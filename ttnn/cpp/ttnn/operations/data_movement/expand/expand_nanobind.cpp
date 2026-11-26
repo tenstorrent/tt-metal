@@ -31,6 +31,8 @@ void bind_expand(nb::module_& mod) {
     const auto* doc =
         R"doc(
         Returns a tensor whose dimensions of size 1 in `input_tensor` are expanded to the sizes in `output_shape`.
+        The output is a new tensor with its own buffer: the values are copied, so writing to the output leaves the
+        input unchanged.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -55,7 +57,7 @@ void bind_expand(nb::module_& mod) {
                * - BFLOAT8_B
                  - TILE
 
-            For a ``BFLOAT16`` TILE input whose last two dims are not both multiples of 32, input values must not be NaN.
+            For a ``BFLOAT16`` TILE input whose last two dims are not both multiples of 32, input values must not be NaN or -0.0.
 
         Memory Support:
             - Interleaved: DRAM and L1

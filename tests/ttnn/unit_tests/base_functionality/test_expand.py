@@ -186,3 +186,71 @@ def test_expand_docstring_supported_inputs(dtype, layout, buffer_type, device):
         output = ttnn.expand(unaligned, [-1, 3, 30, 30], memory_config=memory_config)
         expected = ttnn.to_torch(unaligned).expand(-1, 3, 30, 30)
         assert_exact(expected, ttnn.to_torch(output), signed_zeros=not bfloat16_tile)
+
+
+_EXPAND_SHARD_GRIDS = {
+    ttnn.ShardStrategy.HEIGHT: ttnn.CoreGrid(y=1, x=2),
+    ttnn.ShardStrategy.WIDTH: ttnn.CoreGrid(y=1, x=2),
+    ttnn.ShardStrategy.BLOCK: ttnn.CoreGrid(y=2, x=2),
+}
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("strategy", list(_EXPAND_SHARD_GRIDS), ids=["HEIGHT", "WIDTH", "BLOCK"])
+def test_expand_docstring_sharded_inputs(strategy, layout, device):
+    """The Sharded item of the ttnn.expand docstring's Memory Support: a HEIGHT_SHARDED, WIDTH_SHARDED or BLOCK_SHARDED
+    L1 input expands with the default ``memory_config`` (the output keeps the memory layout and buffer type), into a
+    given sharded L1 ``memory_config``, and into an interleaved one."""
+    input_shape, output_shape = (1, 1, 64, 64), (2, 3, 64, 64)
+    grid = _EXPAND_SHARD_GRIDS[strategy]
+
+    def sharded(shape):
+        return ttnn.create_sharded_memory_config(
+            shape, core_grid=grid, strategy=strategy, use_height_and_width_as_shard_shape=False
+        )
+
+    input_config = sharded(input_shape)
+    input_tensor = ttnn.from_torch(
+        full_range_input(input_shape, ttnn.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        device=device,
+        memory_config=input_config,
+    )
+    expected = ttnn.to_torch(input_tensor).expand(output_shape)
+
+    output = ttnn.expand(input_tensor, output_shape)
+    assert output.memory_config().memory_layout == input_config.memory_layout
+    assert output.memory_config().buffer_type == ttnn.BufferType.L1
+    assert_exact(expected, ttnn.to_torch(output))
+
+    for memory_config in (sharded(output_shape), ttnn.L1_MEMORY_CONFIG):
+        output = ttnn.expand(input_tensor, output_shape, memory_config=memory_config)
+        assert output.memory_config() == memory_config
+        assert_exact(expected, ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_expand_docstring_dram_sharded_input(layout, device):
+    """The DRAM-sharded part of the ttnn.expand docstring's Memory Support: a WIDTH_SHARDED DRAM input expands into an
+    interleaved DRAM ``memory_config``."""
+    num_banks = device.dram_grid_size().x
+    input_shape, output_shape = (1, 1, 32, 32 * num_banks), (3, 2, 32, 32 * num_banks)
+    banks = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_banks - 1, 0))})
+    input_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(banks, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    input_tensor = ttnn.from_torch(
+        full_range_input(input_shape, ttnn.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        device=device,
+        memory_config=input_config,
+    )
+
+    output = ttnn.expand(input_tensor, output_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    assert_exact(ttnn.to_torch(input_tensor).expand(output_shape), ttnn.to_torch(output))
