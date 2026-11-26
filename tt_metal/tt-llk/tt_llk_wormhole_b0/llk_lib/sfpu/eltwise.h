@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "sfpu/common.h"
+#include "sfpu/span.h"
 #include "sfpu/traverse.h"
 
 namespace llk::sfpu
@@ -22,8 +23,9 @@ class EltwiseOptions
 public:
     struct Struct
     {
-        std::size_t face_unroll     = 0; // Unrolling factor for the outer, per face loop
-        std::size_t vector_unroll   = 8; // Unrolling factor for the inner, per vector loop
+        std::size_t face_unroll   = 0; // Unrolling factor for the outer, per face loop
+        std::size_t vector_unroll = 8; // Unrolling factor for the inner, per vector loop
+        std::size_t span_size     = 1; // Dest vectors per functor call; above 1 the functor takes vSpans of that many
     };
 
     constexpr EltwiseOptions& unroll_faces(const std::size_t faces)
@@ -38,6 +40,12 @@ public:
         return *this;
     }
 
+    constexpr EltwiseOptions& span_size(const std::size_t size)
+    {
+        options.span_size = size;
+        return *this;
+    }
+
     constexpr Struct create() const
     {
         return options;
@@ -47,19 +55,22 @@ private:
     Struct options {};
 };
 
+/// @brief Type of a single Dest vector operand, for spelling out eltwise functor signatures.
+using DestRegister = decltype(sfpi::dst_reg[0]);
+
 namespace detail
 {
 
-template <typename>
-using DestReg = decltype(sfpi::dst_reg[0]);
+template <std::size_t SpanSize, typename = void>
+using DestOperand = std::conditional_t<(SpanSize == 1), DestRegister, vSpan<SpanSize>>;
 
 /// @brief Matches a [](Dest[output_index], Dest[input_index]...) functor signature.
-template <typename Functor, typename... Index>
-constexpr bool is_direct_store_v = std::is_invocable_v<Functor&, DestReg<void>&, DestReg<Index>...>;
+template <std::size_t SpanSize, typename Functor, typename... Index>
+constexpr bool is_direct_store_v = std::is_invocable_v<Functor&, DestOperand<SpanSize>&, DestOperand<SpanSize, Index>...>;
 
 /// @brief Matches a [](Dest[input_index]...) functor signature for deferred stores.
-template <typename Functor, typename... Index>
-constexpr bool is_deferred_store_v = !is_direct_store_v<Functor, Index...> && std::is_invocable_v<Functor&, DestReg<Index>...>;
+template <std::size_t SpanSize, typename Functor, typename... Index>
+constexpr bool is_deferred_store_v = !is_direct_store_v<SpanSize, Functor, Index...> && std::is_invocable_v<Functor&, DestOperand<SpanSize, Index>...>;
 
 } // namespace detail
 
@@ -80,18 +91,22 @@ template <
     EltwiseOptions::Struct Options = EltwiseOptions().create(),
     typename Functor,
     typename... Index,
-    std::enable_if_t<detail::is_direct_store_v<Functor, Index...>, int> = 0>
+    std::enable_if_t<detail::is_direct_store_v<Options.span_size, Functor, Index...>, int> = 0>
 [[gnu::always_inline]] inline void eltwise(const std::uint32_t output_index, Functor&& functor, const Index... input_index)
 {
+    constexpr std::size_t span_size = Options.span_size;
+
     static_assert(((std::is_integral_v<Index> && !std::is_same_v<Index, bool>) && ...), "Input index must be a Dest tile index");
     static_assert(
-        std::is_void_v<std::invoke_result_t<Functor&, detail::DestReg<void>&, detail::DestReg<Index>...>>,
+        std::is_void_v<std::invoke_result_t<Functor&, detail::DestOperand<span_size>&, detail::DestOperand<span_size, Index>...>>,
         "Functor that takes the output Dest vector must return void");
     static_assert(is_shape_walkable(Shape), "Shape must be a Tile");
     static_assert(Agnostic == PaddingAgnostic::Yes || is_walk_agnostic(Shape), "Padding-sensitive call mustn't touch padding");
 
     constexpr std::size_t faces   = face_count(Shape);
     constexpr std::size_t vectors = vector_count(Shape) / faces;
+
+    static_assert(span_size >= 1 && vectors % span_size == 0, "span_size must divide the vectors of a face");
 
     // A 1-column shape skips the face to the right of each one it visits.
     constexpr std::size_t face_stride  = MAX_NUM_FACES_C_DIM / Shape.num_faces_c_dim;
@@ -107,12 +122,21 @@ template <
     detail::repeat<faces, Options.face_unroll>(
         [&]
         {
-            detail::repeat<vectors, Options.vector_unroll>(
+            detail::repeat<vectors / span_size, Options.vector_unroll>(
                 [&]
                 {
-                    // ADDR_MOD_2 under the SFPU addr mod base is ADDR_MOD_6: the store advances Dest by one vector.
-                    auto output = sfpi::dst_reg[0].mode(ADDR_MOD_2);
-                    functor(output, sfpi::dst_reg[input_offset(input_index)]...);
+                    if constexpr (span_size == 1)
+                    {
+                        // ADDR_MOD_2 under the SFPU addr mod base is ADDR_MOD_6: the store advances Dest by one vector.
+                        auto output = sfpi::dst_reg[0].mode(ADDR_MOD_2);
+                        functor(output, sfpi::dst_reg[input_offset(input_index)]...);
+                    }
+                    else
+                    {
+                        // Every store advances Dest by one vector, so every output lane is stored at 0.
+                        auto output = vSpan<span_size>::advancing(0);
+                        functor(output, vSpan<span_size>::fixed(input_offset(input_index))...);
+                    }
                 });
 
             // The vector loop left Dest `vectors` past the face start; step over the rest of it and any skipped face.
@@ -135,18 +159,22 @@ template <
     EltwiseOptions::Struct Options = EltwiseOptions().create(),
     typename Functor,
     typename... Index,
-    std::enable_if_t<detail::is_deferred_store_v<Functor, Index...>, int> = 0>
+    std::enable_if_t<detail::is_deferred_store_v<Options.span_size, Functor, Index...>, int> = 0>
 [[gnu::always_inline]] inline void eltwise(const std::uint32_t output_index, Functor&& functor, const Index... input_index)
 {
+    constexpr std::size_t span_size = Options.span_size;
+    using Output                    = detail::DestOperand<span_size>;
+
     static_assert(
-        std::is_assignable_v<const detail::DestReg<void>&, std::invoke_result_t<Functor&, detail::DestReg<Index>...>>,
-        "the Functor's result must be storable to Dest (a vFloat, vInt, vUInt, ...)");
+        std::is_assignable_v<const Output&, std::invoke_result_t<Functor&, detail::DestOperand<span_size, Index>...>>,
+        "the Functor's result must be storable to Dest (a vFloat, vInt, vUInt, ..., or a vArray of them)");
+    static_assert(
+        span_size == 1 || !std::is_same_v<std::decay_t<std::invoke_result_t<Functor&, detail::DestOperand<span_size, Index>...>>, vSpan<span_size>>,
+        "a Functor returning a vSpan would load each lane after the previous store moved Dest; return a vArray");
 
     // The explicit void return keeps the overload checks on this lambda from instantiating its body.
     eltwise<Shape, Agnostic, Options>(
-        output_index,
-        [&](const detail::DestReg<void>& output, auto&&... input) -> void { output = functor(std::forward<decltype(input)>(input)...); },
-        input_index...);
+        output_index, [&](const Output& output, auto&&... input) -> void { output = functor(std::forward<decltype(input)>(input)...); }, input_index...);
 }
 
 /// Dest[output] = functor(Dest[input]), or functor(Dest[output], Dest[input]) storing itself. Pass the same index twice to operate in place.
