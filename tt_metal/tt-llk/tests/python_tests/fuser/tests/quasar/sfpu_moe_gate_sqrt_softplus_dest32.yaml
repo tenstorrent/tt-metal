@@ -1,19 +1,5 @@
-# DeepSeek-V4 MoE gate: key = sqrt(softplus(x)) + bias, x at Dest tile 0 and the bias at tile 1. The
-# kernel writes the score over x and the key over the bias tile, so the SFPU dest index is the bias
-# tile and the key is what gets packed. x spans the far negative tail (softplus ~ exp(x)), both sides
-# of 0 and past the softplus threshold 20; the bias spans both signs. fp32 Dest only: the kernel has
-# no bf16 rounding step.
-# Bfloat16 inputs; the Float32 ones are in sfpu_moe_gate_sqrt_softplus_dest32_fp32.
-#
-# atol / rtol: the score is softplus to ~5e-6 relative and a 23-bit sqrt, and the bias add can cancel
-# it, so the bound is mostly absolute: the measured worst case is 1.5e-6 absolute (1.7e-5 relative
-# where the key is near 0), against atol 3e-6 + rtol 4e-6. Without the last sqrt refinement the
-# error reaches 1.1e-4, without the top log1p term 8.8e-3.
-#
-# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
-# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
-# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
-# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+# MoE gate key = sqrt(softplus(x)) + bias (x at tile 0, bias at tile 1, key packed); fp32 Dest only.
+# Bfloat16 inputs (Float32 in _dest32_fp32); bound mostly absolute: the bias add can cancel.
 
 dest_acc: true
 

@@ -1,17 +1,5 @@
-# gelu_tanh(x) = 0.5 x (1 + tanh(sqrt(2/pi) (x + 0.044715 x^3))) on [-14, 8] plus 0, +-0.5, +-1,
-# +-3, +-5, a small normal (1e-4) and the saturated tails at +-20, in both approximation modes
-# (approximation_mode: true selects gelu_tanh_tile's fast path).
-# Bfloat16 inputs; the Float32 ones are in sfpu_gelu_tanh_dest32_fp32.
-#
-# atol / rtol 4e-6: the fast path's measured worst case is 2.0e-6 absolute (its stated accuracy is
-# ~1e-6); the accurate path is within 1 fp32 ulp except below x ~ -5, where 1 + tanh(u) cancels and
-# results under ~1.3e-7 come out 0. A missing Newton step on either path's reciprocal shows up as
-# 8e-5 (accurate) or 3e-4 (fast) absolute error.
-#
-# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
-# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
-# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
-# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+# gelu_tanh(x) on [-14, 8] plus specials and the saturated tails at +-20, in both approx modes.
+# Bfloat16 inputs (Float32 in _dest32_fp32); 4e-6 is twice the fast path's measured worst case.
 
 dest_acc: true
 

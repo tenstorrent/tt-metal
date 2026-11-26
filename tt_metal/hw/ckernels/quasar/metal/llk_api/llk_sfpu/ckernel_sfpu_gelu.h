@@ -318,17 +318,8 @@ inline void calculate_gelu() {
     }
 }
 
-// =============================================================================
-// Fused x * exp(t) for the GELU derivative's negative tail, t = -x^2 / 2 for x in (-13.375, -3)
-// =============================================================================
-// exp(t) = 2^k * p(r): k = round(t / ln 2), r = t - k ln 2 by a two-part (Cody-Waite) ln 2, and
-// p(r) the degree-5 Taylor polynomial of exp on |r| <= ln(2) / 2. x is multiplied into p(r) before
-// the 2^k scaling, which is applied by adding k to the biased exponent of x * p(r). exp(t) on its own
-// drops below the smallest normal for t < -87.3 (x < -13.2), but x * exp(t) is larger by |x|, so the
-// product stays representable down to x = -13.375; it is flushed to 0 only when the final exponent
-// underflows. No overflow or NaN handling: t is finite and negative for every x the caller passes.
-// Max error 1 ULP over the range (Blackhole measurement).
-// =============================================================================
+// x * exp(t), t = -x^2 / 2, for the GELU derivative's tail x in (-13.375, -3). x is multiplied in before
+// the 2^k scaling, so the product stays normal where exp(t) alone would underflow.
 sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat t) {
     // Cody-Waite constants for extended precision range reduction
     constexpr float INV_LN2 = 1.4426950408889634f;  // 1/ln(2)
@@ -525,18 +516,8 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
 
-    // NaN (fp32 destination only). The region tests are sign-magnitude ordered compares, which
-    // sort +NaN above +inf and -NaN below -inf, so a raw NaN would land in the saturation region
-    // (+NaN) or the zero default (-NaN). x*1 and x*-1 are exact for every other input (a denormal
-    // flushes to a zero, which lands in the same region) and turn every NaN into the canonical
-    // +NaN. Testing -x <= -GELU_DERIV_SAT_ONE then keeps NaN out of the saturation region, and
-    // x >= -3 sends it into the polynomial, which propagates it. x*x is formed once here for both
-    // remaining regions.
-    // The products must be raw SFPMADs: written as x * 1.0f / -x, sfpi is free to fold the
-    // multiply by one away and to lower the negation to a sign flip, neither of which touches
-    // a NaN, and the canonicalisation would be lost.
-    // A bfloat16 destination keeps the plain compares: convert<vFloat16b> below (SFPSTOCHRND)
-    // turns any NaN into an infinity, so that arm cannot return NaN anyway.
+    // fp32 Dest: x*1 and x*-1 as raw SFPMADs (sfpi would fold them away) turn any NaN into +NaN, which the
+    // compares below then route into the polynomial, so NaN propagates instead of saturating.
     sfpi::vFloat neg_x, x2;
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vFloat zero = 0.0f;

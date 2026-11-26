@@ -1,15 +1,5 @@
-# geglu_tanh(gate, up) = gelu_tanh(gate) * up, gate at Dest tile 0 and up at tile 1: the gate on
-# [-12, 12] (both saturated tails of the tanh) plus 0, +-0.5, +-1, +-3 and +-20, the up operand on
-# both signs.
-#
-# atol / rtol: as sfpu_geglu_tanh_dest32 (measured worst case 1.0e-4 relative).
-#
-# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features.
-# Float32 inputs are unpacked straight to Dest: the FPU datacopy path would cut them to tf32 (10
-# mantissa bits), an error the golden does not model and that would set the tolerance floor near
-# 1e-3 relative. Bfloat16 inputs (which the unpacker cannot widen into a 32-bit Dest) are in the
-# _dest32 file. Stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN); special points
-# sit outside the random ranges, so each is drawn about as often as a unit of range.
+# geglu_tanh(gate, up) = gelu_tanh(gate) * up: gate on [-12, 12] plus specials and +-20.
+# Float32 inputs unpacked straight to Dest (datacopy would cut them to tf32); tolerances as _dest32.
 
 dest_acc: true
 

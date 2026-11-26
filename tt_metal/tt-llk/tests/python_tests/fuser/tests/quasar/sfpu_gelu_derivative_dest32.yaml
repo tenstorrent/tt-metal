@@ -1,17 +1,5 @@
-# gelu'(x) = Phi(x) + x phi(x) on [-14, 8]: the polynomial / tail region boundaries of the
-# derivative kernel (+-3, 3.1719, -13.375), 0, +-0.5, +-1, a small normal (1e-4), and the saturated
-# tails at +-20.
-# Bfloat16 inputs; the Float32 ones are in sfpu_gelu_derivative_dest32_fp32.
-#
-# atol / rtol: rtol 0.01 covers the kernel's two inherent errors: x >= 3.1719 returns 1 where gelu' is
-# up to 1.0075 (7.5e-3), and the tail's three-term Mills series is within 0.4% (measured 2.8e-3 at
-# x = -3.05). Without the Mills correction the tail is off by 1/x^2 (11% at x = -3). atol 1e-12
-# covers x below ~ -7.5, where the golden's erf-based Phi(x) has lost its digits.
-#
-# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
-# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
-# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
-# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+# gelu'(x) on [-14, 8] plus the kernel's region edges (+-3, 3.1719, -13.375), specials and +-20.
+# Bfloat16 inputs (Float32 in _dest32_fp32); rtol 0.01 covers the saturation to 1 (7.5e-3).
 
 dest_acc: true
 
