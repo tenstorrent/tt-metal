@@ -54,12 +54,12 @@ Key Metal 2.0 changes, at a glance:
 
 Two benefits stand out:
 
-- **Named arguments**. Compile-time, runtime, and common runtime arguments are addressed by name on both the host and device sides. Positional CTAs are gone from the API entirely; positional RTAs/CRTAs survive only as **varargs**, intended for the rare kernels that read a dynamic-count argument tail in a loop.
+- **Named arguments**. Compile-time, runtime, and common runtime arguments are addressed by name on both the host and device sides. Positional CTAs are gone from the API entirely. A dynamic-count argument tail read in a loop is a named **array argument**; positional RTAs/CRTAs survive only as **varargs**, for the few blocks an array can't hold.
 - **Named resource bindings**. Metal 2.0 natively supports binding resources (DFBs, semaphores, tensors, etc) to kernels. The corresponding handles are cleanly passed to the device code with user-defined accessor names.
 
 > **Raw pointer argument deprecation.** Eliminating raw device pointer kernel arguments was an explicit goal of Metal 2.0. With tensor parameters, DFBs, and semaphores all bindable as named resources, runtime args carrying a buffer or tensor address should now be the exception rather than the rule. (On the default TTNN factory concept, the TTNN infra makes pointer arguments fully illegal.)
 
-> **Argument naming.** Metal 2.0 is designed around named arguments. All argument types (compile time, runtime, common runtime) can be named. Positional arguments survive only as varargs — intended for kernels with a genuinely dynamic argument count consumed in a loop.
+> **Argument naming.** Metal 2.0 is designed around named arguments. All argument types (compile time, runtime, common runtime) can be named, as scalars or as arrays read by index. Positional arguments survive only as varargs, for the few blocks an array can't hold.
 
 ---
 
@@ -433,7 +433,7 @@ params.kernel_run_args = {{
 program.set_program_run_args(params);
 ```
 
-> **Varargs (niche).** For kernels that read a genuinely dynamic argument tail in a loop — the canonical case being an N-dimensional shape where N is a compile-time `rank` — Metal 2.0 provides a positional "varargs" mechanism alongside named arguments.
+> **Array arguments.** For kernels that read a dynamic argument tail in a loop — the canonical case being an N-dimensional shape where N is a compile-time `rank` — Metal 2.0 provides named array arguments (`runtime_arg_schema.runtime_array_args`, read in the kernel as `get_arg(args::shape)[i]`). A positional "varargs" mechanism remains for the rare block an array can't hold.
 
 ---
 
@@ -606,7 +606,7 @@ Resources can also be bound *conditionally* (a binding omitted from a kernel whe
 Argument naming extends the named-binding ethos to scalar values:
 
 - **Compile-time arguments are named only.** Positional CTAs are gone from the Metal 2.0 API.
-- **Runtime and common runtime arguments are typically named.** A `varargs` mechanism exists as a niche escape hatch for dynamic-count argument tails read in a loop.
+- **Runtime and common runtime arguments are named**, as scalars or arrays. A `varargs` mechanism remains as a niche escape hatch.
 
 The `args::` namespace generated from a `KernelSpec`'s schema gives the kernel one uniform retrieval API: `get_arg(args::name)`. The CTA/RTA/CRTA distinction is a host-only concern.
 

@@ -55,11 +55,11 @@ Key Metal 2.0 changes, at a glance:
 Some benefits of Metal 2.0:
 
 - **Named resource bindings**. Metal 2.0 natively supports binding resources (DFBs, semaphores, tensors, etc) to kernels. The corresponding handles are cleanly passed to the device code with user-defined accessor names.
-- **Named arguments**. Compile-time, runtime, and common runtime arguments are addressed by name on both the host and device sides. Positional CTAs are gone from the API entirely; positional RTAs/CRTAs survive only as **varargs**, for the rare arguments a kernel reaches *by index rather than by name* — a dynamic-count argument tail read in a loop (e.g. an N-D tensor's shape), or an argument selected by a data-computed index. For everything else, prefer names.
+- **Named arguments**. Compile-time, runtime, and common runtime arguments are addressed by name on both the host and device sides. Positional CTAs are gone from the API entirely; an argument a kernel reaches *by index rather than by name* — a dynamic-count argument tail read in a loop (e.g. an N-D tensor's shape), or one selected by a data-computed index — is an element of a named **array argument**. Positional **varargs** remain only for a block an array can't hold (empty in some configuration, or a different length per node).
 
 > **Stated goal: eliminate raw pointer arguments.** With DFBs, semaphores, and tensors all bindable as named resources, runtime args carrying a buffer or tensor address should now be the exception rather than the rule. If you're about to put `tensor.buffer()->address()` in a runtime arg, you're probably doing it wrong — bind the tensor as a `TensorParameter` instead.
 
-> **Argument naming.** Metal 2.0 is designed around named arguments. Compile-time arguments must be named — positional CTAs are no longer part of the API. Runtime and common runtime arguments may be named (the typical case) or positional (varargs, intended for kernels with a genuinely dynamic argument count consumed in a loop — e.g., an N-dimensional shape where N is a CTA). When porting from a legacy kernel, individually-known RTAs translate naturally to named RTAs; reach for varargs only when the kernel reaches an argument *by index rather than as a distinct named field* — a variable-count loop, or a data-selected index.
+> **Argument naming.** Metal 2.0 is designed around named arguments. Compile-time arguments must be named — positional CTAs are no longer part of the API. Every kind of argument can also be a named **array** (a fixed number of elements read by index — e.g., an N-dimensional shape where N is a CTA); positional varargs remain only for the few blocks an array can't hold. When porting from a legacy kernel, individually-known RTAs translate naturally to named RTAs; reach for an array only when the kernel reaches an argument *by index rather than as a distinct named field* — a variable-count loop, or a data-selected index.
 
 Many additional refinements are planned as the APIs mature.
 
@@ -508,7 +508,7 @@ WorkUnitSpec wu_halo{
  - Tensor arguments (`tensor_args`) — one `MeshTensor` per declared `TensorParameter`. See [TensorParameter](#tensorparameter). Borrowed-memory DFBs draw their backing L1 address from the corresponding `tensor_args` entry automatically; they don't require a separate `dfb_run_overrides` entry.
  - GlobalSemaphore arguments (`global_semaphore_args`) — one `GlobalSemaphore` per declared `GlobalSemaphoreParameter`. See [Porting CCL ops](ccl_port.md#globalsemaphores).
 
-All kernel arguments are named arguments in Metal 2.0. For the rare arguments a kernel reaches *by index rather than by name* — a variable-count loop, or a data-computed index — the API additionally provides a **varargs** mechanism.
+All kernel arguments are named arguments in Metal 2.0. For arguments a kernel reaches *by index rather than by name* — a variable-count loop, or a data-computed index — the API provides **array arguments**, and, for a block an array can't hold, positional **varargs**.
 
 **Legacy** (values on the descriptor):
 
@@ -544,28 +544,28 @@ params.kernel_run_args = {{
 program.set_program_run_args(params);
 ```
 
-Vararg form — for kernels with a genuinely dynamic argument tail (loop-retrieved on the device side). The canonical fit is a CTA-bound count plus a per-element payload, e.g. an N-dimensional shape. Vararg counts live on `KernelAdvancedOptions` (schema side); vararg values live on `AdvancedKernelRunArgs` (per-execution side, nested under each `KernelRunArgs` entry's `.advanced_options`):
+Array form — for an argument tail the kernel reads by index (loop-retrieved on the device side). The canonical fit is a CTA-bound count plus a per-element payload, e.g. an N-dimensional shape. The array is declared in the schema with its length, and its values live in the run args beside the scalar ones:
 
 ```cpp
-// Schema (on KernelSpec::advanced_options, which is KernelAdvancedOptions):
+// Schema (on KernelSpec):
 .compile_time_args = {{"rank", rank}},
-.advanced_options = {
-    .num_runtime_varargs = rank,  // shape: one entry per dimension
+.runtime_arg_schema = {
+    .runtime_array_args = {{.name = "shape", .size = rank}},  // one entry per dimension
 },
 
-// Values (on the matching KernelRunArgs entry's .advanced_options, which is AdvancedKernelRunArgs):
-//   .runtime_varargs is Table<NodeCoord, std::vector<uint32_t>>
+// Values (on the matching KernelRunArgs entry):
+//   .runtime_array_arg_values is Table<std::string, Table<NodeCoord, ArrayArgValue>>
 params.kernel_run_args = {{
     .kernel = MY_KERNEL,
-    .advanced_options = {
-        .runtime_varargs = {{NodeCoord{0, 0}, shape_dims}},  // shape_dims.size() == rank
-    },
+    .runtime_array_arg_values = {{"shape", {{NodeCoord{0, 0}, shape_dims}}}},  // shape_dims.size() == rank
 }};
 ```
 
-Named and vararg forms can coexist on the same kernel. Vararg indices are stable across schema changes — promoting a named RTA to a CRTA, or adding/removing named args, does not shift vararg indices. Common runtime varargs (`num_common_runtime_varargs`, retrieved on the device via `get_common_vararg(i)`) work analogously, broadcast across all nodes.
+In the kernel, `auto shape = get_arg(args::shape);` returns a view read as `shape[i]` (`shape.size()` is the length). Common runtime arrays (`common_runtime_array_args`, values in `common_runtime_array_arg_values`) work analogously, broadcast across all nodes; compile-time arrays are `KernelSpec::compile_time_array_args`, whose view is usable in constant expressions. An array's length is fixed in the spec, at least one element, and the same on every node.
 
-> The vararg form is for an **indexed-collection element** (a variable-count loop, CTA- or runtime-bounded, or an element selected by a data-computed index); an argument read once as a **distinct field** is a **named** arg. See the [patterns catalog caution](port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary) for the full rule and its `arg_index++` / separate-section subtleties.
+**Varargs** cover the blocks an array can't hold: one that is empty in some configuration, or whose length differs between the kernel's nodes. Their counts live on `KernelAdvancedOptions` (`num_runtime_varargs`, `num_common_runtime_varargs`, `compile_time_varargs`), their values on `AdvancedKernelRunArgs` (`runtime_varargs`, `common_runtime_varargs`), and the kernel reads them with `get_vararg(i)` / `get_common_vararg(i)` / `get_compile_time_vararg(i)`.
+
+> The array form is for an **indexed-collection element** (a variable-count loop, CTA- or runtime-bounded, or an element selected by a data-computed index); an argument read once as a **distinct field** is a **named** arg. See the [patterns catalog caution](port_patterns.md#caution-named-fields-stay-named-indexed-collections-become-array-arguments) for the full rule and its `arg_index++` subtleties.
 
 ---
 
@@ -688,18 +688,16 @@ void kernel_main() {
 
 CTAs, RTAs, and CRTAs are accessed through the same `get_arg(args::name)` mechanism in device code. The dispatch type (compile-time, runtime, common runtime) is a host-only concept — the kernel author no longer needs to know or care which kind of argument they're reading. The C++ type-deduction context (`constexpr auto`, `auto`, `const auto`) is the only place the distinction surfaces.
 
-**Example 2 — Named arguments plus varargs (the niche case).**
+**Example 2 — Named arguments plus an array argument.**
 
-Some kernels read a dynamic-count argument tail in a loop — e.g. an N-dimensional tensor's shape, where N is itself a CTA. That's the case varargs are designed for:
+Some kernels read a dynamic-count argument tail in a loop — e.g. an N-dimensional tensor's shape, where N is itself a CTA. That's the case array arguments are for:
 
 ```cpp
 .compile_time_args = {{"rank", rank}},
 .runtime_arg_schema = {
     .runtime_arg_names = {"start_page"},
     .common_runtime_arg_names = {"num_entries"},
-},
-.advanced_options = {
-    .num_runtime_varargs = rank,  // shape: one entry per dimension
+    .runtime_array_args = {{.name = "shape", .size = rank}},  // one entry per dimension
 },
 ```
 
@@ -710,21 +708,18 @@ void kernel_main() {
     constexpr auto rank      = get_arg(args::rank);          // CTA
     auto start_page          = get_arg(args::start_page);    // RTA
     const auto num_entries   = get_arg(args::num_entries);   // CRTA
+    auto shape               = get_arg(args::shape);         // RTA array, rank elements
 
-    // Vararg RTAs read in a loop — count is bound to `rank`:
-    uint32_t shape[rank];
     for (uint32_t i = 0; i < rank; ++i) {
-        shape[i] = get_vararg(i);
+        // shape[i] ...
     }
     // ...
 }
 ```
 
-Common runtime varargs are analogous: declare with `num_common_runtime_varargs`, retrieve on the device with `get_common_vararg(i)`. Same loop-retrieval criterion applies.
+Common runtime arrays are analogous: declare in `common_runtime_array_args`, read the same way.
 
-> Porting positional RTAs, the natural Metal 2.0 form is named RTAs — one per distinct field. Translating into varargs compiles and runs (a fine interim step on a large kernel), but named is the recommended endpoint; reach for varargs only for a true **indexed-collection element** (see the [caution](port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary)).
-
-Vararg indices are stable across schema changes: promoting a named RTA to a CRTA, or adding or removing named arguments, does not shift vararg indices. (This stability lets you migrate incrementally — rename arguments to named form one at a time without disturbing the remaining varargs.)
+> Porting positional RTAs, the natural Metal 2.0 form is named RTAs — one per distinct field — and one array per legacy block the kernel reads by index, holding the block's elements in the same order so the kernel's index arithmetic carries over (see the [caution](port_patterns.md#caution-named-fields-stay-named-indexed-collections-become-array-arguments)). Varargs are for the blocks an array can't hold.
 
 > **Note**: This argument-retrieval syntax will evolve again to support custom argument types beyond `uint32_t` (including user-defined POD types). The named-accessor mechanism (`get_arg(args::name)`) will be preserved; the underlying types will become user-extensible. Migrators should plan to revisit kernel arguments after these changes.
 
@@ -841,8 +836,8 @@ When a port carries any of these patterns forward verbatim — buffer-address RT
 Argument naming extends the named-binding ethos to scalar values:
 
 - **Compile-time arguments are named only.** Positional CTAs are gone from the Metal 2.0 API.
-- **Runtime arguments are typically named.** A `varargs` mechanism exists as a niche escape hatch.
-- **Common runtime arguments are typically named.** Same `varargs` mechanism applies.
+- **Runtime arguments are named**, as scalars or arrays. Positional varargs remain for the few blocks an array can't hold.
+- **Common runtime arguments are named**, likewise.
 
 The `args::` namespace generated from a `KernelSpec`'s schema gives the kernel one uniform retrieval API: `get_arg(args::name)`. The CTA/RTA/CRTA distinction is a host-only concern; the kernel author doesn't need to know which dispatch slot a given argument lives in.
 
@@ -851,7 +846,7 @@ Legacy `ProgramDescriptor` offered a hybrid model: `KernelDescriptor::compile_ti
 - Named CTAs in legacy → named CTAs in Metal 2.0. 1:1 mechanical.
 - Positional CTAs in legacy → named CTAs in Metal 2.0. Explicit naming required during port; pick names that reflect what the kernel actually does with the value.
 
-> **Named by default; varargs only when the kernel reaches an argument as an element of an indexed collection.** Chiefly a **variable-count loop** (bounded by a CTA — e.g. an N-dimensional shape gated on `rank` — or by a runtime value) or an element **selected by a data-computed index**. An argument read once as a **distinct field** is a **named** arg — *including* one whose legacy retrieval used a running `arg_index++` counter, and one whose legacy offset fell after a variable-count block (named args live in a section separate from the varargs). Shorthand: *indexed-collection element → vararg, distinct field → named*. A port from positional RTAs to varargs may compile and run, but it preserves the legacy positional vocabulary instead of upgrading to Metal 2.0's named one. See the [patterns catalog](port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary) caution for the two failure modes, the fixed-count fork (a homogeneous literal-count array is still a vararg), and the sentinel exception.
+> **Named by default; an array argument when the kernel reaches an argument as an element of an indexed collection.** Chiefly a **variable-count loop** (bounded by a CTA — e.g. an N-dimensional shape gated on `rank` — or by a runtime value) or an element **selected by a data-computed index**. An argument read once as a **distinct field** is a **named** scalar — *including* one whose legacy retrieval used a running `arg_index++` counter, and one whose legacy offset fell after a variable-count block. Shorthand: *indexed-collection element → array, distinct field → named*. Varargs remain only for a block an array can't hold (empty in some configuration, or a different length per node). See the [patterns catalog](port_patterns.md#caution-named-fields-stay-named-indexed-collections-become-array-arguments) caution for the two failure modes, the fixed-count fork (a homogeneous literal-count array is still an array), and the sentinel.
 
 ---
 
@@ -1207,8 +1202,8 @@ Common pitfalls when migrating from `ProgramDescriptor`:
 - **DFB placement is derived, not specified.** Don't pass a node range to `DataflowBufferSpec` — the DFB lives wherever its bound producer / consumer kernels run. `DataflowBufferSpec` has no `target_nodes` field by design.
 - **Local DFB invariant.** A local DFB's producer and consumer kernels must share *identical* `WorkUnitSpec` membership.
 - **Compile-time arguments are named only.** Positional CTAs are not part of the Metal 2.0 API; use named CTAs throughout.
-- **Runtime varargs are for indexed-collection elements.** `num_runtime_varargs` / `num_common_runtime_varargs` fit an argument reached **by index** — a variable-count loop, or a data-selected index. A **distinct field read a fixed number of times** is a named RTA (see the [patterns caution](port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary) for the `arg_index++` / separate-section subtleties).
-- **`ProgramRunArgs` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `Program::set_program_run_args` to error. The same applies to varargs.
+- **Array arguments are for indexed-collection elements.** `runtime_array_args` / `common_runtime_array_args` / `compile_time_array_args` fit an argument reached **by index** — a variable-count loop, or a data-selected index. A **distinct field read a fixed number of times** is a named scalar (see the [patterns caution](port_patterns.md#caution-named-fields-stay-named-indexed-collections-become-array-arguments) for the `arg_index++` subtleties). Varargs only for a block an array can't hold.
+- **`ProgramRunArgs` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `Program::set_program_run_args` to error. The same applies to runtime arrays and varargs.
 
 ### Cryptic error → likely cause
 
