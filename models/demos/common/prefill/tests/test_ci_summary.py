@@ -95,28 +95,42 @@ def test_perf_summary_and_gate_name_what_ran(tmp_path, monkeypatch):
 
 
 # Without a baseline the gate only reports, so it must check that the whole request retired: a run cut short reports a
-# shallow rate that would otherwise pass.
+# shallow rate that would otherwise pass. Runs the summarizer and the gate as CI does (--real-chunks 40).
 @pytest.mark.parametrize("retired, rc", [(40, 0), (12, 1)])
 def test_unbaselined_gate_fails_a_run_cut_short(tmp_path, monkeypatch, retired, rc):
     import json
     import sys
 
-    from models.demos.common.prefill.runners.ci import perf_gate
-    from models.demos.common.prefill.runners.ci.summarize_ci_run import _perf_metrics
+    from models.demos.common.prefill.runners.ci import perf_gate, summarize_ci_run
 
     monkeypatch.delenv("CI_FAILURE_RECORDS", raising=False)
-    _, rec = _perf_metrics(_packed_spans(retired, 4, 0.2, tail_s=0.2), 2560, 8, chunks_per_forward=4)
-    rec["expected_chunks"] = 40
-    perf_json = tmp_path / "run_sc4.json"
-    perf_json.write_text(json.dumps(rec))
+    summaries = tmp_path / "summaries"
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(summaries))
+    logs = tmp_path / "ranklogs"
+    logs.mkdir()
+    (logs / "stderr").write_text(
+        "".join(
+            f"[producer] CHUNK_RETIRE slot=0 start={c * 2560} end={(c + 1) * 2560} first={begin:.3f} "
+            f"retire={end:.3f} warmup=0 acks=24\n"
+            for c, (begin, end, _) in enumerate(_packed_spans(retired, 4, 0.2, tail_s=0.2))
+        )
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["summarize_ci_run.py", "--ranklogs", str(logs), "--real-chunks", "40", "--chunk-size", "2560"]
+        + ["--pipeline-ranks", "8", "--chunks-per-forward", "4", "--summary-name", "run_sc4"],
+    )
+    summarize_ci_run.main()
     table = tmp_path / "baselines.json"
     table.write_text(json.dumps({"margin": {}, "baselines": {}}))
+    perf_json = summaries / "perf_json" / "run_sc4.json"
     args = [
         str(perf_json),
         "--table",
         str(table),
         "--model",
-        "m",
+        "run",
         "--config",
         "sc4",
         "--power",
