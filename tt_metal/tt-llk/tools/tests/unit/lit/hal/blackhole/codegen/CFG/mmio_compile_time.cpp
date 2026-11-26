@@ -21,8 +21,11 @@ inline constexpr std::uint32_t StateBankWords = 224;
 
 inline volatile std::uint32_t tt_reg_ptr* reference_cfg_bank()
 {
-    const std::uint32_t bank_offset = (ckernel::cfg_state_id == 0) ? 0u : StateBankWords;
-    return reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE) + bank_offset;
+    if (ckernel::cfg_state_id == 0)
+    {
+        return reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE);
+    }
+    return reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE) + StateBankWords;
 }
 
 // Merge both fields in word 0 before setting the bit in word 5.
