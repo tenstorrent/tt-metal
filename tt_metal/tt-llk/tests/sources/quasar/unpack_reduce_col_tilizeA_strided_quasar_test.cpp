@@ -39,6 +39,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
     {
         START_PERF_MEASURE("INIT")
         // SrcA is tilized out of a row-major tensor, so its descriptor must address L1 in units of a single
@@ -50,9 +53,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // SrcB holds the reduce scalar and is unpacked face by face, so it uses the tile-shaped descriptor.
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
-
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
         _llk_unpack_reduce_col_tilizeA_strided_init_<POOL_TYPE>(bfd_a, bfd_b, FULL_CT_DIM, tensor_shape);
         PROFILER_SYNC();
@@ -117,6 +117,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    DataFormat math_format = static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
     {
         START_PERF_MEASURE("INIT")
         // Only end-to-end and math-isolate runs use the FPU→PACK dest-dvalid
@@ -125,9 +128,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
-
-        DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
         _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
             static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape);
@@ -194,6 +194,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_init_(bfd_pack, tensor_shape, TILE_CNT);
     {
         START_PERF_MEASURE("INIT")
         // PACK_ISOLATE packs without a math↔pack handshake.
@@ -207,11 +212,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-
-        _llk_pack_init_(bfd_pack, tensor_shape, TILE_CNT);
         _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape);
         PROFILER_SYNC();
     }

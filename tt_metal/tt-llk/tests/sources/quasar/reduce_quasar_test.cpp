@@ -37,6 +37,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    constexpr bool data_in_srcb = reduce_swaps_operands<POOL_TYPE, REDUCE_DIM>();
+    const auto data_format      = static_cast<DataFormat>(formats.unpack_A_dst);
+    const auto scaler_format    = static_cast<DataFormat>(formats.unpack_B_dst);
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(data_in_srcb ? scaler_format : data_format, data_in_srcb ? data_format : scaler_format);
     {
         START_PERF_MEASURE("INIT")
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
@@ -44,10 +49,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape_A, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
 
-        constexpr bool data_in_srcb = reduce_swaps_operands<POOL_TYPE, REDUCE_DIM>();
-        const auto data_format      = static_cast<DataFormat>(formats.unpack_A_dst);
-        const auto scaler_format    = static_cast<DataFormat>(formats.unpack_B_dst);
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(data_in_srcb ? scaler_format : data_format, data_in_srcb ? data_format : scaler_format);
         const bool data_2x = data_format == DataFormat::MxFp4_2x_A || data_format == DataFormat::MxFp4_2x_B;
         _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(bfd_a, bfd_b, tensor_shape_A, INPUT_NUM_TILES_IN_BLOCK, data_2x /*clear_data_src*/);
         PROFILER_SYNC();
@@ -108,6 +109,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Reduce-to-one folds every tile into DEST index 0 inside one section, the production REDUCE_ROW shape.
     const std::uint32_t tiles_per_section = IS_REDUCE_TO_ONE ? TILE_CNT : max_tiles_dest;
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
     {
         START_PERF_MEASURE("INIT")
         // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
@@ -115,8 +118,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
-
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
 
         _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
             static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape_A);
@@ -186,6 +187,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
     const std::uint32_t output_tile_cnt       = IS_REDUCE_TO_ONE ? 1 : TILE_CNT;
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_init_(bfd_pack, tensor_shape_A, 1 /*num_tiles_per_pack*/);
     {
         START_PERF_MEASURE("INIT")
         // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
@@ -199,10 +205,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(bfd_pack, tensor_shape_A, 1 /*num_tiles_per_pack*/);
         _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape_A);
         PROFILER_SYNC();
     }
