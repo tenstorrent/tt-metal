@@ -129,6 +129,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
+                // The SrcB bank the producer's unpack init hands to math (clear_src).
+                _perf_unpack_stream_set_valid<false /* set_a */, true /* set_b */, PERF_RUN_TYPE>(1 /* iterations */);
                 for (std::uint32_t k = 0; k < PRODUCER_KT; ++k)
                 {
                     _perf_unpack_stream_set_valid<true /* set_a */, true /* set_b */, PERF_RUN_TYPE>(1 /* iterations */);
@@ -213,6 +215,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
+                // Give back the SrcB bank the producer's unpack init hands over, as its math init does (clear_src).
+                _perf_math_stream_clear_valid<false /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(1 /* iterations */);
                 for (std::uint32_t k = 0; k < PRODUCER_KT; ++k)
                 {
                     if constexpr (REUSE_KT > 1)
