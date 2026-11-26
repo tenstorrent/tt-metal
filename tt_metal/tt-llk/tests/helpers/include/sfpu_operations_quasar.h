@@ -2437,8 +2437,8 @@ void init_ternary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::mac)
     {
-        // The Compute API's mac_tile_init expression. It records into replay bank 0, so it must run after any FPU
-        // datacopy MOP that stages the operands and immediately before the calculate step.
+        // The Compute API's mac_tile_init expression. Its recording starts at replay slot 0, which the bank-0 FPU
+        // recordings and sfpi's own replay also use, so it must run immediately before the calculate step.
         SFPU_TERNARY_INIT_FN(mac, sfpu::mac_init, (APPROX, is_fp32_dest_acc_en, ternary_float_format<is_fp32_dest_acc_en>));
     }
     else

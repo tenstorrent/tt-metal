@@ -6,8 +6,9 @@
 // buffer_A holds TILE_CNT / 3 operand triples, one Dest section each: staged into Dest tiles 0, 1 and 2,
 // result over tile 0, packed into the section's tile of buffer_Res.
 //
-// The op's init runs after the staging: mac_init records into replay bank 0, which the FPU datacopy MOP
-// also uses. The datacopy is re-initialized per section for the same reason.
+// The op's init runs per section, immediately before the kernel, as mac_tile_init does: mac_init's recording
+// starts at replay slot 0, which the bank-0 FPU recordings (eltwise binary, matmul, reduce, transpose_dest)
+// and sfpi's own replay also use.
 //
 // Two staging paths, selected by `unpack_to_dest`:
 //   * unpack_to_dest=true  — UNPACK writes Dest; SFPU reads/writes Dest; PACK reads Dest.
@@ -127,12 +128,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
     }
 
+    if constexpr (!unpack_to_dest)
+    {
+        _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(params.num_faces * params.TEST_FACE_R_DIM, 1 /*num_matrices*/);
+    }
+
     for (std::uint32_t section = 0; section < num_sections; ++section)
     {
         if constexpr (!unpack_to_dest)
         {
-            // Per section: the previous section's mac_init recorded over the datacopy's replay bank.
-            _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(params.num_faces * params.TEST_FACE_R_DIM, 1 /*num_matrices*/);
             for (std::uint32_t i = 0; i < TERNARY_OPERAND_TILES; ++i)
             {
                 _llk_math_eltwise_unary_datacopy_(i);
@@ -140,8 +144,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
         }
 
-        // Init after the staging (see the header comment), then the kernel over all four faces: operands in
-        // tiles 0, 1, 2, result over tile 0.
+        // Init (see the header comment), then the kernel over all four faces: operands in tiles 0, 1, 2,
+        // result over tile 0.
         test_utils::init_ternary_sfpu_operation_quasar<SFPU_TERNARY_OPERATION, is_fp32_dest_acc_en>();
         test_utils::call_ternary_sfpu_operation_quasar<SFPU_TERNARY_OPERATION, dest_sync, is_fp32_dest_acc_en>(
             0 /*src0_tile*/, 1 /*src1_tile*/, 2 /*src2_tile*/, 0 /*dst_tile*/);
