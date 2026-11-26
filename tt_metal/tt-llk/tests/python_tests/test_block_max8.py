@@ -115,6 +115,7 @@ def _run_block_max8(
         test_config_kwargs=dict(
             test_name=source,
             formats=formats,
+            templates=[],
             runtimes=runtimes,
             variant_stimuli=StimuliConfig(
                 src,
