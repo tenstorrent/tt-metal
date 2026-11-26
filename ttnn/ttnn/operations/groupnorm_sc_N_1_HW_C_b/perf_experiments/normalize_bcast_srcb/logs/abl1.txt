@@ -1,0 +1,3 @@
+case                          rnels@zsub_raw  sub_raw_noseed  zsub_raw_nomul  w_noseed_nomul  kernels@noseed
+unet_rm_ip_16384x960           66,591          66,447  -0.2%   66,410  -0.3%   66,343  -0.4%   66,513  -0.1%
+vae_tile_16384x512             31,746          27,695 -12.8%   27,554 -13.2%   24,827 -21.8%   27,759 -12.6%

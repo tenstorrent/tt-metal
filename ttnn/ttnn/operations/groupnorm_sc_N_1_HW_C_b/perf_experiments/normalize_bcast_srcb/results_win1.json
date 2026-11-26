@@ -1,0 +1,98 @@
+[
+ {
+  "variant": "kernels@zsub_raw_wseed_wmul",
+  "case": "vae_tile_16384x512",
+  "pcc": 0.999998461015635,
+  "rms": 0.0017568213362174274,
+  "md5": "cb71d811f0c8",
+  "ns": 29499
+ },
+ {
+  "variant": "kernels@zsub_raw_wseed",
+  "case": "vae_tile_16384x512",
+  "pcc": 0.999998461015635,
+  "rms": 0.0017568213362174274,
+  "md5": "cb71d811f0c8",
+  "ns": 29536
+ },
+ {
+  "variant": "kernels@zsub_raw_seed2",
+  "case": "vae_tile_16384x512",
+  "pcc": 0.999998461015635,
+  "rms": 0.0017568213362174274,
+  "md5": "cb71d811f0c8",
+  "ns": 31279
+ },
+ {
+  "variant": "kernels@zsub_raw_wseed_wmul",
+  "case": "unet_tile_1024x1280",
+  "pcc": 0.9999981833428374,
+  "rms": 0.0019064261655769574,
+  "md5": "ad2c4f222728",
+  "ns": 11064
+ },
+ {
+  "variant": "kernels@zsub_raw_wseed",
+  "case": "unet_tile_1024x1280",
+  "pcc": 0.9999981833428374,
+  "rms": 0.0019064261655769574,
+  "md5": "ad2c4f222728",
+  "ns": 11066
+ },
+ {
+  "variant": "kernels@zsub_raw_seed2",
+  "case": "unet_tile_1024x1280",
+  "pcc": 0.9999981833428374,
+  "rms": 0.0019064261655769574,
+  "md5": "ad2c4f222728",
+  "ns": 11353
+ },
+ {
+  "variant": "kernels@zsub_raw_wseed_wmul",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "md5": "2d6993851d08",
+  "ns": 66502
+ },
+ {
+  "variant": "kernels@zsub_raw_wseed",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "md5": "2d6993851d08",
+  "ns": 66518
+ },
+ {
+  "variant": "kernels@zsub_raw_seed2",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "md5": "2d6993851d08",
+  "ns": 66596
+ },
+ {
+  "variant": "kernels@zsub_raw_wseed_wmul",
+  "case": "unet_rm_ip_16384x320",
+  "pcc": 0.9999982783526176,
+  "rms": 0.0018560235583032095,
+  "md5": "2d1cce76e0e8",
+  "ns": 30085
+ },
+ {
+  "variant": "kernels@zsub_raw_wseed",
+  "case": "unet_rm_ip_16384x320",
+  "pcc": 0.9999982783526176,
+  "rms": 0.0018560235583032095,
+  "md5": "2d1cce76e0e8",
+  "ns": 30140
+ },
+ {
+  "variant": "kernels@zsub_raw_seed2",
+  "case": "unet_rm_ip_16384x320",
+  "pcc": 0.9999982783526176,
+  "rms": 0.0018560235583032095,
+  "md5": "2d1cce76e0e8",
+  "ns": 30230
+ }
+]

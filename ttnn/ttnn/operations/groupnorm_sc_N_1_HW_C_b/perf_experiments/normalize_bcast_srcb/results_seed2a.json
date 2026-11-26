@@ -1,0 +1,50 @@
+[
+ {
+  "variant": "kernels@zsub_raw_seed2",
+  "case": "vae_tile_16384x512",
+  "pcc": 0.999998461015635,
+  "rms": 0.0017568213362174274,
+  "md5": "cb71d811f0c8",
+  "ns": 31259
+ },
+ {
+  "variant": "kernels@zsub_raw",
+  "case": "vae_tile_16384x512",
+  "pcc": 0.999998461015635,
+  "rms": 0.0017568213362174274,
+  "md5": "cb71d811f0c8",
+  "ns": 31780
+ },
+ {
+  "variant": "kernels@zsub_raw_seed2",
+  "case": "unet_tile_1024x1280",
+  "pcc": 0.9999981833428374,
+  "rms": 0.0019064261655769574,
+  "md5": "ad2c4f222728",
+  "ns": 11346
+ },
+ {
+  "variant": "kernels@zsub_raw",
+  "case": "unet_tile_1024x1280",
+  "pcc": 0.9999981833428374,
+  "rms": 0.0019064261655769574,
+  "md5": "ad2c4f222728",
+  "ns": 11365
+ },
+ {
+  "variant": "kernels@zsub_raw_seed2",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "md5": "2d6993851d08",
+  "ns": 66616
+ },
+ {
+  "variant": "kernels@zsub_raw",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "md5": "2d6993851d08",
+  "ns": 66553
+ }
+]

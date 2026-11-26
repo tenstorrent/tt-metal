@@ -1,0 +1,82 @@
+[
+ {
+  "variant": "kernels@zsub_raw_wseed",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "md5": "2d6993851d08",
+  "ns": 66486
+ },
+ {
+  "variant": "kernels",
+  "case": "unet_rm_ip_16384x960",
+  "pcc": 0.9999983561466974,
+  "rms": 0.0018205763463145675,
+  "md5": "2d6993851d08",
+  "ns": 68860
+ },
+ {
+  "variant": "kernels@zsub_raw_wseed",
+  "case": "vae_tile_16384x512",
+  "pcc": 0.999998461015635,
+  "rms": 0.0017568213362174274,
+  "md5": "cb71d811f0c8",
+  "ns": 29498
+ },
+ {
+  "variant": "kernels",
+  "case": "vae_tile_16384x512",
+  "pcc": 0.999998461015635,
+  "rms": 0.0017568213362174274,
+  "md5": "cb71d811f0c8",
+  "ns": 33115
+ },
+ {
+  "variant": "kernels@zsub_raw_wseed",
+  "case": "unet_rm_ip_16384x320",
+  "pcc": 0.9999982783526176,
+  "rms": 0.0018560235583032095,
+  "md5": "2d1cce76e0e8",
+  "ns": 30119
+ },
+ {
+  "variant": "kernels",
+  "case": "unet_rm_ip_16384x320",
+  "pcc": 0.9999982783526176,
+  "rms": 0.0018560235583032095,
+  "md5": "2d1cce76e0e8",
+  "ns": 30492
+ },
+ {
+  "variant": "kernels@zsub_raw_wseed",
+  "case": "unet_rm_ip_1024x1280",
+  "pcc": 0.9999981804773981,
+  "rms": 0.0019073255665823358,
+  "md5": "ad2c4f222728",
+  "ns": 12870
+ },
+ {
+  "variant": "kernels",
+  "case": "unet_rm_ip_1024x1280",
+  "pcc": 0.9999981804773981,
+  "rms": 0.0019073255665823358,
+  "md5": "ad2c4f222728",
+  "ns": 13200
+ },
+ {
+  "variant": "kernels@zsub_raw_wseed",
+  "case": "unet_tile_1024x1280",
+  "pcc": 0.9999981833428374,
+  "rms": 0.0019064261655769574,
+  "md5": "ad2c4f222728",
+  "ns": 11066
+ },
+ {
+  "variant": "kernels",
+  "case": "unet_tile_1024x1280",
+  "pcc": 0.9999981833428374,
+  "rms": 0.0019064261655769574,
+  "md5": "ad2c4f222728",
+  "ns": 11569
+ }
+]

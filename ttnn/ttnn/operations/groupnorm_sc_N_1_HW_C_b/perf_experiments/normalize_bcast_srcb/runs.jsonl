@@ -1,0 +1,12 @@
+{"variant": "graduation@nocb6", "case": "unet_rm_ip_16384x960", "pcc": 0.9999983561466974, "rms": 0.0018205763463145675, "md5": "2d6993851d08"}
+{"variant": "kernels@zsub_raw_wseed", "case": "unet_rm_ip_16384x960", "pcc": 0.9999983561466974, "rms": 0.0018205763463145675, "md5": "2d6993851d08"}
+{"variant": "graduation@nocb6", "case": "vae_tile_16384x512", "pcc": 0.999998461015635, "rms": 0.0017568213362174274, "md5": "cb71d811f0c8"}
+{"variant": "kernels@zsub_raw_wseed", "case": "vae_tile_16384x512", "pcc": 0.999998461015635, "rms": 0.0017568213362174274, "md5": "cb71d811f0c8"}
+{"variant": "graduation@nocb6", "case": "unet_rm_ip_16384x320", "pcc": 0.9999982783526176, "rms": 0.0018560235583032095, "md5": "2d1cce76e0e8"}
+{"variant": "kernels@zsub_raw_wseed", "case": "unet_rm_ip_16384x320", "pcc": 0.9999982783526176, "rms": 0.0018560235583032095, "md5": "2d1cce76e0e8"}
+{"variant": "graduation@nocb6", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "md5": "ad2c4f222728"}
+{"variant": "kernels@zsub_raw_wseed", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "md5": "ad2c4f222728"}
+{"variant": "graduation@nocb6", "case": "unet_tile_1024x1280", "pcc": 0.9999981833428374, "rms": 0.0019064261655769574, "md5": "ad2c4f222728"}
+{"variant": "kernels@zsub_raw_wseed", "case": "unet_tile_1024x1280", "pcc": 0.9999981833428374, "rms": 0.0019064261655769574, "md5": "ad2c4f222728"}
+{"variant": "graduation@nocb6", "case": "unet_tile_4096x640_4x8", "pcc": 0.9999982703513858, "rms": 0.001865367572178539, "md5": "50b47152ccab"}
+{"variant": "kernels@zsub_raw_wseed", "case": "unet_tile_4096x640_4x8", "pcc": 0.9999982703513858, "rms": 0.001865367572178539, "md5": "50b47152ccab"}

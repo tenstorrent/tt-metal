@@ -16,9 +16,9 @@
 //                         read from cb_group_stats = [rstd, mean*rstd, e] (e = 1.0, written once by the writer):
 //                         a = rstd x gmap, b' = [mean*rstd, e] x [gmap; bmap] = mean*rstd*gamma - beta, per
 //                         channel (rows replicated); no affine: the group map, transposed
-//   normalize           : per chunk y = (-1)*b' + x*a, two accumulating FPU multiplies into one DEST tile
-//                         (raw compute API), resident chunks first; sharded RM packs untilized straight into the
-//                         output shard (pack_untilize_dest)
+//   normalize           : per chunk y = x*a - b': DEST seeded with 0 - b' (raw LLK, one unpacker context per DEST
+//                         window), then DEST += x*a (ELWMUL, srcB a row broadcast); resident chunks first; sharded
+//                         RM packs untilized straight into the output shard (pack_untilize_dest)
 // Shift k (Refinement 1): one sample per group, x[image row 0, first channel of the group], identical on every
 // core of a unit, so the shifted sums combine with no correction. With mean' = S1'/n and T2 = Sigma x*(x - k),
 //   var = T2/n - mean'*(mean' + k) = E[(x - k)^2] - mean'^2,
@@ -73,7 +73,7 @@ constexpr uint32_t cb_output_rm = 1;  // sharded RM: the output shard (untilized
 constexpr uint32_t cb_input_tiles = 2;
 constexpr uint32_t cb_input_keep = 3;
 constexpr uint32_t cb_output_tiles = 5;
-constexpr uint32_t cb_neg_one = 6;  // constant -1 (bf16, compute-generated once): pass 2's folded '- b''
+constexpr uint32_t cb_neg_one = 6;  // constant -1 (bf16, compute-generated once): the root finalize's in0 (-k, -S)
 constexpr uint32_t cb_sum_acc = 7;
 constexpr uint32_t cb_sumsq_acc = 8;
 constexpr uint32_t cb_chan_scale = 9;
@@ -373,16 +373,113 @@ NOINLINE_BLOCK_OP void moments_rows(uint32_t rows, bool first, bool last) {
     }
 }
 
-// Pass-2 normalize of the chunk at the front of cb_input_keep: y = a*x - b' (a, b' row-mapped, held for the
-// block), as two accumulating FPU multiplies into one DEST tile: DEST = (-1)*b' + x*a.
-// perf_experiments/per_tile_pass_chains (N1b): raw compute API instead of eltwise_chain(BinaryFpu Mul +
-// DestReuseBinary Sub); measured with N1u below: vae_tile_16384x512 54.6 -> 49.7 us, unet_rm_ip_16384x960
-// 167.9 -> 153.9 us (changelog Perf 1, Helper bypasses). Mechanism: ELWMUL always accumulates into DEST, so the
-// subtraction is folded into a second multiply by a constant -1 tile; both multiplies share one (srcA bf16, srcB
-// Float32) format pair and one MOP, so there is no per-window re-init / reconfig and no DEST->src move (the dest-reuse
-// MOVD2A stalls per face). Precision: b' and a sit on srcB (Float32 -> tf32, every bit used under HiFi3); -1 and x are
-// bf16 on srcA (exact); the sum is formed in fp32 DEST (the dest-reuse path truncated a*x to tf32 on the DEST -> srcA
-// move).
+// Pass-2 normalize: DEST = (0 - b') + x * a per output tile, CHAIN_BLOCK tiles per DEST window.
+// perf_experiments/normalize_bcast_srcb (Perf 2), measured against the (-1)*b' + x*a pair of mul_tiles it replaces
+// (device ns, BH): vae_tile_16384x512 33136 -> 29505, unet_tile_4096x640_4x8 24623 -> 22404, unet_rm_ip_16384x960
+// 68890 -> 66506, unet_tile_1024x1280 11597 -> 11068; bit-identical output on every case run.
+// Helpers bypassed: mul_tiles / mul_init (compute API) for the seed, and llk_unpack_A / the binary MOP for its unpack.
+// Mechanism:
+//   - a and b' are rows-replicated (the expand matmul's output), so row 0 of each face is the whole operand: both
+//     FPU ops take srcB as a ROW broadcast of one 16-datum row per face (x-end 16, tensor shape FR1 x NF1x2).
+//   - The seed is ELWSUB(srcA = 0, srcB = b' row): the unpacker zeroes srcA without an L1 read (UNPACR_NOP
+//     ZEROSRC + SET_DVALID), so the bf16 (-1) tile, its srcA unpack and two of the three HiFi3 phases are gone.
+//     0 - tf32(b') == HiFi3 (-1) * tf32(b') bit for bit (srcA = -1 has no low mantissa bits).
+//   - Measured (ablation): the seed's cost was the per-call unpacker context (base-address write, semaphore round
+//     trip), not its data. One context covers the whole DEST window: b' tiles are addressed by the unpacker's ch0
+//     Z counter (Z = 4 * w + face) from tile 0 of cb_bprime, and each tile takes 2 srcA/srcB bank pairs (the face-0
+//     row seeds DEST faces 0 and 2, the face-1 row faces 1 and 3).
+//   - The seed's math reuses the ELWMUL ROW init's ADDR_MOD_0 (srcA +8, srcB +0, dest +8), the stock ELWSUB ROW
+//     addressing, so one init per chunk serves both ops; the x*a multiply is the stock per-tile call.
+// History: Perf 1 (per_tile_pass_chains N1b / N1u) replaced eltwise_chain(BinaryFpu Mul + DestReuseBinary Sub)
+// with two accumulating mul_tiles, (-1)*b' + x*a (no per-window re-init, no DEST->srcA move; changelog Perf 1).
+// Precision: b' and a sit on srcB (Float32 -> tf32, every bit used under HiFi3), x is bf16 on srcA (exact); the sum
+// is formed in fp32 DEST.
+#ifdef TRISC_UNPACK
+// srcB shape of a / b': one row per face, 1x2 faces. Only the x-end (datums per UNPACR) changes; the L1 face stride
+// stays the CB's full-tile face size, so UNPACR z+1 lands on face 1's row 0.
+constexpr ckernel::TensorShape P2_ROWB_SHAPE = ckernel::make_tensor_shape(1, 16, 1, 2);
+static constexpr uint32_t P2_UNP_B_ROW =
+    TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+static constexpr uint32_t P2_UNP_A_ZERO = TT_OP_UNPACR_NOP(
+    SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+// Seed unpack of DEST tiles 0..cnt-1 from b' tiles ww, ww+1, ... (wrapping from wrap_at back to reset_to), in one
+// unpacker context: _llk_unpack_A_'s context protocol around per-tile (Z = 4 * ww, (b' row, zero A) x 2).
+inline void p2_seed_unpack_window(uint32_t cnt, uint32_t ww, uint32_t wrap_at, uint32_t reset_to) {
+    const uint32_t id = get_operand_id(cb_bprime);
+    const uint32_t address = get_local_cb_interface(id).fifo_rd_ptr - 1;
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+    cfg[unp_cfg_context == 0 ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32] =
+        address;
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    for (uint32_t k = 0; k < cnt; ++k) {
+        TT_SETADC(p_setadc::UNP_B, p_setadc::CH_0, p_setadc::SET_Z, ww << 2);
+        TTI_INSN(P2_UNP_B_ROW);
+        TTI_INSN(P2_UNP_A_ZERO);
+        TTI_INSN(P2_UNP_B_ROW);
+        TTI_INSN(P2_UNP_A_ZERO);
+        ww = ww + 1 == wrap_at ? reset_to : ww + 1;
+    }
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+#endif
+#ifdef TRISC_MATH
+// Seed math of DEST tiles 0..cnt-1: bank pair 1 (b' face-0 row) writes DEST rows 0-15 and 32-47, bank pair 2
+// (face-1 row) rows 16-31 and 48-63; srcA (zeroed) is re-read from row 0 for each face.
+inline void p2_seed_math_window(uint32_t cnt) {
+    for (uint32_t k = 0; k < cnt; ++k) {
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(k);
+        TTI_ELWSUB(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_0, 0);
+        TTI_ELWSUB(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_0, 0);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_A);
+        TTI_INCRWC(0, 8, 0, 0);
+        TTI_INCRWC(0, 8, 0, 0);
+        TTI_ELWSUB(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_0, 0);
+        TTI_ELWSUB(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_0, 0);
+        TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_ABD);
+        TTI_INCRWC(0, 8, 0, 0);
+        TTI_INCRWC(0, 8, 0, 0);
+        TTI_ELWSUB(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_0, 0);
+        TTI_ELWSUB(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_0, 0);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_A);
+        TTI_INCRWC(0, 8, 0, 0);
+        TTI_INCRWC(0, 8, 0, 0);
+        TTI_ELWSUB(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_0, 0);
+        TTI_ELWSUB(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_0, 0);
+        TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_ABD);
+    }
+    math::clear_dst_reg_addr();
+}
+#endif
+// Once per chunk: formats (srcA bf16 x, srcB Float32 a / b'), the ELWMUL ROW HiFi3 math init (its ADDR_MOD_0 also
+// drives the seed) and the AB ROW unpack init with B = one row per face (its x-end also serves the seed).
+ALWI void p2_init(uint32_t x_cb) {
+    reconfig_data_format(x_cb, cb_bprime);
+    state_configure(x_cb, cb_chan_scale, __builtin_LINE());
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, MATH_FIDELITY>(
+        x_cb, cb_chan_scale, 0)));
+    UNPACK((_llk_unpack_AB_init_<BroadcastType::ROW>(
+        ckernel::DEFAULT_TENSOR_SHAPE, P2_ROWB_SHAPE, ckernel::Transpose::None)));
+}
+// DEST[0..cnt-1] = 0 - b'[ww...] (row broadcast), b' index advancing ww -> wrap_at -> reset_to.
+ALWI void p2_seed_window(uint32_t cnt, uint32_t ww, uint32_t wrap_at, uint32_t reset_to) {
+    UNPACK((p2_seed_unpack_window(cnt, ww, wrap_at, reset_to)));
+    MATH((p2_seed_math_window(cnt)));
+}
+// DEST[dst] += x[xi] * a[w] (a as a row broadcast), HiFi3.
+ALWI void p2_mul_tile(uint32_t x_cb, uint32_t xi, uint32_t w, uint32_t dst) {
+    UNPACK((llk_unpack_AB<BroadcastType::ROW>(x_cb, cb_chan_scale, xi, w)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::ROW,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::NONE>(x_cb, cb_chan_scale, dst, true)));
+}
+
 ALWI void normalize_chunk(uint32_t rows_valid) {
     constexpr uint32_t x_cb = cb_input_keep;
     {
@@ -393,25 +490,18 @@ ALWI void normalize_chunk(uint32_t rows_valid) {
     cb_wait_front(cb_chan_scale, W);
     cb_wait_front(cb_bprime, W);
     const uint32_t n = rows_valid * W;
-    reconfig_data_format(cb_neg_one, cb_bprime);
+    p2_init(x_cb);
     pack_reconfig_data_format(cb_output_tiles);
-    mul_init(cb_neg_one, cb_bprime);
     uint32_t w = 0;
     for (uint32_t i = 0; i < n; i += CHAIN_BLOCK) {
         const uint32_t cnt = n - i < CHAIN_BLOCK ? n - i : CHAIN_BLOCK;
         cb_reserve_back(cb_output_tiles, cnt);
         tile_regs_acquire();
-        uint32_t ww = w;
+        p2_seed_window(cnt, w, W, 0);
         for (uint32_t j = 0; j < cnt; ++j) {
-            mul_tiles(cb_neg_one, cb_bprime, 0, ww, j);
-            ww = ww + 1 == W ? 0 : ww + 1;
+            p2_mul_tile(x_cb, i + j, w, j);
+            w = w + 1 == W ? 0 : w + 1;
         }
-        ww = w;
-        for (uint32_t j = 0; j < cnt; ++j) {
-            mul_tiles(x_cb, cb_chan_scale, i + j, ww, j);
-            ww = ww + 1 == W ? 0 : ww + 1;
-        }
-        w = ww;
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t j = 0; j < cnt; ++j) {
@@ -424,7 +514,7 @@ ALWI void normalize_chunk(uint32_t rows_valid) {
     cb_pop_front(x_cb, T);
 }
 
-// Sharded RM (UNTILIZE_OUT): the same folded normalize, packed straight to the row-major output shard with
+// Sharded RM (UNTILIZE_OUT): the same normalize, packed straight to the row-major output shard with
 // pack_untilize_dest (perf_experiments/per_tile_pass_chains N1u). Bypasses PackTile -> cb_output_tiles ->
 // untilize<>() (unpack + datacopy + pack again per tile): the normalized DEST block is untilized by the packer.
 // DEST block = UB_RT tile rows x UB_CT tile columns (UB_CT | W, UB_CT * UB_RT <= DEST window); the packer writes
@@ -450,8 +540,7 @@ ALWI void normalize_untilize_chunk(uint32_t rows_valid) {
     MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_normalize");
     cb_wait_front(cb_chan_scale, W);
     cb_wait_front(cb_bprime, W);
-    reconfig_data_format(cb_neg_one, cb_bprime);
-    mul_init(cb_neg_one, cb_bprime);
+    p2_init(x_cb);
     pack_untilize_dest_init<UB_CT, W>(cb_output_rm);
     for (uint32_t r0 = 0; r0 < rows_valid; r0 += UB_RT) {
         const uint32_t rt = rows_valid - r0 < UB_RT ? rows_valid - r0 : UB_RT;
@@ -459,14 +548,10 @@ ALWI void normalize_untilize_chunk(uint32_t rows_valid) {
         for (uint32_t b = 0; b < UB_NB; ++b) {
             const uint32_t c0 = b * UB_CT;
             tile_regs_acquire();
+            p2_seed_window(rt * UB_CT, c0, c0 + UB_CT, c0);
             for (uint32_t r = 0; r < rt; ++r) {
                 for (uint32_t c = 0; c < UB_CT; ++c) {
-                    mul_tiles(cb_neg_one, cb_bprime, 0, c0 + c, r * UB_CT + c);
-                }
-            }
-            for (uint32_t r = 0; r < rt; ++r) {
-                for (uint32_t c = 0; c < UB_CT; ++c) {
-                    mul_tiles(x_cb, cb_chan_scale, (r0 + r) * W + c0 + c, c0 + c, r * UB_CT + c);
+                    p2_mul_tile(x_cb, (r0 + r) * W + c0 + c, c0 + c, r * UB_CT + c);
                 }
             }
             tile_regs_commit();
@@ -644,8 +729,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(cb_chan_scale, cb_group_map, cb_local_partials);
 
-    // The constant -1 tile (bf16, srcA of pass 2's folded subtraction), resident for the whole kernel.
-    {
+    // The constant -1 tile (bf16, in0 of the root finalize's -k and sender-sum matmuls), resident for the whole
+    // kernel. Only the unit root reads it.
+    if constexpr (IS_ROOT) {
         DataflowBuffer neg_one_dfb(cb_neg_one);
         eltwise_chain(
             IterationShape::one_tile(), FillScalar<Dst::D0>{-1.0f}, PackTile<output(cb_neg_one)>{neg_one_dfb});

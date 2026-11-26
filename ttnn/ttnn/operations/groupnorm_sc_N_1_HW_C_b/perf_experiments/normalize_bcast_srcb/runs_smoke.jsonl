@@ -1,0 +1,8 @@
+{"variant": "kernels", "case": "unet_tile_1024x1280", "pcc": 0.9999981833428374, "rms": 0.0019064261655769574, "md5": "ad2c4f222728"}
+{"variant": "kernels@rowb", "case": "unet_tile_1024x1280", "pcc": 0.9999981833428374, "rms": 0.0019064261655769574, "md5": "ad2c4f222728"}
+{"variant": "kernels@zsub", "case": "unet_tile_1024x1280", "pcc": 0.9999981833428374, "rms": 0.0019064261655769574, "md5": "ad2c4f222728"}
+{"variant": "kernels@zsub_raw", "case": "unet_tile_1024x1280", "pcc": 0.9999981833428374, "rms": 0.0019064261655769574, "md5": "ad2c4f222728"}
+{"variant": "kernels", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "md5": "ad2c4f222728"}
+{"variant": "kernels@rowb", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "md5": "ad2c4f222728"}
+{"variant": "kernels@zsub", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "md5": "ad2c4f222728"}
+{"variant": "kernels@zsub_raw", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "md5": "ad2c4f222728"}

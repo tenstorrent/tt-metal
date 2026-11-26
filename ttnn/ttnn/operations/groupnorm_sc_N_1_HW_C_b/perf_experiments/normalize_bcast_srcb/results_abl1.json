@@ -1,0 +1,52 @@
+[
+ {
+  "variant": "kernels@zsub_raw",
+  "case": "unet_rm_ip_16384x960",
+  "ns": 66591
+ },
+ {
+  "variant": "kernels@zsub_raw_noseed",
+  "case": "unet_rm_ip_16384x960",
+  "ns": 66447
+ },
+ {
+  "variant": "kernels@zsub_raw_nomul",
+  "case": "unet_rm_ip_16384x960",
+  "ns": 66410
+ },
+ {
+  "variant": "kernels@zsub_raw_noseed_nomul",
+  "case": "unet_rm_ip_16384x960",
+  "ns": 66343
+ },
+ {
+  "variant": "kernels@noseed",
+  "case": "unet_rm_ip_16384x960",
+  "ns": 66513
+ },
+ {
+  "variant": "kernels@zsub_raw",
+  "case": "vae_tile_16384x512",
+  "ns": 31746
+ },
+ {
+  "variant": "kernels@zsub_raw_noseed",
+  "case": "vae_tile_16384x512",
+  "ns": 27695
+ },
+ {
+  "variant": "kernels@zsub_raw_nomul",
+  "case": "vae_tile_16384x512",
+  "ns": 27554
+ },
+ {
+  "variant": "kernels@zsub_raw_noseed_nomul",
+  "case": "vae_tile_16384x512",
+  "ns": 24827
+ },
+ {
+  "variant": "kernels@noseed",
+  "case": "vae_tile_16384x512",
+  "ns": 27759
+ }
+]
