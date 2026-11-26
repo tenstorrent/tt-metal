@@ -412,6 +412,157 @@ def test_spec_vllm_class_runner(mesh_device, monkeypatch, warmup):
     assert getattr(model, "_vfy_trace_id", None) is None, "verify trace not released"
 
 
+def _masked_columns(logits, n, gen):
+    """Plugin-packed token mask int32 [1, 1+K, V/32] for one verify row whose logits are ``logits`` [1+K, V]: columns
+    0..n allow a random third of the vocabulary and never the column's argmax, so each masked argmax differs from the
+    verify's own; later columns are unconstrained."""
+    T, V = logits.shape
+    allowed = torch.rand(T, V, generator=gen) < 0.3
+    allowed[torch.arange(T), logits.argmax(dim=1)] = False
+    allowed[n + 1 :] = True
+    bits = allowed.reshape(T, V // 32, 32).to(torch.int64) << torch.arange(32)
+    packed = bits.sum(-1)
+    return torch.where(packed >= 2**31, packed - 2**32, packed).to(torch.int32).reshape(1, T, V // 32)
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_spec_vllm_class_masked_verify(mesh_device, monkeypatch):
+    """supports_spec_device_mask on Qwen36MTPContractForCausalLM, called as the plugin calls it: each verify of a
+    greedy request is first run as a logits verify, which reads the block's [1+K, V] logits, then again over the same
+    block as decode_forward(defer_device_sampling=True) followed by sample_deferred_decode with a token mask that rules
+    out each column's argmax. The logits verify writes its GDN states into scratch blocks, so the deferred verify reads
+    the same start state (in mamba_cache_mode "none" a step's start block is one of its own window blocks), and its
+    KV writes are those of the deferred verify. The ids of the deferred
+    verify must equal the host's masked argmax of the logits verify column by column (the host logits path of the
+    plugin), the request then commits them and the propose after the deferred verify continues them. No program
+    compiles after the capture, and the verify trace is captured once."""
+    if not _MULTI:
+        pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
+    if not (os.environ.get("HF_MODEL") or os.environ.get("MODEL_WEIGHTS_DIR")):
+        pytest.skip("set HF_MODEL (checkpoint dir)")
+    from transformers import AutoTokenizer
+
+    if _N_LAYERS:
+        monkeypatch.setattr(
+            qwen36_vllm, "create_tt_model", functools.partial(qwen36_vllm.create_tt_model, n_layers=_N_LAYERS)
+        )
+    mesh_device.enable_program_cache()
+    hf_config = SimpleNamespace(_name_or_path=os.environ.get("HF_MODEL"))
+    cls = Qwen36MTPContractForCausalLM.initialize_vllm_model(
+        hf_config, mesh_device, max_batch_size=1, max_seq_len=MAX_MODEL_LEN, tt_data_parallel=1, optimizations=None
+    )
+    model = cls.model[0]
+    tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
+    probe = PluginLayout.for_model(model, num_blocks=1)
+    width = math.ceil(MAX_MODEL_LEN / probe.block_size)
+    layout = PluginLayout.for_model(model, num_blocks=width + probe.num_groups * (K + 1) + 8)
+    kv = cls.allocate_kv_cache_per_layer(layout.per_layer_specs)
+    for enable_trace in (False, True):
+        cls.warmup_model_prefill(enable_trace=enable_trace, kv_cache=kv, can_sample_on_device=True)
+        cls.warmup_model_decode(
+            enable_trace=enable_trace, kv_cache=kv, max_batch_size=1, num_blocks=width, can_sample_on_device=True
+        )
+    eng = cls._engine()
+    assert eng.mask_ready, "a device-sampling launch prepares the token mask"
+    n_prog = mesh_device.num_program_cache_entries()
+
+    runner = PluginRunner(cls, kv, layout, seed=7)
+    # GDN window blocks a reference logits verify writes instead of the step's own.
+    scratch = [[runner.free.pop() for _ in range(K + 1)] for _ in range(layout.num_groups)]
+    vocab = model.args.vocab_size
+    gen = torch.Generator().manual_seed(11)
+    greedy = SimpleNamespace(temperature=[0.0], top_k=[1], top_p=[1.0], seed=[None])
+    prompt = _get_prompt(130, tokenizer)[0].tolist()
+    P = len(prompt)
+    common = dict(
+        kv_cache=kv,
+        enable_trace=True,
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        runner.state.admit(0)
+        logits, _ = cls.prefill_forward(
+            torch.tensor([prompt], dtype=torch.int32),
+            runner._table(P - 1),
+            kv,
+            prompt_lens=np.array([P]),
+            start_pos=np.array([0]),
+            empty_slots=[0],
+            enable_trace=True,
+            mamba_state=runner.state.state({0: runner.state.prefill(0, 0, P)}, 1, intermediate=()),
+        )
+        out, proposal, acc, masked_steps = [int(logits[0, -1].argmax())], [], 1, 0
+        for step in range(24):
+            pos0 = P + len(out) - 1
+            n = len(proposal)
+            tok = torch.full((1, 1 + K), PAD, dtype=torch.int32)
+            pos = torch.full((1, 1 + K), PAD, dtype=torch.int32)
+            tok[0, : 1 + n] = torch.tensor([out[-1]] + proposal, dtype=torch.int32)
+            pos[0, : 1 + n] = torch.arange(pos0, pos0 + 1 + n, dtype=torch.int32)
+            windows, starts = runner.state.decode(0, pos0, 1 + n)
+            block = dict(
+                tokens=tok,
+                start_pos=pos,
+                page_table=runner._table(pos0),
+                num_valid_drafts=torch.tensor([n], dtype=torch.int32),
+                accepted_counts=torch.tensor([acc], dtype=torch.int32),
+                page_tables_per_layer=[runner._table(pos0)] * len(model.layer_indices),
+                **common,
+            )
+            read = cls.decode_forward(
+                spec_mode="logits",
+                read_from_device=True,
+                mamba_state=runner.state.state({0: (scratch, starts)}, 1),
+                **block,
+            )
+            block["mamba_state"] = runner.state.state({0: (windows, starts)}, 1)
+            col = read.logits[0, :, :vocab].float()
+            mask = _masked_columns(col, n, gen) if step % 3 != 2 else None  # every third step is unconstrained
+            payload = cls.decode_forward(
+                spec_mode="argmax_ids", read_from_device=False, defer_device_sampling=True, **block
+            )
+            res = cls.sample_deferred_decode(
+                payload, sampling_params=greedy, grammar_bitmask=mask, num_valid_drafts=torch.tensor([n])
+            )
+            ids = cls.read_decode_output(res.argmax_ids)[0].tolist()
+            if mask is None:
+                want = col.argmax(dim=1)
+            else:
+                allowed = ((mask[0].unsqueeze(-1) >> torch.arange(32, dtype=torch.int32)) & 1).bool().reshape(1 + K, -1)
+                want = torch.where(allowed[:, :vocab], col, torch.tensor(float("-inf"))).argmax(dim=1)
+                masked_steps += 1
+            assert ids[: n + 1] == want[: n + 1].tolist(), f"step {step}: deferred ids {ids} vs masked argmax {want}"
+            j = 0
+            while j < n and proposal[j] == ids[j]:
+                j += 1
+            new = proposal[:j] + [ids[j]]
+            out.extend(new)
+            acc = len(new)
+            runner.state.commit(0, acc)
+            committed = torch.full((1, 1 + K), PAD, dtype=torch.int32)
+            cpos = torch.full((1, 1 + K), PAD, dtype=torch.int32)
+            committed[0, :acc] = torch.tensor(new, dtype=torch.int32)
+            cpos[0, :acc] = torch.arange(pos0 + 1, pos0 + 1 + acc, dtype=torch.int32)
+            d = cls.propose_draft_tokens(K, committed, cpos, torch.tensor([acc], dtype=torch.int32), hidden=res.hidden)
+            proposal = [int(t) for t in d.draft_token_ids[0, : int(d.num_valid[0])]]
+        logger.info(f"[vllm_class] masked verifies: {masked_steps} of 24, {len(out)} tokens, engine {eng.masked_steps}")
+        assert eng.masked_steps == masked_steps > 0
+        cls.release_request(0)
+        runner.state.release(0)
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    assert mesh_device.num_program_cache_entries() == n_prog, "program cache grew"
+    assert model._vfy_capture_count == 1, "verify trace was re-captured"
+    cls.release_persistent_capture()
+
+
 # --- host tests (CPU) ---
 
 
