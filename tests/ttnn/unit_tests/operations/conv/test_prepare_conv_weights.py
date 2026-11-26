@@ -415,6 +415,92 @@ def test_prepare_bias(
     assert passing
 
 
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width",
+    (
+        (1, 20, 40, 30, 30),
+        (2, 64, 96, 16, 16),
+    ),
+)
+@pytest.mark.parametrize("prepare_bias", [True, False], ids=["prepared_bias", "host_bias"])
+@pytest.mark.parametrize("input_on_device", [True, False], ids=["input_on_device", "input_on_host"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
+def test_conv2d_1x1_with_bias(
+    batch_size,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    prepare_bias,
+    input_on_device,
+    device,
+):
+    # A 1x1 conv runs as a matmul, which broadcasts the bias across rows only if the bias has logical height 1.
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((batch_size, input_channels, input_height, input_width), dtype=torch.bfloat16)
+    torch_weight_tensor = torch.randn((output_channels, input_channels, 1, 1), dtype=torch.bfloat16)
+    torch_bias_tensor = torch.randn((1, 1, 1, output_channels), dtype=torch.bfloat16) * 10
+
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_input_tensor, torch_weight_tensor, bias=torch_bias_tensor.reshape(-1)
+    ).permute(0, 2, 3, 1)
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor.permute(0, 2, 3, 1), ttnn.bfloat16)
+    if input_on_device:
+        tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
+    tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
+    tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
+
+    conv_config = ttnn.Conv2dConfig(
+        weights_dtype=ttnn.bfloat16,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    )
+    conv_kwargs = {
+        "in_channels": input_channels,
+        "out_channels": output_channels,
+        "batch_size": batch_size,
+        "input_height": input_height,
+        "input_width": input_width,
+        "kernel_size": (1, 1),
+        "stride": (1, 1),
+        "padding": (0, 0),
+        "dilation": (1, 1),
+        "groups": 1,
+        "device": device,
+        "conv_config": conv_config,
+    }
+
+    if prepare_bias:
+        tt_bias_tensor = ttnn.prepare_conv_bias(
+            bias_tensor=tt_bias_tensor,
+            input_memory_config=ttnn.L1_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_dtype=ttnn.bfloat16,
+            **conv_kwargs,
+        )
+        assert tt_bias_tensor.shape[-2] == 1
+        tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device)
+
+    tt_output_tensor_on_device, [_, tt_bias_tensor_used] = ttnn.conv2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        bias_tensor=tt_bias_tensor,
+        compute_config=ttnn.init_device_compute_kernel_config(device.arch()),
+        dtype=ttnn.bfloat16,
+        return_weights_and_bias=True,
+        **conv_kwargs,
+    )
+    assert tt_bias_tensor_used.shape[-2] == 1
+
+    torch_output_tensor = ttnn.to_torch(ttnn.from_device(tt_output_tensor_on_device))
+    torch_output_tensor = torch_output_tensor[:, :, :, :output_channels].reshape(torch_out_golden_tensor.shape)
+
+    pcc = 0.99
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
+    logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
+    assert passing
+
+
 SliceHeight = ttnn.Conv2dDRAMSliceHeight
 SliceWidth = ttnn.Conv2dDRAMSliceWidth
 
