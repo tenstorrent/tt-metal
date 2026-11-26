@@ -146,7 +146,7 @@ Validation, before any device work; all errors printed, then exit 2:
 5. Exit code (below).
 
 - Triage env, every pytest attempt: `TT_METAL_OPERATION_TIMEOUT_SECONDS=<hang_secs>`, `TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE` = tt-triage with gwdt's `HANG_TRIAGE` scripts, `--llm-output-path=<crash_triage_NN.csv>`, then `kill -9 $PPID`.
-- Script runner (mcast-ack): no triage env (the script arms its own watchdog); `MCAST_ACK_WORK_DIR=<attempt dir>/chips` (script change: `__main__` passes `MCAST_ACK_WORK_DIR` to `scan_all_chips(work_dir=...)`; unset = `/tmp/mm_mcast_write_ack_failure`). The script deletes that dir at start, so it must be the dedicated `chips/` subfolder, never the attempt folder itself; per-chip `cache/` folders deleted after the attempt.
+- Script runner (mcast-ack): no triage env (the script arms its own watchdog); `MCAST_ACK_WORK_DIR=<attempt dir>/chips` (script change: `__main__` passes `MCAST_ACK_WORK_DIR` to `scan_all_chips(work_dir=...)`; unset = `/tmp/mm_mcast_write_ack_failure`). The script deletes that dir at start, so it must be the dedicated `chips/` subfolder, never the attempt folder itself. Kernel caches: `MCAST_ACK_CACHE_DIR=/tmp/didt_runner_<run>/<attempt>` on local disk (32 concurrent JIT builds into one NFS tree fail with link/assembler write errors, which the scan reports as hangs); the script keys them `kmd<minor>/` per chip; the runner deletes the dir after the attempt.
 - Step status = first attempt; fallbacks never change it.
 - `status.json` is rewritten after every state change (atomic: temp file + rename).
 

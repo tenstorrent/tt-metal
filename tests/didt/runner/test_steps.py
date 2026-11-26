@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import tempfile
 import time
 from pathlib import Path
 
@@ -72,7 +73,8 @@ class FakeShell:
             return 137
         if script:
             work = Path(env["MCAST_ACK_WORK_DIR"])
-            (work / "chip3" / "cache").mkdir(parents=True)
+            (work / "chip3").mkdir(parents=True)
+            (Path(env["MCAST_ACK_CACHE_DIR"]) / "kmd2").mkdir(parents=True)
             (work / "chip3" / "pytest.log").write_text("1 passed\n")
             if outcome == "build":
                 log.write_text(
@@ -184,7 +186,10 @@ def test_script_runner_work_dir(tmp_path):
     assert call["env"]["MATMUL_WORKLOAD"] == "wkv_b1" and call["timeout"] == 1800
     assert "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" not in call["env"]
     assert (run_dir / "nd/mcast-ack/chips/chip3/pytest.log").is_file()
-    assert not (run_dir / "nd/mcast-ack/chips/chip3/cache").exists()
+    # kernel caches on local disk, one dir per attempt, gone afterwards; logs stay in the run dir
+    cache = Path(tempfile.gettempdir()) / f"didt_runner_{run_dir.name}"
+    assert call["env"]["MCAST_ACK_CACHE_DIR"] == str(cache / "nd/mcast-ack")
+    assert not cache.exists()
     assert rc == 0 and steps["nd:mcast-ack"]["status"] == "PASS"
 
 
