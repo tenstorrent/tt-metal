@@ -8,8 +8,8 @@ dashboards:
     description: "Shadow PR Gate: a non-blocking shadow of the PR Gate, run on each merge-queue entry; its checks are not required"
     report:
       check: true
-    conditions:
-      apply-on: [pull-request, merge-queue]
+    member-conditions:
+      evaluate-on: [pull-request, merge-queue]
     members:
       - job: asan-build
         when:
