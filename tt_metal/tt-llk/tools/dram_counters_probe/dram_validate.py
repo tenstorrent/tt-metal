@@ -64,7 +64,11 @@ def main():
         default=0.02,
         help="relative error accepted on the main program",
     )
-    p.add_argument("--device", default=c.default_device_path())
+    p.add_argument(
+        "--device",
+        required=True,
+        help="device node of the card to use, e.g. /dev/tenstorrent/0",
+    )
     args = p.parse_args()
     if c.card_busy(args.device):
         c.fail(f"{args.device} is open by another process; not running")
