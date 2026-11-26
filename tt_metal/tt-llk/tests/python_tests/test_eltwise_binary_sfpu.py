@@ -1254,8 +1254,12 @@ def _fp32_from_bits(words):
 
 # The expected verdicts model the Wormhole and Blackhole SFPU, which read a subnormal as zero.
 @skip_for_quasar
-@parametrize(mathop=list(_FP32_COMPARE_REFERENCE), dest_acc=[DestAccumulation.Yes])
-def test_eltwise_binary_sfpu_float_comparison_specials(mathop, dest_acc):
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32]),
+    mathop=list(_FP32_COMPARE_REFERENCE),
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_float_comparison_specials(formats, mathop, dest_acc):
     # Float32 into a 32-bit Dest delivers subnormals and NaN payloads to the SFPU. Expected:
     # operands flushed to zero when subnormal, then IEEE comparison (any NaN is unordered).
     pairs = [
@@ -1266,7 +1270,7 @@ def test_eltwise_binary_sfpu_float_comparison_specials(mathop, dest_acc):
     ]
     src = _build_paired_tile_override(pairs, torch.float32)
     res, _ = sfpu_binary(
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        formats,
         dest_acc,
         mathop,
         src_A_override=src,
