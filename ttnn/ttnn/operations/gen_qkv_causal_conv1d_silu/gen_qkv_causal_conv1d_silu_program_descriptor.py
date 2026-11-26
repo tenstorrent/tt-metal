@@ -1,0 +1,350 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""gen_qkv_causal_conv1d_silu — plan selection and ProgramDescriptor.
+
+One program: per core, one channel group (``block_ch_tiles`` channel tiles) and one contiguous
+token range (``core_seq_tiles`` tile-rows), processed in blocks of ``block_rows`` tile-rows.
+
+    reader  (NCRISC/NoC0): taps -> cb_tap_tiles (packed, tap p in row 2p);
+                           RM:   halo + body sticks -> cb_rows slot
+                           TILE: input tiles -> cb_input_tiles; cb_untilized_rows -> cb_rows slot
+    compute (TRISCs):      [TILE: untilize] -> windowed tilize (4 shifted windows / tile-row)
+                           -> sum_p window_p * rowbcast(tap_p) in DEST -> SiLU in DEST -> pack
+    writer  (BRISC/NoC1):  cb_output_tiles -> q / k / v (per-tile routing of the channel axis)
+
+Every block knob (block_ch_tiles, block_rows, cores_per_group) and every buffer depth is defined
+exactly once in this module; CB capacities, loop trip counts and grid sizing derive from them.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+import ttnn
+
+KERNEL_DIR = Path(__file__).parent / "kernels"
+
+# ---------------------------------------------------------------------------------------------
+# Op-math constants
+# ---------------------------------------------------------------------------------------------
+TAP_COUNT = 4  # the convolution has 4 taps
+HALO_ROWS = TAP_COUNT - 1  # rows before a block's first token that the block reads
+TILE_DIM = 32
+
+# ---------------------------------------------------------------------------------------------
+# Buffer-depth knobs (single source of truth; every CB capacity derives from them)
+# ---------------------------------------------------------------------------------------------
+ROWS_DEPTH = 2  # cb_rows slots: reader fills block b+1 while compute windows block b
+OUT_DEPTH = 2  # cb_output_tiles tile-rows: writer drains row m while compute packs m+1
+IN_DEPTH = 2  # TILE regime: cb_input_tiles tile-rows (reader fetch j+1 during untilize j)
+UNTILIZED_DEPTH = 2  # TILE regime: cb_untilized_rows tile-rows (untilize j+1 during copy j)
+
+# ---------------------------------------------------------------------------------------------
+# Mechanism caps
+# ---------------------------------------------------------------------------------------------
+MAX_BLOCK_CH_TILES = 255  # fast tilize requires block_width_tiles < 256 (tilize_helpers.inl)
+L1_BOUND_BYTES = 1_048_576  # BB-05: L1 the model leaves to the op on every core
+
+# ---------------------------------------------------------------------------------------------
+# CB indices (semantic names; the numbers are only slots)
+# ---------------------------------------------------------------------------------------------
+CB_ROWS = 0  # row-major sticks: halo(3) + body(32*rows) per slot
+CB_TAP_TILES = 1  # packed tap tiles, resident
+CB_WINDOW_TILES = 2  # 4 shifted windows per tile-row, one block
+CB_OUTPUT_TILES = 3  # activated output tiles -> writer
+CB_INPUT_TILES = 4  # TILE regime: input tiles -> untilize
+CB_UNTILIZED_ROWS = 5  # TILE regime: untilized tile-rows -> reader -> cb_rows
+
+REGIME_RM = "rm_staged_window"
+REGIME_TILE = "tile_untilize_staged_window"
+
+
+@dataclass(frozen=True)
+class Plan:
+    """The plan a call runs (BB-08: reportable through get_last_plan())."""
+
+    regime: str
+    block_ch_tiles: int
+    block_rows: int
+    num_ch_groups: int
+    cores_per_group: int
+    num_cores: int
+    core_seq_tiles_max: int
+
+
+def select_regime(layout) -> str:
+    return REGIME_RM if layout == ttnn.ROW_MAJOR_LAYOUT else REGIME_TILE
+
+
+def _div_up(a: int, b: int) -> int:
+    return -(-a // b)
+
+
+def footprint(block_ch_tiles: int, block_rows: int, regime: str, *, elem_bytes: int = 2, tile_bytes: int = 2048) -> int:
+    """Per-core CB bytes of a plan (l1_ledger.md: Total per-core footprint)."""
+    stick_bytes = block_ch_tiles * TILE_DIM * elem_bytes
+    total = ROWS_DEPTH * (TILE_DIM * block_rows + HALO_ROWS) * stick_bytes  # cb_rows
+    total += block_ch_tiles * tile_bytes  # cb_tap_tiles
+    total += TAP_COUNT * block_ch_tiles * block_rows * tile_bytes  # cb_window_tiles
+    total += OUT_DEPTH * block_ch_tiles * tile_bytes  # cb_output_tiles
+    if regime == REGIME_TILE:
+        total += (IN_DEPTH + UNTILIZED_DEPTH) * block_ch_tiles * tile_bytes  # TILE hop CBs
+    return total
+
+
+def select_plan(
+    tensor_seq_tiles: int,
+    tensor_ch_tiles: int,
+    grid_x: int,
+    grid_y: int,
+    regime: str,
+    l1_budget: int = L1_BOUND_BYTES,
+    *,
+    max_block_rows: Optional[int] = None,
+    max_cores_per_group: Optional[int] = None,
+    elem_bytes: int = 2,
+    tile_bytes: int = 2048,
+) -> Plan:
+    """Pure plan selection (op_design.md: Work Distribution -> select_plan).
+
+    Candidates: every divisor w of tensor_ch_tiles with w <= 255, G = C_t / w groups <= N cores,
+    footprint(w, 1) <= budget. Per candidate U = min(N // G, T_t, max_cores_per_group) token
+    ranges per group; makespan = ceil(T_t / U) * w. Choose min makespan, ties -> larger w, then
+    fewer cores. block_rows = the coarsest balanced block that fits the budget.
+    """
+    num_grid_cores = grid_x * grid_y
+    cpg_cap = tensor_seq_tiles if max_cores_per_group is None else max(1, min(max_cores_per_group, tensor_seq_tiles))
+    best = None
+    for w in range(1, min(MAX_BLOCK_CH_TILES, tensor_ch_tiles) + 1):
+        if tensor_ch_tiles % w:
+            continue
+        groups = tensor_ch_tiles // w
+        if groups > num_grid_cores:
+            continue
+        if footprint(w, 1, regime, elem_bytes=elem_bytes, tile_bytes=tile_bytes) > l1_budget:
+            continue
+        ranges = min(num_grid_cores // groups, tensor_seq_tiles, cpg_cap)
+        core_seq_tiles_max = _div_up(tensor_seq_tiles, ranges)
+        # Fewest token ranges that keep the same makespan ("then fewer cores").
+        ranges = _div_up(tensor_seq_tiles, core_seq_tiles_max)
+        makespan = core_seq_tiles_max * w
+        rank = (makespan, -w, groups * ranges)
+        if best is None or rank < best[0]:
+            best = (rank, w, groups, ranges, core_seq_tiles_max)
+    if best is None:
+        raise ValueError(
+            f"gen_qkv_causal_conv1d_silu: no channel split of {tensor_ch_tiles} channel tiles fits "
+            f"{num_grid_cores} cores within {l1_budget} B of L1 per core"
+        )
+    _, w, groups, ranges, core_seq_tiles_max = best
+
+    row_cap = core_seq_tiles_max if max_block_rows is None else max(1, min(max_block_rows, core_seq_tiles_max))
+    block_rows_fit = row_cap
+    while (
+        block_rows_fit > 1
+        and footprint(w, block_rows_fit, regime, elem_bytes=elem_bytes, tile_bytes=tile_bytes) > l1_budget
+    ):
+        block_rows_fit -= 1
+    num_blocks = _div_up(core_seq_tiles_max, block_rows_fit)
+    block_rows = _div_up(core_seq_tiles_max, num_blocks)  # balanced: same block count, smallest ragged tail
+
+    return Plan(
+        regime=regime,
+        block_ch_tiles=w,
+        block_rows=block_rows,
+        num_ch_groups=groups,
+        cores_per_group=ranges,
+        num_cores=groups * ranges,
+        core_seq_tiles_max=core_seq_tiles_max,
+    )
+
+
+def output_l1_share(tensor_seq_tiles: int, width_tiles, num_l1_banks: int, tile_bytes: int = 2048) -> int:
+    """Per-core L1 that interleaved L1 outputs q/k/v occupy (subtracted from the CB budget)."""
+    return sum(_div_up(tensor_seq_tiles * x_tiles, num_l1_banks) * tile_bytes for x_tiles in width_tiles)
+
+
+# ---------------------------------------------------------------------------------------------
+# Work distribution
+# ---------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CoreWork:
+    core: "ttnn.CoreCoord"
+    ch_group: int
+    core_seq_start: int  # first tile-row of this core's token range
+    core_seq_tiles: int  # tile-rows in this core's token range
+
+
+def assign_work(plan: Plan, tensor_seq_tiles: int, grid_x: int):
+    """Core i = g * U + s (row-wise over the grid) gets channel group g and token range s."""
+    base, rem = divmod(tensor_seq_tiles, plan.cores_per_group)
+    work = []
+    for g in range(plan.num_ch_groups):
+        for s in range(plan.cores_per_group):
+            i = g * plan.cores_per_group + s
+            work.append(
+                CoreWork(
+                    core=ttnn.CoreCoord(i % grid_x, i // grid_x),
+                    ch_group=g,
+                    core_seq_start=s * base + min(s, rem),
+                    core_seq_tiles=base + (1 if s < rem else 0),
+                )
+            )
+    return work
+
+
+def _row_wise_core_range_set(num_cores: int, grid_x: int):
+    ranges = []
+    full_rows, tail = divmod(num_cores, grid_x)
+    if full_rows:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, full_rows - 1)))
+    if tail:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(tail - 1, full_rows)))
+    return ttnn.CoreRangeSet(ranges)
+
+
+def _cb(index: int, page_size: int, num_pages: int, core_ranges, dtype):
+    return ttnn.CBDescriptor(
+        total_size=num_pages * page_size,
+        core_ranges=core_ranges,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_size)],
+    )
+
+
+# Positions of the buffer addresses inside each kernel's per-core runtime args (rewritten on a
+# program-cache hit; everything else in the descriptor is a function of the cache key).
+READER_ADDR_SLOTS = 6  # input, history, tap0..tap3
+WRITER_ADDR_SLOTS = 3  # q, k, v
+READER_KERNEL_INDEX = 0
+WRITER_KERNEL_INDEX = 1
+
+
+def reader_addresses(input_tensor, history, taps):
+    return [input_tensor.buffer_address(), history.buffer_address()] + [t.buffer_address() for t in taps]
+
+
+def writer_addresses(outputs):
+    return [t.buffer_address() for t in outputs]
+
+
+def create_program_descriptor(
+    input_tensor,
+    history,
+    taps,
+    outputs,
+    widths,
+    plan: Plan,
+    *,
+    grid_x: int,
+    math_fidelity,
+    fp32_dest_acc_en: bool,
+    dst_full_sync_en: bool,
+    input_column_offset: int = 0,
+):
+    """Build the single program. Returns (descriptor, work) — `work` lists the cores in the
+    order their runtime args were written (used to rewrite addresses on a cache hit)."""
+    dtype = input_tensor.dtype
+    elem_bytes = input_tensor.element_size()
+    tile_bytes = ttnn.tile_size(dtype)
+    tensor_seq_tiles = int(input_tensor.shape[1]) // TILE_DIM
+    input_width_tiles = int(input_tensor.shape[2]) // TILE_DIM
+    width_tiles = [x // TILE_DIM for x in widths]
+    w = plan.block_ch_tiles
+    block_rows = plan.block_rows
+    tile_input = plan.regime == REGIME_TILE
+
+    work = assign_work(plan, tensor_seq_tiles, grid_x)
+    core_ranges = _row_wise_core_range_set(plan.num_cores, grid_x)
+
+    # ---- circular buffers (capacities derive from the knobs above) ----
+    stick_bytes = w * TILE_DIM * elem_bytes
+    slot_sticks = TILE_DIM * block_rows + HALO_ROWS
+    cbs = [
+        _cb(CB_ROWS, stick_bytes, ROWS_DEPTH * slot_sticks, core_ranges, dtype),
+        _cb(CB_TAP_TILES, tile_bytes, w, core_ranges, dtype),
+        _cb(CB_WINDOW_TILES, tile_bytes, TAP_COUNT * w * block_rows, core_ranges, dtype),
+        _cb(CB_OUTPUT_TILES, tile_bytes, OUT_DEPTH * w, core_ranges, dtype),
+    ]
+    if tile_input:
+        cbs.append(_cb(CB_INPUT_TILES, tile_bytes, IN_DEPTH * w, core_ranges, dtype))
+        cbs.append(_cb(CB_UNTILIZED_ROWS, tile_bytes, UNTILIZED_DEPTH * w, core_ranges, dtype))
+
+    # ---- reader ----
+    reader_ct = [w, block_rows, int(tile_input), input_width_tiles, elem_bytes, tile_bytes]
+    for t in [input_tensor, history] + list(taps):
+        reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    # ---- writer ----
+    writer_ct = [w, width_tiles[0], width_tiles[1], width_tiles[2], tile_bytes]
+    for t in outputs:
+        writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    # ---- compute ----
+    compute_ct = [w, block_rows, int(tile_input)]
+
+    reader_rt = ttnn.RuntimeArgs()
+    writer_rt = ttnn.RuntimeArgs()
+    compute_rt = ttnn.RuntimeArgs()
+    read_addrs = reader_addresses(input_tensor, history, taps)
+    write_addrs = writer_addresses(outputs)
+    input_col_offset_tiles = input_column_offset // TILE_DIM
+    for cw in work:
+        ch_group_tile_start = cw.ch_group * w
+        reader_rt[cw.core.x][cw.core.y] = read_addrs + [
+            ch_group_tile_start,
+            input_col_offset_tiles,
+            cw.core_seq_start,
+            cw.core_seq_tiles,
+        ]
+        writer_rt[cw.core.x][cw.core.y] = write_addrs + [ch_group_tile_start, cw.core_seq_start, cw.core_seq_tiles]
+        compute_rt[cw.core.x][cw.core.y] = [cw.core_seq_start, cw.core_seq_tiles]
+
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "gen_qkv_causal_conv1d_silu_reader.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=reader_ct,
+        runtime_args=reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    writer = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "gen_qkv_causal_conv1d_silu_writer.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    compute_config = ttnn.ComputeConfigDescriptor()
+    compute_config.math_fidelity = math_fidelity
+    compute_config.fp32_dest_acc_en = bool(fp32_dest_acc_en)
+    compute_config.dst_full_sync_en = bool(dst_full_sync_en)
+    compute_config.math_approx_mode = False
+    compute = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "gen_qkv_causal_conv1d_silu_compute.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=compute_ct,
+        runtime_args=compute_rt,
+        config=compute_config,
+    )
+    kernels = [None, None, compute]
+    kernels[READER_KERNEL_INDEX] = reader
+    kernels[WRITER_KERNEL_INDEX] = writer
+    descriptor = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+    return descriptor, work
+
+
+def rewrite_addresses(descriptor, work, input_tensor, history, taps, outputs):
+    """Program-cache hit: only the buffer addresses change (BB-07)."""
+    read_addrs = reader_addresses(input_tensor, history, taps)
+    write_addrs = writer_addresses(outputs)
+    reader_rt = descriptor.kernels[READER_KERNEL_INDEX].runtime_args
+    writer_rt = descriptor.kernels[WRITER_KERNEL_INDEX].runtime_args
+    for cw in work:
+        args = reader_rt[cw.core.x][cw.core.y]
+        for i, a in enumerate(read_addrs):
+            args[i] = a
+        args = writer_rt[cw.core.x][cw.core.y]
+        for i, a in enumerate(write_addrs):
+            args[i] = a
