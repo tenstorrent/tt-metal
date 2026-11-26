@@ -72,3 +72,49 @@
 - **Tests added**:
   - probe `probes/test_probe_errmap.py` (per chip / source / mt error map);
   - parsers `perf/parse_profile.py` (per-role end times, all chips) and `perf/parse_zones.py` (TX zone totals).
+
+## Refinement 2 — Speed up the worker DRAM read stream (perf-flagged profile)
+- **Date**: 2026-11-26
+- **What was done**:
+  - **Split-NoC reads, by core (`READ_NOC_SPLIT`, host knob).** One worker set runs its reader on NoC 1 and its writer on NoC 0. The rest keep reader NoC 0 / writer NoC 1. Shipped value: `"halves"` (logical x ≥ grid.x/2 reads on NoC 1); `"none"` is the Phase 0 layout.
+    - Each kernel still uses one NoC. In dedicated-NoC mode a RISC initialises only its own NoC's barrier counters, so per-request alternation on one RISC is not safe without `DM_DYNAMIC_NOC`.
+    - Reused: the reader and writer sources and args, unchanged. Added: a second reader/writer descriptor pair per NoC set.
+  - **Core sets packed into rectangles (`_core_ranges`).** Worker, tx and per-NoC sets were lists of single-core ranges. That cost nothing for `none`, but a checkerboard split (48 single-core ranges per kernel) took 183 µs per call under trace replay: dispatch could not multicast.
+  - **W overlaps the first attn block (worker reader).** W's reads stay in flight and are covered by the first attn block's barrier (one NoC). `cb_weight` is pushed right after that block, because compute tilizes block 0 before it needs W.
+  - **Race fix 1, fabric_tx writer.** A fabric send issues the payload, then the packet header, with non-blocking NoC writes from L1. R1's batched flush re-programmed the single scatter header for packet i+1 before packet i's header had left L1. Packet i's payload then went to packet i+1's addresses: rows of head h held head h-1's data (`probes/test_probe_errmap_heads.py::test_probe_badrow_content`).
+    - The writer now rotates a ring of independently armed scatter headers. The ring size comes from the per-RISC header pool (`NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType` minus the inc and unicast headers), capped at `TX_BATCH`.
+    - A header is reused only after a flush: per batch, or mid-batch if the batch outruns the ring. The unicast tail header is flushed before reuse.
+    - The race was latent under R1 timing and showed up as soon as the reads got faster. It is very likely the "tx pull on NoC 1: wrong output" that R1 left undiagnosed.
+  - **Race fix 2, block counters.** `sem_blocks_done` was a program semaphore, which is re-initialised only when the worker core launches. Measured launch skew: fabric_tx cores start 0.25–0.6 µs in, workers up to 0.5 µs. So a tx reader could see the previous call's final count and pull unproduced blocks (mt 0/1 rows).
+    - The counters are now per-head-slot `GlobalSemaphore`s (`get_block_counter_semaphores`, created on the first eager call and cached; persistent, zero at creation).
+    - The worker writer bumps a counter only for a remote head.
+    - The consuming tx reader waits for `>= mb + 1` and resets each head's counter to 0 (`noc_inline_dw_write` + write barrier) after the head's last block. Every call starts from 0 whatever the launch order. `op_design.md`'s synchronization contract is updated.
+- **Calculator prediction (before measuring)**: `estimate.py sweep perf/sweep_attn.json` / `sweep_w.json`, `--phase "Refinement 2"`, recorded in `dm_estimates.json` (ids c92d491d / 396f7029).
+  - Current (NoC 0, attn batch 32, W 64): 38.0 + 16.2 = **54.2 µs**.
+  - Rank 1 (split NoC, attn batch 16): 32.3 + 13.9 = **46.2 µs**. It carries the tool's caveat that a split-NoC read on 96 cores measured 17–26% slower than estimated.
+  - Batch is flat in the model (38.0 µs for batch 8/16/32).
+- **Measured** (eager profile `probes/test_probe_profile.py` + `perf/parse_profile.py`: worker NCRISC end, max / mean over 8 chips; trace replay `test_a2a_wkv_b2_trace_timing.py`, µs per call):
+
+  | Variant | Reader end, max / mean (µs) | Last tx BRISC (µs) | µs per call |
+  |---|---|---|---|
+  | `none` (R1 baseline + race fixes) | 60.5 / 59.8 | 92.2 | 103.1–103.6 (R1: 102.5) |
+  | `checker` (x+y odd on NoC 1) | 56.2 / 54.3 | ≤ 91 | **183** (dispatch to 48 single-core ranges) |
+  | `all` (every reader on NoC 1) | 107.4 / 105.4 | — | 143.4 |
+  | `rows` (odd rows on NoC 1) | 58.9 / 57.1 | 86.0 | 103.1–103.5 |
+  | `cols` (odd columns on NoC 1) | 57.5 / 55.1 | 87.0 | 107.0–107.2 |
+  | `halves_left` (left half on NoC 1) | 53.8 / 53.5 | 86.7–87.7 | 95.6–96.3 (3 runs) |
+  | `halves` (right half on NoC 1) | 56.5–58.9 / 54.6 | 84.1–86.5 | 93.5–94.4 (3 runs) |
+  | **`halves` + W overlap (shipped)** | **55.8 / 54.4** | 86.0 | **93.9–94.2** |
+  | shipped + `ATTN_RM_DEPTH = 3` | 55.8 / 53.9 | 84.9 | 93.9–94.9 (flat, not kept) |
+
+  - **Calculator vs device.**
+    - NoC 0: the model predicts 54.2 µs; the device measured 59.8 mean, the model being 10% fast.
+    - The model's split-NoC schedule (per-request alternation, 46.2 µs) was not built as such, because it needs dynamic NoC mode.
+    - The core-split equivalents measured 54.4–55.1 mean, about 18% slower than the estimate, which matches the tool's caveat.
+    - The order (split faster than NoC 0) held for halves, columns and checker, but not for `all`. Running every read on NoC 1 alone is about 1.8× slower on this placement.
+    - `estimate.py measure` was not recorded: the reader end is the attn and W streams together, while the estimates are per tensor.
+- **Bottleneck now**: the fabric_tx send path. The last tx BRISC ends at about 84–86 µs, against about 56 µs for the reader and 59 µs for compute. Per call is 93.9 µs, of which about 8 µs is dispatch and launch skew beyond the device end. The reader is 27% above the DRAM SOL (43.8 µs).
+- **Accuracy achieved**: PCC = 0.999907, relative RMS = 0.0177 (5 distributions, `test_a2a_wkv_b2_precision_baseline.py`), unchanged, on attn [1,96,160,512] per chip → out [1,24,640,128].
+- **Golden test progress**: 7 / 7 (`EVAL_CAPTURE_L1=0`, including `test_regression.py`: back-to-back bit-identity and trace replay). Acceptance 10 / 10.
+- **Issues encountered**: the two latent races above. Both passed every test under R1 timing and corrupted 1–3% of rows once the read stream changed timing. Under `--dev` (watcher) they did not reproduce.
+- **Tests added**: `probes/test_probe_errmap_heads.py` (error map by producing head / tx stream position, and bad-row content matching).

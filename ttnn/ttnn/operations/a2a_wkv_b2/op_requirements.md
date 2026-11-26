@@ -103,7 +103,7 @@ The guard set is this single cell, so no regression on it is the no-regression r
 - **Not available**: bigger packets (the fabric payload is fixed at 4,352 B by the fabric config).
 - **Next**: an earlier worker publish (Refinement 2), then more than one sender per link via the mux (Refinement 3) to parallelize the per-packet send cost. Not done here because both are out of this refinement's scope.
 
-### [ ] Refinement 2 — Speed up the worker DRAM read stream (perf-flagged profile)
+### [x] Refinement 2 — Speed up the worker DRAM read stream (perf-flagged profile)
 
 **Type**: perf
 
@@ -128,6 +128,15 @@ Levers from `op_design.md`'s perf lamps and the master.md data-movement entries 
 **Verifier notes**: land after Refinement 1. While the `send` stage ends 55 µs after the workers, a faster reader moves the worker end but not the per-call time. Measure the reader end time in the profile as the primary signal, and the per-call time as the secondary one.
 
 **Done when**: measured worker reader end time improves on the flagged shape and per-call time (trace timing) does not regress (it improves if `send` is no longer critical). Also required: PCC ≥ 0.9995, golden and acceptance green, regression tests bit-identical.
+
+**Outcome**: worker reader end 59.6–60.5 → **55.8 µs** (max over 8 chips; mean 59.8 → 54.4), and **103.3 → 93.9 µs per call** (trace replay, 3 repeat pairs 93.5–94.4). PCC 0.999907; golden 7/7; acceptance 10/10.
+- **What landed**: split-NoC reads by core (`READ_NOC_SPLIT = "halves"`: the right half of the workers runs its reader on NoC 1 and its writer on NoC 0; per-request alternation on one RISC is unsafe in dedicated-NoC mode). Also W's reads now share the first attn block's barrier, and every core set is packed into rectangles.
+- **Two latent races fixed on the way** (both corrupted output once the reads got faster):
+  - the fabric_tx scatter header was re-programmed before its non-blocking send left L1; R1's per-batch flush exposed it, and the fix is a ring of armed headers;
+  - the program-semaphore block counter could be polled before the worker's launch reset it; it is now a per-head-slot GlobalSemaphore, reset by its consumer.
+- **Measured and not kept**: `checker` (reader 54 µs, but 183 µs per call because of dispatch to 48 single-core ranges); `cols` (107 µs); `rows` (flat); `all` NoC 1 (reader 105 µs); `ATTN_RM_DEPTH = 3` (flat). `halves_left` gives the fastest reader (53.8 µs) but 95.9 µs per call.
+- **Bottleneck now**: the fabric_tx send path, not DRAM. The last tx BRISC ends at about 84–86 µs, against about 56 µs for the reader and 59 µs for compute. The reader is 27% above the 43.8 µs DRAM SOL.
+- **Next**: the sender topology (Refinement 3: more senders per link via the mux, last-round drain). Not done here because it is out of this refinement's scope.
 
 ### [ ] Refinement 3 — Remaining tail: sender topology and last-round drain (perf-flagged profile)
 

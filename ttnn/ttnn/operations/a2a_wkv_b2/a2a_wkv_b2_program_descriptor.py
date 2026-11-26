@@ -39,8 +39,9 @@ TX_BUFFERS = 2  # cb_tx_stage depth in batches (pull batch b+1 overlaps send of 
 # Worker read NoC split (Refinement 2): which worker cores swap their reader onto NoC 1 (and their writer
 # onto NoC 0), so the DRAM read stream's responses use both NoCs' links. Each kernel still uses one NoC
 # (dedicated mode), so no cross-NoC counter state is involved. "none" = every reader on NoC 0 (Phase 0);
-# "checker" = cores with odd (x + y) read on NoC 1.
-READ_NOC_SPLIT = "all"
+# "halves" (shipped) = right half of the grid reads on NoC 1; also "halves_left", "rows", "cols", "checker",
+# "all" — measured in changelog.md Refinement 2 (checker defeats dispatch multicast; all-NoC-1 is slow).
+READ_NOC_SPLIT = "halves"
 MAX_MATMUL_CORES = 110  # matmul di/dt cap
 SCATTER_MAX_CHUNKS = 4  # NOC_SCATTER_WRITE_MAX_CHUNKS
 DEST_TILES_HALF_SYNC_16B = 8  # DEST capacity (half sync, 16-bit)
@@ -124,14 +125,52 @@ def _stream_core_index(direction, link, num_links):
     return (0 if direction > 0 else 1) * num_links + link
 
 
-def _reads_on_noc1(core):
+def _reads_on_noc1(core, grid):
     if READ_NOC_SPLIT == "none":
         return False
     if READ_NOC_SPLIT == "all":
         return True
     if READ_NOC_SPLIT == "checker":
         return (core.x + core.y) % 2 == 1
+    if READ_NOC_SPLIT == "rows":
+        return core.y % 2 == 1
+    if READ_NOC_SPLIT == "cols":
+        return core.x % 2 == 1
+    if READ_NOC_SPLIT == "halves":
+        return core.x >= grid.x // 2
+    if READ_NOC_SPLIT == "halves_left":
+        return core.x < grid.x // 2
     raise ValueError(f"unknown READ_NOC_SPLIT {READ_NOC_SPLIT!r}")
+
+
+def _core_ranges(cores):
+    """Pack cores into as few rectangles as possible (x-runs per row, merged over consecutive rows), so
+    dispatch can multicast binaries / launch messages to a core set instead of unicasting per core."""
+    rows = {}
+    for c in cores:
+        rows.setdefault(c.y, set()).add(c.x)
+    runs = []  # (x0, x1, y)
+    for y in sorted(rows):
+        xs = sorted(rows[y])
+        start = prev = xs[0]
+        for x in xs[1:] + [None]:
+            if x is not None and x == prev + 1:
+                prev = x
+                continue
+            runs.append((start, prev, y))
+            if x is not None:
+                start = prev = x
+    rects = []  # [x0, x1, y0, y1]
+    for x0, x1, y in runs:
+        for r in rects:
+            if r[0] == x0 and r[1] == x1 and r[3] == y - 1:
+                r[3] = y
+                break
+        else:
+            rects.append([x0, x1, y, y])
+    return ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for x0, x1, y0, y1 in rects]
+    )
 
 
 def _coord_with(coord_tuple, axis, value):
@@ -211,8 +250,8 @@ def create_mesh_program_descriptor(
             head_owner[start + i] = (core, i)
 
     worker_cores = [c for c, _, _ in worker_assign]
-    worker_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in worker_cores])
-    tx_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in tx_cores])
+    worker_set = _core_ranges(worker_cores)
+    tx_set = _core_ranges(tx_cores)
     program_set = worker_set.merge(tx_set)
 
     tx_core_of = {}
@@ -281,10 +320,10 @@ def create_mesh_program_descriptor(
 
         worker_kernels = []
         for on_noc1 in (False, True):
-            cores = [c for c in worker_cores if _reads_on_noc1(c) == on_noc1]
+            cores = [c for c in worker_cores if _reads_on_noc1(c, grid) == on_noc1]
             if not cores:
                 continue
-            crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+            crs = _core_ranges(cores)
             if on_noc1:
                 reader_cfg = ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default

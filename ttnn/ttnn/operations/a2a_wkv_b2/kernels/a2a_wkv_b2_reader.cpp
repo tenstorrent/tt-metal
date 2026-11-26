@@ -4,7 +4,10 @@
 // a2a_wkv_b2 worker reader (NCRISC, NoC 0).
 //
 // Per head h owned by this core:
-//   load_weight_block : W[h] = Kt x Nt bf8_b tiles -> cb_weight, one barrier per head (resident across mt)
+//   load_weight_block : W[h] = Kt x Nt bf8_b tiles -> cb_weight (resident across mt). Its reads stay in
+//                       flight behind the first attn block's reads and share that block's barrier (one
+//                       NoC, so the barrier covers both); W is pushed right after (compute tilizes the
+//                       first attn block before it needs W).
 //   load_attn_block   : mt_block*32 attn sticks (one token of head h each) -> cb_attn_rm, via
 //                       read_sticks_for_tilize (one barrier per 32-stick tile row)
 //
@@ -54,14 +57,15 @@ void kernel_main() {
             noc_async_read(w.get_noc_addr(w_tile0 + t), l1, w_tile_bytes);
             l1 += w_tile_bytes;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_weight, w_block_tiles);
 
         // load_attn_block: mt_block tile rows of this head's tokens per block (ragged last block).
         for (uint32_t mb = 0; mb < num_mt_blocks; ++mb) {
             const uint32_t tok0 = mb * mt_block * tile_h;
             const uint32_t rows = (tokens - tok0) < mt_block * tile_h ? (tokens - tok0) : mt_block * tile_h;
             dataflow_kernel_lib::read_sticks_for_tilize<cb_attn_rm>(attn, rows, stick_bytes, h * tokens + tok0);
+            if (mb == 0) {
+                cb_push_back(cb_weight, w_block_tiles);  // W landed under the first block's barrier
+            }
         }
     }
 }
