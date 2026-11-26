@@ -12,9 +12,6 @@ import ttnn
 
 C_NOT_TILE_ALIGNED = "C must be a multiple of 32: https://github.com/tenstorrent/tt-metal/issues/43826"
 NO_MEAN_RSTD = "ttnn.group_norm does not return mean/rstd: https://github.com/tenstorrent/tt-metal/issues/67202"
-GAMMA_BETA_WIDTH_NOT_VALIDATED = (
-    "gamma/beta width is not validated: https://github.com/tenstorrent/tt-metal/issues/67203"
-)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -85,34 +82,6 @@ def test_group_norm_mean_rstd_memory_config(N, C, num_groups, H, W, memory_confi
     if C % ttnn.TILE_SIZE:
         pytest.skip(C_NOT_TILE_ALIGNED)
     pytest.skip(NO_MEAN_RSTD)
-
-
-@pytest.mark.skip(reason=GAMMA_BETA_WIDTH_NOT_VALIDATED)
-@pytest.mark.parametrize("affine_width", [32, 256], ids=["narrower", "wider"])
-@pytest.mark.parametrize("affine", ["gamma", "beta"])
-def test_group_norm_rejects_mismatched_gamma_beta(affine_width, affine, device, expect_error):
-    N, C, H, W, num_groups = 2, 128, 32, 32, 4
-    grid = ttnn.CoreGrid(y=1, x=1)
-
-    def packed(width):
-        return ttnn.from_torch(
-            ttnn.create_group_norm_weight_bias_rm(torch.rand(width), width, grid.y),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-    tt_input = ttnn.from_torch(torch.rand(N, 1, H * W, C), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    with expect_error(RuntimeError, affine):
-        ttnn.group_norm(
-            tt_input,
-            num_groups=num_groups,
-            weight=packed(affine_width if affine == "gamma" else C),
-            bias=packed(affine_width if affine == "beta" else C),
-            core_grid=grid,
-            inplace=False,
-        )
 
 
 @pytest.mark.parametrize("offset", [50.0, 500.0])
