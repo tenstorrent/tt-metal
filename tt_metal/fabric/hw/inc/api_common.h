@@ -458,6 +458,16 @@ FORCE_INLINE void open_connections(
         sem_args_are_l1_addresses>(rt_arg_idx, num_connections_to_build);
 }
 
+// Builds the connection manager from a Metal 2.0 fabric connection binding and opens its connections: one slot for
+// each target of the binding, in target order.
+template <uint8_t WORKER_HANDSHAKE_NOC = tt::tt_fabric::get_fabric_worker_noc()>
+FORCE_INLINE void open_connections(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager, FabricConnectionBindingToken token) {
+    connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::template build_from_binding<
+        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION,
+        WORKER_HANDSHAKE_NOC>(token);
+}
+
 // clang-format off
 /**
  * Closes all connections owned by the provided connection manager.

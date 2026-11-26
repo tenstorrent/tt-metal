@@ -890,13 +890,6 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             self.num_trace_captures += 1
         ttnn.synchronize_device(self.mesh_device)
 
-    def release_traces(self) -> None:
-        """Release every kept step trace (the per-size buffers stay allocated)."""
-        for st in self._sizes.values():
-            if st.tracer is not None:
-                st.tracer.release_trace()
-                st.tracer = None
-
     @torch.no_grad()
     def __call__(
         self,

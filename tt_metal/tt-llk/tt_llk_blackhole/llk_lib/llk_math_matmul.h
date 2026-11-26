@@ -521,13 +521,13 @@ inline void matmul_configure_mop(
         ckernel_template tmp(
             1 /* outer loop */,
             inner_loops,
-            lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len - 1),
+            TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len - 1, 0, 0),
             TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
         tmp.set_last_outer_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0));
         tmp.program();
         return;
     }
-    ckernel_template tmp(1 /* outer loop */, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len));
+    ckernel_template tmp(1 /* outer loop */, inner_loops, TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0));
 
     if constexpr (high_fidelity)
     {
@@ -684,7 +684,7 @@ inline void matmul_configure_row_mop(
     ckernel_template tmp(
         reuse_a ? ct_dim : rt_dim /* outer loop: tiles of the row */,
         inner_loops,
-        lltt::replay_insn(ckernel::math::replay_buf_offset, 15),
+        TT_OP_REPLAY(ckernel::math::replay_buf_offset, 15, 0, 0),
         TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
     tmp.set_last_inner_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0));
     tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0));
@@ -761,7 +761,7 @@ inline void matmul_configure_mop_rows(const std::uint32_t ct_dim, const std::uin
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
     const std::uint32_t tile_end        = TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
     ckernel_template tmp(
-        reuse_a ? ct_dim : rt_dim, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, 15), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
+        reuse_a ? ct_dim : rt_dim, inner_loops, TT_OP_REPLAY(ckernel::math::replay_buf_offset, 15, 0, 0), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
     tmp.set_last_inner_loop_instr(tile_end);
     // LoFi rows are unpack or pack bound and ran no faster, a few slower
     const bool fold   = reuse_a && high_fidelity;
@@ -838,7 +838,7 @@ inline void matmul_configure_mop_rows_tiny(
     ckernel_template tmp(
         reuse_a ? ct_dim : rt_dim,
         inner_loops,
-        lltt::replay_insn(ckernel::math::replay_buf_offset, replay_words),
+        TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_words, 0, 0),
         TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
     tmp.set_last_inner_loop_instr(tile_end);
     tmp.set_last_outer_loop_instr(tile_end);
@@ -1013,22 +1013,28 @@ inline constexpr bool matmul_throttle_supports_tile(
 }
 
 /**
- * @brief Whether the execute path issues one MOP run per fidelity phase rather than one per tile.
+ * @brief Whether the throttled MOP needs the execute path to issue one MOP run per fidelity phase.
  *
- * Above throttle level 3 at high fidelity, @ref _llk_math_matmul_ drives the fidelity phases
- * itself, while the unthrottled MOP walks them in its own inner loop. Single source of truth for
- * that branch and for the init-side guard that must not fall back to the unthrottled MOP wherever
- * it holds -- the two have to agree or the phases execute math_fidelity times over.
+ * Above throttle level 3 at high fidelity, the throttled MOP covers a single fidelity phase, so
+ * @ref _llk_math_matmul_ drives the phases itself; the unthrottled MOP walks them in its own inner
+ * loop. The execute path applies this only while @ref ckernel::math::matmul_mop_throttle_level is non-zero.
  *
  * @tparam math_fidelity: Math fidelity the matmul is configured for.
  * @tparam THROTTLE_LEVEL: Compute-throughput throttle level.
- * @return True when the execute path runs the MOP once per fidelity phase.
+ * @return True when the throttled MOP runs once per fidelity phase.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
 inline constexpr bool matmul_throttle_drives_phases()
 {
     return (THROTTLE_LEVEL > 3) && is_high_fidelity(math_fidelity);
 }
+
+namespace ckernel::math
+{
+// Throttle level of the MOP the last _llk_math_matmul_init_ programmed; 0 when it programmed the unthrottled MOP.
+// Only that init programs the matmul MOP, so an op that reprograms the MOP needs a fresh init before _llk_math_matmul_.
+static std::uint32_t matmul_mop_throttle_level = 0;
+} // namespace ckernel::math
 
 /**
  * @brief Build the throttled matmul MOP, inserting NOPs between MVMULs to cap compute throughput.
@@ -1101,7 +1107,7 @@ inline void matmul_configure_mop_throttled(
     ckernel_template tmp(
         outer_loops,
         inner_loops,
-        lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len),
+        TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0),
         TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, addr_mod_inner_loop, 0));
 
     if (!is_in1_32x16 && !is_in1_16x32 && !is_in0_32x16 && !is_in0_16x32)
@@ -1139,12 +1145,7 @@ inline void matmul_configure_mop_throttled(
  *
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; 0 disables throttling, valid throttled range is {1,2,3,4,5}.
- *         Throttling is a throughput cap, not a correctness input, so a requested level is silently
- *         dropped where the throttled MOP cannot serve the geometry: levels 1-3 fall back to the
- *         unthrottled MOP on any tile @ref matmul_throttle_supports_tile rejects. Levels 4-5 at high
- *         fidelity do NOT -- @ref matmul_throttle_drives_phases holds there, so the fallback would
- *         execute every fidelity phase math_fidelity times over, and those levels keep the throttled
- *         MOP. Pairing them with a tile the throttled MOP does not support wedges the math thread.
+ *         Init records the MOP it programmed in @ref ckernel::math::matmul_mop_throttle_level.
  * @param in0_tile_r_dim: Row dimension of an in0 tile.
  * @param in0_tile_c_dim: Column dimension of an in0 tile.
  * @param in1_tile_r_dim: Row dimension of an in1 tile.
@@ -1213,26 +1214,18 @@ inline void _llk_math_matmul_init_(
     {
         matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, false, bias_write>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        // On a geometry the throttled MOP does not support, fall back to the unthrottled one:
-        // throttling is only a throughput cap, and the throttled sequence wedges there.
-        //
-        // Sound only while the execute path is a single ckernel_template::run(). Where
-        // matmul_throttle_drives_phases holds, _llk_math_matmul_ runs the MOP once per fidelity
-        // phase, whereas the unthrottled MOP already walks the phases in its own inner loop -- so
-        // falling back there would execute every phase math_fidelity times over. Those levels keep
-        // the throttled path, which the geometry cannot serve: measured on Blackhole, throttle 5 at
-        // HiFi4 on a tiny tile wedges the math thread with or without LLK asserts. Closing it needs
-        // the execute side told which MOP is live, which is a wider change than this guard.
-        constexpr bool fallback_matches_execute = !matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>();
-
-        if (fallback_matches_execute && !matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
-        {
-            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        }
-        else
+        // The throttled replay sequence is written for full 32x32 tiles and wedges the math thread on any
+        // other geometry; throttling is only a throughput cap, so those tiles take the unthrottled MOP.
+        if (matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
         {
             matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL, reuse_dir>(
                 blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            math::matmul_mop_throttle_level = THROTTLE_LEVEL;
+        }
+        else
+        {
+            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            math::matmul_mop_throttle_level = 0;
         }
     }
     else if constexpr (row_mop)
@@ -1270,6 +1263,10 @@ inline void _llk_math_matmul_init_(
             matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
+    if constexpr (THROTTLE_LEVEL == 0)
+    {
+        math::matmul_mop_throttle_level = 0;
+    }
     LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(blk_ct, blk_rt));
     math::reset_counters(p_setrwc::SET_ABD_F);
 
@@ -1293,6 +1290,7 @@ __attribute__((always_inline, flatten)) inline void _llk_math_matmul_init_rows_(
     const std::uint32_t blk_rt = fold_keys ? key_rt : rt_dim;
     matmul_configure_addrmod<math_fidelity, 0, true, 0, false, bias_write>(transpose);
     matmul_configure_mop_rows<math_fidelity, row_end_fold, true>(blk_ct, blk_rt);
+    math::matmul_mop_throttle_level = 0;
     LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<0>(blk_ct, blk_rt));
     math::reset_counters(p_setrwc::SET_ABD_F);
     math::_configure_default_zero_flag_state_();
@@ -1378,7 +1376,7 @@ inline void matmul_configure_row_mop_switch(
     matmul_load_row_replay();
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
     ckernel_template tmp(
-        reuse_a ? ct_dim : rt_dim, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, 15), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
+        reuse_a ? ct_dim : rt_dim, inner_loops, TT_OP_REPLAY(ckernel::math::replay_buf_offset, 15, 0, 0), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
     tmp.set_last_inner_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0));
     tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0));
     tmp.program();
@@ -1397,7 +1395,7 @@ inline void matmul_configure_mop_rows_switch(const std::uint32_t ct_dim, const s
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
     const std::uint32_t tile_end        = TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
     ckernel_template tmp(
-        reuse_a ? ct_dim : rt_dim, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, 15), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
+        reuse_a ? ct_dim : rt_dim, inner_loops, TT_OP_REPLAY(ckernel::math::replay_buf_offset, 15, 0, 0), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
     tmp.set_last_inner_loop_instr(tile_end);
     const bool fold   = reuse_a && high_fidelity;
     const bool fold_b = row_end_fold && !reuse_a;
@@ -1450,7 +1448,7 @@ inline void matmul_configure_mop_switch(
             (is_in0_16x32 && is_in1_32x16) ? 4 : ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : 16);
         constexpr std::uint32_t inner_loops = to_underlying(math_fidelity);
         ckernel_template tmp(
-            1 /* outer loop */, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len - 1), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
+            1 /* outer loop */, inner_loops, TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len - 1, 0, 0), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
         tmp.set_last_outer_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0));
         tmp.program();
     }
@@ -1492,15 +1490,18 @@ inline void _llk_math_matmul_init_switch_(
     if constexpr (THROTTLE_LEVEL > 0)
     {
         matmul_configure_addrmod_switch<math_fidelity, THROTTLE_LEVEL, false>();
-        constexpr bool fallback_matches_execute = !matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>();
-        if (fallback_matches_execute && !matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
-        {
-            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        }
-        else
+        // The throttled replay sequence is written for full 32x32 tiles and wedges the math thread on any
+        // other geometry; throttling is only a throughput cap, so those tiles take the unthrottled MOP.
+        if (matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
         {
             matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL, reuse_dir>(
                 blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            math::matmul_mop_throttle_level = THROTTLE_LEVEL;
+        }
+        else
+        {
+            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            math::matmul_mop_throttle_level = 0;
         }
     }
     else if constexpr (row_mop)
@@ -1533,6 +1534,10 @@ inline void _llk_math_matmul_init_switch_(
             matmul_rows_dest_stride = 0;
             matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
+    }
+    if constexpr (THROTTLE_LEVEL == 0)
+    {
+        math::matmul_mop_throttle_level = 0;
     }
     LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(blk_ct, blk_rt));
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -1591,6 +1596,12 @@ inline void _llk_math_matmul_(
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // reuse-dim
     LLK_ASSERT(reuse_a == math_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
+
+    LLK_ASSERT(
+        (math::matmul_mop_throttle_level == 0) || (math::matmul_mop_throttle_level == static_cast<std::uint32_t>(THROTTLE_LEVEL)),
+        "matmul: THROTTLE_LEVEL differs from the throttled MOP _llk_math_matmul_init_ programmed");
+    // The unthrottled MOP walks the fidelity phases itself; drive them here only while the throttled MOP is live.
+    const bool drive_phases = matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>() && (math::matmul_mop_throttle_level != 0);
 
     if constexpr (matmul_two_row<reuse_dir>())
     {
@@ -1691,7 +1702,7 @@ inline void _llk_math_matmul_(
                 math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(tile);
             }
 
-            if constexpr (matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>())
+            if (drive_phases)
             {
                 for (std::uint32_t phase = 0; phase < to_underlying(math_fidelity); phase++)
                 {

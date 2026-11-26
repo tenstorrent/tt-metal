@@ -13,17 +13,17 @@
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp"
 #include "ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp"
 #include "ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -116,17 +116,15 @@ autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim
 }
 
 autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
-    auto shape = ttnn::Shape({1, 1, 1, 1});
-    auto out =
-        autograd::create_tensor(core::empty(shape, &autograd::ctx().get_device(), tensor->get_value().memory_config()));
-    ttnn::moreh_mean(
-        tensor->get_value(),
-        std::nullopt,
-        true,
-        std::nullopt,
-        out->get_value(),
-        std::nullopt,
-        /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+    // out is the reduction's own result, so it and the gradients derived from it carry the input's mesh topology label.
+    auto out = autograd::create_tensor(ttnn::reshape(
+        ttnn::mean(
+            tensor->get_value(),
+            /* dim */ std::nullopt,
+            /* keepdim */ true,
+            /* memory_config */ std::nullopt,
+            /* compute_kernel_config */ core::ComputeKernelConfig::precise()),
+        ttnn::Shape({1, 1, 1, 1})));
     autograd::GradFunction grad = [tensor, out]() {
         auto resulting_shape = tensor->get_value().logical_shape();
         auto res = ttnn::moreh_mean_backward(

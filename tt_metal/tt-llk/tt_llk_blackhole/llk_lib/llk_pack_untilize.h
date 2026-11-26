@@ -146,7 +146,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
 
     // After the inner loop finishes, update L1 address. The "advance Dst face-row" is folded
     // into the row-closing PACR's AddrMod (ADDR_MOD_1, set below), so no INCADCXY end_op is needed.
-    tmp.set_end_op(lltt::replay_insn(ckernel::packer::replay_buf_offset, replay_buf_len));
+    tmp.set_end_op(TT_OP_REPLAY(ckernel::packer::replay_buf_offset, replay_buf_len, 0, 0));
 
     /*
     Close the row in the block by setting the Last bit to 1 in the last inner loop instruction.

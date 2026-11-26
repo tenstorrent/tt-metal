@@ -266,7 +266,7 @@ inline void _llk_pack_mop_config_(
         ckernel::ckernel_template tmp(
             MOP_OUTER_LOOP,
             MOP_INNER_LOOP,
-            lltt::replay_insn(0, replay_buf_len),
+            TT_OP_REPLAY(0, replay_buf_len, 0, 0),
             TT_OP_PACR(
                 p_pacr::CFG_CTXT_0,
                 p_pacr::NO_ROW_PAD_ZERO,
@@ -947,7 +947,7 @@ inline void _llk_pack_block_closed_fast_(
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
-        lltt::replay(0, 17);
+        TTI_REPLAY(0, 17, 0, 0);
     }
 
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
@@ -1005,7 +1005,7 @@ inline void _llk_pack_block_closed_w_(const std::uint32_t start_tile_index, cons
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
-        lltt::replay(0, 17);
+        TTI_REPLAY(0, 17, 0, 0);
     }
 
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
