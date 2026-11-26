@@ -137,6 +137,7 @@ CombineL1Plan plan_routed_experts_combine_l1(
     CombinePlanInputs in;
     in.home_tokens = cfg.split_tokens() / N;
     in.row_elements = res.dims().routed_width();
+    in.token_rows = res.dims().top_k;  // (an accumulator finishes a token once its top-k rows are in)
     in.free_cores = out.free_cores;
     in.accumulator_count = combine.accumulator_count;
     in.mode = combine.mode;

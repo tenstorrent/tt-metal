@@ -49,7 +49,8 @@ StateLayout state_layout(uint32_t N, uint32_t A, uint32_t grants_per_source) {
 uint32_t acc_cb_bytes(uint32_t S, uint32_t A, uint32_t NT, uint32_t rows, uint32_t tab) {
     const uint32_t max_tokens_per_accumulator = (S + A - 1) / A;
     return align64(tab) + align64(rows * NT * kTile) + align64(rows * 32) +
-           align64(max_tokens_per_accumulator * NT * 4096) + align64(2 * NT * kTile) + align64(rows * kTile);
+           align64(max_tokens_per_accumulator * NT * 4096) + align64(2 * NT * kTile) + align64(rows * kTile) +
+           align64(kDoneCbPages * 32) + align64(32);  // (the finished-token ids, the compute's pack -> unpack sync)
 }
 
 CombineLayout combine_l1_layout(
