@@ -1,7 +1,15 @@
 #!/bin/bash
 # usage: [NODE_JOB=<jobid>] on-node <command...>
 # Runs a command as a Slurm step inside the reserved node job (no ssh to the node, so no extra watcher threads).
-JOB="${NODE_JOB:-$(squeue -u "$USER" -h -t RUNNING -n lb-a10u28-dstoiljkovic -o %i | head -1)}"
-[ -n "$JOB" ] || { echo "no running reservation job found (set NODE_JOB=<jobid>)"; exit 2; }
+NODE_NAME="${NODE_NAME:-lb-a08u32-dstoiljkovic}"
+running() { squeue -u "$USER" -h -t RUNNING -n "$NODE_NAME" -o %i | head -1; }
+JOB="${NODE_JOB:-}"
+# A reservation job can end and be followed by a queued one on the same node: if the given job is no
+# longer running, use the running job with the reservation name, waiting up to 15 min for it to start.
+if [ -z "$JOB" ] || [ "$(squeue -h -j "$JOB" -t RUNNING -o %i 2>/dev/null)" != "$JOB" ]; then
+  for _ in $(seq 90); do JOB="$(running)"; [ -n "$JOB" ] && break; sleep 10; done
+  [ -n "${NODE_JOB:-}" ] && [ -n "$JOB" ] && echo "[on-node] job $NODE_JOB is gone; using $JOB ($NODE_NAME)" >&2
+fi
+[ -n "$JOB" ] || { echo "no running reservation job found (set NODE_JOB=<jobid> or NODE_NAME=<job name>)"; exit 2; }
 . "$(dirname "$(readlink -f "$0")")/env.sh"
 exec srun --jobid="$JOB" --overlap -N1 bash -c "cd /data/dstoiljkovic/tt-metal && $*"

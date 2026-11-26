@@ -1,0 +1,14 @@
+{
+  "eval/golden_tests/a2a_wkv_b2/test_golden.py::test_op[blackhole-A1x96x160x512_W1x96x512x128-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=ROW_MAJOR-weight_dtype=BFLOAT8_B-device_params0-mesh_device0]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "weight_dtype": "BFLOAT8_B",
+    "fp32_dest_acc_en": false
+  },
+  "eval/golden_tests/a2a_wkv_b2/test_golden.py::test_op_loose[blackhole-A1x96x160x512_W1x96x512x128-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=ROW_MAJOR-weight_dtype=BFLOAT8_B-device_params0-mesh_device0]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "weight_dtype": "BFLOAT8_B",
+    "fp32_dest_acc_en": false
+  }
+}
