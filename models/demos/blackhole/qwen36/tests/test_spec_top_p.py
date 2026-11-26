@@ -16,7 +16,9 @@ reference probability, expected and observed counts:
 * user 4: rows with a plateau of 200 tokens, whose nucleus reaches far past the top-32: q < top_p, so
   spec_top_p.failed_rows marks every column, and the redo from the logits read back from the devices (the reads the
   engine makes) follows vLLM's nucleus (chi-square over seeds);
-* user 5: a top-k 20 top_p 0.9 row next to them draws as on the sampler trace (target_probs under either top-p rule);
+* user 5: a top-k 20 top_p 0.9 row next to them draws as on the sampler trace: vLLM's top-k then top-p in the same
+  (value descending, id ascending) order (spec_top_p.row_distribution), so of equal values at the top-p cut the lower
+  ids stay, as the sampler's candidates order them; chi-square p-value above P_MIN per column;
 * user 6 greedy, user 7 padding: they draw nothing.
 
     pytest models/demos/blackhole/qwen36/tests/test_spec_top_p.py    (Blackhole, up to 2 chips; MESH_DEVICE=P150x8)
@@ -29,7 +31,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.blackhole.qwen36.tests.sampling_reference import chi_square_p, target_probs
+from models.demos.blackhole.qwen36.tests.sampling_reference import chi_square_p
 from models.demos.blackhole.qwen36.tests.test_factory import _resolve_mesh_shape
 from models.demos.blackhole.qwen36.tt.spec_sample import VerifySampler, sampling_plan
 from models.demos.blackhole.qwen36.tt.spec_top_p import (
@@ -86,9 +88,10 @@ def _row_logits(r, g):
     return x.to(torch.bfloat16).float()
 
 
-def _nucleus(x, temperature, top_p):
-    """vLLM's full-vocabulary nucleus of a row in (value descending, id ascending) order, dense [V] float64."""
-    ids, prob = row_distribution(x, temperature, 0, top_p)
+def _nucleus(x, temperature, top_p, top_k=0):
+    """vLLM's distribution of a row (top-k, 0 = off, then top-p) in (value descending, id ascending) order, dense [V]
+    float64."""
+    ids, prob = row_distribution(x, temperature, top_k, top_p)
     return torch.zeros(x.numel(), dtype=torch.float64).index_put((ids,), prob)
 
 
@@ -196,15 +199,10 @@ def test_certificate_rows_draw_vllms_nucleus_and_failed_rows_redo_from_the_devic
                 logger.info(f"user {u} column {j}: chi-square p {pv:.3g}")
         temp, k, p = USERS[5]
         for j in range(T):
-            counts = torch.bincount(draws[:, 5 * T + j], minlength=VOCAB)
-            by_rule = [
-                chi_square_p(counts, target_probs(logits[5 * T + j], temp, k, p, rule)) for rule in ("vllm", "at_most")
-            ]
-            logger.info(f"user 5 column {j}: chi-square p by rule {by_rule}")
-            if max(by_rule) < 0.01:
-                _check_draws(5 * T + j, counts, target_probs(logits[5 * T + j], temp, k, p), logits[5 * T + j], [])
-            if max(by_rule) <= P_MIN:
-                failures.append((5 * T + j, max(by_rule)))
+            r = 5 * T + j
+            counts = torch.bincount(draws[:, r], minlength=VOCAB)
+            pv = _check_draws(r, counts, _nucleus(logits[r], temp, p, k), logits[r], failures)
+            logger.info(f"user 5 column {j}: chi-square p {pv:.3g}")
         # the redo of the failed user from the logits the engine reads back
         parts = [ttnn.to_torch(ttnn.from_device(t, blocking=True)) for t in ttnn.get_device_tensors(buf)]
         full = torch.cat([t.reshape(-1, t.shape[-1])[: B * T] for t in parts], dim=1).float()
