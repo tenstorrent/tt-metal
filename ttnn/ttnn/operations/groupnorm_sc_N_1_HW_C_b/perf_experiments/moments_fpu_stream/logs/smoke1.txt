@@ -1,0 +1,10 @@
+case                                   kernels     kernels@fused  kernels@fused_b1
+unet_rm_ip_1024x1280                         -                 -                 -
+vae_tile_16384x512                           -                 -                 -
+
+  unet_rm_ip_1024x1280         randn            kernels pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f
+  unet_rm_ip_1024x1280         randn      kernels@fused pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f bit-identical
+  unet_rm_ip_1024x1280         randn   kernels@fused_b1 pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f bit-identical
+  vae_tile_16384x512           randn            kernels pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30
+  vae_tile_16384x512           randn      kernels@fused pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30 bit-identical
+  vae_tile_16384x512           randn   kernels@fused_b1 pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30 bit-identical

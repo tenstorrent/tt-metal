@@ -1,0 +1,26 @@
+case                             kernels@fused  rnels@fused_tile
+vae_tile_16384x512                           -                 -
+unet_rm_ip_1024x1280                         -                 -
+rm_ip_partial_4096x640                       -                 -
+dram_stream_65536x128                        -                 -
+vae_tile_16384x512[mean50]                   -                 -
+unet_rm_ip_1024x1280[mean50]                 -                 -
+rm_ip_partial_4096x640[mean50]                 -                 -
+dram_stream_65536x128[mean50]                 -                 -
+
+  vae_tile_16384x512                   randn      kernels@fused pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30
+  vae_tile_16384x512                   randn   rnels@fused_tile pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30 bit-identical
+  unet_rm_ip_1024x1280                 randn      kernels@fused pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f
+  unet_rm_ip_1024x1280                 randn   rnels@fused_tile pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f bit-identical
+  rm_ip_partial_4096x640               randn      kernels@fused pcc64=0.9999981 rms64=0.00194 pcc=0.999998 rms=0.00190 sha=662946cb8155
+  rm_ip_partial_4096x640               randn   rnels@fused_tile pcc64=0.9999981 rms64=0.00194 pcc=0.999998 rms=0.00190 sha=662946cb8155 bit-identical
+  dram_stream_65536x128                randn      kernels@fused pcc64=0.9999982 rms64=0.00188 pcc=0.999998 rms=0.00186 sha=aa6363642a5b
+  dram_stream_65536x128                randn   rnels@fused_tile pcc64=0.9999982 rms64=0.00188 pcc=0.999998 rms=0.00186 sha=aa6363642a5b bit-identical
+  vae_tile_16384x512[mean50]           mean50     kernels@fused pcc64=0.9991663 rms64=0.04082 pcc=0.999164 rms=0.04090 sha=199ff3499a80
+  vae_tile_16384x512[mean50]           mean50  rnels@fused_tile pcc64=0.9991663 rms64=0.04082 pcc=0.999164 rms=0.04090 sha=199ff3499a80 bit-identical
+  unet_rm_ip_1024x1280[mean50]         mean50     kernels@fused pcc64=0.9990133 rms64=0.04461 pcc=0.999012 rms=0.04464 sha=10f3c1a649a0
+  unet_rm_ip_1024x1280[mean50]         mean50  rnels@fused_tile pcc64=0.9990133 rms64=0.04461 pcc=0.999012 rms=0.04464 sha=10f3c1a649a0 bit-identical
+  rm_ip_partial_4096x640[mean50]       mean50     kernels@fused pcc64=0.9990161 rms64=0.04440 pcc=0.999013 rms=0.04447 sha=56ca90bd76f6
+  rm_ip_partial_4096x640[mean50]       mean50  rnels@fused_tile pcc64=0.9990161 rms64=0.04440 pcc=0.999013 rms=0.04447 sha=56ca90bd76f6 bit-identical
+  dram_stream_65536x128[mean50]        mean50     kernels@fused pcc64=0.9992564 rms64=0.03909 pcc=0.999252 rms=0.03926 sha=be9756f97e96
+  dram_stream_65536x128[mean50]        mean50  rnels@fused_tile pcc64=0.9992564 rms64=0.03909 pcc=0.999252 rms=0.03926 sha=be9756f97e96 bit-identical

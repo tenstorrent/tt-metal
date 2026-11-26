@@ -1,0 +1,38 @@
+[
+ {
+  "variant": "kernels@fused",
+  "case": "vae_tile_16384x512",
+  "dist": "randn",
+  "ns": 28841
+ },
+ {
+  "variant": "kernels@fused_nostall",
+  "case": "vae_tile_16384x512",
+  "dist": "randn",
+  "ns": 28091
+ },
+ {
+  "variant": "kernels@fused_nomath",
+  "case": "vae_tile_16384x512",
+  "dist": "randn",
+  "ns": 19758
+ },
+ {
+  "variant": "kernels@fused",
+  "case": "unet_rm_ip_16384x960",
+  "dist": "randn",
+  "ns": 61350
+ },
+ {
+  "variant": "kernels@fused_nostall",
+  "case": "unet_rm_ip_16384x960",
+  "dist": "randn",
+  "ns": 59965
+ },
+ {
+  "variant": "kernels@fused_nomath",
+  "case": "unet_rm_ip_16384x960",
+  "dist": "randn",
+  "ns": 43323
+ }
+]

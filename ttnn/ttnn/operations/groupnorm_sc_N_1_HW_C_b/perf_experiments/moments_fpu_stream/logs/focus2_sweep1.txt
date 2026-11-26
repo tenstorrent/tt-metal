@@ -1,0 +1,50 @@
+case                             kernels@fused           kernels
+unet_rm_ip_16384x960            61,360            68,906  +12.3%
+vae_tile_16384x512              28,860            33,137  +14.8%
+unet_rm_ip_16384x320            27,864            30,490   +9.4%
+unet_rm_ip_1024x1280            12,486            13,178   +5.5%
+unet_rm_oop_16384x320           27,842            30,470   +9.4%
+unet_rm_oop_1024x1280           12,490            13,182   +5.5%
+unet_tile_4096x640_4x8          22,056            24,610  +11.6%
+vae_tile_ip_16384x512           28,850            33,159  +14.9%
+unet_tile_ip_1024x1280          10,997            11,553   +5.1%
+g_rm_ip_1024x1280_gonly         12,041            12,718   +5.6%
+g_tile_oop_1024x1280_none       10,438            11,016   +5.5%
+vae_dram_65536x512             368,690           372,859   +1.1%
+flux1_dram_16384x256            52,449            53,184   +1.4%
+mid_4096x640_rm                 45,601            45,973   +0.8%
+g_dram_tile_16384x96_cg3        26,001            27,047   +4.0%
+g_dram_rm_4096x640_none         44,494            44,976   +1.1%
+
+  unet_rm_ip_16384x960                 randn      kernels@fused pcc64=0.9999981 rms64=0.00199 pcc=0.999998 rms=0.00212 sha=4aa0f4dc0656
+  unet_rm_ip_16384x960                 randn            kernels pcc64=0.9999981 rms64=0.00199 pcc=0.999998 rms=0.00212 sha=4aa0f4dc0656 bit-identical
+  vae_tile_16384x512                   randn      kernels@fused pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30
+  vae_tile_16384x512                   randn            kernels pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30 bit-identical
+  unet_rm_ip_16384x320                 randn      kernels@fused pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b
+  unet_rm_ip_16384x320                 randn            kernels pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b bit-identical
+  unet_rm_ip_1024x1280                 randn      kernels@fused pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f
+  unet_rm_ip_1024x1280                 randn            kernels pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f bit-identical
+  unet_rm_oop_16384x320                randn      kernels@fused pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b
+  unet_rm_oop_16384x320                randn            kernels pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b bit-identical
+  unet_rm_oop_1024x1280                randn      kernels@fused pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f
+  unet_rm_oop_1024x1280                randn            kernels pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f bit-identical
+  unet_tile_4096x640_4x8               randn      kernels@fused pcc64=0.9999981 rms64=0.00194 pcc=0.999998 rms=0.00190 sha=7c9b3d61abf3
+  unet_tile_4096x640_4x8               randn            kernels pcc64=0.9999981 rms64=0.00194 pcc=0.999998 rms=0.00190 sha=7c9b3d61abf3 bit-identical
+  vae_tile_ip_16384x512                randn      kernels@fused pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30
+  vae_tile_ip_16384x512                randn            kernels pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30 bit-identical
+  unet_tile_ip_1024x1280               randn      kernels@fused pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f
+  unet_tile_ip_1024x1280               randn            kernels pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f bit-identical
+  g_rm_ip_1024x1280_gonly              randn      kernels@fused pcc64=0.9999981 rms64=0.00200 pcc=0.999998 rms=0.00222 sha=d3af91072d6e
+  g_rm_ip_1024x1280_gonly              randn            kernels pcc64=0.9999981 rms64=0.00200 pcc=0.999998 rms=0.00222 sha=d3af91072d6e bit-identical
+  g_tile_oop_1024x1280_none            randn      kernels@fused pcc64=0.9999980 rms64=0.00216 pcc=0.999997 rms=0.00260 sha=bb61f4c6473e
+  g_tile_oop_1024x1280_none            randn            kernels pcc64=0.9999980 rms64=0.00216 pcc=0.999997 rms=0.00260 sha=bb61f4c6473e bit-identical
+  vae_dram_65536x512                   randn      kernels@fused pcc64=0.9999982 rms64=0.00188 pcc=0.999998 rms=0.00187 sha=0ddaa26b3e39
+  vae_dram_65536x512                   randn            kernels pcc64=0.9999982 rms64=0.00188 pcc=0.999998 rms=0.00187 sha=0ddaa26b3e39 bit-identical
+  flux1_dram_16384x256                 randn      kernels@fused pcc64=0.9999983 rms64=0.00186 pcc=0.999998 rms=0.00181 sha=6f21839594b3
+  flux1_dram_16384x256                 randn            kernels pcc64=0.9999983 rms64=0.00186 pcc=0.999998 rms=0.00181 sha=6f21839594b3 bit-identical
+  mid_4096x640_rm                      randn      kernels@fused pcc64=0.9999981 rms64=0.00196 pcc=0.999998 rms=0.00192 sha=dc2f14a277bd
+  mid_4096x640_rm                      randn            kernels pcc64=0.9999981 rms64=0.00196 pcc=0.999998 rms=0.00192 sha=dc2f14a277bd bit-identical
+  g_dram_tile_16384x96_cg3             randn      kernels@fused pcc64=0.9999982 rms64=0.00192 pcc=0.999998 rms=0.00191 sha=af7fbe4c5fd2
+  g_dram_tile_16384x96_cg3             randn            kernels pcc64=0.9999982 rms64=0.00192 pcc=0.999998 rms=0.00191 sha=af7fbe4c5fd2 bit-identical
+  g_dram_rm_4096x640_none              randn      kernels@fused pcc64=0.9999976 rms64=0.00224 pcc=0.999997 rms=0.00261 sha=99bfd7210b0e
+  g_dram_rm_4096x640_none              randn            kernels pcc64=0.9999976 rms64=0.00224 pcc=0.999997 rms=0.00261 sha=99bfd7210b0e bit-identical

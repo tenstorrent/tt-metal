@@ -1,0 +1,18 @@
+case                                   kernels     kernels@fused  rnels@fused_tile
+unet_rm_ip_16384x960            68,919            61,363  -11.0%    50,556  -26.6%
+vae_tile_16384x512              33,135            28,860  -12.9%    23,014  -30.5%
+unet_rm_ip_16384x320            30,495            27,861   -8.6%    24,281  -20.4%
+unet_rm_ip_1024x1280            13,202            12,486   -5.4%    11,679  -11.5%
+
+  unet_rm_ip_16384x960                 randn            kernels pcc64=0.9999981 rms64=0.00199 pcc=0.999998 rms=0.00212 sha=4aa0f4dc0656
+  unet_rm_ip_16384x960                 randn      kernels@fused pcc64=0.9999981 rms64=0.00199 pcc=0.999998 rms=0.00212 sha=4aa0f4dc0656 bit-identical
+  unet_rm_ip_16384x960                 randn   rnels@fused_tile pcc64=0.9999981 rms64=0.00199 pcc=0.999998 rms=0.00212 sha=4aa0f4dc0656 bit-identical
+  vae_tile_16384x512                   randn            kernels pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30
+  vae_tile_16384x512                   randn      kernels@fused pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30 bit-identical
+  vae_tile_16384x512                   randn   rnels@fused_tile pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30 bit-identical
+  unet_rm_ip_16384x320                 randn            kernels pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b
+  unet_rm_ip_16384x320                 randn      kernels@fused pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b bit-identical
+  unet_rm_ip_16384x320                 randn   rnels@fused_tile pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b bit-identical
+  unet_rm_ip_1024x1280                 randn            kernels pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f
+  unet_rm_ip_1024x1280                 randn      kernels@fused pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f bit-identical
+  unet_rm_ip_1024x1280                 randn   rnels@fused_tile pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f bit-identical

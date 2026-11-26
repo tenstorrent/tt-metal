@@ -1,0 +1,110 @@
+case                                   kernels          graduate
+unet_rm_ip_16384x960                         -                 -
+vae_tile_16384x512                           -                 -
+unet_rm_ip_16384x320                         -                 -
+unet_rm_ip_1024x1280                         -                 -
+unet_tile_4096x640_4x8                       -                 -
+dram_stream_65536x128                        -                 -
+rm_ip_partial_4096x640                       -                 -
+dram_w1_65536x32                             -                 -
+mid_4096x640_rm                              -                 -
+g_dram_tile_16384x96_cg3                     -                 -
+g_tile_oop_1024x1280_none                    -                 -
+g_rm_ip_1024x1280_gonly                      -                 -
+unet_rm_ip_16384x960[mean50]                 -                 -
+vae_tile_16384x512[mean50]                   -                 -
+unet_rm_ip_16384x320[mean50]                 -                 -
+unet_rm_ip_1024x1280[mean50]                 -                 -
+unet_tile_4096x640_4x8[mean50]                 -                 -
+dram_stream_65536x128[mean50]                 -                 -
+rm_ip_partial_4096x640[mean50]                 -                 -
+dram_w1_65536x32[mean50]                     -                 -
+mid_4096x640_rm[mean50]                      -                 -
+g_dram_tile_16384x96_cg3[mean50]                 -                 -
+g_tile_oop_1024x1280_none[mean50]                 -                 -
+g_rm_ip_1024x1280_gonly[mean50]                 -                 -
+unet_rm_ip_16384x960[gmean]                  -                 -
+vae_tile_16384x512[gmean]                    -                 -
+unet_rm_ip_16384x320[gmean]                  -                 -
+unet_rm_ip_1024x1280[gmean]                  -                 -
+unet_tile_4096x640_4x8[gmean]                 -                 -
+dram_stream_65536x128[gmean]                 -                 -
+rm_ip_partial_4096x640[gmean]                 -                 -
+dram_w1_65536x32[gmean]                      -                 -
+mid_4096x640_rm[gmean]                       -                 -
+g_dram_tile_16384x96_cg3[gmean]                 -                 -
+g_tile_oop_1024x1280_none[gmean]                 -                 -
+g_rm_ip_1024x1280_gonly[gmean]                 -                 -
+
+  unet_rm_ip_16384x960                 randn            kernels pcc64=0.9999981 rms64=0.00199 pcc=0.999998 rms=0.00212 sha=4aa0f4dc0656
+  unet_rm_ip_16384x960                 randn           graduate pcc64=0.9999981 rms64=0.00199 pcc=0.999998 rms=0.00212 sha=4aa0f4dc0656 bit-identical
+  vae_tile_16384x512                   randn            kernels pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30
+  vae_tile_16384x512                   randn           graduate pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30 bit-identical
+  unet_rm_ip_16384x320                 randn            kernels pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b
+  unet_rm_ip_16384x320                 randn           graduate pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b bit-identical
+  unet_rm_ip_1024x1280                 randn            kernels pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f
+  unet_rm_ip_1024x1280                 randn           graduate pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f bit-identical
+  unet_tile_4096x640_4x8               randn            kernels pcc64=0.9999981 rms64=0.00194 pcc=0.999998 rms=0.00190 sha=7c9b3d61abf3
+  unet_tile_4096x640_4x8               randn           graduate pcc64=0.9999981 rms64=0.00194 pcc=0.999998 rms=0.00190 sha=7c9b3d61abf3 bit-identical
+  dram_stream_65536x128                randn            kernels pcc64=0.9999982 rms64=0.00188 pcc=0.999998 rms=0.00186 sha=aa6363642a5b
+  dram_stream_65536x128                randn           graduate pcc64=0.9999982 rms64=0.00188 pcc=0.999998 rms=0.00186 sha=aa6363642a5b bit-identical
+  rm_ip_partial_4096x640               randn            kernels pcc64=0.9999981 rms64=0.00194 pcc=0.999998 rms=0.00190 sha=662946cb8155
+  rm_ip_partial_4096x640               randn           graduate pcc64=0.9999981 rms64=0.00194 pcc=0.999998 rms=0.00190 sha=662946cb8155 bit-identical
+  dram_w1_65536x32                     randn            kernels pcc64=0.9999981 rms64=0.00194 pcc=0.999998 rms=0.00209 sha=62b01bb149a7
+  dram_w1_65536x32                     randn           graduate pcc64=0.9999981 rms64=0.00194 pcc=0.999998 rms=0.00209 sha=62b01bb149a7 bit-identical
+  mid_4096x640_rm                      randn            kernels pcc64=0.9999981 rms64=0.00196 pcc=0.999998 rms=0.00192 sha=dc2f14a277bd
+  mid_4096x640_rm                      randn           graduate pcc64=0.9999981 rms64=0.00196 pcc=0.999998 rms=0.00192 sha=dc2f14a277bd bit-identical
+  g_dram_tile_16384x96_cg3             randn            kernels pcc64=0.9999982 rms64=0.00192 pcc=0.999998 rms=0.00191 sha=af7fbe4c5fd2
+  g_dram_tile_16384x96_cg3             randn           graduate pcc64=0.9999982 rms64=0.00192 pcc=0.999998 rms=0.00191 sha=af7fbe4c5fd2 bit-identical
+  g_tile_oop_1024x1280_none            randn            kernels pcc64=0.9999980 rms64=0.00216 pcc=0.999997 rms=0.00260 sha=bb61f4c6473e
+  g_tile_oop_1024x1280_none            randn           graduate pcc64=0.9999980 rms64=0.00216 pcc=0.999997 rms=0.00260 sha=bb61f4c6473e bit-identical
+  g_rm_ip_1024x1280_gonly              randn            kernels pcc64=0.9999981 rms64=0.00200 pcc=0.999998 rms=0.00222 sha=d3af91072d6e
+  g_rm_ip_1024x1280_gonly              randn           graduate pcc64=0.9999981 rms64=0.00200 pcc=0.999998 rms=0.00222 sha=d3af91072d6e bit-identical
+  unet_rm_ip_16384x960[mean50]         mean50           kernels pcc64=0.9990846 rms64=0.04283 pcc=0.999084 rms=0.04285 sha=00953cfb98b3
+  unet_rm_ip_16384x960[mean50]         mean50          graduate pcc64=0.9990846 rms64=0.04283 pcc=0.999084 rms=0.04285 sha=00953cfb98b3 bit-identical
+  vae_tile_16384x512[mean50]           mean50           kernels pcc64=0.9991663 rms64=0.04082 pcc=0.999164 rms=0.04090 sha=199ff3499a80
+  vae_tile_16384x512[mean50]           mean50          graduate pcc64=0.9991663 rms64=0.04082 pcc=0.999164 rms=0.04090 sha=199ff3499a80 bit-identical
+  unet_rm_ip_16384x320[mean50]         mean50           kernels pcc64=0.9991945 rms64=0.04015 pcc=0.999194 rms=0.04025 sha=e0ca23d14057
+  unet_rm_ip_16384x320[mean50]         mean50          graduate pcc64=0.9991945 rms64=0.04015 pcc=0.999194 rms=0.04025 sha=e0ca23d14057 bit-identical
+  unet_rm_ip_1024x1280[mean50]         mean50           kernels pcc64=0.9990133 rms64=0.04461 pcc=0.999012 rms=0.04464 sha=10f3c1a649a0
+  unet_rm_ip_1024x1280[mean50]         mean50          graduate pcc64=0.9990133 rms64=0.04461 pcc=0.999012 rms=0.04464 sha=10f3c1a649a0 bit-identical
+  unet_tile_4096x640_4x8[mean50]       mean50           kernels pcc64=0.9990660 rms64=0.04328 pcc=0.999064 rms=0.04334 sha=be5b7f8afdab
+  unet_tile_4096x640_4x8[mean50]       mean50          graduate pcc64=0.9990660 rms64=0.04328 pcc=0.999064 rms=0.04334 sha=be5b7f8afdab bit-identical
+  dram_stream_65536x128[mean50]        mean50           kernels pcc64=0.9992564 rms64=0.03909 pcc=0.999252 rms=0.03926 sha=be9756f97e96
+  dram_stream_65536x128[mean50]        mean50          graduate pcc64=0.9992564 rms64=0.03909 pcc=0.999252 rms=0.03926 sha=be9756f97e96 bit-identical
+  rm_ip_partial_4096x640[mean50]       mean50           kernels pcc64=0.9990161 rms64=0.04440 pcc=0.999013 rms=0.04447 sha=56ca90bd76f6
+  rm_ip_partial_4096x640[mean50]       mean50          graduate pcc64=0.9990161 rms64=0.04440 pcc=0.999013 rms=0.04447 sha=56ca90bd76f6 bit-identical
+  dram_w1_65536x32[mean50]             mean50           kernels pcc64=0.9994268 rms64=0.03541 pcc=0.999423 rms=0.03581 sha=bc9142eba383
+  dram_w1_65536x32[mean50]             mean50          graduate pcc64=0.9994268 rms64=0.03541 pcc=0.999423 rms=0.03581 sha=bc9142eba383 bit-identical
+  mid_4096x640_rm[mean50]              mean50           kernels pcc64=0.9991108 rms64=0.04227 pcc=0.999109 rms=0.04231 sha=477c9dc0d62e
+  mid_4096x640_rm[mean50]              mean50          graduate pcc64=0.9991108 rms64=0.04227 pcc=0.999109 rms=0.04231 sha=477c9dc0d62e bit-identical
+  g_dram_tile_16384x96_cg3[mean50]     mean50           kernels pcc64=0.9990643 rms64=0.04358 pcc=0.999063 rms=0.04360 sha=a4705ed69331
+  g_dram_tile_16384x96_cg3[mean50]     mean50          graduate pcc64=0.9990643 rms64=0.04358 pcc=0.999063 rms=0.04360 sha=a4705ed69331 bit-identical
+  g_tile_oop_1024x1280_none[mean50]    mean50           kernels pcc64=0.9995944 rms64=0.05775 pcc=0.999589 rms=0.05793 sha=2fe5010dc525
+  g_tile_oop_1024x1280_none[mean50]    mean50          graduate pcc64=0.9995944 rms64=0.05775 pcc=0.999589 rms=0.05793 sha=2fe5010dc525 bit-identical
+  g_rm_ip_1024x1280_gonly[mean50]      mean50           kernels pcc64=0.9980681 rms64=0.06267 pcc=0.998066 rms=0.06271 sha=f6dc7315c10a
+  g_rm_ip_1024x1280_gonly[mean50]      mean50          graduate pcc64=0.9980681 rms64=0.06267 pcc=0.998066 rms=0.06271 sha=f6dc7315c10a bit-identical
+  unet_rm_ip_16384x960[gmean]          gmean            kernels pcc64=0.9999725 rms64=0.00744 pcc=0.999971 rms=0.00759 sha=43b406943a34
+  unet_rm_ip_16384x960[gmean]          gmean           graduate pcc64=0.9999725 rms64=0.00744 pcc=0.999971 rms=0.00759 sha=43b406943a34 bit-identical
+  vae_tile_16384x512[gmean]            gmean            kernels pcc64=0.9999749 rms64=0.00710 pcc=0.999974 rms=0.00726 sha=1009b8eacaec
+  vae_tile_16384x512[gmean]            gmean           graduate pcc64=0.9999749 rms64=0.00710 pcc=0.999974 rms=0.00726 sha=1009b8eacaec bit-identical
+  unet_rm_ip_16384x320[gmean]          gmean            kernels pcc64=0.9999809 rms64=0.00617 pcc=0.999980 rms=0.00636 sha=6415b7fed33f
+  unet_rm_ip_16384x320[gmean]          gmean           graduate pcc64=0.9999809 rms64=0.00617 pcc=0.999980 rms=0.00636 sha=6415b7fed33f bit-identical
+  unet_rm_ip_1024x1280[gmean]          gmean            kernels pcc64=0.9999811 rms64=0.00615 pcc=0.999980 rms=0.00633 sha=8abc3c4da2d3
+  unet_rm_ip_1024x1280[gmean]          gmean           graduate pcc64=0.9999811 rms64=0.00615 pcc=0.999980 rms=0.00633 sha=8abc3c4da2d3 bit-identical
+  unet_tile_4096x640_4x8[gmean]        gmean            kernels pcc64=0.9999830 rms64=0.00585 pcc=0.999982 rms=0.00603 sha=ed808598ce05
+  unet_tile_4096x640_4x8[gmean]        gmean           graduate pcc64=0.9999830 rms64=0.00585 pcc=0.999982 rms=0.00603 sha=ed808598ce05 bit-identical
+  dram_stream_65536x128[gmean]         gmean            kernels pcc64=0.9999602 rms64=0.00892 pcc=0.999959 rms=0.00908 sha=dbdaa7f29484
+  dram_stream_65536x128[gmean]         gmean           graduate pcc64=0.9999602 rms64=0.00892 pcc=0.999959 rms=0.00908 sha=dbdaa7f29484 bit-identical
+  rm_ip_partial_4096x640[gmean]        gmean            kernels pcc64=0.9999825 rms64=0.00594 pcc=0.999981 rms=0.00611 sha=13b761aa45e5
+  rm_ip_partial_4096x640[gmean]        gmean           graduate pcc64=0.9999825 rms64=0.00594 pcc=0.999981 rms=0.00611 sha=13b761aa45e5 bit-identical
+  dram_w1_65536x32[gmean]              gmean            kernels pcc64=0.9999811 rms64=0.00618 pcc=0.999980 rms=0.00646 sha=67c6302ee191
+  dram_w1_65536x32[gmean]              gmean           graduate pcc64=0.9999811 rms64=0.00618 pcc=0.999980 rms=0.00646 sha=67c6302ee191 bit-identical
+  mid_4096x640_rm[gmean]               gmean            kernels pcc64=0.9999802 rms64=0.00632 pcc=0.999979 rms=0.00648 sha=9d0fe0a1a32d
+  mid_4096x640_rm[gmean]               gmean           graduate pcc64=0.9999802 rms64=0.00632 pcc=0.999979 rms=0.00648 sha=9d0fe0a1a32d bit-identical
+  g_dram_tile_16384x96_cg3[gmean]      gmean            kernels pcc64=0.9999779 rms64=0.00672 pcc=0.999977 rms=0.00689 sha=b070410601b1
+  g_dram_tile_16384x96_cg3[gmean]      gmean           graduate pcc64=0.9999779 rms64=0.00672 pcc=0.999977 rms=0.00689 sha=b070410601b1 bit-identical
+  g_tile_oop_1024x1280_none[gmean]     gmean            kernels pcc64=0.9999702 rms64=0.00775 pcc=0.999968 rms=0.00798 sha=61391353bdd2
+  g_tile_oop_1024x1280_none[gmean]     gmean           graduate pcc64=0.9999702 rms64=0.00775 pcc=0.999968 rms=0.00798 sha=61391353bdd2 bit-identical
+  g_rm_ip_1024x1280_gonly[gmean]       gmean            kernels pcc64=0.9999636 rms64=0.00854 pcc=0.999962 rms=0.00870 sha=38908385a6a7
+  g_rm_ip_1024x1280_gonly[gmean]       gmean           graduate pcc64=0.9999636 rms64=0.00854 pcc=0.999962 rms=0.00870 sha=38908385a6a7 bit-identical

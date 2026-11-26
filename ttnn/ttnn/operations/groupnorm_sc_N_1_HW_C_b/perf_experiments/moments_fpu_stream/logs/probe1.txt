@@ -1,0 +1,3 @@
+case                             kernels@fused  ls@fused_nostall  els@fused_nomath
+vae_tile_16384x512              28,841            28,091   -2.6%    19,758  -31.5%
+unet_rm_ip_16384x960            61,350            59,965   -2.3%    43,323  -29.4%

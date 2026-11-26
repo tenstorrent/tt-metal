@@ -1,0 +1,263 @@
+--- kernels/groupnorm_sc_N_1_HW_C_b_compute.cpp	2026-11-26 12:41:35.710569649 +0000
++++ perf_experiments/moments_fpu_stream/graduate/groupnorm_sc_N_1_HW_C_b_compute.cpp	2026-11-26 14:09:59.405954523 +0000
+@@ -164,72 +164,173 @@
+ }
+
+ // ---------------------------------------------------------------------------------------------------------------
+-// Pass-1 moments, "accumulate first, reduce once" (perf_experiments/pass1_moments_accumulate, candidate C2).
++// Pass-1 moments, "accumulate first, reduce once", streamed one x tile per FPU program
++// (perf_experiments/pass1_moments_accumulate C2, then perf_experiments/moments_fpu_stream).
+ //
+-// RAW-LLK PATH (bypasses compute_kernel_lib::reduce<REDUCE_COL, Accumulate>, the eltwise_chain
+-// x*(x - k) -> Float32 intermediate CB and the dest-reuse helper; measured: unet_rm_ip_16384x960 167.8 -> 107.0 us,
+-// vae_tile_16384x512 54.6 -> 43.2 us, see changelog Perf 1 "Helper bypasses"). Mechanism: the FPU accumulates the two
+-// moments ELEMENTWISE in fp32 DEST over every tile row of the window; the 32 rows of each accumulator are collapsed
+-// once (SFPU column sum, fp32) at the end of the block:
+-//   S   += x + (-k)        ELWADD, acc_to_dest, srcB = the pilot row (-k) broadcast    (exact: bf16 operands)
+-//   D_i += x + (-k)        same MOP, into a zeroed DEST scratch tile -> d = x - k
+-//   Q   += x * d           ELWMUL (native DEST accumulate on WH/BH) at the user's HiFi3, srcA = x (unpacked),
+-//                          srcB = d moved DEST -> srcB (MOVD2B), exactly the baseline chain's x*(x - k) product
+-// so S ends at S1' = Sigma (x - k) and Q at T2 = Sigma x*(x - k), the moments the finalize already consumes.
+-// Why raw: the stock dest-reuse multiply (mul_reuse_dest_tiles) moves DEST[t] into srcB, ZEROACCs DEST[t] and
+-// writes the product back to the SAME tile t. Here the MOVD2B row offset reaches the scratch tile D_i while the
+-// MOP's destination counter walks the accumulator Q (no ZEROACC on Q: ELWMUL accumulates), and the ZEROACC clears
+-// D_i so the next tile's D_i += x + (-k) starts from 0. Same instructions, same count as the stock face loop.
+-// Keeping x*x out of the FPU matters: x*x at HiFi3 drops the srcA_lo x srcB_lo partial product (a ~1e-4 relative
+-// one-sided bias, which at |mean| >> std cancels catastrophically in T2 - mean'(mean' + k)); x*d with d = x - k
+-// a short-mantissa value on srcB is exact in that regime (candidate C1 measured that bias).
+-// No helper expresses "several elementwise FPU accumulators in one DEST window over a strided walk, then an SFPU
+-// column collapse": the reduce helper reloads/re-packs its accumulator per call, and the chain's DestAccumulation
+-// sums along a walk row, not down a column.
+-// DEST window (4 fp32 tiles, half-sync DEST_AUTO_LIMIT): one channel tile -> S (0), Q (1), D_0 (2), D_1 (3); rows
+-// are walked two at a time so each pair costs one ELWADD init and one multiply init.
+-// Across chunks (streamed DRAM / partially resident RM) the elementwise partials spill to the UnpackToDestFp32
+-// accumulators (CB 7 S, CB 8 Q; exact reload); the last chunk packs the collapsed row-0 moments straight into the
+-// FPU-readable chan CBs (9 / 10, the same bytes: in-place lockstep), which replaces the publish copy.
++// RAW-LLK PATH. It bypasses compute_kernel_lib::reduce<REDUCE_COL, Accumulate>, the eltwise_chain
++// x*(x - k) -> Float32 intermediate CB, the dest-reuse helper (mul_reuse_dest_tiles), and the stock
++// add_tiles_bcast<ROW> / mul_reuse_dest_init face MOPs that C2 still used.
++// Measured, whole op (device ns), vs C2 on the same build:
++//   unet_rm_ip_16384x960  68.9 -> 50.6 us
++//   vae_tile_16384x512    33.1 -> 23.0 us
++//   unet_rm_ip_16384x320  30.5 -> 24.3 us
++//   unet_rm_ip_1024x1280  13.2 -> 11.7 us
++// Output is bit-identical. See changelog "Helper bypasses".
++//
++// Mechanism. The FPU accumulates the two moments ELEMENTWISE in fp32 DEST over every tile row of the window. The
++// 32 rows of each accumulator are collapsed once (SFPU column sum, fp32) at the end of the block:
++//   D   = x + (-k)        ELWADD, srcB = the pilot row (-k) broadcast, into a DEST scratch tile (AddDst = 0)
++//   S  += x + (-k)        same operands, AddDst = 1                                  (exact: bf16 operands)
++//   Q  += x * d           ELWMUL (native DEST accumulate on WH/BH) at the user's fidelity. srcA = x, the same
++//                         unpacked bank. srcB = d, moved DEST -> srcB (MOVD2B, fp32 -> bf16-style srcB), exactly
++//                         the baseline chain's x*(x - k) product.
++// S ends at S1' = Sigma (x - k) and Q at T2 = Sigma x*(x - k), the moments the finalize already consumes.
++//
++// One unpack per x tile feeds all three ops. The unpacker moves the WHOLE x tile into one srcA bank (faces 0..3 ->
++// rows 0..63) and pilot faces 0 / 1 into one srcB bank (-k cols 0..15 in row 0, cols 16..31 in row 16). It uses one
++// UNPACR each with the full-tile x_end, the matmul unpack's layout. The FPU then keeps both banks for one tile
++// program:
++//   8 x (ELWADD D, ELWADD S)  bcast row 0 for faces 0 / 2, row 16 for faces 1 / 3
++//   STALLWAIT + 16 x MOVD2B   D -> srcB rows 0..63 (one drain per tile)
++//   MOP: phases x 8 ELWMUL    fidelity loop OUTER over the 8 row blocks, so an accumulating ELWMUL never
++//                             re-reads a DEST block written < 5 cycles earlier (Dst.md "Instruction scheduling");
++//                             the last multiply flips both banks back to the unpacker.
++// C2 paid three costs that this program removes:
++//   - 3 x unpacks + 2 pilot unpacks + 1 dummy srcB publish per tile;
++//   - a ZEROACC of the scratch;
++//   - per-row-pair ELWADD / ELWMUL re-inits.
++// It also ran 2-block face programs that stalled on every fidelity phase (pass 1 of vae_tile_16384x512:
++// 17.9 -> 7.8 us). Same instructions, operands and per-element accumulation order as C2, so the output is
++// bit-identical.
++//
++// Why x*x stays out of the FPU: x*x at HiFi3 drops the srcA_lo x srcB_lo partial product. That is a ~1e-4 relative,
++// one-sided bias, which at |mean| >> std cancels catastrophically in T2 - mean'(mean' + k). x*d, with d = x - k a
++// short-mantissa value on srcB, is exact in that regime (candidate C1 measured that bias).
++//
++// Why no helper or stock op expresses it: each stock binary op unpacks its own operands per call and owns its MOP,
++// so no API keeps one unpacked srcA / srcB bank across ELWADD + MOVD2B + ELWMUL. The stock dest-reuse multiply
++// ZEROACCs its source and writes back to the same tile. The reduce helper reloads / re-packs its accumulator per
++// call, and the chain's DestAccumulation sums along a walk row, not down a column.
++//
++// DEST window (4 fp32 tiles, half-sync DEST_AUTO_LIMIT): one channel tile, with S at slot 0, Q at slot 1 and the
++// scratch D at slot 2. Across chunks (streamed DRAM / partially resident RM) the elementwise partials spill to the
++// UnpackToDestFp32 accumulators (CB 7 S, CB 8 Q; exact reload). The last chunk packs the collapsed row-0 moments
++// straight into the FPU-readable chan CBs (9 / 10, the same bytes: in-place lockstep), which replaces the publish
++// copy.
+ constexpr uint32_t S_DST = 0;
+ constexpr uint32_t Q_DST = 1;
+-constexpr uint32_t D0_DST = 2;
+-static_assert(DEST_AUTO_LIMIT >= 4, "C2 moments window needs 4 DEST tiles");
++static_assert(DEST_AUTO_LIMIT >= 3, "moments window needs 3 fp32 DEST tiles (S, Q, scratch D)");
++// DEST rows relative to slot S_DST (fp32: 64 rows per tile slot), used as instruction DstRow immediates.
++constexpr uint32_t MOM_S_ROW = S_DST * 64;
++constexpr uint32_t MOM_Q_ROW = Q_DST * 64;
++constexpr uint32_t MOM_D_ROW = 2 * 64;
++// Address-mod slots 0..5 (the SFPU owns 6 / 7); every later stock init reprograms the slots it uses.
++constexpr uint32_t AM_MOM_NONE = 0;     // no change (D adds, moves)
++constexpr uint32_t AM_MOM_A8 = 1;       // srcA += 8
++constexpr uint32_t AM_MOM_A8_B16 = 2;   // srcA += 8, srcB += 16 (end of faces 0 / 2: bcast row 0 -> 16)
++constexpr uint32_t AM_MOM_A8_BCLR = 3;  // srcA += 8, srcB = 0  (end of faces 1 / 3: bcast row 16 -> 0)
++constexpr uint32_t AM_MOM_MUL = 4;      // srcA, srcB, Dst += 8
++constexpr uint32_t AM_MOM_MUL_PH = 5;   // srcA = srcB = Dst = 0, fidelity += 1
+
+-ALWI void add_bcast_rows_acc_init(uint32_t icb0, uint32_t icb1) {
+-    state_configure(icb0, icb1, __builtin_LINE());
+-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW, MathFidelity::LoFi>(
+-        icb0, icb1, 1 /*acc_to_dest*/)));
+-    UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
++#ifdef TRISC_MATH
++constexpr uint32_t MOM_PHASES =
++    ckernel::math::is_high_fidelity(MATH_FIDELITY) ? ckernel::to_underlying(MATH_FIDELITY) : 1;
++
++inline void moments_math_program() {
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(AM_MOM_NONE);
++    addr_mod_t{.srca = {.incr = 8}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(AM_MOM_A8);
++    addr_mod_t{.srca = {.incr = 8}, .srcb = {.incr = 16}, .dest = {.incr = 0}}.set(AM_MOM_A8_B16);
++    addr_mod_t{.srca = {.incr = 8}, .srcb = {.incr = 0, .clr = 1}, .dest = {.incr = 0}}.set(AM_MOM_A8_BCLR);
++    addr_mod_t{.srca = {.incr = 8}, .srcb = {.incr = 8}, .dest = {.incr = 8}}.set(AM_MOM_MUL);
++    addr_mod_t{
++        .srca = {.incr = 0, .clr = 1},
++        .srcb = {.incr = 0, .clr = 1},
++        .dest = {.incr = 0, .clr = 1},
++        .fidelity = {.incr = 1}}
++        .set(AM_MOM_MUL_PH);
++    // D / S adds for the 8 row blocks: 16 entries, the FPU half of the replay buffer (the SFPU convention owns
++    // 16..31).
++    load_replay_buf(0, 16, [] {
++        TTI_ELWADD(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_ROW, AM_MOM_NONE, MOM_D_ROW + 0);
++        TTI_ELWADD(p_elwise::CLR_NONE, 1, p_elwise::SRCB_BCAST_ROW, AM_MOM_A8, MOM_S_ROW + 0);
++        TTI_ELWADD(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_ROW, AM_MOM_NONE, MOM_D_ROW + 8);
++        TTI_ELWADD(p_elwise::CLR_NONE, 1, p_elwise::SRCB_BCAST_ROW, AM_MOM_A8_B16, MOM_S_ROW + 8);
++        TTI_ELWADD(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_ROW, AM_MOM_NONE, MOM_D_ROW + 16);
++        TTI_ELWADD(p_elwise::CLR_NONE, 1, p_elwise::SRCB_BCAST_ROW, AM_MOM_A8, MOM_S_ROW + 16);
++        TTI_ELWADD(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_ROW, AM_MOM_NONE, MOM_D_ROW + 24);
++        TTI_ELWADD(p_elwise::CLR_NONE, 1, p_elwise::SRCB_BCAST_ROW, AM_MOM_A8_BCLR, MOM_S_ROW + 24);
++        TTI_ELWADD(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_ROW, AM_MOM_NONE, MOM_D_ROW + 32);
++        TTI_ELWADD(p_elwise::CLR_NONE, 1, p_elwise::SRCB_BCAST_ROW, AM_MOM_A8, MOM_S_ROW + 32);
++        TTI_ELWADD(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_ROW, AM_MOM_NONE, MOM_D_ROW + 40);
++        TTI_ELWADD(p_elwise::CLR_NONE, 1, p_elwise::SRCB_BCAST_ROW, AM_MOM_A8_B16, MOM_S_ROW + 40);
++        TTI_ELWADD(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_ROW, AM_MOM_NONE, MOM_D_ROW + 48);
++        TTI_ELWADD(p_elwise::CLR_NONE, 1, p_elwise::SRCB_BCAST_ROW, AM_MOM_A8, MOM_S_ROW + 48);
++        TTI_ELWADD(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_ROW, AM_MOM_NONE, MOM_D_ROW + 56);
++        TTI_ELWADD(p_elwise::CLR_NONE, 1, p_elwise::SRCB_BCAST_ROW, AM_MOM_A8_BCLR, MOM_S_ROW + 56);
++    });
++    // Q += x * D: outer = fidelity phases, inner = the tile's 8 row blocks; the very last multiply flips both banks.
++    ckernel_template tmp(
++        MOM_PHASES, 8, TT_OP_ELWMUL(p_elwise::CLR_NONE, 0, p_elwise::SRCB_NO_BCAST, AM_MOM_MUL, MOM_Q_ROW));
++    tmp.set_last_inner_loop_instr(
++        TT_OP_ELWMUL(p_elwise::CLR_NONE, 0, p_elwise::SRCB_NO_BCAST, AM_MOM_MUL_PH, MOM_Q_ROW));
++    tmp.set_last_outer_loop_instr(TT_OP_ELWMUL(p_elwise::CLR_AB, 0, p_elwise::SRCB_NO_BCAST, AM_MOM_MUL_PH, MOM_Q_ROW));
++    tmp.program();
+ }
+
+-#ifdef TRISC_MATH
+-// Q += srcA * DEST[d]; DEST[d] := 0. Requires mul_reuse_dest_init<DEST_TO_SRCB> (HiFi3 face MOP + addr mods).
+-// Mirrors _llk_math_eltwise_binary_with_dest_reuse_<ELWMUL, NONE, ..., DEST_TO_SRCB> face by face.
+-template <uint32_t d>
+-inline void math_mul_acc_from_dest_tile() {
+-    static_assert(d > Q_DST && d < 4, "scratch tile must follow Q inside the 4-tile fp32 half");
+-    constexpr uint32_t off = (d - Q_DST) * 64;  // DEST rows per 32x32 tile slot (set_dst_write_addr stride)
+-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(Q_DST);
+-#pragma GCC unroll 0
+-    for (uint32_t f = 0; f < 4; ++f) {
+-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, off + 0);
+-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, off + 4);
+-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, off + 8);
+-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, off + 12);
+-        // fp32 DEST: 4 tiles per bank, block index = tile * 4 + face (as the stock dest-reuse ZEROACC).
+-        TT_ZEROACC(p_zeroacc::CLR_16, 1 /*fp32*/, 0, ADDR_MOD_1, (d & 3) * 4 + f);
+-        ckernel_template::run();
+-    }
+-    math::clear_dst_reg_addr();
++inline void moments_math_tile() {
++    lltt::replay(0, 16);
++    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB);  // srcA ended at row 64
++    // D must be in DEST before the moves read it (the stock dest-reuse path stalls the same way; once per tile).
++    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH);
++    TTI_MOVD2B(0, 0, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 0);
++    TTI_MOVD2B(0, 4, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 4);
++    TTI_MOVD2B(0, 8, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 8);
++    TTI_MOVD2B(0, 12, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 12);
++    TTI_MOVD2B(0, 16, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 16);
++    TTI_MOVD2B(0, 20, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 20);
++    TTI_MOVD2B(0, 24, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 24);
++    TTI_MOVD2B(0, 28, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 28);
++    TTI_MOVD2B(0, 32, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 32);
++    TTI_MOVD2B(0, 36, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 36);
++    TTI_MOVD2B(0, 40, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 40);
++    TTI_MOVD2B(0, 44, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 44);
++    TTI_MOVD2B(0, 48, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 48);
++    TTI_MOVD2B(0, 52, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 52);
++    TTI_MOVD2B(0, 56, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 56);
++    TTI_MOVD2B(0, 60, AM_MOM_NONE, p_movd2b::MOV_4_ROWS, MOM_D_ROW + 60);
++    ckernel_template::run();
++    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
++}
++#endif
++
++#ifdef TRISC_UNPACK
++// Per tile: one srcB UNPACR (pilot faces 0, 1 -> rows 0..31) and one srcA UNPACR (the whole x tile -> rows
++// 0..63), each setting data-valid once. The tile descriptors stay as configured.
++inline void moments_unpack_program() {
++    TTI_SETADCXX(p_setadc::UNP_A, 4 * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
++    TTI_SETADCXX(p_setadc::UNP_B, 2 * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
++    ckernel_template tmp(
++        1,
++        1,
++        TT_OP_UNPACR(SrcB, 0, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*SetDvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1),
++        TT_OP_UNPACR(SrcA, 0, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*SetDvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1));
++    tmp.program();
+ }
+ #endif
+
+-template <uint32_t d>
+-ALWI void mul_x_by_dest_tile_acc(uint32_t x_cb, uint32_t x_idx) {
+-    UNPACK((llk_unpack_A<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(x_cb, x_idx)));
+-    MATH((math_mul_acc_from_dest_tile<d>()));
++// Unpacker + FPU state for the walk (once per DEST window): bf16 x on srcA, the pilot (bf16) on srcB.
++ALWI void moments_init(uint32_t x_cb) {
++    reconfig_data_format(x_cb, cb_pilot_rows);
++    // Stock ELWADD-bcast init for its side state (CLR_DVALID enable, zero-flag default, RWC reset, ALU config); its
++    // MOPs / x_end / addr mods are then superseded by the tile program.
++    state_configure(x_cb, cb_pilot_rows, __builtin_LINE());
++    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW, MathFidelity::LoFi>(
++        x_cb, cb_pilot_rows, 1 /*acc_to_dest*/)));
++    UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(x_cb, cb_pilot_rows)));
++    UNPACK((moments_unpack_program()));
++    MATH((moments_math_program()));
++    MATH((math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(S_DST)));
++    MATH((TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F)));
+ }
+
+ // rows tile rows of W tiles at the front of cb_input_tiles (row r, channel tile c at r*W + c).
+@@ -250,24 +351,12 @@
+             cb_pop_front(cb_sum_acc, 1);
+             cb_pop_front(cb_sumsq_acc, 1);
+         }
+-        reconfig_data_format(x_cb, cb_pilot_rows);
+-        for (uint32_t r = 0; r < rows; r += 2) {
+-            const uint32_t t0 = r * W + c;
+-            const uint32_t t1 = t0 + W;
+-            const bool two = r + 1 < rows;
+-            add_bcast_rows_acc_init(x_cb, cb_pilot_rows);
+-            add_tiles_bcast<BroadcastType::ROW>(x_cb, cb_pilot_rows, t0, c, S_DST);
+-            add_tiles_bcast<BroadcastType::ROW>(x_cb, cb_pilot_rows, t0, c, D0_DST);
+-            if (two) {
+-                add_tiles_bcast<BroadcastType::ROW>(x_cb, cb_pilot_rows, t1, c, S_DST);
+-                add_tiles_bcast<BroadcastType::ROW>(x_cb, cb_pilot_rows, t1, c, D0_DST + 1);
+-            }
+-            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(x_cb);
+-            mul_x_by_dest_tile_acc<D0_DST>(x_cb, t0);
+-            if (two) {
+-                mul_x_by_dest_tile_acc<D0_DST + 1>(x_cb, t1);
+-            }
++        moments_init(x_cb);
++        for (uint32_t r = 0; r < rows; ++r) {
++            UNPACK((llk_unpack_AB<BroadcastType::ROW>(x_cb, cb_pilot_rows, r * W + c, c)));
++            MATH((moments_math_tile()));
+         }
++        MATH((math::clear_dst_reg_addr()));
+         if (last) {
+             sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+             sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(S_DST);

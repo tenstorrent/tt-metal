@@ -1,0 +1,18 @@
+case                                   kernels     kernels@fused  kernels@fused_b1
+unet_rm_ip_16384x960            68,905            61,353  -11.0%    61,383  -10.9%
+vae_tile_16384x512              33,162            28,863  -13.0%    28,839  -13.0%
+unet_rm_ip_16384x320            30,498            27,854   -8.7%    27,876   -8.6%
+unet_rm_ip_1024x1280            13,193            12,491   -5.3%    12,524   -5.1%
+
+  unet_rm_ip_16384x960         randn            kernels pcc64=0.9999981 rms64=0.00199 pcc=0.999998 rms=0.00212 sha=4aa0f4dc0656
+  unet_rm_ip_16384x960         randn      kernels@fused pcc64=0.9999981 rms64=0.00199 pcc=0.999998 rms=0.00212 sha=4aa0f4dc0656 bit-identical
+  unet_rm_ip_16384x960         randn   kernels@fused_b1 pcc64=0.9999981 rms64=0.00199 pcc=0.999998 rms=0.00212 sha=4aa0f4dc0656 bit-identical
+  vae_tile_16384x512           randn            kernels pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30
+  vae_tile_16384x512           randn      kernels@fused pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30 bit-identical
+  vae_tile_16384x512           randn   kernels@fused_b1 pcc64=0.9999982 rms64=0.00191 pcc=0.999998 rms=0.00192 sha=dd9826942c30 bit-identical
+  unet_rm_ip_16384x320         randn            kernels pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b
+  unet_rm_ip_16384x320         randn      kernels@fused pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b bit-identical
+  unet_rm_ip_16384x320         randn   kernels@fused_b1 pcc64=0.9999980 rms64=0.00197 pcc=0.999998 rms=0.00206 sha=86e93ea5997b bit-identical
+  unet_rm_ip_1024x1280         randn            kernels pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f
+  unet_rm_ip_1024x1280         randn      kernels@fused pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f bit-identical
+  unet_rm_ip_1024x1280         randn   kernels@fused_b1 pcc64=0.9999983 rms64=0.00185 pcc=0.999998 rms=0.00181 sha=219d9014bd4f bit-identical

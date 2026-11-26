@@ -1,0 +1,6 @@
+{"variant": "kernels@fused", "case": "vae_tile_16384x512", "dist": "randn"}
+{"variant": "kernels@fused_nostall", "case": "vae_tile_16384x512", "dist": "randn"}
+{"variant": "kernels@fused_nomath", "case": "vae_tile_16384x512", "dist": "randn"}
+{"variant": "kernels@fused", "case": "unet_rm_ip_16384x960", "dist": "randn"}
+{"variant": "kernels@fused_nostall", "case": "unet_rm_ip_16384x960", "dist": "randn"}
+{"variant": "kernels@fused_nomath", "case": "unet_rm_ip_16384x960", "dist": "randn"}
