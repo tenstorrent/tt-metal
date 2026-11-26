@@ -13,7 +13,9 @@
 //                         same DEST window (raw SFPU PostComputeFn, + the group shift k) -> [rstd, mean]
 //   expand              : matmul<transpose>(stats, map) -> per-channel rstd / mean (rows replicated);
 //                         a = rstd*gamma, m = mean*a, b' = m - beta
-//   normalize           : per chunk y = a*x - b', resident chunks first
+//   normalize           : per chunk y = (-1)*b' + x*a, two accumulating FPU multiplies into one DEST tile
+//                         (raw compute API), resident chunks first; sharded RM packs untilized straight into the
+//                         output shard (pack_untilize_dest)
 // Shift k (Refinement 1): one sample per group, x[image row 0, first channel of the group], identical on every
 // core of a unit, so the shifted sums combine with no correction. With mean' = S1'/n and T2 = Sigma x*(x - k),
 //   var = T2/n - mean'*(mean' + k) = E[(x - k)^2] - mean'^2,
@@ -38,10 +40,10 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/pack_untilize.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -55,6 +57,7 @@
 #include "ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #endif
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
 
 using namespace compute_kernel_lib;
 
@@ -67,6 +70,7 @@ constexpr uint32_t cb_output_rm = 1;  // sharded RM: the output shard (untilized
 constexpr uint32_t cb_input_tiles = 2;
 constexpr uint32_t cb_input_keep = 3;
 constexpr uint32_t cb_output_tiles = 5;
+constexpr uint32_t cb_neg_one = 6;  // constant -1 (bf16, compute-generated once): pass 2's folded '- b''
 constexpr uint32_t cb_sum_acc = 7;
 constexpr uint32_t cb_sumsq_acc = 8;
 constexpr uint32_t cb_chan_scale = 9;
@@ -269,36 +273,109 @@ NOINLINE_BLOCK_OP void moments_rows(uint32_t rows, bool first, bool last) {
 }
 
 // Pass-2 normalize of the chunk at the front of cb_input_keep: y = a*x - b' (a, b' row-mapped, held for the
-// block). a is the srcA operand, so srcA keeps its 19-bit format when a*x re-enters through srcA (with x on
-// srcA, the DEST -> srcA move would truncate a*x to bf16).
+// block), as two accumulating FPU multiplies into one DEST tile: DEST = (-1)*b' + x*a.
+// perf_experiments/per_tile_pass_chains (N1b): raw compute API instead of eltwise_chain(BinaryFpu Mul +
+// DestReuseBinary Sub); measured with N1u below: vae_tile_16384x512 54.6 -> 49.7 us, unet_rm_ip_16384x960
+// 167.9 -> 153.9 us (changelog Perf 1, Helper bypasses). Mechanism: ELWMUL always accumulates into DEST, so the
+// subtraction is folded into a second multiply by a constant -1 tile; both multiplies share one (srcA bf16, srcB
+// Float32) format pair and one MOP, so there is no per-window re-init / reconfig and no DEST->src move (the dest-reuse
+// MOVD2A stalls per face). Precision: b' and a sit on srcB (Float32 -> tf32, every bit used under HiFi3); -1 and x are
+// bf16 on srcA (exact); the sum is formed in fp32 DEST (the dest-reuse path truncated a*x to tf32 on the DEST -> srcA
+// move).
 ALWI void normalize_chunk(uint32_t rows_valid) {
     constexpr uint32_t x_cb = cb_input_keep;
-    DataflowBuffer x_dfb(x_cb);
-    DataflowBuffer scale_dfb(cb_chan_scale);
-    DataflowBuffer bprime_dfb(cb_bprime);
-    DataflowBuffer out_dfb(cb_output_tiles);
-
-    // A one-tile slice (W = 1) reads a / b' tile 0 for every x tile: walk the chunk as one row (Scalar mapping) so
-    // the DEST window spans tile rows; otherwise the window is bounded by the W-tile walk row (Row mapping).
-    constexpr InputTileMapping CHAN_MAP = W == 1 ? InputTileMapping::Scalar : InputTileMapping::Row;
-    IterationShape shape = W == 1 ? IterationShape::tiles(rows_valid) : IterationShape::grid(rows_valid, W);
     {
         MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_wait_x");
         cb_wait_front(x_cb, T);
     }
     MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_normalize");
-    eltwise_chain(
-        shape.block_size(CHAIN_BLOCK),
-        BinaryFpu<
-            BinaryFpuOp::Mul,
-            input(cb_chan_scale, WaitPolicy::Upfront, PopPolicy::None, CHAN_MAP),
-            input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block)>{scale_dfb, x_dfb},
-        DestReuseBinary<
-            BinaryFpuOp::Sub,
-            input(cb_bprime, WaitPolicy::Upfront, PopPolicy::None, CHAN_MAP),
-            DestReuseType::DEST_TO_SRCA>{bprime_dfb},
-        PackTile<output(cb_output_tiles, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{out_dfb});
-    push_pad(cb_output_tiles, T - rows_valid * W);
+    cb_wait_front(cb_chan_scale, W);
+    cb_wait_front(cb_bprime, W);
+    const uint32_t n = rows_valid * W;
+    reconfig_data_format(cb_neg_one, cb_bprime);
+    pack_reconfig_data_format(cb_output_tiles);
+    mul_init(cb_neg_one, cb_bprime);
+    uint32_t w = 0;
+    for (uint32_t i = 0; i < n; i += CHAIN_BLOCK) {
+        const uint32_t cnt = n - i < CHAIN_BLOCK ? n - i : CHAIN_BLOCK;
+        cb_reserve_back(cb_output_tiles, cnt);
+        tile_regs_acquire();
+        uint32_t ww = w;
+        for (uint32_t j = 0; j < cnt; ++j) {
+            mul_tiles(cb_neg_one, cb_bprime, 0, ww, j);
+            ww = ww + 1 == W ? 0 : ww + 1;
+        }
+        ww = w;
+        for (uint32_t j = 0; j < cnt; ++j) {
+            mul_tiles(x_cb, cb_chan_scale, i + j, ww, j);
+            ww = ww + 1 == W ? 0 : ww + 1;
+        }
+        w = ww;
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < cnt; ++j) {
+            pack_tile(j, cb_output_tiles);
+        }
+        tile_regs_release();
+        cb_push_back(cb_output_tiles, cnt);
+    }
+    push_pad(cb_output_tiles, T - n);
+    cb_pop_front(x_cb, T);
+}
+
+// Sharded RM (UNTILIZE_OUT): the same folded normalize, packed straight to the row-major output shard with
+// pack_untilize_dest (perf_experiments/per_tile_pass_chains N1u). Bypasses PackTile -> cb_output_tiles ->
+// untilize<>() (unpack + datacopy + pack again per tile): the normalized DEST block is untilized by the packer.
+// DEST block = UB_RT tile rows x UB_CT tile columns (UB_CT | W, UB_CT * UB_RT <= DEST window); the packer writes
+// row r of the block at r * W pages and column block b at b * UB_CT tiles of the reserved tile rows.
+constexpr uint32_t largest_divisor_le(uint32_t n, uint32_t m) {
+    for (uint32_t b = m; b > 1; --b) {
+        if (n % b == 0) {
+            return b;
+        }
+    }
+    return 1;
+}
+constexpr uint32_t UB_CT = largest_divisor_le(W, CHAIN_BLOCK);
+constexpr uint32_t UB_RT = CHAIN_BLOCK / UB_CT;
+constexpr uint32_t UB_NB = W / UB_CT;
+
+ALWI void normalize_untilize_chunk(uint32_t rows_valid) {
+    constexpr uint32_t x_cb = cb_input_keep;
+    {
+        MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_wait_x");
+        cb_wait_front(x_cb, T);
+    }
+    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_normalize");
+    cb_wait_front(cb_chan_scale, W);
+    cb_wait_front(cb_bprime, W);
+    reconfig_data_format(cb_neg_one, cb_bprime);
+    mul_init(cb_neg_one, cb_bprime);
+    pack_untilize_dest_init<UB_CT, W>(cb_output_rm);
+    for (uint32_t r0 = 0; r0 < rows_valid; r0 += UB_RT) {
+        const uint32_t rt = rows_valid - r0 < UB_RT ? rows_valid - r0 : UB_RT;
+        cb_reserve_back(cb_output_rm, rt * W);
+        for (uint32_t b = 0; b < UB_NB; ++b) {
+            const uint32_t c0 = b * UB_CT;
+            tile_regs_acquire();
+            for (uint32_t r = 0; r < rt; ++r) {
+                for (uint32_t c = 0; c < UB_CT; ++c) {
+                    mul_tiles(cb_neg_one, cb_bprime, 0, c0 + c, r * UB_CT + c);
+                }
+            }
+            for (uint32_t r = 0; r < rt; ++r) {
+                for (uint32_t c = 0; c < UB_CT; ++c) {
+                    mul_tiles(x_cb, cb_chan_scale, (r0 + r) * W + c0 + c, c0 + c, r * UB_CT + c);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_untilize_dest<UB_CT, W>(cb_output_rm, rt, b);
+            tile_regs_release();
+        }
+        cb_push_back(cb_output_rm, rt * W);
+    }
+    pack_untilize_uninit(cb_output_rm);
     cb_pop_front(x_cb, T);
 }
 
@@ -417,6 +494,13 @@ void kernel_main() {
     DataflowBuffer beta_dfb(cb_beta_rows);
 
     compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(cb_chan_scale, cb_group_map, cb_local_partials);
+
+    // The constant -1 tile (bf16, srcA of pass 2's folded subtraction), resident for the whole kernel.
+    {
+        DataflowBuffer neg_one_dfb(cb_neg_one);
+        eltwise_chain(
+            IterationShape::one_tile(), FillScalar<Dst::D0>{-1.0f}, PackTile<output(cb_neg_one)>{neg_one_dfb});
+    }
 
     const uint32_t num_chunks = (rows_core + CHUNK_HT - 1) / CHUNK_HT;
     const uint32_t K = resident_chunks < num_chunks ? resident_chunks : num_chunks;
@@ -586,12 +670,10 @@ void kernel_main() {
                     tilize_chunk(rows_valid);
                 }
             }
-            normalize_chunk(rows_valid);
             if constexpr (UNTILIZE_OUT) {
-                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_untilize");
-                DataflowBuffer out_tiles_dfb(cb_output_tiles);
-                DataflowBuffer out_rm_dfb(cb_output_rm);
-                untilize<W, cb_output_tiles, cb_output_rm>(out_tiles_dfb, out_rm_dfb, rows_valid);
+                normalize_untilize_chunk(rows_valid);
+            } else {
+                normalize_chunk(rows_valid);
             }
             if (reread) {
                 skip_chunk(cb_input_tiles);  // the pass-1 view also carried the re-read

@@ -1,0 +1,26 @@
+--- groupnorm_sc_N_1_HW_C_b_program_descriptor.py	2026-11-26 08:57:51.756505645 +0000
++++ groupnorm_sc_N_1_HW_C_b_program_descriptor.py (n1u)	2026-11-26 10:26:52.815470557 +0000
+@@ -95,6 +95,7 @@
+ CB_PILOT_ROWS = 22  # shift k per channel (row 0, bf16), one per block, held for pass 1
+ CB_SUM_SEED = 23  # -n*k per channel (row 0, Float32 unpacked to DEST): the Sigma x accumulator's start
+ CB_GROUP_SHIFT = 24  # unit root: k per group lane (Float32, rows replicated), read by the finalize
++CB_NEG_ONE = 25  # constant -1 (bf16, compute-generated once): normalize folds '- b'' into a 2nd ELWMUL
+
+ NUM_CB_SLOTS = 64  # unpack_to_dest_mode vector length (covers WH 32 / BH 64)
+
+@@ -178,6 +179,7 @@
+         (D_RM * T if is_rm and not sharded else 0)
+         + (0 if tile_shard else input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm))
+         + 1  # reduce scaler
++        + 1  # the constant -1 tile (normalize)
+         + R  # ones tiles
+         + W * (1 + pilot_repeat(W, T // W) + hg + hb)  # map, pilot rows (m copies), gamma rows, beta rows
+     )
+@@ -715,6 +717,7 @@
+     cbs.append(_cb(pilot_repeat(W, h) * W * BF16_TILE_BYTES, cores, [(CB_PILOT_ROWS, bf16, BF16_TILE_BYTES)]))
+     cbs.append(_cb(W * F32_TILE_BYTES, cores, [(CB_SUM_SEED, f32, F32_TILE_BYTES)]))
+     cbs.append(_cb(F32_TILE_BYTES, cores, [(CB_GROUP_SHIFT, f32, F32_TILE_BYTES)]))
++    cbs.append(_cb(BF16_TILE_BYTES, cores, [(CB_NEG_ONE, bf16, BF16_TILE_BYTES)]))
+     if hg:
+         cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GAMMA_ROWS, bf16, BF16_TILE_BYTES)]))
+     if hb:

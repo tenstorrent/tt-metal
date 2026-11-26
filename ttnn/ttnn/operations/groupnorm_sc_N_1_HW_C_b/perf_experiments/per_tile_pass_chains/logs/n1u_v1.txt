@@ -1,0 +1,11 @@
+case                         variant              pcc      rms        ns
+vae_tile_16384x512           n1u             0.999999  0.00173     49704
+vae_tile_16384x512           n1b             0.999999  0.00173     49732
+vae_tile_16384x512           base            0.999998  0.00183     54574
+unet_rm_ip_16384x320         n1u             0.999998  0.00183     49695
+unet_rm_ip_16384x320         n1b             0.999998  0.00183     49859
+unet_rm_ip_16384x320         base            0.999998  0.00195     53762
+unet_rm_ip_16384x960         n1u             0.999998  0.00200    153853
+unet_rm_ip_16384x960         n1b             0.999998  0.00200    161496
+unet_rm_ip_16384x960         base            0.999998  0.00207    167844
+csv=/localdev/mmoscicki/gn-regen/tt-metal/generated/profiler/reports/2026_11_26_09_58_19/ops_perf_results_2026_11_26_09_58_19.csv

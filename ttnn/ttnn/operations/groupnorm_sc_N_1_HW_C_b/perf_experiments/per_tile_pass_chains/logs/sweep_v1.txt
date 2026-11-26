@@ -1,0 +1,26 @@
+case                         variant              pcc      rms        ns
+unet_rm_ip_1024x1280         n1u             0.999998  0.00177     26161
+unet_rm_ip_1024x1280         base            0.999998  0.00186     27110
+unet_rm_ip_4096x320          n1u             0.999998  0.00198     26810
+unet_rm_ip_4096x320          base            0.999998  0.00207     27797
+unet_rm_ip_4096x640          n1u             0.999998  0.00187     33921
+unet_rm_ip_4096x640          base            0.999998  0.00195     35950
+unet_rm_ip_1024x640          n1u             0.999998  0.00208     22433
+unet_rm_ip_1024x640          base            0.999998  0.00213     23118
+refiner_rm_ip_256x1536       n1u             0.999998  0.00216     21797
+refiner_rm_ip_256x1536       base            0.999997  0.00224     22388
+refiner_rm_ip_16384x384      n1u             0.999998  0.00204     46753
+refiner_rm_ip_16384x384      base            0.999998  0.00208     52827
+unet_rm_ip_16384x640         n1u             0.999998  0.00190     79636
+unet_rm_ip_16384x640         base            0.999998  0.00198     87809
+unet_tile_1024x1280          n1u             0.999998  0.00177     24540
+unet_tile_1024x1280          base            0.999998  0.00186     25187
+unet_tile_4096x640_4x8       n1u             0.999998  0.00188     43069
+unet_tile_4096x640_4x8       base            0.999998  0.00196     45981
+unet_rm_oop_16384x320        n1u             0.999998  0.00183     49724
+unet_rm_oop_16384x320        base            0.999998  0.00195     53759
+vae_dram_262144x256          n1u             0.999998  0.00181    894804
+vae_dram_262144x256          base            0.999998  0.00186    901936
+mid_4096x640_rm              n1u             0.999998  0.00193     66853
+mid_4096x640_rm              base            0.999998  0.00200     67856
+csv=/localdev/mmoscicki/gn-regen/tt-metal/generated/profiler/reports/2026_11_26_10_06_54/ops_perf_results_2026_11_26_10_06_54.csv

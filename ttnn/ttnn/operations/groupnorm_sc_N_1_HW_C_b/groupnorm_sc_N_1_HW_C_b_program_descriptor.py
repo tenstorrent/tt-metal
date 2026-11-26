@@ -72,6 +72,7 @@ CB_OUTPUT_RM = 1  # sharded RM: untilized output, backed on the output shard
 CB_INPUT_TILES = 2  # input ring, pass-1 view (alias group A)
 CB_INPUT_KEEP = 3  # input ring, pass-2 view (alias group A)
 CB_OUTPUT_TILES = 5
+CB_NEG_ONE = 6  # constant -1 (bf16, compute-generated once): pass 2 folds '- b'' into a second ELWMUL
 CB_SUM_ACC = 7
 CB_SUMSQ_ACC = 8
 CB_CHAN_SCALE = 9
@@ -142,7 +143,7 @@ def input_ring_pages(*, T, K_alloc, stream, is_rm):
 
 
 def output_ring_bytes(T):
-    """The D_OUT-deep bf16 output tile ring (interleaved output, and sharded RM's untilize source)."""
+    """The D_OUT-deep bf16 output tile ring (interleaved output only)."""
     return D_OUT * T * BF16_TILE_BYTES
 
 
@@ -163,11 +164,12 @@ def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta, map
     bf16_pages = (
         (D_RM * T if is_rm and not sharded else 0)
         + (0 if tile_shard else input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm))
+        + 1  # the constant -1 tile (pass 2)
         + R  # ones tiles
         + W * (2 + hg + hb)  # map, pilot rows, gamma rows, beta rows
     )
-    # Sharded TILE: the output tiles are the output shard.
-    out_ring = 0 if tile_shard else output_ring_bytes(T)
+    # Sharded: TILE packs into the output shard, RM pack-untilizes into it (no output tile ring).
+    out_ring = 0 if sharded else output_ring_bytes(T)
     # 2W: alias groups E (sum acc / chan scale) and C (sumsq acc / chan work / chan shift).
     # 2R + 7: gathered partials, local partials (2), stats out (2), group stats (2), group shift (1).
     f32_bytes = out_ring + F32_TILE_BYTES * (2 * W + 2 * R + 7)
@@ -669,7 +671,9 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
                 ring_views,
             )
         )
-        cbs.append(_cb(output_ring_bytes(T), cores, [(CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)]))
+        if not sharded:
+            # Sharded RM pack-untilizes the normalized tiles straight into the output shard: no tile ring.
+            cbs.append(_cb(output_ring_bytes(T), cores, [(CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)]))
     # Alias group E: the S1' spill accumulator (UnpackToDestFp32, multi-chunk pass 1) / the FPU-readable chan_scale.
     # The last chunk reloads accumulator tile i and packs the collapsed chan tile i over it (in-place lockstep; every
     # view returns to its base each block), so the accumulator costs no L1 of its own.
@@ -695,6 +699,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     )
     cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GROUP_MAP, bf16, BF16_TILE_BYTES)]))
     cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_PILOT_ROWS, bf16, BF16_TILE_BYTES)]))
+    cbs.append(_cb(BF16_TILE_BYTES, cores, [(CB_NEG_ONE, bf16, BF16_TILE_BYTES)]))
     cbs.append(_cb(F32_TILE_BYTES, cores, [(CB_GROUP_SHIFT, f32, F32_TILE_BYTES)]))
     if hg:
         cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GAMMA_ROWS, bf16, BF16_TILE_BYTES)]))
