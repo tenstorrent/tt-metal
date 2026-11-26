@@ -1,6 +1,11 @@
 # xlogy(x, y) = x * ln(y) on a 16-bit Dest: x of both signs; y positive or zero (x * -inf). Negative
 # y (NaN) is covered by sfpu_xlogy_dest32: a 16-bit Dest does not carry a NaN through the pack.
 #
+# atol / rtol: as on Blackhole the log is truncated to bfloat16 before the product, so the result
+# carries that truncation plus its own rounding (measured worst case 1.5e-2 relative, 2 bf16 ulps);
+# rtol 0.03 is twice that. ln(y) itself (the log op's body, ~1 fp32 ulp) adds nothing measurable,
+# also where x * ln(y) is near 0, so atol is only a 1e-6 floor.
+#
 # Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
 # dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), and stimuli are finite intervals
 # and points (no inf, NaN, -0 or INT_MIN).
@@ -39,6 +44,8 @@ operands:
   - name: "sfpu_out"
     dims: [32, 32]
     format: Float16_b
+    atol: 1.0e-6
+    rtol: 0.03
 
 operations:
   - math:

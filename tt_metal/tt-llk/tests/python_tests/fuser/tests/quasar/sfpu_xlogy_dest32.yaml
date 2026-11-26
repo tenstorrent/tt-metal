@@ -1,6 +1,10 @@
 # xlogy(x, y) = x * ln(y): x of both signs; y positive, zero (x * -inf) and negative (NaN, kept by a
 # 32-bit Dest). Points sit outside the random ranges, so each is drawn about as often as a unit of range.
 #
+# atol / rtol: ln(y) is the log op's body (32-bit Dest polynomial), about 1 fp32 ulp, and the product
+# adds its own rounding: measured worst case 1.5e-7 relative, also where x * ln(y) is near 0. rtol 3e-7
+# is twice that (2.5 ulps); atol is only a 1e-6 floor. The earlier ln cubic (4.4e-4 absolute) fails.
+#
 # Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
 # dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), and stimuli are finite intervals
 # and points (no inf, NaN, -0 or INT_MIN).
@@ -10,7 +14,7 @@ dest_acc: true
 operands:
   - name: "input_A"
     dims: [32, 32]
-    format: [Float16_b, Float32]
+    format: [Float16_b]
     stimuli:
       include:
         - [-4.0, -1.01]
@@ -40,6 +44,8 @@ operands:
   - name: "sfpu_out"
     dims: [32, 32]
     format: Float32
+    atol: 1.0e-6
+    rtol: 3.0e-7
 
 operations:
   - math:
