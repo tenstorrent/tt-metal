@@ -2,10 +2,14 @@
 
 For a Claude Code session (and its human) picking up this model. Give this file to your Claude first. It covers what
 the bring-up is, its current state and defaults, how to set up, run and measure it, the prefill → decode (PD) serving
-hand-off, the open questions, and where everything is.
+hand-off, the open items, and where everything is. It states the current facts; the history is in the ledger
+(`supervision.md`, `results/`, `BREADCRUMBS.md`).
 
-Facts are as of 2026-11-08, branch `dnijemcevic/model_bringup` (the only branch; work happens in `~/repos/tt-metal` on the Galaxy node), through task P.36 with every full gate passed (P.35 / P.36 full gates 2026-11-08 10:16). Items marked
+Facts are as of 2026-11-26, branch `dnijemcevic/model_bringup_batching` at `e3f48ea0390`, through task PB.MM256 (accepted 2026-11-23, every gate passed). Items marked
 **(unverified)** were not checked against code or a run while this was written.
+
+**This is the batching branch.** Sections 1-11 are the `dnijemcevic/model_bringup` text unchanged; section 12 adds packed
+prefill and lists every shared fact that is not true on this branch (12.6). Read 12.6 before trusting a number above.
 
 ## 1. What this is
 
@@ -15,160 +19,92 @@ them), TP = 4 mesh columns (the hidden size is split over them). "Prefill" = com
 decode machine (tt-blaze) generates the tokens after a hand-off.
 
 - The gated bring-up framework (`models/demos/common/bringup`) organizes the work as tasks with gates (tests that must
-  pass) in a ledger (section 10).
+  pass) in a ledger (section 9).
 - The model code is `models/demos/deepseek_v41_flash_d_p/tt/`. Every switch is in `tt/settings.py`.
 - The tt-d-gen inference server drives the model through the adapter in `tt/runners/`.
 
-| Item | State (2026-11-07) |
+**Branches.** `dnijemcevic/model_bringup` is the single-request prefill (one request a chunk, 5,120-token chunk = 160
+rows a chip). `dnijemcevic/model_bringup_batching` forks from it at `bcab6af973b` (2026-11-19 hand-off) and adds packed
+prefill (several requests in one 8,192-token chunk); fixes found on either branch are ported to the other as their own
+tasks (MB.* on model_bringup, PB.* on the batching branch). Both share one ledger directory layout; each branch's `tasks.yaml` holds its own tasks.
+
+| Item | State |
 |---|---|
-| Deployment box / spec | Galaxy 8x4: `models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml` |
+| Deployment box / spec | Galaxy 8x4: `models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml` (deploy seq 1,044,480, chunk 5,120) |
 | Seed run | QuietBox 2x2, partial (layers 0-3, 14, 20, 21, 24, scaled model): `bringup/spec.yaml`, ledger in `bringup/` |
-| Last full run | X.3 PASS 2026-11-05 (full 56,320-token ladder, every limit holds) |
-| Accuracy now (rung `last`) | err_final_hidden 0.1321 (limit 0.242), top-5 1.0 (ladder with P.35 on, 2026-11-07; P.36 is bit-identical to P.35). Was 0.1313 before P.35 |
-| Perf now (one 5,120-token chunk at 51,200, P.36 tree) | device 186.92 ms, wall 203.1 ms, host overhead 16.2 ms, 1,704 host launches (section 4); +9.7 ms device since the contract work began (section 4, regression table) |
-| Tasks done in the last three days | P.37-P.43, then P.35 and P.36 (perf: norm inside mHC; FFN input steps fused), accepted and committed (section 3) |
-| Running now | Nothing; the orchestrator stopped after P.36 (`--until P.36`). P.35 / P.36 full gates passed (2026-11-08; one P.36 unit crashed in device close after its test passed and passed on re-run) |
-| PD hand-off | Our served table: `bringup/migration_configs.md`. Decode reviewed it (Brian Liu); Kartik Paigwar proposed a different final contract (section 8) |
-| Held | O.1, Z.1, F.1; the QuietBox run |
+| Accuracy now (MB.9 accept gate, rung `last`, 40 layers) | err_final_hidden 0.1362 (limit 0.2422), top-5 1.0; determinism max abs diff 0.0 (fresh process) |
+| Perf now (MB.9 accept gate, 5,120 chunk, layers 0-20) | 70.6k new tok/s at 51,200 history, 68.5k at 139,264, 62.1k at 1,024,000 (section 3) |
+| Serving rebuilds | 0 program builds after warm-up, 0 ids uploads a chunk (`tests/test_no_rebuild.py`, cold program cache) |
+| Running now | Nothing; the queue is empty after MB.9, waiting on the owner |
+| Open in the ledger | FIX.11, FIX.13 (TODO, not queued); section 10 |
 
 ## 2. Current defaults
 
-`tt/settings.py` is the source of truth. Each entry carries its owner decision and measurements: read it before
-flipping one. Every option below is kept behind its switch; nothing old was deleted.
+`tt/settings.py` is the source of truth: each entry carries its owner decision and measurements; read it before
+flipping one. Environment variable = `DS41_<NAME>`. Call-time switches (read per chunk, listed in
+`bringup/hooks.py batch_call_settings`) let both A/B sides run in one model load; load-time ones need a reload.
 
-| Switch | Default | Other values | Since | Why |
-|---|---|---|---|---|
-| `MOE_BLOCK_SRC` | `main` | `carried` | P.37 (2026-11-06) | Marko Staletovic's reworked MoE block (C++ ops `ttnn.bringup.moe_block_main`, no DRISC). `carried` = the block used since P.17, which pushes expert weights with the DRAM cores' RISCs (DRISC) |
-| `CKV_FORMAT` | `bf16` | `bfp4_rows` | P.38 (2026-11-06) | Compressed KV in bf16 for the PD first cut; 4-bit comes back later |
-| `WINDOW_KV_FORMAT` | `bf16_tiles` | `bfp8_tiles`, `bfp8_blocks`, `bf16` | P.38 | Window KV computed and read in bf16 |
-| `INDEX_K_FORMAT` | `bfp8` | `bfp4`, `bf16` | P.40 (2026-11-07) | The index keys the indexer scores; bfp8 picks almost what bf16 picks |
-| `INDEX_K_COPY` | `bfp8` | `bf16` | P.41 (2026-11-07) | One bfp8 copy of the index keys, no 16-bit copy. Needs `INDEX_K_FORMAT=bfp8` and `INDEX_K_SERVED=fp8_row192`, else falls back to bf16 (logged once) |
-| `INDEX_K_SERVED` | `fp8_row192` | `bf16` | P.39 (2026-11-06) | Served index keys as Blaze decode's 192-byte fp8 rows |
-| `WINDOW_KV_KEEP` | `snapshot128` | `full`, `ring`, `none` | P.42 (2026-11-07) | Serve a 128-row window snapshot per layer at cap (section 8). The model keeps 192 rows a layer for its own attention |
-| `REINDEX_SERVE` | `alias` | `copy` | P.42 | Re-index layers 24, 28, 32, 36 served as aliases of layer 20's index rows |
-| `KV_BLOCK_SIZE` | 64 | any (32 legal in tt-d-gen) | P.42 | The serving engine's `kv_block_size`; sets cap |
-| `NORM_IN_MHC` | `on` | `off` | P.35 (2026-11-08) | The RMS norm of the collapsed input runs inside the mHC collapse pass; the separate attn_norm / ffn_norm calls are gone. Not bit-identical (err_layer_L39 0.707 → 0.911, limit 1.533; final hidden 0.1313 → 0.1321) |
-| `FFN_FEED` | `on` | `off` | P.36 (2026-11-08) | ffn_hc + ffn_norm + the MoE input all_to_all in one program (rows sent over fabric into the MoE head's input). Bit-identical |
-| `DECODER_SKIP` | `off` | `exact`, `replay128` | P.30 / P.31 | Skip layers 20-39 on chunks marked not-last. Off until the owner decides |
-| `CCL_IMPL` | `fabric_bf16` | `fabric`, `stock` | P.5 / P.6 | Collectives: gathers on `ttnn.experimental.high_bw_all_gather`, reduce-scatters on `ttnn.bringup.fabric_reduce_scatter`, TP partial sums in bf16 |
-| `ENGRAM_TABLE` | `resident` (tests: `mmap`) | `mmap` | FIX.10 | Engram tables in host RAM vs the checkpoint mmap. Bit-identical. Timed runs set resident |
-| `EXPERTS_IMPL` | `bfp4_mse` | `bfp4`, `bfp8`, `bfp8_down4` | FIX.22 | Routed experts bfp4 with an MSE-chosen exponent |
-| `MOE_IMPL` | `block` | `flat` | FIX.6 | Block MoE with a fused head. `flat` hangs on the torus (DS41-130) |
-| `OWN_ROWS`, `POST_COLLAPSE` | `on` | `off` | P.23, P.34 | Residual / mHC streams on each chip's own rows; mhc_post writes the next collapsed input |
-| `MAX_WORKER_CORES` | 110 | 0 = no cap | FIX.15 | Galaxy power rule: never more than 110 cores an op. Never 0 on a Galaxy |
-| `EXPERTS_WEIGHT_CACHE`, `EXPERTS_PREFETCH` | `on` | `off` | | Bank-major expert cache and read-ahead |
-
-## 3. Tasks of the last three days (2026-11-05 to 2026-11-08)
-
-"Device" and "wall" are one 5,120-token chunk at position 51,200 (p51200), off → on, from the A/B tables
-`/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/ab/<task>/table.md`. Device = time
-the chips spend; wall = host clock for the chunk; host overhead = wall - device.
-
-| Task | What it did | Commit | Measured effect (off → on) |
+| Switch | Default | Other values | What it does |
 |---|---|---|---|
-| X.3 | Final accuracy at full target (56,320), warm full prefill, one warm chunk at several positions | `907e8d61160` (pre-rebase) | PASS. Then the rebase onto llk_helper_library `107f838f379` (2026-11-05/06, `bringup/REBASE_STATUS.md`) |
-| P.34 | `POST_COLLAPSE`: mhc_post also writes the next sublayer's collapsed input | `f123afcc5a1` | Bit-identical; gate err_final_hidden 0.1394, top-5 1.0, device 157.67 ms, wall 172.4 ms (on its own A/B setup) |
-| (port) | Marko's MoE block ported as `ttnn.bringup.moe_block_main` + `models/demos/moe_block_main`, switch `MOE_BLOCK_SRC` | `bc71f592543`..`494262dfccb` | Default stayed `carried` until P.37 |
-| P.37 | `MOE_BLOCK_SRC=main` reaches parity with the carried block (SE_PACK_PRECISE, NORM_INTO_MOE, DECODER_SKIP=replay128); made default | `bf49ffcd902` | device 177.60 → 177.27 ms, wall 194.9 → 194.0 ms; MoE 2.67 ms device a layer (carried 2.39) |
-| P.38 | Compressed and window KV in bf16 (computed and served) | `53832f4caac` | device 179.09 → 183.57 ms (+4.5, attention 44.2 → 50.0), wall 196.3 → 203.7; compressed-KV error 1.4-4x lower |
-| P.39 | Served index keys as Blaze's fp8 192 B rows (new fork `ttnn.bringup.pack_fp8_rows`) | `d70e41c47f0` | device 184.87 → 182.97 ms, wall 199.9 → 200.8 (noise); served index-key error L02 0.016 → 0.053 (limit 0.236) |
-| P.40 | `INDEX_K_FORMAT` gains bfp8, made default (A/B bf16 / bfp4 / bfp8) | `2a96853dbc3` | device 183.78 → 183.56 ms; final hidden 0.1334 → 0.1313; top-k overlap ~0.85 → ~0.92 (= bf16); key buffers 1.9x bfp4's memory |
-| P.41 | One bfp8 index-key copy, no bf16 copy; served rows built from it | `98463fd81bc` | device 184.93 → 183.80 ms, indexer 7.06 → 6.83 ms; copies 127.95 → 44.39 MB a chip a slot at 1M; accuracy identical |
-| DS41-216 fix | One `high_bw_all_gather` semaphore pair per mesh axis (section 9) | in `902322e6f77` | Stress tests: 2,048 wrong replicas → 0 |
-| P.42 | Re-index layers as aliases of layer 20; window KV as a 128-row snapshot at cap (decode's review) | `902322e6f77` | device 184.13 → 188.74 ms (+4.6: the snapshot writes, in section ffn_residual 5.06 → 11.69), wall 202.9 → 206.5; window + copies 1,377 → 20 MiB a chip a slot at 1M; accuracy identical |
-| P.43 | Decode hand-off clean-up. (1) `SKIP_TAIL_START=cap` (default; `end` = old): under `DECODER_SKIP=exact` / `replay128` the last chunk starts from cap (replay128 at or before min(end - 128, cap - 128); exact at or before min(end - 2688, cap - 2668)); a later last chunk is refused (ValueError); every layer's snapshot is written in both modes. (2) The framework contract check (`testing/contract.py`) checks Snapshot configs only at the request's last chunk, as tt-d-gen ships them (DS41-218); new host unit test `test_contract_acks.py`; full `test_contract` passes (acks_early 0). (3) `0_window_kv` declares `max_sequence_length` 128. Owner accepted (2026-11-07) the snapshot test's limit for the 8 layers with official per-position references taken from the official reference's own error (DS41-193 method; layer 20 rows [0, 64): 0.144 -> ~0.180). Under replay128, layers 21-39's snapshot rows are 0.97-2.2x their limit by design (DS41-221: the tail's window starts empty), recorded, not gated | `f087d1b682a` | device 190.0 → 189.0, wall 208.0 → 204.4 (no change: the harness never marks a last chunk, so the skip does not act); accuracy identical |
-| P.35 | `NORM_IN_MHC`: the input RMS norm inside the mHC collapse pass (attn_norm / ffn_norm calls removed) | `98bad201aa7` | device 191.97 → 187.16 ms, wall 205.3 → 203.2 ms, launches 1,823 → 1,744; at 512,000: device 226.69 → 225.30, wall 253.4 → 247.0. Not bit-identical; all limits hold; ladder err_final_hidden 0.1321, top-5 1.0 |
-| P.36 | `FFN_FEED`: ffn_hc + ffn_norm + MoE all_to_all in one program, on the main MoE block (`tt/moe_block_main_adapter.py`) | `ba77b348d9b` | device 189.07 → 186.92 ms (experts -3.6, attn_residual +1.5), wall 204.8 → 203.1 ms, launches 1,744 → 1,704; bit-identical. The A/B showed a wider wall spread on; a re-measure (2 more runs a side, `/scratch/dnijemcevic/rebase/p36_spread/`) found the same 20-45 ms outlier runs on both sides: noise. Mean of 3 medians: 203.9 on vs 205.7 off |
+| `MOE_BLOCK_SRC` | `block` | `main`, `carried` | Marko's MoE block as merged in his stack, on the fork `ttnn.bringup.moe_block` (`tt/moe_block_v2_adapter.py`) |
+| `MOE_IMPL` / `MOE_HEAD` / `MOE_TAIL` | `block` / `fused` / `fused` | `flat` / `ops` | Block MoE with fused head and tail. `flat` hangs on the torus (DS41-130) |
+| `EXPERTS_IMPL` | `bfp4_mse` | `bfp4`, `bfp8`, `bfp8_down4` | Routed experts bfp4 with an MSE-chosen exponent |
+| `ATTN_SP32_PROJ`, `ATTN_SP32`, `OWN_ROWS` | `on` | `off` | Attention and the residual / mHC streams on each chip's own S/(SP TP) rows |
+| `HISTORY_FORMAT` | `bfp4` | `bf16` | Prefill's own attention history: served bf16 rows packed to 4-bit records every chunk before the gather |
+| `CKV_FORMAT` | `bf16` | `bfp4_rows` | The SERVED compressed KV stays bf16 (decode reads it) |
+| `WINDOW_KV_FORMAT` | `bf16_tiles` | `bfp8_tiles`, `bfp8_blocks`, `bf16` | Window KV computed and read in bf16 |
+| `INDEX_K_FORMAT` / `INDEX_K_COPY` / `INDEX_K_SERVED` | `bfp8` / `bfp8` / `fp8_row192` | | Indexer scores bfp8 keys; served index keys as Blaze's 192-byte fp8 rows |
+| `INDEXER_BLOCK_SELECT`, `INDEXER_BMAX_COMPUTE` | `on` | `off` | Exact block-max pre-selection before the indexer top-k, block maxima in the score's compute kernel |
+| `INDEXER_BLOCK_SELECT_MIN` | `auto` (262,144 keys) | a key count | Below it the plain top-k (the block path's extra launches cost more wall than they save) |
+| `MATMUL_CONFIG` / `MM_TUNED160` | `galaxy` / `on` | `tuned`, `auto` / `off` | Dense matmul program configs: the 8x4 sweep (`tt/mm_configs.GALAXY`), plus the 5,120-chunk re-sweep (`GALAXY160`, `GMM160`); call-time |
+| `POS_DYNAMIC` | `on` | `off` | Every per-chunk value is a runtime value: serving builds no program after warm-up; ids reordered on the device |
+| `HOST_HIDE`, `ENGRAM_HOST_IMPL` | `True`, `cpp` | `False`, `numba` | Host work of a chunk hidden behind the device; engram hash / gather in C++ (`tt/csrc/engram_host.cpp`) |
+| `MHC_POST_FAST`, `NORM_IN_MHC`, `FFN_FEED`, `POST_COLLAPSE` | on | off | mHC / norm / FFN-input fusions |
+| `ENGRAM_TABLE` | `resident` (tests: `mmap`) | `mmap` | Engram tables in host RAM vs the checkpoint mmap. Timed runs set resident |
+| `ENGRAM_DEVICE`, `ENGRAM_DEVICE_TABLES` | `off` | `on` | Engram tables on the Galaxy (6.6 GB a chip, ~6 min upload); not shipped |
+| `STATIC_TABLES` | `off` | `on` | No per-user, per-chip KV history: each chunk gathers the slot's served rows |
+| `DECODER_SKIP` | `off` | `exact`, `replay128`, `decode` | `decode` = prefill runs layers 0-19 + layer 20's KV head only (decode's proposed cut). Every perf measurement runs `decode`; the shipped default stays `off` until the owner decides |
+| `PREFILL_END` | `cap` | `end` | The serving runtime stops computing at decode's cap (64-token block) |
+| `WINDOW_KV_KEEP` / `REINDEX_SERVE` / `KV_BLOCK_SIZE` | `snapshot128` / `alias` / 64 | | 128-row window snapshot per layer; re-index layers served as aliases of layer 20 |
+| `CCL_IMPL` | `fabric_bf16` | `fabric`, `stock` | Gathers on `high_bw_all_gather`, reduce-scatters on the fabric fork, TP partial sums in bf16 |
+| `MAX_WORKER_CORES` / `NONMM_MAX_CORES` | 110 / 0 (full 120 grid) | | Galaxy power rule: matmuls and the forks stay within 110 cores; other stock ops may use 120. Never set `MAX_WORKER_CORES=0` on a Galaxy |
 
-Owner process notes: P.41 accepted by the owner 2026-11-07 09:25; P.42 held until DS41-216 was root-caused, then
-re-measured on the fixed tree (17:19) and committed (17:26). P.43 accepted 18:45 (commit rebased onto the README commit `cf686613dff`, so `f50b38ac87f` in the orchestrator log is now `f087d1b682a`). P.35 accepted 2026-11-08 06:50, P.36 09:24.
+## 3. Perf and accuracy headline
 
-## 4. Perf and accuracy headline (current defaults)
+**Perf: the 5,120 ladder** (MB.9 accept gate, 2026-11-23, `results/MB.9.json`; method and off/on comparison in
+`results/MB.9_ladder.md`). agentic_cc text, layers 0-20 loaded (`DECODER_SKIP=decode`), resident engram table, steady
+chunk = mid-request, resumed = first chunk after a prefix hit (128 rows of encoder replay). Wall = clean warm median of 10
+timed runs, each preceded by the real previous chunk, program-cache misses refused; device = one profiled run, slowest
+chip; exposed host = wall - device. Walls vary by ±1-2 ms run to run: judge changes by device ms.
 
-One 5,120-token chunk at 51,200, P.36 tree, `ENGRAM_TABLE=resident`, from `ab/P.36/table.md` (2026-11-08 08:27, the
-'on' side):
+| History | 51,200 | 131,072 | 139,264 | 262,144 | 524,288 | 786,432 | 1,024,000 |
+|---|---|---|---|---|---|---|---|
+| steady wall ms | 72.5 | 75.6 | 74.7 | 75.3 | 77.8 | 83.1 | 82.4 |
+| steady new tok/s | 70.6k | 67.7k | 68.5k | 68.0k | 65.8k | 61.6k | 62.1k |
+| resumed wall ms | 74.9 | 77.8 | 78.7 | 79.5 | 82.0 | 84.6 | 83.4 |
+| steady device ms | 60.0 | 62.0 | 62.7 | 63.6 | 67.1 | 73.8 | 75.3 |
 
-| Number | Value |
-|---|---|
-| device_ms_total (profiled) | 186.92 ms |
-| chunk_wall_ms (clean warm, median of 10) | 203.1 ms (three re-measures: 202.3-206.2) |
-| host overhead (wall - device) | 16.2 ms |
-| host launches / device programs (all 40 layers) | 1,704 / 52,000 (1,625 op calls) |
-| at 512,000 | device 223.95 ms, wall 246.1 ms |
-| last chunk after the golden 51,200 prefix (quick run) | wall 184.7 ms |
+- Serving adds the ids readback, ~1.5 ms a chunk (about -1.3k tok/s; `results/agentx_ladder_20261119.md`).
+- Device ms by section for a 5,120 chunk at 138,240 history: `results/MB.9_ladder.md` section 3 (chunk 66.06 ms;
+  experts 31.5, attention 21.5, ffn_residual 4.7, attn_residual 3.1, indexer 2.1).
+- The MoE block's fused matmuls (~25 ms a chunk) take their blocking at load: not tunable by a call-time switch.
 
-### What got slower since the contract work began (P.38 on)
+**Accuracy** (MB.9 accept gate, rung `last`, all 40 layers, every gated limit holds):
 
-Baseline P.37 (Marko's MoE block, before the contract work). Each row is that task's A/B at 51,200 (on - off).
-Run-to-run noise is about ±1 ms device and ±3 ms wall.
+| Metric | Value | Limit |
+|---|---|---|
+| err_final_hidden | 0.1362 | 0.2422 |
+| top5_overlap | 1.000 | >= 0.9943 |
+| err_layer_L39 | 0.7554 | 1.5332 (L39 swings 0.70-0.91 on rounding-only changes, DS41-188) |
+| determinism_max_abs_diff (fresh process) | 0.0 | == 0 |
 
-| Task | Change | Device ms | Wall ms | Where |
-|---|---|---|---|---|
-| P.37 (baseline) | MoE block switch | **177.3** | **194.0** | |
-| P.38 | compressed + window KV in bf16 (were 4-bit / 8-bit) | +4.5 | +7.4 | attention +5.8 |
-| P.39 | index keys as Blaze 8-bit rows | ~0 | ~0 | noise |
-| P.40 | index keys scored in bfp8 | ~0 | ~0 | noise |
-| P.41 | drop the bf16 index-key copy | ~0 | ~0 | indexer -0.2 |
-| P.42 | 128-row window snapshot, layer-20 aliases | +4.6 | +3.6 | ffn_residual +6.6 (the snapshot rewrite), attention -1.8 |
-| P.43 | skip-mode tail start, contract check | ~0 | ~0 | noise |
-| P.35 (perf) | norm inside the mHC collapse | -4.8 | -2.1 | attn_norm / ffn_norm -1.4, experts -3.1 (partly noise) |
-| P.36 (perf) | FFN input steps in one program | -2.2 | -1.7 | experts -3.6, attn_residual +1.5 |
-| **Now** | | **186.9** | **203.1** | **+9.7 ms (+5.4%) device, +9.1 ms (+4.7%) wall** |
-
-By section (device ms), P.37 baseline → now (P.36):
-
-| Section | P.37 | Now | Change |
-|---|---|---|---|
-| attention | 44.12 | 48.10 | +3.98 (bf16 KV, P.38) |
-| ffn_residual (now includes the snapshot write) | 5.06 | 11.63 | +6.57 (snapshot rewrite, P.42) |
-| experts (MoE) | 106.80 | 105.28 | -1.52 (P.36 fusion; experts vary ±2 run to run) |
-| attn_residual | 5.30 | 7.06 | +1.76 (P.36's fused program is counted here) |
-| compressor | 1.77 | 2.07 | +0.30 |
-| indexer | 6.97 | 6.89 | -0.08 |
-| kv | 0.72 | 0.73 | +0.01 |
-| attn_norm + ffn_norm | 1.40 | 0.02 | -1.38 (inside mHC, P.35) |
-| **device_ms_total** | **177.27** | **186.92** | **+9.65** |
-| chunk_wall_ms | 194.0 | 203.1 | +9.1 |
-| host overhead | 16.7 | 16.2 | -0.5 (noise) |
-
-Both costs are recoverable:
-- **bf16 KV (~4 ms)** is the temporary format for the first e2e run. Back to 4-bit (`CKV_FORMAT=bfp4_rows`) once
-  decode reads it.
-- **The snapshot rewrite (~6.6 ms a chunk)** happens on every chunk because prefill cannot tell the last chunk
-  (tt-d-gen's chunk header has no last flag). With a last-chunk flag, or N (the prompt length) in the metadata as
-  Kartik's contract proposes, it runs once per request. The same signal lets the decoder skip act
-  (`DECODER_SKIP=exact`: layers 21-39 skipped on every chunk but the last).
-
-| Section | Device ms |
-|---|---|
-| experts (MoE) | 105.28 |
-| attention | 48.10 |
-| ffn_residual (includes the snapshot writes) | 11.63 |
-| attn_residual (includes P.36's fused FFN input) | 7.06 |
-| indexer | 6.89 |
-| q_a | 3.42 |
-| compressor | 2.07 |
-| engram_kv | 0.84 |
-| kv, engram_add, attn_hc, attn_norm | 0.73, 0.63, 0.25, 0.02 (ffn_norm 0: inside mHC since P.35) |
-
-| Accuracy (rung `last`) | Value | Limit | Source |
-|---|---|---|---|
-| err_final_hidden | 0.1321 | 0.242 | ladder with P.35 on (`/scratch/dnijemcevic/rebase/p35_ladder/`); 0.1313 before P.35 |
-| top5_overlap | 1.000 | >= 0.994 | same |
-| err_layer_L39 | 0.9115 | 1.533 | P.35 / P.36 A/B (0.7067 before P.35) |
-| worst metric share of limit | 0.75 (err_state_window_kv L25) | | P.36 A/B |
-
-- P.36 is bit-identical to P.35 (every error equal in its A/B), so the P.35 ladder stands for the P.36 tree.
-- The quick A/B's "min layer PCC" (~0.75 at L39) is not a regression signal: L39 is the noisy last layer.
-- Full 56k prefill: 2,503 ms on the rebased build (X.3 re-run, before P.34, mmap engram). Not re-measured since.
-
-## 5. Setup on a new Galaxy
+## 4. Setup on a new Galaxy
 
 Everything under `/scratch` is node-local. A new box has none of it. The shared masters are on NFS `/data` and are
 readable by other users.
 
 ```bash
-# 1. Checkout (origin = github.com/tenstorrent/tt-metal); steps 1-3 were not re-run for this doc (unverified as a sequence)
+# 1. Checkout (origin = github.com/tenstorrent/tt-metal); not re-run for this doc (unverified as a sequence)
 git clone https://github.com/tenstorrent/tt-metal.git && cd tt-metal
 git checkout dnijemcevic/model_bringup
 git submodule update --init --recursive
@@ -177,11 +113,10 @@ git -c submodule.tt_metal/third_party/tt_ops_code_gen.update=checkout submodule 
 
 # 2. Build: Release, no tests (the build_metal.sh defaults). Afterwards `build` must be a symlink to build_Release.
 ./build_metal.sh
-ls -l build            # build -> build_Release
 # After a C++ change to a bring-up fork: cmake --build build --target install (Python loads the installed copies)
 
-# 3. venv (./python_env). If ~/.cache/uv is damaged, put uv's cache on /scratch (UV_CACHE_DIR: uv's own variable, unverified here):
-UV_CACHE_DIR=/scratch/$USER/uv-cache ./create_venv.sh
+# 3. venv (./python_env)
+./create_venv.sh
 
 # 4. Every session, from the repo root
 export PYTHONPATH=$PWD && source python_env/bin/activate
@@ -191,312 +126,334 @@ S=models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml
 The data paths come from the spec. `paths.art` is `/scratch/$USER/bringup`, and the framework appends the model
 name (`core/spec.py:art`):
 
-| What | Where | Size | How it gets there |
-|---|---|---|---|
-| HF checkpoint, rev `5254448103b6254fc646dacbca1cbbf20e9216c1`, all 48 shards | `/scratch/$USER/bringup/deepseek_v41_flash_d_p/hf_full` | 476 GiB | You download it once (below). Dense weights and the engram tables are always read from it |
-| Goldens (master) | `/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4` (s10240_c5120, s56320_c5120, plus `-official`) | 85 GB | Fixed |
-| Goldens (node-local mirror tests read) | `/scratch/$USER/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4` | 85 GB | `reference.golden sync`. The orchestrator syncs at run/resume start. When the mirror is incomplete, tests read NFS (slow) and print a warning |
-| Routed-expert weight cache (master) | `/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/tt_cache/8x4/v1`: the carried block's bank-major `.bm.bin` (306 GB, 120 files) and, since 2026-11-07, the MoE-main block's `.moe_main.*.tensorbin` (306 GB, 80 files), bfp4_mse | 612 GB, 200 files | Fixed |
-| Weight cache (node-local mirror the loader reads) | `/scratch/$USER/bringup/deepseek_v41_flash_d_p/tt_cache/8x4/v1` | 612 GB with `MOE_BLOCK_SRC=main` (306 GB with `carried`) | `core.weight_cache pull`. The orchestrator pulls at run/resume start. A miss rebuilds that layer from the checkpoint (~2-3 min a layer, DS41-121) |
-| MoE-main routed weights (the default block) | beside the expert cache: `<expert cache>.moe_main.<plan>.{w_gu,w_d}.tensorbin` | 306 GB, 80 files | In the master (pushed 2026-11-07 in 16 min, ~315 MB/s) and pulled with the rest when `MOE_BLOCK_SRC=main` (`bringup/hooks.py weight_cache_patterns`). A missing file is laid out from the checkpoint on first use (time unverified) |
+| What | Where | How it gets there |
+|---|---|---|
+| HF checkpoint, rev `5254448103b6254fc646dacbca1cbbf20e9216c1`, all 48 shards (476 GiB) | `/scratch/$USER/bringup/deepseek_v41_flash_d_p/hf_full` | Download once (below). Dense weights and the engram tables are read from it |
+| Goldens (master, 85 GB) | `/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4` | Fixed |
+| Goldens (node-local mirror) | `/scratch/$USER/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4` | `reference.golden sync`; the orchestrator syncs at run/resume start |
+| Routed-expert weight cache (master) | `/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/tt_cache/8x4/v1` | Fixed. The default `block` reads the main block's `.moe_main.*` files where its plan lays them out the same, else `.moe_blk.*` (sizes now: unverified; 612 GB for carried + main as of 2026-11-08) |
+| Weight cache (node-local mirror) | `/scratch/$USER/bringup/deepseek_v41_flash_d_p/tt_cache/8x4/v1` | `core.weight_cache pull`; the orchestrator pulls at run/resume start. A miss rebuilds that layer from the checkpoint |
 
 ```bash
-# checkpoint (the recipe used here: /scratch/dnijemcevic/hf_dl.py; ~7 min on this node's network (unverified elsewhere))
 python -c "from huggingface_hub import snapshot_download as d; d('deepseek-ai/DeepSeek-V4.1-Flash', \
   revision='5254448103b6254fc646dacbca1cbbf20e9216c1', \
   local_dir='/scratch/$USER/bringup/deepseek_v41_flash_d_p/hf_full', max_workers=8)"
-
-python -m models.demos.common.bringup.reference.golden status --spec $S      # which dir each rung reads
-python -m models.demos.common.bringup.reference.golden sync   --spec $S      # master -> mirror, verified
-python -m models.demos.common.bringup.core.weight_cache status --spec $S     # to pull / to push, with a time estimate
-python -m models.demos.common.bringup.core.weight_cache pull   --spec $S     # 612 GB: ~100 min at the code's 100 MB/s NFS estimate
+python -m models.demos.common.bringup.reference.golden status|sync --spec $S
+python -m models.demos.common.bringup.core.weight_cache status|pull --spec $S
 ```
 
-- The local disk needs about 1.2 TB: checkpoint 476 GiB, weight cache 612 GB (both blocks), goldens 85 GB.
-- Old `.tensorbin` expert caches are not read any more. To convert one (host only, ~8 min):
-  `python models/demos/deepseek_v41_flash_d_p/tools/convert_expert_cache.py --layers $(seq 0 39) [--verify]`.
-- `ENGRAM_TABLE=resident` needs ~190-210 GB of host RAM for the two engram tables (the Galaxy host has 566 GB).
+- Local disk: about 1.2 TB (checkpoint, weight cache, goldens).
+- `ENGRAM_TABLE=resident` needs ~190-210 GB of host RAM for the two engram tables; a full 40-layer load holds ~200 GB
+  host RSS.
 - `push` is for the master's owner only. A user who cannot write the master only pulls.
 
-## 6. Run the model
+## 5. Run the model
 
-The rules in section 11 apply to every command below. Each device test loads the model: about 1.5-3.5 min with a
-warm weight cache (measured model_load_s 82 s and 205 s), plus about 1.5-2.5 min of first-chunk compile.
+The rules in section 10 apply. **Do all device work through the resident runner** (one model load held in one
+process; a later request reaches its first chunk in ~1-2 s). A direct `scripts/run_safe_pytest.sh` makes the runner step
+aside, which costs a fresh device open (2-4 min load, plus host RAM the driver leaks until a reboot).
 
 ```bash
-# "What is the capital of France?" -> Paris, on the device model (no server)
-BRINGUP_SPEC=$S scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_smoke.py
-
-# accuracy: ladder rung `last` (golden prefix 0-51200 loaded, last 5120-token chunk on device, every metric vs the golden)
-BRINGUP_SPEC=$S BRINGUP_RESULTS_DIR=/scratch/$USER/ds41_results BRINGUP_TASK=mine BRINGUP_RUNG=last \
-  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-
-# the full 56k prefill, all 11 chunks on device, ~8 min (X.3: 492 s)
-BRINGUP_SPEC=$S DS41_ENGRAM_TABLE=resident BRINGUP_RUNG=s56320 \
-  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-
-# a short turn under the decoder skip (in every recent gate)
-BRINGUP_SPEC=$S DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident \
-  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
+R="python -m models.demos.common.bringup.resident"
+$R start --spec $S          # when the first device work is ready
+$R submit --spec $S --cmd "<safe-runner command(s), && joined>" [--task T] [--fresh]
+$R status|stop --spec $S
 ```
 
-**Serving runner (tt-d-gen).** The K.1R serving-contract tests drive the model with the real tt-d-gen engine.
+New test files mark `BATCH_SHARED = True` (+ `BATCH_ITEM_VARS` for per-run env, `BATCH_LAYERS`) to run in the held
+process. The commands below are what the accept gate (`tasks.yaml`, MB.9 `gate.cmd`) runs; prefix `BRINGUP_SPEC=$S`
+outside the orchestrator.
 
-- Branch for serving (owner, 2026-11-07 00:15): `jazpur/dsv4-replay-window`, checked out at `48b79127f`
-  ("Recurrent handoff at #2384's prefill stop, and a DSv4 P2D snapshot test"; main d8a194417 + 10 commits, tt-blaze pin
-  3cefbb45). Clone: `/scratch/dnijemcevic/tt-d-gen` (= the spec's `serving.server_repo`, `/scratch/$USER/tt-d-gen`).
-- Built at `/scratch/dnijemcevic/tt-d-gen-build`; the engine's Python is `venv312/bin/python`
-  (`testing/dgen_engine.py:find_build`). `BRINGUP_SERVER_REPO=<path>` points at another checkout.
-- How to build it: `/scratch/dnijemcevic/tt-d-gen-build/README.md` (this node only). Short version:
-  `./build_dgen.sh --bindings --blaze --no-kvm-client`. That build fails at tt-blaze's BFP packer because clang-20
-  here has no OpenMP. Build the packer with `CC=g++-12 CXX=g++-12 LDSHARED="g++-12 -shared"`, then re-run with
-  `--skip-blaze-build`. Or let the `dgen-build` agent (`models/demos/common/bringup/agents/dgen-build.md`) do it.
-- Check the build: `BRINGUP_SPEC=$S python -m models.demos.common.bringup.testing.dgen_engine find`.
-- `test_runner_contract` against this branch: PASS (2026-11-07 00:48, and again in the DS41-216 fix round).
+```bash
+P="BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode"
+SR="scripts/run_safe_pytest.sh --run-all --no-precompile"
+
+# accuracy: ladder rung `last` (golden 0-51200 prefix, last chunk on device, all 40 layers, every metric vs its limit)
+BRINGUP_RUNG=last $SR models/demos/common/bringup/tests/test_ladder.py
+# the 5,120 perf ladder (steady + resumed walls, device ms, exposed host per rung)
+$P SKIP_POS=51200,131072,139264,262144,524288,786432,1024000 $SR models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+# no program build after warm-up in serving (PASS/FAIL, run cold: first in a fresh process)
+$P $SR models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+# MB.9's own unit: tuned matmul configs off vs on, one load
+$P DS41_MM_TUNED160=on $SR models/demos/deepseek_v41_flash_d_p/tests/test_mm160_offon.py
+
+# "What is the capital of France?" -> Paris, on the device model (no server)
+$SR models/demos/common/bringup/tests/test_smoke.py
+# the full 56k prefill, all 11 chunks on device
+DS41_ENGRAM_TABLE=resident BRINGUP_RUNG=s56320 $SR models/demos/common/bringup/tests/test_ladder.py
+```
+
+- **Determinism** (bit-identical repeats) outranks everything. The framework adds it to every model-level gate
+  (`core/gate.py with_determinism`, `testing/model_determinism.py`) and runs it in a fresh process, once per accept gate;
+  `tests/test_determinism.py` adds the `DECODER_SKIP=decode` sequence the serving runtime takes.
+- **Walls.** `test_skip_positions.py` measures its own clean walls (above). For the framework's single-position
+  profile (`test_profile.py`) only `BRINGUP_PROFILE_WALL=1` runs give clean walls (the gate splits profile and wall).
+- **Box check:** `models/demos/common/bringup/tests/test_box.py` once after a reboot.
+- Matmul config sweeps: `tests/perf/test_matmul_sweep.py` (capture, then `-k test_sweep_card` in parallel single-card
+  processes, `P23_SHARD=i/N`; resident runner stopped first). Recipe in `results/MB.9_ladder.md` section 2.
+
+**Serving runner (tt-d-gen).** The serving-contract tests drive the model with the real tt-d-gen engine
+(`serving.server_repo` in the spec: `/scratch/$USER/tt-d-gen`; tested against `jazpur/dsv4-replay-window` at
+`48b79127fb1`). Build: `./build_dgen.sh --bindings --blaze --no-kvm-client`, or the `dgen-build` agent
+(`models/demos/common/bringup/agents/dgen-build.md`). Check: `python -m models.demos.common.bringup.testing.dgen_engine find`.
 
 ```bash
 T=models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
-BRINGUP_SPEC=$S scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-for t in test_kv_layout test_adapter_acks test_runner_contract test_runner_smoke; do   # smoke ~12 min: Paris via tt-d-gen
-  BRINGUP_SPEC=$S scripts/run_safe_pytest.sh --run-all --no-precompile $T/$t.py || break; done
+$SR models/demos/common/bringup/tests/test_contract.py
+for t in test_kv_layout test_adapter_acks test_runner_contract test_runner_smoke; do $SR $T/$t.py || break; done
 ```
 
-- `test_contract` passes on the P.43 tree (acks_early 0, contract_checks_failed 0). On P.42 it failed with 40 early
-  acks (DS41-218: the check was stricter than tt-d-gen for Snapshot configs); P.43 fixed the check.
-
-## 7. Accuracy
+## 6. Accuracy
 
 There is no fixed bar. Every gated metric has a limit of `e2e.calib` (2.0) x the official reference's own drift
-from full precision. The golden is the fp32 reference. The drift comes from the bf16/fp8/fp4 reference
-(`<rung>-official`, `drift-<rung>.json` beside the golden). The code is in `testing/e2e_limits.py` and
-`reference/drift.py`.
+from full precision. The golden is the fp32 reference; the drift comes from the bf16/fp8/fp4 reference
+(`<rung>-official`, `drift-<rung>.json` beside the golden). Code: `testing/e2e_limits.py`, `reference/drift.py`.
 
-The ladder (`testing/ladder.py`) writes `$BRINGUP_RESULTS_DIR/$BRINGUP_TASK.json`, by default
-`generated/bringup_adhoc/adhoc.json`. Every metric has `{t, value}`, and every gated metric has a `<name>_limit` next
-to it. The test fails if any gated metric is over its limit, unless an owner waiver (`tests.waivers`) covers it.
-
-| Metric | Meaning | Latest |
-|---|---|---|
-| `err_layer_L00..L39` | per-layer output rel L2 (`pcc_layer_*` is diagnostic only) | P.42: 0.019 (L0) to 0.140 (L18), about half of each limit; L39 0.707 / 1.533 |
-| `err_state_<cache>_L*`, `overlap_state_*` | the served caches: window_kv, compress_kv, index_k, topk_idx (overlap), candidates, engram_tail | all within limits; worst share 0.42 (P.42) |
-| `err_final_hidden` | final norm output rel L2 | 0.1313 / limit 0.242 (P.40 / P.41). X.3: 0.145 / 0.259 |
-| `top5_overlap`, `top1_match`, `pcc_logits_tail` | token-level agreement of the last rows' logits | 1.0, 1.0, ~0.993 (X.3) |
-
-- Rungs: `s10240` and `seed` (10k), `last` (golden 51k prefix + 1 chunk, the fast check), `s56320` (the full 56k).
-- The quick A/B reports layer and state metrics only; final hidden and top-5 come from a ladder run.
-- Token-level study: `tests/bringup/test_logit_kl.py` (FIX.20). It still asserts the old window format `bfp8_tiles`
-  and fails under P.38's bf16 default (P.38 agent; not in any gate; owner's call).
-- The precision policy is realistic precision only: there is never a max-precision device run. Its rationale is in
-  `models/demos/common/bringup/README.md` ("Switches") and in the spec's `agents.rules`.
-
-## 8. The PD serving hand-off (prefill → decode)
-
-**The idea.** Prefill (this model, tt-metal) computes the prompt's caches. tt-d-gen's KV Manager copies ("migrates")
-them to the decode machine (tt-blaze), which generates tokens. Both sides publish a KV address table; tt-d-gen moves
-the records between them.
-
-| Document | Where | What |
-|---|---|---|
-| Serving contract | `models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md` (repo) | How tt-d-gen drives prefill: input, chunk layout, served caches, acks, P.39 / P.42 changes |
-| **Migration configs** | `models/demos/deepseek_v41_flash_d_p/bringup/migration_configs.md` (repo) | The table as the code serves it: per config the layers, record bytes, entry counts, cap rule, fp8 row, switches, open points |
-| Earlier draft (v2) | `/scratch/dnijemcevic/rebase/dgen_migration_table_draft.md` (scratch) | Superseded by the file above |
-| Decode's review | Brian Liu, #blaze-deepseek-v4, 2026-11-06, https://claude.ai/artifact/HG8kwWMJedV7TZsJtPMjgk | Asked for the 128-row snapshot at cap, Blaze fp8 index rows, `alias_rows` fan-out |
-| Kartik's proposed final contract | #blaze-deepseek-v4 thread 2026-11-06 18:13 CET; local copy `/scratch/dnijemcevic/DSv4.1_final_tt-d-gen_bounded-replay_contract.html` (scratch) | Bounded replay driven by X / N metadata (below) |
-| tt-d-gen tables mock | `/scratch/dnijemcevic/tt-d-gen/engine/tests/integration/dsv4_tables.py` (tt-d-gen clone) | DSv4-shaped mock tables: `swa` as a 128-position snapshot, the P2D byte check |
-
-**What we serve today** (P.42 defaults; details in migration_configs.md):
-
-| Config | Layers | Record bytes | Type |
-|---|---|---|---|
-| `0_window_kv` | 0-39 | 32,768 (32 bf16 rows of 512) | Snapshot: 128 rows, p at row p % 128, p in [cap - 128, cap) |
-| `1_compress_kv_r2` | 2, 8, 14 | 16,384 | History [0, cap) |
-| `2_index_k_r2` | 2, 8, 14 | 3,072 (16 fp8 rows of 192 B) | History [0, cap) |
-| `3_compress_kv_r1` | 20 | 32,768 | History [0, cap) |
-| `4_index_k_r1` | 20 (+ 24, 28, 32, 36 aliases) | 6,144 | History [0, cap) |
-
-- cap = (prompt_len - 1) // `KV_BLOCK_SIZE` x `KV_BLOCK_SIZE` (64). Decode receives [0, cap) and replays
-  [cap, prompt_len). Prefill still computes and attends every position up to the prompt's end.
-- Per slot at 1,048,576 tokens: 3,044.81 MiB of distinct bytes to migrate; at 56,320: 168.10 MiB.
-
-**Kartik Paigwar's proposed contract vs what we serve.**
-
-| Topic | Kartik's contract | What we serve |
-|---|---|---|
-| Cut point | C = max(N - 128 - N % 2, 0): even, 128 short of the prompt length N | cap = (N - 1) // 64 x 64: 64-aligned; decode replays [cap, N) |
-| Window rings | Only encoder layers 0-19 transfer rings; decoder SWA starts at D on decode | A 128-row snapshot for all 40 layers |
-| Prefill's work | Layers 0-19 + layer 20's KV head only (never the full decoder) | All 40 layers on every chunk (`DECODER_SKIP=off`); `exact` / `replay128` exist behind the switch and need a last-chunk flag. P.33 showed prefill to an even cut 128 short of the end is within limits (2026-11-05) |
-| Metadata | New X (matched prefix length) and N (prompt length): PrefillMetadata 12 → 16 B, BlazeMetadata 384 → 448 B; host planner derives scenarios A / B / C / A0 | tt-d-gen's 12-byte header `{slot_id, actual_start, actual_end}`; no X, N or last flag |
-| Ring indexing | Local q = p - E (encoder origin), row = q % 128 | Absolute row = p % 128 |
-| Migration range | P migrates only new rows [X, C); decode loads [0, X) from the store | tt-d-gen's existing rule: decode announces what it lacks, prefill sends it |
-| Status | DTO/codec prototype and simulator verified; runtime/device integration pending | Implemented, tested against tt-d-gen 48b79127f with mock migration |
-
-**Jonathan Azpur's 5 objections** (same thread, 2026-11-06 23:58 CET):
-1. Model-aware readers: keep model logic out of tt-d-gen; the device can report skipped layers as finished.
-2. Agreeing X before prefill starts adds a decode round trip to every request's TTFT; indexing rings by absolute
-   position (row = p % 128) would remove the need.
-3. Migrating only [X, C) and loading [0, X) from the store adds a store dependency for no gain; tt-d-gen already
-   sends only what decode lacks.
-4. Gating decode until the hand-off is in is not needed: decode already waits for its migration (the snapshot
-   arrives with the last chunk).
-5. Bypassing prefill in scenario C: the contract does not say who decides; in tt-d-gen decode decides through its
-   decline path.
-
-**Open questions** (owner / decode / tt-d-gen):
-
-| Question | State |
+| Metric | Meaning |
 |---|---|
-| fp8 quantizer rounding: decode's review says round-to-nearest-even, byte for byte with `pack_index_keys`; P.39 read Blaze's writer as truncating and matches the stock `per_token_cast_to_fp8` (DS41-213) | Open |
-| cap from the prompt length vs where prefill stops (DS41-219): tt-d-gen stops PD prefill at prompt_len - 1; differs when prompt_len % 64 == 1 (2,945: ours 2,880, decode's 2,944) | Open, ask decode |
-| Last-chunk flag / N for prefill: without it the snapshot is rewritten every chunk (~4.6 ms device a chunk) and the decoder skip cannot act | Owner raising with tt-d-gen |
-| Single-turn: a 128-row snapshot at cap cannot serve a follow-up past cap | Open |
-| Engram at resume: decode's first tail step needs token ids before cap | Open: is Engram in the first serving version? |
-| Device groups: index rows on 4 chips, snapshot on 32; dedup not decided | Open |
-| Multi-slot caches on decode (`llong/dsv41-mu-main`) | Decode side, under review |
-| Compressed-KV `alias_rows` for consumer layers (decode's review) vs ours (sources only) | **Unverified** what decode expects |
-| Real KV Manager test: its kernel (`kv_manager/device_io/kernel/dmk.cpp`) uses the same 4 DRISC tiles a chip as the old `flat_drisc` op; `MOE_BLOCK_SRC=main` avoids it; our runner tests use mock migration | Owner: "not yet" |
+| `err_layer_L00..L39` | per-layer output rel L2 (`pcc_layer_*` is diagnostic only) |
+| `err_state_<cache>_L*`, `overlap_state_*` | the served caches: window_kv, compress_kv, index_k, topk_idx (overlap), candidates, engram_tail |
+| `err_final_hidden` | final norm output rel L2 |
+| `top5_overlap`, `top1_match`, `pcc_logits_tail` | token-level agreement of the last rows' logits |
+| `determinism_*` | bit-identical repeats (== 0) |
 
-## 9. Known issues found (2026-11-05 to 2026-11-07)
+- Rungs: `s10240`, `last` (golden 51k prefix + 1 chunk, the accept check), `s56320` (the full 56k).
+- Owner rule: bit-identity to the previous code is not a criterion; a change may move rounding (e.g. a matmul's fp32
+  summation order, DS41-390) as long as every limit holds and repeats are exact.
+- The precision policy is realistic precision only: there is never a max-precision device run
+  (`models/demos/common/bringup/README.md`, "Switches"; the spec's `agents.rules`).
 
-Exact entries: `models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md`.
+## 7. The PD serving hand-off (prefill → decode)
 
-| Id | What | State |
-|---|---|---|
-| DS41-216 | Stale gather rows: one `high_bw_all_gather` semaphore pair was shared by both mesh axes. TP and SP link workers share cores on 22 of 32 chips, so one axis's counts were taken by the other's call; whole TP columns got wrong rows, even after a full sync | Fixed in `902322e6f77`: one pair per axis (`tt/ccl._sems(mesh, axis)`). Stress tests `tests/test_gather_stress.py`, `tests/test_window_gather_stress.py` (skewed chips, 512 iterations): 2,048 wrong replicas → 0. Notes: `/scratch/dnijemcevic/rebase/ds41_216/NOTES.md` Upstream doc request: https://github.com/tenstorrent/tt-metal/issues/64805 (documentation fix PR, reviewer Marko Staletovic). |
-| DS41-220 | Stock `ttnn.all_gather` over the whole mesh (cluster_axis None) of a ROW_MAJOR tensor returns before every row has landed (TILE is fine) | Upstream https://github.com/tenstorrent/tt-metal/issues/64801, assigned to Sheran Cardoza (stock CCL owner, ops-data-movement). Standalone repro `/scratch/dnijemcevic/rebase/ds41_216/test_all_gather_mesh_rm_repro.py`. The model never does this call |
-| DS41-217 | `slice_write` refuses a sharded output | Worked around: `update_padded_kv_cache` at start 0 |
-| DS41-218 | Framework contract check stricter than tt-d-gen for Snapshot configs (acks_early 40) | Fixed in P.43 |
-| DS41-221 | Under `DECODER_SKIP=replay128`, layers 21-39's snapshot rows are 0.97-2.2x their limit (the tail model's window starts empty; same effect as DS41-207) | By design; recorded, not gated. `exact` is within limits |
-| DS41-219 | tt-d-gen PD prefill stops at prompt_len - 1; cap may differ from decode's | Open (section 8) |
-| DS41-211..215 | Main block's shared expert ran bf16 (fixed P.37); bf16 table + per-chip window needs the sdpa fork's `kv_window` (P.38); stock fp8 cast vs Blaze recipe (P.39); reading fp8 bytes (P.39); bfp8 copy at non-aligned starts (P.41) | Fixed / documented |
-| SFPI ICE | sparse_sdpa row_bfp4 at H=32 does not build: SFPI 7.90-7.93 internal compiler error (tenstorrent/tt-metal#64605). H=64 (the 8x4) builds. Owner-waived in the spec's `fork_waivers` | Report draft `/scratch/dnijemcevic/rebase/sfpi_ice_report.md` (not filed); reproducer `ttnn/ttnn/bringup/sdpa/docs/sfpi_ice/` |
-| tt-kmd leak | tt-kmd 2.11.0 leaks host memory (#301); ~320 GiB unaccounted before the 2026-11-06 23:45 UTC reboot, 6 test units OOM-killed. After the reboot the driver was **the same 2.11.0** (fix not loaded) | Watch `free -g`; only a reboot clears it |
+Prefill (this model, tt-metal) computes the prompt's caches. tt-d-gen's KV Manager copies ("migrates") them to the
+decode machine (tt-blaze). Both sides publish a KV address table; tt-d-gen moves the records between them.
 
-**Gather-path count** (2026-11-07, one profile run at 51,200, `/scratch/dnijemcevic/rebase/gather_count/counts.json`):
-every model gather goes through `ttnn.experimental.high_bw_all_gather` (368 calls a chunk, all from `tt/ccl.py:270`);
-stock `ttnn.all_gather` is called 0 times on default settings. Direct stock calls exist only on non-default paths:
-`tt/weighted_combine.py:417` (the flat-MoE combine, called from `tt/experts.py`; unverified which switch values reach it), `tt/moe_block_main_adapter.py:411` (with `x_dram`), and
-`tt/ccl.py:261` (`CCL_IMPL=stock`).
+| Document | What |
+|---|---|
+| `models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md` | How tt-d-gen drives prefill: input, chunk header, served caches, acks; the `PREFILL_END=cap` and `DECODER_SKIP=decode` contract changes |
+| `models/demos/deepseek_v41_flash_d_p/bringup/migration_configs.md` | The served config table (v3, generated from the code): per config the layers, record bytes, entry counts, cap rule, open points |
 
-## 10. Operating the bring-up
+What is served (config names as tt-d-gen uses them): `0_window_kv` (layers 0-39, a 128-row snapshot at cap),
+`1_compress_kv_r2` / `2_index_k_r2` (layers 2, 8, 14), `3_compress_kv_r1` / `4_index_k_r1` (layer 20; layers 24, 28, 32,
+36 as aliases of 20's index rows). Compressed KV is served bf16; index keys as fp8 192-byte rows.
 
-**Read first:** `models/demos/common/bringup/README.md` (how-to, task ids, gates, exit codes). Skills:
-`models/demos/common/bringup/skill/{bringup,rebase-bringup,bringup-fork-op,bringup-fork-tests}/SKILL.md`; link them into
-`~/.claude/skills/`. Agent definitions: `agents/`; link them into `~/.claude/agents/`.
+- `DECODER_SKIP=decode` (model side implemented and gated; tt-d-gen not yet changed): prefill stops at
+  P = (N - 128) // 64 x 64 and never runs layers 21-39; decode runs [P, N) itself. The chunk header gains
+  `global_write_start` (encoder replay below it). Under it layers 20-39's snapshot records are not written.
+- Serving asks still open on the tt-d-gen side: send the engram token-id tail and the 128-row bounded window replay
+  (`bringup/ledgers/galaxy_8x4-full/HANDOFF_20261119.md` section 5).
 
-**The ledger** (`models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/`, in the repo):
+## 8. Known issues
+
+Model lessons: `models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md` (DS41-n entries; long forms in
+`known_issues_detail.md`); shared ones: `models/demos/common/bringup/knowledge/known_issues.md`. Read them before
+changing anything. The ones that bite most often:
+
+- Every device open leaks 10-27 GiB of host RAM in the driver until a reboot; check `free -g` before full-model loads.
+- New kernels hung the box: bounded waits, every awaited semaphore signalled, NOC writes inside buffers, fabric
+  payloads <= 6,208 B, smallest shape first.
+- Random test inputs hide a summation-order change in bfp8 matmuls (DS41-390, `results/MB.9_ladder.md`): confirm
+  matmul config changes on a real chunk.
+- The sparse_sdpa row_bfp4 H=32 cases do not build (SFPI internal compiler error; owner-waived in the spec's
+  `fork_waivers`; H=64 on the 8x4 builds).
+
+## 9. Operating the bring-up
+
+**Read first:** `models/demos/common/bringup/README.md` (how-to, task ids, gates, exit codes, resident runner).
+Skills: `models/demos/common/bringup/skill/{bringup,rebase-bringup,bringup-fork-op,bringup-fork-tests}/SKILL.md`;
+link them into `~/.claude/skills/`. Agent definitions: `models/demos/common/bringup/agents/`; link them into
+`~/.claude/agents/`.
+
+**The ledger** (`models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/`):
 
 | File | What |
 |---|---|
-| `tasks.yaml` | each task's brief, allowed `paths`, `gate.cmd` + `metrics`, A/B env (`ab.env` off side, `ab.change` on side) |
+| `tasks.yaml` | each task's brief, allowed `paths`, `gate.cmd` + `metrics`, A/B env. Escape `'` as `''`, validate after every edit, keep it under 500 KB |
 | `approvals.yaml` | the owner's approvals; any edit to what was approved voids it |
-| `state.json`, `state_metrics.json` | verdicts and metrics (F253: metrics split out) |
-| `results/<task>.json` | the gate's metrics |
-| `supervision.md` | the overseer's log, newest at the end. Read the entries from 2026-11-05 on |
-| `spec.yaml` | box, paths, limits, waivers, serving |
+| `state.chunks/`, `state_metrics.chunks/` | verdicts and metrics |
+| `results/<task>.json`, `results/<task>_*.md` | the gate's metrics; ladder / A/B reports (latest: `MB.9_ladder.md`, `MB.8_ladder.md`, `agentx_ladder_20261119.md`) |
+| `supervision.md` | the overseer's log, newest at the end: read its tail first |
+| `HANDOFF_20261119.md` | the working rules (fast iteration, owner rules) and packing facts |
+| `spec.yaml`, `overseer_tools/` | box, paths, limits, waivers, serving; the overseer's launcher scripts (node-specific) |
 
 **The orchestrator** (runs agents, measures A/B, runs gates, commits):
 
 ```bash
 B="python -m models.demos.common.bringup"; O="python -m models.demos.common.bringup.orchestrator"
 $B status --spec $S                         # the ledger
-$O run|resume --spec $S [--until <task>]    # resume after a stop; --until runs a task and its deps, then stops
+$O run|resume --spec $S [--until <task>]    # --until runs a task and its deps, then stops
 $O pause --spec $S                          # stop before the next task
-$O decide --task P.42 --accept|--reject|--rerun --spec $S   # a perf pick, from its A/B table
-$B gate <task> --spec $S [--unit U | --continue | --status | --no-commit | --commit-only]
-$B rerun --from <task> --spec $S            # reset it and everything downstream, then sweep
+$O decide --task <T> --accept|--reject|--rerun --spec $S   # a perf pick, from its A/B table
+$O measure --task <T> --part <run> --spec $S               # one measurement (e.g. determinism, last)
+$B gate <task> --spec $S [--check | --unit U | --continue | --status | --no-commit | --commit-only]
 ```
 
-- The run is started by `/scratch/dnijemcevic/run_ds41_8x4.sh` (last used `resume --until P.36`) in a tmux
-  session; it sources `/scratch/dnijemcevic/node_env.sh` and works in `/home/dnijemcevic/repos/tt-metal`.
-- **A/B accept flow (perf picks, P.\*).** (1) An agent makes the change behind a `tt/settings.py` switch. (2) The
-  orchestrator measures off and on, one process a side: a quick run (last chunk after the golden prefix, accuracy vs
-  limits) and p51200 (device / host time). (3) It writes `ab/<task>/table.md` and stops with exit code 3 (waiting for
-  a person). (4) The owner runs `decide --accept|--reject|--rerun`. (5) An accept commits with the quick gate; the
-  full gate stays `full_pending` and runs before the final task. Exit codes: 0 done, 3 waiting, 1 stopped.
-- **`gate` commits a PASS by default** (F239). A gate never restarts: each test segment is a unit, kept until the
-  code under test changes.
-- **Logs** (run dir `/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/`):
-  `orchestrator.log`, `logs/<task>.log` and `<task>.units.log`, `agents/<task>.<role>.<n>.jsonl` (large: extract the
-  last text message with a script, never cat them), `briefs/`, `ab/<task>/{table.md,new,old}`.
-- **Never edit `tasks.yaml` or `approvals.yaml` while a task runs.** The orchestrator's path check blames the running
-  agent for any change outside its paths (2026-11-07 11:36: queuing P.43 during P.42 tripped it). Queue new tasks at a
-  decision pause.
+- **A/B accept flow (perf picks).** An agent makes the change behind a call-time switch; the orchestrator measures off
+  and on in one load and stops with exit code 3; the decision follows the owner's rule (a device win with every gate
+  unit passing is accepted); the accept gate (switch default flipped) runs accuracy on all 40 layers plus fresh-process
+  determinism, the ladder and the cold no-rebuild check, then commits. Exit codes: 0 done, 3 waiting, 1 stopped.
+- **Logs:** `/scratch/$USER/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/` (`orchestrator.log`,
+  `logs/<task>.log`, `agents/*.jsonl` (large: extract the last message with a script), `ab/<task>/table.md`).
+- **Never edit `tasks.yaml` or `approvals.yaml` while a task runs**, and never switch branches while any orchestrator
+  process is alive (check `ps`, not only the log).
+- Run measurements yourself on the resident runner; agents only for code changes (they submit to the runner too).
 
-## 11. Rules and pitfalls
+## 10. Rules and pitfalls
 
 **Device**
-- Before every device run check that nobody holds a chip. `fuser /dev/shm/TT_UMD_LOCK*` prints nothing when free.
-  A finer check (who holds which chip):
-  `for f in /dev/shm/TT_UMD_LOCK.CHIP_IN_USE_*_PCIe; do python3 -c "import struct,sys,os; p=struct.unpack_from('<i',open(sys.argv[1],'rb').read(),52)[0]; p and os.path.exists(f'/proc/{p}') and print(sys.argv[1], 'held by pid', p)" "$f"; done`
-  Also glance at other users' processes (`ps`).
-- Run on the device only through `scripts/run_safe_pytest.sh` (`--run-all --no-precompile` for model tests). One
-  device job at a time, and never next to a running orchestrator.
-- Never wrap a device command in `timeout`. The safe runner detects hangs, collects triage and resets the box itself.
+- Before every device run check that nobody holds a chip: `fuser /dev/shm/TT_UMD_LOCK*` prints nothing when free.
+- Run on the device only through `scripts/run_safe_pytest.sh` (`--run-all --no-precompile`) or the resident runner.
+  One device job at a time, never next to a running orchestrator.
+- Never wrap a device command in `timeout`: the safe runner detects hangs, collects triage and resets the box.
 - Reset only with the safe runner's `recover-hosts` (`scripts/lib/tt_device_pool.sh`) or `tt-smi -glx_reset`. **Never
   `tt-smi -r`** on a Blackhole Galaxy.
-- Never loosen a limit to make a test pass.
-- If `/tmp/tt-device.lock` is a stale file of another user, point `TTPOOL_LEGACY_LOCK` / `TTPOOL_LEGACY_DIRTY` at
-  files of your own. See `/scratch/dnijemcevic/node_env.sh`.
+- Never loosen a limit to make a test pass. No fork regression suites on the 8x4: run the tests you add and the
+  model-level checks.
+- If `/tmp/tt-device.lock` is a stale file of another user, point `TTPOOL_LEGACY_LOCK` / `TTPOOL_LEGACY_DIRTY` at files of
+  your own.
 
-**Known failures and waivers**, all in the galaxy spec's `tests:` section:
-- `unit_waivers`: `test_adapter_acks` accepts "last block: 0_window_kv layer N pcc 0.98x < 0.99" (tt-d-gen's fixed
-  0.99 rule fails by rounding; the gated rel-L2 checks pass).
-- `fork_waivers`: the 4 sparse_sdpa row_bfp4 H=32 cases (SFPI ICE, section 9). On a 2x2 QuietBox, DS41 at TP2 has 32
-  heads a chip and hits this until there is a fixed SFPI.
-- `waivers` (per step): attn_hc / ffn_hc, experts (bfp4), indexer, router. The reasons are written there.
-- `models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_hybrid_routed_expert_combine.py` hangs under the safe
-  runner's precompile plugin. With `--no-precompile` it passes. Framework bug, not on DS41's path.
-- The Galaxy cannot run 2x2 / 1x4 submesh fork cases (fabric init times out, or skipped). Those go to the QuietBox;
-  list in `bringup/REBASE_STATUS.md` ("For the QuietBox").
+**Owner rules (binding)**
+- Fast iteration first: never load what you do not need (CPU, one layer, layers 0-20, the full 40 only in the accept
+  gate); write the one-line reason before any full load.
+- Do not break tt-d-gen compatibility (served caches, formats, addresses, acks, chunk header, the engine's device
+  input). The model does not know the next chunk: no per-prompt precompute, no extra host round trips.
+- Serving never rebuilds: every position-, slot- or layout-derived value is a runtime value.
 
-**Host**
-- tt-kmd 2.11.0 leaks host memory (section 9). Check `free -g` before resident-engram runs; ~500 GB available after a
-  reboot.
-- A test at its peak plus the agents can exceed a low `ulimit -u` (512 on an earlier node).
+**Known failures and waivers** (the galaxy spec's `tests:` section): `unit_waivers` (tt-d-gen's fixed 0.99 window-KV
+rule fails by rounding on a few layers; the gated rel-L2 checks pass), `fork_waivers` (SFPI ICE cases), per-step
+`waivers` with their reasons. The Galaxy cannot run 2x2 / 1x4 submesh fork cases; those go to a QuietBox
+(`bringup/REBASE_STATUS.md`).
 
-**Before changing anything, read** `bringup/known_issues.md` (DS41-n entries; shared ones in
-`models/demos/common/bringup/knowledge/known_issues.md`), `bringup/repo_map.md` and the latest sections of
-`bringup/BREADCRUMBS.md` (append-only, one section per task attempt).
+**Open items:** the queue is empty after MB.9 (owner's next direction pending). In the ledger: FIX.11 (layer 0 attention
+precision vs the reference), FIX.13 (DS41-141, window-KV rise) are TODO. `DECODER_SKIP` stays `off` until the owner
+decides; the tt-d-gen asks in section 7 are pending.
 
-## 12. Where things are
+## 11. Where things are
 
-"Repo" = in git on this branch. "Scratch" = on the Galaxy node's shared `/scratch` (bh-glx node, not in git; a new
-box has none of it). "/data" = NFS, shared, not in git.
+Repo paths relative to `models/demos/deepseek_v41_flash_d_p/` unless absolute.
 
-| Path (repo paths relative to `models/demos/deepseek_v41_flash_d_p/` unless absolute) | Where | What |
+| Path | What |
+|---|---|
+| `DEEPSEEK41_README.md` (repo root) | this file |
+| `tt/model.py`, `tt/*.py` | the all-device model (`TtDS41Model`) and its steps |
+| `tt/settings.py` | every switch, with its default and its why |
+| `tt/mm_configs.py` | matmul program configs (`GALAXY`, `GALAXY160`, `GMM160`) |
+| `tt/runners/adapter.py`, `tt/runners/kv_contract.py` | the tt-d-gen prefill adapter and the served KV table |
+| `tt/moe_block_v2_adapter.py`, `models/demos/moe_block/` | the default MoE block (`MOE_BLOCK_SRC=block`) |
+| `reference/` | CPU reference (`ds41_ref.py`, `hf_oracle.py`, `kernels.py`, `weights.py`) |
+| `tests/test_skip_positions.py`, `tests/test_no_rebuild.py`, `tests/test_determinism.py`, `tests/fresh_common.py` | perf ladder, no-rebuild check, determinism, fresh-traffic helpers |
+| `tests/bringup/contract/` | serving-contract tests |
+| `tests/bringup/test_c_*`, `test_swap_*` | frozen per-step component and swap tests |
+| `tests/perf/` | probes and sweeps (`test_matmul_sweep.py`) |
+| `bringup/ledgers/galaxy_8x4-full/` | the 8x4 run: spec, tasks, approvals, state, results, supervision.md, hand-off |
+| `bringup/known_issues.md`, `repo_map.md`, `BREADCRUMBS.md`, `opportunities.md` | knowledge files (BREADCRUMBS: append-only, one section per task attempt) |
+| `bringup/serving_contract.md`, `bringup/migration_configs.md` | the PD contract and served table |
+| `bringup/spec.yaml`, `bringup/tasks.yaml`, `bringup/plan.md` | 2x2 seed run and sharding plan |
+| `models/demos/common/bringup/` | the framework: `README.md`, `resident.py`, `orchestrator.py`, `tests/`, `testing/`, `knowledge/perf_guide.md` |
+| `ttnn/ttnn/bringup/` (`INDEX.md`) | the forked ops (`ttnn.bringup.*`) |
+| `scripts/run_safe_pytest.sh` | the only direct way to run on the device |
+| `/scratch/$USER/bringup/deepseek_v41_flash_d_p/{hf_full,golden_full,tt_cache,runs}` | node-local checkpoint, mirrors, run dirs |
+| `/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/{golden_full/galaxy_8x4,tt_cache}` | shared masters: goldens and weight cache |
+
+## 12. Packed prefill (this branch)
+
+`dnijemcevic/model_bringup_batching` = `dnijemcevic/model_bringup` forked at `bcab6af973b` (2026-11-19) + packed prefill
+(continuous batching): one 8,192-token chunk (256 rows a chip) carries several requests ("segments"), each continuing
+its own slot's served history. Design: `models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md`; binding owner
+rules for every PB task: `bringup/PACKED_RULES.md`; the tt-d-gen ask: `bringup/drafts/tt_d_gen_packed_ask.md`.
+
+### 12.1 What the packed path is
+
+- **Chip-aligned lanes** (the one packed path): each segment owns a contiguous run of whole chips (starts, lengths and
+  splits multiples of 256 rows; last chip padded; 1-32 chips a segment; up to 6 segments, `tt/packed_glued.GLUED_SEGS`).
+  Rows of two requests never share a chip. Typical layouts: 4 x 2,048 (8 chips each) and 4 x 1,792 + a 5th request's
+  first 1,024 tokens (every row a real token).
+- Token-wise work runs once over all 8,192 rows; attention, compressor, indexer and sparse_sdpa run ONCE a layer with
+  per-segment arguments (no row moves). Prefix-hit (replay) segments run in the same call; an unsupported layout raises,
+  it never falls back to a slower path.
+- Each segment's history and index keys are gathered only to the chips it owns (`tt/owned_gather.py`, `tt/owned_keys.py`).
+- No host tables and no program builds per layout: the host uploads token ids + the chunk descriptor (per segment slot,
+  start, length, write_start); every per-chunk table is derived on the device (`tt/glued_derive.py`, `tt/lane_rows.py`).
+- Serving entry: `tt/runners/adapter.py prefill_packed`. Code: `tt/packed.py` (descriptor, `GluedChunk`),
+  `tt/packed_glued.py`, `tt/packed_device.py`; CPU reference `reference/packed_ref.py`.
+- Single-request chunks (5,120 or 8,192) still run the model_bringup path.
+
+### 12.2 Switches (all in `tt/settings.py`, call-time)
+
+| Switch | Default | What it does |
 |---|---|---|
-| `DEEPSEEK41_README.md` (repo root) | repo | this file |
-| `tt/model.py`, `tt/*.py` | repo | the all-device model (`TtDS41Model`) and its steps |
-| `tt/settings.py` | repo | every switch, with its default and its why |
-| `models/demos/common/bringup/knowledge/perf_guide.md` (absolute) | repo | general perf guide for any bring-up: reading a profile, what fuses, trade-offs, measuring (2026-11-08) |
-| `tt/ccl.py` | repo | collectives (per-axis high_bw semaphores, DS41-216) |
-| `tt/runners/adapter.py`, `tt/runners/kv_contract.py` | repo | the tt-d-gen prefill adapter and the served KV table |
-| `tt/moe_block_main_adapter.py`, `models/demos/moe_block_main/`, `ttnn/ttnn/bringup/moe_block_main_ttnn/` | repo | the main MoE block (`MOE_BLOCK_SRC=main`) |
-| `reference/` | repo | CPU reference (`ds41_ref.py`, `hf_oracle.py`, `kernels.py`, `weights.py`) |
-| `bringup/serving_contract.md` | repo | how tt-d-gen drives prefill |
-| `bringup/migration_configs.md` | repo | the PD migration configs (v3) |
-| `tests/bringup/contract/` (`caches.py`, `server_rules.py`, `test_*`) | repo | serving-contract tests (K.1R) |
-| `tests/test_window_snapshot.py`, `tests/test_gather_stress.py`, `tests/test_window_gather_stress.py`, `tests/test_index_k_copy.py` | repo | P.42 snapshot, DS41-216 stress, P.41 bfp8 copy |
-| `tests/bringup/test_c_*`, `test_swap_*` | repo | frozen per-step component and swap tests |
-| `tests/bringup/test_decoder_cut.py`, `test_decoder_skip.py`, `test_window_ring.py`, `test_short_turn.py`, `test_logit_kl.py` | repo | decoder cut / skip, window ring, short turn, token-level accuracy |
-| `tests/perf/`, `tools/convert_expert_cache.py` | repo | perf sweeps; .tensorbin -> bank-major expert cache |
-| `bringup/ledgers/galaxy_8x4-full/` | repo | the 8x4 run: spec, tasks, approvals, state, results, supervision.md |
-| `bringup/known_issues.md`, `repo_map.md`, `BREADCRUMBS.md`, `opportunities.md` | repo | knowledge files |
-| `bringup/REBASE_STATUS.md` | repo | the 2026-11-06 rebase: verification, decisions, QuietBox list |
-| `bringup/spec.yaml`, `bringup/tasks.yaml`, `bringup/plan.md`, `ENGRAM_HOST_PATH.md`, `tt/MOE_BLOCK.md` | repo | 2x2 seed run, sharding plan, engram host path, block MoE |
-| `models/demos/common/bringup/` | repo | the framework: `README.md`, `defaults.yaml`, `orchestrator.py`, `tests/`, `testing/` (incl. `contract.py`), `docs/` |
-| `ttnn/ttnn/bringup/` (`INDEX.md`) | repo | the forked ops (`ttnn.bringup.*`) |
-| `scripts/run_safe_pytest.sh` | repo | the only way to run on the device |
-| `/home/dnijemcevic/repos/tt-metal` | node home | the checkout the orchestrator runs in, branch model_bringup (do not edit while it runs) |
-| `/scratch/dnijemcevic/run_ds41_8x4.sh`, `/scratch/dnijemcevic/node_env.sh` | scratch | run script; node environment |
-| `/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/` | scratch | orchestrator.log, logs/, agents/, briefs/, ab/<task>/table.md |
-| `/scratch/dnijemcevic/rebase/HANDOFF_2026-11-06.md` | scratch | hand-off before the 2026-11-06 reboot |
-| `/scratch/dnijemcevic/rebase/ds41_216/` (`NOTES.md`, logs, repro) | scratch | DS41-216 / DS41-220 root cause |
-| `/scratch/dnijemcevic/rebase/gather_count/counts.json` | scratch | gather-path count |
-| `/scratch/dnijemcevic/rebase/sfpi_ice_report.md` | scratch | SFPI ICE report draft |
-| `/scratch/dnijemcevic/rebase/dgen_migration_table_draft.md` | scratch | migration table v2 (superseded) |
-| `/scratch/dnijemcevic/DSv4.1_final_tt-d-gen_bounded-replay_contract.html` | scratch | Kartik's proposed contract (local copy) |
-| `/scratch/dnijemcevic/tt-d-gen` (branch `jazpur/dsv4-replay-window`), `/scratch/dnijemcevic/tt-d-gen-build` (`venv312`, `README.md`) | scratch | tt-d-gen clone and build |
-| `/scratch/dnijemcevic/tt-d-gen/engine/tests/integration/dsv4_tables.py` | scratch (tt-d-gen) | the tt-d-gen DSv4 tables mock |
-| `/scratch/$USER/bringup/deepseek_v41_flash_d_p/{hf_full,golden_full,tt_cache,runs,profiles}` | scratch | checkpoint, mirrors, run dirs |
-| `/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/{golden_full/galaxy_8x4,tt_cache}` | /data | shared masters: goldens and weight cache (both MoE blocks' routed weights) |
+| `PACKED`, `PACKED_MOE`, `PACKED_GATHER_HIDE`, `PACKED_ATTN_ONECALL`, `PACKED_HOST_FAST`, `PACKED_LANE_BALANCE`, `PACKED_LONG_HIDE`, `PACKED_GLUED`, `PACKED_GLUED_ONECALL`, `PACKED_GLUED_DYNAMIC` | `off` | Select the packed path. Every packed gate and ladder sets them all `on` together with `POS_DYNAMIC=on` (the env `$PK` below) |
+| `PACKED_CHIPS` | `on` | Chip-aligned lanes (`off` = back-to-back glued rows, the A/B's old side) |
+| `PACKED_HIST_OWNED`, `PACKED_KEYS_OWNED` | `on` | Histories / index keys only to the segment's own chips |
+| `PACKED_CWRITE_FAST`, `COMMON_VALUE_SLOTS`, `PACKED_WARM_CONT1` | `on` | Packed served writes without slices; common runtime-arg slots; engine warm-up also covers a continuing, non-aligned one-segment chunk |
+| `MM_TUNED256` | `on` | The 8,192-chunk matmul re-sweep (`tt/mm_configs.GALAXY256` / `GMM256`) |
+| `MHC_POST_V2` | `True` | mhc_post v2 (bit-identical device win) |
+| `INDEXER_BLOCK_SELECT_MIN_PACKED` | `auto` (196,608 keys) | Block-select threshold for packed chunks |
+
+### 12.3 Tests and ladders (from the PB.MM256 and PB.T gates)
+
+```bash
+PK="DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on \
+DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on \
+DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode"
+L=51200,131072,139264,262144,524288,786432,1024000
+M=models/demos/deepseek_v41_flash_d_p/tests
+
+# accuracy at 8192 (40 layers, vs the reference limits; from 0 and last)
+BRINGUP_CHUNK=8192 $SR $M/packed/test_chunk8192_reference.py
+# single 8192 ladder; packed ladders (4x2k, 4x1792s)
+BRINGUP_CHUNK=8192 $PK SKIP_POS=$L $SR $M/test_skip_positions.py
+BRINGUP_CHUNK=8192 $PK LADDER_POS=$L LADDER_CASES=4x2k,4x1792s $SR $M/packed/test_packed_walls.py
+# cold strict no-rebuild on every layout (single8192, one4k, one1600, lanes4x2k, lanes4x1600s, lanes6mix, lanes2x3k)
+NO_REBUILD_PACKED_STRICT=1 BRINGUP_CHUNK=8192 $PK $SR $M/test_no_rebuild.py
+# adversarial batching tests: no cross-request leakage, bit-exact vs prompt-by-prompt (FAST tier in accept gates; DEEP sweep)
+BRINGUP_CHUNK=8192 $PK $SR $M/packed/test_packed_fast_tier.py
+BRINGUP_CHUNK=8192 $PK $SR $M/packed/test_packed_deep_sweep.py
+# PB.MM256's own unit: tuned 8192 matmul configs off vs on, single and 4x2k, one load
+BRINGUP_CHUNK=8192 $PK DS41_MM_TUNED256=on $SR $M/test_mm256_offon.py
+```
+
+Ladder method (`tests/packed/ladder_common.py`): every segment of a packed chunk sits at the same history; steady and
+resumed (128 replay rows a segment); wall = median of 10 timed runs after the real previous chunk, program-cache misses
+refused; tok/s = new tokens / wall.
+
+### 12.4 Latest results (ledger `results/`)
+
+`results/PB.MM256_ladder.md` (2026-11-23, the tip; switch on) and `results/PB.LAD_ladder.md` (2026-11-22, the full
+table with device and exposed host per rung). Steady new tok/s, layers 0-20, agentic_cc:
+
+| Case | 51,200 | 139,264 | 262,144 | 524,288 | 1,024,000 |
+|---|---|---|---|---|---|
+| single 8192 | 83.0k | 82.9k | 81.5k | 76.8k | 68.2k |
+| 4 x 2048 (chip-aligned) | 75.0k | 73.2k | 71.0k | 67.1k | 61.3k |
+| 4 x 1792 + 1024 | 73.1k | 71.9k | 68.2k | 64.9k | 60.3k |
+
+- Device ms at 139,264 (one load, MM_TUNED256 on): single 85.2, 4 x 2k 95.1. Packed walls carry more exposed host than
+  single (19-22 vs ~14 ms at 139,264, PB.LAD).
+- Owner target (`PACKED_RULES.md`): 4 x 2k over ~139k >= 67k new tok/s: met (73.2k).
+- Accuracy (PB.MM256 accept gate, 8,192 chunk, 40 layers): err_final_hidden 0.1345 / limit 0.2422 (last), 0.1400 /
+  0.2586 (from 0); top-5 1.0; determinism max abs diff 0.0; on-repeats exact.
+
+### 12.5 Ledger state on this branch
+
+- Queue empty after PB.MM256 (`d6bc91514d5`, accepted 2026-11-23). TODO in the state: FIX.11, FIX.13, PB.8P.
+- Open owner item (supervision.md, hand-off 2026-11-22): no state in the serving path. The default still reads
+  per-slot carries (window ring, ring bookkeeping, engram token-id tail); decided: tt-d-gen sends the tail ids and the
+  128-row bounded replay every chunk; to do: a permanent stateless gate test, a default that never reads the carries.
+- Serving needs tt-d-gen's packer to agree to 256-aligned segments (`PACKED_RULES.md`).
+- Framework: `models/demos/common/bringup/selftest/test_perf_ab.py` has 15 pre-existing failures in this checkout (to bisect).
+
+### 12.6 Shared facts that differ on this branch
+
+- MB.9 (`35d79c6720f`) is not on this branch: no `MM_TUNED160`, `GALAXY160` / `GMM160`, `tests/test_mm160_offon.py`,
+  `tests/test_mm160_ladder_hits.py`; the 5,120 chunk runs the configs from before MB.9.
+- This branch's `tasks.yaml` has the PB.* tasks, not MB.*: no MB.9 `gate.cmd`, no `results/MB.*` files
+  (`MB.9.json`, `MB.9_ladder.md`, `MB.8_ladder.md`). The "Perf now" / "Accuracy now" rows of section 1 and the tables of
+  section 3 are model_bringup's; this branch's numbers are in 12.4. Its latest 5,120 single-request ladder is
+  `results/PB.9C5.json` (2026-11-21, before PB.MB4 / PB.BM / PB.FBM / PB.MM256): steady 69.3k tok/s at 51,200, 66.4k at
+  139,264, 56.0k at 1,024,000.
+- The model_bringup fixes exist here as their own tasks: MB.1 / MB.2 as PB.MB / PB.MB5, MB.4 as PB.MB4; MB.6 / MB.8
+  came from this branch's PB.BM / PB.FBM.
+- `INDEXER_BLOCK_SELECT_MIN=auto` is 163,840 keys here (single request; `tt/indexer.py BSEL_MIN_AUTO`), not 262,144.
+- `tests/ladder_common.py` does not exist here; the packed ladders use `tests/packed/ladder_common.py`.
+- `bringup/known_issues.md` here has DS41-390; on model_bringup it is cited from `results/MB.9_ladder.md` only.
