@@ -256,35 +256,44 @@ void run_kernel(RUNTIME_PARAMETERS params)
             else
             {
                 // tilize_block: each tile is its own DEST section.
-                for (std::uint32_t tile = 0; tile < LOOP_FACTOR * TILE_CNT; tile++)
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    _llk_math_wait_for_dest_available_();
-                    _llk_math_eltwise_unary_datacopy_(0);
-                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+                    {
+                        _llk_math_wait_for_dest_available_();
+                        _llk_math_eltwise_unary_datacopy_(0);
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             // Math owns each Dest section and lends it to the unpack-to-dest tilize, one tile per section.
-            for (std::uint32_t tile = 0; tile < LOOP_FACTOR * TILE_CNT; tile++)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_math_wait_for_dest_available_();
-                _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
-                _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
-                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+                {
+                    _llk_math_wait_for_dest_available_();
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             // Stand-in lender: unpack takes each section's DEST bank through the loan, as in production.
-            for (std::uint32_t tile = 0; tile < LOOP_FACTOR * TILE_CNT; tile++)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
-                _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
-                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-                // Pack is idle, so math takes MATH_PACK back.
-                ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
+                for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+                {
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    // Pack is idle, so math takes MATH_PACK back.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
+                }
             }
         }
         PROFILER_SYNC();
