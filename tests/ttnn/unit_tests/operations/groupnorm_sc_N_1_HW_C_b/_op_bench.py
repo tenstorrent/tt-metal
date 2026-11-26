@@ -86,33 +86,102 @@ SHARDED_INPLACE_CASES = [
 ]
 
 
-@pytest.mark.parametrize("name, shape, G, layout, eps", CASES, ids=[c[0] for c in CASES])
-def test_bench(device, name, shape, G, layout, eps):
+# Refinement 4: Float32 input / Float32 or TILE gamma-beta on DRAM interleaved shapes.
+# name, shape, G, layout, eps, dtype, affine dtype, affine layout
+FORMAT_CASES = [
+    (
+        "f32_vae_dram_65536x512",
+        (1, 1, 65536, 512),
+        32,
+        ttnn.TILE_LAYOUT,
+        1e-6,
+        ttnn.float32,
+        ttnn.float32,
+        ttnn.TILE_LAYOUT,
+    ),
+    (
+        "f32_refiner_dram_16384x1152",
+        (1, 1, 16384, 1152),
+        32,
+        ttnn.TILE_LAYOUT,
+        1e-5,
+        ttnn.float32,
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        "f32_flux1_dram_16384x256",
+        (1, 1, 16384, 256),
+        16,
+        ttnn.TILE_LAYOUT,
+        1e-6,
+        ttnn.float32,
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        "f32_mid_4096x640_rm",
+        (1, 1, 4096, 640),
+        32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        1e-5,
+        ttnn.float32,
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        "bf16_gtile_vae_dram_65536x512",
+        (1, 1, 65536, 512),
+        32,
+        ttnn.TILE_LAYOUT,
+        1e-6,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+    ),
+    (
+        "bf16_gf32_vae_dram_65536x512",
+        (1, 1, 65536, 512),
+        32,
+        ttnn.TILE_LAYOUT,
+        1e-6,
+        ttnn.bfloat16,
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+]
+
+
+def _bench(
+    device, shape, G, layout, eps, dtype=ttnn.bfloat16, aff_dtype=ttnn.bfloat16, aff_layout=ttnn.ROW_MAJOR_LAYOUT
+):
     torch.manual_seed(0)
     C = shape[-1]
     x = ttnn.from_torch(
-        torch.randn(shape, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
+        torch.randn(shape, dtype=torch.float32 if dtype == ttnn.float32 else torch.bfloat16),
+        dtype=dtype,
         layout=layout,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    g = ttnn.from_torch(
-        torch.randn((1, 1, 1, C), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-    )
-    b = ttnn.from_torch(
-        torch.randn((1, 1, 1, C), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-    )
+    g = ttnn.from_torch(torch.randn((1, 1, 1, C)), dtype=aff_dtype, layout=aff_layout, device=device)
+    b = ttnn.from_torch(torch.randn((1, 1, 1, C)), dtype=aff_dtype, layout=aff_layout, device=device)
     out = groupnorm_sc_N_1_HW_C_b(x, G, gamma=g, beta=b, eps=eps)
     ttnn.synchronize_device(device)
     out.deallocate()
     x.deallocate()
+
+
+@pytest.mark.parametrize("name, shape, G, layout, eps", CASES, ids=[c[0] for c in CASES])
+def test_bench(device, name, shape, G, layout, eps):
+    _bench(device, shape, G, layout, eps)
+
+
+@pytest.mark.parametrize(
+    "name, shape, G, layout, eps, dtype, aff_dtype, aff_layout", FORMAT_CASES, ids=[c[0] for c in FORMAT_CASES]
+)
+def test_bench_formats(device, name, shape, G, layout, eps, dtype, aff_dtype, aff_layout):
+    _bench(device, shape, G, layout, eps, dtype, aff_dtype, aff_layout)
 
 
 @pytest.mark.parametrize("name, shape, G, grid, layout, eps", SHARDED_CASES, ids=[c[0] for c in SHARDED_CASES])

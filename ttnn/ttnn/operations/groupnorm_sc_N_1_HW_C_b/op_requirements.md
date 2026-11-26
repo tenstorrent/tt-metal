@@ -213,7 +213,7 @@
   - RM whole-width units with `sw % 32 ≠ 0` are `W`-bound (7×8 RM: `k = 4` → `W = 23` in one tile row, 2× its TILE twin).
   - The RM image-straddle root waits on the image-mixed core row's pass 1 (4.2 µs): R8 leads.
 
-### [ ] Refinement 4 — fp32 input (DRAM interleaved), fp32 γ/β, and TILE-layout γ/β
+### [x] Refinement 4 — fp32 input (DRAM interleaved), fp32 γ/β, and TILE-layout γ/β
 
 **Goal**: add three values to SUPPORTED:
 - `ttnn.float32` to `SUPPORTED["dtype"]`, for DRAM-interleaved input in TILE and RM. Sharded fp32 is scope-parked INVALID.
@@ -236,6 +236,12 @@ The output is fp32 for fp32 input. Statistics and intermediates stay Float32 wit
 **Done when**:
 - Every `xfail_expected` cell whose only unsupported axes are among `{dtype=FLOAT32, affine_dtype=FLOAT32, affine_layout=TILE}` passes. Today that is 1 950 tile-aligned cells.
 - bf16 Phase 0 / R1–R3 cells stay green, and the DRAM perf cases do not regress.
+
+**Outcome**: Done (2026-11-26).
+- 1950/1950 new cells pass, plus 678/678 bf16 cells, 21/21 loose cases and regression 43/43. The unit tests pass under `--dev` too.
+- bf16 DRAM perf is flat: −0.6% to +1.7%.
+- Float32 input costs 1.5–2.55× bf16. That tracks the bytes moved, because Float32 halves `K_max`.
+- Float32 relative RMS is ~1.2e-3 on `randn`. With a +10σ mean it rises to ~7e-3; the cause is TF32 at srcA/srcB in pass 2's `x·a − b'`.
 
 ### [ ] Refinement 5 — hw_non_aligned (HW % 32 ≠ 0)
 

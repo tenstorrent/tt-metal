@@ -849,3 +849,79 @@ Ragged shards (newly supported; the base op refuses them) vs the same tensor thr
 | TILE 1024×1280 7×8 (groups straddle) | 10 819 | — | — |
 | RM in place 1024×1280 7×8 (groups straddle, `W = 23`) | 21 802 | 25 699 | 1.18× faster |
 | RM in place 4096×640 6×8 (padded column, groups straddle) | 20 056 | 45 206 | 2.25× faster |
+
+## Refinement 4 — fp32 input (DRAM interleaved), fp32 γ/β, and TILE-layout γ/β
+- Date: 2026-11-26
+- What was done:
+  - **Registry.**
+    - `SUPPORTED["dtype"]` gains `float32`, `["affine_dtype"]` gains `float32`, and `["affine_layout"]` gains `TILE_LAYOUT`.
+    - `EXCLUSIONS` refuses `BLOCK_SHARDED` combined with any of the three. Those cells are scope-parked INVALID in `feature_spec`; for a direct caller the op raises `ExcludedCell`. The sharded pilot, staging and pack-untilize paths are bf16 byte math, and a reader `static_assert` pins that.
+    - `validate()` passes `formats_of(input, gamma, beta)` to `plan_or_raise`. The new `fmt=` argument defaults to the input dtype with bf16 RM γ/β, so the old probe call sites still work.
+  - **One page-size source (descriptor).** A frozen `Formats` record (`in_dtype`, `aff_dtype`, `aff_tile`) derives `in_tile`, `in_elem`, `amap_tile` and `aff_elem` from `ttnn.tile_size`. It is stored on the plan and threaded through `footprint_bytes`, `output_ring_bytes`, `staging_bytes` / `affine_stage_bytes`, `_evaluate_gx` / `_choose_gx`, the `K_max` / `f_resident` / `chunk_bytes` solve and the sharded planner.
+    - CB formats follow the tensors. The input / output side (0, 1, 2/3, 5, 25/26, 27) uses the input dtype at `in_tile` pages; the output dtype is the input dtype. The γ/β maps (13) use `aff_dtype` at `amap_tile` pages. The map (12), pilot rows (22) and −1 tile (6) stay bf16; the statistics stay Float32.
+    - The `BF16_TILE_BYTES` literals that remain size only those bf16-by-design CBs.
+  - **Reader (same file).**
+    - Four new CT args: 16 `IN_TILE_BYTES`, 17 `AFF_ELEM`, 18 `AFF_TILE`, 19 `AFF_PAGE_BYTES`. The `TensorAccessorArgs` chain now starts at 20.
+    - The stick segment, chunk tile stride, face offsets and the RM pilot length all derive from `IN_TILE_BYTES`.
+    - The pilot `k` is the bf16 upper halfword of a Float32 sample, a valid shift. The kernel's `kv` stays bf16 bits, so `cb_pilot_rows` and `cb_group_shift` are unchanged.
+    - γ/β staging:
+      - RM sticks: the 64 B-aligned slice is now in γ/β's element size.
+      - TILE: one 64 B row-0 read of faces 0/1 per channel tile, 128 B per tile staged. This replaces the RM stick read for that layout.
+    - `aff_idx()` maps a channel to its staged element.
+    - `build_affine` word-copies runs into the maps in γ/β's own format: a Float32 run is one word per lane, so odd `C/G` works too. `copy_run` now takes up to 16 words. bf16 with odd `C/G` keeps the halfword path.
+    - The γ/β ring zero-fill copies the 2 KB zero tile across `AMAP_TILES·amap_tile` bytes.
+  - **Compute and writer: no change.** Formats come from the CB configs via the existing `reconfig_data_format` / matmul init / `pack_reconfig` calls. The tilize helper drops fast tilize for a Float32 output by itself. The interleaved writer already used `OUT_PAGE_BYTES`.
+  - **No `UnpackToDestFp32` on the new CBs.** Per /numeric-formats-metal §1.5, every consumer of the ring (2/3) is an FPU op: pass-1 ELWADD / ELWMUL and the pass-2 multiplies. The tilize input (0) feeds only a tilize whose output is FPU-consumed. A lossless tilize would therefore buy nothing: Float32 x reaches srcA as TF32 on both layouts, and TILE and RM give bit-identical outputs (measured). The fp32 accumulators (7, 8) keep their existing tags.
+  - **Grid fill and knobs unchanged.** Same `_choose_gx` full-grid split (104–110 cores on the perf shapes) and the same chunk `h` / `T`. The residency `K_max = floor((L1 − F_fixed)/(in_tile·T))` roughly halves for Float32.
+- Reused: the whole two-pass blocking scheme, every compute / writer kernel path, the reader's chunk / pilot / map / affine sites (parameterized, not forked), and the golden helper `run_groupnorm_sc_N_1_HW_C` for the new tests.
+- Added: the descriptor's `Formats` record / `formats_of` / `affine_stage_bytes`, reader CT args 16–19, the TILE γ/β row-0 read loop and `aff_idx`, and `EXCLUSIONS` for sharded × the new values. No new kernel file.
+- Accuracy achieved (Blackhole, HiFi3, fp32 DEST, γ+β Float32 TILE; probe_023):
+  - Float32 input, `randn`: PCC ≥ 0.999998, relative RMS 1.1e-3 – 1.3e-3 (limit 0.01, 0.999) on 256×256 / 4096×320 / 64×1280 / 16384×512, TILE = RM.
+  - With a +10σ mean offset (`randn + 10`): PCC 0.99997, relative RMS 6.4e-3 – 7.3e-3. This is still inside the limit, but the margin shrinks. The error is the TF32 quantization of x, a and b' at srcA / srcB in pass 2's `x·a − b'`. Its absolute size scales with `|x|`, and the cancellation against `b' ≈ mean·a` exposes it relative to the unit-variance output. An FPU pass 2 cannot avoid it: only an SFPU pass 2 from `UnpackToDestFp32` x would. Recorded as a finding; the golden distribution passes with ~8× margin.
+  - bf16 input with Float32 or TILE γ/β: within the bf16 limits (golden slice below).
+- Golden test progress:
+  - **1950/1950** newly supported cells pass. That is every cell whose only previously-unsupported axes are among `{dtype=FLOAT32, affine_dtype=FLOAT32, affine_layout=TILE}`, all DRAM interleaved and tile-aligned. Run as node ids, `--precompile`, 9 min.
+  - The legacy bf16 cells and the perf loose cases: **678/678 + 21/21**.
+  - `test_regression.py` **43/43**.
+  - Unit tests: spec + `_sharded` + `_ragged` + `_precision_baseline` 99/99 plain. With `--dev`, spec + `_sharded` + `_ragged` + `_dtypes` gave 192/192, so the kernel text still fits the kernel-config ring under the watcher build.
+- Perf (Blackhole, DEVICE KERNEL DURATION [ns], one fresh-cache profiled run per case, `_op_bench.py`):
+  - **bf16 DRAM cases, no regression** vs R3 / Perf 2:
+
+    | Case | ns | Change |
+    |---|---|---|
+    | vae_dram_1048576x128 | 1 681 538 | +0.3% |
+    | vae_dram_65536x512 | 331 393 | −0.6% |
+    | vae_dram_262144x256 | 705 114 | +0.2% |
+    | vae_dram_262144x512 | 1 697 099 | +0.1% |
+    | vae_dram_1048576x256 | 3 665 704 | −0.3% |
+    | refiner_dram_16384x1152 | 197 807 | −0.5% |
+    | flux1_dram_16384x256 | 51 255 | +0.7% |
+    | flux1_dram_1048576x64 | 632 182 | +0.2% |
+    | mochi_dram_8x407040x128 | 5 843 043 | −0.6% |
+    | mid_4096x640_rm | 44 228 | +0.3% |
+    | mid_16384x320_tile | 66 182 | +1.7%, noise band |
+
+    The bf16 reader code is constexpr-equivalent to R3: same reads, same stores, same loop trips.
+  - **New formats:**
+
+    | Case | ns | vs bf16 |
+    |---|---|---|
+    | Float32 vae 65536×512 (TILE γ/β) | 845 314 | 2.55× |
+    | Float32 refiner 16384×1152 | 392 307 | 1.98× |
+    | Float32 flux1 16384×256 | 96 179 | 1.88× |
+    | Float32 4096×640 RM | 67 000 | 1.51× |
+    | bf16 x + TILE bf16 γ/β, vae 65536×512 | 333 831 | +0.7% |
+    | bf16 x + Float32 RM γ/β, vae 65536×512 | 334 576 | +1.0% |
+
+  - The Float32 ratios track bytes moved. vae 65536×512 drops from fully resident (`K = B = 10`) to `K = 5`: a Float32 per-core slice is about 1.2 MB against a 1.46 MB budget. Its traffic is (1 + 0.5 + 1)·2 = 2.5× the bf16 bytes, and the effective DRAM bandwidth is the same, about 397 vs 405 GB/s.
+- Issues encountered:
+  - The profiled bench run first "failed" because the tracy wrapper splits a `-k "a and not b"` expression on spaces. Passing explicit node ids fixed it; there was no op issue. Otherwise no failures: the first full run of the new test file passed 100/100.
+- Tests added:
+  - `tests/.../test_groupnorm_sc_N_1_HW_C_b_dtypes.py`, 100 cases:
+    - Float32 input × TILE / RM × {γβ f32 RM, γβ f32 TILE, γβ bf16 TILE, γ f32 RM, none} on 4 shapes, including `C/G = 4`.
+    - bf16 input × {γβ bf16 TILE, γβ f32 RM, γβ f32 TILE, γ bf16 TILE} on 6 shapes, including odd `C/G = 3` (halfword path) and `C/G = 56`.
+    - Float32 odd `C/G`.
+    - Float32 stream-only / partial residency.
+    - Float32 multi-unit per core (`max_cores = 4`).
+    - Float32 wide (64×4096) and deep (16384×512).
+  - `_op_bench.py`: `test_bench_formats` (Float32 / TILE γ/β / Float32 γ/β cases). `test_bench` now shares a `_bench` helper.

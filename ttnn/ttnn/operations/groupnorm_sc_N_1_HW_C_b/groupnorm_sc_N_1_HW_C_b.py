@@ -92,16 +92,17 @@ INPUT_TAGGERS = {
 
 # ---------------------------------------------------------------------------
 # 2. SUPPORTED (Phase 0 + Refinement 1: L1 BLOCK_SHARDED, even shards; Refinement 2: in place on BLOCK_SHARDED;
-#    Refinement 3: ragged shards - padded last row / column, shards straddling images, groups straddling columns)
+#    Refinement 3: ragged shards - padded last row / column, shards straddling images, groups straddling columns;
+#    Refinement 4: Float32 input (DRAM interleaved), Float32 gamma / beta, TILE-layout gamma / beta)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.float32],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned"],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
-    "affine_dtype": [ttnn.bfloat16, "none"],
-    "affine_layout": [ttnn.ROW_MAJOR_LAYOUT, "none"],
+    "affine_dtype": [ttnn.bfloat16, ttnn.float32, "none"],
+    "affine_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
     "shard_fit": ["none", "even", "ragged"],
     # True only on a BLOCK_SHARDED input (an interleaved input has no L1 shard to write over: ValueError
@@ -114,7 +115,14 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = []
+EXCLUSIONS = [
+    # The sharded kernels consume bf16 shards with bf16 ROW_MAJOR gamma / beta (their pilot, staging and
+    # pack-untilize paths are bf16 byte math): Float32 / TILE-gamma on BLOCK_SHARDED is scope-parked (INVALID in
+    # feature_spec; the op refuses it for a direct caller too).
+    {"memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED, "dtype": ttnn.float32},
+    {"memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED, "affine_dtype": ttnn.float32},
+    {"memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED, "affine_layout": ttnn.TILE_LAYOUT},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -199,10 +207,15 @@ def validate(input_tensor, num_groups, *, gamma=None, beta=None, eps=1e-5, in_pl
             raise ExcludedCell(f"groupnorm_sc_N_1_HW_C_b: unsupported combination (refinement candidate): {exc}")
 
     # Shape-class gate: a feasible column-slice count must exist (cross_column_group_combine regime).
-    from .groupnorm_sc_N_1_HW_C_b_program_descriptor import plan_or_raise
+    from .groupnorm_sc_N_1_HW_C_b_program_descriptor import formats_of, plan_or_raise
 
     return plan_or_raise(
-        input_tensor, num_groups, has_gamma=gamma is not None, has_beta=beta is not None, in_place=bool(in_place)
+        input_tensor,
+        num_groups,
+        has_gamma=gamma is not None,
+        has_beta=beta is not None,
+        in_place=bool(in_place),
+        fmt=formats_of(input_tensor, gamma, beta),
     )
 
 

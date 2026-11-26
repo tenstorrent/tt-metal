@@ -30,6 +30,12 @@
 // A slice lane v (0 .. W*32) holds channel s*P + (v mod P), P = MAP_PERIOD: P = W*32 except a sharded RM
 // slice narrower than a tile multiple, which compute tilizes as k = W*32/P sticks per tile row.
 //
+// Formats (Refinement 4): the input is bf16 or Float32 (IN_TILE_BYTES; DRAM interleaved only for Float32), gamma /
+// beta bf16 or Float32 (AFF_ELEM), ROW_MAJOR or TILE (AFF_TILE: row 0 of each (1, C) tile carries the values, read
+// as one 64 B row-0 run of faces 0 / 1 per channel tile). The pilot k is always bf16: a Float32 sample's upper
+// halfword (its bf16 truncation, a valid shift). The group map, pilot rows and -1 tile stay bf16; the affine maps
+// take gamma / beta's format (cb_gamma_rows page = AMAP_TILE_BYTES).
+//
 // raw_api rows (op_design.md API Mapping): map / affine-map one-hot stores and pilot row-0 copies have no helper
 // (generate_index_tile writes a ramp, fill_tile_column writes all 32 rows); DRAM reads are TensorAccessor.
 // The prologue's zero fills are stateful NoC *writes* from MEM_ZEROS (not Noc::async_write_zeros, whose loopback
@@ -58,12 +64,11 @@ constexpr uint32_t cb_output_b = 27;   // DRAM interleaved: this RISC's share of
 constexpr uint32_t cb_out_seq_b = 29;  // pass-2 index of each chunk compute packed into cb_output_b (16 B pages)
 constexpr uint32_t OUT_SEQ_END = 0xFFFFFFFFu;
 
-constexpr uint32_t BF16_TILE_BYTES = 2048;
-constexpr uint32_t BF16_FACE_BYTES = 512;
+constexpr uint32_t BF16_TILE_BYTES = 2048;  // the group map (always bf16)
 constexpr uint32_t F32_TILE_BYTES = 4096;
 constexpr uint32_t BF16_ONE = 0x3F80;
-constexpr uint32_t TILE_SEGMENT_BYTES = 64;  // 32 bf16 channels of one stick
 constexpr uint32_t ALIGN = 64;               // DRAM read alignment (BH)
+constexpr uint32_t ROW0_READ_BYTES = 64;     // TILE pilot / gamma: one read of a face's row 0 (bf16: rows 0-1)
 constexpr uint32_t MAX_LANES = 32;           // group lanes in one tile row
 constexpr uint32_t PILOT_SLOT_BYTES = 16;    // sharded TILE pilot: one 16 B read per group lane
 
@@ -98,10 +103,10 @@ FORCE_INLINE void fill_lanes(volatile tt_l1_ptr T* base, uint32_t v, uint32_t v1
     }
 }
 
-// n (<= 8) words src -> dst, each xor x. A whole half row (8 words) loads every word before storing any, so the
-// in-order core overlaps the L1 load latencies instead of paying one per word.
+// n (<= 16) words src -> dst, each xor x. Whole 8-word runs (a bf16 half row; half of a Float32 one) load every
+// word before storing any, so the in-order core overlaps the L1 load latencies instead of paying one per word.
 FORCE_INLINE void copy_run(volatile tt_l1_ptr uint32_t* d, volatile tt_l1_ptr uint32_t* s, uint32_t n, uint32_t x) {
-    if (n == 8) {
+    for (; n >= 8; n -= 8, d += 8, s += 8) {
         const uint32_t a0 = s[0], a1 = s[1], a2 = s[2], a3 = s[3], a4 = s[4], a5 = s[5], a6 = s[6], a7 = s[7];
         d[0] = a0 ^ x;
         d[1] = a1 ^ x;
@@ -111,10 +116,9 @@ FORCE_INLINE void copy_run(volatile tt_l1_ptr uint32_t* d, volatile tt_l1_ptr ui
         d[5] = a5 ^ x;
         d[6] = a6 ^ x;
         d[7] = a7 ^ x;
-    } else {
-        for (uint32_t i = 0; i < n; ++i) {
-            d[i] = s[i] ^ x;
-        }
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        d[i] = s[i] ^ x;
     }
 }
 
@@ -140,20 +144,36 @@ void kernel_main() {
     constexpr bool HAS_STAGE = get_compile_time_arg_val(14) != 0;
     // Sharded, fully resident: the shard's pieces are walked once (no pass-2 re-read credits).
     constexpr bool OPS = get_compile_time_arg_val(15) != 0;
-    constexpr auto in_args = TensorAccessorArgs<16>();
+    // Formats (Refinement 4): the input's tile bytes, gamma / beta's element bytes, layout and page bytes.
+    constexpr uint32_t IN_TILE_BYTES = get_compile_time_arg_val(16);
+    constexpr uint32_t AFF_ELEM = get_compile_time_arg_val(17);
+    constexpr bool AFF_TILE = get_compile_time_arg_val(18) != 0;
+    constexpr uint32_t AFF_PAGE_BYTES = get_compile_time_arg_val(19);
+    constexpr auto in_args = TensorAccessorArgs<20>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     // The output (written for this RISC's pass-2 share; DRAM interleaved only).
     constexpr uint32_t OUT_PAGE_BYTES = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
     constexpr auto out_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset() + 1>();
 
+    constexpr uint32_t IN_ELEM = IN_TILE_BYTES / 1024;  // input element bytes (bf16 2, Float32 4)
+    constexpr uint32_t IN_FACE_BYTES = IN_TILE_BYTES / 4;
+    constexpr uint32_t TILE_SEGMENT_BYTES = 32 * IN_ELEM;  // 32 channels of one stick
+    constexpr uint32_t AMAP_TILE_BYTES = 1024 * AFF_ELEM;  // one affine map tile (gamma / beta's format)
+    constexpr uint32_t AFF_FACE_BYTES = 256 * AFF_ELEM;
+    static_assert(IN_ELEM == 2 || IN_ELEM == 4, "bf16 or Float32 input");
+    static_assert(AFF_ELEM == 2 || AFF_ELEM == 4, "bf16 or Float32 gamma / beta");
+    static_assert(
+        !SHARDED || (IN_ELEM == 2 && AFF_ELEM == 2 && !AFF_TILE),
+        "sharded: bf16 input with bf16 ROW_MAJOR gamma / beta (the op's EXCLUSIONS)");
     constexpr uint32_t T = CHUNK_HT * W;
     constexpr uint32_t HW = HT * 32;
-    constexpr uint32_t C = WT_TOTAL * 32;
     constexpr uint32_t SLICE_BYTES = W * TILE_SEGMENT_BYTES;
     constexpr uint32_t G_CORE = P / CG;  // interleaved: group lanes of a slice (slices start on group boundaries)
-    // Per-tensor affine staging: the slice's P channels from a 64 B-aligned start.
-    constexpr uint32_t AFFINE_STAGE_BYTES = ((P * 2 + ALIGN - 1) / ALIGN) * ALIGN + ALIGN;
+    // Per-tensor affine staging (host: affine_stage_bytes). RM: the slice's P channels from a 64 B-aligned start;
+    // TILE: row 0 of faces 0 / 1 of each of the slice's W channel tiles, 64 B each.
+    constexpr uint32_t AFFINE_STAGE_BYTES =
+        AFF_TILE ? W * 2 * ROW0_READ_BYTES : ((P * AFF_ELEM + ALIGN - 1) / ALIGN) * ALIGN + ALIGN;
 
     uint32_t arg = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(arg++);
@@ -183,8 +203,8 @@ void kernel_main() {
 
     const auto in_acc = TensorAccessor(in_args, in_addr, IN_PAGE_BYTES);
     [[maybe_unused]] const auto out_acc = TensorAccessor(out_args, out_addr, OUT_PAGE_BYTES);
-    [[maybe_unused]] const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr, C * 2);
-    [[maybe_unused]] const auto beta_acc = TensorAccessor(beta_args, beta_addr, C * 2);
+    [[maybe_unused]] const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr, AFF_PAGE_BYTES);
+    [[maybe_unused]] const auto beta_acc = TensorAccessor(beta_args, beta_addr, AFF_PAGE_BYTES);
 
     const uint32_t num_chunks = (rows_core + CHUNK_HT - 1) / CHUNK_HT;
     const uint32_t K = resident_chunks < num_chunks ? resident_chunks : num_chunks;
@@ -253,11 +273,12 @@ void kernel_main() {
             noc_async_write_one_packet_with_state(map_base, map_base + t * BF16_TILE_BYTES);
         }
         if constexpr (HAS_GAMMA) {
+            // The affine maps in 2 KB steps of the zero tile (a Float32 map tile is two of them).
             constexpr uint32_t AMAP_TILES = (HAS_BETA ? 2 : 1) * W;
             cb_reserve_back(cb_gamma_rows, AMAP_TILES);
             const uint32_t am_base = get_write_ptr(cb_gamma_rows);
-            for (uint32_t t = 0; t < AMAP_TILES; ++t) {
-                noc_async_write_one_packet_with_state(map_base, am_base + t * BF16_TILE_BYTES);
+            for (uint32_t off = 0; off < AMAP_TILES * AMAP_TILE_BYTES; off += BF16_TILE_BYTES) {
+                noc_async_write_one_packet_with_state(map_base, am_base + off);
             }
         }
         noc_async_write_barrier();
@@ -318,15 +339,44 @@ void kernel_main() {
         }
     };
 
-    // gamma / beta slices [xs, xs + vc) -> staging (64 B-aligned start; never past the slice's valid channels).
+    // gamma / beta slices [xs, xs + vc) -> staging. RM: one read from a 64 B-aligned start (never past the slice's
+    // valid channels); TILE (DRAM interleaved: xs a tile multiple): the row-0 run of faces 0 / 1 of each channel
+    // tile, 64 B each, staged 128 B per tile.
     auto issue_affine_reads = [&](uint32_t xs, uint32_t vc) {
         if constexpr (HAS_GAMMA) {
-            const uint32_t lo = (xs * 2) & ~(ALIGN - 1);
-            const uint32_t len = ((xs + vc) * 2 - lo + ALIGN - 1) & ~(ALIGN - 1);
-            noc_async_read(gamma_acc.get_noc_addr(0, lo), staging, len);
-            if constexpr (HAS_BETA) {
-                noc_async_read(beta_acc.get_noc_addr(0, lo), staging + AFFINE_STAGE_BYTES, len);
+            if constexpr (AFF_TILE) {
+                const uint32_t t0 = xs >> 5;
+                const uint32_t nt = ((xs & 31) + vc + 31) >> 5;
+                for (uint32_t t = 0; t < nt; ++t) {
+                    for (uint32_t f = 0; f < 2; ++f) {
+                        const uint32_t dst = staging + t * 2 * ROW0_READ_BYTES + f * ROW0_READ_BYTES;
+                        noc_async_read(gamma_acc.get_noc_addr(t0 + t, f * AFF_FACE_BYTES), dst, ROW0_READ_BYTES);
+                        if constexpr (HAS_BETA) {
+                            noc_async_read(
+                                beta_acc.get_noc_addr(t0 + t, f * AFF_FACE_BYTES),
+                                dst + AFFINE_STAGE_BYTES,
+                                ROW0_READ_BYTES);
+                        }
+                    }
+                }
+            } else {
+                const uint32_t lo = (xs * AFF_ELEM) & ~(ALIGN - 1);
+                const uint32_t len = ((xs + vc) * AFF_ELEM - lo + ALIGN - 1) & ~(ALIGN - 1);
+                noc_async_read(gamma_acc.get_noc_addr(0, lo), staging, len);
+                if constexpr (HAS_BETA) {
+                    noc_async_read(beta_acc.get_noc_addr(0, lo), staging + AFFINE_STAGE_BYTES, len);
+                }
             }
+        }
+    };
+
+    // Staged element (AFF_ELEM bytes) index of slice channel xs + ch (issue_affine_reads' layout).
+    auto aff_idx = [](uint32_t xs, uint32_t ch) -> uint32_t {
+        if constexpr (AFF_TILE) {
+            const uint32_t cl = (xs & 31) + ch;
+            return ((cl >> 5) * 2 * ROW0_READ_BYTES + ((cl >> 4) & 1) * ROW0_READ_BYTES) / AFF_ELEM + (cl & 15);
+        } else {
+            return ((xs * AFF_ELEM) & (ALIGN - 1)) / AFF_ELEM + ch;
         }
     };
 
@@ -335,33 +385,34 @@ void kernel_main() {
     // tiles, element (g(c), lane of c) = gamma[c], then (beta) W "beta map" tiles with row 0 = -beta[c]. compute:
     // a = rstd x gmap, b' = [mean*rstd, e] x [gmap; bmap] (e = 1), so b' = mean*rstd*gamma - beta. Adjacent channels
     // of one group are adjacent halfwords of one row, so both maps are word copies of the staged slice (even
-    // groups). Padding lanes stay zero (the ring was zeroed once by build_map).
+    // groups; every Float32 run). Padding lanes stay zero (the ring was zeroed once by build_map).
     auto build_affine = [&](uint32_t xs, uint32_t l0, uint32_t off0, uint32_t vc) {
         if constexpr (HAS_GAMMA) {
             MaybeDeviceZoneScope("r_affine");
             constexpr uint32_t AMAP_TILES = (HAS_BETA ? 2 : 1) * W;
-            const uint32_t skew_hw = xs & 31;  // halfword of channel xs in the 64 B-aligned staging
             cb_reserve_back(cb_gamma_rows, AMAP_TILES);
             noc_async_read_barrier();
             const uint32_t am = get_write_ptr(cb_gamma_rows);
-            if constexpr (CG % 2 == 0) {
-                // Runs of one group inside one half row (<= 16 lanes, 8 words; the run starts, the skew and CG are
-                // even, so a word never straddles a group): gamma -> row g(c) of the gamma map, -beta -> row 0 of
-                // the beta map, both at the run's own face-row positions.
+            if constexpr (AFF_ELEM == 4 || CG % 2 == 0) {
+                // Runs of one group inside one half row (<= 16 lanes; bf16: 8 words - the run starts, the skew and
+                // CG are even, so a word never straddles a group; Float32: one word per lane): gamma -> row g(c) of
+                // the gamma map, -beta -> row 0 of the beta map, both at the run's own face-row positions.
+                constexpr uint32_t EPW = 4 / AFF_ELEM;  // elements per word
+                constexpr uint32_t NEG = AFF_ELEM == 4 ? 0x80000000u : 0x80008000u;
                 volatile tt_l1_ptr uint32_t* gs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging);
                 volatile tt_l1_ptr uint32_t* bs =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging + AFFINE_STAGE_BYTES);
                 volatile tt_l1_ptr uint32_t* gm = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(am);
                 volatile tt_l1_ptr uint32_t* bm =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(am + W * BF16_TILE_BYTES);
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(am + W * AMAP_TILE_BYTES);
                 for_each_run(l0, off0, vc, [&](uint32_t v, uint32_t ve, uint32_t lane, uint32_t ch) {
-                    const uint32_t nw = (ve - v) >> 1;
-                    const uint32_t w = (skew_hw + ch) >> 1;
+                    const uint32_t nw = (ve - v) / EPW;
+                    const uint32_t w = aff_idx(xs, ch) / EPW;
                     // Word of (tile v >> 5, half (v >> 4) & 1, row 0, lane v & 15).
-                    const uint32_t base = (v >> 5) * 512 + ((v >> 4) & 1) * 128 + ((v & 15) >> 1);
-                    copy_run(gm + base + (lane >> 4) * 256 + (lane & 15) * 8, gs + w, nw, 0);
+                    const uint32_t base = ((v >> 5) * 1024 + ((v >> 4) & 1) * 256 + (v & 15)) / EPW;
+                    copy_run(gm + base + ((lane >> 4) * 512 + (lane & 15) * 16) / EPW, gs + w, nw, 0);
                     if constexpr (HAS_BETA) {
-                        copy_run(bm + base, bs + w, nw, 0x80008000u);  // -beta
+                        copy_run(bm + base, bs + w, nw, NEG);  // -beta
                     }
                 });
             } else {
@@ -370,13 +421,14 @@ void kernel_main() {
                     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging + AFFINE_STAGE_BYTES);
                 volatile tt_l1_ptr uint16_t* gm = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(am);
                 volatile tt_l1_ptr uint16_t* bm =
-                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(am + W * BF16_TILE_BYTES);
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(am + W * AMAP_TILE_BYTES);
                 for_each_run(l0, off0, vc, [&](uint32_t v, uint32_t ve, uint32_t lane, uint32_t ch) {
                     for (uint32_t i = 0; v + i < ve; ++i) {
                         const uint32_t col = ((v + i) >> 5) * 1024 + row0_lane((v + i) & 31);
-                        gm[col + (lane >> 4) * 512 + (lane & 15) * 16] = gs[skew_hw + ch + i];
+                        const uint32_t si = aff_idx(xs, ch + i);
+                        gm[col + (lane >> 4) * 512 + (lane & 15) * 16] = gs[si];
                         if constexpr (HAS_BETA) {
-                            bm[col] = bs[skew_hw + ch + i] ^ 0x8000;  // -beta
+                            bm[col] = bs[si] ^ 0x8000;  // -beta
                         }
                     }
                 });
@@ -429,7 +481,7 @@ void kernel_main() {
                     }
                     const uint32_t cl = c - (col_end - P);  // local channel in the source shard
                     const uint32_t off =
-                        (cl >> 5) * BF16_TILE_BYTES + ((cl >> 4) & 1) * BF16_FACE_BYTES + (cl & 15) * 2;
+                        (cl >> 5) * IN_TILE_BYTES + ((cl >> 4) & 1) * IN_FACE_BYTES + (cl & 15) * IN_ELEM;
                     kv[l] = l * (PILOT_SLOT_BYTES / 2) + ((off & 15) >> 1);
                     if (col != state_col) {
                         noc_async_read_one_packet_set_state(
@@ -469,8 +521,8 @@ void kernel_main() {
             // padding channels) is built over the pilot slots, doubled into a full template row after the staged
             // rows, then each staged row = template prefix + shard sticks + template suffix (local NoC copies).
             MaybeDeviceZoneScope("r_stage_rows");
-            constexpr uint32_t STICK = P * 2;
-            constexpr uint32_t TR_BYTES = W * BF16_TILE_BYTES;  // 32k sticks
+            constexpr uint32_t STICK = P * IN_ELEM;
+            constexpr uint32_t TR_BYTES = W * IN_TILE_BYTES;  // 32k sticks
             {
                 uint32_t a = 0, lane = sh_l0, gend = CG - sh_off0;
                 while (a < sh_vc) {
@@ -579,15 +631,16 @@ void kernel_main() {
 
             if (step == 0) {
                 // Pilot source (image row 0 of the slice) -> staging; its barrier is the chunk's.
-                // TILE: row 0 of faces 0 / 1 of each tile (64 B reads: rows 0-1), staged 128 B per tile.
-                // RM: the slice of stick 0, staged contiguously.
+                // TILE: row 0 of faces 0 / 1 of each tile (64 B reads: bf16 rows 0-1, Float32 row 0), staged 128 B
+                // per tile. RM: the slice of stick 0, staged contiguously.
                 if constexpr (IS_RM) {
-                    noc_async_read(in_acc.get_noc_addr(n * HW, wt0 * TILE_SEGMENT_BYTES), staging, P * 2);
+                    noc_async_read(in_acc.get_noc_addr(n * HW, wt0 * TILE_SEGMENT_BYTES), staging, P * IN_ELEM);
                 } else {
                     for (uint32_t wt = 0; wt < W; ++wt) {
                         for (uint32_t f = 0; f < 2; ++f) {
-                            const uint64_t src = in_acc.get_noc_addr(n * HT * WT_TOTAL + wt0 + wt, f * BF16_FACE_BYTES);
-                            noc_async_read(src, staging + wt * 128 + f * 64, 64);
+                            const uint64_t src = in_acc.get_noc_addr(n * HT * WT_TOTAL + wt0 + wt, f * IN_FACE_BYTES);
+                            noc_async_read(
+                                src, staging + wt * 2 * ROW0_READ_BYTES + f * ROW0_READ_BYTES, ROW0_READ_BYTES);
                         }
                     }
                 }
@@ -635,7 +688,7 @@ void kernel_main() {
                     const uint32_t tile0 = (n * HT + row0 + r) * WT_TOTAL + wt0;
                     for (uint32_t wt = 0; wt < W; ++wt) {
                         noc_async_read_page(tile0 + wt, in_acc, dst);
-                        dst += BF16_TILE_BYTES;
+                        dst += IN_TILE_BYTES;
                     }
                 }
             }
@@ -653,11 +706,14 @@ void kernel_main() {
             }
 
             if (step == 0) {
-                // k of group lane l = the staged sample of its first channel (slices start on group boundaries).
-                // TILE staging holds rows 0-1 of faces 0/1 per tile: lane l < 16 at halfword l, else l + 16.
+                // k of group lane l = the staged sample of its first channel (slices start on group boundaries), as
+                // bf16: a Float32 sample's upper halfword. TILE staging holds 64 B of row 0 of faces 0 / 1 per tile.
                 for (uint32_t l = 0; l < G_CORE; ++l) {
                     const uint32_t c = l * CG;
-                    kv[l] = sv[IS_RM ? c : (c >> 5) * 64 + (c & 31) + (c & 16)];
+                    const uint32_t byte =
+                        IS_RM ? c * IN_ELEM
+                              : (c >> 5) * 2 * ROW0_READ_BYTES + ((c >> 4) & 1) * ROW0_READ_BYTES + (c & 15) * IN_ELEM;
+                    kv[l] = sv[(byte + IN_ELEM - 2) >> 1];
                 }
                 build_shift_rows(0, 0, P, G_CORE, blk);
             }
