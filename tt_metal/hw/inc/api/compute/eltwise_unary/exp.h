@@ -83,6 +83,25 @@ template <
     InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    MATH(if constexpr (
+        ckernel::sfpu::exp_bf16_whole_tile && !is_fp32_dest_acc_en && !approx && !scale_en &&
+        input_clamping == InputClamping::ClampToNegative && iterations == 8) {
+        if (vector_mode == VectorMode::RC) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                calculate_exponential,
+                (approx,
+                 is_fp32_dest_acc_en,
+                 scale_en,
+                 32 /*ITERATIONS*/,
+                 (input_clamping == InputClamping::ClampToNegative)),
+                idst,
+                VectorMode::None,
+                scale);
+            return;
+        }
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
