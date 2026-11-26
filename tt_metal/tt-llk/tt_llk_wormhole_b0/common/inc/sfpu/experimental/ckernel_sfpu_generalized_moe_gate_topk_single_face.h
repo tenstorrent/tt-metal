@@ -45,13 +45,8 @@ inline void _gmg_set_prgm_from_lreg0()
     TTI_SFPCONFIG(0, prgm_lreg, 0);
 }
 
-// Normalization-tail prologue shared by top8 and finalize_ungrouped: clear LaneConfig, sum the top-8 scores
-// (scores+0/+4, column 0), leave the sum in LREG0 after a bf16-truncating round trip through interm, and program
-// the reciprocal seeds (LREG12-14, sfpu_reciprocal_init's round_to_bf16=false values). The gate broadcasts through
-// LREG14, so the seeds are set here rather than in the op init; run-only callers never pay for them. After the
-// transpose the sum is reduced into LREG4/6, so LREG0 (SFPCONFIG's source) can carry the first seed while the ADDs
-// are in flight. ENABLE_DEST_INDEX makes SFPADD writes to LREG4-7 unsupported (erratum TEN-2932, SFPCONFIG.md
-// LaneConfig), so LaneConfig is cleared before the transpose, one instruction ahead of the first such write.
+// Normalization-tail prologue: sums the top-8 scores into LREG0 (bf16-truncated) and programs the reciprocal seeds.
+// LaneConfig is cleared first because ENABLE_DEST_INDEX makes SFPADD writes to LREG4-7 unsupported (TEN-2932).
 inline void _gmg_tail_sum_to_lreg0_set_recip_seeds()
 {
     constexpr auto seed_k0_bits = __builtin_bit_cast(std::uint32_t, RECIPROCAL_SEED_K0);

@@ -740,13 +740,8 @@ def _bf16_truncate(values):
     return bits.view(torch.float32)
 
 
-# The normalization tail stores the fp32 sum of the kept scores to the 16-bit interm region and
-# reloads it, so the denominator is the sum truncated to bf16; the final 16-bit store truncates the
-# weights again. With payloads on a 1/16 grid the sum is exact in fp32, so both truncations are
-# modelled exactly. Each seed is picked so that (a) the sum has bits below bf16, so a tail that skips
-# the round trip changes some weights, and (b) every exact weight sits well inside its bf16 interval,
-# so the reciprocal's last-bit error cannot move the result. Under those two conditions the weights
-# are compared bit for bit.
+# Bit-exact weights: seeds make the sum carry bits below bf16 (so skipping the interm round trip is
+# visible) and keep every weight well inside its bf16 interval (so reciprocal error cannot flip it).
 @parametrize(
     case=[(False, 8, 4), (False, 6, 45), (True, 8, 8)],  # (grouped, topk, seed)
 )
