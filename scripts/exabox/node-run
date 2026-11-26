@@ -12,6 +12,11 @@ for _ in 1 2 3 4 5; do  # squeue intermittently fails with "Unexpected message r
     JOB="$(squeue --me -h -t RUNNING -w "${NODE_HOST:-bh-lb-a10u24}" -o %i 2>/dev/null | head -1)"; [ -n "$JOB" ] || sleep 3
 done
 [ -n "$JOB" ] || { echo "node-run: no running reservation job (set NODE_JOB=<jobid>)" >&2; exit 2; }
+# Only chips 0-3 (one 2x2 half) of bh-lb-a10u24 are ours; the other half belongs to other work.
+if [ -n "${TT_VISIBLE_DEVICES:-}" ] && [ "$TT_VISIBLE_DEVICES" != "0,1,2,3" ]; then
+    echo "node-run: TT_VISIBLE_DEVICES=$TT_VISIBLE_DEVICES refused; only chips 0,1,2,3 may be used" >&2; exit 2
+fi
+export TT_VISIBLE_DEVICES=0,1,2,3
 export XRUN_BYPASS=1 HOME="${NODE_HOME:-/data/$USER/nodehome}"
 mkdir -p "$HOME"
 exec srun --jobid="$JOB" --overlap -N1 --export=ALL bash -c 'cd "$0" && exec "$@"' "$REPO" "$@"
