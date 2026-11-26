@@ -107,7 +107,11 @@ constexpr uint32_t gate_up_units = get_named_compile_time_arg_val("gate_up_units
 constexpr uint32_t gate_up_units_h_tiles = get_named_compile_time_arg_val("gate_up_units_h_tiles");
 // row passes: row tiles per pass when DEST holds fewer than a whole sub-block's gate/up tiles (0: one pass)
 constexpr uint32_t row_pass_rows = get_named_compile_time_arg_val("row_pass_rows");
-// x blocks the gate/up core's x ring holds (row passes re-read x from it)
+// row tiles of an x block, of an x path sub-block: a row pass's with row passes (each pass reads, and frees, its own
+// x blocks), else a sub-block's
+constexpr uint32_t x_row_tiles = get_named_compile_time_arg_val("x_row_tiles");
+constexpr uint32_t x_rows_per_sub_block = x_row_tiles * 32;
+// x blocks (of x_row_tiles row tiles) the gate/up core's x ring holds
 constexpr uint32_t x_ring_blocks = get_named_compile_time_arg_val("x_ring_blocks");
 
 // ---- down and y ----
