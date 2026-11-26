@@ -30,8 +30,10 @@ the conv and window, per-frame statistics gathered for the scans).
 from __future__ import annotations
 
 import dataclasses
+import os
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -198,6 +200,7 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         x_1BND, q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE = (
             whole(t) for t in (x_1BND, q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE)
         )
+        self._mark("projections and SP gather")
 
         if full_cover:
             softmax_BHNE = ttnn.transformer.scaled_dot_product_attention(
@@ -220,6 +223,7 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         # canonical inner order the column-parallel output projections expect.
         softmax_1BND = self._gather(softmax_1BND, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
         out = self.to_out(softmax_1BND, force_transpose=False, compute_kernel_config=self.mm_compute_kernel_config)
+        self._mark("window softmax and to_out")
 
         if not full_cover:
             vs, ve = layout.video_start, layout.video_end
@@ -235,6 +239,7 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
                 skip_ends=self.anchor_frames == "both",
                 text=text,
             )
+            self._mark("linear branch")
             readout = self._gather(readout, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
             video = ttnn.add(rows_slice(out, vs, ve), self.to_out_linear(readout))
             pieces = [rows_slice(out, 0, vs)] if vs else []
@@ -244,20 +249,23 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             out = ttnn.concat(pieces, dim=2) if len(pieces) > 1 else video
 
         # Back to the padded length, then each SP device keeps its own rows.
+        self._mark("output rows assembled")
         if length < padded_len:
-            tail = ttnn.zeros(
-                [1, 1, padded_len - length, out.shape[3]],
-                dtype=out.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-            )
-            out = ttnn.concat([out, tail], dim=2)
+            out = ttnn.pad(out, [(0, 0), (0, 0), (0, padded_len - length), (0, 0)], 0.0)
+            self._mark("pad tail")
         if self.sp_factor > 1:
             out = ttnn.mesh_partition(out, dim=2, cluster_axis=self.sp_mesh_axis)
+            self._mark("mesh_partition")
 
         if addcmul_residual is not None:
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
         return out
+
+    def _mark(self, name: str) -> None:
+        """With OPENVDN_SYNC_LOG=1: wait for the device and log, to place a hang."""
+        if os.environ.get("OPENVDN_SYNC_LOG") == "1":
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info(f"hybrid attention: {name} done")
 
     def _gather(self, t: ttnn.Tensor, *, dim: int, mesh_axis: int, factor: int) -> ttnn.Tensor:
         if factor == 1:

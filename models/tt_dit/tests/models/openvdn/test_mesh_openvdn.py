@@ -119,7 +119,9 @@ def _upload_hidden(x: torch.Tensor, mesh_device, padded_len: int) -> ttnn.Tensor
 
 
 def _download_hidden(x: ttnn.Tensor) -> torch.Tensor:
+    logger.info(f"reading back {tuple(x.shape)} per device")
     out = tensor.to_torch(x, mesh_axes=[None, None, SP_AXIS, TP_AXIS]).float()
+    logger.info(f"read back {tuple(out.shape)}")
     return out.reshape(out.shape[-2], out.shape[-1])[:SEQ_LEN]
 
 
