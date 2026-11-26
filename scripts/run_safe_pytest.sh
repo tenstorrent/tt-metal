@@ -90,10 +90,12 @@ DISPATCH_TIMEOUT="${SAFE_PYTEST_DISPATCH_TIMEOUT:-5}"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 TRIAGE_OUT_DIR="${REPO_DIR}/generated/tt-triage"
-LOCK_FILE="/tmp/tt-device.lock"
-DIRTY_FLAG="/tmp/tt-device.dirty"
+# Lock, dirty flag and reset per card when TT_VISIBLE_DEVICES names one card; whole machine otherwise.
+source "${REPO_DIR}/scripts/tt_device_lock.sh"
+LOCK_FILE="$TT_DEV_LOCK"
+DIRTY_FLAG="$TT_DEV_DIRTY"
 TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
-TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage.txt"
+TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage${TT_DEV_TRIAGE_SUFFIX}.txt"
 PROFILE_REPORTS_DIR="${REPO_DIR}/generated/profiler/reports"
 
 # --- Device-lock contention profiling ---
@@ -440,9 +442,10 @@ _print_total_runtime() {
 
 # --- Acquire flock (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
+    tt_dev_hold_machine_shared SAFE_PYTEST
     exec 9>"$LOCK_FILE"
 
-    echo "SAFE_PYTEST: Waiting for device lock..."
+    echo "SAFE_PYTEST: Waiting for device lock ($TT_DEV_LABEL)..."
 
     # Find the PID holding an flock on a given path. Tries lslocks first
     # (fast, works in the global namespace); falls back to scanning /proc/*/fd
@@ -489,16 +492,16 @@ if [[ "$SIM_MODE" == false ]]; then
         fi
     done
     TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
-    echo "SAFE_PYTEST: Device lock acquired"
+    echo "SAFE_PYTEST: Device lock acquired ($TT_DEV_LABEL)"
 
     # Start the total-run clock the moment we own the device. The lock-wait above is
     # idle queueing behind other runners and is deliberately excluded.
     RUN_START=$(date +%s)
 
     # --- Check if device needs reset from previous hang ---
-    if [[ -f "$DIRTY_FLAG" ]]; then
-        echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..."
-        if ! tt-smi -r; then
+    if tt_dev_is_dirty; then
+        echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting $TT_DEV_LABEL..."
+        if ! tt_dev_reset; then
             echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed"
             exit 3
         fi
@@ -636,7 +639,7 @@ if [[ "$SIM_MODE" == false ]]; then
         MISSING_TTEXALENS=true
     fi
     mkdir -p "${TRIAGE_OUT_DIR}"
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} ${TT_DEV_TRIAGE_ARGS} > ${TRIAGE_LOG} 2>&1"
 fi
 
 emit_missing_ttexalens_warning() {
@@ -832,8 +835,8 @@ fi
 # Clear the dirty flag, resetting first if the run left Ethernet cores stuck.
 _clear_dirty_flag() {
     if [[ "$ETH_STUCK" == true ]]; then
-        echo "SAFE_PYTEST: Active Ethernet cores stuck after the run, resetting device..."
-        if tt-smi -r; then
+        echo "SAFE_PYTEST: Active Ethernet cores stuck after the run, resetting $TT_DEV_LABEL..."
+        if tt_dev_reset; then
             sleep 2
             rm -f "$DIRTY_FLAG"
             echo "SAFE_PYTEST: Device reset complete"
@@ -891,8 +894,8 @@ fi
 # stuck Ethernet cores (ETH_STUCK above), which reset on every exit path.
 if [[ "$IS_HANG" == true ]]; then
     if [[ "$SIM_MODE" == false ]]; then
-        echo "SAFE_PYTEST: Resetting device..."
-        if tt-smi -r; then
+        echo "SAFE_PYTEST: Resetting $TT_DEV_LABEL..."
+        if tt_dev_reset; then
             sleep 2
             rm -f "$DIRTY_FLAG"
             echo "SAFE_PYTEST: Device reset complete"
