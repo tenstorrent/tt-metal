@@ -1,7 +1,6 @@
 # didt_runner: rules for extending it
 
 Read before changing `tests/didt/didt_runner.py`, `tests/didt/didt_runner_config.json` or anything in `tests/didt/runner/`.
-Design and reasons: `docs/superpowers/specs/2026-11-26-didt-runner-design.md`.
 
 ## What it is
 
@@ -35,7 +34,26 @@ Design and reasons: `docs/superpowers/specs/2026-11-26-didt-runner-design.md`.
 | new pass/fail or device parser | `runner/checks.py` or `runner/devices.py`, + a `check` name |
 | new way to launch | `runner/steps.py`, + a `runner` name |
 | new fallback | config `fallbacks{}`; code only for a new fallback kind |
-| new status field | `runner/status.py` + spec's status.json section |
+| new status field | `runner/status.py` + the `status.json` section below |
+
+## status.json
+
+- Top level: gwdt's keys (`tool host run mode commit run_dir`) + `config` (`path`, `sha256`), `chips`, `current`,
+  `steps`. Never rename or drop a gwdt key: `build-gwdt-sweep` renders the file unchanged.
+- `chips[]`: host snapshot before the run, `dev bdf tray asic asic_id kmd`; `dev` = BDF rank on the host.
+- Step: `key status reason details log start end devices fallbacks[]`. A fallback adds `name env opts` in front,
+  plus its own kind fields (`pin_core`: `target trigger cores iterations loop`).
+- `status`: `PENDING RUN PASS WARN FAIL HANG SKIP`. `details`: one line per failing device, then GDDR lines.
+- `devices[]`: failing devices of that attempt only, empty on PASS. Fields the source does not give are left out.
+
+| `devices[]` field | from |
+|---|---|
+| `dev bdf tray asic asic_id kmd` | `chips[]` joined on `dev`; if the log's `Chip map` BDF differs, keep the log's + a `details` warning |
+| `hung` | always |
+| `failed_checks checks pattern` | `nd_report` (`ND summary device N` line) |
+| `op core_count` | HANG: triage CSV `dump_running_operations.py` |
+| `elements` | `core_sweep` |
+| `cores[]` | up to 8, worst first: `x y`, `translated` if logged, then `failed_checks signature` or `elements` |
 
 ## Adding a screen
 
@@ -49,7 +67,7 @@ Design and reasons: `docs/superpowers/specs/2026-11-26-didt-runner-design.md`.
 ## Adding a check or parser
 
 - Test first, from REAL log text saved in `runner/testdata/` (cite the source run dir).
-- Return the spec's `devices[]` shape; identity joined from the chip snapshot on `dev`.
+- Return the `devices[]` shape above; identity joined from the chip snapshot on `dev`.
 - A per-chip child process sees itself as `device 0`: join on the parent's chip id.
 - Log format comes from the test (`op_test_base.py`, test file). Change both together, never one.
 
@@ -82,4 +100,4 @@ Design and reasons: `docs/superpowers/specs/2026-11-26-didt-runner-design.md`.
 
 - Unit tests: `python_env/bin/python -m pytest -q --noconftest -p no:cacheprovider tests/didt/runner`
 - `python tests/didt/didt_runner.py --co` on a galaxy: exit 0, all steps collect.
-- Spec updated if behavior or `status.json` changed.
+- This file updated if a rule or the `status.json` shape changed.
