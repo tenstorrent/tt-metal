@@ -50,9 +50,11 @@ def host_inputs(monkeypatch):
     calls = []
 
     def from_torch(value, *, device=None, **kwargs):
+        tensor = value.clone()
         if device is not None:
             calls.append("allocate")
-        return value.clone()
+            tensor.spec = None  # read by `_borrowing_host_tensor`, which the patched `host_tensor_from_bytes` ignores
+        return tensor
 
     monkeypatch.setattr(ttnn, "from_torch", from_torch)
     monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, device_tensor: calls.append("copy"))

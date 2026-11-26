@@ -151,7 +151,8 @@ class DeviceInput:
 
     def _upload(self) -> ttnn.Tensor:
         if self.tensor is None:
-            # Allocated once, from the logical value, so the tensor's topology is ttnn's own.
+            # Allocated once, from the logical value, so the tensor's topology is ttnn's own. DRAM interleaved: its rows
+            # are packed, so later copies can come straight from the staging buffer (see `_borrowing_host_tensor`).
             self.tensor = ttnn.from_torch(
                 self.host_value(),
                 device=self.mesh_device,
@@ -170,19 +171,15 @@ class DeviceInput:
         """A host tensor over the staging buffer, with no copy: one shard per chip under the device tensor's topology,
         or, replicated, one tensor that the copy writes to every chip. The uint8 view is the same bytes, not a cast.
 
-        The spec only describes the staging bytes: shape, dtype and layout must match the device tensor (the copy
-        checks them), and its memory config just means packed rows. Where the bytes land is set by the device tensor's
-        own memory config, so any device config works, DRAM or L1, interleaved or sharded, except row-major width or
-        block sharding with uneven shards, which ttnn rejects."""
+        It uses the device tensor's own per-chip spec, so the staging bytes must be exactly that spec's host bytes. They
+        are for DRAM interleaved, which `_upload` allocates. A row-major tensor sharded with uneven shard widths pads its
+        rows, so the staging bytes no longer match: `host_tensor_from_bytes` rejects them, where a copy from a spec
+        built by hand would land the rows in the wrong place without an error."""
         raw = self._staging.view(torch.uint8).numpy()
+        spec = self.tensor.spec  # per chip: [1, 1, rows / sp, width], or the whole shape when replicated
         if self.sp_axis is None:
-            spec = ttnn.TensorSpec(ttnn.Shape(self.shape), self.dtype, self.layout, ttnn.DRAM_MEMORY_CONFIG)
             return ttnn.host_tensor_from_bytes(raw, spec)
         sp = tuple(self.mesh_device.shape)[self.sp_axis]
-        shard_rows = self.rows // sp
-        spec = ttnn.TensorSpec(
-            ttnn.Shape((1, 1, shard_rows, self.width)), self.dtype, self.layout, ttnn.DRAM_MEMORY_CONFIG
-        )
         # Rows are contiguous in both layouts (TILE: whole tile rows), so chip k's shard is the k-th slice.
         shard_bytes = raw.size // sp
         shards = {}

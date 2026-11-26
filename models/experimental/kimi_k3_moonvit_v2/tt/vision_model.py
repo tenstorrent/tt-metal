@@ -277,6 +277,7 @@ class TT_MoonViT_Vision_Model(Module):
             self._readback = None  # drop the old buffer first
             rows_per_chip, width = shape[2], shape[3]
             buffer = np.empty(rows_per_chip * width, np.uint16)
+            # Packed rows, matching `out`, which `forward` leaves in DRAM interleaved.
             spec = ttnn.TensorSpec(
                 ttnn.Shape([1, 1, rows_per_chip, width]), out.dtype, out.layout, ttnn.DRAM_MEMORY_CONFIG
             )
