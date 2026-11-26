@@ -45,8 +45,14 @@ void bind_permute(nb::module_& mod) {
                  - ROW_MAJOR
                * - BFLOAT8_B
                  - TILE
+               * - MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2 (Quasar only)
+                 - TILE
 
             ``BFLOAT8_B`` is supported for interleaved tensors of rank 4 or less.
+
+            MX tensors are supported for interleaved tensors of rank 4 or less. Swapping N and C moves whole tiles and
+            runs natively; every other permutation is done in BFLOAT16 (staged in DRAM) and the result is converted back
+            to the input's MX format.
 
             ``BFLOAT16`` input values must not be NaN when ``dims`` moves the last dimension.
 

@@ -36,7 +36,7 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
          logical count can't be inferred from the tensor.
          ``num_kv_heads * block_size * head_dim`` must be preserved across views.
          Input tensors must be FLOAT32 or BFLOAT16 even when the destination cache is
-         BFLOAT8_B/BFLOAT4_B. This op updates one token row inside an existing cache
+         BFLOAT8_B/BFLOAT4_B or an MX format (Quasar). This op updates one token row inside an existing cache
          tile and owns the final repack into the cache dtype; do not pre-cast decode
          K/V updates to the low-precision cache dtype. In contrast,
          ``paged_fill_cache`` performs a raw tile copy and requires matching input
@@ -97,7 +97,7 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
                     sequential single-row calls. Rows of DIFFERENT users must not share a cache tile.
 
             Input tensors must be FLOAT32 or BFLOAT16 even when the destination
-            caches are BFLOAT8_B/BFLOAT4_B; this op repacks into each cache dtype.
+            caches are BFLOAT8_B/BFLOAT4_B or an MX format (Quasar); this op repacks into each cache dtype.
             In contrast, ``paged_fill_cache`` performs a raw tile copy and requires
             matching input and cache dtypes.
 

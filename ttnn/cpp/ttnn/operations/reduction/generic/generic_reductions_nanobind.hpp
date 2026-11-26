@@ -87,8 +87,15 @@ inline std::string get_generic_reduction_doc(
                   - ROW_MAJOR, TILE
                 * - BFLOAT8_B
                   - TILE{2}
+                * - MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2 (Quasar only)
+                  - TILE
 
             The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`.
+
+            MX inputs: tile-aligned inputs reduced over the H and/or W axis with ``keepdim=True`` run on the native
+            kernels (``min`` excluded), which unpack MX to Float16_b and pack the result back to the input's MX format.
+            Everything else (N or C axes, implicit tile padding, ``keepdim=False``, ``min``, a full reduction) is
+            reduced in BFLOAT16 and the result is converted back to the input's MX format.
             Exception: for sum and mean, 4D ROW_MAJOR BFLOAT16/FLOAT32 inputs with INTERLEAVED memory
             config reduced along the last (-1) or second-to-last (-2) dimension preserve ROW_MAJOR layout.
 
