@@ -287,7 +287,10 @@ class TT_MoonViT_Vision_Model(Module):
             )
             self._readback = (shape, buffer.reshape(rows_per_chip, width), host)
         _, buffer, host = self._readback
-        ttnn.copy_device_to_host_tensor(ttnn.get_device_tensors(out)[0], host)
+        # copy_device_to_host_tensor holds the GIL; enqueue it nonblocking and wait in synchronize_device, which
+        # releases it.
+        ttnn.copy_device_to_host_tensor(ttnn.get_device_tensors(out)[0], host, blocking=False)
+        ttnn.synchronize_device(self.mesh_device)
         return buffer
 
     def forward(
