@@ -91,7 +91,8 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0 + Refinement 1: L1 BLOCK_SHARDED, even shards; Refinement 2: in place on BLOCK_SHARDED)
+# 2. SUPPORTED (Phase 0 + Refinement 1: L1 BLOCK_SHARDED, even shards; Refinement 2: in place on BLOCK_SHARDED;
+#    Refinement 3: ragged shards - padded last row / column, shards straddling images, groups straddling columns)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -102,7 +103,7 @@ SUPPORTED = {
     "affine_dtype": [ttnn.bfloat16, "none"],
     "affine_layout": [ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
-    "shard_fit": ["none", "even"],
+    "shard_fit": ["none", "even", "ragged"],
     # True only on a BLOCK_SHARDED input (an interleaved input has no L1 shard to write over: ValueError
     # in validate(), INVALID in feature_spec).
     "in_place": [False, True],

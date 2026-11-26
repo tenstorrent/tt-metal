@@ -6,8 +6,10 @@
 //
 // Per block:
 //   gather   : row 0 of the 2 local partial tiles (group lanes of S1 / S2) -> row `slot` of the root's
-//              cb_gathered_partials tile pair slot/32, then a semaphore increment on the root.
-//   root     : wait for cpi arrivals, publish the gathered tiles to compute; multicast [rstd, mean] from
+//              cb_gathered_partials tile pair slot/32, then a semaphore increment on the root. SHARDED: one pair
+//              per image of the unit (R pairs each); a core sends each of its image segments' partials to that
+//              image's pairs and zero rows (from MEM_ZEROS) to the unit images it holds no rows of.
+//   root     : wait for cpi arrivals, publish the gathered tiles to compute; multicast [rstd, mean] per image from
 //              cb_stats_out into every unit core's cb_group_stats (McastArgs; cpi == 1 is a local copy).
 //   receiver : take the multicast into cb_group_stats.
 //   output   : this RISC's share of the pass-2 chunks -> DRAM via TensorAccessor. Compute packs each chunk for
@@ -15,7 +17,8 @@
 //              cb_output_b) and names its pass-2 index q (resident tail first, then the re-read head) on
 //              cb_out_seq_a here; END closes the block. The reader writes the other share on its NoC.
 //              SHARDED: compute writes the output shard directly (zero-copy CB); the writer only drains the
-//              credits (RM: the head-skip credits compute pushes first, then every chunk).
+//              credits (RM: the head-skip credits compute pushes first, then every chunk), and (RM ragged) copies
+//              each staged tile row's valid sticks from cb_rm_stage_out back into the output shard.
 //
 // Unused gather rows (slots >= cpi in the last tile pair) are zeroed once with NoC zeros; senders never
 // touch them, so they stay zero across blocks.
@@ -36,6 +39,7 @@ constexpr uint32_t cb_local_partials = 15;
 constexpr uint32_t cb_gathered_partials = 16;
 constexpr uint32_t cb_stats_out = 19;
 constexpr uint32_t cb_group_stats = 20;
+constexpr uint32_t cb_rm_stage_out = 26;  // sharded RM: normalized staged tile rows (untilized)
 constexpr uint32_t cb_out_seq_a = 28;  // DRAM interleaved: pass-2 index of each chunk packed into cb_output_tiles
 constexpr uint32_t OUT_SEQ_END = 0xFFFFFFFFu;
 
@@ -64,15 +68,20 @@ void kernel_main() {
     constexpr bool SHARDED = get_compile_time_arg_val(9) != 0;
     // Per-chunk zones only when the host found every chunk's zone executions inside the marker budget.
     constexpr bool CHUNK_ZONES = get_compile_time_arg_val(10) != 0;
-    constexpr auto out_args = TensorAccessorArgs<11>();
+    constexpr uint32_t NU = get_compile_time_arg_val(11);  // images per statistic unit (cb_group_stats: 2 per image)
+    constexpr bool HAS_STAGE = get_compile_time_arg_val(12) != 0;
+    constexpr bool OPS = get_compile_time_arg_val(13) != 0;  // sharded, fully resident pieces
+    constexpr uint32_t P = get_compile_time_arg_val(14);     // MAP_PERIOD (sharded RM: the stick's channels)
+    constexpr auto out_args = TensorAccessorArgs<15>();
     constexpr auto mc = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
     using McastT = std::remove_cv_t<decltype(mc)>;
 
     constexpr uint32_t T = CHUNK_HT * W;
-    constexpr uint32_t STATS_BYTES = 2 * F32_TILE_BYTES;
-    constexpr uint32_t N_STATS = 3;  // cb_group_stats pages: [rstd, mean*rstd, e]; only the first 2 are multicast
+    constexpr uint32_t PAIR_BYTES = 2 * F32_TILE_BYTES;
+    // cb_group_stats pages: [rstd, mean*rstd] per image, then e; only the image pairs are multicast.
+    constexpr uint32_t N_STATS = 2 * NU + 1;
 
     uint32_t arg = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
@@ -85,6 +94,12 @@ void kernel_main() {
     const uint32_t root_x = get_arg_val<uint32_t>(arg++);
     const uint32_t root_y = get_arg_val<uint32_t>(arg++);
     const uint32_t cpi = get_arg_val<uint32_t>(arg++);
+    const uint32_t n_img = get_arg_val<uint32_t>(arg++);     // images of this core's unit (<= NU)
+    const uint32_t n_seg = get_arg_val<uint32_t>(arg++);     // this core's image segments (local partial pairs)
+    const uint32_t seg_img0 = get_arg_val<uint32_t>(arg++);  // unit image of its first segment
+    const uint32_t rm_credit_pages = get_arg_val<uint32_t>(arg++);
+    const uint32_t n_staged = get_arg_val<uint32_t>(arg++);  // RM staged rows: (shard stick, position, sticks)
+    const uint32_t staged_arg = arg;
 
     const auto out_acc = TensorAccessor(out_args, out_addr, OUT_PAGE_BYTES);
     Noc noc;
@@ -95,15 +110,15 @@ void kernel_main() {
     const uint32_t sem_l1 = get_semaphore(GATHER_SEMAPHORE_ID);
     const uint64_t root_sem_noc = get_noc_addr(root_x, root_y, sem_l1);
 
-    // Destination of this core's partial row inside the root's gathered tile pair slot/32.
-    const uint32_t pair_base = gathered_base + 2 * (slot / 32) * F32_TILE_BYTES;
-    const uint32_t row = slot % 32;
-    const uint32_t dst_row = pair_base + face_row_lo(row);
+    // Destination of this core's partial row inside the root's gathered tile pair slot/32 (of unit image 0; image i
+    // is R pairs further).
+    const uint32_t dst_row = gathered_base + (slot / 32) * PAIR_BYTES + face_row_lo(slot % 32);
 
     {
-        // e = 1.0 (page 2 of cb_group_stats; only column 0 counts, the rest must be finite). Written once: the CB
-        // moves N_STATS pages per block, so page 2 is always these bytes.
-        volatile tt_l1_ptr uint32_t* e = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(group_stats_base + STATS_BYTES);
+        // e = 1.0 (page 2*NU of cb_group_stats; only column 0 counts, the rest must be finite). Written once: the CB
+        // moves N_STATS pages per block, so that page is always these bytes.
+        volatile tt_l1_ptr uint32_t* e =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(group_stats_base + NU * PAIR_BYTES);
         for (uint32_t i = 0; i < F32_TILE_BYTES / 4; ++i) {
             e[i] = 0x3F800000u;
         }
@@ -114,16 +129,18 @@ void kernel_main() {
             // Zero rows first_unused..31 of both tiles of the last pair (the sender-sum matmul adds every row).
             // Per face: faces 0/1 hold rows 0..15, faces 2/3 rows 16..31; zero that face's rows >= first_unused.
             DataflowBuffer gathered_dfb(cb_gathered_partials);
-            const uint32_t last_pair = 2 * (R - 1) * F32_TILE_BYTES;
-            for (uint32_t face = 0; face < 8; ++face) {  // 2 tiles x 4 faces
-                const uint32_t f = face & 3;
-                const uint32_t first_row = f < 2 ? first_unused : (first_unused > 16 ? first_unused - 16 : 0);
-                if (first_row < 16) {
-                    const uint32_t lo = first_row * F32_FACE_ROW_BYTES;
-                    noc.async_write_zeros(
-                        gathered_dfb,
-                        F32_FACE_BYTES - lo,
-                        {.offset_bytes = last_pair + (face >> 2) * F32_TILE_BYTES + f * F32_FACE_BYTES + lo});
+            for (uint32_t i = 0; i < n_img; ++i) {
+                const uint32_t last_pair = (i * R + R - 1) * PAIR_BYTES;
+                for (uint32_t face = 0; face < 8; ++face) {  // 2 tiles x 4 faces
+                    const uint32_t f = face & 3;
+                    const uint32_t first_row = f < 2 ? first_unused : (first_unused > 16 ? first_unused - 16 : 0);
+                    if (first_row < 16) {
+                        const uint32_t lo = first_row * F32_FACE_ROW_BYTES;
+                        noc.async_write_zeros(
+                            gathered_dfb,
+                            F32_FACE_BYTES - lo,
+                            {.offset_bytes = last_pair + (face >> 2) * F32_TILE_BYTES + f * F32_FACE_BYTES + lo});
+                    }
                 }
             }
             noc.write_zeros_l1_barrier();
@@ -139,27 +156,33 @@ void kernel_main() {
         const uint32_t n = unit / GX;
         const uint32_t wt0 = (unit % GX) * W;
 
-        // ---------------- gather: local partial row -> root ----------------
+        // ---------------- gather: local partial row(s) -> root ----------------
         if constexpr (IS_ROOT) {
-            cb_reserve_back(cb_gathered_partials, 2 * R);
+            cb_reserve_back(cb_gathered_partials, 2 * R * NU);
         }
         {
             // Pass 1 + collapse on this core's compute (the writer idles until the local partials exist).
             MaybeDeviceZoneScope("w_wait_partials");
-            cb_wait_front(cb_local_partials, 2);
+            cb_wait_front(cb_local_partials, 2 * n_seg);
         }
         {
             MaybeDeviceZoneScope("w_gather_send");
-            // Row 0 of each partial tile (lanes 0..15 in face 0, 16..31 in face 1) -> row `slot` of the pair.
-            const uint32_t src = get_read_ptr(cb_local_partials);
-            for (uint32_t k = 0; k < 4; ++k) {
-                const uint32_t off = (k >> 1) * F32_TILE_BYTES + (k & 1) * F32_FACE_BYTES;
-                noc_async_write(src + off, get_noc_addr(root_x, root_y, dst_row + off), F32_FACE_ROW_BYTES);
+            // Row 0 of each partial tile (lanes 0..15 in face 0, 16..31 in face 1) -> row `slot` of the image's pair;
+            // zeros (MEM_ZEROS) for the unit images this core holds no rows of.
+            const uint32_t src0 = get_read_ptr(cb_local_partials);
+            for (uint32_t i = 0; i < n_img; ++i) {
+                const bool own = i >= seg_img0 && i < seg_img0 + n_seg;
+                const uint32_t src = own ? src0 + (i - seg_img0) * PAIR_BYTES : MEM_ZEROS_BASE;
+                const uint32_t dst = dst_row + i * R * PAIR_BYTES;
+                for (uint32_t k = 0; k < 4; ++k) {
+                    const uint32_t off = (k >> 1) * F32_TILE_BYTES + (k & 1) * F32_FACE_BYTES;
+                    noc_async_write(own ? src + off : src, get_noc_addr(root_x, root_y, dst + off), F32_FACE_ROW_BYTES);
+                }
             }
-            noc_async_write_barrier();  // the row must land before the root sees the increment
+            noc_async_write_barrier();  // the rows must land before the root sees the increment
             noc_semaphore_inc(root_sem_noc, 1);
         }
-        cb_pop_front(cb_local_partials, 2);
+        cb_pop_front(cb_local_partials, 2 * n_seg);
 
         // ---------------- combine / broadcast ----------------
         if constexpr (IS_ROOT) {
@@ -170,19 +193,19 @@ void kernel_main() {
                 noc_semaphore_wait_min(sem, cpi);
             }
             noc_semaphore_set(sem, 0);
-            cb_push_back(cb_gathered_partials, 2 * R);
+            cb_push_back(cb_gathered_partials, 2 * R * NU);
 
             {
                 MaybeDeviceZoneScope("w_wait_finalize");
-                cb_wait_front(cb_stats_out, 2);
+                cb_wait_front(cb_stats_out, 2 * n_img);
             }
             cb_reserve_back(cb_group_stats, N_STATS);
             if constexpr (McastT::sender_available) {
                 MaybeDeviceZoneScope("w_mcast_send");
-                mc.sender(noc).send(get_read_ptr(cb_stats_out), group_stats_base, STATS_BYTES);
+                mc.sender(noc).send(get_read_ptr(cb_stats_out), group_stats_base, n_img * PAIR_BYTES);
             }
             cb_push_back(cb_group_stats, N_STATS);
-            cb_pop_front(cb_stats_out, 2);
+            cb_pop_front(cb_stats_out, 2 * n_img);
         } else {
             // Member cores exist only when cpi > 1; their binary carries the receiver pipe only.
             cb_reserve_back(cb_group_stats, N_STATS);
@@ -198,10 +221,33 @@ void kernel_main() {
         MaybeDeviceZoneScope("w_output");
         if constexpr (SHARDED) {
             constexpr uint32_t cb_out = IS_RM ? cb_output_rm : cb_output_tiles;
-            const uint32_t credits = (IS_RM ? first_resident : 0) + num_chunks;
-            for (uint32_t c = 0; c < credits; ++c) {
-                cb_wait_front(cb_out, T);
-                cb_pop_front(cb_out, T);
+            if constexpr (HAS_STAGE) {
+                // Staged tile rows: compute untilizes each into cb_rm_stage_out (in op order, between the shard's
+                // own tile rows); its valid sticks go back to the output shard by a local NoC copy.
+                constexpr uint32_t STICK = P * 2;
+                for (uint32_t i = 0; i < n_staged; ++i) {
+                    const uint32_t dst = get_arg_val<uint32_t>(staged_arg + 3 * i) * STICK;
+                    const uint32_t pos = get_arg_val<uint32_t>(staged_arg + 3 * i + 1) * STICK;
+                    const uint32_t len = get_arg_val<uint32_t>(staged_arg + 3 * i + 2) * STICK;
+                    cb_wait_front(cb_rm_stage_out, W);
+                    noc_async_write(get_read_ptr(cb_rm_stage_out) + pos, get_noc_addr(out_addr + dst), len);
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_rm_stage_out, W);
+                }
+            }
+            // The shard's own pieces (compute packs them in place): drain the credits.
+            if constexpr (IS_RM && !OPS) {
+                // Partial residency: the head-skip credits wrap the shard FIFO, so drain chunk by chunk.
+                for (uint32_t c = 0; c < first_resident + num_chunks; ++c) {
+                    cb_wait_front(cb_out, T);
+                    cb_pop_front(cb_out, T);
+                }
+            } else {
+                const uint32_t pages = IS_RM ? rm_credit_pages : num_chunks * T;
+                if (pages > 0) {
+                    cb_wait_front(cb_out, pages);
+                    cb_pop_front(cb_out, pages);
+                }
             }
             continue;
         }

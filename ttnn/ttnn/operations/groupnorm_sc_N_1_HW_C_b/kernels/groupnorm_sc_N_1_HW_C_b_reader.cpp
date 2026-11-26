@@ -53,6 +53,7 @@ constexpr uint32_t cb_gamma_rows = 13;  // the expand matmul's in1: gamma map (+
 constexpr uint32_t cb_affine_staging = 21;
 constexpr uint32_t cb_pilot_rows = 22;
 constexpr uint32_t cb_group_shift = 24;
+constexpr uint32_t cb_rm_stage_in = 25;  // sharded RM: staged partial / image-mixed tile rows (+ k-fill template)
 constexpr uint32_t cb_output_b = 27;   // DRAM interleaved: this RISC's share of the pass-2 output
 constexpr uint32_t cb_out_seq_b = 29;  // pass-2 index of each chunk compute packed into cb_output_b (16 B pages)
 constexpr uint32_t OUT_SEQ_END = 0xFFFFFFFFu;
@@ -63,6 +64,8 @@ constexpr uint32_t F32_TILE_BYTES = 4096;
 constexpr uint32_t BF16_ONE = 0x3F80;
 constexpr uint32_t TILE_SEGMENT_BYTES = 64;  // 32 bf16 channels of one stick
 constexpr uint32_t ALIGN = 64;               // DRAM read alignment (BH)
+constexpr uint32_t MAX_LANES = 32;           // group lanes in one tile row
+constexpr uint32_t PILOT_SLOT_BYTES = 16;    // sharded pilot: one 16 B read per group lane
 
 // Element offset of tile-row-0 lane l (0..31) inside a tile: faces 0 / 1 hold lanes 0..15 / 16..31.
 FORCE_INLINE uint32_t row0_lane(uint32_t l) { return (l >> 4) * 256 + (l & 15); }
@@ -129,11 +132,15 @@ void kernel_main() {
     constexpr uint32_t HT = get_compile_time_arg_val(8);
     constexpr uint32_t GX = get_compile_time_arg_val(9);
     constexpr uint32_t IN_PAGE_BYTES = get_compile_time_arg_val(10);
-    constexpr uint32_t P = get_compile_time_arg_val(11);  // MAP_PERIOD: channels per slice
+    constexpr uint32_t P = get_compile_time_arg_val(11);  // MAP_PERIOD: channels per slice (sharded: the shard width)
     constexpr bool SHARDED = get_compile_time_arg_val(12) != 0;
     // Per-chunk zones only when the host found every chunk's zone executions inside the marker budget.
     constexpr bool CHUNK_ZONES = get_compile_time_arg_val(13) != 0;
-    constexpr auto in_args = TensorAccessorArgs<14>();
+    // Sharded RM (Refinement 3): partial / image-mixed tile rows are staged here (k-filled) for compute to tilize.
+    constexpr bool HAS_STAGE = get_compile_time_arg_val(14) != 0;
+    // Sharded, fully resident: the shard's pieces are walked once (no pass-2 re-read credits).
+    constexpr bool OPS = get_compile_time_arg_val(15) != 0;
+    constexpr auto in_args = TensorAccessorArgs<16>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     // The output (written for this RISC's pass-2 share; DRAM interleaved only).
@@ -144,7 +151,7 @@ void kernel_main() {
     constexpr uint32_t HW = HT * 32;
     constexpr uint32_t C = WT_TOTAL * 32;
     constexpr uint32_t SLICE_BYTES = W * TILE_SEGMENT_BYTES;
-    constexpr uint32_t G_CORE = P / CG;  // group lanes of a slice
+    constexpr uint32_t G_CORE = P / CG;  // interleaved: group lanes of a slice (slices start on group boundaries)
     // Per-tensor affine staging: the slice's P channels from a 64 B-aligned start.
     constexpr uint32_t AFFINE_STAGE_BYTES = ((P * 2 + ALIGN - 1) / ALIGN) * ALIGN + ALIGN;
 
@@ -158,9 +165,21 @@ void kernel_main() {
     const uint32_t rows_core = get_arg_val<uint32_t>(arg++);
     const uint32_t resident_chunks = get_arg_val<uint32_t>(arg++);
     const uint32_t is_root = get_arg_val<uint32_t>(arg++);
-    const uint32_t root_x = get_arg_val<uint32_t>(arg++);  // SHARDED: unit root (virtual), holds image row 0
+    const uint32_t root_x = get_arg_val<uint32_t>(arg++);  // SHARDED: unit root (virtual), first core row of the band
     const uint32_t root_y = get_arg_val<uint32_t>(arg++);
     const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
+    // Sharded slice geometry (interleaved: derived per block below). Lanes count the statistic unit's groups.
+    const uint32_t sh_xs = get_arg_val<uint32_t>(arg++);    // first channel of the slice
+    const uint32_t sh_vc = get_arg_val<uint32_t>(arg++);    // its valid channels (padded last column: < P)
+    const uint32_t sh_l0 = get_arg_val<uint32_t>(arg++);    // group lane of the first channel
+    const uint32_t sh_off0 = get_arg_val<uint32_t>(arg++);  // its offset inside that group
+    const uint32_t g_unit = get_arg_val<uint32_t>(arg++);   // group lanes of the unit
+    const uint32_t rm_credit_pages = get_arg_val<uint32_t>(arg++);
+    const uint32_t n_cols = get_arg_val<uint32_t>(arg++);  // the unit's core columns (pilot sources), virtual x
+    const uint32_t cols_arg = arg;
+    arg += n_cols;
+    const uint32_t n_staged = get_arg_val<uint32_t>(arg++);  // RM staged rows: (shard stick, position, sticks)
+    const uint32_t staged_arg = arg;
 
     const auto in_acc = TensorAccessor(in_args, in_addr, IN_PAGE_BYTES);
     [[maybe_unused]] const auto out_acc = TensorAccessor(out_args, out_addr, OUT_PAGE_BYTES);
@@ -171,11 +190,30 @@ void kernel_main() {
     const uint32_t K = resident_chunks < num_chunks ? resident_chunks : num_chunks;
     const uint32_t first_resident = num_chunks - K;
     const uint32_t staging = get_write_ptr(cb_affine_staging);
-    // The prologue (shift rows, group shift) runs right after a chunk's credit push:
-    // SHARDED after the last pass-1 push (the chunks are resident, so compute gets every credit before any prologue
-    // work), DRAM after chunk 0's (whose read the pilot rides with). RM compute tilizes meanwhile; TILE compute
-    // waits only for the pilot rows, which are emitted first.
-    const uint32_t pro_step = SHARDED ? num_chunks - 1 : 0;
+    volatile tt_l1_ptr uint16_t* sv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging);
+    // k per group lane (bf16 bits): pilot rows, group shift and (RM staged) the k stick are built from it.
+    uint32_t kv[MAX_LANES];
+
+    // Every run of slice lanes [v, ve) inside one half row (16 lanes) whose channels ch.. (relative to the slice's
+    // first) belong to one group lane: f(v, ve, lane, ch). Periods of P lanes repeat the slice's vc valid channels
+    // (sharded RM: k sticks per virtual row); lanes past vc in a period (a padded last column) are never visited.
+    auto for_each_run = [&](uint32_t l0, uint32_t off0, uint32_t vc, auto&& f) {
+        for (uint32_t p0 = 0; p0 < W * 32; p0 += P) {
+            uint32_t a = 0, lane = l0, gend = CG - off0;
+            while (a < vc) {
+                const uint32_t b = gend < vc ? gend : vc;
+                for (uint32_t v = p0 + a, ve = p0 + b, ch = a; v < ve;) {
+                    const uint32_t re = ((v | 15) + 1) < ve ? ((v | 15) + 1) : ve;
+                    f(v, re, lane, ch);
+                    ch += re - v;
+                    v = re;
+                }
+                a = b;
+                gend += CG;
+                ++lane;
+            }
+        }
+    };
 
     // One output chunk at the front of cb_output_b -> DRAM: rows_valid tile rows from image tile row row0g
     // (n * HT + row0), the writer's page walk.
@@ -194,9 +232,10 @@ void kernel_main() {
     };
 
     // Group map M (W tiles): element (slice lane r, group lane l) = 1.0 iff slice lane r holds a channel of group
-    // lane l. Slices start on group boundaries, so the map is block-invariant: built once per kernel. Compute first
-    // reads it at the collapse, so it is built off the critical path, after the last pass-1 chunk push of block 0.
-    auto build_map = [&]() {
+    // lane l (padding lanes: no one). Block-invariant (interleaved slices start on group boundaries; a sharded core
+    // runs one block): built once per kernel. Compute first reads it at the collapse, so it is built off the
+    // critical path, after the last pass-1 chunk push of block 0.
+    auto build_map = [&](uint32_t l0, uint32_t off0, uint32_t vc) {
         MaybeDeviceZoneScope("r_map_setup");
         cb_reserve_back(cb_group_map, W);
         // Zeros: one tile from MEM_ZEROS, then whole-tile self-copies of it into the map's other W - 1 tiles and
@@ -222,24 +261,241 @@ void kernel_main() {
             }
         }
         noc_async_write_barrier();
-        volatile tt_l1_ptr uint16_t* map = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_group_map));
-        // Row r = v & 31 of tile v >> 5 has its one at column lane(v) = (v mod P) / CG: per group, each half-row run
-        // of rows is one strided store loop (16 elements per face row).
-        for (uint32_t v0 = 0; v0 < W * 32; v0 += CG) {
-            const uint32_t lane = (v0 % P) / CG;
-            for (uint32_t v = v0; v < v0 + CG;) {
-                const uint32_t run_end = ((v | 15) + 1) < v0 + CG ? ((v | 15) + 1) : v0 + CG;
-                const uint32_t r = v & 31;
-                volatile tt_l1_ptr uint16_t* p =
-                    map + (v >> 5) * 1024 + ((r >> 4) * 2 + (lane >> 4)) * 256 + (r & 15) * 16 + (lane & 15);
-                for (uint32_t i = 0, n = run_end - v; i < n; ++i) {
-                    p[i * 16] = BF16_ONE;
-                }
-                v = run_end;
+        volatile tt_l1_ptr uint16_t* map = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(map_base);
+        // Row r = v & 31 of tile v >> 5 has its one at column `lane`: per run, one strided store loop (16 elements
+        // per face row).
+        for_each_run(l0, off0, vc, [&](uint32_t v, uint32_t ve, uint32_t lane, uint32_t) {
+            const uint32_t r = v & 31;
+            volatile tt_l1_ptr uint16_t* p =
+                map + (v >> 5) * 1024 + ((r >> 4) * 2 + (lane >> 4)) * 256 + (r & 15) * 16 + (lane & 15);
+            for (uint32_t i = 0, n = ve - v; i < n; ++i) {
+                p[i * 16] = BF16_ONE;
             }
-        }
+        });
         cb_push_back(cb_group_map, W);
     };
+
+    // ---------------- Shift rows from kv: lane v -> k of its group lane ----------------
+    // cb_pilot_rows (bf16): -k (sign bit flipped: exact), the srcB operand of pass 1's x + (-k), a row broadcast:
+    // the unpacker reads only row 0 (faces 0/1), so rows 1..31 are never zeroed. Padding lanes keep whatever they
+    // held (compute masks / skips them). cb_group_shift (root, Float32): +k per group lane in row 0, 0 past the
+    // unit's lanes (rows 1..31 stay zero).
+    auto build_shift_rows = [&](uint32_t l0, uint32_t off0, uint32_t vc, uint32_t lanes, uint32_t blk) {
+        {
+            MaybeDeviceZoneScope("r_shift_rows");
+            cb_reserve_back(cb_pilot_rows, W);
+            const uint32_t pbase = get_write_ptr(cb_pilot_rows);
+            for_each_run(l0, off0, vc, [&](uint32_t v, uint32_t ve, uint32_t lane, uint32_t) {
+                const uint32_t nk16 = kv[lane] ^ 0x8000u;  // -k
+                if constexpr (CG % 2 == 0) {
+                    // Even groups: lanes (v, v + 1), v even, share a group and one word of a face row.
+                    fill_lanes<2>(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pbase), v, ve, nk16 | (nk16 << 16));
+                } else {
+                    fill_lanes<1>(
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pbase), v, ve, static_cast<uint16_t>(nk16));
+                }
+            });
+            cb_push_back(cb_pilot_rows, W);  // compute's pass-1 moments walk starts here
+        }
+        if (is_root) {
+            cb_reserve_back(cb_group_shift, 1);
+            const uint32_t gs = get_write_ptr(cb_group_shift);
+            if (blk == 0) {
+                // Compute forms -k on every row as (-1 tile) x [k row; zeros], so rows 1..31 must be zero
+                // (once: only row 0 is rewritten per block) and nothing is replicated. NoC writes from
+                // MEM_ZEROS, as in build_map (no gamma / beta read is in flight yet).
+                noc_async_write_one_packet_set_state(get_noc_addr(gs), MEM_ZEROS_SIZE);
+                for (uint32_t off = 0; off < F32_TILE_BYTES; off += MEM_ZEROS_SIZE) {
+                    noc_async_write_one_packet_with_state(MEM_ZEROS_BASE, gs + off);
+                }
+                noc_async_write_barrier();
+            }
+            volatile tt_l1_ptr uint32_t* gv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gs);
+            for (uint32_t g = 0; g < 32; ++g) {
+                gv[row0_lane(g)] = g < lanes ? kv[g] << 16 : 0;
+            }
+            cb_push_back(cb_group_shift, 1);
+        }
+    };
+
+    // gamma / beta slices [xs, xs + vc) -> staging (64 B-aligned start; never past the slice's valid channels).
+    auto issue_affine_reads = [&](uint32_t xs, uint32_t vc) {
+        if constexpr (HAS_GAMMA) {
+            const uint32_t lo = (xs * 2) & ~(ALIGN - 1);
+            const uint32_t len = ((xs + vc) * 2 - lo + ALIGN - 1) & ~(ALIGN - 1);
+            noc_async_read(gamma_acc.get_noc_addr(0, lo), staging, len);
+            if constexpr (HAS_BETA) {
+                noc_async_read(beta_acc.get_noc_addr(0, lo), staging + AFFINE_STAGE_BYTES, len);
+            }
+        }
+    };
+
+    // ---------------- Affine expand maps ----------------
+    // cb_gamma_rows holds the expand matmul's in1, [group lane x channel] per tile (not transposed): W "gamma map"
+    // tiles, element (g(c), lane of c) = gamma[c], then (beta) W "beta map" tiles with row 0 = -beta[c]. compute:
+    // a = rstd x gmap, b' = [mean*rstd, e] x [gmap; bmap] (e = 1), so b' = mean*rstd*gamma - beta. Adjacent channels
+    // of one group are adjacent halfwords of one row, so both maps are word copies of the staged slice (even
+    // groups). Padding lanes stay zero (the ring was zeroed once by build_map).
+    auto build_affine = [&](uint32_t xs, uint32_t l0, uint32_t off0, uint32_t vc) {
+        if constexpr (HAS_GAMMA) {
+            MaybeDeviceZoneScope("r_affine");
+            constexpr uint32_t AMAP_TILES = (HAS_BETA ? 2 : 1) * W;
+            const uint32_t skew_hw = xs & 31;  // halfword of channel xs in the 64 B-aligned staging
+            cb_reserve_back(cb_gamma_rows, AMAP_TILES);
+            noc_async_read_barrier();
+            const uint32_t am = get_write_ptr(cb_gamma_rows);
+            if constexpr (CG % 2 == 0) {
+                // Runs of one group inside one half row (<= 16 lanes, 8 words; the run starts, the skew and CG are
+                // even, so a word never straddles a group): gamma -> row g(c) of the gamma map, -beta -> row 0 of
+                // the beta map, both at the run's own face-row positions.
+                volatile tt_l1_ptr uint32_t* gs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging);
+                volatile tt_l1_ptr uint32_t* bs =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging + AFFINE_STAGE_BYTES);
+                volatile tt_l1_ptr uint32_t* gm = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(am);
+                volatile tt_l1_ptr uint32_t* bm =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(am + W * BF16_TILE_BYTES);
+                for_each_run(l0, off0, vc, [&](uint32_t v, uint32_t ve, uint32_t lane, uint32_t ch) {
+                    const uint32_t nw = (ve - v) >> 1;
+                    const uint32_t w = (skew_hw + ch) >> 1;
+                    // Word of (tile v >> 5, half (v >> 4) & 1, row 0, lane v & 15).
+                    const uint32_t base = (v >> 5) * 512 + ((v >> 4) & 1) * 128 + ((v & 15) >> 1);
+                    copy_run(gm + base + (lane >> 4) * 256 + (lane & 15) * 8, gs + w, nw, 0);
+                    if constexpr (HAS_BETA) {
+                        copy_run(bm + base, bs + w, nw, 0x80008000u);  // -beta
+                    }
+                });
+            } else {
+                volatile tt_l1_ptr uint16_t* gs = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging);
+                volatile tt_l1_ptr uint16_t* bs =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging + AFFINE_STAGE_BYTES);
+                volatile tt_l1_ptr uint16_t* gm = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(am);
+                volatile tt_l1_ptr uint16_t* bm =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(am + W * BF16_TILE_BYTES);
+                for_each_run(l0, off0, vc, [&](uint32_t v, uint32_t ve, uint32_t lane, uint32_t ch) {
+                    for (uint32_t i = 0; v + i < ve; ++i) {
+                        const uint32_t col = ((v + i) >> 5) * 1024 + row0_lane((v + i) & 31);
+                        gm[col + (lane >> 4) * 512 + (lane & 15) * 16] = gs[skew_hw + ch + i];
+                        if constexpr (HAS_BETA) {
+                            bm[col] = bs[skew_hw + ch + i] ^ 0x8000;  // -beta
+                        }
+                    }
+                });
+            }
+            cb_push_back(cb_gamma_rows, AMAP_TILES);
+        }
+    };
+
+    if constexpr (SHARDED) {
+        // ================= Sharded: one block, the core's own shard =================
+        // Pass-1 credits: the chunks are resident in this core's shard, so a credit push is all compute needs.
+        if constexpr (!IS_RM) {
+            cb_reserve_back(cb_input_tiles, num_chunks * T);
+            cb_reserve_back(cb_input_keep, num_chunks * T);
+            cb_push_back(cb_input_tiles, num_chunks * T);
+            cb_push_back(cb_input_keep, num_chunks * T);
+        } else {
+            const uint32_t pages = OPS ? rm_credit_pages : num_chunks * T;
+            cb_reserve_back(cb_input_rm, pages);
+            cb_push_back(cb_input_rm, pages);
+        }
+
+        // ---------------- Pilot: k of each group lane, x[band row 0, first channel of the group] ----------------
+        // One 16 B read per lane from the unit core holding the group's first channel (the band's first core row,
+        // whose shard row 0 is an image's row 0). Lane l's first channel is l * CG past the unit's first column.
+        // The unit root reads every lane (its group shift), others only their own.
+        {
+            const uint32_t n_own = (sh_off0 + sh_vc + CG - 1) / CG;
+            const uint32_t la = is_root ? 0 : sh_l0;
+            const uint32_t lb = is_root ? g_unit : sh_l0 + n_own;
+            uint32_t c = 0, col = 0, col_end = P;
+            for (uint32_t l = 0; l < lb; ++l, c += CG) {
+                while (c >= col_end) {
+                    ++col;
+                    col_end += P;
+                }
+                const uint32_t cl = c - (col_end - P);  // local channel in the source shard
+                const uint32_t off =
+                    IS_RM ? cl * 2 : (cl >> 5) * BF16_TILE_BYTES + ((cl >> 4) & 1) * BF16_FACE_BYTES + (cl & 15) * 2;
+                kv[l] = (off & 15) >> 1;  // element of the lane's 16 B slot (the value replaces it below)
+                if (l >= la) {
+                    const uint32_t src_x = get_arg_val<uint32_t>(cols_arg + col);
+                    noc_async_read(
+                        get_noc_addr(src_x, root_y, in_addr + (off & ~15u)), staging + l * PILOT_SLOT_BYTES, 16);
+                }
+            }
+            noc_async_read_barrier();
+            for (uint32_t l = la; l < lb; ++l) {
+                kv[l] = sv[l * (PILOT_SLOT_BYTES / 2) + kv[l]];
+            }
+        }
+        build_shift_rows(sh_l0, sh_off0, sh_vc, g_unit, 0);
+
+        if constexpr (HAS_STAGE) {
+            // ---------------- Staged tile rows (RM): partial tail / image-mixed rows ----------------
+            // A staged row = the segment's sticks of one tile-row position, every other stick the k stick (x - k = 0
+            // and x * (x - k) = 0: contributes nothing to the moments). The k stick (channel c -> k of its group, 0 on
+            // padding channels) is built over the pilot slots, doubled into a full template row after the staged
+            // rows, then each staged row = template prefix + shard sticks + template suffix (local NoC copies).
+            MaybeDeviceZoneScope("r_stage_rows");
+            constexpr uint32_t STICK = P * 2;
+            constexpr uint32_t TR_BYTES = W * BF16_TILE_BYTES;  // 32k sticks
+            {
+                uint32_t a = 0, lane = sh_l0, gend = CG - sh_off0;
+                while (a < sh_vc) {
+                    const uint32_t b = gend < sh_vc ? gend : sh_vc;
+                    for (uint32_t ch = a; ch < b; ++ch) {
+                        sv[ch] = kv[lane];
+                    }
+                    a = b;
+                    gend += CG;
+                    ++lane;
+                }
+                for (uint32_t ch = sh_vc; ch < P; ++ch) {
+                    sv[ch] = 0;
+                }
+            }
+            cb_reserve_back(cb_rm_stage_in, n_staged * W);
+            const uint32_t stage_base = get_write_ptr(cb_rm_stage_in);
+            const uint32_t tmpl = stage_base + n_staged * TR_BYTES;
+            noc_async_write(staging, get_noc_addr(tmpl), STICK);
+            noc_async_write_barrier();
+            for (uint32_t m = STICK; m < TR_BYTES; m *= 2) {
+                noc_async_write(tmpl, get_noc_addr(tmpl + m), m < TR_BYTES - m ? m : TR_BYTES - m);
+                noc_async_write_barrier();
+            }
+            for (uint32_t i = 0; i < n_staged; ++i) {
+                const uint32_t src = get_arg_val<uint32_t>(staged_arg + 3 * i) * STICK;
+                const uint32_t pos = get_arg_val<uint32_t>(staged_arg + 3 * i + 1) * STICK;
+                const uint32_t len = get_arg_val<uint32_t>(staged_arg + 3 * i + 2) * STICK;
+                const uint32_t dst = stage_base + i * TR_BYTES;
+                if (pos > 0) {
+                    noc_async_write(tmpl, get_noc_addr(dst), pos);
+                }
+                noc_async_write(in_addr + src, get_noc_addr(dst + pos), len);
+                if (pos + len < TR_BYTES) {
+                    noc_async_write(tmpl + pos + len, get_noc_addr(dst + pos + len), TR_BYTES - pos - len);
+                }
+            }
+            noc_async_write_barrier();
+            cb_push_back(cb_rm_stage_in, n_staged * W);
+        }
+
+        // After the pilot work (which frees the staging): the gamma / beta slices' DRAM reads land behind the map
+        // build instead of in front of the affine build.
+        issue_affine_reads(sh_xs, sh_vc);
+        build_map(sh_l0, sh_off0, sh_vc);
+        build_affine(sh_xs, sh_l0, sh_off0, sh_vc);
+
+        if constexpr (IS_RM && !OPS) {
+            // Pass-2 re-read credits (partial residency): the shard FIFO wraps to the non-resident head; each
+            // reserve waits for compute to free the ring slot.
+            for (uint32_t j = 0; j < first_resident; ++j) {
+                cb_reserve_back(cb_input_rm, T);
+                cb_push_back(cb_input_rm, T);
+            }
+        }
+        return;
+    }
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         MaybeDeviceZoneScope("r_block");
@@ -247,10 +503,10 @@ void kernel_main() {
         const uint32_t n = unit / GX;
         const uint32_t c_start = (unit % GX) * P;  // first channel of the slice
         const uint32_t wt0 = c_start / 32;         // its tile column (P = W*32 whenever the input is tiled in DRAM)
-        // Output share (DRAM interleaved; SHARDED packs into the output shard and has none).
-        [[maybe_unused]] bool b_done = false;
+        // Output share (DRAM interleaved).
+        bool b_done = false;
         // One cb_output_b chunk if its index and data are both there (block: wait for them); END ends the share.
-        [[maybe_unused]] auto try_b = [&](bool block) {
+        auto try_b = [&](bool block) {
             if (!block && !cb_pages_available_at_front(cb_out_seq_b, 1)) {
                 return;
             }
@@ -276,81 +532,7 @@ void kernel_main() {
         // B+1..B+first_resident re-read the non-resident head for pass 2.
         for (uint32_t step = 0; step <= num_chunks + first_resident; ++step) {
             if (step == num_chunks) {
-                MaybeDeviceZoneScope("r_affine");
-
-                // ---------------- Affine expand maps ----------------
-                // cb_gamma_rows holds the expand matmul's in1, [group lane x channel] per tile (not transposed):
-                // W "gamma map" tiles, element (g(c), lane of c) = gamma[c], then (beta) W "beta map" tiles with
-                // row 0 = -beta[c]. compute: a = rstd x gmap, b' = [mean*rstd, e] x [gmap; bmap] (e = 1), so
-                // b' = mean*rstd*gamma - beta. Adjacent channels of one group are adjacent halfwords of one row,
-                // so both maps are word copies of the staged slice.
-                if constexpr (HAS_GAMMA) {
-                    constexpr uint32_t AMAP_TILES = (HAS_BETA ? 2 : 1) * W;
-                    const uint32_t lo = (c_start * 2) & ~(ALIGN - 1);
-                    const uint32_t skew_hw = (c_start * 2 - lo) / 2;
-                    // The ring was zeroed once by build_map (block 0); the gamma / beta reads were issued after the
-                    // last pass-1 push.
-                    cb_reserve_back(cb_gamma_rows, AMAP_TILES);
-                    noc_async_read_barrier();
-                    const uint32_t am = get_write_ptr(cb_gamma_rows);
-                    // Slice lane v: tile v >> 5, column row0_lane(v & 31); its group lane picks the gamma map row.
-                    uint32_t lane = 0, in_group = 0, in_period = 0;  // in_period == v % P
-                    if constexpr (CG % 2 == 0) {
-                        // Runs of one group inside one half row (<= 16 lanes, 8 words; P, the skew and CG are even,
-                        // so a word never straddles a group): gamma -> row g(c) of the gamma map, -beta -> row 0 of
-                        // the beta map, both at the run's own face-row positions.
-                        volatile tt_l1_ptr uint32_t* gs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging);
-                        volatile tt_l1_ptr uint32_t* bs =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging + AFFINE_STAGE_BYTES);
-                        volatile tt_l1_ptr uint32_t* gm = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(am);
-                        volatile tt_l1_ptr uint32_t* bm =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(am + W * BF16_TILE_BYTES);
-                        for (uint32_t v = 0; v < W * 32;) {
-                            const uint32_t half_end = (v | 15) + 1;
-                            const uint32_t grp_end = v + (CG - in_group);
-                            const uint32_t run_end = half_end < grp_end ? half_end : grp_end;
-                            const uint32_t nw = (run_end - v) >> 1;
-                            const uint32_t w = (skew_hw + in_period) >> 1;
-                            // Word of (tile v >> 5, half (v >> 4) & 1, row 0, lane v & 15).
-                            const uint32_t base = (v >> 5) * 512 + ((v >> 4) & 1) * 128 + ((v & 15) >> 1);
-                            copy_run(gm + base + (lane >> 4) * 256 + (lane & 15) * 8, gs + w, nw, 0);
-                            if constexpr (HAS_BETA) {
-                                copy_run(bm + base, bs + w, nw, 0x80008000u);  // -beta
-                            }
-                            v = run_end;
-                            in_period += 2 * nw;
-                            in_group += 2 * nw;
-                            if (in_period == P) {
-                                in_period = in_group = lane = 0;
-                            } else if (in_group == CG) {
-                                in_group = 0;
-                                ++lane;
-                            }
-                        }
-                    } else {
-                        volatile tt_l1_ptr uint16_t* gs = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging);
-                        volatile tt_l1_ptr uint16_t* bs =
-                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging + AFFINE_STAGE_BYTES);
-                        volatile tt_l1_ptr uint16_t* gm = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(am);
-                        volatile tt_l1_ptr uint16_t* bm =
-                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(am + W * BF16_TILE_BYTES);
-                        for (uint32_t v = 0; v < W * 32; ++v) {
-                            const uint32_t col = (v >> 5) * 1024 + row0_lane(v & 31);
-                            const uint32_t ch = skew_hw + in_period;
-                            gm[col + (lane >> 4) * 512 + (lane & 15) * 16] = gs[ch];
-                            if constexpr (HAS_BETA) {
-                                bm[col] = bs[ch] ^ 0x8000;  // -beta
-                            }
-                            if (++in_period == P) {
-                                in_period = in_group = lane = 0;
-                            } else if (++in_group == CG) {
-                                in_group = 0;
-                                ++lane;
-                            }
-                        }
-                    }
-                    cb_push_back(cb_gamma_rows, AMAP_TILES);
-                }
+                build_affine(c_start, 0, 0, P);
                 continue;
             }
 
@@ -365,18 +547,7 @@ void kernel_main() {
                 // TILE: row 0 of faces 0 / 1 of each tile (64 B reads: rows 0-1), staged 128 B per tile.
                 // RM: the slice of stick 0, staged contiguously.
                 if constexpr (IS_RM) {
-                    const uint64_t src = SHARDED ? get_noc_addr(root_x, root_y, in_addr)
-                                                 : in_acc.get_noc_addr(n * HW, wt0 * TILE_SEGMENT_BYTES);
-                    noc_async_read(src, staging, P * 2);
-                } else if constexpr (SHARDED) {
-                    // Every segment comes from the unit root's shard: one NoC state, then two addresses per read.
-                    noc_async_read_one_packet_set_state(get_noc_addr(root_x, root_y, in_addr), 64);
-                    for (uint32_t wt = 0; wt < W; ++wt) {
-                        for (uint32_t f = 0; f < 2; ++f) {
-                            noc_async_read_one_packet_with_state(
-                                in_addr + wt * BF16_TILE_BYTES + f * BF16_FACE_BYTES, staging + wt * 128 + f * 64);
-                        }
-                    }
+                    noc_async_read(in_acc.get_noc_addr(n * HW, wt0 * TILE_SEGMENT_BYTES), staging, P * 2);
                 } else {
                     for (uint32_t wt = 0; wt < W; ++wt) {
                         for (uint32_t f = 0; f < 2; ++f) {
@@ -390,20 +561,18 @@ void kernel_main() {
             {
                 // Back-pressure: compute has not freed the ring slot yet.
                 MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_reserve");
-                if constexpr (!SHARDED) {
-                    // Pass-2 re-read: compute may be blocked on cb_output_b (this RISC's share), so write the share
-                    // out while the ring has no room for the next chunk.
-                    if (step > num_chunks) {
-                        for (;;) {
-                            const bool room = IS_RM ? cb_pages_reservable_at_back(cb_input_rm, T)
-                                                    : cb_pages_reservable_at_back(cb_input_tiles, T) &&
-                                                          cb_pages_reservable_at_back(cb_input_keep, T);
-                            if (room) {
-                                break;
-                            }
-                            if (!b_done) {
-                                try_b(false);
-                            }
+                // Pass-2 re-read: compute may be blocked on cb_output_b (this RISC's share), so write the share
+                // out while the ring has no room for the next chunk.
+                if (step > num_chunks) {
+                    for (;;) {
+                        const bool room = IS_RM ? cb_pages_reservable_at_back(cb_input_rm, T)
+                                                : cb_pages_reservable_at_back(cb_input_tiles, T) &&
+                                                      cb_pages_reservable_at_back(cb_input_keep, T);
+                        if (room) {
+                            break;
+                        }
+                        if (!b_done) {
+                            try_b(false);
                         }
                     }
                 }
@@ -415,9 +584,7 @@ void kernel_main() {
                     cb_reserve_back(cb_input_keep, T);
                 }
             }
-            if constexpr (SHARDED) {
-                // The chunk is already resident in this core's shard: the reserve above hands compute its credits.
-            } else if constexpr (IS_RM) {
+            if constexpr (IS_RM) {
                 MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_issue");
                 uint32_t page = n * HW + row0 * 32;
                 uint32_t dst = get_write_ptr(cb_input_rm);
@@ -438,9 +605,9 @@ void kernel_main() {
                 }
             }
 
-            if (!SHARDED || step == pro_step) {
+            {
                 MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_barrier");
-                noc_async_read_barrier();  // SHARDED: only the pilot read is outstanding
+                noc_async_read_barrier();
             }
 
             if constexpr (IS_RM) {
@@ -450,89 +617,32 @@ void kernel_main() {
                 cb_push_back(cb_input_keep, T);
             }
 
-            if (step == pro_step) {
-                // ---------------- Shift rows: lane v -> k = x[row 0, first channel of v's group] ----------------
-                // cb_pilot_rows (bf16): -k (sign bit flipped: exact), the srcB operand of pass 1's x + (-k), a row
-                // broadcast: the unpacker reads only row 0 (faces 0/1), so rows 1..31 are never zeroed.
-                // cb_group_shift (root, Float32): +k per group lane in row 0, 0 past G_CORE (rows 1..31 stay zero).
-                // Lanes come in whole groups: P is a multiple of CG and every period starts on a group boundary.
-                volatile tt_l1_ptr uint16_t* sv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging);
+            if (step == 0) {
+                // k of group lane l = the staged sample of its first channel (slices start on group boundaries).
                 // TILE staging holds rows 0-1 of faces 0/1 per tile: lane l < 16 at halfword l, else l + 16.
-                auto stage = [&](uint32_t c) -> uint32_t {
-                    return sv[IS_RM ? c : (c >> 5) * 64 + (c & 31) + (c & 16)];
-                };
-                {
-                    MaybeDeviceZoneScope("r_shift_rows");
-                    cb_reserve_back(cb_pilot_rows, W);
-                    const uint32_t pbase = get_write_ptr(cb_pilot_rows);
-                    for (uint32_t v0 = 0; v0 < W * 32; v0 += CG) {
-                        const uint32_t nk16 = stage(v0 % P) ^ 0x8000u;  // -k
-                        if constexpr (CG % 2 == 0) {
-                            // Even groups: lanes (v, v + 1), v even, share a group and one word of a face row.
-                            fill_lanes<2>(
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pbase),
-                                v0,
-                                v0 + CG,
-                                nk16 | (nk16 << 16));
-                        } else {
-                            fill_lanes<1>(
-                                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pbase),
-                                v0,
-                                v0 + CG,
-                                static_cast<uint16_t>(nk16));
-                        }
-                    }
-                    cb_push_back(cb_pilot_rows, W);  // compute's pass-1 moments walk starts here
+                for (uint32_t l = 0; l < G_CORE; ++l) {
+                    const uint32_t c = l * CG;
+                    kv[l] = sv[IS_RM ? c : (c >> 5) * 64 + (c & 31) + (c & 16)];
                 }
-
-                if (is_root) {
-                    cb_reserve_back(cb_group_shift, 1);
-                    const uint32_t gs = get_write_ptr(cb_group_shift);
-                    if (blk == 0) {
-                        // Compute forms -k on every row as (-1 tile) x [k row; zeros], so rows 1..31 must be zero
-                        // (once: only row 0 is rewritten per block) and nothing is replicated. NoC writes from
-                        // MEM_ZEROS, as in build_map (no gamma / beta read is in flight yet).
-                        noc_async_write_one_packet_set_state(get_noc_addr(gs), MEM_ZEROS_SIZE);
-                        for (uint32_t off = 0; off < F32_TILE_BYTES; off += MEM_ZEROS_SIZE) {
-                            noc_async_write_one_packet_with_state(MEM_ZEROS_BASE, gs + off);
-                        }
-                        noc_async_write_barrier();
-                    }
-                    volatile tt_l1_ptr uint32_t* gv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gs);
-                    for (uint32_t g = 0; g < 32; ++g) {
-                        gv[row0_lane(g)] = g < G_CORE ? stage(g * CG) << 16 : 0;
-                    }
-                    cb_push_back(cb_group_shift, 1);
-                }
+                build_shift_rows(0, 0, P, G_CORE, blk);
             }
-            if constexpr (HAS_GAMMA) {
-                if (step == num_chunks - 1) {
-                    // After the last pass-1 push and the pilot work (which frees the staging): the gamma / beta
-                    // slices' DRAM reads (one hot bank: every core of a slice reads the same page) land behind the
-                    // map build instead of in front of the affine build.
-                    const uint32_t lo = (c_start * 2) & ~(ALIGN - 1);
-                    const uint32_t len = ((c_start + P) * 2 - lo + ALIGN - 1) & ~(ALIGN - 1);
-                    noc_async_read(gamma_acc.get_noc_addr(0, lo), staging, len);
-                    if constexpr (HAS_BETA) {
-                        noc_async_read(beta_acc.get_noc_addr(0, lo), staging + AFFINE_STAGE_BYTES, len);
-                    }
+            if (step == num_chunks - 1) {
+                // After the last pass-1 push and the pilot work (which frees the staging): the gamma / beta
+                // slices' DRAM reads (one hot bank: every core of a slice reads the same page) land behind the
+                // map build instead of in front of the affine build.
+                issue_affine_reads(c_start, P);
+                if (blk == 0) {
+                    // After the last pass-1 push (compute first reads the map after reducing this chunk). Its zero
+                    // fill is NoC writes, so the gamma / beta reads just issued do not hold it.
+                    build_map(0, 0, P);
                 }
-            }
-            if (step == num_chunks - 1 && blk == 0) {
-                // After the last pass-1 push (compute first reads the map after reducing this chunk). Its zero fill
-                // is NoC writes, so the gamma / beta reads just issued do not hold it.
-                build_map();
             }
         }
         // The rest of this block's output share: whatever compute packs for this RISC after the last re-read was
         // issued (every chunk of the share when nothing is re-read), up to END.
-        if constexpr (!SHARDED) {
-            while (!b_done) {
-                try_b(true);
-            }
+        while (!b_done) {
+            try_b(true);
         }
     }
-    if constexpr (!SHARDED) {
-        noc_async_write_barrier();
-    }
+    noc_async_write_barrier();
 }

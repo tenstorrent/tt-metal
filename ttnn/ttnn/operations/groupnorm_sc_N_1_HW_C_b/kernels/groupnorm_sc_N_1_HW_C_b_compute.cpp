@@ -86,6 +86,10 @@ constexpr uint32_t cb_stats_out = 19;
 constexpr uint32_t cb_group_stats = 20;
 constexpr uint32_t cb_pilot_rows = 22;   // -k per channel (row 0), held for pass 1
 constexpr uint32_t cb_group_shift = 24;  // root: k per group lane in row 0, rows 1..31 zero (finalize_raw)
+// Sharded RM (Refinement 3, alias group F): partial / image-mixed tile rows staged k-filled by the reader (tilized
+// in pass 1), and their normalized rows (untilized in pass 2, copied back to the output shard by the writer).
+constexpr uint32_t cb_rm_stage_in = 25;
+constexpr uint32_t cb_rm_stage_out = 26;
 // DRAM interleaved output split across both DM RISCs: per pass-2 chunk the packer takes whichever output CB has a free
 // chunk slot - the writer's cb_output_tiles first, else the reader's cb_output_b - and names the chunk's pass-2 index
 // on that consumer's sequence CB (one 16 B uint32 page per chunk; OUT_SEQ_END closes the block). Each RISC writes its
@@ -111,6 +115,21 @@ constexpr bool IS_ROOT = get_compile_time_arg_val(7) != 0;
 // Per-chunk device zones (perf_instrumentation.hpp): the host enables them only when every core's chunk count keeps
 // the zone executions inside the per-RISC marker budget (a long DRAM block would silently exhaust it).
 constexpr bool CHUNK_ZONES = get_compile_time_arg_val(8) != 0;
+// Images per statistic unit (sharded: an image band of the grid; interleaved: 1). cb_group_stats holds
+// [rstd, mean*rstd] per image, then e.
+constexpr uint32_t NU = get_compile_time_arg_val(9);
+constexpr uint32_t P = get_compile_time_arg_val(10);  // MAP_PERIOD: channels per slice period (sharded: shard width)
+// Sharded RM with a padded last core column: lanes past the slice's valid channels are zeroed after the column
+// collapse (the shard's padding bytes are not data).
+constexpr bool COL_MASK = get_compile_time_arg_val(11) != 0;
+constexpr bool HAS_STAGE = get_compile_time_arg_val(12) != 0;
+// Sharded, fully resident: the core's shard is walked as op words (descriptor _rm_core_ops / TILE segments), one
+// statistic set per image segment.
+constexpr bool OPS = get_compile_time_arg_val(13) != 0;
+constexpr uint32_t OP_ROWS = 0xFFFF;
+constexpr uint32_t OP_STAGED = 1u << 16;
+constexpr uint32_t OP_SEG_END = 1u << 17;
+constexpr uint32_t OP_SKIP = 1u << 18;
 constexpr uint32_t T = CHUNK_HT * W;
 // Tiles per DEST window of the pass-2 chain a*x - b': each element runs over the whole window, so its FPU init is paid
 // once per window, not per tile. The chain clamps it to DEST.
@@ -160,6 +179,25 @@ NOINLINE_BLOCK_OP void tilize_chunk(uint32_t rows_valid) {
         push_pad(cb_input_tiles, pad);
     }
     cb_push_back(cb_input_keep, T);
+}
+
+// Sharded ops path: one piece (rows tile rows) -> the input ring, both views in lockstep; a staged piece (one tile
+// row) comes from cb_rm_stage_in, a full one from the shard (cb_input_rm).
+NOINLINE_BLOCK_OP void tilize_piece(uint32_t rows, [[maybe_unused]] bool staged) {
+    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_tilize");
+    DataflowBuffer x_dfb(cb_input_tiles);
+    cb_reserve_back(cb_input_keep, rows * W);
+    if constexpr (HAS_STAGE) {
+        if (staged) {
+            DataflowBuffer st_dfb(cb_rm_stage_in);
+            tilize<W, cb_rm_stage_in, cb_input_tiles>(st_dfb, x_dfb, rows);
+            cb_push_back(cb_input_keep, rows * W);
+            return;
+        }
+    }
+    DataflowBuffer rm_dfb(cb_input_rm);
+    tilize<W, cb_input_rm, cb_input_tiles>(rm_dfb, x_dfb, rows);
+    cb_push_back(cb_input_keep, rows * W);
 }
 
 // Advance one view of the input ring past a chunk it does not read.
@@ -338,8 +376,38 @@ ALWI void moments_init(uint32_t x_cb) {
     MATH((TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F)));
 }
 
-// rows tile rows of W tiles at the front of cb_input_tiles (row r, channel tile c at r*W + c).
-NOINLINE_BLOCK_OP void moments_rows(uint32_t rows, bool first, bool last) {
+#ifdef TRISC_MATH
+// COL_MASK: after the column collapse, zero the S / Q lanes of channel tile c whose slice position is padding.
+// Lane (face F, column parity PAR, vector lane j) is tile column F*16 + 2*(j & 7) + PAR; its slice position is
+// (32c + column) mod P (sharded RM: k sticks of P channels per tile row), padding when >= vc. Only row-group 0 of
+// faces 0 / 1 (rows 0..3: row 0 holds the sums) is touched, in both tiles (S at DEST 0, Q at DEST 1).
+template <int F, int PAR>
+sfpi_inline void col_mask_vector(const int base, const int vc) {
+    const int b = base + F * 16 + PAR;
+    sfpi::vInt pos = sfpi::vConstTileId & 14;
+    pos = pos + sfpi::vInt(b);
+    for (int lim = static_cast<int>(P); lim <= b + 14; lim += static_cast<int>(P)) {
+        v_if(pos >= static_cast<int>(P)) { pos = pos - sfpi::vInt(static_cast<int>(P)); }
+        v_endif;
+    }
+    v_if(pos >= sfpi::vInt(vc)) {
+        sfpi::dst_reg[8 * F + PAR] = 0.0f;
+        sfpi::dst_reg[32 + 8 * F + PAR] = 0.0f;
+    }
+    v_endif;
+}
+sfpi_inline void col_mask_sfpu(const int base, const int vc) {
+    col_mask_vector<0, 0>(base, vc);
+    col_mask_vector<0, 1>(base, vc);
+    col_mask_vector<1, 0>(base, vc);
+    col_mask_vector<1, 1>(base, vc);
+}
+#endif
+
+// rows tile rows of W tiles from ring tile row row0 of cb_input_tiles (row r, channel tile c at (row0 + r)*W + c).
+// Channel tiles c >= w_valid (a padded TILE slice) contribute nothing (their accumulators stay at DEST's zero).
+NOINLINE_BLOCK_OP void moments_rows(
+    uint32_t row0, uint32_t rows, bool first, bool last, uint32_t w_valid, [[maybe_unused]] uint32_t vc) {
     MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p1_moments");
     constexpr uint32_t x_cb = cb_input_tiles;
     pack_reconfig_data_format(cb_sum_acc);  // every target (7, 8, 9, 10) is Float32
@@ -357,8 +425,9 @@ NOINLINE_BLOCK_OP void moments_rows(uint32_t rows, bool first, bool last) {
             cb_pop_front(cb_sumsq_acc, 1);
         }
         moments_init(x_cb);
-        for (uint32_t r = 0; r < rows; ++r) {
-            UNPACK((llk_unpack_AB<BroadcastType::ROW>(x_cb, cb_pilot_rows, r * W + c, c)));
+        const uint32_t rows_c = c < w_valid ? rows : 0;
+        for (uint32_t r = 0; r < rows_c; ++r) {
+            UNPACK((llk_unpack_AB<BroadcastType::ROW>(x_cb, cb_pilot_rows, (row0 + r) * W + c, c)));
             MATH((moments_math_tile()));
         }
         MATH((math::clear_dst_reg_addr()));
@@ -366,6 +435,16 @@ NOINLINE_BLOCK_OP void moments_rows(uint32_t rows, bool first, bool last) {
             sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
             sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(S_DST);
             sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(Q_DST);
+            if constexpr (COL_MASK) {
+                if (vc < P) {
+                    MATH((_llk_math_eltwise_unary_sfpu_params_(
+                        col_mask_sfpu,
+                        S_DST,
+                        ckernel::VectorMode::None,
+                        static_cast<int>((32 * c) % P),
+                        static_cast<int>(vc))));
+                }
+            }
         }
         tile_regs_commit();
         const uint32_t s_cb = last ? cb_chan_scale : cb_sum_acc;
@@ -526,6 +605,31 @@ ALWI uint32_t output_cb_for([[maybe_unused]] uint32_t q) {
     return out_cb;
 }
 
+// DEST = x*a - b' for n tiles of x_cb from tile x0 (x0 a multiple of W: tile i is channel tile i mod W) -> out_cb.
+// The caller waits x, a and b'.
+ALWI void normalize_tiles(uint32_t x_cb, uint32_t x0, uint32_t n, uint32_t out_cb) {
+    p2_init(x_cb);
+    pack_reconfig_data_format(out_cb);
+    uint32_t w = 0;
+    for (uint32_t i = 0; i < n; i += CHAIN_BLOCK) {
+        const uint32_t cnt = n - i < CHAIN_BLOCK ? n - i : CHAIN_BLOCK;
+        cb_reserve_back(out_cb, cnt);
+        tile_regs_acquire();
+        p2_seed_window(cnt, w, W, 0);
+        for (uint32_t j = 0; j < cnt; ++j) {
+            p2_mul_tile(x_cb, x0 + i + j, w, j);
+            w = w + 1 == W ? 0 : w + 1;
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < cnt; ++j) {
+            pack_tile(j, out_cb);
+        }
+        tile_regs_release();
+        cb_push_back(out_cb, cnt);
+    }
+}
+
 ALWI void normalize_chunk(uint32_t rows_valid, uint32_t q) {
     constexpr uint32_t x_cb = cb_input_keep;
     const uint32_t out_cb = output_cb_for(q);
@@ -537,26 +641,7 @@ ALWI void normalize_chunk(uint32_t rows_valid, uint32_t q) {
     cb_wait_front(cb_chan_scale, W);
     cb_wait_front(cb_bprime, W);
     const uint32_t n = rows_valid * W;
-    p2_init(x_cb);
-    pack_reconfig_data_format(out_cb);
-    uint32_t w = 0;
-    for (uint32_t i = 0; i < n; i += CHAIN_BLOCK) {
-        const uint32_t cnt = n - i < CHAIN_BLOCK ? n - i : CHAIN_BLOCK;
-        cb_reserve_back(out_cb, cnt);
-        tile_regs_acquire();
-        p2_seed_window(cnt, w, W, 0);
-        for (uint32_t j = 0; j < cnt; ++j) {
-            p2_mul_tile(x_cb, i + j, w, j);
-            w = w + 1 == W ? 0 : w + 1;
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t j = 0; j < cnt; ++j) {
-            pack_tile(j, out_cb);
-        }
-        tile_regs_release();
-        cb_push_back(out_cb, cnt);
-    }
+    normalize_tiles(x_cb, 0, n, out_cb);
     push_pad(out_cb, T - n);
     cb_pop_front(x_cb, T);
 }
@@ -578,6 +663,32 @@ constexpr uint32_t UB_CT = largest_divisor_le(W, CHAIN_BLOCK);
 constexpr uint32_t UB_RT = CHAIN_BLOCK / UB_CT;
 constexpr uint32_t UB_NB = W / UB_CT;
 
+// rows tile rows of x_cb from ring tile row x_row0 -> out_cb, untilized (rows x W pages). The caller waits x, a, b'.
+ALWI void normalize_untilize_rows(uint32_t x_cb, uint32_t x_row0, uint32_t rows, uint32_t out_cb) {
+    p2_init(x_cb);
+    pack_untilize_dest_init<UB_CT, W>(out_cb);
+    for (uint32_t r0 = 0; r0 < rows; r0 += UB_RT) {
+        const uint32_t rt = rows - r0 < UB_RT ? rows - r0 : UB_RT;
+        cb_reserve_back(out_cb, rt * W);
+        for (uint32_t b = 0; b < UB_NB; ++b) {
+            const uint32_t c0 = b * UB_CT;
+            tile_regs_acquire();
+            p2_seed_window(rt * UB_CT, c0, c0 + UB_CT, c0);
+            for (uint32_t r = 0; r < rt; ++r) {
+                for (uint32_t c = 0; c < UB_CT; ++c) {
+                    p2_mul_tile(x_cb, (x_row0 + r0 + r) * W + c0 + c, c0 + c, r * UB_CT + c);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_untilize_dest<UB_CT, W>(out_cb, rt, b);
+            tile_regs_release();
+        }
+        cb_push_back(out_cb, rt * W);
+    }
+    pack_untilize_uninit(out_cb);
+}
+
 ALWI void normalize_untilize_chunk(uint32_t rows_valid) {
     constexpr uint32_t x_cb = cb_input_keep;
     {
@@ -587,28 +698,7 @@ ALWI void normalize_untilize_chunk(uint32_t rows_valid) {
     MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_normalize");
     cb_wait_front(cb_chan_scale, W);
     cb_wait_front(cb_bprime, W);
-    p2_init(x_cb);
-    pack_untilize_dest_init<UB_CT, W>(cb_output_rm);
-    for (uint32_t r0 = 0; r0 < rows_valid; r0 += UB_RT) {
-        const uint32_t rt = rows_valid - r0 < UB_RT ? rows_valid - r0 : UB_RT;
-        cb_reserve_back(cb_output_rm, rt * W);
-        for (uint32_t b = 0; b < UB_NB; ++b) {
-            const uint32_t c0 = b * UB_CT;
-            tile_regs_acquire();
-            p2_seed_window(rt * UB_CT, c0, c0 + UB_CT, c0);
-            for (uint32_t r = 0; r < rt; ++r) {
-                for (uint32_t c = 0; c < UB_CT; ++c) {
-                    p2_mul_tile(x_cb, (r0 + r) * W + c0 + c, c0 + c, r * UB_CT + c);
-                }
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_untilize_dest<UB_CT, W>(cb_output_rm, rt, b);
-            tile_regs_release();
-        }
-        cb_push_back(cb_output_rm, rt * W);
-    }
-    pack_untilize_uninit(cb_output_rm);
+    normalize_untilize_rows(x_cb, 0, rows_valid, cb_output_rm);
     cb_pop_front(x_cb, T);
 }
 
@@ -689,42 +779,47 @@ sfpi_inline void gn_finalize_sfpu(const uint32_t inv_n_bits, const uint32_t eps_
 // publish hand-off (changelog Perf 1); mean*rstd joined it in Perf 2 (perf_experiments/combine_tail "mr").
 
 constexpr uint32_t cb_fin_out = cb_stats_out;  // the root's writer multicasts it into cb_group_stats
-constexpr uint32_t N_STATS = 3;                // cb_group_stats pages: [rstd, mean*rstd, e]
+constexpr uint32_t N_STATS = 2 * NU + 1;       // cb_group_stats pages: [rstd, mean*rstd] per image, then e
+constexpr uint32_t E_IDX = 2 * NU;             // e's page
 
 // RAW LLK (bypasses compute_kernel_lib::matmul_block + a finalize PostComputeFn): the helper acquires DEST
 // itself after its input waits, so nothing can be staged in the DEST window ahead of the gathered partials; the k
 // tile had to be a fully replicated UnpackToDestFp32 copy issued after the matmul. Here the matmul init and the k
 // product (-1 tile x [k row; zero rows] = -k on every row, exact: k is a bf16 value) run before the gather wait, and
 // the sum uses the resident -1 tile as in0 (no ones tiles), so -S1' / -T2 / -k feed the finalize with -inv_n.
-ALWI void finalize_raw(uint32_t inv_n_bits, uint32_t eps_bits) {
+// One finalize per image of the unit (n_img): its R gathered pairs (image i at pair offset R*i) -> [rstd, mean*rstd]
+// in cb_stats_out (2 pages per image, image order).
+ALWI void finalize_raw(uint32_t inv_n_bits, uint32_t eps_bits, uint32_t n_img) {
     constexpr uint32_t in0 = cb_neg_one;
-    tile_regs_acquire();
-    reconfig_data_format(cb_group_shift, in0);  // srcA = in1 (Float32), srcB = in0 (the -1 tile, bf16)
-    matmul_init(in0, cb_group_shift);
     cb_wait_front(cb_group_shift, 1);
-    matmul_tiles(in0, cb_group_shift, 0, 0, 2);
-    {
-        MaybeDeviceZoneScope("c_wait_gather");
-        cb_wait_front(cb_gathered_partials, 2 * R);
+    for (uint32_t i = 0; i < n_img; ++i) {
+        tile_regs_acquire();
+        reconfig_data_format(cb_group_shift, in0);  // srcA = in1 (Float32), srcB = in0 (the -1 tile, bf16)
+        matmul_init(in0, cb_group_shift);
+        matmul_tiles(in0, cb_group_shift, 0, 0, 2);
+        if (i == 0) {
+            MaybeDeviceZoneScope("c_wait_gather");
+            cb_wait_front(cb_gathered_partials, 2 * R * NU);
+        }
+        MaybeDeviceZoneScope("c_finalize");
+        for (uint32_t k = 0; k < R; ++k) {
+            matmul_tiles(in0, cb_gathered_partials, 0, 2 * (R * i + k), 0);
+            matmul_tiles(in0, cb_gathered_partials, 0, 2 * (R * i + k) + 1, 1);
+        }
+        rsqrt_tile_init();
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            gn_finalize_sfpu, 0, ckernel::VectorMode::None, inv_n_bits ^ 0x80000000u, eps_bits)));
+        tile_regs_commit();
+        cb_reserve_back(cb_fin_out, 2);
+        PACK((pack_reconfig_data_format(cb_fin_out)));
+        tile_regs_wait();
+        pack_tile(0, cb_fin_out);
+        pack_tile(1, cb_fin_out);
+        tile_regs_release();
+        cb_push_back(cb_fin_out, 2);
     }
-    MaybeDeviceZoneScope("c_finalize");
-    for (uint32_t k = 0; k < R; ++k) {
-        matmul_tiles(in0, cb_gathered_partials, 0, 2 * k, 0);
-        matmul_tiles(in0, cb_gathered_partials, 0, 2 * k + 1, 1);
-    }
-    rsqrt_tile_init();
-    MATH((_llk_math_eltwise_unary_sfpu_params_(
-        gn_finalize_sfpu, 0, ckernel::VectorMode::None, inv_n_bits ^ 0x80000000u, eps_bits)));
-    tile_regs_commit();
-    cb_pop_front(cb_gathered_partials, 2 * R);
+    cb_pop_front(cb_gathered_partials, 2 * R * NU);
     cb_pop_front(cb_group_shift, 1);
-    cb_reserve_back(cb_fin_out, 2);
-    PACK((pack_reconfig_data_format(cb_fin_out)));
-    tile_regs_wait();
-    pack_tile(0, cb_fin_out);
-    pack_tile(1, cb_fin_out);
-    tile_regs_release();
-    cb_push_back(cb_fin_out, 2);
 }
 
 // RAW LLK (bypasses compute_kernel_lib::matmul_block for the two expand products only; measured, expand stage
@@ -734,8 +829,9 @@ ALWI void finalize_raw(uint32_t inv_n_bits, uint32_t eps_bits) {
 // predecessor and packs only its new tiles (pack_block from a DEST offset), so every subblock is a full 4-tile
 // DEST half (W = 5: 2 subblocks instead of 5) with a single short init per product. (2) Under fp32_dest_acc_en
 // the helper re-issues pack_reconfig_data_format on every subblock; here once per product.
-// Both products read in0 from cb_group_stats ([rstd, mean*rstd, e], waited by the caller) at tile offset in0_off and
-// share one init (same CBs, formats, subblock; rt_dim = 1, so kt_dim only has to match the init).
+// Both products read in0 from cb_group_stats ([rstd, mean*rstd] per image, then e; waited by the caller): inner tile 0
+// at in0_off, inner tile 1 (the beta map's) at E_IDX. They share one init (same CBs, formats, subblock; rt_dim = 1,
+// so kt_dim only has to match the init).
 template <uint32_t K, bool INIT>
 ALWI void expand_matmul(uint32_t in0_cb, uint32_t in0_off, uint32_t in1_cb, uint32_t out_cb) {
     if constexpr (INIT) {
@@ -749,7 +845,8 @@ ALWI void expand_matmul(uint32_t in0_cb, uint32_t in0_off, uint32_t in1_cb, uint
         const uint32_t n_out = last ? EXP_LAST : EXP_SBW_E;
         tile_regs_acquire();
         for (uint32_t k = 0; k < K; ++k) {
-            ckernel::matmul_block(in0_cb, in1_cb, in0_off + k, k * W + n0, 0, EXP_TRANSPOSE, EXP_SBW_E, 1, K_B);
+            ckernel::matmul_block(
+                in0_cb, in1_cb, k == 0 ? in0_off : E_IDX, k * W + n0, 0, EXP_TRANSPOSE, EXP_SBW_E, 1, K_B);
         }
         tile_regs_commit();
         cb_reserve_back(out_cb, n_out);
@@ -769,6 +866,13 @@ void kernel_main() {
     const uint32_t resident_chunks = get_arg_val<uint32_t>(arg++);
     const uint32_t inv_n_bits = get_arg_val<uint32_t>(arg++);
     const uint32_t eps_bits = get_arg_val<uint32_t>(arg++);
+    const uint32_t n_img = get_arg_val<uint32_t>(arg++);     // images of the unit (root: statistic sets to finalize)
+    const uint32_t seg_img0 = get_arg_val<uint32_t>(arg++);  // unit image of this core's first segment
+    const uint32_t w_valid = get_arg_val<uint32_t>(arg++);   // TILE: channel tiles holding data
+    const uint32_t vc_arg = get_arg_val<uint32_t>(arg++);    // sharded: valid channels of the slice
+    const uint32_t n_ops = get_arg_val<uint32_t>(arg++);
+    const uint32_t ops_arg = arg;
+    const uint32_t vc = SHARDED ? vc_arg : P;
 
     CircularBuffer chan_scale_cb(cb_chan_scale);
     CircularBuffer chan_work_cb(cb_chan_work);
@@ -793,6 +897,118 @@ void kernel_main() {
         return rows_left < CHUNK_HT ? rows_left : CHUNK_HT;
     };
 
+    if constexpr (SHARDED && OPS) {
+        // ================= Sharded, fully resident: one block, the core's shard as op words =================
+        // Pieces in shard row order: each pushes its tile rows to the input ring (TILE: the shard itself, credited by
+        // the reader); OP_SEG_END closes an image segment, which gets its own statistic set (partials, a / b').
+        uint32_t ring_tiles = num_chunks * T;  // TILE: the reader's credits (the whole valid shard)
+        {
+            MaybeDeviceZoneScope("c_pass1");
+            if constexpr (IS_RM) {
+                uint32_t ring_rows = 0;
+                for (uint32_t i = 0; i < n_ops; ++i) {
+                    const uint32_t op = get_arg_val<uint32_t>(ops_arg + i);
+                    if (op & OP_SKIP) {
+                        // A staged position the shard FIFO steps over (its rows come from cb_rm_stage_in).
+                        cb_wait_front(cb_input_rm, W);
+                        cb_pop_front(cb_input_rm, W);
+                        continue;
+                    }
+                    tilize_piece(op & OP_ROWS, (op & OP_STAGED) != 0);
+                    ring_rows += op & OP_ROWS;
+                }
+                ring_tiles = ring_rows * W;
+            }
+            {
+                MaybeDeviceZoneScope("c_wait_pilot");
+                cb_wait_front(cb_pilot_rows, W);
+            }
+            cb_wait_front(cb_input_tiles, ring_tiles);
+            bool map_ready = false;
+            uint32_t row0 = 0, seg_rows = 0;
+            for (uint32_t i = 0; i < n_ops; ++i) {
+                const uint32_t op = get_arg_val<uint32_t>(ops_arg + i);
+                if (op & OP_SKIP) {
+                    continue;
+                }
+                seg_rows += op & OP_ROWS;
+                if (op & OP_SEG_END) {
+                    moments_rows(row0, seg_rows, true, true, w_valid, vc);
+                    if (!map_ready) {
+                        // Resident for the whole kernel (matmul in1, NoWaitNoPop); the reader builds it in pass 1's
+                        // shadow.
+                        MaybeDeviceZoneScope("c_wait_map");
+                        cb_wait_front(cb_group_map, W);
+                        map_ready = true;
+                    }
+                    MaybeDeviceZoneScope("c_collapse");
+                    collapse_with_map(chan_scale_cb, map_cb, local_partials_cb);
+                    collapse_with_map(chan_work_cb, map_cb, local_partials_cb);
+                    row0 += seg_rows;
+                    seg_rows = 0;
+                }
+            }
+            cb_pop_front(cb_input_tiles, ring_tiles);
+            cb_pop_front(cb_pilot_rows, W);
+        }
+        if constexpr (IS_ROOT) {
+            finalize_raw(inv_n_bits, eps_bits, n_img);
+        }
+        {
+            MaybeDeviceZoneScope("c_wait_stats");
+            cb_wait_front(cb_group_stats, N_STATS);
+        }
+        if constexpr (HAS_GAMMA) {
+            MaybeDeviceZoneScope("c_wait_affine");
+            cb_wait_front(cb_gamma_rows, K_B * W);
+        }
+        // ---------------- pass 2: per segment, expand its image's a / b', normalize its pieces ----------------
+        MaybeDeviceZoneScope("c_pass2");
+        constexpr uint32_t x_cb = cb_input_keep;
+        cb_wait_front(x_cb, ring_tiles);
+        uint32_t img = seg_img0, xrow = 0;
+        bool expanded = false;
+        for (uint32_t i = 0; i < n_ops; ++i) {
+            const uint32_t op = get_arg_val<uint32_t>(ops_arg + i);
+            if (op & OP_SKIP) {
+                if constexpr (IS_RM) {
+                    push_pad(cb_output_rm, W);  // the output shard FIFO steps over the staged position
+                }
+                continue;
+            }
+            if (!expanded) {
+                MaybeDeviceZoneScope("c_expand");
+                expand_matmul<1, true>(cb_group_stats, 2 * img, cb_amap, cb_chan_scale);
+                expand_matmul<K_B, false>(cb_group_stats, 2 * img + 1, cb_amap, cb_chan_work);
+                cb_wait_front(cb_chan_scale, W);
+                cb_wait_front(cb_bprime, W);
+                expanded = true;
+            }
+            const uint32_t rows = op & OP_ROWS;
+            if constexpr (IS_RM) {
+                normalize_untilize_rows(x_cb, xrow, rows, (op & OP_STAGED) ? cb_rm_stage_out : cb_output_rm);
+            } else {
+                normalize_tiles(x_cb, xrow * W, rows * W, cb_output_tiles);
+            }
+            xrow += rows;
+            if (op & OP_SEG_END) {
+                cb_pop_front(cb_chan_scale, W);
+                cb_pop_front(cb_bprime, W);
+                ++img;
+                expanded = false;
+            }
+        }
+        if constexpr (!IS_RM) {
+            push_pad(cb_output_tiles, ring_tiles - xrow * W);  // the writer drains the reader's credit count
+        }
+        cb_pop_front(x_cb, ring_tiles);
+        cb_pop_front(cb_group_stats, N_STATS);
+        if constexpr (HAS_GAMMA) {
+            cb_pop_front(cb_gamma_rows, K_B * W);
+        }
+        return;
+    }
+
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         // ---------------- accumulate_moments (pass 1) ----------------
         {
@@ -814,7 +1030,7 @@ void kernel_main() {
                 }
                 wait_pilot();
                 cb_wait_front(cb_input_tiles, num_chunks * T);
-                moments_rows(rows_core, true, true);
+                moments_rows(0, rows_core, true, true, W, vc);
                 cb_pop_front(cb_input_tiles, num_chunks * T);
             } else {
                 for (uint32_t j = 0; j < num_chunks; ++j) {
@@ -829,7 +1045,7 @@ void kernel_main() {
                     if (j == 0) {
                         wait_pilot();
                     }
-                    moments_rows(rows_valid, j == 0, j + 1 == num_chunks);
+                    moments_rows(0, rows_valid, j == 0, j + 1 == num_chunks, W, vc);
                     cb_pop_front(cb_input_tiles, T);
                     if (j < first_resident) {
                         skip_chunk(cb_input_keep);  // streamed head chunk: not held for pass 2
@@ -863,7 +1079,7 @@ void kernel_main() {
 
         // ---------------- combine_group_stats (root) ----------------
         if constexpr (IS_ROOT) {
-            finalize_raw(inv_n_bits, eps_bits);
+            finalize_raw(inv_n_bits, eps_bits, 1);
         }
 
         // ---------------- expand_stats_to_channels ----------------
