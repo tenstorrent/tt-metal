@@ -273,10 +273,12 @@ def _check_accuracy(case, device, layout=None):
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_flat_expert_short_x_ring(device):
     """The gate/up start-up cap (weight reads limited to 8 landing slots until the first x row group is in) on a plan
-    whose x ring is shorter than a row group (no row passes: the ring holds fewer x blocks than the K blocks) and whose
-    experts span several sub-blocks (a load's weights stay until its last sub-block): the cap has to lift once the
-    ring is full, else the weight reads and the compute wait on each other. A small arena (x ring growth off) gives
-    such a plan; accuracy, within the timeout, checks it."""
+    whose x ring is shorter than a row group (no row passes, ring < K blocks) and whose experts span several sub-blocks
+    (a load's weights stay until its last sub-block): the cap lifts once the ring is full (min(K blocks, ring) x blocks
+    in), the path this plan takes. Waiting for the whole row group instead deadlocks once ring + 8 < K blocks - the
+    compute uses the 8 granted weight blocks, freeing 8 x slots, then waits for the next weight block - which no
+    current plan reaches: the cap only applies to loads of 24+ blocks (GLM-5.3), whose rings are at least 16. A small
+    arena (x ring growth off) gives such a plan; accuracy, within the timeout, checks it."""
     _skip_unless_supported(device)
     case = FlatCase("glm53", "4x4", 10240, "uniform")
     md = cases.MODELS[case.model]
