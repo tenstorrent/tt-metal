@@ -13,6 +13,7 @@
 // Running with the combine (flat_options::hands_y_to_combine), y is not written to DRAM: each token row goes straight
 // into a landing slot of its destination combine core (CombineHandoff below).
 #pragma once
+#include "zz_hist.hpp"
 
 #include <cstdint>
 
@@ -246,6 +247,7 @@ struct RowMajorYWriter {
                     y_noc,
                     y_vc);
             }
+            zz::hist_y.add(rows * segment_bytes);
         }
         ++issued;
         if (++issue_row_tile == row_tiles(schedule, issue_entry, issue_sub_block)) {

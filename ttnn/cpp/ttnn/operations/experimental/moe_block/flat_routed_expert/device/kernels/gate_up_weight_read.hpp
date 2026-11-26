@@ -17,6 +17,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "flat_options.hpp"
 #include "zz_probes.hpp"
+#include "zz_hist.hpp"
 
 constexpr uint32_t kGateUpReadArgs = 5;
 constexpr uint32_t kGateUpReadFirstTrid = 8;  // (x forwarding writes use ids 1..; the h writes id 0)
@@ -117,6 +118,7 @@ struct GateUpWeightReads {
         bool moved = (zz::iso & 1) != 0 && done > 0;
         while (done < iss && ncrisc_noc_read_with_transaction_id_flushed(noc_index, kGateUpReadFirstTrid + rd)) {
             ++done;
+            zz::hist.add(pbytes);
             rd = rd + 1 == depth ? 0 : rd + 1;
             moved = true;
         }

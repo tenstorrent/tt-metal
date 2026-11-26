@@ -26,7 +26,7 @@ GLM 4x4 M 320, after the commits below (1094 us):
 | `f3fcf1d0ed0` | x forwarder: 6 pieces in flight for experts of 6+ row tiles, 3 below (6 everywhere slowed short experts / the Galaxy MoE block) | -> 1157 (-5.1%) |
 | `e0f2d6148c2` | x snake + head writes on unicast VC 3 (was VC 1 with the weight read requests; h 0, y 2) | -> 1108 (-4.1%) |
 | `789fcaa2888` | gate/up weight grants capped at 8 until a core's first sub-block x is in (loads of 24+ blocks) | -> 1094 (-1.4%) |
-| (next) | 1 gate/up weight read in flight at 16+ experts a chip, whole-tile gate / up (was 2); determinism test compares token rows only | 1096 -> 1093 (-0.3%); M 80 / 160 / 240 / 480 -2.9 / -2.7 / -4.7 / -0.8%, zipf -1.6% |
+| `ef26bcabe09` | 1 gate/up weight read in flight at 16+ experts a chip, whole-tile gate / up (was 2); determinism test compares token rows only | 1096 -> 1093 (-0.3%); M 80 / 160 / 240 / 480 -2.9 / -2.7 / -4.7 / -0.8%, zipf -1.6% |
 
 Zipf 1381 -> 1288. Every commit: full perf matrix (21 cases, all models) + accuracy / determinism (52 passed).
 Side effects elsewhere: 8x4 10240 -10%, DSV4.1-Flash hot -15%, K3 hot -3%; worst +1% (short experts).
@@ -53,6 +53,29 @@ Side effects elsewhere: 8x4 10240 -10%, DSV4.1-Flash hot -15%, K3 hot -3%; worst
   8 experts a chip and unit splits slower (DSV4.1-Flash up to +7%). Enabled at 16+ experts a chip, whole-tile gate / up
   only (A/B over the 23-case matrix: GLM 4x4 -0.3 .. -4.7%, every other case within +-0.8%).
 
+## DRAM timeline (zz_hist.hpp: bytes landed a reader in 12 us bins, FLAT_ZZ_PROBES=1)
+
+Per bin: gate/up weights by bank, down weights, x reads (helpers), y writes (bfp8 tiles, down_core_writer). Bytes a
+call: gate/up 226.5 MB + down 113.2 MB (42.5 MB on every bank: even) + x 16 / 32 / 48 / 64 MB + y 10 / 18 / 27 / 35 MB
+(M 80 / 160 / 240 / 320). (The status table's "w+x+y" counted y as bf16: it is bfp8 here, ~half.)
+
+| M | reads end | last y | steady DRAM | gate/up MM / span | x wait | floor (bytes / 510) |
+|---|---|---|---|---|---|---|
+| 80 | ~750 us | ~800 | 490-520 GB/s | 744 / 751 | 353 | 717 |
+| 160 | ~800 | ~898 | ~486 | 835 / 842 | 284 | 766 |
+| 240 | ~886 | ~995 | ~459 | 922 / 930 | 170 | 813 |
+| 320 | ~970 | ~1117 | ~420 (350-480) | 1036 / 1046 | 70 | 861 |
+
+- M 80: DRAM saturated in steady state; the loss is the end: banks finish their gate/up reads 704-740 us (service, not
+  bytes), the last expert's down weights land in a late burst, then its gate/up + down + y (~50 us).
+- M 320: gate/up compute-bound (the math busy 1036 of its 1046 us; 66048 tiles a core = 885 us at 18.1 cycles a
+  tile), weight ring full, DRAM idle ~15%. Loss: in-op math (~19 vs 18.1 cycles), x wait 70 (startup), weight wait
+  32, down after the last h ~50.
+- Every gate/up / down weight byte is read once and the rings run full: the DRAM side has nothing left to fix at
+  M >= 240; at M 80-160 only the end-of-call drain (~50-80 us).
+- `FLAT_DOWN_RING` 3 / 4 (experts in the down ring, default 2): M 80 817.9 / 795.4 (default 801.0), M 160 914.6 /
+  903.8 (902.7). Not kept.
+
 ## Status (GLM-5.3, 16 experts a chip, uniform, at `789fcaa2888`)
 
 Math peak 4096 FLOP / cycle / core (LoFi tile matmul in 16 cycles), DRAM 512 GB/s nominal; weights bfp4 340 MB a
@@ -67,17 +90,23 @@ call, x / y bf16 rows.
 | 480 | 1509.7 | 73.5% | 64.1% | 44.0% | 68.7% |
 | 640 | 1980.2 | 74.5% | 65.0% | 33.5% | 58.7% |
 
-M <= 320 DRAM-bound (~430-450 GB/s: the lab's pure-read figure is 465), above gate/up-math-bound. M 480: ideal math
+M <= 320 runs at ~430-465 GB/s of DRAM, above that gate/up-math-bound. CORRECTION: the 465 GB/s "pure-read ceiling"
+used earlier was wrong. Measured on this p150b (perf_microbenchmark/8_dram_adjacent_core_read, one reader a bank at
+its optimal core, 53 / 107 MB, device-profiler kernel span): 508.5 / 510.4 GB/s, ~99.7% of 512. The op's ~465 GB/s
+at M 80 is 9% under the real ceiling. M 480: ideal math
 1292 + in-op slowdown ~60 + x wait 71 + weight wait 32 + down tail ~45 = 1510.
 
 ## Resolved: GLM 4x4 M 80 "determinism" failure (a test bug, not the op)
 
 `test_flat_expert_determinism[glm53-4x4-2560-uniform]` failed after the other glm53-4x4 cases (and with
 `FLAT_GU_RIF=1` alone). A per-row dump (a scratch test running 10240 first, then 2560 six times) showed every
-differing row at or past its expert's token count, only on call 0, never a token row. y is row major and its
-writer (y_row_major.hpp) skips rows past an expert's count, even inside the last row tile, so those rows hold whatever
-the y allocation held. The test compared whole row tiles on the stale assumption "padding rows are zero"; the 10240
-cases just happened to find matching DRAM there. Fix: the determinism test compares the token rows only. With it,
+differing row at or past its expert's token count, only on call 0, never a token row. Those padding rows of the
+last row tile are written (y is bfp8 tiles in the standalone op), but computed from x rows the x reader never loads
+(it skips rows past the count), i.e. from whatever the x ring held: earlier experts' rows (the same every call - the
+diffs start at the running max of the earlier counts) or the previous program's (call 0 only). Rows stay independent
+through the matmuls and bfp8's per-row shared exponents, so token rows are unaffected. The test compared whole row
+tiles on the stale assumption "padding rows are zero" (the first commit's message says the writer skips them: that is
+the row-major y path, not this one). Fix: the determinism test compares the token rows only. With it,
 glm53-4x4 determinism (incl. M 80 / M 480) passes at defaults and with `FLAT_GU_RIF=1`.
 
 ## Next

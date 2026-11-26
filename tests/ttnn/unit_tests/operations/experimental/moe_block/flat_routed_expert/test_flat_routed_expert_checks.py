@@ -271,8 +271,9 @@ def test_flat_expert_determinism(device, case):
     _skip_unless_supported(device)
     op, args, (x, spans), _ = _setup(case, device)
     det = DeterminismMarker(device)
-    # (only the routed experts' token rows are written - y is row major and its writer skips the rows past an expert's
-    # token count, even inside its last row tile: compare the token rows; the rest of y is whatever its allocation held)
+    # (compare the routed experts' token rows only: the rows past an expert's token count in its last row tile are
+    # padding - the x reader skips them, so they are computed from whatever the x ring held (earlier experts' or the
+    # last program's rows); the rest of y is whatever its allocation held)
     rows = [(o, o + c) for o, c in spans if c]
     for _ in range(CALLS):
         y = op(*args)
