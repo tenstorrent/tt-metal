@@ -66,12 +66,22 @@ runs:
     - name: Checkout repo
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
       with:
-        # find-changed-files.sh runs `git merge-base origin/main HEAD`, so the commit
-        # graph has to be real. The blobs do not: fetch them on demand instead of
-        # pulling 2.4 GB up front on every caller.
-        fetch-depth: 0
-        filter: blob:none
+        # The script reads only .github and .gitmodules from the working tree.
+        fetch-depth: 1
+        sparse-checkout: .github
         submodules: false
+    - name: Fetch the history of main and HEAD
+      shell: bash
+      run: |
+        # find-changed-files.sh runs `git merge-base origin/main HEAD`, so the commit
+        # graph of these two refs has to be real. The other branches, the tags, the
+        # trees, and the blobs do not: git fetches the trees the diff reads on demand.
+        unshallow=()
+        if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+          unshallow=(--unshallow)
+        fi
+        git -c protocol.version=2 fetch --no-tags --no-recurse-submodules --filter=tree:0 "${unshallow[@]}" \
+          origin "+refs/heads/main:refs/remotes/origin/main"
     - name: Find changed files
       id: find-changed-files
       shell: bash
