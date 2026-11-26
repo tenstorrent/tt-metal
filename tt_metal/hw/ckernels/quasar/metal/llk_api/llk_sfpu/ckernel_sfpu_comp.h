@@ -117,8 +117,8 @@ inline constexpr bool _zero_comp_tests_negative_() {
  *       sign-magnitude -0 (0x80000000) unchanged (nonzero), breaking eqz(-0). Clearing the sign bit
  *       (SFPSETSGN with sign=0) is the correct, format-agnostic primitive.
  * @note The compares must stay integer ones (@c vInt operands): a float compare would misread an Int32
- *       whose magnitude has a NaN bit pattern. A float NaN is therefore signed like any other element,
- *       as before this predicate was reworked; tt-metal#55273 tracks returning 0 for it.
+ *       whose magnitude has a NaN bit pattern. A float NaN is therefore signed like any other element;
+ *       tt-metal#55273 tracks returning 0 for it.
  *
  * @tparam COMP_MODE: Comparison-to-zero mode, values =
  *         <equal_zero/not_equal_zero/less_than_zero/greater_than_zero/greater_than_equal_zero/less_than_equal_zero>
