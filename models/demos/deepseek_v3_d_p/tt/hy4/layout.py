@@ -20,15 +20,17 @@ are mesh axis 1 (4 chips):
   * indexer: each chip scores its own stripe and keeps a local top-2048, one gather + merge picks the global
     top-2048; sparse attention runs per chip with all 64 heads over the rows it holds, partials merge by LSE
     (#65887);
-  * routed experts EP32 (8 per chip); embedding and LM head vocab-sharded over 32 chips (#65892).
+  * routed experts EP32 (8 per chip); embedding and LM head vocab-sharded over 32 chips (#65892; the prefill builds
+    the embedding only, decode owns the LM head).
 
 In the runner's knobs that is the sequence (SP) on axis 0 and the hidden (TP) on axis 1: ``PREFILL_SP=8
 PREFILL_TP=4 PREFILL_SP_AXIS=0``, the same mesh as the dev layout below. The two differ in where the weights go,
 not in the mesh: ``tp32`` puts the heads on the SP axis (``heads_over="sp"``) and shards every weight once, the dev
 layout puts the heads on the TP axis and replicates attention over SP. ``PREFILL_HY4_LAYOUT`` picks one.
 
-The shared prefill stack cannot run ``tp32`` yet (``TP32_BLOCKERS``), so selecting it fails at runner start
-with the blockers and their issues. An issue that removes a blocker deletes its entry.
+``TP32_BLOCKERS`` lists what the shared prefill stack lacks for ``tp32``; selecting a layout with blockers fails at
+runner start naming them and their issues. It is empty since the vocab-sharded embedding (#65892) landed, the last
+entry: ``tp32`` runs on the shared stack end to end.
 
 ``glm_prefill_sp8_tp4`` is a DEV / NUMERICS layout, not a deployment candidate: GLM-5.3's prefill layout
 (SP 8 x TP 4, 16 heads per chip, attention / shared-expert / dense weights replicated over the 8 SP rows). It
@@ -70,13 +72,10 @@ SC1_CHIPS = 32
 # every attention and indexer weight sharded once over the 32 chips, residual in and out [S/8, 6144/4]. TtPrefillBlock
 # builds them through mla_class(config) when the config sets mla_2d_tp, which the adapter does for a layout with
 # ``mla_2d_tp`` (tp32, ``Hy4PrefillLayout.apply_to_config``).
-TP32_BLOCKERS = (
-    (
-        "vocab-sharded embedding over 32 chips: TtParallelEmbedding shards the hidden dim over the TP axis and "
-        "replicates over the other",
-        "#65892",
-    ),
-)
+# The token embedding (#65892) is decode's vocab-32 table (TtHy4PrefillEmbedding, tt/hy4/embedding.py: 3776 ids per
+# chip, combined into [S/8, 6144/4] by a reduce-scatter over the sequence on axis 0 and one over the hidden on axis 1),
+# which the transformer builds when the model config sets EMBED_VOCAB_SHARDED (Hy4TP32Config).
+TP32_BLOCKERS: tuple = ()
 
 # L1_SMALL carve-out (B per bank) the Hy4 prefill opens the mesh with: GLM-5.3's 1536 B (glm_5_3.py) is exactly full
 # on the tp32 blocks with the golden top-k (2D attention, 2D FFN, EP32 MoE, iHC: every all_to_all_async_generic /

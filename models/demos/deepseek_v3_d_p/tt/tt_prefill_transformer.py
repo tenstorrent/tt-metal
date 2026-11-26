@@ -23,6 +23,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.hy4 import embedding as hy4_embedding
 from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -60,6 +61,17 @@ def _row_fold_width(n: int, max_cols: int = 2048) -> int:
         if n % cols == 0:
             return cols
     raise ValueError(f"no 16-aligned divisor of {n} up to {max_cols} to fold a row-major gather into")
+
+
+def embedding_cache_complete(cache_path: Path, model_cfg) -> bool:
+    """The token-embedding table's cache: the vocab-sharded one (``EMBED_VOCAB_SHARDED``, Hy4 tp32) or
+    ``TtParallelEmbedding``'s."""
+    if hy4_embedding.vocab_sharded(model_cfg):
+        mesh, sp_axis = hy4_embedding.embedding_mesh(model_cfg)
+        return hy4_embedding.TtHy4PrefillEmbedding.check_cache_complete(
+            cache_path, mesh, sp_axis, int(model_cfg.VOCAB_SIZE)
+        )
+    return TtParallelEmbedding.check_cache_complete(cache_path)
 
 
 def rank_loads_embedding(is_first_rank: bool, is_last_rank: bool, mtp_levels: int) -> bool:
@@ -144,9 +156,9 @@ class TtPrefillTransformer(LightweightModule):
         # Initialize fast cache checker for this directory
         init_checker(cache_path)
 
-        if rank_loads_embedding(
-            is_first_rank, is_last_rank, mtp_levels
-        ) and not TtParallelEmbedding.check_cache_complete(cache_path):
+        if rank_loads_embedding(is_first_rank, is_last_rank, mtp_levels) and not embedding_cache_complete(
+            cache_path, model_cfg
+        ):
             return False
 
         # Per-layer blocks — cache keys are global, so index globally.
@@ -258,19 +270,31 @@ class TtPrefillTransformer(LightweightModule):
 
         num_mtp_levels = 0 if mtp_predictor is None else int(mtp_predictor.num_levels)
 
-        self.embed = (
-            TtParallelEmbedding(
-                mesh_device=mesh_device,
-                vocab_size=config.vocab_size,
-                emb_dim=config.hidden_size,
-                torch_weight=state_dict.get("embed_weight"),  # None if cache exists
-                sp_axis=sp_axis,
-                tp_axis=tp_axis,
-                weight_cache_path=weight_cache_path,
-            )
-            if rank_loads_embedding(is_first_rank, is_last_rank, num_mtp_levels)
-            else None
-        )
+        self.embed = None
+        if rank_loads_embedding(is_first_rank, is_last_rank, num_mtp_levels):
+            if hy4_embedding.vocab_sharded(model_cfg):
+                # Hy4 tp32 (#65892): decode's vocab-32 table, combined into [S/sp, H/tp] by two reduce-scatters.
+                self.embed = hy4_embedding.TtHy4PrefillEmbedding(
+                    mesh_device,
+                    vocab_size=config.vocab_size,
+                    emb_dim=config.hidden_size,
+                    torch_weight=state_dict.get("embed_weight"),  # None if cache exists
+                    sp_axis=sp_axis,
+                    tp_axis=tp_axis,
+                    weight_cache_path=weight_cache_path,
+                    num_links=num_links,
+                    topology=(sp_topology, tp_topology) if sp_axis == 0 else (tp_topology, sp_topology),
+                )
+            else:
+                self.embed = TtParallelEmbedding(
+                    mesh_device=mesh_device,
+                    vocab_size=config.vocab_size,
+                    emb_dim=config.hidden_size,
+                    torch_weight=state_dict.get("embed_weight"),  # None if cache exists
+                    sp_axis=sp_axis,
+                    tp_axis=tp_axis,
+                    weight_cache_path=weight_cache_path,
+                )
 
         self.num_kvpe_cache_layers = num_layers + num_mtp_levels
 
