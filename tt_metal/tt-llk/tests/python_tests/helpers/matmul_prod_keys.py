@@ -356,6 +356,17 @@ def lofi_row8_row_mop_off(
     )
 
 
+def custom_main_unpack(fidelity, half_sync, in0, in1, out) -> bool:
+    """llk_matmul_forms.h matmul_custom_main_unpack_kernel for a kernel whose CBs are in0, in1 and out."""
+    return (
+        fidelity.name == "LoFi"
+        and half_sync
+        and in0 == DataFormat.Float16_b
+        and in1 == DataFormat.Float16_b
+        and out == DataFormat.Bfp8_b
+    )
+
+
 # matmul_row_mop_off_cells of llk_matmul_forms.h: (fidelity, half sync, 32-bit DEST, in1, in0, output, rt, ct)
 _ROW_MOP_OFF_CELLS = {
     (

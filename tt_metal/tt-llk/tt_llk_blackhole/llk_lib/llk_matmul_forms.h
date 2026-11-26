@@ -98,6 +98,29 @@ constexpr bool matmul_kernel_lofi_mix(const std::uint8_t (&formats)[N])
     return (a == DataFormat::Float32 && fast(b)) || (b == DataFormat::Float32 && fast(a));
 }
 
+// A LoFi half sync custom matmul kernel (compute/experimental/matmul_custom.h) of Float16_b operands in CBs 0 and 1 whose other CBs are
+// Bfp8_b (formats: every CB format of the kernel) runs main's unpack: the keyed unpack read up to 1.4 % slower than main on its blocks.
+template <std::size_t N>
+constexpr bool matmul_custom_main_unpack_kernel(const MathFidelity fidelity, const bool half_sync, const std::uint8_t (&formats)[N])
+{
+    if (fidelity != MathFidelity::LoFi || !half_sync || N < 3 || static_cast<DataFormat>(formats[0]) != DataFormat::Float16_b ||
+        static_cast<DataFormat>(formats[1]) != DataFormat::Float16_b)
+    {
+        return false;
+    }
+    bool out = false;
+    for (std::size_t i = 2; i < N; i++)
+    {
+        const DataFormat f = static_cast<DataFormat>(formats[i]);
+        if (f != DataFormat::Invalid && f != DataFormat::Bfp8_b)
+        {
+            return false;
+        }
+        out = out || f == DataFormat::Bfp8_b;
+    }
+    return out;
+}
+
 // The kernels whose plain matmul_block calls run the ttsync unpack (formats: every CB format of the kernel): LoFi at half sync, and above LoFi except the
 // classes where a production block measured slower under ttsync (G2 census, 660 keys): HiFi4 at full sync with a 32-bit DEST, half sync
 // without a 32-bit DEST in a kernel holding Bfp8_b, and with a 32-bit DEST and a 32-bit format HiFi2 at either sync and HiFi3 at full
