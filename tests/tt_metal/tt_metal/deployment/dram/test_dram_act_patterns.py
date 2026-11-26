@@ -670,10 +670,14 @@ class Driver:
         for arm in self.cfg["arms"]:
             acc = {r.chip: {"launches": 0, "reads": 0} for r in self.runs}
             first = {}
+            passes, t_read = [], 0.0
             t_start = time.monotonic()
             t_end = t_start + seconds
             while True:
                 outs, dt = self.launch(specs_by_chip, arm)
+                t_read += dt
+                p = [int(out[s, 1]) for r, out in zip(self.runs, outs) for s in range(r.slots)]
+                passes.append((min(p), max(p)))
                 for r, out in zip(self.runs, outs):
                     specs = specs_by_chip[r.chip]
                     a = acc[r.chip]
@@ -700,10 +704,13 @@ class Driver:
                 row.update(first=first.get(r.chip), **a)
                 self.results.append(row)
             bad = {c: a["bad_reads"] for c, a in acc.items() if a["bad_reads"]}
+            # A launch whose min equals the floor had readers outlast the matmul.
             logger.info(
                 f"{pattern}/{name} arm {arm}: {acc[self.runs[0].chip]['launches']} launches, "
-                f"{sum(a['reads'] for a in acc.values()):.3e} reads, iters {self.iters}, last launch {dt:.2f}s, "
-                f"bad reads by chip {bad or 'none'}"
+                f"{sum(a['reads'] for a in acc.values()):.3e} reads, last launch {dt:.2f}s, "
+                f"read runs {t_read:.1f}s of {time.monotonic() - t_start:.1f}s, "
+                f"passes per RISC (min-max) by launch {' '.join(f'{lo}-{hi}' for lo, hi in passes)} "
+                f"(floor {self.iters}), bad reads by chip {bad or 'none'}"
             )
 
     def self_test(self):
