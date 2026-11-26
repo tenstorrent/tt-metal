@@ -6,9 +6,9 @@
 
 #include <tt_stl/assert.hpp>
 
-#include "hal_types.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include "math.hpp"
+#include "tt-metalium/utils/math.hpp"
 
 namespace tt::tt_metal::mx {
 

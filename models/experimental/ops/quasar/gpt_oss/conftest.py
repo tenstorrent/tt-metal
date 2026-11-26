@@ -10,6 +10,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_quasar
+from models.experimental.ops.quasar.gpt_oss.utils.merge_heads import merge_heads_on_device
 
 
 @pytest.fixture(autouse=True)
@@ -109,9 +110,11 @@ def quasar_block_float_to_bf16(monkeypatch, quasar_host_cast_fp32_to_bf16, quasa
 
 @pytest.fixture(autouse=True)
 def quasar_ops(monkeypatch):
-    """On Quasar, route the mainline ops below, which Quasar rejects, to their ttnn.experimental.quasar versions.
+    """On Quasar, replace the mainline ops below, which fail on Quasar.
 
-    Experimental ops maintain the same API as the mainline ops, so the model code needs no change.
+    Most of them are routed to their ttnn.experimental.quasar versions. Experimental ops maintain the same API as
+    the mainline ops, so the model code needs no change. ttnn.experimental.nlp_concat_heads_decode places one head
+    on each core, so on a device with fewer cores than heads it is replaced by merge_heads_on_device.
     """
     if not is_quasar():
         return
@@ -143,6 +146,16 @@ def quasar_ops(monkeypatch):
     )
     for module, name, quasar_module, quasar_name in routes:
         monkeypatch.setattr(module, name, getattr(quasar_module, quasar_name))
+
+    concat_heads_decode = ttnn.experimental.nlp_concat_heads_decode
+
+    def _concat_heads_decode(input_tensor, *, num_heads, **kwargs):
+        device_grid = input_tensor.device().compute_with_storage_grid_size()
+        if device_grid.x * device_grid.y >= num_heads:
+            return concat_heads_decode(input_tensor, num_heads=num_heads, **kwargs)
+        return merge_heads_on_device(input_tensor, num_heads=num_heads, **kwargs)
+
+    monkeypatch.setattr(ttnn.experimental, "nlp_concat_heads_decode", _concat_heads_decode)
 
 
 def pytest_addoption(parser):

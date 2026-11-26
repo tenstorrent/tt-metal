@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
@@ -94,7 +94,7 @@ struct PrefetchCase {
         // before anything runs.
         const uint32_t entry_bytes = kKBlockTiles * kTilesPerReceiver * kBfloat16TileBytes;
         space = std::make_unique<metal_exp::PrefetcherPipeSpace>(metal_exp::CreatePrefetcherPipeSpace(
-            *device,
+            device->mesh_command_queue(0),
             {.num_dram_senders = 2 * num_banks,
              .receiver_domain = receiver_domain,
              .ring_size = kRingEntries * entry_bytes,

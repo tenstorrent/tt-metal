@@ -28,7 +28,7 @@
 
 #include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/soc_descriptor.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
@@ -847,6 +847,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
     psd.set_discovery_data(get_local_discovery_hostname(cluster_desc), my_rank, all_hostnames_unique);
+    auto local_exit_nodes = psd.get_exit_node_connection_table()[get_local_discovery_hostname(cluster_desc)];
 
     if (run_global_discovery) {
         exchange_metadata(psd, distributed_context, true);
@@ -865,6 +866,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
         // merge appends exit-node tables, so a peer still holds its own unpruned local entries.
         psd.prune_unresolved_links();
     }
+    psd.get_local_exit_nodes() = std::move(local_exit_nodes);
 
     return psd;
 }

@@ -18,7 +18,6 @@ using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
-
 // These constants and function should ideally go to SFPI
 // Copied from ckernel_sfpu_int_sum.h to avoid dependency complications
 #ifndef SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
@@ -40,35 +39,17 @@ sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
 
 #endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
 
-inline void equal_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void equal_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void greater_than_equal_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void greater_than_equal_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void greater_than_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void greater_than_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void less_than_equal_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void less_than_equal_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void less_than_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void less_than_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void not_equal_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void not_equal_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp() {
@@ -288,35 +269,27 @@ inline void calculate_nez_uint32() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
-    // Convert both operands to two's complement format
-    //
-    // LOGIC:
-    // - Scalar is already in two's complement (from host)
-    // - Convert SFPU input data from sign-magnitude to two's complement
-    // - Perform comparison with both in two's complement format
-
-    // Scalar stays in original two's complement format
-    vInt converted_scalar = scalar;
+    // Equality is a compare of the 32-bit words, so the tile word is loaded as stored
+    // (DataLayout::I32, SFPLOAD INT32). The default vInt load (INT32_SM) converts the word from
+    // sign-magnitude to two's complement on the way in, and the explicit conversion this kernel
+    // used to apply on top of it undid that for every word except 0x80000000, which the load turns
+    // into 0: a tile value of INT32_MIN compared equal to 0 and unequal to its own scalar.
+    vInt s = scalar;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
+        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
         vInt val = 0;
 
-        // Convert input data from sign-magnitude to two's complement
-        v = sfpu_sign_mag_to_twos_comp(v);
-
-        // Now both operands are in two's complement format
-        // Use simple comparison like Blackhole
         if constexpr (COMP_MODE == SfpuType::unary_ne) {
-            v_if(v != converted_scalar) { val = 1; }
+            v_if(v != s) { val = 1; }
             v_endif;
         } else if constexpr (COMP_MODE == SfpuType::unary_eq) {
-            v_if(v == converted_scalar) { val = 1; }
+            v_if(v == s) { val = 1; }
             v_endif;
         }
 
-        dst_reg[0] = val;
+        dst_reg[0].mode<sfpi::DataLayout::I32>() = val;
         dst_reg++;
     }
 }

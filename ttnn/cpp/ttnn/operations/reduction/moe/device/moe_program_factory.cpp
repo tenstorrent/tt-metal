@@ -9,10 +9,10 @@
 
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 #include <cmath>
 #include <string>
@@ -386,6 +386,21 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
         .spec = std::move(spec),
         .run_params = std::move(run_args),
     };
+}
+
+ttnn::command_list::CmdListBindings MoeProgramFactory::map_cmd_list_parameters(
+    const MoeParams&,
+    const MoeInputs&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    binder.tensor(
+        /*invoke_name=*/"expert_mask_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"expert_mask"});
+    binder.tensor(
+        /*invoke_name=*/"topk_mask_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"topk_mask"});
+    binder.tensor(/*invoke_name=*/"output_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"output"});
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

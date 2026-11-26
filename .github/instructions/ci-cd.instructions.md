@@ -35,12 +35,12 @@ Test yamls define what runs in CI. Every test entry must include all required ke
 |-----|---------|
 | `name` | Display name in GitHub Actions UI |
 | `cmd` | Exact command to run |
-| `sku` | Machine type target — must match an entry in `.github/sku_config.yaml` |
+| `skus` | Mapping of SKU (machine type) to per-SKU settings: `timeout` (maximum job runtime in minutes) and optional `tier`. SKU names must match an entry in `.github/sku_config.yaml` |
 | `owner_id` | Slack user ID for failure notification |
 | `team` | Owning team (used for time budget allocation) |
-| `timeout` | Maximum job runtime in minutes |
+| `budget_type` | Allowance under the team in `.github/time_budget.yaml` that the timeouts are charged to |
 
-Flag any test entry missing a required key, or using a `sku` value not defined in `sku_config.yaml`.
+Flag any test entry missing a required key, or using a SKU under `skus` that is not defined in `sku_config.yaml`.
 
 **Not all pipelines have been through the pipeline reorg sanitization process.** Some pre-reorg pipelines still exist and may not conform to the rules above. When reviewing, flag pipelines that appear to be pre-reorg — e.g. missing required keys, using legacy/hard-coded runner labels instead of `sku`-based routing, or not following the pipeline level semantics below — so they can be migrated rather than silently accepted as compliant.
 
@@ -69,6 +69,6 @@ Flag a test that violates its pipeline's runtime contract (e.g., a 10-minute tes
 - [ ] Runner-routing changes (direct `runs-on:` edits or indirect reorg/`sku_config.yaml` changes) verified against the pipeline reorg tooling
 - [ ] `time_budget.yaml` changes justified
 - [ ] `fetch-depth: 1` unless full history required
-- [ ] Test yaml entries have all required keys (`name`, `cmd`, `sku`, `owner_id`, `team`, `budget_type`, `timeout`)
-- [ ] `sku` values match `.github/sku_config.yaml`
+- [ ] Test yaml entries have all required keys (`name`, `cmd`, `skus`, `owner_id`, `team`, `budget_type`)
+- [ ] SKU names under `skus` match `.github/sku_config.yaml`
 - [ ] Tests are in a pipeline level appropriate for their runtime

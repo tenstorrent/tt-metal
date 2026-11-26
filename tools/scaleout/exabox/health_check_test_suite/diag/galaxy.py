@@ -83,6 +83,59 @@ ETH_EXAMAX_BY_ASIC: dict[int, int] = {
     8: 0x3F0,  # ETH4-6 (retimer) + ETH7-9 (passive)
 }
 
+# Every ETH port of one BH Galaxy UBB, the same on all four: (port type, port id) ->
+# its lanes as (ASIC_LOCATION, eth channel). tt-metal's tools/scaleout/board/board.cpp,
+# UBB_BLACKHOLE. The channel is the logical one triage reports (the N of an eth core's
+# "(e0,N)"), not an ETH_* index of the tables above. QSFP_DD ports take a cable; the
+# board traces and linking boards are built in, so every Galaxy has those links
+# whatever its cabling.
+UBB_ETH_PORTS: dict[tuple[str, int], tuple[tuple[int, int], ...]] = {
+    ("QSFP_DD", 1): ((5, 2), (5, 3)),
+    ("QSFP_DD", 2): ((1, 2), (1, 3)),
+    ("QSFP_DD", 3): ((1, 0), (1, 1)),
+    ("QSFP_DD", 4): ((2, 0), (2, 1)),
+    ("QSFP_DD", 5): ((3, 0), (3, 1)),
+    ("QSFP_DD", 6): ((4, 0), (4, 1)),
+    ("QSFP_DD", 7): ((1, 8), (2, 8)),
+    ("QSFP_DD", 8): ((5, 8), (6, 8)),
+    ("QSFP_DD", 9): ((3, 8), (4, 8)),
+    ("QSFP_DD", 10): ((7, 8), (8, 8)),
+    ("QSFP_DD", 11): ((1, 9), (2, 9)),
+    ("QSFP_DD", 12): ((5, 9), (6, 9)),
+    ("QSFP_DD", 13): ((3, 9), (4, 9)),
+    ("QSFP_DD", 14): ((7, 9), (8, 9)),
+    ("LINKING_BOARD_1", 1): ((5, 6), (5, 7)),
+    ("LINKING_BOARD_1", 2): ((6, 6), (6, 7)),
+    ("LINKING_BOARD_2", 1): ((7, 6), (7, 7)),
+    ("LINKING_BOARD_2", 2): ((8, 6), (8, 7)),
+    ("LINKING_BOARD_3", 1): ((8, 4), (8, 5)),
+    ("LINKING_BOARD_3", 2): ((4, 4), (4, 5)),
+    ("TRACE", 1): ((5, 0), (5, 1)),
+    ("TRACE", 2): ((1, 6), (1, 7)),
+    ("TRACE", 3): ((5, 4), (5, 5)),
+    ("TRACE", 4): ((6, 2), (6, 3)),
+    ("TRACE", 5): ((1, 4), (1, 5)),
+    ("TRACE", 6): ((2, 2), (2, 3)),
+    ("TRACE", 7): ((6, 0), (6, 1)),
+    ("TRACE", 8): ((2, 6), (2, 7)),
+    ("TRACE", 9): ((6, 4), (6, 5)),
+    ("TRACE", 10): ((7, 2), (7, 3)),
+    ("TRACE", 11): ((2, 4), (2, 5)),
+    ("TRACE", 12): ((3, 2), (3, 3)),
+    ("TRACE", 13): ((7, 0), (7, 1)),
+    ("TRACE", 14): ((3, 6), (3, 7)),
+    ("TRACE", 15): ((7, 4), (7, 5)),
+    ("TRACE", 16): ((8, 2), (8, 3)),
+    ("TRACE", 17): ((3, 4), (3, 5)),
+    ("TRACE", 18): ((4, 2), (4, 3)),
+    ("TRACE", 19): ((8, 0), (8, 1)),
+    ("TRACE", 20): ((4, 6), (4, 7)),
+}
+UBB_ETH_PORT_OF: dict[tuple[int, int], tuple[str, int]] = {
+    lane: port for port, lanes in UBB_ETH_PORTS.items() for lane in lanes
+}
+QSFP_PORT_IDS: tuple[int, ...] = tuple(sorted(pid for ptype, pid in UBB_ETH_PORTS if ptype == "QSFP_DD"))
+
 # BH Galaxy board ID prefixes → hardware revision.
 # board_id source: tt-smi -s `device_info[].board_info.board_id` (hex string).
 # Spec: BH Galaxy Revisions Comparison Table (Confluence SYS-4055).

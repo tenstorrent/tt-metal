@@ -11,6 +11,8 @@ void ValidateResourceBindings(const KernelSpec& kernel, const ValidationContext&
     ValidateSemaphoreBindings(kernel, arch);
     ValidateScratchpadBindings(kernel);
     ValidateTensorBindings(kernel);
+    ValidateGlobalSemaphoreBindings(kernel);
+    ValidateFabricConnectionBindings(kernel, arch);
     ValidatePrefetcherPipeBindings(kernel);
 }
 
@@ -36,6 +38,9 @@ void ValidateResourceSpecs(
     for (const auto& pipe : spec.advanced_options.prefetcher_pipe_parameters) {
         ValidatePrefetcherPipeParameter(pipe, l1_alignment);
     }
+    for (const auto& connection : spec.advanced_options.fabric_connections) {
+        ValidateFabricConnectionsSpec(connection);
+    }
 }
 
 void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
@@ -49,6 +54,8 @@ void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
     ValidateScratchpadsUsed(ctx);
     ValidateTensorParametersUsed(ctx);
     ValidatePerNodeTensorPlacement(ctx);
+    ValidateGlobalSemaphoreParametersUsed(ctx);
+    ValidateFabricConnectionsUsed(ctx);
     ValidatePrefetcherPipesUsed(ctx);
     experimental::ValidateSRAMArenaParametersUsed(ctx);
 }

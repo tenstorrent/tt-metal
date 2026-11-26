@@ -211,6 +211,8 @@ public:
     // Chips whose recorded MPI rank is mpi_rank. Several ranks may share one hostname.
     std::vector<AsicID> get_asics_for_mpi_rank(uint32_t mpi_rank) const;
     std::pair<AsicID, uint8_t> get_connected_asic_and_channel(AsicID asic_id, uint8_t chan_id) const;
+    // links both ends list; outside_job adds this host's cables to chips outside the job
+    std::vector<std::pair<AsicID, EthConnection>> get_eth_links(AsicID asic_id, bool outside_job = false) const;
     AsicID get_asic_id(const std::string& hostname, TrayID tray_id, ASICLocation asic_location) const;
     // The descriptor's own label for an address, and the reverse. find_* is empty when this
     // descriptor does not have that chip; get_* is fatal in that case.
@@ -268,6 +270,7 @@ public:
     std::unordered_map<std::string, std::string>& get_host_mobo_name_map() { return host_to_mobo_name_; }
     std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() { return host_to_rank_; }
     ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
+    std::vector<ExitNodeConnection>& get_local_exit_nodes() { return local_exit_nodes_; }
     tt::umd::SemVer& get_ethernet_firmware_version() { return ethernet_firmware_version_; }
     std::optional<tt::umd::FirmwareBundleVersion>& get_firmware_bundle_version() { return firmware_bundle_version_; }
     std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_set<uint32_t>>>&
@@ -292,6 +295,8 @@ private:
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
     std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;
+    // before global discovery prunes them; not serialized
+    std::vector<ExitNodeConnection> local_exit_nodes_;
     bool all_hostnames_unique_ = false;
     tt::umd::SemVer ethernet_firmware_version_;
     std::optional<tt::umd::FirmwareBundleVersion> firmware_bundle_version_;

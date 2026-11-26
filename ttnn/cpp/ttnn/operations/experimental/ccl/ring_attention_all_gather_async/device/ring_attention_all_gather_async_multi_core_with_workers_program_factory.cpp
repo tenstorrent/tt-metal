@@ -7,18 +7,19 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
@@ -336,7 +337,7 @@ void ring_attention_neighbor_halo_exchange_helper(
     const auto op_config = ttnn::ccl::CCLOpConfig(mutable_input_tensors, output_tensors, transport_topology);
     auto unicast_forward_args = std::get<0>(ccl::get_forward_backward_line_unicast_configuration(
         target_device_coord, unicast_destination_coord, std::nullopt, mesh_device));
-    if (tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+    if (tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device))) {
         unicast_forward_args[1] = halo.distance;
     }
 
@@ -710,7 +711,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_layer_idx,
     bool split_forwarding_enabled,
     bool partial_readiness_enabled,
-    RingAttentionRankMapping rank_mapping) {
+    RingAttentionRankMapping rank_mapping,
+    RingAttentionBalance* balance) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -752,7 +754,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             rank_mapping.mesh_rows,
             rank_mapping.mesh_cols);
         TT_FATAL(
-            tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+            tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device)),
             "full-mesh ring-attention requires Fabric2D");
         TT_FATAL(
             target_device_coord.dims() == 2,
@@ -998,6 +1000,48 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const bool has_slot_metadata = slot_id.has_value();
     const bool has_metadata = kv_actual_isl.has_value();
     TT_FATAL(!has_slot_metadata || has_metadata, "slot metadata requires KV-extent metadata");
+    const bool has_balance = balance != nullptr;
+    TT_FATAL(
+        !has_balance || (fuse_op && !rank_mapping.full_mesh),
+        "Ring attention load balancing needs a fused consumer and an axis ring");
+    // Balance scratch: one head's Q or output pages of a row block, or a payload; then the partner page.
+    const uint32_t balance_cb_index = tt::CB::c_in4;
+    uint32_t balance_list_offset = 0;
+    if (has_balance) {
+        auto& config = *balance;
+        const uint32_t data_bytes = tt::round_up(
+            std::max(
+                {config.block_tiles * config.dht * config.q_page_bytes,
+                 config.block_tiles * config.vdht * config.out_page_bytes,
+                 max_payload_size_bytes}),
+            64u);
+        balance_list_offset = data_bytes;
+        const uint32_t list_bytes = tt::round_up(config.q_blocks, 16u) * sizeof(uint32_t);
+        const CoreRangeSet writers = sender_forward_core_ranges.merge(sender_backward_core_ranges);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = data_bytes + list_bytes,
+            .core_ranges = writers,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(balance_cb_index),
+                .data_format = tt::DataFormat::RawUInt32,
+                .page_size = data_bytes + list_bytes,
+            }}},
+        });
+        config.writer_flag_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = config.writer_flag_semaphore,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = writers,
+            .initial_value = 0,
+        });
+        config.writer_cores_noc.clear();
+        for (const auto& w : forward_workers) {
+            config.writer_cores_noc.push_back(mesh_device->worker_core_from_logical_core(w.core));
+        }
+        for (const auto& w : backward_workers) {
+            config.writer_cores_noc.push_back(mesh_device->worker_core_from_logical_core(w.core));
+        }
+    }
     const uint32_t meta_cb_index = tt::CB::c_in3;
     if (has_metadata) {
         const uint32_t meta_cb_page_size_bytes = kv_actual_isl->buffer()->page_size();
@@ -1033,13 +1077,15 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         "ring_attention_all_gather_writer.cpp";
 
     const auto make_reader_compile_time_args = [&](uint32_t cb_index, bool worker_direction) {
+        // The per-chip slots (rank, targets) are 0: the kernel reads them from its common runtime args, so every chip
+        // compiles the same binary.
         std::vector<uint32_t> args = {
-            ring_index,                                         // kMyTransportRank
+            0,                                                  // kMyTransportRank (common arg 0)
             cb_index,                                           // kCbOutputId
             num_pages_per_packet,                               // kPacketSizeInPages
             op_config.get_page_size(),                          // kInputTensorPageSize
-            num_targets_forward,                                // kNumTargetsForwardDirection
-            num_targets_backward,                               // kNumTargetsBackwardDirection
+            0,                                                  // kNumTargetsForwardDirection (common arg 1)
+            0,                                                  // kNumTargetsBackwardDirection (common arg 2)
             static_cast<uint32_t>(topology),                    // kTopology
             kContiguousPagesAdvanced,                           // kContigPagesAdvanced
             num_inputs,                                         // kNumInputs
@@ -1085,23 +1131,22 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     const auto make_writer_compile_time_args = [&](uint32_t cb_index,
                                                    uint32_t packet_header_cb_index,
-                                                   bool worker_direction,
-                                                   uint32_t unicast_route_arg0,
-                                                   uint32_t unicast_route_arg1) {
+                                                   bool worker_direction) {
+        // The per-chip slots (rank, targets, route) are 0: the kernel reads them from its common runtime args.
         std::vector<uint32_t> args = {
-            ring_index,                                         // kMyTransportRank
+            0,                                                  // kMyTransportRank (common arg 0)
             packet_header_cb_index,                             // kReservedPacketHeaderCbId
             cb_index,                                           // kCbOutputId
             num_pages_per_packet,                               // kPacketSizeInPages
             op_config.get_page_size(),                          // kOutputPageSize
-            num_targets_forward,                                // kNumTargetsForwardDirection
-            num_targets_backward,                               // kNumTargetsBackwardDirection
+            0,                                                  // kNumTargetsForwardDirection (common arg 1)
+            0,                                                  // kNumTargetsBackwardDirection (common arg 2)
             static_cast<uint32_t>(fuse_op),                     // kFuseOp
             static_cast<uint32_t>(topology),                    // kTopology
             num_inputs,                                         // kNumInputs
             static_cast<uint32_t>(worker_direction),            // kDirection
-            unicast_route_arg0,                                 // kUnicastRouteArg0
-            unicast_route_arg1,                                 // kUnicastRouteArg1
+            0,                                                  // kUnicastRouteArg0 (common arg 3)
+            0,                                                  // kUnicastRouteArg1 (common arg 4)
             static_cast<uint32_t>(has_metadata),                // kHasMetadata
             meta_cb_index,                                      // kCbMetaId
             num_links,                                          // kNumLinks
@@ -1125,6 +1170,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (has_metadata) {
             tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
         }
+        if (has_balance) {
+            for (tt::tt_metal::Buffer* const buf :
+                 {balance->table, balance->partner, balance->q, balance->mask, balance->out}) {
+                tt::tt_metal::TensorAccessorArgs(buf).append_to(args);
+            }
+        }
         return args;
     };
 
@@ -1138,6 +1189,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_reader_forward_kernel.config = WriterConfigDescriptor{};
     sender_reader_forward_kernel.compile_time_args =
         make_reader_compile_time_args(sender_forward_cb_index, kForwardDirection);
+    sender_reader_forward_kernel.common_runtime_args = {ring_index, num_targets_forward, num_targets_backward};
 
     // Writer
     KernelDescriptor sender_writer_forward_kernel{};
@@ -1146,11 +1198,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_forward_kernel.core_ranges = sender_forward_core_ranges;
     sender_writer_forward_kernel.config = ReaderConfigDescriptor{};
     sender_writer_forward_kernel.compile_time_args = make_writer_compile_time_args(
-        sender_forward_cb_index,
-        reserved_packet_header_forward_CB_index,
-        kForwardDirection,
-        unicast_backward_args[0],
-        unicast_backward_args[1]);
+        sender_forward_cb_index, reserved_packet_header_forward_CB_index, kForwardDirection);
+    if (has_balance) {
+        sender_writer_forward_kernel.defines.emplace_back("RING_ATTENTION_BALANCE", "1");
+    }
+    sender_writer_forward_kernel.common_runtime_args = {
+        ring_index, num_targets_forward, num_targets_backward, unicast_backward_args[0], unicast_backward_args[1]};
     // Backward Direction
     // Reader
     KernelDescriptor sender_reader_backward_kernel{};
@@ -1160,6 +1213,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_reader_backward_kernel.config = WriterConfigDescriptor{};
     sender_reader_backward_kernel.compile_time_args =
         make_reader_compile_time_args(sender_backward_cb_index, kBackwardDirection);
+    sender_reader_backward_kernel.common_runtime_args = {ring_index, num_targets_forward, num_targets_backward};
 
     // Writer
     KernelDescriptor sender_writer_backward_kernel{};
@@ -1168,11 +1222,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_backward_kernel.core_ranges = sender_backward_core_ranges;
     sender_writer_backward_kernel.config = ReaderConfigDescriptor{};
     sender_writer_backward_kernel.compile_time_args = make_writer_compile_time_args(
-        sender_backward_cb_index,
-        reserved_packet_header_backward_CB_index,
-        kBackwardDirection,
-        unicast_forward_args[0],
-        unicast_forward_args[1]);
+        sender_backward_cb_index, reserved_packet_header_backward_CB_index, kBackwardDirection);
+    if (has_balance) {
+        sender_writer_backward_kernel.defines.emplace_back("RING_ATTENTION_BALANCE", "1");
+    }
+    sender_writer_backward_kernel.common_runtime_args = {
+        ring_index, num_targets_forward, num_targets_backward, unicast_forward_args[0], unicast_forward_args[1]};
 
     /* All gather fusion */
     // Inline equivalent of AllGatherFusedOpSignaler::init_all_gather for the descriptor
@@ -1342,6 +1397,60 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (has_metadata) {
             writer_args.push_back(kv_actual_isl->buffer());
             writer_args.push_back(chunk_local_tiles);
+        }
+        if (has_balance) {
+            // ring_attention_balance::Arg order. The forward worker sends toward rank - 1; link 0 multicasts the cost
+            // page over its half of the ring (the diametric device on the minus side) or its side of a line.
+            const auto& config = *balance;
+            const bool ring = topology == ttnn::ccl::Topology::Ring;
+            const uint32_t minus_range = ring ? ring_size / 2 : ring_index;
+            const uint32_t plus_range = ring ? ring_size - 1 - ring_size / 2 : ring_size - 1 - ring_index;
+            const uint32_t table_range = placement.link == 0 ? (is_forward ? minus_range : plus_range) : 0u;
+            uint32_t pushed = 0;  // RTArgList has no size; buffers stay address-patched on cache hits
+            const auto put = [&](auto value) {
+                writer_args.push_back(value);
+                ++pushed;
+            };
+            put(config.table);
+            put(config.partner);
+            put(config.q);
+            put(config.import_q);
+            put(config.mask);
+            put(config.import_mask);
+            put(config.export_out);
+            put(config.out);
+            put(config.tables_arrived_addr);
+            put(config.imports_arrived_addr);
+            put(config.returns_arrived_addr);
+            put(config.tables_read_addr);
+            put(static_cast<uint32_t>(config.balance_core_noc.x));
+            put(static_cast<uint32_t>(config.balance_core_noc.y));
+            put(config.writer_flag_semaphore);
+            put(ring_index);
+            put(ring_size);
+            put(ring ? 1u : 0u);
+            put(table_range);
+            put(placement.link);
+            put(num_links);
+            put(config.heads);
+            put(config.q_blocks);
+            put(config.q_row_tiles);
+            put(config.dht);
+            put(config.vdht);
+            put(config.block_tiles);
+            put(config.mask_rows);
+            put(config.mask_row_bytes);
+            put(config.table_page_bytes);
+            put(config.q_page_bytes);
+            put(config.out_page_bytes);
+            put(max_payload_size_bytes);
+            put(balance_list_offset);
+            TT_FATAL(
+                pushed == ttnn::ring_attention_all_gather::kBalanceWriterArgCount,
+                "Ring attention load-balancing args: {} words, the writer reads {}",
+                pushed,
+                ttnn::ring_attention_all_gather::kBalanceWriterArgCount);
+            writer_args.push_back(balance_cb_index);
         }
 
         const auto neighbor_coord = is_forward ? backward_device_coord : forward_device_coord;

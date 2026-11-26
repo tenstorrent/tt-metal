@@ -74,7 +74,6 @@ template <
     uint32_t groups_per_head,
     uint32_t late_on_writer,
     uint32_t has_actual_end,
-    uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows>
 TT_KERNEL void reader(
@@ -85,7 +84,8 @@ TT_KERNEL void reader(
     uint32_t peer_y0,
     uint32_t peer_x1,
     uint32_t peer_y1,
-    uint32_t receivers) {
+    uint32_t receivers,
+    uint32_t sp_rank) {
     const auto v_beta_accessor = TensorAccessor(tensor::v_beta);
     const auto kd_accessor = TensorAccessor(tensor::kd);
     const auto t_inv_accessor = TensorAccessor(tensor::t_inv);

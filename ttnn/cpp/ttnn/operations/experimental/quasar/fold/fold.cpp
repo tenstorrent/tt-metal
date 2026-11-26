@@ -16,8 +16,8 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/experimental/quasar/halo/halo.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/experimental/quasar/reshard/reshard.hpp"
 #include "ttnn/operations/experimental/quasar/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/sharded_to_interleaved.hpp"

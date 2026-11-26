@@ -33,9 +33,9 @@ from loguru import logger
 import ttnn
 from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.attn_res.device_determinism import deterministic_input
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import EXACT_BOX, HIDDEN_SIZE, L1_SMALL_SIZE
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params, tp_axis_is_wrapped
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import deterministic_input
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import EPS, STATS_FIDELITY
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links, per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
@@ -64,7 +64,8 @@ OPS = ("attn_res_block_stats", "attn_res_block_mix", "attn_res_gather_softmax")
 
 # Device kernel duration (us) per op, as CI hardware (bh_sc1_high_power) measures it. SP8xTP4 is the mean of two CI
 # Galaxies' medians over 20 synced blocks, runs 41962421284 and 42058182913: block_stats 139.0 / 119.0, block_mix
-# 275.5 / 275.6, gather_softmax 67.5 / 68.2.
+# 275.5 / 275.6, gather_softmax 67.5 / 68.2; block_stats then re-centred on run 44904800202's median, 73.8 us (min
+# 72.9, max 88.2), where block_mix and gather_softmax stayed on their references (275.4, 67.9).
 #
 # SP4xTP4 has no CI job: it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the
 # end-to-end boundary layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by
@@ -73,7 +74,7 @@ OPS = ("attn_res_block_stats", "attn_res_block_mix", "attn_res_gather_softmax")
 _CI_OVER_LOCAL = 394.0 / 416.0
 _REFERENCE_US = {
     "SP8xTP4": {
-        "attn_res_block_stats": 129.0,
+        "attn_res_block_stats": 73.8,
         "attn_res_block_mix": 275.6,
         "attn_res_gather_softmax": 67.9,
     },
@@ -138,7 +139,7 @@ def test_attn_res_op_perf(mesh_device, device_params):
     assert set(references) == set(OPS), f"{layout} references name {sorted(references)}, not {sorted(OPS)}"
     require_realtime_profiler("the AttnRes op perf gate")
     num_links = get_num_links(mesh_device, TP_AXIS)
-    topology = per_axis_topology()[TP_AXIS]
+    topology = per_axis_topology(mesh_device=mesh_device)[TP_AXIS]
     grid = mesh_device.compute_with_storage_grid_size()
 
     stream_mapper = _mapper(mesh_device, 2, 3)
@@ -230,7 +231,7 @@ def test_attn_res_op_perf(mesh_device, device_params):
         assert len(samples) == _ITERATIONS, f"expected {_ITERATIONS} {op} programs in the window, got {len(samples)}"
     device_us = {op: statistics.median(samples) for op, samples in durations_us.items()}
 
-    fabric = ttnn.get_fabric_config().name
+    fabric = ttnn.get_fabric_config(mesh_device).name
     logger.info(
         f"AttnRes ops, C = {sum(PLANES)}, {NUM_SITES} sites ({NUM_CLOSED} closed), {GLOBAL_TOKENS} tokens "
         f"({GLOBAL_TOKENS // sp_factor}/chip), {layout} {fabric}, {num_links} links, median of {_ITERATIONS}:"

@@ -27,6 +27,9 @@ struct CollectedSpecData {
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
     std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
+    std::unordered_map<GlobalSemaphoreParamName, const GlobalSemaphoreParameter*> global_semaphore_parameter_by_name;
+    std::unordered_map<experimental::FabricConnectionsSpecName, const experimental::FabricConnectionsSpec*>
+        fabric_connection_by_name;
     std::unordered_map<experimental::SRAMArenaParamName, const experimental::SRAMArenaParameter*>
         sram_arena_parameter_by_name;
     std::unordered_map<experimental::PrefetcherPipeParamName, const experimental::PrefetcherPipeParameter*>
@@ -58,6 +61,18 @@ struct CollectedSpecData {
     // - Every kernel in a vector has a scratchpad binding naming this key
     //   (some k->scratchpad_bindings entry has scratchpad_spec_name == key).
     std::unordered_map<ScratchpadSpecName, std::vector<const KernelSpec*>> scratchpad_binders;
+
+    // Fabric connection binders (derived from kernel fabric connection bindings).
+    // Tracks which kernels bind a given FabricConnectionsSpec.
+    //
+    // Invariants:
+    // - Every key is a key in fabric_connection_by_name.
+    // - Every vector is non-empty.
+    // - Every pointer is non-nullptr.
+    // - Every pointer k is the registered kernel: kernel_by_name[k->unique_id] == k.
+    // - Every kernel in a vector has a fabric connection binding naming this key.
+    std::unordered_map<experimental::FabricConnectionsSpecName, std::vector<const KernelSpec*>>
+        fabric_connection_binders;
 
     // DFB endpoint info (derived from kernel bindings).
     //
@@ -99,12 +114,18 @@ struct CollectedSpecData {
     //  - Every kernel in kernel_by_name have an entry.
     std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
 
-    // dfb_node_set: union of binding-kernels' node sets.
-    //   - For each DFBSpecName, the node set could be empty.
+    // Node sets used to configure a DFB and reserve its backing memory.
+    struct DFBPlacement {
+        NodeRangeSet configuration;
+        NodeRangeSet allocation;
+    };
+
+    // dfb_placements: configuration and backing-memory placement of each DFB.
+    //   - For each DFBSpecName, the node sets could be empty.
     //   - Every key of dfb_by_name has an entry.
-    //   - The node set of a DFB d is the union of kernel_node_set[rec.kernel->unique_id] over every
-    //     record in dfb_endpoints[d].producers and dfb_endpoints[d].consumers.
-    std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_set;
+    //   - Configuration is the union of the producer and consumer kernels' node sets.
+    //   - Allocation is override_placement when set; otherwise it matches configuration.
+    std::unordered_map<DFBSpecName, DFBPlacement> dfb_placements;
 
     // Semaphore binder census (derived from kernel semaphore bindings and kernel_node_set): which
     // kernel instances bind each semaphore, and their placement. A kernel binds a given semaphore at
