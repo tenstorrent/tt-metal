@@ -1,0 +1,3 @@
+{"event":"test_run","what":"acceptance --dev + non-dev, golden suite","result":"PASS 21/21, 21/21, golden 12/12","classification":"pass","ts":"2026-11-26T23:13:50+00:00"}
+{"event":"perf_measure","case":"P","device_kernel_ns":2461,"ncrisc_noc0_ns":2461,"brisc_noc1_ns":1212,"stock_ttnn_ns":1990,"note":"NOC0 issuer 2x slower than NOC1 on P; I5 4070 vs 1291","ts":"2026-11-26T23:13:50+00:00"}
+{"event":"hypothesis","what":"P/I5 sources sit east/south of targets; read data on NOC0 (east->south) wraps the torus, NOC1 (north->west) goes direct. Choose NoC per piece by return-path hops in DM_DYNAMIC_NOC mode.","ts":"2026-11-26T23:13:50+00:00"}
