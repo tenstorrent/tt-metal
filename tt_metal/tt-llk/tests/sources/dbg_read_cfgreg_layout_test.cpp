@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// dbg_read_cfgreg(bank, addr) reads one backend configuration word through the RISC debug
-// selector, whose index space is the RISC's own word view of TENSIX_CFG_BASE: the two state-CFG
-// banks, the dual-write window, then the three thread-CFG banks. The bank bases it adds to
-// `addr` must therefore follow this architecture's CFG_STATE_SIZE / THD_STATE_SIZE, or a read of
-// "state bank 1" or "thread n" returns some other register's word.
+// Checks that dbg_read_cfgreg(bank, addr) returns the configuration word it names. The layout its
+// bank bases follow is described once, at dbg_cfgreg in ckernel_debug.h; the static_asserts below
+// hold those bases to the HAL's (hal/cfg/detail/register_layout.h).
 //
 // The math thread plants a known value where each read must land and reads it back:
-//   - a state-CFG word in bank 1 (the inactive bank; written through the bank-1 MMIO window,
-//     expected = the MMIO read-back of the same word)
+//   - a state-CFG word in bank 1 (the inactive bank; written through the bank-1 MMIO window at the
+//     HAL's bank-1 location, expected = the MMIO read-back of the same word)
 //   - a second bank-1 word far from the first, so a wrong base cannot pass by coincidence
 //   - the same word in bank 0 as a control (base 0 on every layout)
-//   - its own thread-CFG word, set with SETC16 (thread 1 is the math TRISC)
+//   - its own thread-CFG word, set with SETC16 (thread 1 is the math TRISC). The hardware places
+//     this value, so this probe checks the thread base, and through it both state banks and the
+//     dual-write window, against silicon rather than against another copy of the layout.
 // State words are restored afterwards; the thread word is reset to its boot value 0. No LLK runs on
 // any thread, so the words are free to use.
 //
@@ -23,12 +23,19 @@
 //   8 + 4p     probe p: identifier (bank << PROBE_ID_BANK_SHIFT | addr)
 //   9 + 4p     probe p: expected value
 //   10 + 4p    probe p: value dbg_read_cfgreg returned
+//   11 + 4p    reserved, left 0 (WORDS_PER_PROBE is 4 on both sides; change them together)
 
 #include <cstdint>
 
 #include "build.h"
 #include "ckernel.h"
 #include "ckernel_debug.h"
+#include "hal/cfg/detail/register_layout.h"
+
+static_assert(ckernel::dbg_cfgreg::HW_CFG_SIZE == hal::cfg::detail::StateCfgWordCount, "debug read state-bank size disagrees with the HAL");
+static_assert(ckernel::dbg_cfgreg::THREAD_CFG_BASE == hal::cfg::detail::ThreadCfgBase, "debug read thread-bank base disagrees with the HAL");
+static_assert(ckernel::dbg_cfgreg::THREAD_CFG_SIZE == hal::cfg::detail::ThreadCfgWordCount, "debug read thread-bank size disagrees with the HAL");
+static_assert(ckernel::dbg_cfgreg::MAX_INDEX == hal::cfg::detail::CregSelectorMax, "debug read index mask disagrees with the HAL");
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -59,7 +66,7 @@ constexpr std::uint32_t WORDS_PER_PROBE     = 4;
 constexpr std::uint32_t PROBE_ID_BANK_SHIFT = 16;
 
 // Word offset of state bank 1 in the RISC's view of the configuration space.
-constexpr std::uint32_t BANK1_OFFSET = CFG_STATE_SIZE * 4;
+constexpr std::uint32_t BANK1_OFFSET = hal::cfg::detail::StateCfgWordCount;
 
 // The word the dprint helpers read most (ALU format and accumulation control) and an unpacker-1
 // stride word no idle unit consults; both are banked (below GLOBAL_CFGREG_BASE_ADDR32).
