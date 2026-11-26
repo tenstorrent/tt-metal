@@ -125,3 +125,12 @@ def test_renders_with_sweep_page(tmp_path):
     assert r.returncode == 0, r.stderr
     page = out.read_text()
     assert "HANG" in page and "fallback 1: PASS 1 passed" in page
+
+
+def test_status_json_readable_by_others(tmp_path):
+    old = os.umask(0o022)
+    try:
+        write(tmp_path / "status.json", HEADER, _steps(), None)
+    finally:
+        os.umask(old)
+    assert (tmp_path / "status.json").stat().st_mode & 0o777 == 0o644

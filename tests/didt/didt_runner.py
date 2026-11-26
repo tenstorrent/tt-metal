@@ -21,6 +21,7 @@ snapshot failed.
 """
 
 import argparse
+import signal
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -88,7 +89,14 @@ def main(argv: list[str]) -> int:
         return 2
     run_dir = _run_dir(a.out.resolve())
     print(f"run dir {run_dir}  ({len(chips)} chips)", flush=True)
-    return run(cfg, run_dir, chips, only, skip, a.co)
+    # SIGTERM / SIGHUP (closed ssh or tmux) take the same path as Ctrl-C: kill the workload, mark the attempt.
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _interrupt)
+    return run(cfg, run_dir, chips, only, skip, a.co, snap=snapshot)
+
+
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt(signal.Signals(signum).name)
 
 
 if __name__ == "__main__":
