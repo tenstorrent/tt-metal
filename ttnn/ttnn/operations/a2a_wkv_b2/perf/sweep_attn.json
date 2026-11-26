@@ -1,0 +1,4 @@
+{"op": "a2a_wkv_b2", "case": "attn [96,160,512] bf16 RM, 1024 B sticks, one head (160 consecutive pages) per core",
+ "work_bytes": 15728640, "top": 6, "max_l1_bytes": 131072,
+ "candidates": [{"name": "attn_sticks", "family": "dram_read", "placement": "interleaved", "bytes": 1024}],
+ "vary": {"cores": [96], "batch": [8, 16, 32, 64], "noc": [0, 1, "split"]}}
