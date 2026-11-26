@@ -17,7 +17,7 @@ tile are padded, and padded keys are masked out.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import torch
 
@@ -100,14 +100,27 @@ class WindowSoftmax:
         *,
         scale: float,
         anchor_frames: str = "both",
+        sp_axis: int | None = None,
+        sp_factor: int = 1,
+        gather: Callable[[ttnn.Tensor], ttnn.Tensor] | None = None,
+        q_chunk: int = _PAD,
+        k_chunk: int = _PAD,
     ) -> None:
+        """With `sp_factor > 1` (q, k, v replicated on the `sp_axis` devices), each group's query rows are split
+        across those devices (`mesh_partition`), each attends its share against the group's keys, and `gather`
+        (an all-gather on dim 2 over `sp_axis`) reassembles the group: every device then holds the whole output, as
+        without the split, for 1/sp of the attention work. Exact: a query row's softmax does not depend on which
+        device computes it."""
         self.device = device
         self.scale = scale
         self.groups = window_groups(layout, bounds, anchor_frames)
+        self.sp_axis, self.sp_factor, self.gather = sp_axis, sp_factor, gather
+        assert sp_factor == 1 or (sp_axis is not None and gather is not None)
+        self.q_chunk, self.k_chunk = q_chunk, k_chunk
         self.program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-            q_chunk_size=_PAD,
-            k_chunk_size=_PAD,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -115,13 +128,13 @@ class WindowSoftmax:
         )
         self._masks = self._shared_masks
 
-    def _mask(self, q_rows: int, k_rows: int) -> ttnn.Tensor | None:
-        """Additive mask hiding the padded keys, or None when nothing is padded."""
-        if k_rows % _PAD == 0:
+    def _mask(self, q_pad: int, k_rows: int) -> ttnn.Tensor | None:
+        """Additive mask `[q_pad, k_pad]` hiding the padded keys, or None when nothing is padded."""
+        if k_rows % self.k_chunk == 0:
             return None
-        key = (id(self.device), q_rows, k_rows)
+        key = (id(self.device), q_pad, k_rows, self.k_chunk)
         if key not in self._masks:
-            q_pad, k_pad = q_rows + (-q_rows % _PAD), k_rows + (-k_rows % _PAD)
+            k_pad = k_rows + (-k_rows % self.k_chunk)
             mask = torch.zeros(1, 1, q_pad, k_pad)
             mask[..., k_rows:] = float("-inf")
             self._masks[key] = tensor.from_torch(mask, device=self.device, dtype=ttnn.bfloat16)
@@ -132,19 +145,23 @@ class WindowSoftmax:
         outs = []
         for (q0, q1), key_ranges in self.groups:
             k_rows = sum(r1 - r0 for r0, r1 in key_ranges)
-            qg = _pad_rows(_rows(q, [(q0, q1)]), _PAD)
-            kg = _pad_rows(_rows(k, key_ranges), _PAD)
-            vg = _pad_rows(_rows(v, key_ranges), _PAD)
+            qg = _pad_rows(_rows(q, [(q0, q1)]), self.q_chunk * self.sp_factor)
+            if self.sp_factor > 1:
+                qg = ttnn.mesh_partition(qg, dim=2, cluster_axis=self.sp_axis)
+            kg = _pad_rows(_rows(k, key_ranges), self.k_chunk)
+            vg = _pad_rows(_rows(v, key_ranges), self.k_chunk)
             out = ttnn.transformer.scaled_dot_product_attention(
                 qg,
                 kg,
                 vg,
-                attn_mask=self._mask(q1 - q0, k_rows),
+                attn_mask=self._mask(qg.shape[2], k_rows),
                 is_causal=False,
                 scale=self.scale,
                 program_config=self.program_config,
                 compute_kernel_config=self.compute_config,
             )
+            if self.sp_factor > 1:
+                out = self.gather(out)
             if out.shape[2] != q1 - q0:
                 out = ttnn.slice(out, [0, 0, 0, 0], [1, heads, q1 - q0, dim])
             outs.append((q0, out))

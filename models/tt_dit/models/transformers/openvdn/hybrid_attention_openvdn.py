@@ -30,6 +30,7 @@ the conv and window, per-frame statistics gathered for the scans).
 from __future__ import annotations
 
 import dataclasses
+import os
 
 import torch
 
@@ -102,6 +103,13 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             mesh_device=mesh_device,
             tp_mesh_axis=tp_axis,
         )
+        # Stage 4 lever, off by default until accepted: OPENVDN_CONV_SP=1 splits the spatial conv's frames over SP.
+        if os.environ.get("OPENVDN_CONV_SP") == "1" and self.sp_factor > 1:
+            self.linear_attention.frame_split = (
+                self.sp_mesh_axis,
+                self.sp_factor,
+                lambda t: self._gather(t, dim=1, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor),
+            )
         col = dict(mesh_device=mesh_device, mesh_axis=tp_axis, compute_kernel_config=config)
         # Column-parallel like `to_out`: TP-gathered readout in, TP-fractured hidden out.
         self.to_out_linear = ColParallelLinear(self.inner_dim, self.hidden_size, bias=False, **col)
@@ -139,12 +147,23 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
 
     def _window(self, layout: HybridLayout) -> WindowSoftmax:
         if layout not in self._windows:
+            # Stage 4 levers, off by default until accepted: OPENVDN_WINDOW_SP=1 splits each group's queries over
+            # the SP devices; OPENVDN_WINDOW_CHUNKS="q,k" sets the SDPA chunk sizes (default 32,32).
+            split = os.environ.get("OPENVDN_WINDOW_SP") == "1" and self.sp_factor > 1
+            q_chunk, k_chunk = (int(c) for c in os.environ.get("OPENVDN_WINDOW_CHUNKS", "32,32").split(","))
             self._windows[layout] = WindowSoftmax(
                 self.mesh_device,
                 WindowLayout(layout.seq_len, layout.video_start, layout.num_frames, layout.tokens_per_frame),
                 self.bounds(layout),
                 scale=self.head_dim**-0.5,
                 anchor_frames=self.anchor_frames,
+                sp_axis=self.sp_mesh_axis if split else None,
+                sp_factor=self.sp_factor if split else 1,
+                gather=(lambda t: self._gather(t, dim=2, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor))
+                if split
+                else None,
+                q_chunk=q_chunk,
+                k_chunk=k_chunk,
             )
         return self._windows[layout]
 

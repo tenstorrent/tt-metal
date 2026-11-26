@@ -154,6 +154,9 @@ class OpenVDNLinearBranch(Module):
         self.norm_weight = fp32([1, 1, 1, head_dim])
 
         self._shifts: dict[tuple[int, int], list[ttnn.Tensor]] = {}
+        #: `(mesh axis, factor, all-gather on dim 1)` to split the spatial conv's frames over devices that hold the
+        #: same (replicated) tokens, or None. Set by the caller.
+        self.frame_split: tuple[int, int, object] | None = None
 
     # ------------------------------------------------------------------ weights
 
@@ -200,6 +203,16 @@ class OpenVDNLinearBranch(Module):
         x = ttnn.to_layout(ttnn.reshape(x, [1, num_frames, per_frame, channels]), ttnn.TILE_LAYOUT)
         x_t = ttnn.transpose(x, -2, -1)  # [1, F, C, S]
 
+        # The spatial conv is per frame: with `frame_split` (axis, factor, gather) the frames are split over those
+        # devices (padded to a multiple of the factor), each convolves its share and the all-gather reassembles them.
+        split = self.frame_split
+        if split is not None:
+            axis, factor, gather = split
+            pad_frames = -num_frames % factor
+            if pad_frames:
+                x_t = ttnn.pad(x_t, [(0, 0), (0, pad_frames), (0, 0), (0, 0)], 0.0)
+            x_t = ttnn.mesh_partition(x_t, dim=1, cluster_axis=axis)
+
         weight = getattr(self, f"{proj}_sp").data
         acc = None
         for t, shift in enumerate(self._shift_matrices(frame_size)):
@@ -207,6 +220,10 @@ class OpenVDNLinearBranch(Module):
             tap = ttnn.slice(weight, [t, 0, 0, 0], [t + 1, 1, channels, 1])
             moved = ttnn.multiply(moved, tap)
             acc = moved if acc is None else ttnn.add(acc, moved)
+        if split is not None:
+            acc = gather(acc)
+            if acc.shape[1] != num_frames:
+                acc = ttnn.slice(acc, [0, 0, 0, 0], [1, num_frames, channels, per_frame])
         x = ttnn.transpose(acc, -2, -1)  # [1, F, S, C] fp32
 
         pad = self.KERNEL // 2
