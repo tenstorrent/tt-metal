@@ -12,7 +12,7 @@
 #include <string_view>
 #include <vector>
 
-#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
 
 #include "perf_counters/eth_counters_inventory.h"
 

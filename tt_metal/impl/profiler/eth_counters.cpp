@@ -14,13 +14,13 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/profiler/profiler_paths.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "device.hpp"
+#include <tt-metalium/mesh/legacy/device.hpp>
 
 namespace tt::tt_metal::eth_counters {
 
