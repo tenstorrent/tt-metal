@@ -25,8 +25,8 @@ the linear branch and its gates are sharded the same way), then the outputs are 
 holds the whole (logical, unpadded) sequence for its TP heads, and `mesh_partition` hands each device its rows back.
 The heavy work is then split over the SP devices (stage 4): each window group's queries by row (`WindowSoftmax`), and
 the linear branch by head, from its raw projections to the readout (`OpenVDNLinearBranch`, `_head_split`), each
-reassembled with one all-gather. Still repeated on every SP device: the projections' gathers, the softmax gate,
-`to_out` / `to_out_linear` and the output assembly.
+reassembled with one all-gather; the per-row tail (softmax gate, `to_out`, `to_out_linear`) runs on each device's own
+rows. Still repeated on every SP device: the gathers of the projections and the small beta/alpha/gate projections.
 """
 
 from __future__ import annotations
@@ -227,8 +227,9 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
                 return t
             return ttnn.slice(t, [0, 0, 0, 0], [t.shape[0], t.shape[1], length, t.shape[3]])
 
-        # OPENVDN_LOCAL_OUT=1: the per-row tail (softmax gate, to_out, to_out_linear) runs on this device's rows only.
-        local_out = os.environ.get("OPENVDN_LOCAL_OUT") == "1" and self.sp_factor > 1
+        # The per-row tail (softmax gate, to_out, to_out_linear) runs on this device's rows only (stage 4;
+        # OPENVDN_LOCAL_OUT=0 runs it on the whole sequence and partitions after, as before).
+        local_out = os.environ.get("OPENVDN_LOCAL_OUT", "1") == "1" and self.sp_factor > 1
         x_local = x_1BND
         x_1BND, q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE = (
             whole(t) for t in (x_1BND, q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE)
