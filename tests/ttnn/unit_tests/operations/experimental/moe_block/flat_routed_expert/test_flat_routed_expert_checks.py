@@ -271,12 +271,12 @@ def test_flat_expert_determinism(device, case):
     _skip_unless_supported(device)
     op, args, (x, spans), _ = _setup(case, device)
     det = DeterminismMarker(device)
-    # (only the routed experts' tiles are written - x is zero past each expert's rows, so their padding rows are
-    # zero: compare those tiles; the rest of y is whatever its allocation held)
-    tiles = [(o, o + -(-c // 32) * 32) for o, c in spans if c]
+    # (only the routed experts' token rows are written - y is row major and its writer skips the rows past an expert's
+    # token count, even inside its last row tile: compare the token rows; the rest of y is whatever its allocation held)
+    rows = [(o, o + c) for o, c in spans if c]
     for _ in range(CALLS):
         y = op(*args)
-        det.add({f"r{a}": ttnn.slice(y, [a, 0], [b, y.shape[-1]]) for a, b in tiles})
+        det.add({f"r{a}": ttnn.slice(y, [a, 0], [b, y.shape[-1]]) for a, b in rows})
         ttnn.deallocate(y)
     det.assert_identical(f"flat expert {case.id}")
     op.close()
