@@ -300,7 +300,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
     bool fuse_swiglu = false,
-    const std::optional<ttnn::MeshCoordinate>& linear_far_end_coord = std::nullopt) {
+    const std::optional<ttnn::MeshCoordinate>& linear_far_end_coord = std::nullopt,
+    bool gather_in1 = false,
+    bool transpose_b = false) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* device = input_tensor.device();
 
@@ -359,6 +361,11 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     uint32_t K = in0_tensor_shape[-1];
     uint32_t M = ttnn::operations::common::folded_rows(input_tensor);
     uint32_t N = in1_tensor_shape[-1];
+    if (gather_in1) {
+        // The slots hold in1 and in0 (table at agmm_m): M is in1's N and N is in0's rows.
+        M = input_tensor.padded_shape()[transpose_b ? -2 : -1];
+        N = ttnn::operations::common::folded_rows(weight_tensor);
+    }
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
     uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
@@ -381,6 +388,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
      */
     uint32_t subblock_h = config.has_value() ? config.value().subblock_h : default_subblock_h;
     uint32_t subblock_w = config.has_value() ? config.value().subblock_w : default_subblock_w;
+    if (gather_in1 && !config.has_value() && subblock_h < subblock_w) {
+        std::swap(subblock_h, subblock_w);
+    }
 
     uint32_t M_block_tiles = config.has_value() ? config.value().M_block_size : default_M_block_tiles;
     uint32_t K_block_tiles = config.has_value() ? config.value().K_block_size : default_K_block_tiles;
@@ -493,8 +503,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     const bool linear_2d = fabric_2d && topology == ttnn::ccl::Topology::Linear;
     // Direct output: the last K block packs straight to the output over its FP32 partials. Needs a plain output (no
     // bias, ternary, SwiGLU or activation), 1-tile-high subblocks, whole subblocks per N block.
-    const bool direct_out = !fuse_swiglu && !use_bias && !use_fused_ternary && !fused_activation.has_value() &&
-                            subblock_h == 1 && fp32_dest_acc_en && K_blocks > 1 &&
+    const bool direct_out = !gather_in1 && !fuse_swiglu && !use_bias && !use_fused_ternary &&
+                            !fused_activation.has_value() && subblock_h == 1 && fp32_dest_acc_en && K_blocks > 1 &&
                             N_tiles_per_core % N_block_tiles == 0 && N_block_tiles % subblock_w == 0;
     // With direct output, a core whose only output block is this one has it packed and written a row at a time, so one
     // row of output buffer is enough; frees M_block - 1 rows of L1 for larger K blocks.
@@ -808,6 +818,12 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // kernel containing output-writer or compute code sees FUSE_SWIGLU.
     if (fuse_swiglu) {
         defines["FUSE_SWIGLU"] = "1";
+    }
+    if (gather_in1) {
+        defines["GATHER_IN1"] = "1";
+        if (transpose_b) {
+            defines["TRANSPOSE_B"] = "1";
+        }
     }
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
@@ -1942,7 +1958,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
     bool fuse_swiglu,
-    const std::optional<MeshCoordinate>& linear_far_end_coord) {
+    const std::optional<MeshCoordinate>& linear_far_end_coord,
+    bool gather_in1,
+    bool transpose_b) {
     return ::detail::all_gather_minimal_matmul_async_factory_helper(
         input_tensor,
         weight_tensor,
@@ -1979,7 +1997,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
         fsdp_semaphore,
         fsdp_topology,
         fuse_swiglu,
-        linear_far_end_coord);
+        linear_far_end_coord,
+        gather_in1,
+        transpose_b);
 }
 
 tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
@@ -2027,9 +2047,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& ag_output_tensor = output_tensor.at(0);
-    const uint32_t M = operations::common::folded_rows(act_tensor);
+    const uint32_t M = agmm_m(attributes, act_tensor);
     const bool transpose_core_grid =
-        resolve_transpose_core_grid(attributes, M, weight_tensor.padded_shape()[-1], *act_tensor.device());
+        resolve_transpose_core_grid(attributes, M, agmm_n(attributes, weight_tensor), *act_tensor.device());
 
     // Output layout: [ag_output, (optional: persistent_weight_buffer), chunks...]
     // Strip ag_output (always) and persistent_weight_buffer (if FSDP) from mm_output_tensors.
@@ -2075,7 +2095,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         attributes.fsdp_semaphore,
         attributes.fsdp_topology,
         attributes.fuse_swiglu,
-        linear_far_end_coord);
+        linear_far_end_coord,
+        attributes.gather_in1,
+        attributes.transpose_b);
 }
 
 AllGatherMinimalMatmulAsyncProgramFactory::cached_mesh_workload_t
@@ -2150,7 +2172,7 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     const uint32_t sem_forward = operation_attributes.semaphore.at(1).address();
     const uint32_t barrier_sem =
         operation_attributes.barrier_semaphore.has_value() ? operation_attributes.barrier_semaphore->address() : 0u;
-    const uint32_t M_tiles = operations::common::folded_rows(tensor_args.input_tensor) / tt::constants::TILE_HEIGHT;
+    const uint32_t M_tiles = agmm_m(operation_attributes, tensor_args.input_tensor) / tt::constants::TILE_HEIGHT;
 
     uint32_t ternary_a_addr = 0;
     uint32_t ternary_b_addr = 0;

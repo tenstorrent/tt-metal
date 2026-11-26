@@ -15,6 +15,9 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#ifdef GATHER_IN1
+#include "api/compute/experimental/matmul_custom.h"
+#endif
 #include <type_traits>
 
 // Program factory options: Blackhole row MOP (one math MOP per reuse row of a subblock), in1 in column chunks of
@@ -347,6 +350,16 @@ void add_bias_and_addcmul_block(
     intermediate_cb.pop_front(out_block_num_tiles);
 }
 
+#ifdef GATHER_IN1
+// The gathered tiles (in0_cb) are the right-hand operand of the tile multiply, which needs them as [K, N] tiles. With
+// TRANSPOSE_B the stripe is [N, K / n] and the unpacker transposes them; otherwise they are [K, N] tiles already.
+#ifdef TRANSPOSE_B
+constexpr bool transpose_gathered = true;
+#else
+constexpr bool transpose_gathered = false;
+#endif
+#endif
+
 // One K block of an output block (adapted from compute_common.hpp). DIRECT_OUT (last K block) reloads the partials,
 // adds this block and packs to out_cb a subblock at a time. With in1 chunks, accumulating blocks go chunk-major.
 template <bool DIRECT_OUT>
@@ -403,6 +416,23 @@ void matmul_blocks_k(
                 matmul_block_init<row_mop>(
                     in0_cb.get_cb_id(), in1_cb.get_cb_id(), false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
             }
+#ifdef GATHER_IN1
+            // in0_cb holds the gathered tiles (the caller's in1) and in1_cb the activation's. Each output tile is the
+            // sum over k of (activation tile) @ (in1 tile): in1_cb on the left and in0_cb on the right, a K step at a
+            // time. kernel_main sets the in1 column stride and keeps subblock_h >= subblock_w or subblock_h == 1.
+            for (uint32_t k = 0; k < K_block_tiles; k++) {
+                matmul_block(
+                    in1_cb.get_cb_id(),
+                    in0_cb.get_cb_id(),
+                    in1_index + k * in1_k_stride,
+                    M_start * K_block_tiles + k,
+                    0 /*dst_index*/,
+                    transpose_gathered /*transpose*/,
+                    subblock_h /*ct_dim*/,
+                    subblock_w /*rt_dim*/,
+                    1 /*kt_dim*/);
+            }
+#else
             matmul_block_k<row_mop>(
                 in0_cb.get_cb_id(),
                 in1_cb.get_cb_id(),
@@ -415,6 +445,7 @@ void matmul_blocks_k(
                 K_block_tiles /*kt_dim*/,
                 K_block_tiles /*k_steps*/,
                 in1_k_stride);
+#endif
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (DIRECT_OUT) {
@@ -425,6 +456,9 @@ void matmul_blocks_k(
                 uint32_t dst = 0;
                 for (uint32_t h = 0; h < subblock_h; h++) {
                     for (uint32_t w = 0; w < subblock_w; w++) {
+#ifdef GATHER_IN1
+                        dst = w * subblock_h + h;  // DST holds subblock_w rows of subblock_h tiles
+#endif
                         pack_tile<true>(
                             dst++, partials_cb.get_cb_id(), (M_start + h) * full_N_block_tiles + N_start + w);
                     }
@@ -495,8 +529,14 @@ void kernel_main() {
     SFPU_OP_INIT_ACTIVATION
 #endif
 
+#ifdef GATHER_IN1
+    static_assert(!direct_out && in1_chunk_w == 0, "gather_in1 takes whole in1 blocks and no direct output");
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in1_cb_id, in0_cb_id, intermediate_cb_id);
+    matmul_init(in1_cb_id, in0_cb_id, transpose_gathered /*transpose*/);
+#else
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, intermediate_cb_id);
     matmul_init(in0_cb_id, in1_cb_id);
+#endif
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -524,6 +564,17 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
+#ifdef GATHER_IN1
+            // The multiply takes subblock_h >= subblock_w or subblock_h == 1 (see the column stride). A short last M
+            // block that is neither goes one tile row at a time.
+            if (current_subblock_h < current_subblock_w) {
+                current_subblock_h = 1;
+            }
+            matmul_block_init(
+                in1_cb_id, in0_cb_id, transpose_gathered /*transpose*/, current_subblock_h, current_subblock_w, 1);
+            reconfig_data_format(in0_cb_id, in1_cb_id);
+            matmul_set_in1_column_stride(in0_cb_id, K_block_tiles);
+#else
             matmul_block_init<row_mop>(
                 in0_cb_id,
                 in1_cb_id,
@@ -532,6 +583,7 @@ void kernel_main() {
                 current_subblock_h /*rt_dim*/,
                 K_block_tiles /*kt_dim*/);
             reconfig_data_format(in1_cb_id, in0_cb_id);
+#endif
             pack_reconfig_data_format(intermediate_cb_id);
             // Accumulation buffer
             intermediate_cb.reserve_back(out_block_num_tiles);
@@ -598,6 +650,9 @@ void kernel_main() {
                 intermediate_cb.push_back(out_block_num_tiles);
             }
             PACK((llk_pack_reconfig_l1_acc(0)));
+#ifdef GATHER_IN1
+            matmul_set_in1_column_stride(in0_cb_id, 1);
+#endif
             if constexpr (direct_out) {
                 continue;  // the last K block already wrote out_cb
             }
