@@ -34,7 +34,7 @@ void bind_squeeze(nb::module_& mod) {
     ttnn::bind_function<"squeeze">(
         mod,
         R"doc(
-        Returns `input_tensor` with dimensions of size 1 removed, like ``torch.squeeze``: every dimension of size 1 when `dim` is `None`, or only the dimensions of size 1 that `dim` lists.
+        Returns `input_tensor` with dimensions of size 1 removed: every dimension of size 1 when `dim` is `None`, or only the dimensions of size 1 that `dim` lists.
 
         When every removed dimension comes before the last two, the output is a view of `input_tensor`: it shares the input's buffer and no data moves.
 
