@@ -273,7 +273,7 @@ The output is fp32 for fp32 input. Statistics and intermediates stay Float32 wit
 - **Accuracy.** bf16: PCC ≥ 0.999997, relative RMS 1.9e-3 – 2.4e-3. Float32: relative RMS 1.35e-3 – 1.8e-3. Measured on the golden shapes including Mochi (4,1,6360,768).
 - **Speed.** Mochi 6360 runs 223.1 µs on TILE and 228.7 µs on RM, against 224.5 µs and 230.4 µs for its aligned twin with HW = 6368. The fill costs nothing measurable. Aligned DRAM cases are within noise.
 
-### [ ] Refinement 6 — c_non_aligned (C % 32 ≠ 0)
+### [x] Refinement 6 — c_non_aligned (C % 32 ≠ 0)
 
 **Goal**: add `"c_non_aligned"` to `SUPPORTED["alignment"]` for DRAM-interleaved input, in both layouts and every dtype supported at that point. Examples: `C = 17, 47, 50, 100`, and `C = 48` with `G = 2` (Cg = 24).
 - Pad channels of the last tile column never enter a group, and the output's valid channels are exact.
@@ -292,6 +292,30 @@ The output is fp32 for fp32 input. Statistics and intermediates stay Float32 wit
 **Done when**:
 - Every `alignment=c_non_aligned` cell passes whose other axes are in SUPPORTED at that point.
 - Earlier cells stay green.
+
+**Outcome**: Done (2026-11-26).
+- `SUPPORTED["alignment"] = ["tile_aligned", "hw_non_aligned", "c_non_aligned"]`, DRAM interleaved, TILE + RM, bf16 + Float32, every γ/β form. `BLOCK_SHARDED × c_non_aligned` is an `EXCLUSION`: feature_spec has no such INPUTS entry, and the refinement's scope is DRAM interleaved.
+- **Blocking.** `Wt = ceil(C/32)` and `S = ceil(C / lcm(Cg, 32))` spans. `_choose_gx` still cuts S into gx slices of `S/gx` spans, so every slice starts on a tile *and* a group boundary.
+  - The slice width is `W = min((S/gx)·span_tiles, Wt)`.
+  - Only the last slice of a row is partial: `vc_last = C − (gx−1)·W·32` valid channels in `ceil(vc_last/32)` tiles.
+  - For tile-aligned C, `C % lcm(Cg, 32) = 0`, so the aligned plan is unchanged.
+- **Mechanism: lane select, not the map's channel bound.** The pad channels of a TILE input are unspecified and may be NaN, and `NaN·0 = NaN` in the collapse matmul. So the map alone cannot mask them.
+  - Compute reuses R3's `COL_MASK`, an SFPU `v_if` lane select. It zeroes the S1′/T2 lanes at positions `≥ vc` after pass 1's column collapse and before the group map.
+  - The map is still built over all P lanes. Its pad lanes multiply zeros.
+- **Dataflow.** On the partial slice the reader and the writer touch only `ceil(vc_last/32)` tiles per row; RM reads only the stick's `vc·elem` valid bytes from the accessor's aligned page start.
+  - The pilot `k`, the shift rows and the γ/β reads are bounded by `vc` and by `vc/Cg` groups. The γ/β RM staging reads `vc·elem` bytes.
+  - New CT args: `VC_LAST` in all three kernels. New RT arg: compute's `unit_start`, so it knows which block is a row's last slice. No new CB.
+- **Slice.**
+  - Golden: 396/396 in-scope c_non_aligned cells pass. The other 792 c_non_aligned cells are INVALID-skipped. 64 tile-aligned / hw_non_aligned DRAM representatives also pass.
+  - Unit tests: the new unit file passes 80/80, and the whole unit directory passes 341/341 plain. The c_non_aligned, sharded, ragged and hw_non_aligned files pass 190/190 under `--dev`.
+- **Accuracy.**
+  - bf16: PCC ≥ 0.999991, relative RMS ≤ 4.6e-3.
+  - Float32: PCC ≥ 0.999991, relative RMS ≤ 4.8e-3. Float32 TILE is 1.1e-3 – 2.3e-3 per shape, matching the aligned twins.
+  - TILE (zero pad) and RM (stale pad) outputs are bit-identical. Pad columns filled with 1e4 or NaN pass.
+- **Speed.** Medians of 3 profiled runs against an aligned twin with the same Cg and Wt, on 110 cores:
+  - 16384×300 G30 vs 16384×320 G32: 66.0 µs vs 65.4 µs on TILE, 78.3 µs vs 77.4 µs on RM.
+  - 65536×100 G1 vs 65536×128 G1: 102.8 µs vs 102.6 µs on TILE, 151.3 µs vs 151.0 µs on RM.
+  - Every delta is ≤ 1.2%, inside the spread between runs. Aligned DRAM cases are within noise of R5.
 
 ### [ ] Refinement 7 — bfloat8_b input / gamma / beta (TILE)
 

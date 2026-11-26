@@ -29,6 +29,8 @@
 //
 // A slice lane v (0 .. W*32) holds channel s*P + (v mod P), P = MAP_PERIOD: P = W*32 except a sharded RM
 // slice narrower than a tile multiple, which compute tilizes as k = W*32/P sticks per tile row.
+// C % 32 != 0 (Refinement 6, interleaved): the last slice holds only VC_LAST channels in ceil(VC_LAST / 32) tiles;
+// pilot, stick, tile and affine reads and the output writes cover just those (RM: the stick's last vc * elem bytes).
 //
 // Formats (Refinement 4): the input is bf16 or Float32 (IN_TILE_BYTES; DRAM interleaved only for Float32), gamma /
 // beta bf16 or Float32 (AFF_ELEM), ROW_MAJOR or TILE (AFF_TILE: row 0 of each (1, C) tile carries the values, read
@@ -151,7 +153,11 @@ void kernel_main() {
     constexpr uint32_t AFF_PAGE_BYTES = get_compile_time_arg_val(19);
     // Refinement 5: an image's true row count (RM stick paging). HT = ceil(HW / 32) tile rows per image.
     constexpr uint32_t HW = get_compile_time_arg_val(20);
-    constexpr auto in_args = TensorAccessorArgs<21>();
+    // Refinement 6 (c_non_aligned, interleaved): valid channels of the last column slice (P when C % 32 == 0). That
+    // slice is partial: VC_LAST channels (whole groups) in ceil(VC_LAST / 32) tiles. Only those are read and written;
+    // its pad lanes (RM: never read; TILE: unspecified padding) are lane-masked by compute after the column collapse.
+    constexpr uint32_t VC_LAST = get_compile_time_arg_val(21);
+    constexpr auto in_args = TensorAccessorArgs<22>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     // The output (written for this RISC's pass-2 share; DRAM interleaved only).
@@ -175,7 +181,6 @@ void kernel_main() {
     static_assert(HT * 32 == HW + (HR ? 32 - HR : 0), "HT = ceil(HW / 32)");
     constexpr uint32_t FACE_ROW_BYTES = 16 * IN_ELEM;  // one face row of an input tile
     constexpr uint32_t SLICE_BYTES = W * TILE_SEGMENT_BYTES;
-    constexpr uint32_t G_CORE = P / CG;  // interleaved: group lanes of a slice (slices start on group boundaries)
     // Per-tensor affine staging (host: affine_stage_bytes). RM: the slice's P channels from a 64 B-aligned start;
     // TILE: row 0 of faces 0 / 1 of each of the slice's W channel tiles, 64 B each.
     constexpr uint32_t AFFINE_STAGE_BYTES =
@@ -242,13 +247,14 @@ void kernel_main() {
     };
 
     // One output chunk at the front of cb_output_b -> DRAM: rows_valid tile rows from image tile row row0g
-    // (n * HT + row0), the writer's page walk.
-    auto write_b_chunk = [&](uint32_t row0g, uint32_t rows_valid, uint32_t wt0) {
+    // (n * HT + row0), the writer's page walk; the slice's w_blk valid tiles of each W-tile ring row.
+    auto write_b_chunk = [&](uint32_t row0g, uint32_t rows_valid, uint32_t wt0, uint32_t w_blk) {
         cb_wait_front(cb_output_b, T);
-        uint32_t src = get_read_ptr(cb_output_b);
+        const uint32_t src0 = get_read_ptr(cb_output_b);
         for (uint32_t r = 0; r < rows_valid; ++r) {
             const uint32_t tile0 = (row0g + r) * WT_TOTAL + wt0;
-            for (uint32_t wt = 0; wt < W; ++wt) {
+            uint32_t src = src0 + r * W * OUT_PAGE_BYTES;
+            for (uint32_t wt = 0; wt < w_blk; ++wt) {
                 noc_async_write_page(tile0 + wt, out_acc, src);
                 src += OUT_PAGE_BYTES;
             }
@@ -590,10 +596,12 @@ void kernel_main() {
         return;
     }
 
-    // k of group lane l = the staged pilot sample of its first channel (interleaved slices start on group boundaries),
-    // as bf16: a Float32 sample's upper halfword. TILE staging holds 64 B of row 0 of faces 0 / 1 per tile.
-    auto extract_kv = [&]() {
-        for (uint32_t l = 0; l < G_CORE; ++l) {
+    // k of group lane l < g_blk (the slice's groups; slices start on group boundaries) = the staged pilot sample of
+    // its first channel, as bf16: a Float32 sample's upper halfword. TILE staging holds 64 B of row 0 of faces 0 / 1
+    // per tile. Lanes >= g_blk are never read: the pilot / k rows walk only the slice's vc valid channels and the
+    // group shift writes k = 0 there (a partial last slice's spare lanes see zero sums, so finite statistics).
+    auto extract_kv = [&](uint32_t g_blk) {
+        for (uint32_t l = 0; l < g_blk; ++l) {
             const uint32_t c = l * CG;
             const uint32_t byte =
                 IS_RM ? c * IN_ELEM
@@ -609,9 +617,9 @@ void kernel_main() {
     // the input's format) is built in the staging, free between the pilot (step 0) and the affine reads issued after
     // the last pass-1 push; local NoC writes then copy it over the pad: RM, one per pad stick; TILE, one per pad face
     // row (16 lanes) per tile. The writes complete before the chunk's push.
-    [[maybe_unused]] auto k_fill_last_row = [&](uint32_t base, uint32_t lr) {
+    [[maybe_unused]] auto k_fill_last_row = [&](uint32_t base, uint32_t lr, uint32_t vc, uint32_t w_blk) {
         MaybeDeviceZoneScope("r_k_fill");
-        for_each_run(0, 0, P, [&](uint32_t v, uint32_t ve, uint32_t lane, uint32_t) {
+        for_each_run(0, 0, vc, [&](uint32_t v, uint32_t ve, uint32_t lane, uint32_t) {
             if constexpr (IN_ELEM == 4) {
                 volatile tt_l1_ptr uint32_t* kr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging);
                 for (uint32_t i = v; i < ve; ++i) {
@@ -629,7 +637,7 @@ void kernel_main() {
             }
         } else {
             noc_async_write_one_packet_set_state(get_noc_addr(base), FACE_ROW_BYTES);
-            for (uint32_t wt = 0; wt < W; ++wt) {
+            for (uint32_t wt = 0; wt < w_blk; ++wt) {
                 const uint32_t tile = base + (lr * W + wt) * IN_TILE_BYTES;
                 for (uint32_t r = HR; r < 32; ++r) {
                     const uint32_t row = tile + (r >> 4) * 2 * IN_FACE_BYTES + (r & 15) * FACE_ROW_BYTES;
@@ -647,6 +655,11 @@ void kernel_main() {
         const uint32_t n = unit / GX;
         const uint32_t c_start = (unit % GX) * P;  // first channel of the slice
         const uint32_t wt0 = c_start / 32;         // its tile column (P = W*32 whenever the input is tiled in DRAM)
+        // Refinement 6: the last slice of a C % 32 != 0 input holds VC_LAST channels (g_blk whole groups) in w_blk
+        // tiles; every other slice is P channels, W tiles.
+        const uint32_t vc = unit % GX == GX - 1 ? VC_LAST : P;
+        const uint32_t w_blk = (vc + 31) / 32;
+        const uint32_t g_blk = vc / CG;
         // Output share (DRAM interleaved).
         bool b_done = false;
         // One cb_output_b chunk if its index and data are both there (block: wait for them); END ends the share.
@@ -668,7 +681,7 @@ void kernel_main() {
             cb_pop_front(cb_out_seq_b, 1);
             const uint32_t j = q < K ? first_resident + q : q - K;  // pass-2 order: resident tail, then the head
             const uint32_t rows_left = rows_core - j * CHUNK_HT;
-            write_b_chunk(n * HT + row_start + j * CHUNK_HT, rows_left < CHUNK_HT ? rows_left : CHUNK_HT, wt0);
+            write_b_chunk(n * HT + row_start + j * CHUNK_HT, rows_left < CHUNK_HT ? rows_left : CHUNK_HT, wt0, w_blk);
         };
 
         // One loop, one site per NoC pattern (kernel text must fit the kernel-config ring under --dev):
@@ -676,7 +689,7 @@ void kernel_main() {
         // B+1..B+first_resident re-read the non-resident head for pass 2.
         for (uint32_t step = 0; step <= num_chunks + first_resident; ++step) {
             if (step == num_chunks) {
-                build_affine(c_start, 0, 0, P);
+                build_affine(c_start, 0, 0, vc);
                 continue;
             }
 
@@ -691,9 +704,9 @@ void kernel_main() {
                 // TILE: row 0 of faces 0 / 1 of each tile (64 B reads: bf16 rows 0-1, Float32 row 0), staged 128 B
                 // per tile. RM: the slice of stick 0, staged contiguously.
                 if constexpr (IS_RM) {
-                    noc_async_read(in_acc.get_noc_addr(n * HW, wt0 * TILE_SEGMENT_BYTES), staging, P * IN_ELEM);
+                    noc_async_read(in_acc.get_noc_addr(n * HW, wt0 * TILE_SEGMENT_BYTES), staging, vc * IN_ELEM);
                 } else {
-                    for (uint32_t wt = 0; wt < W; ++wt) {
+                    for (uint32_t wt = 0; wt < w_blk; ++wt) {
                         for (uint32_t f = 0; f < 2; ++f) {
                             const uint64_t src = in_acc.get_noc_addr(n * HT * WT_TOTAL + wt0 + wt, f * IN_FACE_BYTES);
                             noc_async_read(
@@ -736,17 +749,19 @@ void kernel_main() {
                 uint32_t dst = chunk_base;
                 // The image's last tile row holds HR valid sticks (the sticks after it are the next image's).
                 const uint32_t sticks = rows_valid * 32 - (HR != 0 && row0 + rows_valid == HT ? 32 - HR : 0);
+                // The slice's valid channels of each stick (a partial last slice ends at the stick's end, C channels).
+                const uint32_t seg_bytes = vc * IN_ELEM;
                 for (uint32_t s = 0; s < sticks; ++s) {
-                    noc_async_read(in_acc.get_noc_addr(page, wt0 * TILE_SEGMENT_BYTES), dst, SLICE_BYTES);
+                    noc_async_read(in_acc.get_noc_addr(page, wt0 * TILE_SEGMENT_BYTES), dst, seg_bytes);
                     ++page;
                     dst += SLICE_BYTES;
                 }
             } else {
                 MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_issue");
-                uint32_t dst = chunk_base;
                 for (uint32_t r = 0; r < rows_valid; ++r) {
                     const uint32_t tile0 = (n * HT + row0 + r) * WT_TOTAL + wt0;
-                    for (uint32_t wt = 0; wt < W; ++wt) {
+                    uint32_t dst = chunk_base + r * W * IN_TILE_BYTES;
+                    for (uint32_t wt = 0; wt < w_blk; ++wt) {
                         noc_async_read_page(tile0 + wt, in_acc, dst);
                         dst += IN_TILE_BYTES;
                     }
@@ -760,10 +775,10 @@ void kernel_main() {
 
             if constexpr (HR != 0) {
                 if (step == 0) {
-                    extract_kv();  // before the push: chunk 0 may hold the image's last tile row
+                    extract_kv(g_blk);  // before the push: chunk 0 may hold the image's last tile row
                 }
                 if (step < num_chunks && row0 + rows_valid == HT) {
-                    k_fill_last_row(chunk_base, rows_valid - 1);
+                    k_fill_last_row(chunk_base, rows_valid - 1, vc, w_blk);
                 }
             }
 
@@ -776,18 +791,19 @@ void kernel_main() {
 
             if (step == 0) {
                 if constexpr (HR == 0) {
-                    extract_kv();
+                    extract_kv(g_blk);
                 }
-                build_shift_rows(0, 0, P, G_CORE, blk);
+                build_shift_rows(0, 0, vc, g_blk, blk);
             }
             if (step == num_chunks - 1) {
                 // After the last pass-1 push and the pilot work (which frees the staging): the gamma / beta
                 // slices' DRAM reads (one hot bank: every core of a slice reads the same page) land behind the
                 // map build instead of in front of the affine build.
-                issue_affine_reads(c_start, P);
+                issue_affine_reads(c_start, vc);
                 if (blk == 0) {
                     // After the last pass-1 push (compute first reads the map after reducing this chunk). Its zero
-                    // fill is NoC writes, so the gamma / beta reads just issued do not hold it.
+                    // fill is NoC writes, so the gamma / beta reads just issued do not hold it. Built over all P
+                    // lanes (block-invariant): a partial last slice's pad lanes are zeroed before the collapse.
                     build_map(0, 0, P);
                 }
             }

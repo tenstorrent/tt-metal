@@ -287,3 +287,24 @@ def test_bench_guard(device, name, shape, G, grid, layout, in_place, affine):
     ttnn.deallocate(out, force=True)
     if not in_place:
         x.deallocate()
+
+
+# Refinement 6: C % 32 != 0 (the last column slice is partial; compute lane-masks its pad channels) next to an aligned
+# twin with the same tile width and span structure (same Cg, so the same lcm span and slice count): the partial slice's
+# trimmed reads/writes and the lane mask should cost ~nothing.
+# name, shape, G, layout, eps
+C_NON_ALIGNED_CASES = [
+    ("cna_16384x300_g30_tile", (1, 1, 16384, 300), 30, ttnn.TILE_LAYOUT, 1e-5),
+    ("cna_16384x300_g30_rm", (1, 1, 16384, 300), 30, ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("cna_twin_16384x320_g32_tile", (1, 1, 16384, 320), 32, ttnn.TILE_LAYOUT, 1e-5),
+    ("cna_twin_16384x320_g32_rm", (1, 1, 16384, 320), 32, ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("cna_65536x100_g1_tile", (1, 1, 65536, 100), 1, ttnn.TILE_LAYOUT, 1e-5),
+    ("cna_65536x100_g1_rm", (1, 1, 65536, 100), 1, ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+    ("cna_twin_65536x128_g1_tile", (1, 1, 65536, 128), 1, ttnn.TILE_LAYOUT, 1e-5),
+    ("cna_twin_65536x128_g1_rm", (1, 1, 65536, 128), 1, ttnn.ROW_MAJOR_LAYOUT, 1e-5),
+]
+
+
+@pytest.mark.parametrize("name, shape, G, layout, eps", C_NON_ALIGNED_CASES, ids=[c[0] for c in C_NON_ALIGNED_CASES])
+def test_bench_c_non_aligned(device, name, shape, G, layout, eps):
+    _bench(device, shape, G, layout, eps)

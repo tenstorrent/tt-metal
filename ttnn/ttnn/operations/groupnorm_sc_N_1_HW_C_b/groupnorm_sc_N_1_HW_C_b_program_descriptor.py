@@ -344,21 +344,27 @@ class GroupNormPlan:
     sharded: bool = False
     in_place: bool = False  # sharded only: the output is the input shard
     map_period: int = 0  # channels per slice (lane v holds channel v mod map_period)
+    # Interleaved (Refinement 6): valid channels of the last column slice (map_period unless C % 32 != 0, where that
+    # slice is partial: ceil(vc_last / 32) tiles, its pad lanes masked by COL_MASK). Sharded: unused (per-core vc).
+    vc_last: int = 0
     shard_grid: object = None  # sharded: the shard grid (ttnn.CoreRangeSet)
     # Refinement 3 (sharded): statistic units = column cluster x image band.
     NU: int = 1  # images per unit (max)
     NSEG: int = 1  # image segments per core (max)
     ops_path: bool = False  # sharded, every core fully resident: pieces walked from RT op words
     stage_pages: int = 0  # RM staged tile rows + k-fill template (alias group F)
-    col_mask: bool = False  # RM padded last column: SFPU lane mask after the column collapse
+    # SFPU lane mask after the column collapse: sharded RM padded last column; interleaved C % 32 != 0 (last slice)
+    col_mask: bool = False
     mcast_row_major: bool = False  # unit = whole grid width x band rows (groups straddle core columns)
     ring_pages: int = 0  # RM ops path: the tilized ring holds every piece's tile rows
     pilot_cols: int = 1  # sharded: core columns of a statistic unit (the RM pilot's span reads, one per column)
     fmt: Formats = field(default_factory=Formats)  # page formats (Refinement 4)
 
 
-def _evaluate_gx(gx, *, N, Ht, S, span_tiles, gps, P, chunk_target, is_rm, has_gamma, has_beta, fmt, l1_budget):
-    W = (S // gx) * span_tiles
+def _evaluate_gx(gx, *, N, Ht, Wt, S, span_tiles, gps, P, chunk_target, is_rm, has_gamma, has_beta, fmt, l1_budget):
+    # A slice is S / gx spans; C % 32 != 0 (Refinement 6): the last span (and so the last slice) is partial, and a
+    # single slice (gx = 1) is just the Wt tiles the tensor has.
+    W = min((S // gx) * span_tiles, Wt)
     G_core = (S // gx) * gps
     if G_core > MAX_GROUP_LANES:
         return None
@@ -398,7 +404,7 @@ def _evaluate_gx(gx, *, N, Ht, S, span_tiles, gps, P, chunk_target, is_rm, has_g
     )
 
 
-def _choose_gx(*, N, Ht, S, span_tiles, gps, P, chunk_target, is_rm, has_gamma, has_beta, fmt, l1_budget):
+def _choose_gx(*, N, Ht, Wt, S, span_tiles, gps, P, chunk_target, is_rm, has_gamma, has_beta, fmt, l1_budget):
     best = None
     best_key = None
     for gx in _divisors(S):
@@ -406,6 +412,7 @@ def _choose_gx(*, N, Ht, S, span_tiles, gps, P, chunk_target, is_rm, has_gamma, 
             gx,
             N=N,
             Ht=Ht,
+            Wt=Wt,
             S=S,
             span_tiles=span_tiles,
             gps=gps,
@@ -486,16 +493,16 @@ def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta, in_place=Fal
     G = num_groups
     # Refinement 5 (hw_non_aligned): an image is ceil(HW / 32) tile rows (TILE pads each image's last tile row; RM
     # has no rows there). The reader k-fills the last tile row's pad rows, so the moments see only the HW valid rows.
-    Ht, Wt = _ceil_div(HW, 32), C // 32
+    # Refinement 6 (c_non_aligned): a row is ceil(C / 32) tiles and S = ceil(C / L) spans of L = lcm(Cg, 32)
+    # channels. Slices of S / gx spans start on tile and group boundaries (L is a multiple of both); only the last
+    # slice is partial - vc_last valid channels (whole groups: Cg | C) in ceil(vc_last / 32) tiles. Its pad lanes are
+    # never read from DRAM (RM) and are lane-masked after pass 1's column collapse (COL_MASK; TILE padding is
+    # unspecified), so they enter no group.
+    Ht, Wt = _ceil_div(HW, 32), _ceil_div(C, 32)
     Cg = C // G
     L = _lcm(Cg, 32)
-    if C % L != 0:
-        raise NotImplementedError(
-            f"groupnorm_sc_N_1_HW_C_b: lcm(Cg={Cg}, 32)={L} does not divide C={C} "
-            "(cross_column_group_combine regime, not built)"
-        )
     span_tiles, gps = L // 32, L // Cg
-    S = Wt // span_tiles
+    S = _ceil_div(C, L)
     is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
     device = input_tensor.device()
@@ -510,6 +517,7 @@ def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta, in_place=Fal
     best = _choose_gx(
         N=N,
         Ht=Ht,
+        Wt=Wt,
         S=S,
         span_tiles=span_tiles,
         gps=gps,
@@ -553,6 +561,7 @@ def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta, in_place=Fal
     footprint += (out_writer_chunks - 1) * chunk_bytes
 
     fields = dict(U=best["U"], P=P, cpi=best["cpi"], Ht=Ht)
+    vc_last = C - (best["gx"] - 1) * W * 32  # valid channels of the last column slice (W * 32 when C % 32 == 0)
     plan = GroupNormPlan(
         N=N,
         HW=HW,
@@ -586,6 +595,8 @@ def plan_or_raise(input_tensor, num_groups, *, has_gamma, has_beta, in_place=Fal
         l1_budget=l1_budget,
         footprint=footprint,
         map_period=W * 32,
+        vc_last=vc_last,
+        col_mask=vc_last < W * 32,
         out_writer_chunks=out_writer_chunks,
         fmt=fmt,
     )
@@ -1057,6 +1068,8 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     # Refinement 5, CT 20: the image's true row count HW (RM stick paging; HW % 32 != 0 -> the last tile row of each
     # image holds HW % 32 valid rows, the reader k-fills the rest).
     reader_ct.append(plan.HW)
+    # Refinement 6, CT 21: valid channels of the last column slice (interleaved; C % 32 != 0 makes it partial).
+    reader_ct.append(plan.vc_last or map_period)
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         (ttnn.TensorAccessorArgs(gamma) if gamma is not None else ttnn.TensorAccessorArgs()).get_compile_time_args()
@@ -1087,13 +1100,15 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             int(plan.col_mask),
             int(has_stage),
             int(plan.ops_path),
+            plan.gx,  # Refinement 6: interleaved column slices per image (the last one holds VC_LAST channels)
+            plan.vc_last or map_period,
         ]
 
     # The writer is built once per role (IS_ROOT is compile-time): each binary carries only its own mcast pipe
     # (sender on unit roots, receiver elsewhere) and only the root's gather-wait / zero-fill code.
     def writer_ct(is_root):
         ct = [W, h, R, plan.Wt, plan.Ht, plan.gx, out_page_bytes, int(is_root), int(is_rm), int(sharded), chunk_zones]
-        ct.extend([NU, int(has_stage), int(plan.ops_path), map_period])
+        ct.extend([NU, int(has_stage), int(plan.ops_path), map_period, plan.vc_last or map_period])
         ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
         return ct
 
@@ -1155,6 +1170,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             wk.seg_img0,
             wk.w_valid,
             wk.vc,
+            wk.unit_start,  # interleaved: block b is unit unit_start + b (its column slice sets vc, Refinement 6)
             len(wk.ops),
             *wk.ops,
         ]

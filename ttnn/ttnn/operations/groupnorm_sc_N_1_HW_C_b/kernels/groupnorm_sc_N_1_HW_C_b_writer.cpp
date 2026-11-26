@@ -72,7 +72,10 @@ void kernel_main() {
     constexpr bool HAS_STAGE = get_compile_time_arg_val(12) != 0;
     constexpr bool OPS = get_compile_time_arg_val(13) != 0;  // sharded, fully resident pieces
     constexpr uint32_t P = get_compile_time_arg_val(14);     // MAP_PERIOD (sharded RM: the stick's channels)
-    constexpr auto out_args = TensorAccessorArgs<15>();
+    // Refinement 6 (interleaved, C % 32 != 0): the last column slice's valid channels -> its W_LAST output tiles.
+    constexpr uint32_t VC_LAST = get_compile_time_arg_val(15);
+    constexpr uint32_t W_LAST = (VC_LAST + 31) / 32;
+    constexpr auto out_args = TensorAccessorArgs<16>();
     constexpr auto mc = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
@@ -159,6 +162,7 @@ void kernel_main() {
         const uint32_t unit = unit_start + blk;
         const uint32_t n = unit / GX;
         const uint32_t wt0 = (unit % GX) * W;
+        const uint32_t w_blk = unit % GX == GX - 1 ? W_LAST : W;  // the slice's tiles in the output row
 
         // ---------------- gather: local partial row(s) -> root ----------------
         if constexpr (IS_ROOT) {
@@ -272,10 +276,11 @@ void kernel_main() {
                 cb_wait_front(cb_output_tiles, T);
             }
             MaybeDeviceZoneScopeIf(CHUNK_ZONES, "w_issue");
-            uint32_t src = get_read_ptr(cb_output_tiles);
+            const uint32_t src0 = get_read_ptr(cb_output_tiles);
             for (uint32_t r = 0; r < rows_valid; ++r) {
                 const uint32_t tile0 = (n * HT + row0 + r) * WT_TOTAL + wt0;
-                for (uint32_t wt = 0; wt < W; ++wt) {
+                uint32_t src = src0 + r * W * OUT_PAGE_BYTES;
+                for (uint32_t wt = 0; wt < w_blk; ++wt) {
                     noc_async_write_page(tile0 + wt, out_acc, src);
                     src += OUT_PAGE_BYTES;
                 }

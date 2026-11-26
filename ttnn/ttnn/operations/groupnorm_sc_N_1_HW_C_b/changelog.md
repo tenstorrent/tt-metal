@@ -997,3 +997,79 @@ Ragged shards (newly supported; the base op refuses them) vs the same tensor thr
     - Stream-only and partial residency (`K < B`, with the k-filled chunk re-read in pass 2).
     - Several units per core (`max_cores = 4`).
   - `_op_bench.py`: `test_bench_hw_non_aligned`, covering Mochi 6360 and its 6368 twin on TILE and RM.
+
+## Refinement 6 — c_non_aligned (C % 32 ≠ 0)
+- Date: 2026-11-26
+- What was done:
+  - **Registry.**
+    - `SUPPORTED["alignment"]` gains `"c_non_aligned"`. `tag_alignment` already returns it for any `C % 32 ≠ 0`, including when HW is non-aligned too.
+    - A new `EXCLUSION` refuses `{memory_layout: BLOCK_SHARDED, alignment: c_non_aligned}`. The refinement's scope is DRAM interleaved, and feature_spec has no block-sharded `C % 32 ≠ 0` INPUTS entry.
+  - **Planner (`plan_or_raise` / `_evaluate_gx`).**
+    - `S = ceil(C / lcm(Cg, 32))` spans. The old `C % L ≠ 0` refusal is gone.
+    - `_choose_gx` still cuts S into gx equal runs of `S/gx` spans. Every slice therefore starts on a span boundary, which is a tile boundary and a group boundary: the verifier's `_choose_gx` constraint holds by construction.
+    - `W = min((S/gx)·span_tiles, Wt)` (`_evaluate_gx` gains `Wt`). The slice of a single-slice row is clamped to the row's real tile count.
+    - Only a row's last slice is partial: `vc_last = C − (gx−1)·W·32` valid channels in `ceil(vc_last/32)` tiles. It is a new plan field; `col_mask` becomes `vc_last < 32·W`.
+    - For tile-aligned C, `C % lcm(Cg, 32) = 0`, so `S`, `W` and every buffer size are unchanged.
+  - **Mechanism: compute's lane select, not the map's channel bound. This deviates from the verifier note.**
+    - TILE pad channels are unspecified and may be NaN, and the group map is a matmul: `NaN·0 = NaN`. The map's channel bound therefore cannot keep a pad channel out of a group.
+    - Instead compute reuses R3's `COL_MASK`, an SFPU `v_if` select. After pass 1's column collapse it zeroes the S1′ and T2 lanes at positions `≥ vc`, before the collapse matmul.
+    - The map is still built over all `P` lanes. Its pad lanes now multiply exact zeros.
+    - Compute decides per block whether this is a last slice: `(unit_start + blk) % GX == GX − 1`. There is a new compute RT arg (`unit_start`) and CT args 14/15 (`GX`, `VC_LAST`). The streaming `moments_rows` takes the block's `w_blk` / `vc_blk`.
+  - **Reader.** New CT arg 21 is `VC_LAST`; `TensorAccessorArgs` now start at 22, and the unused `G_CORE` is removed. Per block, `vc`, `w_blk = ceil(vc/32)` and `g_blk = vc/Cg` bound the following:
+    - TILE reads: `w_blk` tiles per row. RM reads: the stick's `vc·in_elem` valid bytes, from the accessor's aligned page start, so the source alignment is unchanged.
+    - The pilot read (RM `vc·in_elem` B, TILE `w_blk` tiles).
+    - `extract_kv(g_blk)`, `build_shift_rows(..., vc, g_blk, ...)`, and R5's `k_fill_last_row` (`vc` lanes, `w_blk` tiles).
+    - `build_affine` / `issue_affine_reads(c_start, vc)`. The RM γ/β staging reads `align_up(vc·aff_elem, 64)` B inside the tensor's aligned page.
+    - `write_b_chunk` writes `w_blk` tiles per row of the reader's pass-2 output share.
+    - The ring layout keeps the `W`-tile row pitch, so the partial slice fills a prefix of each row.
+  - **Writer.** CT 15 is `VC_LAST` (`TensorAccessorArgs` at 16). It writes `W_LAST = ceil(VC_LAST/32)` tiles per row on a last slice.
+  - **No new CB, and no CB resized.**
+- Reused: R3's `COL_MASK` lane select and its `vc` RT plumbing; `moments_rows`' `w_valid` / `vc` parameters; the `for_each_run` lane walk bounded by `vc`; R5's per-block `extract_kv` / `k_fill_last_row` structure; the existing chunk / residency / pass-2 re-read structure; and the golden helpers `run_groupnorm_sc_N_1_HW_C` / `check_output` for the tests.
+- Added: `S = ceil` and `W = min(…, Wt)` in the planner; the `vc_last` plan field; the `VC_LAST` CT arg in all three kernels (reader 21, compute 15, writer 15) and compute's `GX` CT 14; compute's `unit_start` RT arg; the per-block `vc` / `w_blk` / `g_blk` bounds; and the `BLOCK_SHARDED × c_non_aligned` EXCLUSION.
+- Accuracy achieved (Blackhole, HiFi3, fp32 DEST, γ+β in the input dtype; golden c_non_aligned shapes × TILE / RM):
+
+  | dtype | min PCC | max relative RMS | worst shape |
+  |---|---|---|---|
+  | bf16 | 0.999991 | 4.58e-3 | — |
+  | Float32 | 0.999991 | 4.80e-3 | (2,1,64,47) g1 |
+
+  - Shapes: (1,1,64,17) g1, (1,1,64,50) g1, (1,1,128,100) g1, (2,1,64,47) g1, (1,1,64,48) g2, (1,1,128,48) g3, (1,1,64,80) g4, (1,1,128,144) g4, (1,1,64,200) g8, (1,1,256,330) g33 with gx = 3, and (2,1,96,6) g3.
+  - Float32 TILE is 1.1e-3 – 2.3e-3 per shape, the same band as the aligned twins (1.1e-3 – 2.1e-3).
+  - TILE (zero pad) and RM (stale ring pad) outputs are bit-identical. Pad columns filled with 1e4 or NaN pass. Nothing leaks from the pad.
+- Golden test progress:
+  - **396/396** in-scope `alignment=c_non_aligned` cells pass: DRAM interleaved, bf16 / Float32 input, TILE / RM, every γ/β form, `in_place=False`. The other 792 c_non_aligned cells are INVALID-skipped.
+  - Plus **64/64** DRAM representatives: 64×64 g2, 50×128 g1, 2×100×128 g1 and 4096×320 g32, gamma_beta, all non-bf8 formats.
+  - The slice ran as one `-k` selection with `--precompile --run-all`: 460 passed, 872 skipped, 0 failed, 0 XPASS.
+  - Unit tests:
+    - New file: 80/80 plain.
+    - The whole unit directory: 341/341 plain.
+    - The c_non_aligned, sharded, ragged and hw_non_aligned files: 190/190 under `--dev`. The kernel text still fits the watcher build's 70 688 B kernel-config ring, and the NoC sanitizer is clean on the short RM reads.
+- Perf (Blackhole, DEVICE KERNEL DURATION [ns], `_op_bench.py`). The non-aligned shape and its aligned twin share Cg and Wt, so they have the same spans, slices and grid. Median of 3 fresh-cache profiled runs, on 110 cores:
+
+  | Case | non-aligned | aligned twin | Δ |
+  |---|---|---|---|
+  | 16384×300 g30 vs 16384×320 g32, TILE | 66 040 | 65 377 | +1.0% |
+  | 16384×300 g30 vs 16384×320 g32, RM | 78 330 | 77 439 | +1.2% |
+  | 65536×100 g1 vs 65536×128 g1, TILE | 102 775 | 102 557 | +0.2% |
+  | 65536×100 g1 vs 65536×128 g1, RM | 151 299 | 150 957 | +0.2% |
+
+  - Every delta is inside the run-to-run spread (about 1%). The partial slice's trimmed reads and writes, and the one `COL_MASK` select per block, cost nothing measurable.
+  - Aligned DRAM cases are within noise of R5: `mid_4096x640` 35 811 / 44 431 on TILE / RM, and `mid_16384x320` 65 046 / 77 519.
+  - Finding: RM 65536×100 moves 22% fewer bytes than its 128-channel twin but takes the same time. At that shape RM is bound by the per-stick transaction count (65 536 sticks) and the tilize/untilize, not by bytes. This is a pointer for Refinement 10 (DRAM streaming), not an R6 cost.
+- Issues encountered:
+  - None in the kernels: every new test passed on its first run.
+  - Float32 precision depends on the pilot. Float32 error tracks `|k − mean|`, where the pilot `k` is one sample per group: image row 0, the group's first channel. With `k` forced to +2.84, the per-seed relative RMS is 3.7e-3 – 5.6e-3 for aligned C = 32 / 64 / 96 / 128, and 5.7e-3 – 5.9e-3 for non-aligned C = 47 / 50 / 100, with a maximum of 9.5e-3. This is the pre-existing shifted-moment sensitivity: Float32 x reaches srcA as TF32. It is not specific to R6, and it stays within the 0.01 limit. Golden data is deterministic, because the root conftest's autouse `reset_seeds` sets `torch.manual_seed(213919)`, so those cells are not flaky. Possible lever: a pilot taken over several samples.
+  - Tooling:
+    - A pytest `-k` with `=` in it is a parse error, so the golden slice selects on id fragments instead: `not True` for `in_place=False`, plus `INTERLEAVED` and `gamma_beta`.
+    - `run_safe_pytest.sh --profile` passes a spaced `-k` through Tracy split into separate words, so the run collects nothing and still reports PASS. Profile with node ids instead.
+- Tests added:
+  - `tests/.../test_groupnorm_sc_N_1_HW_C_b_c_non_aligned.py`, 80 cases:
+    - The 9 golden c_non_aligned shapes, plus 256×330 g33, where gx = 3 and the last slice is 1 of 5 tiles, plus 2×96×6 g3, where C < 16. Each runs on TILE / RM × bf16 / Float32.
+    - Three affine forms on 256×330: bf16 TILE γ/β, Float32 RM γ-only, and no affine.
+    - HW and C both non-aligned: 2×50×100 g4.
+    - TILE inputs whose pad columns hold 1e4 or NaN, injected through a `ttnn.reshape(logical, padded)` view.
+    - An offset-heavy input (`randn + 3`).
+    - Stream-only and partial residency (`K < B`, with the partial slice's chunks re-read in pass 2).
+    - Several units per core (`max_cores = 4`), with full and partial slices alternating on one core.
+  - `_op_bench.py`: `test_bench_c_non_aligned`, covering 16384×300 g30 and 65536×100 g1 against their aligned twins on TILE and RM.
+  - Probes 026–032: the R6 bring-up and precision investigation.

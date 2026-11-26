@@ -119,13 +119,17 @@ constexpr bool CHUNK_ZONES = get_compile_time_arg_val(8) != 0;
 // [rstd, mean*rstd] per image, then e.
 constexpr uint32_t NU = get_compile_time_arg_val(9);
 constexpr uint32_t P = get_compile_time_arg_val(10);  // MAP_PERIOD: channels per slice period (sharded: shard width)
-// Sharded RM with a padded last core column: lanes past the slice's valid channels are zeroed after the column
-// collapse (the shard's padding bytes are not data).
+// Sharded RM with a padded last core column, or an interleaved C % 32 != 0 input (Refinement 6: its last column
+// slice is partial): lanes past the slice's valid channels are zeroed after the column collapse (shard padding bytes,
+// TILE padding and never-read RM lanes are not data, possibly not finite: a lane select, not a multiply).
 constexpr bool COL_MASK = get_compile_time_arg_val(11) != 0;
 constexpr bool HAS_STAGE = get_compile_time_arg_val(12) != 0;
 // Sharded, fully resident: the core's shard is walked as op words (descriptor _rm_core_ops / TILE segments), one
 // statistic set per image segment.
 constexpr bool OPS = get_compile_time_arg_val(13) != 0;
+// Interleaved (Refinement 6): column slices per image; the last one holds VC_LAST valid channels (P when aligned).
+constexpr uint32_t GX = get_compile_time_arg_val(14);
+constexpr uint32_t VC_LAST = get_compile_time_arg_val(15);
 constexpr uint32_t OP_ROWS = 0xFFFF;
 constexpr uint32_t OP_STAGED = 1u << 16;
 constexpr uint32_t OP_SEG_END = 1u << 17;
@@ -877,6 +881,7 @@ void kernel_main() {
     const uint32_t seg_img0 = NU == 1 ? 0 : seg_img0_rt;
     const uint32_t w_valid = get_arg_val<uint32_t>(arg++);   // TILE: channel tiles holding data
     const uint32_t vc_arg = get_arg_val<uint32_t>(arg++);    // sharded: valid channels of the slice
+    const uint32_t unit_start = get_arg_val<uint32_t>(arg++);  // interleaved: block b's unit is unit_start + b
     const uint32_t n_ops = get_arg_val<uint32_t>(arg++);
     const uint32_t ops_arg = arg;
     const uint32_t vc = SHARDED ? vc_arg : P;
@@ -1021,6 +1026,12 @@ void kernel_main() {
     }
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+        // Interleaved C % 32 != 0 (Refinement 6): the unit's last column slice holds VC_LAST channels in
+        // ceil(VC_LAST / 32) tiles; pass 1 skips the tiles past them and COL_MASK zeroes the pad lanes after the
+        // column collapse. Pass 2 normalizes every ring tile; the writers store only the valid ones.
+        const bool part = !SHARDED && VC_LAST < P && (unit_start + blk) % GX == GX - 1;
+        const uint32_t vc_blk = part ? VC_LAST : vc;
+        const uint32_t w_blk = part ? (VC_LAST + 31) / 32 : W;
         // ---------------- accumulate_moments (pass 1) ----------------
         {
             MaybeDeviceZoneScope("c_pass1");
@@ -1056,7 +1067,7 @@ void kernel_main() {
                     if (j == 0) {
                         wait_pilot();
                     }
-                    moments_rows(0, rows_valid, j == 0, j + 1 == num_chunks, W, vc);
+                    moments_rows(0, rows_valid, j == 0, j + 1 == num_chunks, w_blk, vc_blk);
                     cb_pop_front(cb_input_tiles, T);
                     if (j < first_resident) {
                         skip_chunk(cb_input_keep);  // streamed head chunk: not held for pass 2
