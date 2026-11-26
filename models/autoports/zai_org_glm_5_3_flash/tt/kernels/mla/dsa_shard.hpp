@@ -778,4 +778,39 @@ inline uint32_t pf_keep_bm(
     return m;
 }
 #endif
+// rev 82, RS1 PIPE (MLA_DSA_SHARD_RS1_PIPE, tt/shard_plan.py GLM53_DSA_SHARD_RS1_PIPE; the 8x4 with RS1_EARLY +
+// RS1_SPLIT and the host's RS1_TSPLIT, on t-row builds whose TSPLIT halves are whole tokens and whose token lanes hold
+// >= 2 tokens each (tt/shard_plan.py rs1_pipe_engaged: t 16 at 8 lanes); unset: every build unchanged; opt-in). Under
+// TSPLIT the split RS1's lanes carry the halves of every destination block -- rs1 (link 1) the slices of the launch
+// tokens [0, t / 2), rs1a (link 0) the rest -- but both counted every token's signals, so both opened behind the last
+// pass-0 slice, landed together, and a root combined round 1 of its lane tokens only after both. With the knob:
+//   - a root signals only the lane that carries token t's slices (rs1_pipe_half0) and each lane's two gates count its
+//     half's tokens (tt/shard_plan.py rs1_pipe_waits: t / 2 per field): rs1 opens on every lane's first token, one
+//     token pass before rs1a;
+//   - rs1's waiter names every root twice in its consumer list (+2 on SEM_RSC), rs1a's and rs2's once (+1): SEM_RSC >=
+//     RS1_PIPE_HALF0 only once rs1 landed (any of its increments follows its landing; rs1a alone is 1), >=
+//     RS1_PIPE_BOTH only once both landed (rs2's increment needs every root's half-1 scatter, which waits for
+//     RS1_PIPE_BOTH), >= RS1_PIPE_ROUND2 once round 2 landed too;
+//   - a root lands / combines / scatters its half-0 tokens past RS1_PIPE_HALF0 and the rest past RS1_PIPE_BOTH: the
+//     same pages, the same order, the same compute messages -- the half-0 round-1 work runs while rs1a is in flight.
+//     So probe 6 (att_dsa_shard_dm1.cpp's mark after the first wait) marks half 0 landed, not round 1;
+//   - rs2's increment follows rs1a's only because rs2's gate counts every token (t x groups): a root raises rs2_sem
+//     for its half-1 tokens past RS1_PIPE_BOTH (tt/tp_dsa_shard.py asserts the gate and the consumer weights).
+// tt/shard_plan.py rs1_pipe_gates / rs1_pipe_root / rs1_pipe_root_waits emulate the gates, the landing waits and the
+// roots' second-wait condition (tests/test_shard_plan_8x4.py)
+#if defined(MLA_DSA_SHARD_RS1_PIPE)
+#if !(defined(MLA_DSA_SHARD_RS1_EARLY) && defined(MLA_DSA_SHARD_RS1_SPLIT))
+#error "MLA_DSA_SHARD_RS1_PIPE: needs MLA_DSA_SHARD_RS1_EARLY and MLA_DSA_SHARD_RS1_SPLIT"
+#endif
+#if defined(MLA_DSA_DENSE_WINDOW)
+#error "MLA_DSA_SHARD_RS1_PIPE: no dense window (the split RS1 refuses it: tt/shard_plan.py rs1_split_window_check)"
+#endif
+static_assert(PAIR == 8 && LINE == 4, "RS1 pipe: the 8x4 column scatter");
+// the roots' SEM_RSC waits (tt/shard_plan.py RS1_PIPE_WAITS: rs1's weight 2, rs1a's 1, rs2's 1)
+constexpr uint32_t RS1_PIPE_HALF0 = 2;
+constexpr uint32_t RS1_PIPE_BOTH = 3;
+constexpr uint32_t RS1_PIPE_ROUND2 = 4;
+// whether launch token t's RS1 slices ride rs1 (link 1: the TSPLIT span of tokens [0, t_rows / 2)) -- else rs1a
+inline bool rs1_pipe_half0(uint32_t t, uint32_t t_rows) { return t < t_rows / 2; }
+#endif
 }  // namespace mlashard

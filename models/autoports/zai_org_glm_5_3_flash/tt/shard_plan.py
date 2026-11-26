@@ -1413,6 +1413,194 @@ def rs1_tsplit_header_check() -> None:
         assert 'sd += [("FS_SPAN0", str(self.sub[3])), ("FS_SPANN", str(self.sub[4]))]' in f.read()
 
 
+# ------------------------------------------------------------------ rev 82: the split RS1 by token halves (GLM53_DSA_SHARD_RS1_PIPE)
+RS1_PIPE_REV = 82  # tt/mk_mla.py MLA_REV_RS1_PIPE (the engaged builds' MLA_REV)
+# the increments each waiter adds to a root's SEM_RSC (rs1's consumer list names every root twice; tt/tp_dsa_shard.py)
+# and the roots' three waits on it (dsa_shard.hpp RS1_PIPE_HALF0 / _BOTH / _ROUND2): half 0 landed, both halves
+# landed, round 2 landed
+RS1_PIPE_W = {"rs1": 2, RS1S_NAME: 1, "rs2": 1}
+RS1_PIPE_WAITS = (HDR["RS1_PIPE_HALF0"], HDR["RS1_PIPE_BOTH"], HDR["RS1_PIPE_ROUND2"])
+assert RS1_PIPE_WAITS == (2, 3, 4) and RS1_PIPE_WAITS[2] == sum(RS1_PIPE_W.values()), RS1_PIPE_WAITS
+
+
+def shard_rs1_pipe(pair: int, early: bool = True, rs1s: bool = True, rs1t: bool = True) -> bool:
+    """rev 82 GLM53_DSA_SHARD_RS1_PIPE (default 0, opt-in; the 8x4): the lane tokens pipelined through the split RS1.
+    Under RS1_TSPLIT the two RS1 lanes carry the halves of every destination block -- whole token halves
+    (rs1_pipe_halves: rs1 the tokens [0, t / 2), every lane's first token at 8 lanes x 2) -- but both counted every
+    token's root signals, so both opened behind the last pass-0 slice and landed together, and a root combined round 1
+    of its lane tokens only after both. With the knob each lane counts its own half's signals (rs1_pipe_waits: rs1
+    opens a token pass earlier) and rs1's waiter signals the roots with weight 2 (RS1_PIPE_W), so a root lands /
+    combines / scatters its half-0 tokens while rs1a is still in flight (dsa_shard.hpp RS1 PIPE, the kernels'
+    MLA_DSA_SHARD_RS1_PIPE; rs1_pipe_gates / rs1_pipe_root emulate it). The same pages, landing order and compute
+    messages: bit-exact. Which builds take it: rs1_pipe_engaged. Needs RS1_EARLY (the per-pass fields), RS1_SPLIT
+    and RS1_TSPLIT; the pair / the 2x4 never take it"""
+    on = pair > 2 and _flag("GLM53_DSA_SHARD_RS1_PIPE")
+    if on and not (early and rs1s and rs1t):
+        raise ValueError(
+            "GLM53_DSA_SHARD_RS1_PIPE=1 needs GLM53_DSA_SHARD_RS1_EARLY=1, GLM53_DSA_SHARD_RS1_SPLIT=1 and "
+            "GLM53_DSA_SHARD_RS1_TSPLIT=1 (the split RS1's two halves)"
+        )
+    return on
+
+
+def rs1_pipe_halves(t: int) -> dict | None:
+    """{link: the launch tokens whose RS1 slices that lane carries} when the RS1_TSPLIT spans (rs1_tsplit_spans) are
+    whole tokens: link 1 (rs1) [0, t / 2), link 0 (rs1a) [t / 2, t) -- att_dsa_shard_dm1.cpp's rs1_pipe_half0; None
+    when the span boundary splits a token's RS1_DATA_PAGES pages (t % 4 != 0: t 1 / 2 / 6 ..)"""
+    h = rs1_tsplit_spans(t)[1][1]
+    if t % 2 or h != (t // 2) * RS1_DATA_PAGES:
+        return None
+    return {1: list(range(t // 2)), 0: list(range(t // 2, t))}
+
+
+def rs1_pipe_engaged(t: int, lanes: int, on: bool) -> bool:
+    """whether a t-row build (token t on lane t % lanes) takes MLA_DSA_SHARD_RS1_PIPE: the knob on, whole-token halves
+    and >= 2 tokens per lane (t >= 2 lanes: every lane then holds tokens of both halves -- its first < lanes <= t / 2,
+    its last >= t - lanes >= t / 2). One token per lane (t 8 at 8 lanes, t 4 at 4: the CI pins, the lone 1 x 3 verify,
+    the MTP drafter) leaves no half-0 work to run behind half 1: those builds keep the knob-off kernels and streams.
+    With the default lanes (mk_mla att_lanes) the t 16 builds at 8 lanes engage, the t 1 / 4 / 8 ones do not; other
+    lane counts engage other shapes -- GLM53_MLA_DSA_LANES_T4=1: t 4 on 1 lane; GLM53_MLA_DSA_LANES=4: t 8 and t 16 on
+    4 lanes -- host-checked (rs1_pipe_root_waits over every engaged shape), untested on device"""
+    return bool(on) and lanes >= 1 and t >= 2 * lanes and rs1_pipe_halves(t) is not None
+
+
+def rs1_pipe_waits(t: int, groups: int = 1) -> dict:
+    """{link: (wait, wait2)} -- the RS1 lanes' FS_WAIT / FS_WAIT2 counts under RS1_PIPE: each lane counts the root
+    signals of its half's tokens (one per token, pass and head group); knob off both lanes count all t x groups"""
+    hv = rs1_pipe_halves(t)
+    assert hv is not None, ("RS1 pipe: whole-token halves", t)
+    return {link: (len(toks) * groups, len(toks) * groups) for link, toks in hv.items()}
+
+
+def rs1_pipe_gates(done0: list, done1: list, t: int, *, mutate: str | None = None) -> dict:
+    """fs_read.cpp FS_WAIT2's two gates on each RS1 lane under RS1_PIPE as the roots' signals land in time order (a
+    pass-0 signal before a pass-1 one at the same time): done0[l] / done1[l] = lane l's root's pass-0 / pass-1 ship
+    times of its tokens l, l + lanes, .. (rs1_lane_ships); a root signals only the lane of the token's half (pass 0
+    into bits [0, 16), pass 1 RS1_PASS1_INC) and each lane's gates open at rs1_pipe_waits. -> {link: (gate 1, gate 2,
+    the last pass-0 ship of its half's tokens, their last pass-1 ship)}: sound iff gate 1 >= that pass-0 ship and gate
+    2 >= that pass-1 ship (the lane stages only its half's pages; None: it never opens -- a hang). mutate (the
+    regression this must expose): "both" -- every signal to both lanes (the knob-off increments) with the halved
+    waits: a lane opens on the other half's signals"""
+    lanes = len(done0)
+    hv, waits = rs1_pipe_halves(t), rs1_pipe_waits(t)
+    assert sum(len(d) for d in done0) == t == sum(len(d) for d in done1), (t, [len(d) for d in done0])
+    half = {tok: link for link, toks in hv.items() for tok in toks}
+    out = {}
+    for link in hv:
+        ev, need0, need1 = [], None, None
+        for l_ in range(lanes):
+            for j, (a, b) in enumerate(zip(done0[l_], done1[l_])):
+                mine = half[l_ + j * lanes] == link
+                if mine:
+                    need0, need1 = max(a, need0 or a), max(b, need1 or b)
+                if mine or mutate == "both":
+                    ev += [(a, 0), (b, 1)]
+        cnt, g1, g2 = 0, None, None
+        for time, pas in sorted(ev):
+            cnt += RS1_PASS1_INC if pas else 1
+            if g1 is None and cnt % RS1_PASS1_INC >= waits[link][0]:
+                g1 = time
+            if g2 is None and cnt // RS1_PASS1_INC >= waits[link][1]:
+                g2 = time
+        out[link] = (g1, g2, need0, need1)
+    return out
+
+
+def rs1_pipe_root(order: list, *, weights: dict | None = None, waits: tuple | None = None) -> list:
+    """one lane root's landing waits (att_dsa_shard_dm1.cpp E under RS1_PIPE) against one arrival order of the round-1
+    increments on its SEM_RSC: order = the waiter of each increment in arrival order -- rs1 weights["rs1"] times (its
+    consumer list names the root twice: every one of them follows rs1's landing), rs1a weights[RS1S_NAME] times; rs2's
+    increments arrive only once the root has passed its second wait (rs2's sends wait for every root's half-1 scatter,
+    which a root ships only past that wait). weights / waits: RS1_PIPE_W / RS1_PIPE_WAITS by default (the regressions:
+    the knob-off unit weights with the ordinal waits (1, 2, 3), a stale round-2 wait). -> [(step, the waiters landed
+    when the root passed that wait)] for "half0" (it lands / combines its tokens < t / 2), "half1" (the rest),
+    "round2" -- sound iff half0 saw rs1, half1 rs1 and rs1a, round2 all three; ("hang", landed) when the root waits for
+    an increment that never comes"""
+    weights = dict(RS1_PIPE_W if weights is None else weights)
+    waits = tuple(RS1_PIPE_WAITS if waits is None else waits)
+    assert sorted(order) == sorted(["rs1"] * weights["rs1"] + [RS1S_NAME] * weights[RS1S_NAME]), (order, weights)
+    pend, landed, steps = list(order), [], []
+    for k, name in enumerate(("half0", "half1", "round2")):
+        while len(landed) < waits[k] and pend:
+            landed.append(pend.pop(0))
+        if len(landed) < waits[k]:
+            steps.append(("hang", tuple(sorted(set(landed)))))
+            break
+        steps.append((name, tuple(sorted(set(landed)))))
+        if name == "half1":  # every root's half-1 scatter shipped: rs2 may send, its waiter signals later
+            pend += ["rs2"] * weights["rs2"]
+    return steps
+
+
+# att_dsa_shard_dm1.cpp's round-1 loop of a lane root (t0 = its lane, right after the RS1_PIPE_HALF0 wait) and its
+# first statement under RS1_PIPE, the second wait's condition: rs1_pipe_root_waits evaluates the same loop and
+# condition, rs1_pipe_header_check asserts both strings and their place in the kernel
+RS1_PIPE_ROOT_LOOP = "for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {"
+RS1_PIPE_HALF1_IF = "if (t >= t_rows / 2 && t < t_rows / 2 + mlaatt::LANES) {"
+
+
+def rs1_pipe_root_waits(t_rows: int, lanes: int, *, mutate: str | None = None) -> dict:
+    """the roots' RS1_PIPE second wait as att_dsa_shard_dm1.cpp runs it (RS1_PIPE_ROOT_LOOP / RS1_PIPE_HALF1_IF,
+    unsigned division): root l walks its tokens l, l + lanes, .. < t_rows and waits SEM_RSC >= RS1_PIPE_BOTH before a
+    token t with t_rows / 2 <= t < t_rows / 2 + lanes. -> {l: [the launch tokens before which root l waits]}: sound iff
+    every lane waits exactly once, before its first half-1 token (rs1_pipe_halves[0]; tokens ascend, so every earlier
+    one is in half 0). mutate (the off-by-ones this must expose): "le" -- <= for the upper bound (a second wait at
+    t_rows / 2 + lanes when a lane holds > 2 tokens), "minus1" -- the boundary at t_rows / 2 - 1 (lane (t_rows / 2 - 1)
+    % lanes waits before a half-0 token and lands its first half-1 token without the wait)"""
+    assert mutate in (None, "le", "minus1"), mutate
+    lo = t_rows // 2 - int(mutate == "minus1")
+    hi = lo + lanes + int(mutate == "le")  # (t < hi: the kernel's t < t_rows / 2 + mlaatt::LANES)
+    return {l_: [t for t in range(l_, t_rows, lanes) if lo <= t < hi] for l_ in range(lanes)}
+
+
+def rs1_pipe_round1_end(land: dict, work: float, tokens: int, on: bool) -> float:
+    """when a lane root has shipped its round-1 row scatters (att_dsa_shard_dm1.cpp E): land[link] = when that RS1 lane
+    landed here, work = the root's round-1 work per token (land_fold1 + the fold combine + the 2-row scatter ship),
+    `tokens` its lane tokens, the first half of them in half 0 (rs1). Knob off one wait for both halves; RS1_PIPE the
+    half-0 tokens behind rs1 alone: the gain is min(land[0] - land[1], the half-0 work) when rs1 lands first"""
+    n0 = tokens // 2
+    if not on:
+        return max(land[0], land[1]) + work * tokens
+    return max(land[1] + work * n0, land[0]) + work * (tokens - n0)
+
+
+def rs1_pipe_header_check() -> None:
+    """GLM53_DSA_SHARD_RS1_PIPE's host plan vs the kernels' / builders' text: the roots' half rule, lane signals and
+    three waits (dsa_shard.hpp, att_dsa_shard_dm1.cpp), rs1's doubled consumer list and the halves' gate counts
+    (tt/tp_dsa_shard.py), the define (tt/mk_mla.py)"""
+    with open(os.path.join(KDIR, "mla", "dsa_shard.hpp")) as f:
+        assert "inline bool rs1_pipe_half0(uint32_t t, uint32_t t_rows) { return t < t_rows / 2; }" in f.read()
+    with open(os.path.join(KDIR, "mla", "att_dsa_shard_dm1.cpp")) as f:
+        dm1 = f.read()
+    for line_ in ("if (mlashard::rs1_pipe_half0(t, t_rows)) {",
+                  "noc_semaphore_wait_min(rsc, mlashard::RS1_PIPE_HALF0);",
+                  RS1_PIPE_HALF1_IF,
+                  "noc_semaphore_wait_min(rsc, mlashard::RS1_PIPE_BOTH);",
+                  "noc_semaphore_wait_min(rsc, mlashard::RS1_PIPE_ROUND2);"):  # fmt: skip
+        assert line_ in dm1, ("att_dsa_shard_dm1.cpp", line_)
+    # rs1_pipe_root_waits' loop and condition: the root's round-1 loop right after the half-0 wait, the second wait's
+    # test its first statement (only the define's #if between them), the only such test in the kernel
+    i0 = dm1.index("noc_semaphore_wait_min(rsc, mlashard::RS1_PIPE_HALF0);")
+    i1 = dm1.index(RS1_PIPE_ROOT_LOOP, i0)
+    i2 = dm1.index(RS1_PIPE_HALF1_IF, i1)
+    gap = [ln.strip() for ln in dm1[i1 + len(RS1_PIPE_ROOT_LOOP) : i2].splitlines() if ln.strip()]
+    assert len(gap) == 1 and gap[0].startswith("#if defined(MLA_DSA_SHARD_RS1_PIPE)"), gap
+    assert dm1.count(RS1_PIPE_HALF1_IF) == 1 and "for (" not in dm1[i0:i1], "att_dsa_shard_dm1.cpp RS1 pipe loop"
+    with open(os.path.join(os.path.dirname(KDIR), "tp_dsa_shard.py")) as f:
+        tds = f.read()
+    for line_ in ('rs1_cons = (MK.SEM_RSC, roots * SP.RS1_PIPE_W["rs1"])',
+                  "assert rs1a.cons == rs2.cons == (MK.SEM_RSC, roots), (rs1a.cons, rs2.cons)",
+                  "assert rs2.wait == (MK.SEM_FSW, n_all) and len(rs2.lanes) == 1, (rs2.wait, rs2.lanes)",
+                  "pw = SP.rs1_pipe_waits(t, self.mk.groups)",
+                  "rs1_wait, rs1a_n = (rs_wait[0], pw[1][0]), pw[0][0]",
+                  "split1, split0 = dict(split, wait2=pw[1][1]), dict(split, wait2=pw[0][1])",
+                  "pipe = SP.rs1_pipe_engaged(t, nl, SP.shard_rs1_pipe(self.P, early, rs1s, rs1t))"):  # fmt: skip
+        assert line_ in tds, ("tp_dsa_shard.py", line_)
+    assert RS1_PIPE_W[RS1S_NAME] == RS1_PIPE_W["rs2"] == 1  # (rs1a / rs2 keep cons=(MK.SEM_RSC, roots))
+    with open(os.path.join(os.path.dirname(KDIR), "mk_mla.py")) as f:
+        assert '[("MLA_DSA_SHARD_RS1_PIPE", "1")] if rs1p else []' in f.read()
+
+
 def rs1_split_window_check(rs1_split: bool, dense_window: bool | None = None) -> None:
     """rev 76 x GLM53_DSA_DENSE_WINDOW: refused at build (tt/tp_dsa_shard.py, tt/mk_mla.py). In an ALL-DENSE launch
     (every row's context inside the dense window) the roots skip the split-K exchange and only signal the RS lanes
@@ -1471,8 +1659,9 @@ def rs1_split_header_check() -> None:
                   "noc_semaphore_wait_min(rsc, 2);  // rev 76: both column-scatter waiters",
                   "noc_semaphore_wait_min(rsc, 3);  // rev 76: the two column-scatter waiters, then the row scatter's"):  # fmt: skip
         assert line_ in dm1, ("att_dsa_shard_dm1.cpp RS1 split", line_)
-    # every RS1 signal of the 8x4 roots (the dense launch's two fields, RS1 early's per-pass one, the late form's)
-    assert dm1.count("get_noc_addr(rs1a_x, rs1a_y, get_semaphore(rs1a_sem))") == 4, "att_dsa_shard_dm1.cpp rs1a signals"
+    # every RS1 signal of the 8x4 roots (the dense launch's two fields, RS1 early's per-pass one, the late form's; rev
+    # 82 RS1 PIPE's per-half one)
+    assert dm1.count("get_noc_addr(rs1a_x, rs1a_y, get_semaphore(rs1a_sem))") == 5, "att_dsa_shard_dm1.cpp rs1a signals"
     with open(os.path.join(os.path.dirname(KDIR), "mk_mla.py")) as f:
         mk = f.read()
     for line_ in ('dm1_rt[xy] += [*shard["rs1a_lane"], int(shard["rs1a_sem"])]',

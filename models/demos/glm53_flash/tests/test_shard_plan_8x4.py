@@ -973,7 +973,9 @@ def test_rs1_early_gates_two_fields():
     """rev 67, the RS1-early race (B 16 distinct users, 8 lanes x 2 tokens: user 0 moved at decode id 8): with one count
     of every root signal (rev 65 / 66) the first gate opens at t signals in total -- the fast lanes' pass-1 signals open
     it while a slow lane's pass-0 slices are unwritten; with two fields (rev 67) it opens exactly at the last pass-0
-    signal. Balanced lanes (B 4: 4 identical users x 1 token) never expose it, which is why B 4 stayed bit-identical."""
+    signal. Balanced lanes (B 4: 4 identical users x 1 token) never expose it, which is why B 4 stayed bit-identical.
+    Rev 82 RS1_PIPE: the per-half gates at 8 lanes x 2 tokens, and the roots' SEM_RSC waits (rs1 weight 2) against
+    every arrival order -- with the regressions they exist to prevent (unit weights, a stale round-2 wait, a hang)."""
     # 8 lanes x 2 tokens, lane 7 (more selected pools) slow in pass 0
     pass_us = [([40.0, 40.0], [50.0, 50.0])] * 7 + [([200.0, 200.0], [50.0, 50.0])]
     done0, done1 = SP.rs1_lane_ships(pass_us)
@@ -990,13 +992,38 @@ def test_rs1_early_gates_two_fields():
     assert (
         SP.rs1_early_gates(done0, done1, 4, fields=False)[0] == 60.0 < 100.0 == SP.rs1_early_gates(done0, done1, 4)[0]
     )
+    # rev 82 GLM53_DSA_SHARD_RS1_PIPE (8 lanes x 2 tokens, ~31 us per token pass): rs1 carries every lane's first token
+    # (t 0..7) and opens at their last pass-0 ship, a token pass before rs1a and the knob-off gate; each gate = its
+    # half's last ship (sound). The knob-off increments (every signal to both lanes) with the halved waits open rs1a
+    # on half 0's signals while its own slices are unwritten (the regression the per-half signal prevents)
+    done0, done1 = SP.rs1_lane_ships([([28.0, 31.0], [31.0, 31.0])] * 8)
+    assert SP.rs1_early_gates(done0, done1, 16) == (59.0, 121.0)  # knob off: both lanes
+    assert SP.rs1_pipe_gates(done0, done1, 16) == {1: (28.0, 90.0, 28.0, 90.0), 0: (59.0, 121.0, 59.0, 121.0)}
+    bad = SP.rs1_pipe_gates(done0, done1, 16, mutate="both")
+    assert bad[0][0] == 28.0 < bad[0][2] == 59.0 and bad[0][1] == 90.0 < bad[0][3] == 121.0
+    # the roots' landing waits: every arrival order of rs1's two increments and rs1a's one -- half 0 only past rs1,
+    # half 1 past both, round 2 past rs2 too (rs2 sends only after every root's half-1 scatter)
+    for o in (["rs1", "rs1", "rs1a"], ["rs1", "rs1a", "rs1"], ["rs1a", "rs1", "rs1"]):
+        st = SP.rs1_pipe_root(o)
+        assert [s for s, _ in st] == ["half0", "half1", "round2"], st
+        assert "rs1" in st[0][1] and st[1][1] == ("rs1", "rs1a") and st[2][1] == ("rs1", "rs1a", "rs2"), (o, st)
+    # regressions: the knob-off unit weights with the ordinal waits let rs1a's landing release half 0; a round-2 wait
+    # left at 3 passes before rs2 landed; a half-1 wait at 4 waits for rs2, which waits for the half-1 scatters: a hang
+    unit = {"rs1": 1, "rs1a": 1, "rs2": 1}
+    st = SP.rs1_pipe_root(["rs1a", "rs1"], weights=unit, waits=(1, 2, 3))
+    assert st[0] == ("half0", ("rs1a",)), st
+    st = SP.rs1_pipe_root(["rs1", "rs1", "rs1a"], waits=(2, 3, 3))
+    assert st[2] == ("round2", ("rs1", "rs1a")), st
+    assert SP.rs1_pipe_root(["rs1", "rs1", "rs1a"], waits=(2, 4, 4))[1] == ("hang", ("rs1", "rs1a"))
 
 
 def test_rs1_early_gates_sound_random():
     """rev 67's two-field gates are sound for any lane skew (gate 1 at the last pass-0 signal, gate 2 at the last
-    pass-1 signal); the one-count gates of rev 65 / 66 are not"""
+    pass-1 signal); the one-count gates of rev 65 / 66 are not. Rev 82 RS1_PIPE (whole-token halves): each RS1 lane's
+    gates open exactly at its own half's last pass-0 / pass-1 ship; with every signal sent to both lanes (the knob-off
+    increments) and the halved waits they open early"""
     gen = torch.Generator().manual_seed(67)
-    unsound_old = 0
+    unsound_old = checked = unsound_both = 0
     for _ in range(200):
         lanes = int(torch.randint(1, 9, (1,), generator=gen))
         per = int(torch.randint(1, 5, (1,), generator=gen))
@@ -1010,7 +1037,14 @@ def test_rs1_early_gates_sound_random():
         assert SP.rs1_early_gates(done0, done1, t) == (need1, need2)
         g1_old, _ = SP.rs1_early_gates(done0, done1, t, fields=False)
         unsound_old += g1_old < need1
+        if SP.rs1_pipe_halves(t) is not None:  # rev 82 RS1_PIPE: each half's lane opens at its own last ship
+            checked += 1
+            for link, (g1, g2, n0, n1) in SP.rs1_pipe_gates(done0, done1, t).items():
+                assert (g1, g2) == (n0, n1), (lanes, per, link)
+            bad = SP.rs1_pipe_gates(done0, done1, t, mutate="both")  # (the knob-off increments, halved waits)
+            unsound_both += any(g1 < n0 or g2 < n1 for g1, g2, n0, n1 in bad.values())
     assert unsound_old > 20, unsound_old
+    assert checked > 50 and unsound_both > checked // 2, (checked, unsound_both)
 
 
 def test_rev65_knobs(monkeypatch):
@@ -1821,6 +1855,70 @@ def test_rs1_split_build_refusals(monkeypatch):
     monkeypatch.delenv("GLM53_DSA_SHARD_RS1_TSPLIT")
     SP.rs1_tsplit_header_check()
     assert SP.rs1_tsplit_spans(16) == {1: (0, 72), 0: (72, 72)} and SP.rs1_tsplit_spans(1) == {1: (0, 4), 0: (4, 6)}
+    # rev 82 GLM53_DSA_SHARD_RS1_PIPE: off by default (not a galaxy default), 0 / 1 only, the 8x4 only, needs RS1_EARLY
+    # + RS1_SPLIT + RS1_TSPLIT; the TSPLIT halves as tokens (None where a span splits a token's pages); engaged only
+    # with >= 2 tokens per lane (t 16 at 8 lanes; never the t 1 / 4 / 8 builds); each lane's gates count its half
+    monkeypatch.delenv("GLM53_DSA_SHARD_RS1_PIPE", raising=False)
+    assert not SP.shard_rs1_pipe(8, False, False, False)
+    monkeypatch.setenv("GLM53_DSA_SHARD_RS1_PIPE", "1")
+    assert SP.shard_rs1_pipe(8) and not SP.shard_rs1_pipe(2, False, False, False)
+    for need in (dict(early=False), dict(rs1s=False), dict(rs1t=False)):
+        with expect_error(ValueError, "GLM53_DSA_SHARD_RS1_PIPE=1 needs"):
+            SP.shard_rs1_pipe(8, **need)
+    monkeypatch.setenv("GLM53_DSA_SHARD_RS1_PIPE", "2")
+    with expect_error(ValueError, "GLM53_DSA_SHARD_RS1_PIPE=2: 0 or 1"):
+        SP.shard_rs1_pipe(8)
+    monkeypatch.delenv("GLM53_DSA_SHARD_RS1_PIPE")
+    assert SP.rs1_pipe_halves(16) == {1: list(range(8)), 0: list(range(8, 16))}
+    assert SP.rs1_pipe_halves(4) == {1: [0, 1], 0: [2, 3]} and SP.rs1_pipe_halves(32)[0] == list(range(16, 32))
+    assert all(SP.rs1_pipe_halves(t) is None for t in (1, 2, 3, 6, 10, 14))
+    for t in range(1, 33):  # the halves = the TSPLIT spans' pages, token by token
+        hv = SP.rs1_pipe_halves(t)
+        if hv is not None:
+            sp_ = SP.rs1_tsplit_spans(t)
+            assert all(sp_[k][1] == len(hv[k]) * SP.RS1_DATA_PAGES for k in (0, 1)), t
+    assert SP.rs1_pipe_engaged(16, 8, True) and SP.rs1_pipe_engaged(32, 8, True) and SP.rs1_pipe_engaged(8, 4, True)
+    assert not any(SP.rs1_pipe_engaged(t, ln, True) for t, ln in ((8, 8), (4, 4), (1, 1), (16, 16), (6, 2), (12, 8)))
+    assert not SP.rs1_pipe_engaged(16, 8, False)
+    for t, ln in ((16, 8), (32, 8), (8, 4)):  # every lane holds tokens of both halves
+        hv = SP.rs1_pipe_halves(t)
+        assert all({k for k, v in hv.items() for x in range(l_, t, ln) if x in v} == {0, 1} for l_ in range(ln)), t
+    # the roots' second wait as the kernel runs it (rs1_pipe_root_waits; rs1_pipe_header_check ties its loop and
+    # condition to att_dsa_shard_dm1.cpp): over every engaged (t, lanes) -- the default t 16 at 8 lanes, t 4 on 1 lane
+    # (GLM53_MLA_DSA_LANES_T4=1), t 8 / 16 on 4 (GLM53_MLA_DSA_LANES=4) -- each lane root waits exactly once, before its
+    # first half-1 token. The off-by-ones must fail: "le" a second wait wherever a lane holds > 2 tokens, "minus1" a
+    # wait before a half-0 token and a first half-1 token landed without it on every engaged shape
+    eng = [(t, ln) for t in range(1, 65) for ln in (1, 2, 4, 8, 16) if SP.rs1_pipe_engaged(t, ln, True)]
+    assert {(16, 8), (4, 1), (8, 4), (16, 4), (32, 8)} <= set(eng) and (8, 8) not in eng, eng
+
+    def root_ok(t, ln, **kw):  # every lane: one wait, before its first half-1 token
+        waits, h1 = SP.rs1_pipe_root_waits(t, ln, **kw), set(SP.rs1_pipe_halves(t)[0])
+        return all(waits[l_] == [min(x for x in range(l_, t, ln) if x in h1)] for l_ in range(ln))
+
+    assert all(root_ok(t, ln) for t, ln in eng), [e for e in eng if not root_ok(*e)]
+    assert SP.rs1_pipe_root_waits(16, 8) == {l_: [8 + l_] for l_ in range(8)}
+    bad = {m: [e for e in eng if not root_ok(*e, mutate=m)] for m in ("le", "minus1")}
+    assert bad["le"] == [e for e in eng if e[0] > 2 * e[1]] and (32, 8) in bad["le"], bad["le"]
+    assert bad["minus1"] == eng, bad["minus1"]
+    assert SP.rs1_pipe_root_waits(16, 8, mutate="minus1")[7] == [7]  # half-0 token 7 waits, half-1 token 15 does not
+    assert SP.rs1_pipe_root_waits(32, 8, mutate="le")[0] == [16, 24]  # lane 0 waits twice
+    assert SP.rs1_pipe_waits(16) == {1: (8, 8), 0: (8, 8)} and SP.rs1_pipe_waits(16, 2) == {1: (16, 16), 0: (16, 16)}
+    SP.rs1_pipe_header_check()
+    with open(os.path.join(os.path.dirname(SP.KDIR), "galaxy_defaults.py")) as fh:
+        assert "GLM53_DSA_SHARD_RS1_PIPE" not in fh.read()  # opt-in
+    # the sizing model: knob off the root combines after both halves; with the knob half 0 behind rs1 alone -- the gain
+    # is min(rs1a - rs1 landing, the half-0 work), 0 when both land together (layer 3 at 32 K x 16 live, 11-25 probe:
+    # both lanes land 249.4 us after the merge, round-1 work 51.6 us for 2 tokens; rs1 a token pass (~31 us) earlier)
+    assert SP.rs1_pipe_round1_end({1: 249.4, 0: 249.4}, 25.8, 2, False) == SP.rs1_pipe_round1_end(
+        {1: 249.4, 0: 249.4}, 25.8, 2, True
+    )
+    off, on_ = (SP.rs1_pipe_round1_end({1: 218.4, 0: 249.4}, 25.8, 2, k) for k in (False, True))
+    assert abs(off - on_ - 25.8) < 1e-9 and abs(off - 301.0) < 1e-9
+    gen = random.Random(82)
+    for _ in range(100):
+        l1, l0, w, n = gen.uniform(0, 300), gen.uniform(0, 300), gen.uniform(1, 40), gen.choice((2, 4))
+        off, on_ = (SP.rs1_pipe_round1_end({1: l1, 0: l0}, w, n, k) for k in (False, True))
+        assert -1e-9 <= off - on_ <= max(0.0, min(l0 - l1, w * (n // 2))) + 1e-9, (l1, l0, w, n)
     env = {}
     # want = GLM53_MLA_DSA_LANES (8) as a power of two <= chunks / helpers; p also <= the free cores
     assert SP.dsa_lane_count(20, 4, 32, env) == (8, 8) and SP.dsa_lane_count(7, 4, 32, env) == (4, 8)
