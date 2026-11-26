@@ -42,7 +42,7 @@ inline void _calculate_max_pool_with_indices_(
     // each face is 16 rows
     constexpr std::uint32_t face_offset = 16;
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
 
     if constexpr (layout == ckernel::DataLayout::ROW_MAJOR) {
         // ROW MAJOR DATA VERSION OF MPWI
@@ -80,7 +80,7 @@ inline void _calculate_max_pool_with_indices_(
             TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, indices_tile_offset + 12 + col_offset);
 
             // sort 4 rows
-            lltt::replay(0, 7);
+            TTI_REPLAY(0, 7, 0, 0);
 
             // data
             TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + 16 + col_offset);
@@ -114,7 +114,7 @@ inline void _calculate_max_pool_with_indices_(
         TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, indices_tile_offset + 6);
 
         // sort 4 rows
-        lltt::replay(0, 7);
+        TTI_REPLAY(0, 7, 0, 0);
 
         // data
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + 8);   // even cols
@@ -146,7 +146,7 @@ inline void _calculate_max_pool_with_indices_(
         TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, indices_tile_offset + face_offset + 6);
 
         // sort 4 rows
-        lltt::replay(0, 7);
+        TTI_REPLAY(0, 7, 0, 0);
 
         // data
         TT_SFPLOAD(
@@ -196,7 +196,7 @@ inline void _calculate_max_pool_with_indices_generic_(
     constexpr std::uint32_t eight_row_offset = 16;
     constexpr std::uint32_t sixteen_row_offset = 32;
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
 
     // ROW MAJOR DATA VERSION OF MPWI
     // DATA IS EXPECTED TO BE IN THE FOLLOWING ORDER IN DEST:
@@ -226,7 +226,7 @@ inline void _calculate_max_pool_with_indices_generic_(
                 TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, idx_base + 12);
 
                 // Reduce 8 rows to max in LREG0/LREG4 via replay buffer
-                lltt::replay(0, 7);
+                TTI_REPLAY(0, 7, 0, 0);
 
                 // Only store when necessary - caller controls this
                 if (store_result) {

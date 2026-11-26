@@ -286,6 +286,11 @@ void init_unary_sfpu_operation_quasar()
     {
         init_signbit();
     }
+    else if constexpr (is_isinf_isnan_op(OPERATION))
+    {
+        // What SFPU_UNARY_INIT(<op>) expands to in the Compute API's *_tile_init, so the bare init's dispatch to isinf_isnan_init is what runs.
+        ::ckernel::llk_math_eltwise_unary_sfpu_init<OPERATION>();
+    }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
         init_typecast();
@@ -336,7 +341,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
-        hardmish_init();
+        // The Compute API's hardmish_tile_init expression, so the bare init's dispatch to hardmish_init is what runs.
+        SFPU_UNARY_INIT(hardmish);
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {
@@ -344,7 +350,12 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {
-        hardshrink_init();
+        // The Compute API's hardshrink_tile_init / threshold_tile_init expressions, so the bare init's dispatch is what runs.
+        SFPU_UNARY_INIT(hardshrink);
+    }
+    else if constexpr (OPERATION == SfpuType::threshold)
+    {
+        SFPU_UNARY_INIT(threshold);
     }
     else if constexpr (OPERATION == SfpuType::hardtanh)
     {
@@ -373,6 +384,11 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::sigmoid_appx)
     {
         sigmoid_appx_init();
+    }
+    else if constexpr (OPERATION == SfpuType::tanh)
+    {
+        // calculate_tanh stores through the ADDR_MOD_6 tanh_init programs, as tanh_tile_init does.
+        tanh_init<APPROX, is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::tanhshrink)
     {
@@ -410,9 +426,10 @@ void init_unary_sfpu_operation_quasar()
     {
         power_init();
     }
-    else if constexpr (OPERATION == SfpuType::log)
+    else if constexpr (OPERATION == SfpuType::log || OPERATION == SfpuType::log_with_base || OPERATION == SfpuType::log10)
     {
-        log_init<APPROX, false /* FAST_APPROX */, is_fp32_dest_acc_en>();
+        // The test's approximation mode selects log's FAST_APPROX path.
+        log_init<APPROX, APPROX /* FAST_APPROX */, is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::digamma)
     {
@@ -432,7 +449,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::i0)
     {
-        i0_init();
+        // The Compute API's i0_tile_init expression, so the bare init's dispatch to i0_init is what runs.
+        SFPU_UNARY_INIT(i0);
     }
     else if constexpr (OPERATION == SfpuType::i1)
     {
@@ -488,15 +506,16 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::bitwise_and)
     {
-        bitwise_and_init();
+        // The Compute API's bitwise_*_tile_init expression, so the bare init's dispatch is what runs.
+        SFPU_UNARY_INIT(bitwise_and);
     }
     else if constexpr (OPERATION == SfpuType::bitwise_or)
     {
-        bitwise_or_init();
+        SFPU_UNARY_INIT(bitwise_or);
     }
     else if constexpr (OPERATION == SfpuType::bitwise_xor)
     {
-        bitwise_xor_init();
+        SFPU_UNARY_INIT(bitwise_xor);
     }
     // fmod / remainder read the divisor and its reciprocal from the programmable constants, set
     // here to 2.0 / 0.5 as in the Blackhole harness.
@@ -522,7 +541,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::tiled_prod)
     {
-        tiled_prod_init();
+        // The Compute API's tiled_prod_tile_init expression, so the bare init's dispatch to tiled_prod_init is what runs.
+        SFPU_UNARY_INIT(tiled_prod);
     }
     else if constexpr (OPERATION == SfpuType::alt_complex_rotate90)
     {
@@ -1074,7 +1094,16 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, hardmish, (APPROX, ITERATIONS), dst_index, vector_mode);
+        if (sfpu_format == DataFormat::Float16)
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, hardmish, (APPROX, is_fp32_dest_acc_en, DataFormat::Float16, ITERATIONS), dst_index, vector_mode);
+        }
+        else
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, hardmish, (APPROX, is_fp32_dest_acc_en, DataFormat::Float16_b, ITERATIONS), dst_index, vector_mode);
+        }
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {
@@ -1083,7 +1112,14 @@ void call_unary_sfpu_operation_quasar(
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {
         SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_hardshrink, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* lambda = 0.5f */);
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_hardshrink,
+            (APPROX, ITERATIONS, is_fp32_dest_acc_en),
+            dst_index,
+            vector_mode,
+            0x3f000000u /* lambda = 0.5f */);
     }
     else if constexpr (OPERATION == SfpuType::hardtanh)
     {
@@ -1207,10 +1243,36 @@ void call_unary_sfpu_operation_quasar(
             is_fp32_dest_acc_en,
             TILE_SHAPE,
             calculate_log,
-            (APPROX, false /* FAST_APPROX */, false /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, ITERATIONS),
+            (APPROX, APPROX /* FAST_APPROX */, false /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
             0u /* log_base_scale_factor (unused: HAS_BASE_SCALING = false) */);
+    }
+    else if constexpr (OPERATION == SfpuType::log_with_base)
+    {
+        // log2 through the exact base-two path, as ttnn.log2 calls it; the golden is torch.log2.
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_log,
+            (APPROX, APPROX /* FAST_APPROX */, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, ITERATIONS, true /* IS_BASE_TWO */),
+            dst_index,
+            vector_mode,
+            0x3fb8aa3bu /* 1 / ln(2) */);
+    }
+    else if constexpr (OPERATION == SfpuType::log10)
+    {
+        // log10 as ttnn.log10 calls it: the generic base-scaling path; the golden is torch.log10.
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_log,
+            (APPROX, APPROX /* FAST_APPROX */, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x3ede5bd9u /* 1 / ln(10) */);
     }
     // Special-function family.
     else if constexpr (OPERATION == SfpuType::digamma)
@@ -1284,7 +1346,7 @@ void call_unary_sfpu_operation_quasar(
                 is_fp32_dest_acc_en,
                 TILE_SHAPE,
                 calculate_logical_not,
-                (APPROX, ckernel::InstrModLoadStore::LO16, ITERATIONS),
+                (APPROX, ckernel::InstrModLoadStore::UINT16, ITERATIONS),
                 dst_index,
                 vector_mode);
         }
@@ -1655,8 +1717,18 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         calculate_gcd_init();
     }
+    else if constexpr (OP == BinaryOp::BITWISE_AND || OP == BinaryOp::BITWISE_OR || OP == BinaryOp::BITWISE_XOR)
+    {
+        // The Compute API's binary_bitwise_tile_init expression (it programs the kernel's ADDR_MOD_6).
+        SFPU_BINARY_INIT_FN_NO_ARGS(bitwise_and, sfpu::binary_bitwise_init);
+    }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID / RESHUFFLE_ROWS are stateless — no init.
+    else if constexpr (OP == BinaryOp::LOGSIGMOID)
+    {
+        // logsigmoid_tile_init: loads the polynomial tail d6..d8 into vConstFloatPrgm0..2.
+        logsigmoid_init<APPROXIMATION_MODE>();
+    }
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / RESHUFFLE_ROWS / MUL_SM_SHIFT23 are stateless — no init.
 }
 
 /**
@@ -1702,9 +1774,10 @@ template <
 void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t src1_tile, std::uint32_t dst_tile, [[maybe_unused]] DataFormat math_format)
 {
     static_assert(
-        TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32 || OP == BinaryOp::ADD || OP == BinaryOp::SUB || OP == BinaryOp::MUL || OP == BinaryOp::DIV ||
-            OP == BinaryOp::GT || OP == BinaryOp::LT || OP == BinaryOp::LE || OP == BinaryOp::GE || OP == BinaryOp::ATAN2 || OP == BinaryOp::COPY_DEST ||
-            OP == BinaryOp::GCD || OP == BinaryOp::LCM || quasar_binary_op_is_quant(OP) || quasar_binary_op_is_max_min(OP),
+        TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32 || OP == BinaryOp::ADD || OP == BinaryOp::SUB || OP == BinaryOp::RSUB || OP == BinaryOp::MUL ||
+            OP == BinaryOp::MUL_SM_SHIFT23 || OP == BinaryOp::DIV || OP == BinaryOp::GT || OP == BinaryOp::LT || OP == BinaryOp::LE || OP == BinaryOp::GE ||
+            OP == BinaryOp::ATAN2 || OP == BinaryOp::COPY_DEST || OP == BinaryOp::GCD || OP == BinaryOp::LCM || quasar_binary_op_is_quant(OP) ||
+            quasar_binary_op_is_max_min(OP),
         "This Quasar binary SFPU operation requires 32x32 tiles");
 
     if constexpr (BCAST_TYPE != BroadcastType::NONE)
@@ -1757,6 +1830,20 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             dst_tile,
             vector_mode);
     }
+    else if constexpr (OP == BinaryOp::RSUB)
+    {
+        // Float path only (dst = src1 - src0); int RSUB is BinaryOp::RSUB_INT32.
+        SFPU_BINARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_sfpu_binary,
+            (APPROXIMATION_MODE, BinaryOp::RSUB, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            vector_mode);
+    }
     else if constexpr (OP == BinaryOp::GT)
     {
         SFPU_BINARY_CALL_TINY_TILE(
@@ -1804,6 +1891,21 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             TILE_SHAPE,
             calculate_binary_comp_int32,
             (false, ITERATIONS, SfpuType::ge, SIGN_MAGNITUDE_FORMAT),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::MUL_SM_SHIFT23)
+    {
+        // sign * ((|a| * |b|) >> 23), the requant rescale.
+        LLK_ASSERT(math_format == DataFormat::Int32, "mul_int32 sm_shift23 supports Int32 only");
+        SFPU_BINARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            _mul_int32_sm_shift23_,
+            (false, ITERATIONS, SIGN_MAGNITUDE_FORMAT),
             src0_tile,
             src1_tile,
             dst_tile,

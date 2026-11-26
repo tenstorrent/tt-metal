@@ -6,10 +6,10 @@
 
 #include <cstdint>
 
-#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
 // Re-exports public profiler enums and adds internal-only types.
-// Prefer <tt-metalium/profiler_types.hpp> for the public subset alone.
-#include <tt-metalium/profiler_types.hpp>
+// Prefer <tt-metalium/observability/profiler/profiler_types.hpp> for the public subset alone.
+#include <tt-metalium/observability/profiler/profiler_types.hpp>
 
 namespace tt::tt_metal {
 

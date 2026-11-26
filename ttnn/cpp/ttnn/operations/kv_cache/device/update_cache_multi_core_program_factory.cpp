@@ -6,15 +6,14 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "update_cache_multi_core_program_factory.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -499,7 +498,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::experimental::ProgramRunArgs UpdateCacheMultiCoreProgramFactory::override_runtime_arguments(
+ProgramRunArgs UpdateCacheMultiCoreProgramFactory::override_runtime_arguments(
     const KvCacheParams& operation_attributes,
     const KvCacheInputs& tensor_args,
     Tensor& tensor_return_value,

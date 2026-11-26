@@ -5,22 +5,21 @@
 #include <tt_stl/fmt.hpp>
 #include "mesh_command_queue_base.hpp"
 
-#include <mesh_device.hpp>
-#include <mesh_event.hpp>
+#include <tt-metalium/execution/mesh_event.hpp>
 #include <api/tt-metalium/experimental/pinned_memory.hpp>
 #include <algorithm>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
 #include <utility>
 
-#include "buffer.hpp"
-#include "mesh_coord.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/vocabulary/mesh_coord.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
 #include "tt_cluster.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"

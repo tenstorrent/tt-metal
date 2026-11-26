@@ -8,8 +8,10 @@ Uses HF_MODEL env var to determine which model variant to test against.
 All HF reference configs and layers are created from the real checkpoint.
 """
 
+import copy
 import json
 import os
+from collections import OrderedDict
 from functools import lru_cache
 
 import pytest
@@ -235,6 +237,42 @@ def skip_if_config_only_checkpoint():
         pytest.skip(_CONFIG_ONLY_SKIP_REASON)
 
 
+# Random-weight HF reference modules by (builder, config, layer) key: (torch RNG state before the build, RNG state
+# after it, the built module). See cached_hf_build.
+_HF_BUILD_CACHE = OrderedDict()
+_HF_BUILD_CACHE_SIZE = 3
+
+
+def hf_config_key(hf_text_config):
+    """A hashable key for an HF text config: every field, including the attention implementation the tests set."""
+    return (
+        json.dumps(hf_text_config.to_dict(), sort_keys=True, default=str),
+        getattr(hf_text_config, "_attn_implementation", None),
+    )
+
+
+def cached_hf_build(key, build):
+    """``build()`` (a random-weight HF reference module), memoized on ``key`` and the global torch RNG state.
+
+    Building a 26B / 31B reference layer is seconds of CPU init (the 26B layer holds 814M fp32 parameters), and most
+    unit tests build the same one from the same seed (``reset_seeds``). A built module is kept with the RNG state
+    before and after its build; a later call with the same key that starts from the same RNG state gets a deep copy
+    and the RNG state the build left behind, so the test sees the same weights and the same random draws after it.
+    Any other call builds."""
+    rng_before = torch.get_rng_state()
+    hit = _HF_BUILD_CACHE.get(key)
+    if hit is not None and torch.equal(hit[0], rng_before):
+        _HF_BUILD_CACHE.move_to_end(key)
+        torch.set_rng_state(hit[1])
+        return copy.deepcopy(hit[2])
+    module = build()
+    _HF_BUILD_CACHE[key] = (rng_before, torch.get_rng_state(), copy.deepcopy(module))
+    _HF_BUILD_CACHE.move_to_end(key)
+    while len(_HF_BUILD_CACHE) > _HF_BUILD_CACHE_SIZE:
+        _HF_BUILD_CACHE.popitem(last=False)
+    return module
+
+
 class TestFactory:
     """Common test setup for Gemma4 unit tests."""
 
@@ -282,7 +320,15 @@ class TestFactory:
 
     @staticmethod
     def create_hf_reference_layer(hf_text_config, layer_idx=0):
-        """Create HF Gemma4TextDecoderLayer with random weights."""
+        """Create HF Gemma4TextDecoderLayer with random weights (built once per config, layer and RNG state:
+        ``cached_hf_build``)."""
+        return cached_hf_build(
+            ("factory_layer", hf_config_key(hf_text_config), layer_idx),
+            lambda: TestFactory._build_hf_reference_layer(hf_text_config, layer_idx),
+        )
+
+    @staticmethod
+    def _build_hf_reference_layer(hf_text_config, layer_idx):
         from transformers.models.gemma4.modeling_gemma4 import Gemma4TextDecoderLayer as HFLayer
 
         hf_layer = HFLayer(hf_text_config, layer_idx=layer_idx)

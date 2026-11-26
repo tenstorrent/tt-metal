@@ -22,9 +22,11 @@ from ...tests.test_factory import (
     PREFILL_BUCKETS,
     TestFactory,
     build_hf_prefill_mask,
+    cached_hf_build,
     compare_tensors,
     find_layer_idx,
     get_pcc_threshold,
+    hf_config_key,
     parametrize_batch_seq,
     parametrize_mesh_with_fabric,
 )
@@ -58,7 +60,15 @@ def test_layer_norms_count():
 
 
 def _create_hf_reference_layer(hf_text_config, layer_idx):
-    """Create HF Gemma4TextDecoderLayer with random weights as reference."""
+    """Create HF Gemma4TextDecoderLayer with random weights as reference (built once per config, layer and RNG
+    state: ``cached_hf_build``)."""
+    return cached_hf_build(
+        ("test_layer", hf_config_key(hf_text_config), layer_idx),
+        lambda: _build_hf_reference_layer(hf_text_config, layer_idx),
+    )
+
+
+def _build_hf_reference_layer(hf_text_config, layer_idx):
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextDecoderLayer as HFDecoderLayer
 
     hf_layer = HFDecoderLayer(hf_text_config, layer_idx=layer_idx)

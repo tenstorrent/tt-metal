@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "dropout_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
@@ -22,7 +22,7 @@ struct DropoutProgramFactory {
     // on every cache hit -- applied to the cached program in place, no spec rebuild. seed is
     // hash-excluded (per-device offset applied when use_per_device_seed); supersedes the framework's
     // tensor-binding refresh, so both tensor bindings are re-supplied here.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const DropoutParams& operation_attributes,
         const DropoutInputs& tensor_args,
         Tensor& tensor_return_value,
@@ -30,21 +30,19 @@ struct DropoutProgramFactory {
 };
 
 struct DropoutMeshWorkloadFactory {
-    // Dropout generates N different programs, but they differ only in the per-device seed set as a runtime argument.
-    // TODO: when heterogeneous runtime arguments are supported, create a single program for all devices, and only
-    // override the runtime arguments for each device. In addition, use `CachedMeshWorkload` instead of
-    // `AdaptedCachedMeshWorkload`, as only a single `shared_variables_t` is needed.
+    // The devices' programs differ only in the compute kernels' per-core seeds (each device offsets the seed by its
+    // id), so each range runs one program with those seeds as per-device run args.
+    static constexpr bool uses_per_device_run_args = true;
+
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const DropoutParams& args,
         const DropoutInputs& tensor_args,
         Tensor& output,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
-    // Delegates to DropoutProgramFactory: both factories emit the same per-core layout, so one
-    // implementation keeps the cache-hit patch from drifting between them. Called once per range;
-    // create_mesh_workload_artifacts emits one single-coordinate range per device, so the range's
-    // start coordinate is the device whose seed is re-derived.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    // Called once per range: DropoutProgramFactory's run args for the range's first device as the base, plus every
+    // device's per-core seeds.
+    static ttnn::device_operation::RangeRunArgs override_runtime_arguments(
         const DropoutParams& operation_attributes,
         const DropoutInputs& tensor_args,
         Tensor& tensor_return_value,

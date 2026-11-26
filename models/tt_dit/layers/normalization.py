@@ -55,7 +55,15 @@ class RMSNorm(Module):
         *,
         compute_kernel_config=None,
         program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None,
+        row_capacity: int | None = None,
     ) -> ttnn.Tensor:
+        """`row_capacity` (largest row count of dim -2, a multiple of 32) selects a program that serves every
+        row count up to it; its result is close to, not bit-identical with, the default one."""
+        if row_capacity is not None:
+            if program_config is not None:
+                msg = "row_capacity takes no program_config"
+                raise ValueError(msg)
+            return self._forward_row_capacity(x, compute_kernel_config, row_capacity)
         return ttnn.experimental.dit_rms_norm_unary_fused(
             x,
             weight=self.weight.data if self.weight is not None else None,
@@ -65,6 +73,26 @@ class RMSNorm(Module):
             compute_kernel_config=compute_kernel_config,
             activation=self.fused_activation,
         )
+
+    def _forward_row_capacity(self, x: ttnn.Tensor, compute_kernel_config, row_capacity: int) -> ttnn.Tensor:
+        if self.bias is not None or self.fused_activation is not None:
+            msg = "row_capacity supports neither a bias nor a fused activation"
+            raise ValueError(msg)
+        shape = list(x.shape)
+        folded = [1, math.prod(shape[:-2]), *shape[-2:]]
+        # The fused distributed RMSNorm without a cluster axis normalizes each [1, batch, N, C] row locally.
+        x = ttnn.experimental.dit_fused_distributed_rmsnorm(
+            x if shape == folded else ttnn.reshape(x, folded),
+            None,
+            self.mesh_device,
+            [],
+            topology=ttnn.Topology.Linear,
+            epsilon=self.norm_eps,
+            weight=self.weight.data if self.weight is not None else None,
+            compute_kernel_config=compute_kernel_config,
+            row_capacity=row_capacity * folded[1],
+        )
+        return x if shape == folded else ttnn.reshape(x, shape)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
@@ -504,6 +532,25 @@ def dram_group_norm_core_grid(
     return best
 
 
+def bounded_group_norm_out_blocks(norm: GroupNorm, batch: int, spatial: int, channels: int, max_block_rows: int) -> int:
+    """num_out_blocks for ``norm`` on a [batch, spatial, channels] input: -1 (the op's auto choice) unless that leaves
+    more than ``max_block_rows`` tile rows per block, else the smallest divisor of the per-core block height that
+    does not."""
+    grid = norm._op_core_grid(batch, spatial)
+    virtual_rows = (grid.x // norm.num_virtual_cols) * grid.y
+    block_h = batch * math.ceil(spatial / ttnn.TILE_SIZE) // virtual_rows
+    target = max(
+        1, spatial * channels // (256 * 256 * (grid.x // norm.num_virtual_cols) * norm.num_virtual_cols * grid.y)
+    )
+    auto = 1
+    while auto < target and auto < 256:
+        auto <<= 1
+    if block_h <= max_block_rows * auto:
+        return -1
+    low = max(auto, ttnn.core.divup(block_h, max_block_rows))
+    return next(d for d in range(low, block_h + 1) if block_h % d == 0)
+
+
 """
 Groupnorm that supports data parallel computation.
 The number of channels and groups will be updated to match the distribution of the data across the mesh.
@@ -526,6 +573,7 @@ class GroupNorm(Module):
         mesh_axis: int | None = None,
         core_grid: ttnn.CoreGrid | None = None,
         activation_fn: str | None = None,
+        max_block_rows: int | None = None,
     ) -> None:
         """
         Args:
@@ -539,10 +587,13 @@ class GroupNorm(Module):
             num_out_blocks: The number of output blocks to use.
             activation_fn: Applied after the norm. ``ttnn.group_norm`` cannot fuse one, so it
                 always runs as a separate op here.
+            max_block_rows: When set, the automatic num_out_blocks is raised so that no output block
+                holds more tile rows than this (bounds the op's L1 circular buffers).
         """
         super().__init__()
 
         self.activation_fn = activation_fn
+        self.max_block_rows = max_block_rows
         self.eps = eps
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
@@ -669,6 +720,10 @@ class GroupNorm(Module):
 
     def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
         batch_size, height, width, channels = x.shape
+        if num_out_blocks == -1 and self.max_block_rows is not None:
+            num_out_blocks = bounded_group_norm_out_blocks(
+                self, batch_size, height * width, channels, self.max_block_rows
+            )
         x = x.reshape([batch_size, 1, width * height, channels])
         kwargs = dict(
             weight=self.weight.data,

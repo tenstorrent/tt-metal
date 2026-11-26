@@ -5,7 +5,7 @@ set(EMULE_ENV
     "TT_METAL_RUNTIME_ROOT=${PROJECT_SOURCE_DIR}"
     "TT_METAL_EMULE_MODE=1"
     "TT_METAL_SLOW_DISPATCH_MODE=1"
-    "TT_METAL_MOCK_CLUSTER_DESC_PATH=${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/tests/cluster_descriptor_examples/wormhole_N150.yaml"
+    "TT_METAL_MOCK_CLUSTER_DESC_PATH=${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/descriptors/cluster_descriptor_examples/wormhole_N150.yaml"
 )
 
 set(EMULE_LABEL "emule")

@@ -62,21 +62,25 @@ mkdir -p perf_data
 
 PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+PYTEST_MARK_EXPR="perf and not accuracy"
+if [[ "${PIPELINE:-}" != nightly && "${PIPELINE:-}" != baseline ]]; then
+  PYTEST_MARK_EXPR+=" and not nightly"
+fi
 
 REPORT="pytest-report-blackhole-${GROUP}${LLK_PERF_REPORT_TAG:-}"
 COMPILE_XML="${REPORT}-compile.xml"
 RUN_XML="${REPORT}-run.xml"
 
 if [[ "$PHASE" != run ]]; then
-  pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "perf and not accuracy" --timeout=60 \
+  pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "$PYTEST_MARK_EXPR" --timeout=60 \
     --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
-    --junitxml="$COMPILE_XML" .
+    --junitxml="$COMPILE_XML" -o "python_files=perf_*.py" .
 fi
 [[ "$PHASE" == compile ]] && exit 0
 
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 "${EXITFIRST_ARGS[@]}" -m "perf and not accuracy" --timeout=60 \
+pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 "${EXITFIRST_ARGS[@]}" -m "$PYTEST_MARK_EXPR" --timeout=60 \
   --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
-  --junitxml="$RUN_XML" .
+  --junitxml="$RUN_XML" -o "python_files=perf_*.py" .
 if [[ -f "$COMPILE_XML" ]]; then
   junitparser merge "$COMPILE_XML" "$RUN_XML" "${REPORT}.xml"
 else

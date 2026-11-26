@@ -8,10 +8,10 @@
 #include "kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <cstdint>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <optional>
 #include <vector>
 
@@ -125,6 +125,51 @@ struct RingAttentionRankMapping {
     ttnn::ccl::snake_ring::Orientation orientation = ttnn::ccl::snake_ring::Orientation::Row;
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
+    // Full mesh only: number tensor ranks down the mesh columns (col * rows + row) instead of along the
+    // rows. Split-KV ring MLA with its sequence (SP) on mesh axis 1 lays the KV stripes out that way.
+    bool column_major_ranks = false;
+};
+
+// The kernels' full-mesh rank-mapping compile-time arg, in the kernels' own encoding
+// (ring_attention_rank_mapping.hpp).
+inline uint32_t rank_mapping_compile_time_arg(const RingAttentionRankMapping& mapping) {
+    if (!mapping.full_mesh) {
+        return ring_attention_all_gather::kAxisRankMapping;
+    }
+    return mapping.column_major_ranks ? ring_attention_all_gather::kColumnMajorRankMapping
+                                      : ring_attention_all_gather::kRowMajorRankMapping;
+}
+
+// sparse_ring_sdpa's cross-device load balancing, carried by the gather writers (kernels/ring_attention_balance.hpp).
+struct RingAttentionBalance {
+    tt::tt_metal::Buffer* table = nullptr;  // R cost pages per device
+    tt::tt_metal::Buffer* partner = nullptr;
+    tt::tt_metal::Buffer* q = nullptr;  // sent from q and mask, received into the import buffers (same layouts)
+    tt::tt_metal::Buffer* import_q = nullptr;
+    tt::tt_metal::Buffer* mask = nullptr;
+    tt::tt_metal::Buffer* import_mask = nullptr;
+    tt::tt_metal::Buffer* export_out = nullptr;  // sent from the export buffer into the home's output
+    tt::tt_metal::Buffer* out = nullptr;
+    // GlobalSemaphores on the balance core (the same address and NoC coordinates on every device).
+    uint32_t tables_arrived_addr = 0;
+    uint32_t imports_arrived_addr = 0;
+    uint32_t returns_arrived_addr = 0;
+    uint32_t tables_read_addr = 0;
+    CoreCoord balance_core_noc;
+    uint32_t heads = 0;
+    uint32_t q_blocks = 0;     // Q blocks per head (row blocks)
+    uint32_t q_row_tiles = 0;  // tile rows of Q / the output per head
+    uint32_t dht = 0;
+    uint32_t vdht = 0;
+    uint32_t block_tiles = 0;
+    uint32_t mask_rows = 0;  // mask rows per head
+    uint32_t mask_row_bytes = 0;
+    uint32_t table_page_bytes = 0;
+    uint32_t q_page_bytes = 0;
+    uint32_t out_page_bytes = 0;
+    // Set by the helper.
+    uint32_t writer_flag_semaphore = 0;
+    std::vector<CoreCoord> writer_cores_noc;
 };
 
 // Sliding attention exchanges one or two predecessor tails into compact output slots.
@@ -327,7 +372,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
     // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
     bool partial_readiness_enabled = false,
-    RingAttentionRankMapping rank_mapping = {});
+    RingAttentionRankMapping rank_mapping = {},
+    RingAttentionBalance* balance = nullptr);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

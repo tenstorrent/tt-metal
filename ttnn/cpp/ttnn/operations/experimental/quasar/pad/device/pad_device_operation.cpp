@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "pad_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -18,6 +18,7 @@
 #include "ttnn/operations/experimental/quasar/pad/device/pad_rm_sharded_width_only_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/pad/device/pad_tile_multicore_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/pad/device/pad_tile_program_factory.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 namespace ttnn::prim::qsr {
@@ -215,7 +216,7 @@ tt::tt_metal::TensorSpec PadDeviceOperation::compute_output_specs(
     const auto& input_tensor = tensor_args.input;
     return tt::tt_metal::TensorSpec(
         operation_attributes.output_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,

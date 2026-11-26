@@ -64,6 +64,10 @@ def test_unary(ttnn_mesh_device, reset_seeds, tt_fn, torch_fn, shape, dt, mem, t
 def test_fill(ttnn_mesh_device, reset_seeds, shape):
     """fill(1e-5): every element (logical region) must be bf16(1e-5)."""
     mesh = ttnn_mesh_device
+    if U.is_quasar():
+        # [.., 4, 2] pads to 32x32 tiles: 10000 queries = 20.5 MB in L1, more than the emulator's two ~3.9 MB
+        # banks hold. 1000 queries keeps the op, dtype and layout.
+        shape = (1, 1000, 4, 2)
     x = U.to_tt_mem(U.torch_rand(shape), mesh, "l1")
     out = ttnn.fill(x, 1e-5)
     got = U.from_tt(out, mesh)

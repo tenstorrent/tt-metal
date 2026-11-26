@@ -86,6 +86,13 @@ on:
         required: false
         default: true
         type: boolean
+      require_full_coverage:
+        description: >-
+          Fail the job when a generated point has no baseline, or a baseline point
+          was not measured.
+        required: false
+        default: false
+        type: boolean
       fail_without_baseline:
         description: >-
           Fail the job when no baseline is found, because the gate then compares nothing.
@@ -104,19 +111,16 @@ on:
         default: true
         type: boolean
       threshold:
-        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.13)"
-        required: false
-        default: "0.02"
+        description: "Relative slowdown counting as a regression, from tt_metal/tt-llk/perf/gate_policy.json"
+        required: true
         type: string
       module_thresholds:
         description: "Per-module thresholds, comma-separated, e.g. perf_matmul=0.25"
-        required: false
-        default: ""
+        required: true
         type: string
       min_cycles:
         description: "A point must also move more than this many cycles"
-        required: false
-        default: "30"
+        required: true
         type: string
       gate_name:
         description: "Name of the gate in the Slack message"
@@ -155,6 +159,7 @@ jobs:
           sparse-checkout: |
             .github/scripts
             tt_metal/tt-llk/perf
+            tt_metal/tt-llk/tests/python_tests/helpers/perf
           filter: blob:none
 
       - name: Set up Python
@@ -190,7 +195,8 @@ jobs:
                     | [.name, .conclusion // \"in_progress\",
                        (if .started_at and .completed_at
                         then ((.completed_at | fromdate) - (.started_at | fromdate)) / 60 | floor
-                        else \"\" end)] | @tsv") || LEGS=""
+                        else \"\" end),
+                       ([.steps[]? | select(.conclusion == \"success\")] | length)] | @tsv") || LEGS=""
             if [ -z "$LEGS" ]; then
               REASON="The measurement did not complete (${MEASURE_RESULT}), and no ${ARCH} leg was found in this run."
             else
@@ -199,15 +205,27 @@ jobs:
                 COMPLETE=true
                 echo "::notice::Every ${ARCH} leg succeeded, so the gate compares ${ARCH}. A leg of another architecture did not (${MEASURE_RESULT})."
               else
-                while IFS=$'\t' read -r NAME CONCLUSION MINUTES; do
+                # Stays true only if every leg that did not complete failed before any step ran.
+                INFRA=true
+                while IFS=$'\t' read -r NAME CONCLUSION MINUTES STEPS; do
                   LINE="${NAME##*/ }: ${CONCLUSION}${MINUTES:+ after ${MINUTES} min}"
                   # The gate does not run in a cancelled run, so a cancelled leg most likely ran out of time.
                   if [ "$CONCLUSION" = cancelled ]; then LINE="${LINE}, most likely at its timeout"; fi
-                  # The suite stops at the first failing test (-x), so a failed leg is a test or the runner.
-                  if [ "$CONCLUSION" = failure ]; then LINE="${LINE}, a failing perf test or a runner fault (see the leg's log)"; fi
+                  # A leg that failed with no step of its own done never reached the suite: the
+                  # runner or the action download failed. That is infrastructure, not performance.
+                  if [ "$CONCLUSION" = failure ] && [ "${STEPS:-0}" -le 1 ]; then
+                    LINE="${LINE}, before any step ran — a runner or action-download fault, not a performance result"
+                  else
+                    INFRA=false
+                    # The suite stops at the first failing test (-x), so a failed leg is a test or the runner.
+                    if [ "$CONCLUSION" = failure ]; then LINE="${LINE}, a failing perf test or a runner fault (see the leg's log)"; fi
+                  fi
                   REASON="${REASON:+${REASON}; }${LINE}"
                 done <<< "$BAD"
                 REASON="A ${ARCH} measuring leg did not complete: ${REASON}."
+                if [ "$INFRA" = true ]; then
+                  REASON="${REASON} This is an infrastructure fault, not a performance result."
+                fi
               fi
             fi
           fi
@@ -445,6 +463,7 @@ jobs:
           THRESHOLD: ${{ inputs.threshold }}
           MIN_CYCLES: ${{ inputs.min_cycles }}
           MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
+          REQUIRE_FULL_COVERAGE: ${{ inputs.require_full_coverage }}
           BASELINE_LABEL: >-
             ${{ inputs.baseline_artifact_pattern && 'branch point on main'
                 || inputs.baseline_pipeline == 'merge_baseline' && 'merge baseline'
@@ -456,7 +475,10 @@ jobs:
             BASELINE_LABEL="${BASELINE_LABEL}, stale"
           fi
 
+          COVERAGE_ARG=()
+          [ "$REQUIRE_FULL_COVERAGE" = "true" ] && COVERAGE_ARG=(--require-full-coverage)
           python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
+            "${COVERAGE_ARG[@]}" \
             --current 'current_perf/**/*.csv' \
             --baseline 'baseline_perf/**/*.csv' \
             --run-types "$RUN_TYPES" \
@@ -489,6 +511,7 @@ jobs:
           path: stage2
 
       - name: Add stage 2 to the report
+        id: stage2
         if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
         env:
           ARCH: ${{ inputs.arch }}
@@ -499,11 +522,21 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
             --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\")) | .name" | wc -l) || LEGS=0
           GATE_BASE=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
-          # Report-only: stage 2 adds to the report and does not change the verdict.
+          # Stage 2 decides a stage-1 regression: it exits non-zero when a candidate is a confirmed
+          # regression, needs review, or was not re-measured. A clean stage 1 has nothing to re-measure.
+          STAGE2_EXIT=0
           python3 ${{ env.LLK_PATH }}/perf/placement_check.py gate \
             --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs "$LEGS" \
             --stage1 perf_gate_report.regressions.csv --gate-base "$GATE_BASE" \
-            --arch "$ARCH" --report stage2.md || true
+            --arch "$ARCH" --report stage2.md --blocking-csv stage2.regressions.csv || STAGE2_EXIT=$?
+          EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
+          if [ "$EXIT_CODE" = "1" ]; then
+            echo "Stage 2 re-measured the candidates, so it decides the verdict (stage 2 exit ${STAGE2_EXIT})."
+            EXIT_CODE=$STAGE2_EXIT
+            # Slack lists what blocks, not every stage-1 regression.
+            [ -f stage2.regressions.csv ] && echo "regressions=stage2.regressions.csv" >> "$GITHUB_OUTPUT"
+          fi
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           printf '\n' >> perf_gate_report.md
           cat stage2.md >> perf_gate_report.md
 
@@ -563,6 +596,8 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
+          STAGE2_EXIT_CODE: ${{ steps.stage2.outputs.exit_code }}
+          STAGE2_REGRESSIONS: ${{ steps.stage2.outputs.regressions }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
           MEASURE_RESULT: ${{ steps.measured.outputs.result }}
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
@@ -588,6 +623,8 @@ jobs:
           MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Where stage 2 ran on a stage-1 regression, its exit code is the verdict.
+          GATE_EXIT_CODE="${STAGE2_EXIT_CODE:-$GATE_EXIT_CODE}"
           if [[ "$PR_NUMBER" == "?" && "$GITHUB_REF" =~ gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
             PR_NUMBER="${BASH_REMATCH[1]}"
             PR_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
@@ -622,7 +659,7 @@ jobs:
           )
 
           python3 "${LLK_PATH}/perf/gate_slack_notify.py" \
-            --regressions perf_gate_report.regressions.csv \
+            --regressions "${STAGE2_REGRESSIONS:-perf_gate_report.regressions.csv}" \
             --report perf_gate_report.md \
             --have-baseline have_baseline.txt \
             --exit-code "${GATE_EXIT_CODE:-0}" \
@@ -710,7 +747,9 @@ jobs:
           fi
 
           HAVE_BASELINE=$(cat have_baseline.txt 2>/dev/null || echo false)
-          EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
+          # Where stage 2 ran on a stage-1 regression, its exit code is the verdict.
+          EXIT_CODE="${{ steps.stage2.outputs.exit_code }}"
+          [ -n "$EXIT_CODE" ] || EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
 
           if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
             KIND=incomplete
@@ -739,6 +778,13 @@ jobs:
           if [ "$COMPARISON_FINISHED" != "true" ]; then
             echo "::error::The comparison did not finish, so the gate has no verdict."
             echo "This is an infrastructure fault, not a performance result."
+            exit 1
+          fi
+
+          if [ "$EXIT_CODE" = "2" ]; then
+            KIND=incomplete
+            echo "::error::The gate did not compare every point, so its verdict covers only part of the run."
+            cat perf_gate_report.md
             exit 1
           fi
 

@@ -7,7 +7,7 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/device_operation.hpp"
@@ -19,7 +19,7 @@ inline bool is_col_sharded(TensorMemoryLayout layout) {
 }
 
 // Runtime args may only depend on the hashed attributes and tensor specs; buffer addresses are passed as
-// Buffer* bindings.
+// tensor bindings.
 struct IndexFillOperation {
     struct operation_attributes_t {
         const uint32_t dim;
@@ -33,10 +33,14 @@ struct IndexFillOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+    struct IndexFillProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    using program_factory_t = std::variant<IndexFillProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

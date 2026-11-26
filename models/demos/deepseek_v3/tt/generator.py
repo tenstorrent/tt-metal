@@ -547,6 +547,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             seed=getattr(params_obj, "seed", None),
             enable_log_probs=getattr(params_obj, "enable_log_probs", False),
             num_logprobs=getattr(params_obj, "num_logprobs", 0),
+            log_probs_enable_temperature=getattr(params_obj, "log_probs_enable_temperature", False),
         )
 
     @staticmethod
@@ -595,6 +596,9 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             seed=_normalize_field(sampling_params.seed, fallback_if_none=None, allow_none=True),
             enable_log_probs=_normalize_field(sampling_params.enable_log_probs, fallback_if_none=False),
             num_logprobs=_normalize_field(sampling_params.num_logprobs, fallback_if_none=0),
+            log_probs_enable_temperature=_normalize_field(
+                sampling_params.log_probs_enable_temperature, fallback_if_none=False
+            ),
         )
 
     @staticmethod
