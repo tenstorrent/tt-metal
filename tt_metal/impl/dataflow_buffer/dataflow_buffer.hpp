@@ -56,6 +56,10 @@ struct DataflowBufferConfig {
     std::optional<Tile> tile = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel
     std::optional<TensixScope> tensix_scope = std::nullopt;
+    // Quasar only: run the compute consumer / producer side on trisc3 instead of trisc0 / trisc2.
+    // Both may be set on one DFB.
+    bool unpack_on_trisc3 = false;
+    bool pack_on_trisc3 = false;
     // When true, the DFB borrows L1 memory from an externally managed buffer
     // instead of allocating its own L1 region. The actual base address must be
     // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.

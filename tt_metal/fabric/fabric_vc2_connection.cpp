@@ -49,6 +49,9 @@ void append_fabric_vc2_connection_rt_args(
         "VC2 requires: 2D fabric topology (Mesh/Torus), multi-mesh configuration, Blackhole architecture, "
         "no UDM/mux extension mode, and TT_METAL_ENABLE_FABRIC_VC2 runtime option. "
         "Current topology may not meet these conditions.");
+    TT_FATAL(
+        !builder_context.get_intermesh_vc_config().vc2_forwards,
+        "VC2 carries only inter-domain traffic on an inter-domain fabric; it has no worker channel");
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
     // Resolve forwarding direction (same logic as public API)
