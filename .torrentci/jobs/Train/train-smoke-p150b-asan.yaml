@@ -23,13 +23,6 @@ jobs:
         - from-job: asan-build
           name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
           install: [tt-metalium, tt-nn, tt-ml-validation]
-    # GitHub uploads this test XML; TorrentCI ingests it as a test report.
-    artifacts:
-      publish:
-        - name: train-smoke-p150b-asan-test-report
-          path: generated/test_reports/ctest_report.xml
-          content-type: application/junit+xml
-          when: always
     env:
       - {name: HOME, value: /tmp/home}
       - {name: TT_METAL_CACHE, value: /tmp/tt-metal-cache}

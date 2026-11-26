@@ -18,13 +18,6 @@ jobs:
         resources:
           requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
           limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
-    # GitHub uploads this test XML; TorrentCI ingests it as a test report.
-    artifacts:
-      publish:
-        - name: llk-smoke-p150b-g1-test-report
-          path: pytest-report-blackhole-1.xml
-          content-type: application/junit+xml
-          when: always
     env:
       - {name: HOME, value: /tmp/home}
       - {name: CHIP_ARCH, value: blackhole}
@@ -50,10 +43,10 @@ jobs:
         shell:
           run:
             - >-
-              ulimit -n 4096; ws=$PWD; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0;
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0;
               timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal -m "$PYTEST_MARKERS"
               --splits 3 --group 1 --splitting-algorithm least_duration
-              --timeout=60 --durations=25 --junitxml="$ws/pytest-report-blackhole-1.xml" .
+              --timeout=60 --durations=25 --junitxml=pytest-report-blackhole-1.xml .
               >/tmp/pytest-1.log 2>&1 || rc=$?; tail -c 12000 /tmp/pytest-1.log; exit $rc
   - id: llk-smoke-p150b-g2
     name: LLK smoke p150b (2/3)
@@ -68,13 +61,6 @@ jobs:
         resources:
           requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
           limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
-    # GitHub uploads this test XML; TorrentCI ingests it as a test report.
-    artifacts:
-      publish:
-        - name: llk-smoke-p150b-g2-test-report
-          path: pytest-report-blackhole-2.xml
-          content-type: application/junit+xml
-          when: always
     env:
       - {name: HOME, value: /tmp/home}
       - {name: CHIP_ARCH, value: blackhole}
@@ -100,10 +86,10 @@ jobs:
         shell:
           run:
             - >-
-              ulimit -n 4096; ws=$PWD; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0;
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0;
               timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal -m "$PYTEST_MARKERS"
               --splits 3 --group 2 --splitting-algorithm least_duration
-              --timeout=60 --durations=25 --junitxml="$ws/pytest-report-blackhole-2.xml" .
+              --timeout=60 --durations=25 --junitxml=pytest-report-blackhole-2.xml .
               >/tmp/pytest-2.log 2>&1 || rc=$?; tail -c 12000 /tmp/pytest-2.log; exit $rc
   - id: llk-smoke-p150b-g3
     name: LLK smoke p150b (3/3)
@@ -118,13 +104,6 @@ jobs:
         resources:
           requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
           limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
-    # GitHub uploads this test XML; TorrentCI ingests it as a test report.
-    artifacts:
-      publish:
-        - name: llk-smoke-p150b-g3-test-report
-          path: pytest-report-blackhole-3.xml
-          content-type: application/junit+xml
-          when: always
     env:
       - {name: HOME, value: /tmp/home}
       - {name: CHIP_ARCH, value: blackhole}
@@ -150,8 +129,8 @@ jobs:
         shell:
           run:
             - >-
-              ulimit -n 4096; ws=$PWD; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0;
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0;
               timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal -m "$PYTEST_MARKERS"
               --splits 3 --group 3 --splitting-algorithm least_duration
-              --timeout=60 --durations=25 --junitxml="$ws/pytest-report-blackhole-3.xml" .
+              --timeout=60 --durations=25 --junitxml=pytest-report-blackhole-3.xml .
               >/tmp/pytest-3.log 2>&1 || rc=$?; tail -c 12000 /tmp/pytest-3.log; exit $rc
