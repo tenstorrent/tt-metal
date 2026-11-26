@@ -22,6 +22,8 @@ The host turns the plugin's packing into bit planes for the constrained engine r
 unconstrained row is staged as -1 words, which adds 0 everywhere.
 """
 
+from collections import deque
+
 import numpy as np
 import torch
 
@@ -29,6 +31,9 @@ import ttnn
 
 WORD_BITS = 32
 MASK_NEG = -(2.0**99)
+# Staged masks kept alive: the host-to-device copy of a step's mask can still read its host buffer after
+# copy_host_to_device_tensor returns, so a buffer is released only this many stages later, when its step is read.
+STAGED_KEPT = 4
 
 
 def mask_words(vocab):
@@ -128,6 +133,7 @@ class VerifyMask:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self._kept = deque(maxlen=STAGED_KEPT)  # (host torch rows, ttnn host tensor) of the last stages
 
     def _mapper(self):
         if self.shards > 1:
@@ -147,11 +153,12 @@ class VerifyMask:
         return out
 
     def stage(self, mask):
-        """Host -> device copy of ``mask`` (engine rows, ``device_rows``) into the persistent input (address kept)."""
-        host = ttnn.from_torch(
-            self.device_rows(mask), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper()
-        )
+        """Host -> device copy of ``mask`` (engine rows, ``device_rows``) into the persistent input (address kept). The
+        host buffers stay referenced for STAGED_KEPT stages: the copy may read them after this returns."""
+        rows = self.device_rows(mask)
+        host = ttnn.from_torch(rows, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper())
         ttnn.copy_host_to_device_tensor(host, self.mask_in)
+        self._kept.append((rows, host))
 
     def apply_(self, x):
         """Edit ``x`` in place: bfloat16 TILE ``[1, 1, r, width]`` per device (r <= rows: the first r verify rows, a
