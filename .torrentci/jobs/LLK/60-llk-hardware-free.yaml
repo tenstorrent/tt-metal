@@ -14,6 +14,21 @@ jobs:
         resources:
           requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 20Gi}
           limits: {memory: 16Gi, ephemeral-storage: 30Gi}
+    # GitHub uploads the three JUnit reports run_hardware_free.sh writes.
+    artifacts:
+      publish:
+        - name: hardware-free-wormhole-test-report
+          path: tt_metal/tt-llk/tests/python_tests/pytest-report-hardware-free-wormhole.xml
+          content-type: application/junit+xml
+          when: always
+        - name: hardware-free-blackhole-test-report
+          path: tt_metal/tt-llk/tests/python_tests/pytest-report-hardware-free-blackhole.xml
+          content-type: application/junit+xml
+          when: always
+        - name: hardware-free-blackhole-accuracy-test-report
+          path: tt_metal/tt-llk/tests/python_tests/pytest-report-hardware-free-blackhole-accuracy.xml
+          content-type: application/junit+xml
+          when: always
     env:
       # Steps get HOME=/, unwritable, and the image sets none (torrentci#3936).
       - {name: HOME, value: /tmp/home}
