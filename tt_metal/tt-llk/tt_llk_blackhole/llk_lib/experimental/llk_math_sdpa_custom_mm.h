@@ -82,7 +82,7 @@ inline void sdpa_custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // 0
         });
 
-    const std::uint32_t mvmul_base      = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, replay_buf_len);
+    const std::uint32_t mvmul_base      = TT_OP_REPLAY(ckernel::math::replay_buf_offset + 0, replay_buf_len, 0, 0);
     const std::uint32_t mvmul_end_tile  = TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
     const std::uint32_t mvmul_end_block = TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
 
@@ -177,14 +177,14 @@ inline void _llk_math_sdpa_custom_mm_(
     {
         for (std::uint32_t i = 0; i < ct_dim - 1; i++)
         {
-            lltt::replay(ckernel::math::replay_buf_offset, 3);
+            TTI_REPLAY(ckernel::math::replay_buf_offset, 3, 0, 0);
             TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
             if (i % signal_granularity == signal_granularity - 1)
             {
                 t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
             }
         }
-        lltt::replay(ckernel::math::replay_buf_offset, 3);
+        TTI_REPLAY(ckernel::math::replay_buf_offset, 3, 0, 0);
         TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
         t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
     }

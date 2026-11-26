@@ -34,8 +34,7 @@ namespace ckernel {
 using sfpu::DstIndex;
 using sfpu::SfpuReg;
 
-// Op tags are declared in ckernel_sfpu_ops.h: op::Exp<APPROXIMATION_MODE>, op::Square, op::Add<ROUNDING>. Variants are
-// template parameters; op::Exp<> takes the kernel's APPROX constant.
+// The op tags are in ckernel_sfpu_ops.h; op::Exp<> defaults to the kernel's APPROX constant.
 namespace op {
 
 template <bool APPROXIMATION_MODE = APPROX>
@@ -61,8 +60,7 @@ constexpr sfpi::DataLayout sfpu_dest_layout_of() {
         DST_ACCUM_MODE>();
 }
 
-// Encoding of I32 Dest tiles, from where they came: tiles copied or unpacked from one DFB keep the two's
-// complement of native Int32; tiles an FPU op left are sign-magnitude. Compile time.
+// I32 Dest tiles: two's complement when copied from one DFB, sign-magnitude when an FPU op left them.
 template <auto... DFB_IDS>
 constexpr sfpu::IntEncoding sfpu_dest_int_encoding_of() {
     return sizeof...(DFB_IDS) == 1 ? sfpu::IntEncoding::TwosComplement : sfpu::IntEncoding::SignMagnitude;
@@ -121,7 +119,7 @@ struct SfpuOp<OP, SfpuReg::Dest, DFB_IDS...> {
         "Dest takes the DFB the tiles were copied from, or the SrcA and SrcB DFBs of the FPU op that left them");
     static_assert((std::is_integral_v<decltype(DFB_IDS)> && ...), "Dest sources are DFB ids");
 
-    // Set up the SFPU for this op: once before the first tile(), and again after any other SFPU init.
+    // Set up the SFPU for this op.
     ALWI static void init() {
         MATH((Op::init()));
         MATH((sfpu_init_owner = &detail::sfpu_op_key<Op>));
@@ -181,8 +179,7 @@ private:
 #endif
 };
 
-// The L1 tiles unpacker 2 reads for a SrcS op: an address in 16-byte units and a format, or the DataflowBuffer
-// whose front entry they are.
+// SrcS input in L1: an address (16-byte units) and a format, or a DataflowBuffer's front entry.
 struct unpack_from {
     uint32_t addr_16B = 0;
     DataFormat format = DataFormat::Invalid;
@@ -198,8 +195,7 @@ struct unpack_from {
     }
 };
 
-// The L1 tiles packer 1 writes for a SrcS op: an address and a format, or the DataflowBuffer whose back entry
-// they are.
+// SrcS output in L1: an address (16-byte units) and a format, or a DataflowBuffer's back entry.
 struct pack_to {
     uint32_t addr_16B = 0;
     DataFormat format = DataFormat::Invalid;
@@ -225,8 +221,6 @@ struct pack_to {
  * | SRCS_FMT           | Format in the SrcS register (unpack dst = pack src) | DataFormat | Float16, Float16_b, Float32, Int32 | True     |
  */
 // clang-format on
-// TODO(#63416): once SrcS is fed from DFBs, SOURCES becomes the DFB ids, as on Dest. The layout then comes from
-// each DFB's L1 format (unpack_src_format), not from unpack_dst_format.
 template <typename OP, DataFormat SRCS_FMT>
 struct SfpuOp<OP, SfpuReg::SrcS, SRCS_FMT> {
     // Set up unpacker 2, packer 1 and the SFPU for this op: once before the first tile().

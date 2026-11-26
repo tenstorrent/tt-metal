@@ -98,21 +98,9 @@ inline void calculate_add_int(
 
 /** @brief Dest Int32 ADD op type: the tuned loop, keeps the index-walked rows of @ref calculate_add_int. */
 template <bool SIGN_MAGNITUDE_FORMAT, int ITERATIONS, trisc::DstTileShape TILE_SHAPE>
-struct SfpuDestOp<
-    AddIntMath<SIGN_MAGNITUDE_FORMAT>,
-    sfpi::DataLayout::I32,
-    sfpi::DataLayout::I32,
-    ITERATIONS,
-    TILE_SHAPE,
-    SfpuImpl::Sfpi>
+struct SfpuDestOp<AddIntMath<SIGN_MAGNITUDE_FORMAT>, sfpi::DataLayout::I32, ITERATIONS, TILE_SHAPE>
     : SfpuDestOpBase<
-          SfpuDestOp<
-              AddIntMath<SIGN_MAGNITUDE_FORMAT>,
-              sfpi::DataLayout::I32,
-              sfpi::DataLayout::I32,
-              ITERATIONS,
-              TILE_SHAPE,
-              SfpuImpl::Sfpi>,
+          SfpuDestOp<AddIntMath<SIGN_MAGNITUDE_FORMAT>, sfpi::DataLayout::I32, ITERATIONS, TILE_SHAPE>,
           2 /*ARITY*/> {
     static constexpr trisc::DstTileShape tile_shape = TILE_SHAPE;
 

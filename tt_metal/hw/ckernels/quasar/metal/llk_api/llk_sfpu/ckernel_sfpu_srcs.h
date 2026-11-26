@@ -64,12 +64,10 @@ struct SrcsLayout {
  * @brief CRTP base of a SrcS op with ARITY inputs: init() and run(), or init() in two steps as configure() and
  *        set_l1(). Op supplies Layout, calculate() and optionally init_op() and hw_clears_valids.
  *
- * The pipeline differs per number of inputs (see llk_sfpu_srcs_api.h): one input is unpacked by the auto-loop,
- * two inputs by a per-slice MOP.
- *
  * @tparam Op: The op type deriving from this base.
  * @tparam ARITY: Number of inputs, values = <1/2>
- * @note The functions are defined in llk_sfpu_srcs_api.h; include it to use them.
+ * @note The functions are defined in llk_sfpu_srcs_api.h; include it to use them. set_l1() and init() take only
+ *       the L1 formats: the SrcS register format is Op::Layout::format.
  */
 template <typename Op, int ARITY>
 struct SfpuSrcsOpBase {
@@ -85,7 +83,6 @@ struct SfpuSrcsOpBase<Op, 1> {
 
     static void configure();
 
-    // Takes only the L1 formats; the SrcS register format comes from Op::Layout.
     static void set_l1(
         const std::uint32_t l1_in_addr_16B,
         const DataFormat l1_in_format,
@@ -111,7 +108,6 @@ struct SfpuSrcsOpBase<Op, 2> {
 
     static void configure();
 
-    // Takes only the L1 formats; the SrcS register format comes from Op::Layout.
     static void set_l1(
         const std::uint32_t l1_in0_addr_16B,
         const std::uint32_t l1_in1_addr_16B,
@@ -130,10 +126,8 @@ struct SfpuSrcsOpBase<Op, 2> {
 };
 
 /**
- * @brief SrcS op type: out = MATH(inputs...) over one slice, for any math policy.
- *
- * The number of inputs is read from MATH::apply. Sfpi serves every MATH; an op specializes this type next to its
- * math for a LoadMacro version (and declares it with @ref srcs_has_loadmacro).
+ * @brief SrcS op type: out = MATH(inputs...) over one slice, for any math policy. An op specializes this type next
+ *        to its math for a LoadMacro version and declares it with @ref srcs_has_loadmacro.
  *
  * @tparam MATH: Math policy; MATH::value_type is the vector type its inputs load into.
  * @tparam LAYOUT: SFPLOAD/SFPSTORE format of the slices.
@@ -170,14 +164,11 @@ template <typename MATH>
 inline constexpr bool srcs_has_loadmacro = false;
 
 /**
- * @brief The SrcS op type of an op tag on a layout.
- *
- * Requesting LoadMacro for a math without one fails to compile; under DISABLE_SFPLOADMACRO (ttsim) every request
- * resolves to Sfpi. I32 slices are sign-magnitude (@ref IntEncoding), which is how SrcS holds Int32.
+ * @brief The SrcS op type of an op tag on a layout. I32 slices are sign-magnitude (@ref IntEncoding).
  *
  * @tparam OP: Op tag (ckernel::op).
  * @tparam LAYOUT: SFPLOAD/SFPSTORE format of the slices, see @ref sfpu_layout.
- * @tparam IMPL: Sfpi or LoadMacro.
+ * @tparam IMPL: Sfpi or LoadMacro, see @ref resolve_sfpu_impl.
  */
 template <typename OP, sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
 using srcs_op_t =

@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Route 1: matmul into Dest[0], exp in place on Dest[0] (MATH thread), pack. The result never leaves Dest.
-//
+// Example: matmul into Dest[0], exp in place on Dest[0], pack.
 // Compile-time args: 0 = in0 DFB id, 1 = in1 DFB id, 2 = out DFB id, 3 = Kt (tiles to accumulate),
 // 4 = number of output tiles.
 

@@ -16,10 +16,7 @@ namespace ckernel::sfpu
 
 /**
  * @brief Call fn(op) with the SrcS op type of the op tag @p OP for the LAYOUT matching the runtime SrcS format,
- *        once outside the tile loop.
- *
- * Only the layouts OP takes are compiled in (@ref op_takes_layout). The SrcS register format is the
- * unpack destination and the pack source; both are passed so a mismatch is caught here.
+ *        once outside the tile loop. Only the layouts OP takes are compiled in.
  *
  * @tparam OP: Op tag (ckernel::op).
  * @tparam IMPL: Sfpi or LoadMacro, for every layout.

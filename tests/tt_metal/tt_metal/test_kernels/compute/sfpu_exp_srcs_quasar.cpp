@@ -2,15 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Example: exp on SrcS through the SFPU op-type compute API. Everything runs on the SFPU thread (TRISC3): per
-// tile, unpacker 2 moves it from L1 into SrcS, the SFPU computes exp, packer 1 writes it back to L1.
-//
-// The input and output are plain L1 regions of num_tiles consecutive tiles, not DataflowBuffers, so there is no
-// per-tile handshake: the producer must have written every input tile before this kernel runs.
-//
-// Compile-time args: 0 = input L1 address (16-byte units), 1 = output L1 address (16-byte units),
-// 2 = number of tiles, 3 = L1 data format of both regions, 4 = SrcS register format
-// (Float16, Float16_b or Float32; equal to the L1 format for the common case).
+// Example: exp on SrcS over plain L1 regions, all on TRISC3. No DataflowBuffers, so no per-tile handshake: every
+// input tile must be in L1 before this kernel runs.
+// Compile-time args: 0 = input L1 address, 1 = output L1 address (16-byte units), 2 = number of tiles,
+// 3 = L1 format of both regions, 4 = SrcS register format.
 
 #include <cstdint>
 

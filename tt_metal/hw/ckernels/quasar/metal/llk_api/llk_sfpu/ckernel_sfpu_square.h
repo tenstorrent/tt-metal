@@ -64,8 +64,8 @@ inline void calculate_square() {
 
 /** @brief Dest square op type: the tuned loop, keeps the ADDR_MOD_6 store of @ref calculate_square. */
 template <sfpi::DataLayout LAYOUT, int ITERATIONS, trisc::DstTileShape TILE_SHAPE>
-struct SfpuDestOp<SquareMath, LAYOUT, LAYOUT, ITERATIONS, TILE_SHAPE, SfpuImpl::Sfpi>
-    : SfpuDestOpBase<SfpuDestOp<SquareMath, LAYOUT, LAYOUT, ITERATIONS, TILE_SHAPE, SfpuImpl::Sfpi>, 1 /*ARITY*/> {
+struct SfpuDestOp<SquareMath, LAYOUT, ITERATIONS, TILE_SHAPE>
+    : SfpuDestOpBase<SfpuDestOp<SquareMath, LAYOUT, ITERATIONS, TILE_SHAPE>, 1 /*ARITY*/> {
     static_assert(
         std::is_same_v<sfpi::vFloat, layout_value_t<LAYOUT>>, "this SFPU op does not take tiles of this Dest layout");
 

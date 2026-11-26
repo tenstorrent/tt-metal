@@ -113,8 +113,8 @@ inline void calculate_sfpu_binary(
     constexpr bool round_to_bf16_rne = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
     if constexpr (BINOP == BinaryOp::ADD && !round_to_bf16_rne) {
         // Through the op type, with the implied (Default) format; it walks two rows per iteration itself.
-        SfpuDestOp<AddFloatMath<>, sfpi::DataLayout::Default, sfpi::DataLayout::Default, ITERATIONS, TILE_SHAPE>::
-            calculate(dst_index_in0, dst_index_in1, dst_index_out);
+        SfpuDestOp<AddFloatMath<>, sfpi::DataLayout::Default, ITERATIONS, TILE_SHAPE>::calculate(
+            dst_index_in0, dst_index_in1, dst_index_out);
         return;
     }
     if constexpr (use_two_row_binary<BINOP, round_to_bf16_rne, ITERATIONS>) {

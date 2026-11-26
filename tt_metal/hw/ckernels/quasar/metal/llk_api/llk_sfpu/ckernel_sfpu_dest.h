@@ -15,10 +15,8 @@
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
-#include "sfpu_impl.h"
 
 // Dest op type, the Dest twin of ckernel_sfpu_srcs.h: SfpuDestOp<MATH, LAYOUT> runs any math policy on Dest tiles.
-// An op with a tuned loop or a LoadMacro version specializes SfpuDestOp next to its math.
 
 namespace ckernel {
 namespace sfpu {
@@ -52,12 +50,8 @@ constexpr bool format_in(const std::uint64_t format_mask, const DataFormat forma
 }  // namespace detail
 
 /**
- * @brief SFPLOAD/SFPSTORE layout of Dest tiles that kept the register format @p FAMILY of their DFB: copied or
- *        unpacked to Dest, not computed by an FPU math op (that is @ref fpu_dest_layout).
- *
- * A 32-bit Dest is I32 for Int32 and F32 for every float family; a 16-bit Dest follows the family's exponent
- * width (F16a for Float16 and MxFp4_2x_A, F16b for Float16_b and MxFp4_2x_B). There is no implied fallback: a
- * format with no layout is a compile error.
+ * @brief SFPLOAD/SFPSTORE layout of Dest tiles copied or unpacked from a DFB (for FPU results see
+ *        @ref fpu_dest_layout). A format with no layout is a compile error.
  *
  * @tparam FAMILY: Register format of the DFB the tiles came from.
  * @tparam EN_32BIT_DEST: Dest is in 32-bit mode (Float32/Int32).
@@ -83,11 +77,8 @@ constexpr sfpi::DataLayout dest_layout() {
 }
 
 /**
- * @brief SFPLOAD/SFPSTORE layout of the Dest tiles an FPU math op leaves, from the register formats of its SrcA
- *        and SrcB.
- *
- * Mirrors the ALU format rule (_build_alu_words_ in llk_math_common.h): a 32-bit Dest holds Int32 when both
- * sources are Int32-compatible and Float32 otherwise. A 16-bit Dest takes the exponent width the sources share.
+ * @brief SFPLOAD/SFPSTORE layout of the Dest tiles an FPU math op leaves; mirrors the ALU format rule
+ *        (_build_alu_words_ in llk_math_common.h).
  *
  * @tparam SRCA: Register format of the FPU op's SrcA.
  * @tparam SRCB: Register format of the FPU op's SrcB.
@@ -115,8 +106,6 @@ constexpr sfpi::DataLayout fpu_dest_layout() {
 /**
  * @brief CRTP base of a Dest op with ARITY inputs: init() and run(). Op supplies calculate(), tile_shape and
  *        optionally init_op().
- *
- * The walk differs per number of inputs: one input runs in place on a tile, two inputs take three tile indices.
  *
  * @tparam Op: The op type deriving from this base.
  * @tparam ARITY: Number of inputs, values = <1/2>
@@ -189,50 +178,31 @@ struct SfpuDestOpBase<Op, 2> {
 namespace detail {
 
 // Row loop of the generic Dest op over one face, per number of inputs.
-template <
-    int ARITY,
-    typename MATH,
-    sfpi::DataLayout LAYOUT,
-    sfpi::DataLayout OUT_LAYOUT,
-    int ITERATIONS,
-    trisc::DstTileShape TILE_SHAPE>
+template <int ARITY, typename MATH, sfpi::DataLayout LAYOUT, int ITERATIONS, trisc::DstTileShape TILE_SHAPE>
 struct DestLoop;
 
-template <
-    typename MATH,
-    sfpi::DataLayout LAYOUT,
-    sfpi::DataLayout OUT_LAYOUT,
-    int ITERATIONS,
-    trisc::DstTileShape TILE_SHAPE>
-struct DestLoop<1, MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE> {
+template <typename MATH, sfpi::DataLayout LAYOUT, int ITERATIONS, trisc::DstTileShape TILE_SHAPE>
+struct DestLoop<1, MATH, LAYOUT, ITERATIONS, TILE_SHAPE> {
     static void calculate() {
-        using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, layout_value_t<LAYOUT>>>;
-        using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<OUT_LAYOUT, layout_value_t<OUT_LAYOUT>>>;
+        using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, layout_value_t<LAYOUT>>>;
         const auto setup = math_setup<MATH>();
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            calculate_operands<MATH, 1 /*ITERATIONS*/>(setup, Output{}, Input{});
+            calculate_operands<MATH, 1 /*ITERATIONS*/>(setup, Operand{}, Operand{});
             sfpi::dst_reg++;
         }
     }
 };
 
-template <
-    typename MATH,
-    sfpi::DataLayout LAYOUT,
-    sfpi::DataLayout OUT_LAYOUT,
-    int ITERATIONS,
-    trisc::DstTileShape TILE_SHAPE>
-struct DestLoop<2, MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE> {
+template <typename MATH, sfpi::DataLayout LAYOUT, int ITERATIONS, trisc::DstTileShape TILE_SHAPE>
+struct DestLoop<2, MATH, LAYOUT, ITERATIONS, TILE_SHAPE> {
     static void calculate(
         const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, layout_value_t<LAYOUT>>>;
-        using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<OUT_LAYOUT, layout_value_t<OUT_LAYOUT>>>;
+        using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, layout_value_t<LAYOUT>>>;
         // sfpi dst_reg indexes in SFP_ROWS (2) units, so the tile stride is dest-rows / 2
         // (32 for Tile32x32; same as BH/WH 64/SFP_DESTREG_STRIDE).
         constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
-        // Two rows per iteration when the math is one instruction and the row count is even (see
-        // calculate_binary_operands_two_rows); any other math keeps one row per iteration.
+        // Single-instruction math over an even row count walks two rows per iteration.
         constexpr bool two_rows = ITERATIONS % 2 == 0 && is_single_instruction_math<MATH>;
         if constexpr (two_rows) {
             // The second row's offset is formed before the cast to int: with an unsigned offset GCC reuses the
@@ -243,12 +213,12 @@ struct DestLoop<2, MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE> {
 #pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d += 2) {
                 calculate_binary_operands_two_rows<MATH>(
-                    Input{static_cast<int>(off_in0)},
-                    Input{static_cast<int>(off_in1)},
-                    Output{static_cast<int>(off_out)},
-                    Input{static_cast<int>(off_in0 + 1)},
-                    Input{static_cast<int>(off_in1 + 1)},
-                    Output{static_cast<int>(off_out + 1)});
+                    Operand{static_cast<int>(off_in0)},
+                    Operand{static_cast<int>(off_in1)},
+                    Operand{static_cast<int>(off_out)},
+                    Operand{static_cast<int>(off_in0 + 1)},
+                    Operand{static_cast<int>(off_in1 + 1)},
+                    Operand{static_cast<int>(off_out + 1)});
                 sfpi::dst_reg += 2;
             }
         } else {
@@ -257,9 +227,9 @@ struct DestLoop<2, MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE> {
             for (int d = 0; d < ITERATIONS; d++) {
                 calculate_operands<MATH, 1 /*ITERATIONS*/>(
                     setup,
-                    Output{static_cast<int>(dst_index_out * dst_tile_size_sfpi)},
-                    Input{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
-                    Input{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)});
+                    Operand{static_cast<int>(dst_index_out * dst_tile_size_sfpi)},
+                    Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
+                    Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)});
                 sfpi::dst_reg++;
             }
         }
@@ -271,38 +241,22 @@ struct DestLoop<2, MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE> {
 /**
  * @brief Dest op type: out = MATH(inputs...) over one face of each tile, for any math policy.
  *
- * The number of inputs is read from MATH::apply. One input runs in place: calculate(), run(dst_index). Two inputs
- * take tile indices: calculate(in0, in1, out), run(in0, in1, out). Sfpi serves every MATH; an op specializes this
- * type next to its math for a tuned loop or a LoadMacro version.
+ * One input runs in place: run(dst_index). Two inputs take tile indices: run(in0, in1, out). An op specializes
+ * this type next to its math for a tuned loop.
  *
  * @tparam MATH: Math policy; MATH::value_type is the vector type its inputs load into.
- * @tparam LAYOUT: SFPLOAD format of the inputs.
- * @tparam OUT_LAYOUT: SFPSTORE format of the output; differs from LAYOUT only for a math that changes the type.
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format of the tiles.
  * @tparam ITERATIONS: Number of SFPI rows per face.
- * @tparam TILE_SHAPE: Dest tile shape the indices are measured in; run() defaults to it.
- * @tparam IMPL: Sfpi or LoadMacro, see @ref resolve_sfpu_impl.
+ * @tparam TILE_SHAPE: Dest tile shape the indices are measured in.
  * @note Call init() once before the first run() or calculate() of the op.
  */
 template <
     typename MATH,
     sfpi::DataLayout LAYOUT,
-    sfpi::DataLayout OUT_LAYOUT = LAYOUT,
     int ITERATIONS = SFPU_ITERATIONS,
-    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32,
-    SfpuImpl IMPL = SfpuImpl::Sfpi>
-struct SfpuDestOp {
-    static_assert(sizeof(MATH) == 0, "This SFPU op has no Dest implementation for the requested SfpuImpl");
-};
-
-template <
-    typename MATH,
-    sfpi::DataLayout LAYOUT,
-    sfpi::DataLayout OUT_LAYOUT,
-    int ITERATIONS,
-    trisc::DstTileShape TILE_SHAPE>
-struct SfpuDestOp<MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE, SfpuImpl::Sfpi>
-    : SfpuDestOpBase<SfpuDestOp<MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE, SfpuImpl::Sfpi>, math_arity<MATH>>,
-      detail::DestLoop<math_arity<MATH>, MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE> {
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+struct SfpuDestOp : SfpuDestOpBase<SfpuDestOp<MATH, LAYOUT, ITERATIONS, TILE_SHAPE>, math_arity<MATH>>,
+                    detail::DestLoop<math_arity<MATH>, MATH, LAYOUT, ITERATIONS, TILE_SHAPE> {
     static_assert(
         std::is_same_v<typename MATH::value_type, layout_value_t<LAYOUT>>,
         "this SFPU op does not take tiles of this Dest layout");
@@ -317,8 +271,7 @@ struct SfpuDestOp<MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE, SfpuImpl::Sf
  * @tparam LAYOUT: SFPLOAD/SFPSTORE format of the tiles, see @ref dest_layout and @ref fpu_dest_layout.
  * @tparam ITERATIONS: Number of SFPI rows per face.
  * @tparam TILE_SHAPE: Dest tile shape the indices are measured in.
- * @tparam INT_ENCODING: Encoding of I32 tiles: SignMagnitude when an FPU op computed them, TwosComplement for
- *         native Int32 tiles copied or unpacked to Dest.
+ * @tparam INT_ENCODING: Encoding of I32 tiles, see @ref IntEncoding.
  */
 template <
     typename OP,
@@ -326,7 +279,7 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32,
     IntEncoding INT_ENCODING = IntEncoding::SignMagnitude>
-using dest_op_t = SfpuDestOp<math_for_t<OP, LAYOUT, INT_ENCODING>, LAYOUT, LAYOUT, ITERATIONS, TILE_SHAPE>;
+using dest_op_t = SfpuDestOp<math_for_t<OP, LAYOUT, INT_ENCODING>, LAYOUT, ITERATIONS, TILE_SHAPE>;
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -4,8 +4,8 @@
 
 // Two-input SFPU op on SrcS: one input is a tile the FPU left in Dest, the other comes from L1.
 // out = (in + in) + in1.
-// Bindings: dfb::in CONSUMER; dfb::mid PRODUCER, and CONSUMER with use_trisc3; dfb::in1 CONSUMER and
-// dfb::out PRODUCER, both with use_trisc3.
+// Bindings: dfb::in CONSUMER; dfb::mid PRODUCER and CONSUMER; dfb::in1 CONSUMER; dfb::out PRODUCER.
+// The mid and in1 CONSUMER ends and the out PRODUCER end are handed to the SFPU pipeline.
 
 #include <cstdint>
 

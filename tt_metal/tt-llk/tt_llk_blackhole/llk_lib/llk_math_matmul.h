@@ -501,7 +501,7 @@ inline void matmul_configure_mop(
         ckernel_template tmp(
             row_tiles,
             inner_loops,
-            lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len),
+            TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0),
             TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0)); // B3A3 // reset srca/srcb, dest to the tile base, increment phase (addr_mod_5)
 
         // B3A3 of a tile's last phase: clear the per-tile source, reset srca/srcb/fidelity, dest to the next tile (addr_mod_6).
@@ -514,7 +514,7 @@ inline void matmul_configure_mop(
         return;
     }
 
-    ckernel_template tmp(1 /* outer loop */, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len));
+    ckernel_template tmp(1 /* outer loop */, inner_loops, TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0));
 
     if constexpr (high_fidelity)
     {
@@ -785,7 +785,7 @@ inline void matmul_configure_mop_throttled(
     ckernel_template tmp(
         outer_loops,
         inner_loops,
-        lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len),
+        TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0),
         TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, addr_mod_inner_loop, 0));
 
     if (!is_in1_32x16 && !is_in1_16x32 && !is_in0_32x16 && !is_in0_16x32)

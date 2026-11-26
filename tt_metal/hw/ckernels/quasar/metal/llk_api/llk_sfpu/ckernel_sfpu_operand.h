@@ -68,10 +68,8 @@ template <sfpi::DataLayout LAYOUT>
 using layout_value_t = std::conditional_t<LAYOUT == sfpi::DataLayout::I32, sfpi::vInt, sfpi::vFloat>;
 
 /**
- * @brief How the Int32 tiles of an I32 layout encode negative values; the layout alone does not say.
- *
- * SignMagnitude: SrcS, and Dest tiles an FPU op computed. TwosComplement: native Int32 tiles copied or unpacked to
- * Dest, which keep their L1 bits.
+ * @brief Encoding of I32 tiles. SignMagnitude: SrcS, and Dest tiles an FPU op computed. TwosComplement: native
+ *        Int32 tiles copied or unpacked to Dest.
  */
 enum class IntEncoding : std::uint8_t {
     SignMagnitude,
@@ -79,9 +77,7 @@ enum class IntEncoding : std::uint8_t {
 };
 
 /**
- * @brief SFPLOAD/SFPSTORE layout of a register holding tiles of a format.
- *
- * There is no implied fallback: a format with no layout is a compile error.
+ * @brief SFPLOAD/SFPSTORE layout of a register holding tiles of a format; any other format is a compile error.
  *
  * @tparam FMT: Format the register holds, values = <Float16/Float16_b/Float32/Int32>
  */
@@ -100,9 +96,8 @@ constexpr sfpi::DataLayout sfpu_layout() {
 }
 
 /**
- * @brief The math policy that computes an op tag on a register layout, as math_for<OP, LAYOUT>::type.
- *
- * One specialization per op, next to its math (ckernel_sfpu_<op>.h); it serves Dest and SrcS alike.
+ * @brief The math policy of an op tag on a register layout, as math_for<OP, LAYOUT>::type. Specialized once per
+ *        op, next to its math (ckernel_sfpu_<op>.h), for Dest and SrcS alike.
  *
  * @tparam OP: Op tag (ckernel::op).
  * @tparam LAYOUT: SFPLOAD/SFPSTORE format of the tiles.
@@ -113,12 +108,7 @@ struct math_for;
 template <typename OP, sfpi::DataLayout LAYOUT, IntEncoding INT_ENCODING = IntEncoding::SignMagnitude>
 using math_for_t = typename math_for<OP, LAYOUT, INT_ENCODING>::type;
 
-/**
- * @brief True when the math of the op tag @p OP on @p LAYOUT computes on the vector type LAYOUT loads into: a
- *        float op on a float layout, an integer op on I32.
- *
- * Only names the math; no op type is instantiated, so a float op may be queried for I32.
- */
+/** @brief True when the math of @p OP on @p LAYOUT computes on the vector type LAYOUT loads into. */
 template <typename OP, sfpi::DataLayout LAYOUT>
 inline constexpr bool op_takes_layout =
     std::is_same_v<typename math_for_t<OP, LAYOUT>::value_type, layout_value_t<LAYOUT>>;
@@ -131,9 +121,7 @@ inline constexpr int math_arity =
 /**
  * @brief The value a math policy keeps for a row loop: MATH::setup() when the policy has one, else an empty value.
  *
- * A policy that needs constants loads them in setup() and takes the result as the first argument of apply().
- *
- * @note Take it once before the rows, not per row: it is what the policy would otherwise reload on every row.
+ * @note Take it once before the rows; apply() gets it as its first argument.
  */
 template <typename MATH>
 sfpi_inline auto math_setup() {

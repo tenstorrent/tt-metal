@@ -1821,8 +1821,8 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         if (math_format == DataFormat::Int32)
         {
             ::ckernel::_sfpu_binary_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
-            ckernel::sfpu::SfpuDestOp<ckernel::sfpu::AddIntMath<SIGN_MAGNITUDE_FORMAT>, sfpi::DataLayout::I32, sfpi::DataLayout::I32, ITERATIONS, TILE_SHAPE>::
-                run(DstIndex {src0_tile}, DstIndex {src1_tile}, DstIndex {dst_tile}, vector_mode);
+            ckernel::sfpu::SfpuDestOp<ckernel::sfpu::AddIntMath<SIGN_MAGNITUDE_FORMAT>, sfpi::DataLayout::I32, ITERATIONS, TILE_SHAPE>::run(
+                DstIndex {src0_tile}, DstIndex {src1_tile}, DstIndex {dst_tile}, vector_mode);
         }
         else if constexpr (kComputeApiKernels)
         {
@@ -1851,7 +1851,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                         layout == sfpi::DataLayout::Default,
                         ckernel::sfpu::AddFloatMath<!is_fp32_dest_acc_en && dst_rounding_mode == ckernel::DstRoundingMode::NearestEven>,
                         ckernel::sfpu::math_for_t<ckernel::op::Add<dst_rounding_mode>, layout>>;
-                    ckernel::sfpu::SfpuDestOp<Math, layout, layout, ITERATIONS, TILE_SHAPE>::run(
+                    ckernel::sfpu::SfpuDestOp<Math, layout, ITERATIONS, TILE_SHAPE>::run(
                         DstIndex {src0_tile}, DstIndex {src1_tile}, DstIndex {dst_tile}, vector_mode);
                 });
         }

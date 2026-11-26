@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // SFPU op on SrcS between two DataflowBuffers, all on trisc3. out = exp(in).
-// Bindings: dfb::in CONSUMER and dfb::out PRODUCER, both with use_trisc3.
+// Bindings: dfb::in CONSUMER and dfb::out PRODUCER, both handed to the SFPU pipeline.
 
 #include <cstdint>
 
@@ -30,6 +30,4 @@ void kernel_main() {
         dfb_in.pop_front(1);   // must not free the entry before unpacker 2 has read it
         dfb_out.push_back(1);  // must not post the entry before packer 1 has written it
     }
-    dfb_in.finish();
-    dfb_out.finish();
 }

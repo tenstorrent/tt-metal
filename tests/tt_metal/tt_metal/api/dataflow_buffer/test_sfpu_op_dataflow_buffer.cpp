@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SfpuOp (api/compute/experimental/sfpu.h) end to end through DataflowBuffers, Quasar only:
-//   DM -> dfb_in -> compute kernel -> dfb_out -> DM, one bfloat16 tile per entry.
-// One test per route: on Dest, on Dest after an FPU op, on SrcS, an FPU op on Dest feeding SrcS, and a
-// two-input SrcS op with one input from Dest and one from L1.
+// SfpuOp (api/compute/experimental/sfpu.h) end to end on Quasar: DM -> dfb_in -> compute kernel -> dfb_out -> DM,
+// one bfloat16 tile per entry. One test per route (SfpuOpRoute).
 
 #include <cmath>
 #include <string>
@@ -68,15 +66,6 @@ void run_sfpu_op_dfb_case(distributed::MeshDevice& mesh_device, const SfpuOpDfbC
             .data_format_metadata = tt::DataFormat::Float16_b,
         };
     };
-    auto binding = [](const DFBSpecName& dfb, const char* accessor, DFBEndpointType endpoint, bool use_trisc3) {
-        return KernelSpec::DFBBinding{
-            .dfb_spec_name = dfb,
-            .accessor_name = accessor,
-            .endpoint_type = endpoint,
-            .access_pattern = DFBAccessPattern::STRIDED,
-            .use_trisc3 = use_trisc3,
-        };
-    };
     constexpr auto CONSUME = DFBEndpointType::CONSUMER;
     constexpr auto PRODUCE = DFBEndpointType::PRODUCER;
 
@@ -89,31 +78,37 @@ void run_sfpu_op_dfb_case(distributed::MeshDevice& mesh_device, const SfpuOpDfbC
     disable_implicit_sync_for(consumer, DFB_OUT);
 
     auto compute = make_compute_kernel(COMPUTE, test_case.kernel);
+    // Bind one DFB end to the compute kernel; on_trisc3 hands that end to the SFPU pipeline.
+    auto bind = [&compute](const DFBSpecName& dfb, const char* accessor, DFBEndpointType endpoint, bool on_trisc3) {
+        compute.dfb_bindings.push_back(KernelSpec::DFBBinding{
+            .dfb_spec_name = dfb,
+            .accessor_name = accessor,
+            .endpoint_type = endpoint,
+            .access_pattern = DFBAccessPattern::STRIDED,
+        });
+        if (on_trisc3) {
+            use_sfpu_pipeline_for(compute, dfb, endpoint);
+        }
+    };
     std::vector<DataflowBufferSpec> dataflow_buffers = {make_spec(DFB_IN), make_spec(DFB_OUT)};
     switch (test_case.route) {
         case SfpuOpRoute::Dest:
-            compute.dfb_bindings = {
-                binding(DFB_IN, "in", CONSUME, /*use_trisc3=*/false),
-                binding(DFB_OUT, "out", PRODUCE, /*use_trisc3=*/false),
-            };
+            bind(DFB_IN, "in", CONSUME, /*on_trisc3=*/false);
+            bind(DFB_OUT, "out", PRODUCE, /*on_trisc3=*/false);
             break;
         case SfpuOpRoute::Srcs:
-            compute.dfb_bindings = {
-                binding(DFB_IN, "in", CONSUME, /*use_trisc3=*/true),
-                binding(DFB_OUT, "out", PRODUCE, /*use_trisc3=*/true),
-            };
+            bind(DFB_IN, "in", CONSUME, /*on_trisc3=*/true);
+            bind(DFB_OUT, "out", PRODUCE, /*on_trisc3=*/true);
             break;
         case SfpuOpRoute::FpuDestThenSrcs:
         case SfpuOpRoute::FpuDestAndL1ToSrcs:
-            compute.dfb_bindings = {
-                binding(DFB_IN, "in", CONSUME, /*use_trisc3=*/false),
-                binding(DFB_MID, "mid", PRODUCE, /*use_trisc3=*/false),
-                binding(DFB_MID, "mid", CONSUME, /*use_trisc3=*/true),
-                binding(DFB_OUT, "out", PRODUCE, /*use_trisc3=*/true),
-            };
+            bind(DFB_IN, "in", CONSUME, /*on_trisc3=*/false);
+            bind(DFB_MID, "mid", PRODUCE, /*on_trisc3=*/false);
+            bind(DFB_MID, "mid", CONSUME, /*on_trisc3=*/true);
+            bind(DFB_OUT, "out", PRODUCE, /*on_trisc3=*/true);
             dataflow_buffers.push_back(make_spec(DFB_MID));
             if (has_in1) {
-                compute.dfb_bindings.push_back(binding(DFB_IN1, "in1", CONSUME, /*use_trisc3=*/true));
+                bind(DFB_IN1, "in1", CONSUME, /*on_trisc3=*/true);
                 dataflow_buffers.push_back(make_spec(DFB_IN1));
             }
             break;

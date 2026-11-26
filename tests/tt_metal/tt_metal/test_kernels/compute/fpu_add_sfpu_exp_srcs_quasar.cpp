@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Mixed: an FPU op on Dest feeds an SFPU op on SrcS through a DataflowBuffer. out = exp(in + in).
-// Bindings: dfb::in CONSUMER; dfb::mid PRODUCER, and CONSUMER with use_trisc3; dfb::out PRODUCER with use_trisc3.
+// Bindings: dfb::in CONSUMER; dfb::mid PRODUCER and CONSUMER; dfb::out PRODUCER.
+// The mid CONSUMER end and the out PRODUCER end are handed to the SFPU pipeline.
 
 #include <cstdint>
 
