@@ -14,6 +14,7 @@ import io
 import itertools
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -849,6 +850,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], "2")
         producer = self.one_record(records, "producer")["env"]
         self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+        # SP on axis 0 from the manifest (no knob exported): the probe checks the axis-0 cache, glm_5_3_bh_16dev/4x4.
+        self.assertNotIn("PREFILL_SP_AXIS", runner)
+        self.assertRegex(result.stdout, rf"4x4 weight cache {re.escape(self.root)}/cache/glm_5_3_bh_16dev/4x4\n")
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_glm53_sc1_4x4_packed_runs_two_chunks_per_forward(self):
@@ -863,6 +867,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         manifest = json.loads(Path(runner["PREFILL_MANIFEST"]).read_text())["env"]
         self.assertEqual(manifest["PREFILL_CHUNK_SIZE"], "2560")
         self.assertEqual(manifest["PREFILL_FORWARD_TOKENS_BUDGET"], "5120")
+        self.assertEqual(manifest["PREFILL_SP_AXIS"], "0")
         self.assertNotIn("PREFILL_FORWARD_TOKENS_BUDGET", runner)
         producer = self.one_record(records, "producer")["env"]
         self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
@@ -932,10 +937,10 @@ class MultirankPccHarnessTests(unittest.TestCase):
 
     def test_sp_axis_knob_on_glm53_4x4_checks_its_mesh_key(self):
         result, records = self.run_harness(
-            "glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True, extra_env={"PREFILL_SP_AXIS": "0"}
+            "glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True, extra_env={"PREFILL_SP_AXIS": "1"}
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertRegex(result.stdout + result.stderr, r"glm_5_3_bh_16dev/4x4\b(?!_sp1)")
+        self.assertIn("glm_5_3_bh_16dev/4x4_sp1", result.stdout + result.stderr)
 
     def test_sp_axis_knob_rejects_axis_1_off_a_4x4_stage_and_bad_values(self):
         for model, config, value, message in (
@@ -955,7 +960,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no 4x4 weight cache at", result.stdout + result.stderr)
-        self.assertIn("glm_5_3_bh_16dev/4x4_sp1", result.stdout + result.stderr)
+        # glm53_4x4.json's SP axis 0: mesh_cache_key((4, 4), 0) == "4x4".
+        self.assertRegex(result.stdout + result.stderr, r"glm_5_3_bh_16dev/4x4\b(?!_sp1)")
         self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
 
     def test_glm53_mtp_runs_8x4_stages_from_its_manifest(self):
@@ -990,7 +996,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
                                 "PREFILL_TP_SHARD_KV",
                             )
                         ),
-                        ("4", "4", "1", "2560", "1"),
+                        ("4", "4", "0", "2560", "1"),
                     )
                 if config == "sc4_4x4":
                     # The MTP variants keep their manifest's slots.

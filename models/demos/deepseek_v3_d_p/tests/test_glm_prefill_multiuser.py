@@ -36,7 +36,7 @@ but the pipeline test also run on a LoudBox.
   packed forwards handed rank to rank, must match one rank, eager and traced.
 
 Mesh and chunk: each mesh runs the chunk that gives the production per-chip shape, 640 rows per SP chip
-(2x4 -> 1,280-token chunks, 8x4 -> 5,120, a 4x4 stage -> 2,560 with SP on its axis-1 ring; the pipeline test is
+(2x4 -> 1,280-token chunks, 8x4 -> 5,120, a 4x4 stage -> 2,560 with SP on stage_sp_axis; the pipeline test is
 8x4 only). On 2x4 every chip sees what a galaxy chip sees in attention
 (640 rows, 16 heads, 160 sparse_sdpa tokens) but holds 32 experts instead of 8.
 
@@ -57,6 +57,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
+from models.demos.common.prefill.runners.runner_utils import stage_sp_axis
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -163,15 +164,16 @@ MESH_PARAMS = [
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
     ),
-    # One 4x4 stage (a galaxy tray half, GLM-5.3's serving stage): SP on the axis-1 ring at its 2,560-token chunk,
-    # TP=4 on the axis-0 line. Needs the galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the 4x4
-    # descriptor); unnarrowed, requires_mesh_topology skips it.
+    # One 4x4 stage (a galaxy tray half, GLM-5.3's serving stage) at its 2,560-token chunk: SP=4 on the axis
+    # runner_utils.stage_sp_axis gives (PREFILL_SP_AXIS when set; unset, the axis-1 ring, while the serving manifests
+    # default to axis 0), TP=4 on the other. Needs the galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the
+    # 4x4 descriptor); unnarrowed, requires_mesh_topology skips it.
     pytest.param(
         (4, 4),
         torus_x_device_params(fabric_payload_size=GLM_FABRIC_PAYLOAD, l1_small_size=TEST_L1_SMALL_SIZE),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-        id="torus-x-4x4-sp1",
+        id=f"torus-x-4x4-sp{stage_sp_axis((4, 4))}",
     ),
 ]
 
@@ -186,8 +188,9 @@ def _release_moe_blocks(request):
 
 
 def _sp_axis(mesh_device):
-    """The mesh's SP axis: 1 on a 4x4 stage (SP on the tray half's ring), else 0."""
-    return 1 if tuple(mesh_device.shape) == (4, 4) else 0
+    """The mesh's SP axis: runner_utils.stage_sp_axis on a 4x4 stage (the SP-axis knob over its default), else 0."""
+    shape = tuple(mesh_device.shape)
+    return stage_sp_axis(shape) if shape == (4, 4) else 0
 
 
 def _traced_mesh_params(l1_small_extra: int = 0) -> list:
@@ -227,7 +230,7 @@ def _traced_mesh_params(l1_small_extra: int = 0) -> list:
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-            id="torus-x-4x4-sp1",
+            id=f"torus-x-4x4-sp{stage_sp_axis((4, 4))}",
         )
     )
     return params

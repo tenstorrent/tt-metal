@@ -131,8 +131,17 @@ _MESH_PARAMS = [
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
     ),
-    # One 4x4 prefill stage (a Galaxy tray half, run_4x4_stage_tests.sh): SP on the axis-1 ring. An MTP
-    # level is a full sparse-MLA block, so 8x4 at SP on axis 1 (TP=8) is not a GLM layout.
+    # One 4x4 prefill stage (a Galaxy tray half, run_4x4_stage_tests.sh): SP on axis 0 (the GLM 4x4 manifests'
+    # default, TP on the axis-1 ring) or on the axis-1 ring (PREFILL_SP_AXIS=1). An MTP level is a full sparse-MLA
+    # block, so 8x4 at SP on axis 1 (TP=8) is not a GLM layout.
+    pytest.param(
+        (4, 4),
+        torus_x_device_params(**_MTP_DEVICE_KW),
+        2,
+        0,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-x-4x4-sp0",
+    ),
     pytest.param(
         (4, 4),
         torus_x_device_params(**_MTP_DEVICE_KW),
@@ -509,7 +518,8 @@ def test_mtp_build_ttnn_cache(
     mtp_layer_state_dict,
 ):
     """Build the MTP layer's TTNN cache at ``$TT_GLM53_MTP_TTNN_CACHE/<variant>_<arch>_<N>dev/<mesh key>``,
-    the path the runner's MTP predictor reads for this mesh (a 4x4 stage: ``glm_5_3_bh_16dev/4x4_sp1``).
+    the path the runner's MTP predictor reads for this mesh (a 4x4 stage: ``glm_5_3_bh_16dev/4x4`` at the
+    manifests' default SP axis 0, ``4x4_sp1`` with ``PREFILL_SP_AXIS=1``).
 
     ``test_mtp_transformer_chunks.py`` builds it behind the trunk on 8x4 only; this builds the module alone,
     on any mesh in ``_MESH_PARAMS``, and runs no forward.

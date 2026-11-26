@@ -2436,10 +2436,10 @@
   sp_config: sc1
 
 
-# The SC1 trunk leg on 4x4 stages: all 78 layers as two [4,4] stages, one per tray half, SP on mesh axis 1,
+# The SC1 trunk leg on 4x4 stages: all 78 layers as two [4,4] stages, one per tray half, SP on mesh axis 0,
 # bound by tt-run discovery on the intragalaxy descriptor, at one slot (glm53_4x4.json's layout, 2560-token
 # chunks). It tracks the 4x4 layout against the 8x4 SC1 leg above until 4x4 runs in production; there is
-# no SC4 4x4 leg. run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4_sp1) first.
+# no SC4 4x4 leg. run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4) first.
 # [2/2] runs the same request packed: two 2,560-token chunks per forward (glm53_4x4_packed.json), traced with D2H
 # acks, against the same golden tail; perf is gated on glm53/sc1_4x4_packed in perf_baselines.json once it has an
 # entry, and until then must still measure. It measured 8-10 min on exabox
