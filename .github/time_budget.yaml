@@ -414,6 +414,7 @@ models:
     bh_galaxy: 75
     bh_sc1: 410
     bh_sc4: 50
+    bh_qb2: 20
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 206
