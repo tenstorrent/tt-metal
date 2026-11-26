@@ -10,8 +10,10 @@
 //
 // The multiply is a broadcast multiply: srcA is the row, srcB the gate weight (element 0 of its tile, broadcast to
 // every element), the product lands in DEST. The add is done by the packer: packing with L1 accumulation on adds DEST
-// onto the token's sum already in cb_acc (a token's first row packs without it, so stale L1 is overwritten). After
-// the last row, every token's sum goes out as bf16 (cb_out); a token that got no rows is written as zeros.
+// onto the token's sum already in cb_acc (a token's first row packs without it, so stale L1 is overwritten). A token
+// is finished as soon as its last row (token_rows: the router's top-k) is in: its sum goes out as bf16 (cb_out) and
+// its id to the writer (cb_done), so the output rows go out while rows still land, in the order tokens finish. Tokens
+// with fewer rows (padding: none, written as zeros) go out after the last row, in token order.
 //
 // The rows are row-major data, but they are processed as if they were tiles: a W-wide bf16 row is W / 1024 "tiles".
 // That is fine because everything here is elementwise - the order of the elements inside a tile does not matter, and
@@ -117,6 +119,13 @@ void kernel_main() {
     constexpr bool snap = snap_step_bits != 0;
     // (1 / q, a power of two too: its exponent field is 254 less q's)
     constexpr uint32_t inverse_snap_step_bits = snap ? 0x7F000000u - snap_step_bits : 0u;
+    // routed rows a token (the router's top-k): a token is finished - its sums to bf16, out to the writer - as soon as
+    // its token_rows-th row is in; tokens with fewer (padding: none) at the call's end. 0: every token at the end
+    constexpr uint32_t token_rows = get_named_compile_time_arg_val(combine_names::kTokenRows);
+    // the finished tokens' ids, in output order (to the writer), and the pack -> unpack hand-over of a token's sums
+    constexpr uint32_t cb_done = get_named_compile_time_arg_val(combine_names::kDoneCb);
+    constexpr uint32_t cb_sync = get_named_compile_time_arg_val(combine_names::kSyncCb);
+    static_assert(token_rows < 256, "rows a token count in a byte");
     compute_kernel_hw_startup(cb_row, cb_w, cb_acc);
     // (no runtime args: whether this core accumulates differs by chip, and one program for the mesh needs them alike)
     cb_wait_front(cb_meta, 1);
@@ -127,11 +136,72 @@ void kernel_main() {
     }
     const uint32_t n_tokens = first_page & ~kMetaActive;
     mul_bcast_scalar_init(cb_row, cb_w);
-    uint8_t has_rows[max_tokens];
+    uint8_t rows_in[max_tokens];  // (each token's rows so far)
     for (uint32_t i = 0; i < max_tokens; ++i) {
-        has_rows[i] = 0;
+        rows_in[i] = 0;
     }
     cb_reserve_back(cb_acc, n_tokens * tiles_per_row);
+
+    // From the sums (cb_acc) to the output: begin_output once (the unpacker on the sums, the packer on bf16 rows), then
+    // output(token) a finished token: its row (zeros if it got no rows - not the CB's stale L1) to cb_out, its id to
+    // cb_done
+    auto begin_output = [&]() {
+        pack_reconfig_l1_acc(0);
+        reconfig_data_format_srca(cb_acc);
+        pack_reconfig_data_format(cb_out);
+        // (the copy is an unpack straight to DEST - no math datacopy - so the SFPU init alongside it holds)
+        copy_init(cb_acc);
+        if constexpr (snap) {
+            snap_sfpu_init();
+        }
+    };
+    auto output = [&](uint32_t token) {
+        cb_reserve_back(cb_out, tiles_per_row);
+        if (rows_in[token] == 0) {
+            fill_tile_init();
+            for (uint32_t first = 0; first < tiles_per_row; first += kDestTiles) {
+                const uint32_t count = tiles_per_row - first < kDestTiles ? tiles_per_row - first : kDestTiles;
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < count; ++j) {
+                    fill_tile(j, 0.0f);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < count; ++j) {
+                    pack_tile(j, cb_out);
+                }
+                tile_regs_release();
+            }
+            copy_init(cb_acc);
+            if constexpr (snap) {
+                snap_sfpu_init();
+            }
+        } else {
+            for (uint32_t first = 0; first < tiles_per_row; first += kDestTiles) {
+                const uint32_t count = tiles_per_row - first < kDestTiles ? tiles_per_row - first : kDestTiles;
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < count; ++j) {
+                    copy_tile(cb_acc, token * tiles_per_row + first + j, j);
+                }
+                if constexpr (snap) {  // the int32 counts back to fp32: count x q
+                    for (uint32_t j = 0; j < count; ++j) {
+                        sign_magnitude_count_to_float_tile<snap_step_bits>(j);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < count; ++j) {
+                    pack_tile(j, cb_out);
+                }
+                tile_regs_release();
+            }
+        }
+        cb_push_back(cb_out, tiles_per_row);
+        cb_reserve_back(cb_done, 1);
+        PACK((*reinterpret_cast<volatile uint32_t*>(get_local_cb_interface(cb_done).fifo_wr_ptr << 4) = token));
+        cb_push_back(cb_done, 1);
+    };
+
     while (true) {
         cb_wait_front(cb_meta, 1);
         const uint32_t token = read_tile_value(cb_meta, 0, 0);
@@ -141,7 +211,7 @@ void kernel_main() {
         }
         cb_wait_front(cb_row, tiles_per_row);
         cb_wait_front(cb_w, 1);
-        pack_reconfig_l1_acc(has_rows[token] ? 1 : 0);
+        pack_reconfig_l1_acc(rows_in[token] ? 1 : 0);
         for (uint32_t first = 0; first < tiles_per_row; first += kDestTiles) {
             const uint32_t count = tiles_per_row - first < kDestTiles ? tiles_per_row - first : kDestTiles;
             tile_regs_acquire();
@@ -164,62 +234,31 @@ void kernel_main() {
             }
             tile_regs_release();
         }
-        has_rows[token] = 1;
         cb_pop_front(cb_row, tiles_per_row);
         cb_pop_front(cb_w, 1);
+        if (++rows_in[token] == token_rows) {  // (token_rows 0: never - every token at the end)
+            // the packer's sums of this token in L1 before the unpacker reads them (a CB push from the PACK thread
+            // waits for the packer), then the token out, then back to the rows
+            cb_reserve_back(cb_sync, 1);
+            cb_push_back(cb_sync, 1);
+            cb_wait_front(cb_sync, 1);
+            begin_output();
+            output(token);
+            cb_pop_front(cb_sync, 1);
+            reconfig_data_format_srca(cb_row);
+            pack_reconfig_data_format(cb_acc);
+            mul_bcast_scalar_init(cb_row, cb_w);
+        }
     }
+    // the tokens not finished yet (fewer rows than token_rows - padding tokens have none - or every token with
+    // token_rows 0), in token order, once all the packs are in L1
     pack_reconfig_l1_acc(0);
     cb_push_back(cb_acc, n_tokens * tiles_per_row);
     cb_wait_front(cb_acc, n_tokens * tiles_per_row);
-    reconfig_data_format_srca(cb_acc);
-    pack_reconfig_data_format(cb_out);
-    // (the copy is an unpack straight to DEST - no math datacopy - so the SFPU init alongside it holds for the loop)
-    copy_init(cb_acc);
-    if constexpr (snap) {
-        snap_sfpu_init();
-    }
+    begin_output();
     for (uint32_t token = 0; token < n_tokens; ++token) {
-        cb_reserve_back(cb_out, tiles_per_row);
-        if (!has_rows[token]) {  // (a padding token: zeros, not the CB's stale L1)
-            fill_tile_init();
-            for (uint32_t first = 0; first < tiles_per_row; first += kDestTiles) {
-                const uint32_t count = tiles_per_row - first < kDestTiles ? tiles_per_row - first : kDestTiles;
-                tile_regs_acquire();
-                for (uint32_t j = 0; j < count; ++j) {
-                    fill_tile(j, 0.0f);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t j = 0; j < count; ++j) {
-                    pack_tile(j, cb_out);
-                }
-                tile_regs_release();
-            }
-            cb_push_back(cb_out, tiles_per_row);
-            copy_init(cb_acc);
-            if constexpr (snap) {
-                snap_sfpu_init();
-            }
-            continue;
+        if (token_rows == 0 || rows_in[token] < token_rows) {
+            output(token);
         }
-        for (uint32_t first = 0; first < tiles_per_row; first += kDestTiles) {
-            const uint32_t count = tiles_per_row - first < kDestTiles ? tiles_per_row - first : kDestTiles;
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < count; ++j) {
-                copy_tile(cb_acc, token * tiles_per_row + first + j, j);
-            }
-            if constexpr (snap) {  // the int32 counts back to fp32: count x q
-                for (uint32_t j = 0; j < count; ++j) {
-                    sign_magnitude_count_to_float_tile<snap_step_bits>(j);
-                }
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < count; ++j) {
-                pack_tile(j, cb_out);
-            }
-            tile_regs_release();
-        }
-        cb_push_back(cb_out, tiles_per_row);
     }
 }

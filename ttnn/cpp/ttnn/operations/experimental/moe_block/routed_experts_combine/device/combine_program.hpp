@@ -53,11 +53,17 @@ namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
 // Circular buffer indices on the combine's cores (disjoint from the flat expert's cores; all bound to the arena).
 inline constexpr uint8_t kCbInj = 0, kCbRow = 1, kCbMeta = 2, kCbTab = 3, kCbAcc = 4, kCbOut = 5, kCbW = 6;
+// the accumulators' finished-token ids (compute -> writer: which token each output row is) and the compute's own pack
+// -> unpack hand-over of a finished token's sums (kCbTabP = 8 is the ports')
+inline constexpr uint8_t kCbDone = 7, kCbSync = 9;
 
 // What the combine is planned from (k3 TtK3TokenSplitMoE.__init__: combine_auto on the flat plan's free cores).
 struct CombinePlanInputs {
     uint32_t home_tokens = 0;                         // home tokens a chip (S)
     uint32_t row_elements = 0;                        // row width (bf16 elements): the routed width Hr (W)
+    // routed rows a token (the router's top-k): an accumulator finishes a token (sums -> bf16 -> output) as soon as its
+    // token_rows-th row is in; tokens with fewer (padding) at the call's end. 0: every token at the end
+    uint32_t token_rows = 0;
     std::vector<tt::tt_metal::CoreCoord> free_cores;  // logical cores the flat plan leaves free (row-major)
     uint32_t arena_bytes = 0;                         // the combine's L1 budget a core (exchange_arena_bytes)
     std::optional<uint32_t> accumulator_count;        // the accumulator count the MoE head planned (pins A)
@@ -85,6 +91,7 @@ struct CombinePlan {
     uint32_t snap_step_bits = 0;  // fp32 bits of the combine's snap step q (0: off)
     uint32_t home_tokens = 0;     // home tokens a chip (S)
     uint32_t row_elements = 0;    // row width, bf16 elements (W)
+    uint32_t token_rows = 0;      // routed rows a token (CombinePlanInputs::token_rows)
     RowSlot row_slot;
     StateLayout state;
     uint32_t accumulator_count = 0;              // accumulators a chip (A)
@@ -121,7 +128,7 @@ struct CombinePlan {
     // the accumulators' CBs: rows (CB_ROW), meta (CB_META), the sums (CB_ACC: int32 with the snap, else fp32), output
     // (CB_OUT), weights (CB_W)
     uint32_t row_cb_offset = 0, meta_cb_offset = 0, accumulator_fp32_offset = 0, output_cb_offset = 0,
-             weight_cb_offset = 0;
+             weight_cb_offset = 0, done_cb_offset = 0, sync_cb_offset = 0;
     uint32_t local_ring_offset = 0;  // the accumulators' local ring
 
     PortCores port_core;  // (chip, dir, link) -> logical core
