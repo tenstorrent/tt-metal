@@ -35,8 +35,8 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 
 #include "tt_metal/distributed/host_h2h_socket.hpp"
 
