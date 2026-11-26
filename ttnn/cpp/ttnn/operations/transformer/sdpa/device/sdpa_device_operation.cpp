@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 using namespace tt::tt_metal;
 
@@ -525,11 +526,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         // offset >= 0, so it is checked in both offset forms.
         const auto q_rows = static_cast<uint32_t>(q.logical_shape()[-2]);
         const auto k_rows = static_cast<uint32_t>(k.logical_shape()[-2]);
-        TT_FATAL(
-            q_rows <= k_rows,
-            "windowed Q shard has {} rows, more than the K sequence length {}.",
-            q_rows,
-            k_rows);
+        TT_FATAL(q_rows <= k_rows, "windowed Q shard has {} rows, more than the K sequence length {}.", q_rows, k_rows);
         if (!tensors.windowed_q_token_offset_tensor.has_value()) {
             // Scalar form. (When the tensor is supplied it overrides the scalar on device, and its
             // per-device values cannot be validated here without a readback -- tile alignment and
@@ -590,6 +587,32 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     for (const auto* tensor : {&q, &k, &v}) {
         validate_padding(*tensor);
     }
+}
+
+SDPAOperation::program_factory_t SDPAOperation::select_program_factory(
+    const SDPAParams& attrs, const SDPAInputs& /*tensors*/) {
+    if (attrs.runtime_seq_len) {
+        return SDPARuntimeSeqLenFactory{};
+    }
+    return SDPAProgramFactory{};
+}
+
+ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, const SDPAInputs& tensors) {
+    const auto factory = select_program_factory(attrs, tensors);
+    if (attrs.runtime_seq_len) {
+        // The kernels and runtime args take the sequence lengths (dim 2 of q, k and v) at run time; only the Q
+        // buffer factor, which sizes a circular buffer, follows them into the program. validate_on_program_cache_miss
+        // allows no other tensor under the flag.
+        using ttnn::operations::common::hash_spec_without_rows;
+        return tt::tt_metal::operation::hash_operation<SDPAOperation>(
+            attrs,
+            factory.index(),
+            sdpa_q_buffer_factor(attrs, tensors),
+            hash_spec_without_rows(tensors.q),
+            hash_spec_without_rows(tensors.k),
+            hash_spec_without_rows(tensors.v));
+    }
+    return tt::tt_metal::operation::hash_operation<SDPAOperation>(attrs, tensors, factory.index());
 }
 
 SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(

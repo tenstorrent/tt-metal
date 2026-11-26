@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Non-causal SDPA with runtime_seq_len: one compiled kernel set serves every Q and K length.
+"""Non-causal SDPA with runtime_seq_len: one program serves every Q and K length.
 
 Each case runs a sequence of (Sq, Sk) pairs against the same configuration in one process and
-compares every output with torch. The lengths cover whole and partial tiles and chunks, Sq != Sk,
+compares every output with torch. A new length adds a program only where it changes whether a core
+may get more than one Q chunk, which sizes the Q buffer. The lengths cover whole and partial tiles and chunks, Sq != Sk,
 fewer Q chunks than cores and more, and a GQA case whose K/V chains span several Q heads.
 """
 
@@ -55,6 +56,9 @@ def _run(
         fp32_dest_acc_en=True,
     )
 
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    q_buffer_factors = set()
     for i, (sq, sk) in enumerate(lengths):
         q = torch.randn(b, nh, sq, d)
         k = torch.randn(b, nkv, sk, d)
@@ -74,8 +78,11 @@ def _run(
             compute_kernel_config=compute_kernel_config,
             runtime_seq_len=True,
         )
-        # A new length builds one program, from the kernels the first length compiled.
-        assert device.num_program_cache_entries() - entries <= 1
+        # A new length reuses the program of its Q buffer factor, and the kernels the first length compiled.
+        q_buffer_factor = 2 if -(-b * nh * -(-sq // q_chunk) // num_cores) > 1 else 1
+        added = device.num_program_cache_entries() - entries
+        assert added == (0 if q_buffer_factor in q_buffer_factors else 1), f"Sq {sq}, Sk {sk}: {added} programs"
+        q_buffer_factors.add(q_buffer_factor)
         if i > 0:
             assert _sdpa_kernel_builds() == builds, f"Sq {sq}, Sk {sk} compiled new SDPA kernels"
 

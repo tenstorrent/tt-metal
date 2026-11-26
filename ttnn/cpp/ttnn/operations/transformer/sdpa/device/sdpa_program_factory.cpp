@@ -1611,7 +1611,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(kv_chain_mode);                                // arg 34
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_mask_block_map));    // arg 35
     reader_compile_time_args.push_back(kv_slots);                                     // arg 36: K/V CB depth in chunks
-    reader_compile_time_args.push_back(0);  // arg 37: fwd_done_semaphore_id placeholder
+    reader_compile_time_args.push_back(0);          // arg 37: fwd_done_semaphore_id placeholder
     reader_compile_time_args.push_back(kv_retain);  // arg 38: K/V retention, Q heads per retention key (0 = off)
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -2148,6 +2148,37 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
+}
+
+uint32_t sdpa_q_buffer_factor(const SDPAParams& operation_attributes, const SDPAInputs& tensor_args) {
+    const auto& q_shape = tensor_args.q.logical_shape();
+    const uint32_t q_chunk_size =
+        operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
+    const CoreCoord grid_size = operation_attributes.program_config
+                                    ? operation_attributes.program_config->compute_with_storage_grid_size
+                                    : tensor_args.q.device()->compute_with_storage_grid_size();
+    const uint32_t q_num_chunks = tt::div_up(q_shape[2], q_chunk_size);
+    const uint32_t total_q_chunks = q_shape[0] * q_shape[1] * q_num_chunks;
+    return tt::div_up(total_q_chunks, grid_size.x * grid_size.y) > 1 ? 2 : 1;
+}
+
+ProgramDescriptor SDPAOperation::SDPARuntimeSeqLenFactory::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    return SDPAProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+}
+
+void SDPAOperation::SDPARuntimeSeqLenFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
+    // The argument counts are fixed for the mode (every core of the grid gets the same lists), so the rebuilt
+    // descriptor's args, buffer addresses included, apply to the cached program in place.
+    tt::tt_metal::apply_descriptor_runtime_args(
+        program, SDPAProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value));
 }
 
 }  // namespace ttnn::prim
