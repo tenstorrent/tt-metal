@@ -17,6 +17,7 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/matrix-bank-handoff.cpp 2>&1 | FileCheck %s --check-prefix=MATRIX_BANK_HANDOFF
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/srcb-negative-infinity.cpp 2>&1 | FileCheck %s --check-prefix=SRCB_NEGATIVE_INFINITY
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/both-banks-srcb-negative-infinity.cpp 2>&1 | FileCheck %s --check-prefix=BOTH_BANKS_SRCB_NEGATIVE_INFINITY
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/invalid-nop-engine.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_NOP_ENGINE
 // clang-format on
 
 //--- valid-options.cpp
@@ -54,8 +55,8 @@ static_assert(
     unpack::Unpacker0.operation().flush_row_start_cache(unpack::CacheScope::AllEntries) ==
     unpack::Unpacker0.operation().flush_row_start_cache<unpack::CacheScope::AllEntries>());
 static_assert(
-    unpack::experimental::clear_both_banks_operation(unpack::Unpacker1, {.wait = unpack::ClearWait::MatrixBank}) ==
-    unpack::experimental::clear_both_banks_operation<unpack::experimental::BothBanksClear {.wait = unpack::ClearWait::MatrixBank}>(unpack::Unpacker1));
+    unpack::experimental::clear_both_banks_operation(unpack::Unpacker1, {}) ==
+    unpack::experimental::clear_both_banks_operation<unpack::experimental::BothBanksClear {}>(unpack::Unpacker1));
 
 // An unpacker built from a constant engine encodes like the predefined one.
 static_assert(
@@ -188,3 +189,9 @@ constexpr auto operation =
     unpack::experimental::clear_both_banks_operation<unpack::experimental::BothBanksClear {.value = unpack::ClearValue::NegativeInfinity}>(unpack::Unpacker1);
 // BOTH_BANKS_SRCB_NEGATIVE_INFINITY: in 'constexpr' expansion of 'hal::detail::require({{.*}}"UNPACR_NOP cannot clear SrcB to negative infinity"))'
 // BOTH_BANKS_SRCB_NEGATIVE_INFINITY: error: '__builtin_trap()' is not a constant expression
+
+//--- invalid-nop-engine.cpp
+#include "hal/nop.h"
+
+constexpr auto operation = hal::nop::unpacker_operation<static_cast<hal::unpack::Engine>(2)>();
+// INVALID_NOP_ENGINE: error: static assertion failed: UNPACR_NOP engine must be Unpacker0 or Unpacker1
