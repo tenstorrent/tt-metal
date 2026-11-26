@@ -17,7 +17,7 @@ namespace mop = hal::mop;
 
 // Template 1 MopCfg words: 0 = outer count, 1 = inner count, 2 = StartOp,
 // 3 = EndOp0, 4 = EndOp1, 5 = LoopOp, 6 = LoopOp1, 7 = Loop0Last, 8 = Loop1Last.
-// EndOp1 is written only with end ops, and words 5-8 only with a nonzero inner count.
+// EndOp1 is written only with end ops; every other word is always written.
 inline volatile std::uint32_t *reference_mop_cfg()
 {
     return reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
@@ -189,6 +189,10 @@ extern "C" __attribute__((noinline, used)) void reference_program_empty_inner()
     mop_cfg[2] = OP_START;
     mop_cfg[3] = OP_END;
     mop_cfg[4] = TT_OP_NOP;
+    mop_cfg[5] = OP_BODY;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP_BODY;
+    mop_cfg[8] = OP_BODY;
 }
 
 // A start op makes an empty inner loop without end ops supported; EndOp1 stays unwritten.
@@ -205,6 +209,10 @@ extern "C" __attribute__((noinline, used)) void reference_program_start_empty_in
     mop_cfg[1] = 0;
     mop_cfg[2] = OP_START;
     mop_cfg[3] = TT_OP_NOP;
+    mop_cfg[5] = OP_BODY;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP_BODY;
+    mop_cfg[8] = OP_BODY;
 }
 
 // A start op keeps an empty inner loop with both end ops out of the count anomaly.
@@ -222,9 +230,13 @@ extern "C" __attribute__((noinline, used)) void reference_program_empty_inner_se
     mop_cfg[2] = OP_START;
     mop_cfg[3] = OP_END;
     mop_cfg[4] = OP_SECOND_END;
+    mop_cfg[5] = OP_BODY;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP_BODY;
+    mop_cfg[8] = OP_BODY;
 }
 
-// A runtime inner count decides at runtime whether words 5-8 are written.
+// A runtime inner count still writes words 5-8.
 extern "C" __attribute__((noinline, used)) void program_runtime_counts(const std::uint32_t outer, const std::uint32_t inner)
 {
     mop::program(mop::loop(outer, OP_START, mop::loop(inner, OP_BODY), OP_END));
@@ -239,13 +251,10 @@ extern "C" __attribute__((noinline, used)) void reference_program_runtime_counts
     mop_cfg[2] = OP_START;
     mop_cfg[3] = OP_END;
     mop_cfg[4] = TT_OP_NOP;
-    if (inner != 0)
-    {
-        mop_cfg[5] = OP_BODY;
-        mop_cfg[6] = TT_OP_NOP;
-        mop_cfg[7] = OP_BODY;
-        mop_cfg[8] = OP_BODY;
-    }
+    mop_cfg[5] = OP_BODY;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP_BODY;
+    mop_cfg[8] = OP_BODY;
 }
 
 extern "C" __attribute__((noinline, used)) void program_runtime_operations(const std::uint32_t body, const std::uint32_t last_inner)
