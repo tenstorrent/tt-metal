@@ -24,5 +24,10 @@ constexpr std::uint32_t llk_configured_cbs(const T (&formats)[n]) {
 
 }  // namespace ckernel
 
-// Use after the JIT descriptors (chlkc_descriptors.h), where unpack_src_format is defined.
+// Use after the JIT descriptors (chlkc_descriptors.h), where unpack_src_format is defined. The ring SDPA kernels
+// (ring_joint_sdpa, sliding_ring_sdpa: those given SLIDING_HALO_SLOT_COUNT) also sit 1 KB under the limit on main.
+#if defined(SLIDING_HALO_SLOT_COUNT)
+#define LLK_SIZE_MODE true
+#else
 #define LLK_SIZE_MODE (::ckernel::llk_configured_cbs(unpack_src_format) >= ::ckernel::llk_size_mode_min_cbs)
+#endif
