@@ -566,15 +566,21 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                         continue;
                     }
                     // All readers address the bank by allocator bank id on the same NOC and therefore target the same
-                    // firmware-approved endpoint. Place additional readers near the bank's primary
-                    // reader to minimize NOC hops without routing one NOC to multiple endpoints.
+                    // firmware-approved endpoint. Rank candidates by the route the bank's data takes to them: NOC0
+                    // delivers a read response from the endpoint east, then south. The primary reader is the first
+                    // worker on that route, so hops from the primary to a candidate rank candidates by the length
+                    // of the data's route to them. Counting hops the other way (candidate -> primary) favours the
+                    // core just north of the primary, which the data reaches only by wrapping south round the whole
+                    // column, through column links that carry other banks' readers too.
                     // This factory shares one logical reader placement across the mesh, as it
                     // already does for primary readers. Use a representative chip for the hop
                     // heuristic; bank addressing still uses each executing chip's allocator table.
-                    const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                        &device, coord, candidate, primary_workers[bank], noc);
-                    // Equal-cost candidates use the same endpoint and hop count. Keep the first candidate in ascending
-                    // x/y scan order so that the assignment is deterministic without adding a second routing objective.
+                    const uint32_t hops = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                        &device, coord, primary, candidate, noc);
+                    // Ties: prefer the primary's own row (fewest rows south of it), so the bank's stream stays on
+                    // its row segment; then the first candidate in ascending x/y scan order (deterministic).
+                    const uint32_t rows_south = (y + worker_grid.y - primary.y) % worker_grid.y;
+                    const uint32_t cost = hops * worker_grid.y + rows_south;
                     if (cost < best_cost) {
                         found = true;
                         best_cost = cost;
