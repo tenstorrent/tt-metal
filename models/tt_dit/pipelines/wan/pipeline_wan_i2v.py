@@ -20,7 +20,6 @@ from PIL import Image
 import ttnn
 
 from ...models.vae.vae_wan2_1 import WanEncoder
-from ...utils import cache
 from ...utils.conv3d import aligned_channels, conv3d_blocking_hash, conv3d_configs, conv_pad_height, conv_pad_width
 from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host, unflatten
 from .pipeline_wan import WanPipeline, WanPipelineConfig
@@ -188,7 +187,8 @@ class WanPipelineI2V(WanPipeline):
             self._vae_encoders[width, height] = encoders_by_blockings.setdefault(conv3d_configs(encoder), encoder)
         logger.info(f"{len(encoders_by_blockings)} image encoder(s) for {len(self._resolutions)} resolution(s)")
         for encoder in encoders_by_blockings.values():
-            self._load_vae_encoder(encoder)
+            self.residency.register(encoder, self._vae_encoder_spec(encoder))
+            self.residency.load(encoder)
 
         if run_warmup:
             self._warmup()
@@ -214,7 +214,7 @@ class WanPipelineI2V(WanPipeline):
             latents_std=self._vae.config.latents_std,
         )
 
-    def _load_vae_encoder(self, encoder: WanEncoder) -> None:
+    def _vae_encoder_spec(self, encoder: WanEncoder) -> dict:
         # C_in_block decides how prepare_conv3d_weights reshapes the stored weights, so a
         # cache written for one blocking is unusable by another. The _lnorm suffix marks
         # weights with the latent normalization folded into quant_conv, which are likewise
@@ -226,15 +226,14 @@ class WanPipelineI2V(WanPipeline):
             if blocking_hash:
                 subfolder = f"vae_encoder_{blocking_hash}_lnorm"
 
-        cache.load_model(
-            encoder,
-            model_name=os.path.basename(self.checkpoint_name),
-            subfolder=subfolder,
-            parallel_config=self.vae_parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            mesh_device=self.mesh_device,
-            get_torch_state_dict=lambda: self._vae.torch_state_dict(),
-        )
+        return {
+            "model_name": os.path.basename(self.checkpoint_name),
+            "subfolder": subfolder,
+            "parallel_config": self.vae_parallel_config,
+            "mesh_shape": tuple(self.mesh_device.shape),
+            "mesh_device": self.mesh_device,
+            "get_torch_state_dict": lambda: self._vae.torch_state_dict(),
+        }
 
     def _warmup_kwargs(self, width: int, height: int) -> dict[str, object]:
         """A sample image_prompt of the size.

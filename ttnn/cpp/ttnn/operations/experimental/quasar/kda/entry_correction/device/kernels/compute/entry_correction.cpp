@@ -117,9 +117,11 @@ TT_KERNEL void compute() {
         tile_regs_acquire();
         reconfig_data_format_srca(terms_id);
         copy_init(terms_id);
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         for (uint32_t j = 0; j < kt; ++j) {
             copy_tile(terms_id, row + j, j);
         }
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         reconfig_data_format<SrcOrder::Reverse>(diff_id, seed);
         matmul_block_init(diff_id, seed, false, kt, 1, kt);
         for (uint32_t k = 0; k < kt; ++k) {
@@ -160,14 +162,18 @@ TT_KERNEL void compute() {
                 tile_regs_acquire();
                 reconfig_data_format_srca(b_id);
                 copy_init(b_id);
+                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
                 for (uint32_t c = 0; c < columns; ++c) {
                     copy_tile(b_id, first_column + c, c);
                 }
+                tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                 reconfig_data_format_srca(seed_exact);
                 copy_init(seed_exact);
+                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
                 for (uint32_t c = 0; c < columns; ++c) {
                     copy_tile(seed_exact, row * kt + first_column + c, columns + c);
                 }
+                tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                 add_binary_tile_init();
                 for (uint32_t c = 0; c < columns; ++c) {
                     add_binary_tile(c, columns + c, c);

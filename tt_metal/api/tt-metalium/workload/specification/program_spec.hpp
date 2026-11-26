@@ -29,6 +29,7 @@ namespace tt::tt_metal {
 //      o dataflow buffers
 //      o semaphores
 //      o scratchpads
+//      o fabric connections (advanced option)
 //  - user-managed resources (parameters)
 //      o tensor parameters
 //      o GlobalSemaphore parameters
