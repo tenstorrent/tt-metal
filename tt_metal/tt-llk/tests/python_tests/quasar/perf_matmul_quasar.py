@@ -11,6 +11,7 @@ from quasar.test_matmul_quasar import (
     NON_MX_MATMUL_FORMATS,
     TINY_MATMUL_SHAPE_CASES,
     matmul_dest_acc_modes,
+    matmul_enable_direct_indexing,
     matmul_register_format_hints,
     matmul_tile_dimensions,
 )
@@ -34,8 +35,7 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
         )
     ),
     register_format_hint=matmul_register_format_hints,
-    # Production's matmul init never enables direct indexing (llk_math_matmul_init EN_DI=false).
-    enable_direct_indexing=[False],
+    enable_direct_indexing=matmul_enable_direct_indexing,
     transpose=[Transpose.No],
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
@@ -90,8 +90,7 @@ def test_perf_matmul_quasar(
         )
     ),
     register_format_hint=matmul_register_format_hints,
-    # Production's matmul init never enables direct indexing (llk_math_matmul_init EN_DI=false).
-    enable_direct_indexing=[False],
+    enable_direct_indexing=matmul_enable_direct_indexing,
     transpose=[Transpose.No],
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
