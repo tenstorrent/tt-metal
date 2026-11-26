@@ -23,7 +23,8 @@ namespace ttml::utils {
  * @param max_steps Step cap; 0 disables it.
  * @param num_epochs Epoch cap; 0 disables it. A partial final epoch is rounded up to a full step.
  * @param steps_per_epoch Result of steps_per_epoch().
- * TT_FATAL if both caps are disabled, or if the epoch cap exceeds the uint32 step counter.
+ * TT_FATAL if both caps are disabled, or if the epoch cap is the binding cap (max_steps is 0 or larger)
+ * and exceeds the uint32 step counter.
  */
 [[nodiscard]] uint32_t resolve_effective_max_steps(uint32_t max_steps, uint32_t num_epochs, double steps_per_epoch);
 

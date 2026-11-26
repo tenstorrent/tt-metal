@@ -107,7 +107,10 @@ void py_module(nb::module_& m) {
         py_tensor.def("get_shape", &Tensor::get_shape, "Get shape");
         py_tensor.def("get_rank", &Tensor::get_rank, "Get rank");
         py_tensor.def(
-            "backward", &Tensor::backward, nb::arg("retain_graph"), "Call gradient function on graph nodes in reverse");
+            "backward",
+            &Tensor::backward,
+            nb::arg("retain_graph") = false,
+            "Call gradient function on graph nodes in reverse");
 
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized, "Check if gradient is initialized");
         py_tensor.def(
