@@ -1792,3 +1792,79 @@ def test_to_layout_dtype_uint8_tile_to_rm(device, tensor_shape):
     t = ttnn.from_torch(x, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
     got = ttnn.to_torch(ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT))
     assert torch.equal(got, x)
+
+
+@pytest.mark.parametrize(
+    "shapes, start",
+    [
+        # FLUX.2's VAE decoder over the latent sizes, whole tiles first, as the warm size is.
+        ([(1, 1024, 128), (1, 1014, 128), (1, 1380, 128), (1, 2835, 128)], ttnn.TILE_LAYOUT),
+        ([(1, 32, 64, 32), (1, 12, 169, 32), (1, 24, 115, 32), (1, 90, 45, 32)], ttnn.ROW_MAJOR_LAYOUT),
+        ([(1, 32, 64, 32), (1, 12, 169, 32), (1, 24, 115, 32)], ttnn.TILE_LAYOUT),
+        ([(1, 32, 128, 512), (1, 12, 338, 512), (1, 24, 230, 512)], ttnn.ROW_MAJOR_LAYOUT),
+        ([(1, 64, 128, 3), (1, 24, 338, 3), (1, 84, 270, 3)], ttnn.TILE_LAYOUT),
+        ([(64, 96), (50, 96), (130, 96)], ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_to_layout_runtime_shapes_one_program(device, shapes, start, dtype):
+    # With runtime_shapes an interleaved tensor takes the padding ops' shape-free programs, so after the first
+    # shape no other shape of the family builds a program.
+    target = ttnn.ROW_MAJOR_LAYOUT if start == ttnn.TILE_LAYOUT else ttnn.TILE_LAYOUT
+    new_entries = []
+    for shape in shapes:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32)
+        x = ttnn.from_torch(torch_input, dtype=dtype, layout=start, device=device)
+        # Counted around to_layout alone, so the upload and readback's own programs stay out.
+        before = device.num_program_cache_entries()
+        y = ttnn.to_layout(x, target, runtime_shapes=True)
+        new_entries.append(device.num_program_cache_entries() - before)
+        assert y.layout == target
+        assert tuple(y.shape) == shape
+        assert torch.equal(ttnn.to_torch(y), torch_input), shape
+    assert new_entries[0] > 0 and all(n == 0 for n in new_entries[1:]), new_entries
+
+
+@pytest.mark.parametrize("start", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_to_layout_runtime_shapes_ignored_outside_its_conditions(device, start):
+    # An L1 or sharded output or a bfloat8_b tensor takes the usual programs, which convert it as without the
+    # flag and build one per shape.
+    target = ttnn.ROW_MAJOR_LAYOUT if start == ttnn.TILE_LAYOUT else ttnn.TILE_LAYOUT
+
+    def new_entries_per_shape(convert, shapes, dtype=ttnn.bfloat16, check=torch.equal):
+        new_entries = []
+        for shape in shapes:
+            torch_input = torch.randn(shape, dtype=torch.bfloat16)
+            layout = ttnn.TILE_LAYOUT if dtype == ttnn.bfloat8_b else start
+            x = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
+            before = device.num_program_cache_entries()
+            y = convert(x)
+            new_entries.append(device.num_program_cache_entries() - before)
+            assert check(ttnn.to_torch(y), torch_input), shape
+        return new_entries
+
+    l1 = new_entries_per_shape(
+        lambda x: ttnn.to_layout(x, target, memory_config=ttnn.L1_MEMORY_CONFIG, runtime_shapes=True),
+        [(1, 1, 50, 64), (1, 1, 100, 64)],
+    )
+    assert all(n > 0 for n in l1), l1
+
+    def to_sharded(x):
+        sharded = ttnn.create_sharded_memory_config(
+            tuple(x.padded_shape) if start == ttnn.TILE_LAYOUT else (1, 1, -(-x.shape[-2] // 32) * 32, 64),
+            ttnn.CoreGrid(x=1, y=1),
+            ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=False,
+        )
+        return ttnn.to_layout(x, target, memory_config=sharded, runtime_shapes=True)
+
+    sharded = new_entries_per_shape(to_sharded, [(1, 1, 50, 64), (1, 1, 100, 64)])
+    assert all(n > 0 for n in sharded), sharded
+    if start == ttnn.TILE_LAYOUT:
+        bfp8 = new_entries_per_shape(
+            lambda x: ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, runtime_shapes=True),
+            [(1, 1, 64, 64), (1, 1, 128, 64)],
+            dtype=ttnn.bfloat8_b,
+            check=lambda a, b: assert_with_pcc(a, b, 0.99) or True,
+        )
+        assert all(n > 0 for n in bfp8), bfp8
