@@ -73,6 +73,10 @@ void kernel_main() {
     constexpr auto pos_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
+#ifdef SDPA_DECODE_PENDING
+    constexpr auto pend_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
+    constexpr auto ppos_args = TensorAccessorArgs<pend_args.next_compile_time_args_offset()>();
+#endif
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -95,6 +99,10 @@ void kernel_main() {
     const uint32_t page_table_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mask_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t attention_sink_addr = get_arg_val<uint32_t>(arg_idx++);
+#ifdef SDPA_DECODE_PENDING
+    const uint32_t pend_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t ppos_addr = get_arg_val<uint32_t>(arg_idx++);
+#endif
     const uint32_t page_table_page_size = get_arg_val<uint32_t>(arg_idx++);
     const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_head_group = get_arg_val<uint32_t>(arg_idx++);
@@ -112,6 +120,35 @@ void kernel_main() {
         return;
     }
 
+#ifdef SDPA_DECODE_PENDING
+    {
+        // this batch's kv group's pending K / V tiles (pending_kv [2, Bkv, 32, DH]) and token 0's position
+        constexpr uint32_t ptb = get_tile_size(cb_k_in);
+        const uint32_t base = CircularBuffer(cb_id_page_table).get_write_ptr();
+        const auto pend_reader = TensorAccessor(pend_args, pend_addr);
+        const auto ppos_reader = TensorAccessor(ppos_args, ppos_addr);
+        const uint32_t g = cur_batch % Bkv;
+        for (uint32_t c = 0; c < DHt; ++c) {
+            noc.async_read(pend_reader, CoreLocalMem<uint32_t>(base + c * ptb), ptb, {.page_id = g * DHt + c}, {});
+        }
+        for (uint32_t c = 0; c < vDHt; ++c) {
+            noc.async_read(
+                pend_reader, CoreLocalMem<uint32_t>(base + (DHt + c) * ptb), ptb, {.page_id = (Bkv + g) * DHt + c}, {});
+        }
+        const uint32_t pos_l1 = base + (DHt + vDHt) * ptb;
+        noc.async_read(ppos_reader, CoreLocalMem<uint32_t>(pos_l1), 16, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        g_pend.k_tiles = base;
+        g_pend.v_tiles = base + DHt * ptb;
+#ifdef SDPA_DECODE_PEND_TOK0
+        g_pend.ntok = SDPA_DECODE_PEND_TOK0 + cur_batch / Bkv + 1;  // a later call of a split verify pass
+#else
+        g_pend.ntok = cur_batch / Bkv + 1;
+#endif
+        g_pend.pos0 = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1);
+        g_pend.S = St * 32;
+    }
+#endif
     // Get cur_pos
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
@@ -259,6 +296,11 @@ void kernel_main() {
         cb_sink.reserve_back(PNHt);
         uint32_t attention_sink_write_ptr = cb_sink.get_write_ptr();
 
+#ifdef SDPA_DECODE_SINK_PER_BATCH
+        const uint32_t sink_tile0 = cur_batch * PNHt;  // sink [B * padded heads, 32]: this batch's block
+#else
+        constexpr uint32_t sink_tile0 = 0;
+#endif
         for (uint32_t tile = 0; tile < PNHt; ++tile) {
             // Use noc.async_read with explicit size instead of noc.async_read_page because
             // the CB may use half tiles (16x32) while the DRAM buffer stores full tiles (32x32).
@@ -267,7 +309,7 @@ void kernel_main() {
                 attention_sink_reader,
                 CoreLocalMem<uint32_t>(attention_sink_write_ptr),
                 attention_sink_tile_bytes,
-                {.page_id = tile},
+                {.page_id = sink_tile0 + tile},
                 {});
             attention_sink_write_ptr += attention_sink_tile_bytes;
         }
@@ -370,18 +412,30 @@ void kernel_main() {
                     k_tile_bytes);
             }
         } else {
+#ifdef SDPA_DECODE_K_UNIT_COL
+            constexpr uint32_t k_mem_cols = DHt - 1;  // tile columns of the K tensor: the reader writes one itself
+#else
+            constexpr uint32_t k_mem_cols = DHt;
+#endif
             // Offset for current batch
-            const uint32_t k_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * DHt;
-            const uint32_t k_head_offset = cur_head * St * DHt;
+            const uint32_t k_batch_offset =
+                ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * k_mem_cols;
+            const uint32_t k_head_offset = cur_head * St * k_mem_cols;
 
             // Then, read K, V, Mask k_chunk_tiles at a time
-            const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * DHt;
+            const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * k_mem_cols;
             uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
 
             // V has its own layout when it's an independent tensor (width = vDHt, not DHt)
-            const uint32_t v_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * vDHt;
-            const uint32_t v_head_offset = cur_head * St * vDHt;
-            const uint32_t v_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * vDHt;
+#ifdef SDPA_DECODE_V_UNIT_COL
+            constexpr uint32_t v_mem_cols = vDHt - 1;  // tile columns of the V tensor: the reader writes the last
+#else
+            constexpr uint32_t v_mem_cols = vDHt;
+#endif
+            const uint32_t v_batch_offset =
+                ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * v_mem_cols;
+            const uint32_t v_head_offset = cur_head * St * v_mem_cols;
+            const uint32_t v_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * v_mem_cols;
             uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
 
             read_kv_mask_chunks<

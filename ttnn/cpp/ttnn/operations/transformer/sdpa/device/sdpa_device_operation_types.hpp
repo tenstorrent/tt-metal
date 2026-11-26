@@ -34,6 +34,10 @@ struct SDPAParams {
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
     bool output_concat_heads = false;
+    // rel_logits in the skewed layout (see scaled_dot_product_attention).
+    bool rel_skewed = false;
+    // rel_logits: position of query row 0 among the keys (unset: Sk - Sq). Passed to the kernels at runtime.
+    std::optional<uint32_t> rel_q_offset;
 };
 
 struct SDPAInputs {
@@ -54,6 +58,9 @@ struct SDPAInputs {
     std::optional<Tensor> windowed_q_token_offset_tensor;
     // [Bm, Hm, q chunks, k chunks] int32 or uint32, nonzero where that block of the dense attn_mask is not all masked.
     std::optional<Tensor> attn_mask_block_map;
+    // Banded relative bias [B, NQH, Sq, W] bf16 ROW_MAJOR: rel_logits[b, h, i, d] is added to the logit of
+    // query row i and the key at distance d = (i + Sk - Sq) - j, for 0 <= d < W. The reader builds the mask.
+    std::optional<Tensor> rel_logits;
 };
 
 }  // namespace ttnn::prim

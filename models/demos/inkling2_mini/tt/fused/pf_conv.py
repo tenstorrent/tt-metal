@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
+# SPDX-License-Identifier: Apache-2.0
+"""Prefill causal k=4 short conv over T rows in one program: drop-in for Inkling2Prefill._conv (+ its two uses).
+
+The op chain: tail window (concat [32-row tail ++ chunk] + 3 unaligned row slices), 4 multiplies, 3 adds, typecast,
+and at the call sites a typecast back to fp32 (post-attn conv) or a residual add + typecast (post-mlp conv): ~10
+passes over [T, 2304]. Here, per output tile (R, j): the lagged rows come from two 0/1 shift-matrix matmuls of the
+x tile and the tile above it (exact: one bf16 term per element), then the taps (row-broadcast, exact fp32) in the
+chain's order. Modes: "bf16" (= _conv), "f32" (= _f32(_conv(..))), "resid" (= bf16(resid + _f32(_conv(..)))),
+"hres" (= ttnn.add(_f32(resid), _f32(_conv(..))), fp32; resid bf16 or fp32: the post-attn residual), "dyn" (the
+global layers' k / v conv, Inkling2Prefill._kv: per-token taps tap_r + dyn[:, 4 h + r] for the 128 channels of head h,
+then bf16((acc + x) * scale); the per-token values come from dyn = the [T, 32] projection columns, broadcast over
+the head's channels in the kernel by a 0/1 selection matmul, exact, instead of a [T, 4 W] fp32 tensor).
+
+Make the PfConv in Inkling2Prefill.__init__ (its shift constants are device tensors; the trace rule).
+"""
+
+import torch
+
+import ttnn
+from models.demos.inkling2_mini.tt.fused import common as F
+
+HIDDEN = 2304
+MODES = {"bf16": 0, "f32": 1, "resid": 2, "hres": 3, "dyn": 4}
+HEAD_TILES = 4  # dyn mode: 128 channels per head
+
+
+def _shift_tiles():
+    """[6 * 32, 32]: A_1..A_3 (row i <- row i - r of the same tile), B_1..B_3 (row i < r <- row 32 + i - r of the
+    tile above)."""
+    m = torch.zeros(6, 32, 32)
+    for r in range(1, 4):
+        for i in range(32):
+            if i >= r:
+                m[r - 1, i, i - r] = 1.0
+            else:
+                m[2 + r, i, 32 + i - r] = 1.0
+    return m.reshape(6 * 32, 32)
+
+
+class PfConv:
+    def __init__(self, device):
+        self.device = device
+        self.shifts = ttnn.from_torch(
+            _shift_tiles().view(1, 1, 6 * 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        sel = torch.zeros(32, 32, 32)  # dyn mode: tile i has row i all ones (dyn tile @ it = column i, broadcast)
+        sel[torch.arange(32), torch.arange(32), :] = 1.0
+        self.sel = ttnn.from_torch(sel.view(1, 1, 32 * 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                                   device=device)  # fmt: skip
+
+    @staticmethod
+    def scale_tile(device, scale):
+        """dyn mode's scale operand: a [32, 32] fp32 tile of `scale` (ttnn.multiply(x, scale) on fp32 x)."""
+        return ttnn.from_torch(torch.full((1, 1, 32, 32), scale), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT,
+                               device=device)  # fmt: skip
+
+    def __call__(self, taps, x, tail, mode="bf16", resid=None, dyn=None, scale=None):
+        """taps: 4 x [1,1,1,C] fp32 (lag 0..3); x [1,1,T,C] (bf16 or fp32, rounded to bf16 as _Tail.window does);
+        tail: prefill_model._Tail (advanced here, and its `keep` hook honoured). Returns per `mode` (module doc).
+        dyn mode: dyn [1,1,T,32] bf16 (column 4 h + r: head h's lag-r tap), scale: scale_tile()."""
+        x = x if x.dtype == ttnn.bfloat16 else ttnn.typecast(x, ttnn.bfloat16)
+        t, c = x.shape[-2], x.shape[-1]
+        assert t % 32 == 0 and t >= 32 and c % 32 == 0, x.shape
+        assert (mode in ("resid", "hres")) == (resid is not None), mode
+        assert (mode == "dyn") == (dyn is not None) == (scale is not None), mode
+        if dyn is not None:
+            assert dyn.dtype == ttnn.bfloat16 and tuple(dyn.shape)[-2:] == (t, 32) and c % (32 * HEAD_TILES) == 0
+            assert scale.dtype == ttnn.float32, scale.dtype
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        for a in [x, tail.t] + list(taps) + ([resid] if resid is not None else []):
+            assert a.layout == ttnn.TILE_LAYOUT and a.memory_config().buffer_type == ttnn.BufferType.DRAM, a
+        out_dtype = ttnn.float32 if mode in ("f32", "hres") else ttnn.bfloat16
+        out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, t, c]), out_dtype, ttnn.TILE_LAYOUT, self.device, dram)
+        wt, rows = c // 32, t // 32
+        grid = self.device.compute_with_storage_grid_size()
+        per = F.balanced_runs(wt, rows, grid.x * grid.y)  # units (j, R0, R1), the same tile count per core
+        cores, crs = F.core_list(self.device, len(per))
+        res_addr = resid.buffer_address() if resid is not None else 0
+        r_args, w_args, c_args = {}, {}, {}
+        page = 4096 if out_dtype == ttnn.float32 else 2048
+        for core, us in zip(cores, per):
+            flat = [v for u in us for v in u]
+            r_args[core] = [x.buffer_address(), tail.t.buffer_address()] + [p.buffer_address() for p in taps]
+            r_args[core] += [self.shifts.buffer_address(), res_addr]
+            r_args[core] += (
+                [dyn.buffer_address(), self.sel.buffer_address(), scale.buffer_address()] if dyn else [0] * 3
+            )
+            r_args[core] += [len(us)] + flat
+            w_args[core] = [out.buffer_address(), page, len(us)] + flat
+            c_args[core] = [len(us)] + [r1 - r0 for _, r0, r1 in us]
+        res_page = 4096 if resid is None or resid.dtype == ttnn.float32 else 2048
+        named = dict(wt=wt, has_resid=int(resid is not None), res_page=res_page, mode=MODES[mode], ht=HEAD_TILES)
+        named = F.fixed_rt(named, r_args, w_args, c_args)
+        kernels = [
+            F.kernel("pf_conv_reader.cpp", ttnn.ReaderConfigDescriptor(), named, r_args, crs),
+            F.kernel("pf_conv_writer.cpp", ttnn.WriterConfigDescriptor(), named, w_args, crs),
+            F.kernel("pf_conv_compute.cpp", F.compute_config([2, 4, 7, 8], full_sync=True),
+                     named, c_args, crs),
+        ]  # fmt: skip
+        bf, fp = ttnn.bfloat16, ttnn.float32
+        rd = resid.dtype if resid is not None else fp
+        cbs = [F.cb(0, bf, 2, cores=crs), F.cb(1, bf, 2, cores=crs), F.cb(2, fp, 4, cores=crs), F.cb(3, bf, 6, cores=crs),
+               F.cb(4, rd, 2, cores=crs), F.cb(16, out_dtype, 2, cores=crs), F.cb(17, bf, 2, cores=crs)]  # fmt: skip
+        if dyn is not None:  # selection tiles, dyn tile, scale tile, the 4 expanded per-token taps
+            cbs += [F.cb(5, bf, 4, cores=crs), F.cb(6, bf, 2, cores=crs), F.cb(7, fp, 1, cores=crs),
+                    F.cb(8, fp, 4, cores=crs)]  # fmt: skip
+        io = [x, tail.t, *taps, self.shifts] + ([resid] if resid is not None else [])
+        io += [dyn, self.sel, scale] if dyn is not None else []
+        io += [out]
+        F.run(io, kernels, cbs)
+        # advance the tail as _Tail.window does: new tail = rows [t, t + 32) of [old tail ++ x] = last 32 rows of x
+        keep = getattr(tail, "keep", None)
+        if keep is not None:  # last chunk: the conv-history handoff reads the last 160 rows of [old tail ++ chunk]
+            keep[0][keep[1]] = (
+                ttnn.concat([tail.t, x], dim=2) if t + 32 <= 160 else ttnn.slice(x, [0, 0, t - 160, 0], [1, 1, t, c])
+            )
+        tail.t = ttnn.slice(x, [0, 0, t - 32, 0], [1, 1, t, c])
+        return out

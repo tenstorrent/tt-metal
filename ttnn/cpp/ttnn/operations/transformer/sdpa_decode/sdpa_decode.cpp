@@ -51,7 +51,10 @@ ttnn::Tensor scaled_dot_product_attention_decode(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<bool> share_cache) {
+    std::optional<bool> share_cache,
+    const std::optional<tt::tt_metal::ProgramDescriptor>& extra_kernels,
+    const std::optional<const Tensor>& pending_kv,
+    const std::optional<const Tensor>& pending_pos) {
     uint32_t s = input_tensor_k.logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
@@ -91,7 +94,14 @@ ttnn::Tensor scaled_dot_product_attention_decode(
         k_chunk_size,
         share_cache,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        0,
+        0,
+        extra_kernels,
+        pending_kv,
+        pending_pos);
 }
 
 ttnn::Tensor paged_scaled_dot_product_attention_decode(
@@ -207,10 +217,13 @@ ttnn::Tensor flash_multi_latent_attention_decode(
     }
 
     if (input_tensor_v.has_value()) {
+        // unit_v_tile_col: V's last tile column is written by the reader, not stored
+        const uint32_t v_unit_cols =
+            (program_config.has_value() && program_config->unit_v_tile_col) ? tt::constants::TILE_WIDTH : 0;
         TT_FATAL(
-            input_tensor_v.value().padded_shape()[-1] == head_dim_v,
+            input_tensor_v.value().padded_shape()[-1] + v_unit_cols == head_dim_v,
             "Head dimension of the V tensor must be equal to head_dim_v parameter value, got {} and {}",
-            input_tensor_v.value().padded_shape()[-1],
+            input_tensor_v.value().padded_shape()[-1] + v_unit_cols,
             head_dim_v);
     }
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
@@ -271,10 +284,13 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
     }
 
     if (input_tensor_v.has_value()) {
+        // unit_v_tile_col: V's last tile column is written by the reader, not stored
+        const uint32_t v_unit_cols =
+            (program_config.has_value() && program_config->unit_v_tile_col) ? tt::constants::TILE_WIDTH : 0;
         TT_FATAL(
-            input_tensor_v.value().padded_shape()[-1] == head_dim_v,
+            input_tensor_v.value().padded_shape()[-1] + v_unit_cols == head_dim_v,
             "Head dimension of the V tensor must be equal to head_dim_v parameter value, got {} and {}",
-            input_tensor_v.value().padded_shape()[-1],
+            input_tensor_v.value().padded_shape()[-1] + v_unit_cols,
             head_dim_v);
     }
 

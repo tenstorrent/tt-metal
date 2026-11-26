@@ -17,6 +17,10 @@
 
 using namespace tt::tt_metal;
 
+namespace ttnn::operations::generic {
+ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor);
+}
+
 namespace ttnn::prim {
 void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -52,8 +56,18 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
     const auto q_shape = input_tensors.at(0).padded_shape();
     const auto q_shape_unpadded = input_tensors.at(0).logical_shape();
-    const auto k_shape = input_tensors.at(1).padded_shape();
-    const auto v_shape = input_tensors.size() > 2 ? input_tensors.at(2).padded_shape() : k_shape;
+    auto k_shape = input_tensors.at(1).padded_shape();
+    if (operation_attributes.program_config.has_value() && operation_attributes.program_config->unit_k_tile_col) {
+        TT_FATAL(
+            use_mla && !tensor_args.v.has_value() && operation_attributes.program_config->const_k_tile_col.has_value(),
+            "unit_k_tile_col needs flash MLA decode (V read from K) and const_k_tile_col");
+        k_shape[3] += tt::constants::TILE_WIDTH;  // the column the reader writes
+    }
+    auto v_shape = input_tensors.size() > 2 ? input_tensors.at(2).padded_shape() : k_shape;
+    if (operation_attributes.program_config.has_value() && operation_attributes.program_config->unit_v_tile_col) {
+        TT_FATAL(use_mla && tensor_args.v.has_value(), "unit_v_tile_col needs flash MLA decode with a V tensor");
+        v_shape[3] += tt::constants::TILE_WIDTH;  // the column the reader writes
+    }
 
     // When using multi-latent attention, the V tensor is the same as K tensor, but of smaller head dimension.
     // If V tensor is not provided, we assume that V is subset of K in the hidden dimension. Hence we use K shape for V.
@@ -74,8 +88,11 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             "Head dimension of Q must be equal to head dim of K, got {} and {}",
             q_shape[3],
             k_shape[3]);
+        // with unit_v_tile_col V has its own tensor and one column more than it stores: it may be wider than Q
+        const bool v_unit =
+            operation_attributes.program_config.has_value() && operation_attributes.program_config->unit_v_tile_col;
         TT_FATAL(
-            operation_attributes.head_dim_v.value() <= q_shape[3],
+            v_unit || operation_attributes.head_dim_v.value() <= q_shape[3],
             "Head dimension of V must be less than or equal to head dim of Q, got {} and {}",
             operation_attributes.head_dim_v.value(),
             q_shape[3]);
@@ -505,7 +522,12 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
         // Batch must match
         const auto B = q_shape[1];
-        if (operation_attributes.share_cache.value_or(false)) {
+        if (tensor_args.pending_kv.has_value()) {
+            // speculative verify: batch b = token * Bkv + kv group, every token on the same ring
+            TT_FATAL(
+                B % k_shape[0] == 0, "With pending_kv, B ({}) must be a multiple of K's batch ({})", B, k_shape[0]);
+            TT_FATAL(v_shape[0] == k_shape[0], "With pending_kv, K and V batches must match");
+        } else if (operation_attributes.share_cache.value_or(false)) {
             TT_FATAL(k_shape[0] == 1, "Share cache expects K to have batch size of 1, but got {}", k_shape[0]);
             TT_FATAL(v_shape[0] == 1, "Share cache expects V to have batch size of 1, but got {}", v_shape[0]);
         } else {
@@ -585,15 +607,38 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             k_shape[1]);
     }
 
+    // Pending rows (speculative verify): kv groups as batch, non-paged, separate K and V of one dtype
+    TT_FATAL(
+        tensor_args.pending_kv.has_value() == tensor_args.pending_pos.has_value(),
+        "pending_kv and pending_pos go together");
+    if (tensor_args.pending_kv.has_value()) {
+        const auto& pend = tensor_args.pending_kv.value();
+        const auto& k_shape_p = input_tensors.at(1).padded_shape();
+        TT_FATAL(!operation_attributes.paged_attention, "pending_kv needs a non-paged cache");
+        TT_FATAL(!operation_attributes.use_mla.value_or(false), "pending_kv needs separate K and V");
+        TT_FATAL(k_shape_p[1] == 1, "pending_kv needs the kv groups as the batch (K [Bkv, 1, S, DH])");
+        TT_FATAL(
+            pend.padded_shape()[0] == 2 && pend.padded_shape()[1] == k_shape_p[0] && pend.padded_shape()[2] == 32 &&
+                pend.padded_shape()[3] == k_shape_p[3],
+            "pending_kv must be [2, Bkv, 32, DH], got {}",
+            pend.padded_shape());
+        TT_FATAL(pend.dtype() == input_tensors.at(1).dtype(), "pending_kv must have the K / V dtype");
+        TT_FATAL(pend.layout() == Layout::TILE, "pending_kv must be TILE");
+        TT_FATAL(tensor_args.pending_pos->dtype() == DataType::INT32, "pending_pos must be INT32");
+        TT_FATAL(
+            input_tensors.at(0).padded_shape()[1] <= 32 * k_shape_p[0], "at most 32 tokens of pending rows per pass");
+    }
+
     // Check attention sink
     if (tensor_args.attention_sink.has_value()) {
         const auto& attention_sink = tensor_args.attention_sink.value();
 
         const auto& sink_shape = attention_sink.padded_shape();
         TT_FATAL(sink_shape.size() == 2, "Attention sink must have 2 dimensions");
+        // [padded heads, 32] shared by every batch, or [batch * padded heads, 32] with one block per batch
         TT_FATAL(
-            sink_shape[0] == q_shape[2],
-            "Attention sink must have the same padded num heads as Q but got {}",
+            sink_shape[0] == q_shape[2] || sink_shape[0] == q_shape[1] * q_shape[2],
+            "Attention sink must have the same padded num heads as Q (or batch x that) but got {}",
             sink_shape[0]);
         TT_FATAL(
             sink_shape[1] == tt::constants::TILE_WIDTH,
@@ -634,6 +679,8 @@ tt::tt_metal::TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
         } else {
             B = page_table.padded_shape()[0];
         }
+    } else if (tensor_args.pending_kv.has_value()) {
+        B = q_shape[1];  // speculative verify: one batch per (token, kv group) over the kv groups' K / V
     } else {
         B = tensor_args.k.padded_shape()[0];
     }
@@ -666,6 +713,27 @@ tt::tt_metal::TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
         output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
 }
 
+std::vector<tt::tt_metal::DynamicRuntimeArg> SdpaDecodeDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
+    std::vector<tt::tt_metal::DynamicRuntimeArg> args;
+    const auto& extra = operation_attributes.extra_kernels.desc;
+    if (!extra) {
+        return args;
+    }
+    // create_descriptor appends them after the op's own kSdpaDecodeKernels kernels
+    for (uint32_t j = 0; j < extra->kernels.size(); ++j) {
+        for (const auto& [core, values] : extra->kernels[j].runtime_args) {
+            for (uint32_t i = 0; i < values.size(); ++i) {
+                args.push_back({.kernel_idx = kSdpaDecodeKernels + j, .core = core, .arg_idx = i, .value = values[i]});
+            }
+        }
+    }
+    return args;
+}
+
 Tensor SdpaDecodeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
@@ -694,8 +762,19 @@ Tensor sdpa_decode(
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo,
     uint32_t spec_multi_pos_tiles,
-    uint32_t spec_pack_heads) {
+    uint32_t spec_pack_heads,
+    const std::optional<tt::tt_metal::ProgramDescriptor>& extra_kernels,
+    const std::optional<const Tensor>& pending_kv,
+    const std::optional<const Tensor>& pending_pos) {
     using OperationType = SdpaDecodeDeviceOperation;
+    SdpaExtraKernels extra{};
+    if (extra_kernels.has_value() && !extra_kernels->kernels.empty()) {
+        TT_FATAL(
+            extra_kernels->cbs.empty() && extra_kernels->semaphores.empty(),
+            "sdpa_decode extra_kernels: kernels only (no CBs or semaphores)");
+        extra.desc = std::make_shared<const tt::tt_metal::ProgramDescriptor>(*extra_kernels);
+        extra.hash = ttnn::operations::generic::compute_program_descriptor_hash(*extra_kernels);
+    }
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
         .paged_attention = paged_attention,
@@ -714,6 +793,7 @@ Tensor sdpa_decode(
         .cache_position_modulo = cache_position_modulo,
         .spec_multi_pos_tiles = spec_multi_pos_tiles,
         .spec_pack_heads = spec_pack_heads,
+        .extra_kernels = std::move(extra),
     };
 
     auto tensor_args = OperationType::tensor_args_t{
@@ -724,6 +804,8 @@ Tensor sdpa_decode(
         .page_table_tensor = page_table_tensor,
         .attn_mask = attn_mask,
         .attention_sink = attention_sink,
+        .pending_kv = pending_kv,
+        .pending_pos = pending_pos,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

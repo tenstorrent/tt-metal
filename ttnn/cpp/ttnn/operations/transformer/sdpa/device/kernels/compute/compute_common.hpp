@@ -24,12 +24,20 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
+#ifdef SDPA_REL_TILIZE
+#include "api/compute/tilize.h"
+#endif
 #include "api/dataflow/circular_buffer.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
+#endif
+
+#ifdef SDPA_REL_BIAS
+// rel_logits: query row 0's position among the keys, runtime arg 6 (set in kernel_main before any use)
+inline uint32_t sdpa_rel_q_off = 0;
 #endif
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
@@ -415,10 +423,19 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     sub_bcast_cols_init(in0_cb, in1_cb);
 
     // Approximate exp skips negative-input clamping for speed. Inputs below about -88 can
-    // produce negative outputs, which packer ReLU clears. Keep this path for partial faces.
-    // The accurate branch below handles full RC tiles.
-    if constexpr (EXP_APPROX_MODE || vector_mode != VectorMode::RC) {
+    // produce negative outputs, which packer ReLU clears. Keep this path for partial faces
+    // unless SDPA_EXACT_EXP_PARTIAL is set. The accurate branch below handles the rest.
+#ifdef SDPA_EXACT_EXP_PARTIAL
+    constexpr bool approx_exp = EXP_APPROX_MODE;
+#else
+    constexpr bool approx_exp = EXP_APPROX_MODE || vector_mode != VectorMode::RC;
+#endif
+    // scale 1.0 (q pre-scaled): x * 1.0 == x, so the accurate branch skips the multiply and its per-tile re-init
+    constexpr bool unit_scale = scale_fp32 == 0x3F800000;
+    if constexpr (approx_exp) {
         exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+    } else if constexpr (unit_scale) {
+        exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();
     }
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 
@@ -439,22 +456,26 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
+            // In place, each row's tiles are popped, so the row starts at the front; otherwise index the block.
+            const uint32_t in0_row_tile = write_result_inplace ? 0 : i * cols + u * dst_tiles;
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+                sub_tiles_bcast_cols(in0_cb, in1_cb, in0_row_tile + j, i, j);
                 // A 32x32 tile has four 16x16 faces, each requiring eight SFPU iterations.
                 // None visits the full tile in 32 iterations; R/C traverse faces with eight each.
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
-                if constexpr (EXP_APPROX_MODE || vector_mode != VectorMode::RC) {
+                if constexpr (approx_exp) {
                     exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(
                         j, vector_mode_exp);
                 } else {
                     // Apply the full FP32 attention scale once before accurate exponentiation.
                     // The init scale 0x3F800000 is the IEEE-754 encoding of 1.0f.
                     // Negative clamping protects masked/large-negative scores in accurate BF16 exp.
-                    binop_with_scalar_tile_init();
-                    mul_unary_tile(j, scale_fp32);
-                    exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();
+                    if constexpr (!unit_scale) {
+                        binop_with_scalar_tile_init();
+                        mul_unary_tile(j, scale_fp32);
+                        exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();
+                    }
                     exp_tile<false, false, InputClamping::ClampToNegative, iterations>(j, vector_mode_exp);
                 }
             }
@@ -1129,11 +1150,13 @@ ALWI void matmul_blocks(
     const bool& transpose,
     const bool& add_mask = false,
     const uint32_t& mask_cb = 0,
-    const uint32_t& zero_cb = 0) {
+    const uint32_t& zero_cb = 0,
+    const uint32_t& k0 = 0) {
     // precondition: in0_cb has M*K produced
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
+    // k0: inner tiles below k0 are skipped; the caller guarantees in0 is zero there, so the sums are unchanged
 
     CircularBuffer cb_in0(in0_cb);
     CircularBuffer cb_in1(in1_cb);
@@ -1164,10 +1187,10 @@ ALWI void matmul_blocks(
             tile_regs_acquire();
 
             uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
+            uint32_t in0_index = in0_index_offset + k0;
+            uint32_t in1_index = in1_index_offset + k0 * N;
 
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+            for (uint32_t inner_dim = k0; inner_dim < in0_block_w; inner_dim++) {
                 matmul_block(
                     in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
                 in0_index++;
@@ -1907,7 +1930,16 @@ void sdpa_inner_loop(
                 // Apply mask if causal overlap, sliding window, or this K chunk has padding
                 apply_mask = (q_start_tile < k_high_idx) || (sliding_window_size > 0) || needs_padding_mask;
             } else if constexpr (use_provided_mask) {
+#ifdef SDPA_REL_BIAS
+                // rel bias: a K chunk whose keys are all >= W behind every query of the Q chunk gets no bias (the
+                // reader pushes no mask for it). Only global layers have such chunks: a windowed layer's K range
+                // starts at a chunk the first query still sees.
+                const int32_t far_d = static_cast<int32_t>(q_start_tile * 32 + sdpa_rel_q_off) -
+                                      static_cast<int32_t>((k_chunk + 1) * Sk_chunk_t * 32 - 1);
+                apply_mask = far_d < static_cast<int32_t>(SDPA_REL_W);
+#else
                 apply_mask = true;
+#endif
             } else if constexpr (use_padded_mask) {
                 // Apply mask only on the last K chunk
                 apply_mask = (k_chunk == iter_k_chunk_end - 1);
@@ -1917,6 +1949,24 @@ void sdpa_inner_loop(
             }
 
             if (apply_mask) {
+#ifdef SDPA_REL_TILIZE
+                {
+                    // rel bias, skewed layout: the reader pushed one row-major [32, Sk_chunk] block per Q tile row
+                    CircularBuffer cb_rel_rm(SDPA_REL_RM_CB);
+                    CircularBuffer cb_mask(cb_mask_in);
+                    reconfig_data_format_srca(SDPA_REL_RM_CB);
+                    pack_reconfig_data_format(cb_mask_in);
+                    tilize_init(SDPA_REL_RM_CB, Sk_chunk_t, cb_mask_in);
+                    for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
+                        cb_rel_rm.wait_front(Sk_chunk_t);
+                        cb_mask.reserve_back(Sk_chunk_t);
+                        tilize_block(SDPA_REL_RM_CB, Sk_chunk_t, cb_mask_in);
+                        cb_mask.push_back(Sk_chunk_t);
+                        cb_rel_rm.pop_front(Sk_chunk_t);
+                    }
+                    tilize_uninit(SDPA_REL_RM_CB, cb_mask_in);
+                }
+#endif
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 if constexpr (lightweight_mask_enabled) {

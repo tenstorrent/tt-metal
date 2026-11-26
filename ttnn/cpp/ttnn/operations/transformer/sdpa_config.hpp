@@ -33,6 +33,28 @@ struct SDPAProgramConfig {
     // narrowest pack, in tiles, that goes out as one block rather than tile by tile. Unset keeps the architecture
     // default, 8 on Wormhole and 2 on Blackhole.
     std::optional<uint32_t> min_blocked_pack_tiles;
+    // Decode only: Q is zero on its first qk_skip_head_dim columns (a multiple of 32, below the K head dim), so the
+    // QK^T matmul skips those columns; the result is the same as with 0, which multiplies every column.
+    uint32_t qk_skip_head_dim = 0;
+    // Decode with non-paged K, no K multicast, V read from K (flash MLA): this K tile column (32 columns) holds the
+    // same bytes for every key, so the reader loads it from DRAM only while each K buffer slot is first filled.
+    std::optional<uint32_t> const_k_tile_col;
+    // Decode only: with half tiles (16-row Q, <= 16 heads) the softmax exp is the accurate one, as with full tiles,
+    // instead of the approximate one; the rows are then bit-equal to the full-tile path.
+    bool exact_exp_half_tile = false;
+    // Decode, causal, speculative verify: Q rows come in groups of rows_per_token, one group per token at consecutive
+    // positions (cur_pos = the last token's). Row r's causal bound is cur_pos - (tokens - 1 - r / rows_per_token).
+    // Exact when every token's bound lies in the same K chunk as cur_pos (the caller checks); 0 = off.
+    uint32_t rows_per_token = 0;
+    // Decode with pending_kv: batch b is token pending_tok0 + b / (K batch) of the verify pass, so it sees pending rows
+    // 0 .. pending_tok0 + b / (K batch). Lets a pass with more tokens than fit in one call run as several calls.
+    uint32_t pending_tok0 = 0;
+    // With const_k_tile_col: that tile column is not stored. K is 32 columns narrower than Q and the reader writes
+    // the column itself, every row [1, 0 x 31]. The output is the same as with those rows stored in K.
+    bool unit_k_tile_col = false;
+    // Flash MLA decode with its own V tensor (non-paged K and V, which may differ in dtype): V's last tile column is
+    // not stored. V is 32 columns narrower than head_dim_v and the reader writes the column, every row [1, 0 x 31].
+    bool unit_v_tile_col = false;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

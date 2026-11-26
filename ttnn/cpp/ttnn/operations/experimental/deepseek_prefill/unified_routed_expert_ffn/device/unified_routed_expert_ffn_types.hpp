@@ -121,6 +121,45 @@ struct UnifiedRoutedExpertFfnParams {
     // pairs point at) names it here instead of zeroing it with a separate op.
     uint32_t zero_output_row = std::numeric_limits<uint32_t>::max();
 
+    // Stacked expert weights: every gate_projs / up_projs slot holds the same [.., E, K, 2*hidden] tensor (gate in
+    // columns [0, hidden), up in [hidden, 2*hidden)) and every down_projs slot the same [.., E, hidden, emb] tensor;
+    // expert g's blocks start at tile g * K * 2*hidden / 1024 and g * hidden * emb / 1024 (g = global expert id).
+    // Set when gate_projs[0] and up_projs[0] are one buffer. Changes the reader/writer programs (part of the key).
+    bool stacked_experts = false;
+
+    // Precise mode, set by compute_kernel_config.fp32_dest_acc_en: fp32 DEST and K-loop partials, bf16 activations
+    // and intermediates (default: bf16 DEST / partials, bf8_b activations). Part of the key (the config is not).
+    bool precise = false;
+
+    // Matmul fidelity from compute_kernel_config.math_fidelity (default LoFi). Part of the key (the config is not).
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi;
+
+    // Worker columns (<= kCoreGridX; rows stay kCoreGridY). A narrower grid can split N with less padding (e.g.
+    // 36 gate tiles: 4 per column on 9 columns, 44 padded on 11). Part of the key.
+    uint32_t grid_x = kCoreGridX;
+
+    // Row groups (1 or 2): the kCoreGridY rows split into independent grids that run different experts, so an
+    // expert's tail rounds up to kCoreGridY / row_groups tile-rows per core row (adaptive_chunk.hpp). Part of the
+    // key.
+    uint32_t row_groups = 1;
+
+    // Worker rows (8 or 10; default kCoreGridY), split into row_groups groups. Part of the key.
+    uint32_t grid_y = kCoreGridY;
+
+    // PF layout (stacked experts only; set when gate_up_extra / down_extra are given): the gate_up and down
+    // tensors hold the stacked tensors' tiles in another arrangement, read in place (kernels/weight_runs.hpp).
+    // With nb = the DRAM banks the main tensors are ND-sharded over, Kt = a tensor's K in tiles, e = the global
+    // expert id and P = hidden / 32 gate (and up) tile columns, P % nb == 1:
+    //   gate_up main [.., E, K, 2*(P-1)*32], DRAM ND-sharded, one tile column per shard: gate column j < P-1 is
+    //     main column (j / nb) * 2nb + j % nb, up column j < P-1 is main column (j / nb) * 2nb + nb + j % nb;
+    //   gate_up extra [.., pages*32, 32], DRAM interleaved: tile row r of gate column P-1 is page
+    //     nb * ((e / (nb-2)) * 2Kt + r) + 2 + e % (nb-2), of up column P-1 the page nb * Kt after it;
+    //   down main [.., E, K, n*32] with n = emb / 32 rounded down to a multiple of nb, ND-sharded the same way:
+    //     column c < n is main column c;
+    //   down extra [.., pages*32, 32], DRAM interleaved: tile row r of column n + c is page nb * (e * Kt + r) + c.
+    // Changes the reader/writer programs (part of the key).
+    bool pf_layout = false;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -132,7 +171,14 @@ struct UnifiedRoutedExpertFfnParams {
         "l1_end",
         "x_indexed",
         "output_row_major",
-        "zero_output_row");
+        "zero_output_row",
+        "stacked_experts",
+        "precise",
+        "math_fidelity",
+        "grid_x",
+        "row_groups",
+        "grid_y",
+        "pf_layout");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -145,7 +191,14 @@ struct UnifiedRoutedExpertFfnParams {
             l1_end,
             x_indexed,
             output_row_major,
-            zero_output_row);
+            zero_output_row,
+            stacked_experts,
+            precise,
+            math_fidelity,
+            grid_x,
+            row_groups,
+            grid_y,
+            pf_layout);
     }
 };
 
@@ -195,6 +248,9 @@ struct UnifiedRoutedExpertFfnInputs {
     // Optional dispatch row index (x_indexed): UINT32 ROW_MAJOR, one page, one entry per buffer row (the output's
     // row count): the x row each buffer row holds. Rows no pair writes may hold any valid x row; they are never read.
     std::optional<Tensor> x_row_index;
+    // PF layout (op.pf_layout): the tiles the gate_up / down main tensors leave out. Both or neither.
+    std::optional<Tensor> gate_up_extra;
+    std::optional<Tensor> down_extra;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

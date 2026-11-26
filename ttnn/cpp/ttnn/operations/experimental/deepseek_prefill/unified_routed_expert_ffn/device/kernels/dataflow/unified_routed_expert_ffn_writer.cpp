@@ -40,6 +40,11 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "../adaptive_chunk.hpp"
+#if __has_include( \
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/ure_variant_gen.h")
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/ure_variant_gen.h"
+#endif
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/ure_prof.hpp"
 #include "../weight_runs.hpp"
 
 constexpr uint32_t TILE_HEIGHT = 32;
@@ -181,6 +186,11 @@ void kernel_main() {
     // DOWN_SPLIT: down accessor follows up in the compile-arg stream.
     constexpr uint32_t down_accessor_offset = up_args.next_compile_time_args_offset();
     constexpr auto down_args = TensorAccessorArgs<down_accessor_offset>();
+#ifdef PF_LAYOUT
+    // PF layout: the extra tensors' accessors end the accessor stream, their addresses the common args.
+    constexpr auto pf_gu_x_args = TensorAccessorArgs<PF_X_CT>();
+    constexpr auto pf_d_x_args = TensorAccessorArgs<pf_gu_x_args.next_compile_time_args_offset()>();
+#endif
     // Per-expert `up` base addresses follow output/start in the common arguments; COMMON_UP is its first index.
     // up_addr(e) = arg[COMMON_UP + e].
     constexpr uint32_t COMMON_UP = 2;
@@ -258,20 +268,45 @@ void kernel_main() {
     Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(IN1_WM_RT + 8));
     // Gate/up blocks only, for the same cross-chunk reason down_seq exists.
     uint32_t mc_seq = 0;
+    // row group of this core and the expert -> group schedule (as the reader's)
+    const uint32_t my_group = get_arg_val<uint32_t>(IN1_WM_RT + 9);  // after the 9 IN1_WRITER_MCAST args
+    adaptive_chunk::RowGroupSchedule row_groups;
 
     // ======================= per-local-expert loop =======================
     // Drain every local expert's down-matmul output (and, for UP_SPLIT sender
     // cores, feed its `up` weights) into the shared output buffer at the
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
+    URE_T0(15);
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+#ifndef PF_LAYOUT
         const auto up_acc =
             TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
+#endif
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
+#ifdef PF_LAYOUT
+        // PF layout: up is a column set of the gate_up main tensor; see weight_runs.hpp.
+        const auto gu_main_acc =
+            TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
+        const auto gu_extra_acc = TensorAccessor(pf_gu_x_args, get_common_arg_val<uint32_t>(PF_X_RT), up_tile_bytes);
+        [[maybe_unused]] const unified_routed_expert_ffn::PfGateUp up_acc{
+            gu_main_acc, gu_extra_acc, global_expert_id, 1};
+        [[maybe_unused]] constexpr uint32_t gate_page_off = 0, up_page_off = 0, down_page_off = 0, gu_row_stride = 0;
+#elif defined(STACKED_EXPERTS)
+        // Stacked weights: expert g's gate / up are the column halves of its [K, 2*hidden] block of the gate_up
+        // tensor, its down block follows the previous experts' blocks.
+        [[maybe_unused]] const uint32_t gate_page_off = global_expert_id * GU_EXPERT_TILES;
+        [[maybe_unused]] const uint32_t up_page_off = gate_page_off + UP_COL_TILES;
+        [[maybe_unused]] const uint32_t down_page_off = global_expert_id * D_EXPERT_TILES;
+        [[maybe_unused]] constexpr uint32_t gu_row_stride = GU_ROW_TILES;
+#else
+        [[maybe_unused]] constexpr uint32_t gate_page_off = 0, up_page_off = 0, down_page_off = 0, gu_row_stride = 0;
+#endif
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
-        const uint32_t count_value =
-            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
+        const uint32_t count_value = row_groups.take(
+            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens),
+            my_group);
         // Same capacity clamp the reader and compute apply to the device-produced
         // count (see adaptive_chunk::clamp_count_tiles): arithmetic, so it bounds
         // the chunk loop in Release too, where ASSERT is a no-op.
@@ -286,6 +321,7 @@ void kernel_main() {
         const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
 
         for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+            URE_EV_SEL(local_expert_id, chunk);
             // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
             // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
             // Runs before the cb_out drain.
@@ -305,7 +341,9 @@ void kernel_main() {
                     const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                         ++up_seq;
-                        up_go_sem.wait_min(up_seq);
+                        URE_T(0, up_go_sem.wait_min(up_seq));
+                        URE_T0(1);
+                        URE_EV(21, kb);
                         const uint32_t up_slot_offset = ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
                         uint32_t l1_w_up = cb_in1_up_buf.get_write_ptr() + up_slot_offset;
                         // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
@@ -320,11 +358,15 @@ void kernel_main() {
                                 up_col0,
                                 up_col_end,
                                 l1_w_up,
-                                up_tile_bytes);
+                                up_tile_bytes,
+                                gu_row_stride,
+                                up_page_off);
                             l1_w_up += per_core_N_gu * up_tile_bytes;
                         }
                         noc_up.async_read_barrier();
                         up_done_sem.set(up_seq);
+                        URE_T1(1);
+                        URE_EV(22, kb);
 
                         // IN1_WRITER_MCAST: wait for the reader's gate read (mcast_go), then
                         // for the receivers to free their slots (in1_ready), multicast
@@ -334,8 +376,11 @@ void kernel_main() {
                         // read overlaps this multicast -- which is the whole point.
                         if constexpr (writer_mcasts_in1) {
                             ++mc_seq;
-                            mcast_go_sem.wait_min(mc_seq);
-                            in1_ready_sem.wait(in1_num_receivers);
+                            URE_T(2, mcast_go_sem.wait_min(mc_seq));
+                            URE_EV(23, kb);
+                            URE_T(3, in1_ready_sem.wait(in1_num_receivers));
+                            URE_T0(4);
+                            URE_EV(24, kb);
                             in1_ready_sem.set(0);
                             CircularBuffer cb_in1_gate_buf(cb_in1_gate);
                             const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
@@ -378,6 +423,8 @@ void kernel_main() {
                                 in1_mc_ny_end,
                                 in1_num_receivers);
                             mcast_done_sem.set(mc_seq);
+                            URE_T1(4);
+                            URE_EV(25, kb);
                         }
                     }
                 }
@@ -397,8 +444,16 @@ void kernel_main() {
             // corrupts the gate/up path from the second chunk on.
             if constexpr (writer_split_down) {
                 if (is_up_sender) {
+#ifdef PF_LAYOUT
+                    const auto d_main_acc = TensorAccessor(
+                        down_args, get_common_arg_val<uint32_t>(COMMON_DOWN + local_expert_id), down_tile_bytes);
+                    const auto d_extra_acc =
+                        TensorAccessor(pf_d_x_args, get_common_arg_val<uint32_t>(PF_X_RT + 1), down_tile_bytes);
+                    const unified_routed_expert_ffn::PfDown down_acc{d_main_acc, d_extra_acc, global_expert_id};
+#else
                     const auto down_acc = TensorAccessor(
                         down_args, get_common_arg_val<uint32_t>(COMMON_DOWN + local_expert_id), down_tile_bytes);
+#endif
                     // cb_in1_down is double-buffered with one push per down K-block, and this
                     // RISC never pushes, so its write pointer is static: index the live slot
                     // off the block counter, exactly as the UP_SPLIT block does.
@@ -408,7 +463,10 @@ void kernel_main() {
                     const uint32_t down_slot_bytes = d_in1_block_num_tiles * down_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
                         ++down_seq;
-                        down_go_sem.wait_min(down_seq);
+                        URE_T(5, down_go_sem.wait_min(down_seq));
+                        URE_T0(6);
+                        URE_EV(26, kb);
+                        [[maybe_unused]] const uint32_t down_slot_offset = (down_blk % kDownNumSlots) * down_slot_bytes;
                         uint32_t l1_w = down_cb_base + (down_blk % kDownNumSlots) * down_slot_bytes +
                                         down_split_k * per_core_N_d * down_tile_bytes;
                         ++down_blk;
@@ -426,12 +484,51 @@ void kernel_main() {
                                     down_col0,
                                     down_col_end,
                                     l1_w,
-                                    down_tile_bytes);
+                                    down_tile_bytes,
+                                    0,
+                                    down_page_off);
                             }
                             l1_w += per_core_N_d * down_tile_bytes;
                         }
                         noc_up.async_read_barrier();
                         down_done_sem.set(down_seq);
+                        URE_T1(6);
+                        URE_EV(27, kb);
+                        // The down multicast runs here too, on NoC 1, as the gate / up one does: the reader's
+                        // NoC 0 then carries only the M-row activated multicasts in the down phase, so the row
+                        // and the column multicasts no longer hold each other up where they cross. Same
+                        // go / done counter as the gate / up blocks (both kernels count every block, in order).
+                        if constexpr (writer_mcasts_in1) {
+                            ++mc_seq;
+                            URE_T(2, mcast_go_sem.wait_min(mc_seq));  // the reader's rows have landed
+                            URE_T(3, in1_ready_sem.wait(in1_num_receivers));
+                            in1_ready_sem.set(0);
+                            URE_T0(4);
+                            noc_up.async_write_multicast(
+                                CoreLocalMem<uint32_t>(down_cb_base + down_slot_offset),
+                                cb_in1_down_buf,
+                                down_slot_bytes,
+                                in1_num_receivers,
+                                {.offset_bytes = 0},
+                                {.noc_x_start = in1_mc_nx_start,
+                                 .noc_y_start = in1_mc_ny_start,
+                                 .noc_x_end = in1_mc_nx_end,
+                                 .noc_y_end = in1_mc_ny_end,
+                                 .offset_bytes = down_slot_offset},
+                                /*linked=*/true);
+                            noc_up.async_writes_flushed();
+                            in1_valid_sem.set(1);
+                            in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+                                noc_up,
+                                in1_mc_nx_start,
+                                in1_mc_ny_start,
+                                in1_mc_nx_end,
+                                in1_mc_ny_end,
+                                in1_num_receivers);
+                            mcast_done_sem.set(mc_seq);
+                            URE_T1(4);
+                            URE_EV(25, kb);
+                        }
                     }
                 }
             }
@@ -454,7 +551,9 @@ void kernel_main() {
                 // the column guard becomes the segment width: this core's real columns only.
                 const uint32_t seg_bytes = (down_col_end > down_col0 ? down_col_end - down_col0 : 0) * RM_COL_BYTES;
                 for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
-                    cb_out_buf.wait_front(per_core_N_d);
+                    URE_T(7, cb_out_buf.wait_front(per_core_N_d));
+                    URE_T0(8);
+                    URE_EV(28, sb_m);
                     const uint32_t row = row0 + sb_m;
                     const uint32_t dst_row = row_offset_tiles + row;
                     if (sb_m < per_core_M && seg_bytes > 0 && row < M_tiles_full && row < count_tiles) {
@@ -477,6 +576,8 @@ void kernel_main() {
                     }
                     noc.async_writes_flushed();
                     cb_out_buf.pop_front(per_core_N_d);
+                    URE_T1(8);
+                    URE_EV(29, sb_m);
                 }
                 continue;
             }
@@ -550,6 +651,8 @@ void kernel_main() {
     }  // end per-local-expert loop
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).
+    URE_T1(15);
+    URE_EMIT();
     noc.async_write_barrier();
     if constexpr (has_zero_row) {
         if (zeroes_row) {

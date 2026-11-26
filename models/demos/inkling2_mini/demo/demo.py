@@ -1,0 +1,299 @@
+# SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
+# SPDX-License-Identifier: Apache-2.0
+"""Inkling-2-Mini on one p100a: DRAM report, trace checks, greedy generation, decode speed.
+
+    python -m models.demos.inkling2_mini.demo.demo --prompt "Write a haiku about a lake." [--gen 64] [--fast]
+    python -m models.demos.inkling2_mini.demo.demo --golden DIR --max-ctx 131072 \
+        [--skip-app-trace] [--gen 64] [--perf-pos 2048 32768] [--json out.json]
+
+Weights come from ``$INKLING_CACHE`` (default: the run mode's cache, see modes.py; ``--fast`` or
+``INKLING_MODE=fast`` picks the faster, less exact own3-l8 experts). ``--prompt`` is wrapped in the model's chat template (tokenizer from
+``--tokenizer``, default ``$INKLING_CKPT``) and replaces the golden prompts; without it the golden prompts
+(``--golden``, default ``$INKLING_GOLDEN``) are generated and prompt 0 is compared with the golden greedy tokens.
+
+The same runs as tests (they skip when the caches, the golden prompts or the checkpoint are not there):
+
+    pytest models/demos/inkling2_mini/demo/demo.py [-k "golden or prompt or fast or spec"]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+import torch
+
+import ttnn
+from models.demos.inkling2_mini import modes
+from models.demos.inkling2_mini.tt.device import open_device
+from models.demos.inkling2_mini.tt.generator import Generator
+from models.demos.inkling2_mini.tt.model import Inkling2Model
+
+GiB = 2**30
+
+
+def dram_free(dev):
+    v = ttnn.get_memory_view(dev, ttnn.BufferType.DRAM)
+    return v.num_banks * v.total_bytes_free_per_bank / GiB, v.num_banks * v.largest_contiguous_bytes_free_per_bank / GiB
+
+
+def trace_one_app(model, L=11, p=1, pos=5):
+    """Capture one layer application, replay twice from the same state: bit-equal?"""
+    dev = model.device
+    h = ttnn.from_torch(torch.randn(1, 1, 1, 2304), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
+    stack = model.rows.seal(None, h, 0)  # depth-2 attn-res for L11
+    model.reset()
+    model.positions.update(pos)
+    model.positions.prepare()
+    eager, _, _ = model._app(L, p, h, stack, 1, None)
+    eager = ttnn.to_torch(eager)
+    model.reset()
+    tid = ttnn.begin_trace_capture(dev, cq_id=0)
+    model.positions.prepare()
+    out, _, _ = model._app(L, p, h, stack, 1, None)
+    ttnn.end_trace_capture(dev, tid, cq_id=0)
+    runs = []
+    for _ in range(2):
+        model.reset()
+        ttnn.execute_trace(dev, tid, cq_id=0, blocking=True)
+        runs.append(ttnn.to_torch(out))
+    ttnn.release_trace(dev, tid)
+    return {
+        "app_trace_bit_equal": bool(torch.equal(runs[0], runs[1])),
+        "app_trace_eq_eager": bool(torch.equal(runs[0], eager)),
+    }
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--max-ctx",
+        type=int,
+        default=196608,
+        help="context limit. The far KV cache takes 17,408 B per token of it: 196608 leaves 2.84 GiB of DRAM free "
+        "(decode only); 368640 is the largest that fits (0.05 GiB free). Decode cost follows the position, not this.",
+    )
+    ap.add_argument("--trace-mib", type=int, default=512)
+    ap.add_argument("--gen", type=int, default=64)
+    ap.add_argument("--prompts", type=int, nargs="*", default=[0, 1])
+    ap.add_argument("--perf-pos", type=int, nargs="*", default=[2048, 32768])
+    ap.add_argument("--perf-steps", type=int, default=20)
+    ap.add_argument("--skip-app-trace", action="store_true")
+    ap.add_argument("--json", type=str, default=None)
+    ap.add_argument("--prompt", type=str, help="user message to answer (replaces the golden prompts)")
+    ap.add_argument("--golden", type=Path, default=os.environ.get("INKLING_GOLDEN"), help="golden dir")
+    ap.add_argument("--tokenizer", default=os.environ.get("INKLING_CKPT"), help="HF tokenizer dir (checkpoint dir)")
+    ap.add_argument(
+        "--fast",
+        action="store_true",
+        help="fast mode (also INKLING_MODE=fast): own3-l8 experts, ~1.5 ms/token faster decode, KL .0096 vs .0067",
+    )
+    ap.add_argument(
+        "--spec",
+        action="store_true",
+        default=os.environ.get("INKLING_SPEC") == "1",
+        help="speculative decode (also INKLING_SPEC=1): a drafter proposes 2 tokens, one verify pass checks them; "
+        "the same tokens as plain greedy (checked here), more tokens per second. Needs the drafter weights "
+        "(convert.mtp) and a --max-ctx that leaves DRAM for it (default mode: up to ~150K)",
+    )
+    args = ap.parse_args(argv)
+    if args.prompt is None and args.golden is None:
+        ap.error("give --prompt, or --golden / INKLING_GOLDEN for the golden prompts")
+    if args.prompt is not None and args.tokenizer is None:
+        ap.error("--prompt needs --tokenizer or INKLING_CKPT")
+    if args.spec:  # the draft, verify and commit traces
+        args.trace_mib = max(args.trace_mib, 1024)
+    res = {"max_ctx": args.max_ctx, "trace_mib": args.trace_mib}
+    t0 = time.time()
+    from models.demos.inkling2_mini.demo.startup import Startup  # progress lines on stderr
+
+    log = lambda s: print(f"[inkling-demo] {s}", file=sys.stderr, flush=True)  # noqa: E731
+    st = Startup(log, key=f"demo|{args.max_ctx}|{args.spec}|{args.fast}")
+    st.phase("open device")
+    dev = open_device(trace_region_size=args.trace_mib << 20)
+    try:
+        st.phase("weights")
+        res["dram_free_open_gib"] = dram_free(dev)[0]
+        res["cache"] = str(modes.roots(args.fast)[0])
+        if args.spec:
+            from models.demos.inkling2_mini.tt import spec_generator as SG
+            from models.demos.inkling2_mini.tt.verify import VerifyStep
+
+            model, drafter = SG.build(dev, args.max_ctx, log=lambda s: None, k=2, root=res["cache"])
+            drafter.head = drafter.make_head(ttnn.bfloat4_b)
+            drafter.top_probs = True
+            res["spec_rows"] = SG.verify_rows(dev, args.max_ctx)
+        else:
+            model = Inkling2Model(dev, root=res["cache"], max_ctx=args.max_ctx, log=lambda s: None)
+        res["load_s"] = round(time.time() - t0, 1)
+        res["dram_free_after_load_gib"], res["dram_largest_after_load_gib"] = dram_free(dev)
+        print(json.dumps(res), flush=True)
+
+        if not args.skip_app_trace and not args.spec:  # (the tapped model's apps run inside a step only)
+            st.phase("one-app trace check")
+            res.update(trace_one_app(model))
+            print(json.dumps(res), flush=True)
+
+        st.phase("traces")  # warm-up steps (compiles every program), then the captures
+        if args.spec:
+            gen = SG.SpecGenerator(model, drafter, verify=[VerifyStep(model, r) for r in res["spec_rows"]])
+            t1 = time.time()
+            gen.capture_rows(1536)
+        else:
+            gen = Generator(model)
+            t1 = time.time()
+            gen.capture()
+        res["capture_s"] = round(time.time() - t1, 1)
+        st.done("model ready")
+        tv = ttnn.get_memory_view(dev, ttnn.BufferType.TRACE)
+        res["trace_used_mib"] = tv.num_banks * tv.total_bytes_allocated_per_bank / 2**20
+        res["dram_free_after_trace_gib"] = dram_free(dev)[0]
+        # full-step trace: replay twice from the same state -> bit-equal; and vs eager
+        outs = []
+        for _ in range(2):
+            model.reset()
+            o = gen.decode(200005, 3, traced=True)
+            outs.append(ttnn.to_torch(o["logits"]).clone())
+        model.reset()
+        e = ttnn.to_torch(gen.decode(200005, 3, traced=False)["logits"])
+        res["step_trace_bit_equal"] = bool(torch.equal(outs[0], outs[1]))
+        res["step_trace_eq_eager"] = bool(torch.equal(outs[0], e))
+        res["step_trace_vs_eager_maxdiff"] = float((outs[0] - e).abs().max())
+        print(json.dumps(res), flush=True)
+
+        tok = None
+        if args.tokenizer is not None:
+            try:
+                from transformers import AutoTokenizer
+
+                tok = AutoTokenizer.from_pretrained(args.tokenizer)
+            except Exception as ex:  # noqa: BLE001
+                if args.prompt is not None:
+                    raise
+                res["tokenizer_error"] = str(ex)
+        if args.prompt is not None:
+            ids = tok.apply_chat_template([{"role": "user", "content": args.prompt}], tokenize=True)
+            prompts = [("prompt", ids["input_ids"] if hasattr(ids, "keys") else list(ids))]
+            gold = None
+        else:
+            gold = json.loads((args.golden / "greedy.json").read_text())
+            prompts = [(k, torch.load(args.golden / f"prompt{k}" / "input_ids.pt")[0].tolist()) for k in args.prompts]
+        res["gen"] = []
+        for k, ids in prompts:
+            t1 = time.time()
+            new, times = gen.generate(ids, args.gen, traced=True)
+            g = {"prompt": k, "ids": new, "seconds": round(time.time() - t1, 1)}
+            if times:
+                g["decode_tok_s"] = len(times) / sum(times)
+            if gold is not None and k == 0:
+                ref = gold["new_ids"]
+                n = min(len(ref), len(new))
+                g["match_golden_first16"] = sum(int(a == b) for a, b in zip(new[:n], ref[:n]))
+                g["first_mismatch"] = next((i for i in range(n) if new[i] != ref[i]), None)
+            if args.spec:  # the same prompt through draft + verify passes: same tokens, fewer steps
+                t1 = time.time()
+                spec, st = gen.generate_rows(ids, args.gen, early_stop=0.45)
+                n = max(1, len(spec) - 1)
+                g["spec_equals_plain"] = spec == new
+                g["spec_tok_s"] = n / (st["draft_s"] + st["verify_s"])
+                g["spec_tokens_per_pass"] = round(n / max(1, st["passes"]), 3)
+                g["spec_seconds"] = round(time.time() - t1, 1)
+            if tok is not None:
+                g["text"] = tok.decode(new, skip_special_tokens=False)
+            if args.prompt is not None:
+                print(g["text"], flush=True)
+            res["gen"].append(g)
+            print(json.dumps(g, ensure_ascii=False), flush=True)
+
+        # decode speed at a given position (v1 cost depends on max_ctx, not on content)
+        res["perf"] = []
+        for pos in args.perf_pos:
+            if pos >= args.max_ctx:
+                continue
+            gen.decode(1, pos)
+            ttnn.synchronize_device(dev)
+            t1 = time.perf_counter()
+            for i in range(args.perf_steps):
+                gen.decode(1, pos + i)
+            ttnn.synchronize_device(dev)
+            dt = (time.perf_counter() - t1) / args.perf_steps
+            t1 = time.perf_counter()
+            for i in range(args.perf_steps):
+                o = gen.decode(1, pos + i)
+                gen.read_token(o)
+            dt_sync = (time.perf_counter() - t1) / args.perf_steps
+            res["perf"].append(
+                {
+                    "pos": pos,
+                    "ms": dt * 1e3,
+                    "tok_s": 1 / dt,
+                    "ms_with_token_read": dt_sync * 1e3,
+                    "tok_s_with_read": 1 / dt_sync,
+                }
+            )
+            print(json.dumps(res["perf"][-1]), flush=True)
+        gen.release()
+    finally:
+        ttnn.close_device(dev)
+    if args.json:
+        Path(args.json).write_text(json.dumps(res, indent=1, ensure_ascii=False))
+    return res
+
+
+def _run(*argv, need_ckpt=False):
+    """The demo with argv, for the tests below; skips when its inputs are not on this machine."""
+    import pytest
+
+    fast, golden = "--fast" in argv, os.environ.get("INKLING_GOLDEN")
+    cache = modes.roots(fast)[0]
+    if not (cache / "manifest.json").is_file():
+        pytest.skip(f"weight cache {cache} missing (set INKLING_CACHE_DIR or INKLING_CACHE)")
+    if "--prompt" not in argv and not (golden and (Path(golden) / "greedy.json").is_file()):
+        pytest.skip("golden prompts missing (set INKLING_GOLDEN)")
+    if need_ckpt and not os.environ.get("INKLING_CKPT"):
+        pytest.skip("checkpoint missing (set INKLING_CKPT)")
+    res = main(list(argv))
+    assert res["step_trace_bit_equal"], res
+    return res
+
+
+SHORT = ("--max-ctx", "4096", "--skip-app-trace", "--perf-pos", "2048")
+
+
+def test_demo_golden():
+    """Default arguments: prompt 0 gives the golden greedy tokens, the traced step replays bit-equal."""
+    res = _run()
+    assert res["app_trace_bit_equal"] and res["step_trace_eq_eager"], res
+    assert res["gen"][0]["first_mismatch"] is None, res["gen"][0]
+
+
+def test_demo_prompt():
+    """--prompt: a user message through the chat template, answered."""
+    res = _run("--prompt", "Write a haiku about a mountain lake at dawn.", "--gen", "32", *SHORT, need_ckpt=True)
+    assert len(res["gen"][0]["ids"]) == 32 and res["gen"][0]["text"], res["gen"]
+
+
+def test_demo_fast():
+    """--fast: the faster, less exact experts; the golden prompts run and the step replays bit-equal."""
+    res = _run("--fast", *SHORT)
+    assert all(len(g["ids"]) == 64 for g in res["gen"]), res["gen"]
+
+
+def test_demo_spec():
+    """--spec: speculative decode gives the plain greedy tokens (needs the drafter weights, convert.mtp)."""
+    import pytest
+
+    from models.demos.inkling2_mini.tt.mtp import mtp_root
+
+    if not (mtp_root() / "manifest.json").is_file():
+        pytest.skip(f"drafter weights {mtp_root()} missing (python -m models.demos.inkling2_mini.convert.mtp)")
+    res = _run("--spec", *SHORT, need_ckpt=True)
+    assert all(g["spec_equals_plain"] for g in res["gen"]), res["gen"]
+
+
+if __name__ == "__main__":
+    main()

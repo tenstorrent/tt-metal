@@ -1,0 +1,171 @@
+# SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
+# SPDX-License-Identifier: Apache-2.0
+"""Decode logits tail: unembed chunks -> softcap -> logits row + on-device argmax.
+
+Replaces, per decode step: one ShardedToInterleaved per unembed chunk, then concat, slice, multiply, tanh,
+multiply, vocab-mask add, untilize and argmax, each over the 32-row padded [1, 1, 32, 200064] fp32 tile tensor
+(~1.1 ms of the step). Two kinds of programs instead:
+  1. after each chunk's matmul, a pack program on the cores holding its L1 width-sharded output copies row 0
+     of their tiles into a raw fp32 row in DRAM (data movement only);
+  2. after the last chunk, one program on ~100 cores: each takes two 1024-value pages of the raw row, applies
+     tanh(x * (1/cap)) * cap with the same SFPU calls as the ttnn op chain, writes its part of the logits row,
+     and sends its (max, index) to a master core, which writes the token.
+
+FUSED (bank unembed, the default): no tail programs. The unembed applies the softcap to its finished fp32 Dest tiles
+(the tail's SFPU ops on the same values) and writes the logits; its writers scan each row's argmax while the stream
+runs and worker 0 merges them (the tail's tie rule). Logits are then a [1, 1, 1, vocab_pad] fp32 TILE tensor (row 0
+of each tile: its pages spread over the DRAM banks); same values.
+
+Outputs (module buffers, allocated on the first call, which must be eager):
+  logits [1, 1, 1, vocab_pad] fp32 ROW_MAJOR DRAM (FUSED: TILE): softcap(x), bit-equal to the ttnn op chain; columns
+    >= vocab_real are not masked (readers cut at vocab_real), they are left out of the argmax.
+  token  [1, 1, 1, 1] uint32 ROW_MAJOR DRAM: argmax over the vocab_real columns, ttnn.argmax tie rule.
+"""
+
+import math
+
+import torch
+
+import ttnn
+from models.demos.inkling2_mini.tt.fused import common as F
+from models.demos.inkling2_mini.tt.fused.bank_linear import BankLinear
+
+PAGES_PER_CORE = 2
+# bank unembed: softcap in its Dest and the argmax on its writers (bank_linear head mode), no tail program
+FUSED = True
+
+
+class FusedLogitsTail:
+    def __init__(self, device, unembed, vocab_pad, vocab_real, softcap):
+        """unembed: tt/dram_sharded.DramShardedLinear with fp32 output (its chunks and program are reused), or
+        tt/fused/bank_linear.BankLinear (same output, one program that writes the raw row itself)."""
+        assert unembed.out_dtype == ttnn.float32, unembed.out_dtype
+        self.device = device
+        self.mm = unembed
+        self.vocab_pad, self.vocab_real = vocab_pad, vocab_real
+        self.bank = isinstance(unembed, BankLinear)
+        width = (unembed.n_chunks if self.bank else len(unembed.chunks)) * unembed.chunk  # raw row: whole chunks
+        assert width >= vocab_pad
+        self.n_pages = math.ceil(width / F.PAGE)
+        self.raw_width = self.n_pages * F.PAGE
+        cap = torch.tensor(softcap, dtype=torch.float32)
+        # bank unembed with the tail inside it (FUSED): the scalars' fp32 bits, as the tail's scalar pages hold them
+        bits = lambda t: int(t.view(torch.int32))  # noqa: E731
+        self.head_args = dict(
+            inv=bits(torch.tensor(1.0 / softcap, dtype=torch.float32)), cap=bits(cap), n_arg=vocab_real
+        )
+        self.scal = F.dense_tensor(device, torch.stack([torch.full((F.PAGE,), 1.0 / softcap), cap.expand(F.PAGE)]))
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        rm = ttnn.ROW_MAJOR_LAYOUT
+
+        def row(n, dtype=ttnn.float32, tdtype=torch.float32):
+            z = torch.zeros(1, 1, 1, n, dtype=tdtype)
+            return ttnn.from_torch(z, dtype=dtype, layout=rm, device=device, memory_config=dram)
+
+        def tile_row(n):  # the fused head's logits: TILE, so its pages spread over the DRAM banks
+            z = torch.zeros(1, 1, 1, n)
+            return ttnn.from_torch(z, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+
+        self._row, self._tile_row = row, tile_row
+        self.raw = row(self.raw_width)
+        self.logits = row(vocab_pad)
+        self.logits_t = tile_row(vocab_pad) if self.bank else None
+        self.token = row(1, ttnn.uint32, torch.int32)
+        self.rows_bufs = [(self.raw, self.logits, self.token)]  # per verify row (rows()); row 0 = the 1-row buffers
+        self.rows_tiles = []  # FUSED: per verify row TILE logits (row 0: logits_t)
+        n_cores = math.ceil(self.n_pages / PAGES_PER_CORE)
+        self.cores, self.grid = F.core_list(device, n_cores)
+        self.master = device.worker_core_from_logical_core(self.cores[0])
+
+    def __call__(self, x):
+        """x [1,1,1,K] bf16 (final-norm output) -> (logits, token) module buffers."""
+        mm = self.mm
+        if self.bank and FUSED:
+            mm(x, self.logits_t, head=dict(self.head_args, tokens=[self.token]))
+            return self.logits_t, self.token
+        if self.bank:
+            mm(x, self.raw)
+            self._cap()
+            return self.logits, self.token
+        xs = ttnn.to_memory_config(x, mm.act_mem)
+        for i, w in enumerate(mm.chunks):
+            y = ttnn.linear(
+                xs,
+                w,
+                program_config=mm.program,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                dtype=ttnn.float32,
+                compute_kernel_config=mm.cc,
+            )
+            self._pack(y, i)
+            ttnn.deallocate(y)
+        ttnn.deallocate(xs)
+        self._cap()
+        return self.logits, self.token
+
+    def rows(self, x):
+        """R verify rows: x [1,1,R,K] bf16 -> [(logits, token)] per row, each bit-equal to the 1-row call on row r
+        (rows ride in the unembed's tiles, raw row r per row; then the 1-row tail program per row). Bank only."""
+        assert self.bank
+        n = x.shape[-2]
+        while len(self.rows_bufs) < n:  # first use must be eager
+            self.rows_bufs.append(
+                (self._row(self.raw_width), self._row(self.vocab_pad), self._row(1, ttnn.uint32, torch.int32))
+            )
+        bufs = self.rows_bufs[:n]
+        if FUSED:
+            while len(self.rows_tiles) < n:
+                self.rows_tiles.append(self.logits_t if not self.rows_tiles else self._tile_row(self.vocab_pad))
+            lgs = self.rows_tiles[:n]
+            self.mm(x, lgs, head=dict(self.head_args, tokens=[b[2] for b in bufs]))
+            return [(lg, b[2]) for lg, b in zip(lgs, bufs)]
+        self.mm(x, [b[0] for b in bufs])
+        self._cap(*zip(*bufs))  # one tail program for all rows
+        return [(lg, tk) for _, lg, tk in bufs]
+
+    def _pack(self, y, i):
+        spec = y.memory_config().shard_spec
+        cores = ttnn.corerange_to_cores(spec.grid, row_wise=True)
+        h, w = spec.shape
+        assert y.dtype == ttnn.float32 and h == 32 and w % 32 == 0, (y.dtype, spec.shape)
+        assert spec.orientation == ttnn.ShardOrientation.ROW_MAJOR and len(cores) * w == self.mm.chunk
+        rt = {
+            c: [y.buffer_address(), self.raw.buffer_address(), i * self.mm.chunk + k * w] for k, c in enumerate(cores)
+        }
+        named = dict(ntiles=w // 32, row_page=self.raw_width * 4)
+        kernels = [F.kernel("head_pack.cpp", ttnn.ReaderConfigDescriptor(), named, rt, spec.grid)]
+        cbs = [F.cb(0, ttnn.float32, 1, w * 4, cores=spec.grid)]
+        ttnn.generic_op([y, self.raw], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
+
+    def _cap(self, raws=None, logitss=None, tokens=None):
+        """Softcap + argmax of raw rows (default: the 1-row buffers); R verify rows: lists, one program."""
+        if raws is None:
+            raws, logitss, tokens = [self.raw], [self.logits], [self.token]
+        T, n, R = PAGES_PER_CORE, len(self.cores), len(raws)
+        r_args, w_args = {}, {}
+        for k, c in enumerate(self.cores):
+            col0 = k * T * F.PAGE
+            n_write = max(0, min(T * F.PAGE, self.vocab_pad - col0))
+            n_arg = max(0, min(T * F.PAGE, self.vocab_real - col0))
+            r_args[c] = [raws[0].buffer_address(), k * T, self.scal.buffer_address()]
+            r_args[c] += [t.buffer_address() for t in raws[1:]]
+            w_args[c] = [logitss[0].buffer_address(), col0, n_write, n_arg, k, self.master.x, self.master.y, n,
+                         tokens[0].buffer_address()]  # fmt: skip
+            w_args[c] += [
+                a for lg, tk in zip(logitss[1:], tokens[1:]) for a in (lg.buffer_address(), tk.buffer_address())
+            ]
+        named = dict(pages=T, row_page=self.raw_width * 4, logits_page=self.vocab_pad * 4, sem=0, rows=R)
+        kernels = [
+            F.kernel("head_reader.cpp", ttnn.ReaderConfigDescriptor(), named, r_args, self.grid),
+            F.kernel("head_writer.cpp", ttnn.WriterConfigDescriptor(), named, w_args, self.grid),
+            F.kernel("head_compute.cpp", F.compute_config([0, 1]), dict(pages=T * R), None, self.grid),
+        ]
+        cbs = [
+            F.cb(0, ttnn.float32, T * R, cores=self.grid),
+            F.cb(1, ttnn.float32, 2, cores=self.grid),
+            F.cb(16, ttnn.float32, T * R, cores=self.grid),
+            F.cb(17, ttnn.float32, 1, 16 * R * (n + 1), cores=self.grid),
+        ]
+        sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=self.grid, initial_value=0)]
+        io = [*raws, self.scal, *tokens[1:], *logitss[1:], tokens[0], logitss[0]]
+        ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=sems))

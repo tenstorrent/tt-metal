@@ -419,11 +419,9 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             batch_length_B,
             b_shape_padded[-3],
             b_shape_padded);
-        TT_FATAL(
-            indices.logical_volume() <= batch_length_B,
-            "indices length / num_active ({}) must be <= the number of sparse groups in input B ({})",
-            indices.logical_volume(),
-            batch_length_B);
+        // num_active may exceed the group count: ids can repeat (several row slots of one group; sorted ids let
+        // the in1 reader keep a group's weights across consecutive slots).
+        TT_FATAL(indices.logical_volume() > 0, "indices must not be empty");
         indexed_num_active = static_cast<uint32_t>(indices.logical_volume());
     }
     // Per-group fused bias validation. `bias` (optional_input_tensors[1]) is a TILE tensor whose tile
@@ -680,11 +678,13 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     const auto& input_tensors = tensor_args.input_tensors;
     // A compact output is fully written by the in1 writer (one block per non-zero sparsity entry),
     // so it skips the zero-fill below; expanded outputs rely on it to zero the skipped blocks.
-    const bool compact_output = !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
-                                operation_attributes.nnz.has_value() &&
-                                optional_output_tensors[0]->logical_shape() ==
-                                    compute_sparse_matmul_compact_output_shape(
-                                        input_tensors.at(0), input_tensors.at(1), operation_attributes.nnz.value());
+    // The indexed mode's output is compact too (one block per id, every block written).
+    const bool compact_output = operation_attributes.use_indices ||
+                                (!optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
+                                 operation_attributes.nnz.has_value() &&
+                                 optional_output_tensors[0]->logical_shape() ==
+                                     compute_sparse_matmul_compact_output_shape(
+                                         input_tensors.at(0), input_tensors.at(1), operation_attributes.nnz.value()));
 
     if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
         output_tensors.reserve(optional_output_tensors.size());
@@ -707,7 +707,9 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     for (const auto& output_spec : output_specs) {
         output_tensors.emplace_back(create_device_tensor(output_spec, device));
     }
-    // Compact output requires a caller-supplied tensor, so this path is never compact.
+    if (compact_output) {  // indexed mode
+        return output_tensors;
+    }
     for (auto& output_tensor : output_tensors) {
         output_tensor = zero_fill_on_matmul_cores(output_tensor, input_tensors.at(1), operation_attributes);
     }

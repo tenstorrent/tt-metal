@@ -301,6 +301,27 @@ void generate_mask(uint32_t /*k_num_chunks*/, uint32_t Sk_chunk_t, uint32_t cur_
         }
     }
 
+#ifdef SDPA_DECODE_ROW_GROUP
+    // speculative verify: rows of token t (t * G .. t * G + G - 1) end at cur_pos - (T - 1 - t), so keys after that
+    // bound are masked for them too. The caller keeps every bound in this (last) chunk.
+    {
+        constexpr uint32_t G = SDPA_DECODE_ROW_GROUP, T = SDPA_DECODE_ROW_TOKENS;
+        noc.async_read_barrier();
+        const uint32_t chunk_start = cur_pos - cur_pos_in_chunk;
+        for (uint32_t t = 0; t + 1 < T; ++t) {
+            const uint32_t bound = cur_pos - (T - 1 - t);
+            for (uint32_t key = bound + 1; key <= cur_pos; ++key) {
+                const uint32_t c = key - chunk_start, ti = c >> 5, cc = c & 31;
+                for (uint32_t r = t * G; r < (t + 1) * G; ++r) {
+                    const uint32_t face = (r >> 4) * 2 + (cc >> 4);
+                    volatile tt_l1_ptr uint16_t* e = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                        q_write_ptr_base + ti * tile_bytes + (face * 256 + (r & 15) * 16 + (cc & 15)) * 2);
+                    *e = 0xFF80;  // -inf
+                }
+            }
+        }
+    }
+#endif
     cb_mask.push_back(total_read_tiles);
 }
 
@@ -860,6 +881,407 @@ void read_v(
     cb_v.push_back(v_chunk_tiles);
 }
 
+#if defined(SDPA_DECODE_K_UNIT_COL) || defined(SDPA_DECODE_V_UNIT_COL)
+// a tile with rows [1, 0 x 31] as the host packer writes it: bf16 (2048 bytes), bfp8 (1088) or bfp4 (576)
+FORCE_INLINE void fill_unit_col_tile(uint32_t addr, uint32_t tile_bytes) {
+    volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+    for (uint32_t i = 0; i < tile_bytes / 4; ++i) {
+        w[i] = 0;
+    }
+    for (uint32_t face = 0; face < 4; face += 2) {  // the faces with tile column 0
+        if (tile_bytes == 2048) {
+            for (uint32_t r = 0; r < 16; ++r) {
+                w[face * 128 + r * 8] = 0x3f80;
+            }
+        } else {
+            const uint32_t row_words = (tile_bytes - 64) / 256;  // mantissa words per face row
+            for (uint32_t i = 0; i < 4; ++i) {
+                w[face * 4 + i] = 0x7f7f7f7f;  // exponent 127 for the 16 rows of the face
+            }
+            for (uint32_t r = 0; r < 16; ++r) {
+                w[16 + (face * 16 + r) * row_words] = row_words == 4 ? 0x40 : 0x4;
+            }
+        }
+    }
+}
+#endif
+
+#ifdef SDPA_DECODE_TWO_NOC
+#ifndef SDPA_DECODE_K_GROUP
+#define SDPA_DECODE_K_GROUP 2  // K tiles per transaction-id group
+#endif
+#ifndef SDPA_DECODE_K_WINDOW
+#define SDPA_DECODE_K_WINDOW 4  // groups in flight per NOC (<= 14)
+#endif
+// K stream for non-paged K, no mask, V read from K's L1 buffer (flash MLA decode). K tiles alternate between the two
+// NOCs by row. Each NOC keeps a rolling window of up to SDPA_DECODE_K_WINDOW groups of SDPA_DECODE_K_GROUP reads in
+// flight, each group tagged with its own transaction id (1..WINDOW), so the stream does not drain at every barrier
+// inside a chunk. K tile column `const_col` (if < DHt) holds the same bytes for every key, so it is read only while
+// each K buffer slot is filled for the first time. Same tiles in the same L1 slots as read_kv_mask_chunks: the output
+// is unchanged.
+// SDPA_DECODE_K_UNIT_COL: the tensor does not hold column `const_col` (it is DHt - 1 tile columns wide); the reader
+// writes its tiles, every row [1, 0 x 31], where it would have read them. The L1 chunks are the same.
+template <uint32_t DHt, uint32_t vDHt, uint32_t cb_k_in, uint32_t cb_v_in, uint32_t const_col, typename KReaderType>
+void read_k_chunks_two_noc(
+    uint32_t k_chunk_start,
+    uint32_t k_chunk_end,
+    uint32_t k_start_tile_id,
+    uint32_t Sk_chunk_t,
+    uint32_t k_chunk_tiles,
+    uint32_t v_chunk_tiles,
+    const KReaderType& k_reader,
+    uint32_t k_tile_bytes,
+    uint32_t v_tile_bytes) {
+    constexpr uint32_t GROUP = SDPA_DECODE_K_GROUP;
+    constexpr uint32_t WIN = SDPA_DECODE_K_WINDOW;
+    static_assert(WIN >= 1 && WIN <= 14, "trids 1..14 for K, 15 for the V copy");
+    constexpr uint32_t V_TRID = 15;
+    Noc noc0;
+    const uint8_t noc_id = noc0.get_noc_id();
+    Noc noc1(1 - noc_id);
+    const Noc* nocs[2] = {&noc0, &noc1};
+    const uint32_t my_noc_x = my_x[noc_id];
+    const uint32_t my_noc_y = my_y[noc_id];
+    CircularBuffer cb_k(cb_k_in);
+    CircularBuffer cb_v(cb_v_in);
+    // chunks until every K slot has been written once (no skipping unless the buffer holds whole chunks)
+    const uint32_t k_pages = get_local_cb_interface(cb_k_in).fifo_num_pages;
+    const uint32_t full_chunks = (k_pages % k_chunk_tiles == 0) ? k_pages / k_chunk_tiles : 0xFFFFFFFF;
+
+    uint32_t grp[2] = {0, 0};  // groups started per NOC
+    uint32_t cnt[2] = {0, 0};  // reads in the open group per NOC
+    auto trid_of = [](uint32_t g) { return 1 + g % WIN; };
+    // Chunk i + 1's first reads are issued before chunk i is finished (its last groups waited, K pushed, V copied),
+    // so the K stream does not drain at every chunk boundary. Needs room for two chunks in the K buffer; the reads,
+    // the L1 slots and the pushes are the same as without the overlap, only their timing changes.
+    const uint32_t chunk_bytes = k_chunk_tiles * k_tile_bytes;
+    const uint32_t fifo_limit = get_local_cb_interface(cb_k_in).fifo_limit;
+    const uint32_t fifo_size = get_local_cb_interface(cb_k_in).fifo_size;
+    const bool overlap = full_chunks != 0xFFFFFFFF && full_chunks >= 2;
+    // tiles of the next chunk issued before the previous one is finished: enough to have reused every trid
+    const uint32_t lead = !overlap ? 0 : (k_chunk_tiles < 2 * GROUP * WIN ? k_chunk_tiles : 2 * GROUP * WIN);
+    bool pending = false;
+    uint32_t p_base = 0, p_first[2] = {0, 0}, p_last[2] = {0, 0};
+    auto finish = [&]() {
+        // wait for the pending chunk's groups whose trid was not reused since (older ones were waited at reuse)
+        for (uint32_t n = 0; n < 2; ++n) {
+            const uint32_t started = grp[n] + (cnt[n] ? 1 : 0);
+            const uint32_t unwaited = started > WIN ? started - WIN : 0;
+            for (uint32_t g = p_first[n] > unwaited ? p_first[n] : unwaited; g < p_last[n]; ++g) {
+                nocs[n]->async_read_barrier<NocOptions::TXN_ID>({.trid = trid_of(g)});
+            }
+        }
+        cb_k.push_back(k_chunk_tiles);
+        // V chunk (transpose of K) from K's L1 buffer
+        cb_v.reserve_back(v_chunk_tiles);
+        uint32_t v_write_ptr = cb_v.get_write_ptr();
+        UnicastEndpoint v_src;
+        for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+            uint32_t k_read_ptr = p_base + row * k_tile_bytes;
+            for (uint32_t col = 0; col < vDHt; ++col) {
+                noc0.async_read<NocOptions::TXN_ID>(
+                    v_src,
+                    CoreLocalMem<uint32_t>(v_write_ptr),
+                    v_tile_bytes,
+                    {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = k_read_ptr},
+                    {},
+                    {.trid = V_TRID});
+                v_write_ptr += v_tile_bytes;
+                k_read_ptr += Sk_chunk_t * k_tile_bytes;
+            }
+        }
+        noc0.async_read_barrier<NocOptions::TXN_ID>({.trid = V_TRID});
+        cb_v.push_back(v_chunk_tiles);
+        pending = false;
+    };
+    for (uint32_t k_chunk = k_chunk_start, i = 0; k_chunk < k_chunk_end; ++k_chunk, ++i) {
+        uint32_t k_base;
+        if (pending) {  // the pending chunk holds the slot at the write pointer; this one takes the next slot
+            cb_k.reserve_back(2 * k_chunk_tiles);
+            k_base = p_base + chunk_bytes;
+            if (k_base >= fifo_limit) {
+                k_base -= fifo_size;
+            }
+        } else {
+            cb_k.reserve_back(k_chunk_tiles);
+            k_base = cb_k.get_write_ptr();
+        }
+        const uint32_t first[2] = {grp[0], grp[1]};
+        const bool skip_const = i >= full_chunks;
+        uint32_t l1 = k_base, issued = 0;
+#ifdef SDPA_DECODE_K_UNIT_COL
+        constexpr uint32_t mem_cols = DHt - 1;  // tile columns of the tensor
+#else
+        constexpr uint32_t mem_cols = DHt;
+#endif
+        for (uint32_t col = 0; col < DHt; ++col) {
+            if (col == const_col && skip_const) {
+                l1 += Sk_chunk_t * k_tile_bytes;
+                continue;
+            }
+#ifdef SDPA_DECODE_K_UNIT_COL
+            if (col == const_col) {
+                for (uint32_t row = 0; row < Sk_chunk_t; ++row, l1 += k_tile_bytes) {
+                    fill_unit_col_tile(l1, k_tile_bytes);
+                }
+                continue;
+            }
+            uint32_t page = k_start_tile_id + (col > const_col ? col - 1 : col);
+#else
+            uint32_t page = k_start_tile_id + col;
+#endif
+            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+                const uint32_t n = row & 1;
+                if (cnt[n] == 0 && grp[n] >= WIN) {  // reuse of a trid: wait for group grp - WIN
+                    nocs[n]->async_read_barrier<NocOptions::TXN_ID>({.trid = trid_of(grp[n])});
+                }
+                nocs[n]->async_read<NocOptions::TXN_ID>(
+                    k_reader,
+                    CoreLocalMem<uint32_t>(l1),
+                    k_tile_bytes,
+                    {.page_id = page},
+                    {},
+                    {.trid = trid_of(grp[n])});
+                if (++cnt[n] == GROUP) {
+                    cnt[n] = 0;
+                    ++grp[n];
+                }
+                page += mem_cols;
+                l1 += k_tile_bytes;
+                if (pending && ++issued == lead) {
+                    finish();
+                }
+            }
+        }
+        // close open groups
+        for (uint32_t n = 0; n < 2; ++n) {
+            if (cnt[n]) {
+                cnt[n] = 0;
+                ++grp[n];
+            }
+        }
+        if (pending) {
+            finish();
+        }
+        k_start_tile_id += Sk_chunk_t * mem_cols;
+        p_base = k_base;
+        p_first[0] = first[0], p_first[1] = first[1];
+        p_last[0] = grp[0], p_last[1] = grp[1];
+        pending = true;
+        if (!overlap) {
+            finish();
+        }
+    }
+    if (pending) {
+        finish();
+    }
+    // sticky packet tags back to the default transaction id
+    noc_async_read_set_trid(0, noc_id);
+    noc_async_read_set_trid(0, 1 - noc_id);
+}
+#endif
+
+#if defined(SDPA_DECODE_TWO_NOC) && defined(SDPA_DECODE_V_UNIT_COL)
+// K and V streams for non-paged K and V tensors, no mask (flash MLA decode with its own V tensor), V's last tile
+// column not stored (unit_v_tile_col): the reader writes its tiles, every row [1, 0 x 31], while each V buffer slot
+// is filled for the first time. Like read_k_chunks_two_noc: tiles alternate between the two NOCs by row, each NOC
+// keeps a rolling window of transaction-id groups in flight, and chunk i + 1's first reads are issued before chunk
+// i is finished. V tiles go from DRAM straight into the V buffer (row-major), so there is no copy out of K.
+template <uint32_t DHt, uint32_t vDHt, uint32_t cb_k_in, uint32_t cb_v_in, typename KReaderType, typename VReaderType>
+void read_kv_chunks_two_noc(
+    uint32_t k_chunk_start,
+    uint32_t k_chunk_end,
+    uint32_t k_start_tile_id,
+    uint32_t v_start_tile_id,
+    uint32_t Sk_chunk_t,
+    uint32_t k_chunk_tiles,
+    uint32_t v_chunk_tiles,
+    const KReaderType& k_reader,
+    const VReaderType& v_reader,
+    uint32_t k_tile_bytes,
+    uint32_t v_tile_bytes) {
+    constexpr uint32_t GROUP = SDPA_DECODE_K_GROUP;
+    constexpr uint32_t WIN = SDPA_DECODE_K_WINDOW;
+    constexpr uint32_t v_mem_cols = vDHt - 1;  // tile columns of the V tensor
+    Noc noc0;
+    const uint8_t noc_id = noc0.get_noc_id();
+    Noc noc1(1 - noc_id);
+    const Noc* nocs[2] = {&noc0, &noc1};
+    CircularBuffer cb_k(cb_k_in);
+    CircularBuffer cb_v(cb_v_in);
+    // whole chunks each buffer holds (0: not a whole number, then no overlap and the unit tiles are always written)
+    const uint32_t k_pages = get_local_cb_interface(cb_k_in).fifo_num_pages;
+    const uint32_t v_pages = get_local_cb_interface(cb_v_in).fifo_num_pages;
+    const uint32_t k_full = (k_pages % k_chunk_tiles == 0) ? k_pages / k_chunk_tiles : 0;
+    const uint32_t v_full = (v_pages % v_chunk_tiles == 0) ? v_pages / v_chunk_tiles : 0;
+    const bool overlap = k_full >= 2 && v_full >= 2;
+    const uint32_t k_chunk_bytes = k_chunk_tiles * k_tile_bytes;
+    const uint32_t v_chunk_bytes = v_chunk_tiles * v_tile_bytes;
+    const uint32_t chunk_reads = k_chunk_tiles + Sk_chunk_t * v_mem_cols;
+    // reads of the next chunk issued before the previous one is finished: enough to have reused every trid
+    const uint32_t lead = !overlap ? 0 : (chunk_reads < 2 * GROUP * WIN ? chunk_reads : 2 * GROUP * WIN);
+
+    uint32_t grp[2] = {0, 0};  // groups started per NOC
+    uint32_t cnt[2] = {0, 0};  // reads in the open group per NOC
+    auto trid_of = [](uint32_t g) { return 1 + g % WIN; };
+    bool pending = false;
+    uint32_t p_kbase = 0, p_vbase = 0, p_first[2] = {0, 0}, p_last[2] = {0, 0}, issued = 0;
+    auto finish = [&]() {
+        // wait for the pending chunk's groups whose trid was not reused since (older ones were waited at reuse)
+        for (uint32_t n = 0; n < 2; ++n) {
+            const uint32_t started = grp[n] + (cnt[n] ? 1 : 0);
+            const uint32_t unwaited = started > WIN ? started - WIN : 0;
+            for (uint32_t g = p_first[n] > unwaited ? p_first[n] : unwaited; g < p_last[n]; ++g) {
+                nocs[n]->async_read_barrier<NocOptions::TXN_ID>({.trid = trid_of(g)});
+            }
+        }
+        cb_k.push_back(k_chunk_tiles);
+        cb_v.push_back(v_chunk_tiles);
+        pending = false;
+    };
+    auto read = [&](const auto& reader, uint32_t n, uint32_t l1, uint32_t bytes, uint32_t page) {
+        if (cnt[n] == 0 && grp[n] >= WIN) {  // reuse of a trid: wait for group grp - WIN
+            nocs[n]->async_read_barrier<NocOptions::TXN_ID>({.trid = trid_of(grp[n])});
+        }
+        nocs[n]->async_read<NocOptions::TXN_ID>(
+            reader, CoreLocalMem<uint32_t>(l1), bytes, {.page_id = page}, {}, {.trid = trid_of(grp[n])});
+        if (++cnt[n] == GROUP) {
+            cnt[n] = 0;
+            ++grp[n];
+        }
+        if (pending && ++issued == lead) {
+            finish();
+        }
+    };
+    for (uint32_t k_chunk = k_chunk_start, i = 0; k_chunk < k_chunk_end; ++k_chunk, ++i) {
+        uint32_t k_base, v_base;
+        if (pending) {  // the pending chunk holds the slots at the write pointers; this one takes the next slots
+            cb_k.reserve_back(2 * k_chunk_tiles);
+            cb_v.reserve_back(2 * v_chunk_tiles);
+            k_base = p_kbase + k_chunk_bytes;
+            if (k_base >= get_local_cb_interface(cb_k_in).fifo_limit) {
+                k_base -= get_local_cb_interface(cb_k_in).fifo_size;
+            }
+            v_base = p_vbase + v_chunk_bytes;
+            if (v_base >= get_local_cb_interface(cb_v_in).fifo_limit) {
+                v_base -= get_local_cb_interface(cb_v_in).fifo_size;
+            }
+        } else {
+            cb_k.reserve_back(k_chunk_tiles);
+            cb_v.reserve_back(v_chunk_tiles);
+            k_base = cb_k.get_write_ptr();
+            v_base = cb_v.get_write_ptr();
+        }
+        const uint32_t first[2] = {grp[0], grp[1]};
+        issued = 0;
+        if (v_full == 0 || i < v_full) {  // the unit tiles of this V slot
+            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+                fill_unit_col_tile(v_base + (row * vDHt + v_mem_cols) * v_tile_bytes, v_tile_bytes);
+            }
+        }
+        uint32_t l1 = k_base;
+        for (uint32_t col = 0; col < DHt; ++col) {  // K: column-major in L1
+            uint32_t page = k_start_tile_id + col;
+            for (uint32_t row = 0; row < Sk_chunk_t; ++row, page += DHt, l1 += k_tile_bytes) {
+                read(k_reader, row & 1, l1, k_tile_bytes, page);
+            }
+        }
+        for (uint32_t row = 0, page = v_start_tile_id; row < Sk_chunk_t; ++row) {  // V: row-major in L1
+            l1 = v_base + row * vDHt * v_tile_bytes;
+            for (uint32_t col = 0; col < v_mem_cols; ++col, ++page, l1 += v_tile_bytes) {
+                read(v_reader, row & 1, l1, v_tile_bytes, page);
+            }
+        }
+        // close open groups
+        for (uint32_t n = 0; n < 2; ++n) {
+            if (cnt[n]) {
+                cnt[n] = 0;
+                ++grp[n];
+            }
+        }
+        if (pending) {
+            finish();
+        }
+        k_start_tile_id += k_chunk_tiles;
+        v_start_tile_id += Sk_chunk_t * v_mem_cols;
+        p_kbase = k_base;
+        p_vbase = v_base;
+        p_first[0] = first[0], p_first[1] = first[1];
+        p_last[0] = grp[0], p_last[1] = grp[1];
+        pending = true;
+        if (!overlap) {
+            finish();
+        }
+    }
+    if (pending) {
+        finish();
+    }
+    // sticky packet tags back to the default transaction id
+    noc_async_read_set_trid(0, noc_id);
+    noc_async_read_set_trid(0, 1 - noc_id);
+}
+#endif
+
+#ifdef SDPA_DECODE_PENDING
+// Speculative verify: rows of the pass's tokens that are not in the ring yet (sdpa_decode pending_kv). The reader
+// keeps this batch's pending K / V tiles in L1 (row t = token t, tile c = head-dim tile c) and copies rows 0 .. ntok -
+// 1 into the ring tiles it reads, at slot (pos0 + t) % S, so each token sees the ring plain decode would see at its
+// step.
+struct PendingRows {
+    uint32_t k_tiles;  // L1: pending K tiles (DHt), then V tiles (vDHt)
+    uint32_t v_tiles;
+    uint32_t ntok;
+    uint32_t pos0;
+    uint32_t S;
+};
+PendingRows g_pend;
+
+// row sr of the tile at src -> row dr of the tile at dst (bf16, or bfp8: exponent byte + 16 mantissa bytes per face
+// row)
+FORCE_INLINE void pend_copy_row(uint32_t src, uint32_t sr, uint32_t dst, uint32_t dr, uint32_t tile_bytes) {
+    for (uint32_t h = 0; h < 2; ++h) {
+        const uint32_t fs = (sr >> 4) * 2 + h, rs = sr & 15, fd = (dr >> 4) * 2 + h, rd = dr & 15;
+        if (tile_bytes == 2048) {
+            volatile tt_l1_ptr uint32_t* s =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + (fs * 256 + rs * 16) * 2);
+            volatile tt_l1_ptr uint32_t* d =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + (fd * 256 + rd * 16) * 2);
+            for (uint32_t w = 0; w < 8; ++w) {
+                d[w] = s[w];
+            }
+        } else {
+            reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dst)[fd * 16 + rd] =
+                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src)[fs * 16 + rs];
+            volatile tt_l1_ptr uint32_t* s =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + 64 + fs * 256 + rs * 16);
+            volatile tt_l1_ptr uint32_t* d =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + 64 + fd * 256 + rd * 16);
+            for (uint32_t w = 0; w < 4; ++w) {
+                d[w] = s[w];
+            }
+        }
+    }
+}
+
+// patch the K (col-major tile order: col * Sk_chunk_t + row) or V (row-major: row * cols + col) chunk at base
+FORCE_INLINE void pend_patch_chunk(
+    uint32_t base, uint32_t k_chunk, uint32_t Sk_chunk_t, uint32_t cols, uint32_t tile_bytes, bool is_k) {
+    const uint32_t s0 = k_chunk * Sk_chunk_t * 32, s1 = s0 + Sk_chunk_t * 32;
+    for (uint32_t t = 0; t < g_pend.ntok; ++t) {
+        const uint32_t slot = (g_pend.pos0 + t) % g_pend.S;
+        if (slot < s0 || slot >= s1) {
+            continue;
+        }
+        const uint32_t trow = (slot - s0) >> 5, r = slot & 31;
+        for (uint32_t c = 0; c < cols; ++c) {
+            const uint32_t dst = base + (is_k ? c * Sk_chunk_t + trow : trow * cols + c) * tile_bytes;
+            const uint32_t src = (is_k ? g_pend.k_tiles : g_pend.v_tiles) + c * tile_bytes;
+            pend_copy_row(src, t, dst, r, tile_bytes);
+        }
+    }
+}
+#endif
+
 template <
     uint32_t DHt,
     uint32_t vDHt,
@@ -890,6 +1312,42 @@ void read_kv_mask_chunks(
     uint32_t k_tile_bytes,
     uint32_t v_tile_bytes,
     uint32_t PSt) {
+#ifdef SDPA_DECODE_TWO_NOC
+    if constexpr (reuse_k && !use_attention_mask) {
+#ifdef SDPA_DECODE_K_CONST_COL
+        constexpr uint32_t const_col = SDPA_DECODE_K_CONST_COL;
+#else
+        constexpr uint32_t const_col = 0xFFFFFFFF;  // none
+#endif
+        read_k_chunks_two_noc<DHt, vDHt, cb_k_in, cb_v_in, const_col>(
+            k_chunk_start,
+            k_chunk_end,
+            k_start_tile_id,
+            Sk_chunk_t,
+            k_chunk_tiles,
+            v_chunk_tiles,
+            k_reader,
+            k_tile_bytes,
+            v_tile_bytes);
+        return;
+    }
+#endif
+#if defined(SDPA_DECODE_TWO_NOC) && defined(SDPA_DECODE_V_UNIT_COL)
+    static_assert(!reuse_k && !use_attention_mask, "unit_v_tile_col: V tensor, no mask");
+    read_kv_chunks_two_noc<DHt, vDHt, cb_k_in, cb_v_in>(
+        k_chunk_start,
+        k_chunk_end,
+        k_start_tile_id,
+        v_start_tile_id,
+        Sk_chunk_t,
+        k_chunk_tiles,
+        v_chunk_tiles,
+        k_reader,
+        v_reader,
+        k_tile_bytes,
+        v_tile_bytes);
+    return;
+#endif
     Noc noc;
     CircularBuffer cb_k(cb_k_in);
     CircularBuffer cb_v(cb_v_in);
@@ -898,25 +1356,52 @@ void read_kv_mask_chunks(
     const uint32_t my_noc_y = my_y[noc_id];
 
     uint32_t barrier_count = 0;
+    // SDPA_DECODE_TWO_NOC (non-paged, no K multicast; the reader runs in dynamic NOC mode): K tiles alternate between
+    // the two NOCs (even K rows on this kernel's NOC, odd rows on the other), each NOC with up to barrier_threshold
+    // reads in flight, so the far-KV stream is not limited by one NOC's DRAM read bandwidth.
+#ifdef SDPA_DECODE_TWO_NOC
+    Noc noc_alt(1 - noc_id);
+    constexpr uint32_t row_noc_mask = 1;
+#else
+    Noc& noc_alt = noc;
+    constexpr uint32_t row_noc_mask = 0;
+#endif
     for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
         // Read K chunk transposed
         cb_k.reserve_back(k_chunk_tiles);
         uint32_t k_write_ptr = cb_k.get_write_ptr();
         uint32_t k_base_read_ptr = k_write_ptr;
         barrier_count = 0;
+        uint32_t barrier_count_alt = 0;
         for (uint32_t col = 0; col < DHt; ++col) {
             uint32_t k_tile_id = k_start_tile_id + col;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                noc.async_read(k_reader, CoreLocalMem<uint32_t>(k_write_ptr), k_tile_bytes, {.page_id = k_tile_id}, {});
-                if (++barrier_count == barrier_threshold) {
-                    noc.async_read_barrier();
-                    barrier_count = 0;
+                if (row & row_noc_mask) {
+                    noc_alt.async_read(
+                        k_reader, CoreLocalMem<uint32_t>(k_write_ptr), k_tile_bytes, {.page_id = k_tile_id}, {});
+                    if (++barrier_count_alt == barrier_threshold) {
+                        noc_alt.async_read_barrier();
+                        barrier_count_alt = 0;
+                    }
+                } else {
+                    noc.async_read(
+                        k_reader, CoreLocalMem<uint32_t>(k_write_ptr), k_tile_bytes, {.page_id = k_tile_id}, {});
+                    if (++barrier_count == barrier_threshold) {
+                        noc.async_read_barrier();
+                        barrier_count = 0;
+                    }
                 }
                 k_tile_id += DHt;
                 k_write_ptr += k_tile_bytes;
             }
         }
         noc.async_read_barrier();
+        if constexpr (row_noc_mask != 0) {
+            noc_alt.async_read_barrier();
+        }
+#ifdef SDPA_DECODE_PENDING
+        pend_patch_chunk(k_base_read_ptr, k_chunk, Sk_chunk_t, DHt, k_tile_bytes, true);
+#endif
         cb_k.push_back(k_chunk_tiles);
 
         if constexpr (use_attention_mask) {
@@ -966,6 +1451,11 @@ void read_kv_mask_chunks(
             }
         }
         noc.async_read_barrier();
+#ifdef SDPA_DECODE_PENDING
+        if constexpr (!reuse_k) {
+            pend_patch_chunk(cb_v.get_write_ptr(), k_chunk, Sk_chunk_t, vDHt, v_tile_bytes, false);
+        }
+#endif
         cb_v.push_back(v_chunk_tiles);
 
         // Update the starting tile id for next iteration

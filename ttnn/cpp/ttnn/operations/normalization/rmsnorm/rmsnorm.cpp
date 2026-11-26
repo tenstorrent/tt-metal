@@ -27,7 +27,13 @@ Tensor rms_norm(
     const std::optional<const Tensor>& residual_input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<DataType>& dtype_arg,
+    const std::optional<Tensor>& output_tensor,
+    uint32_t output_col_tiles,
+    const std::vector<Tensor>& extra_output_tensors) {
+    const std::optional<DataType> dtype =
+        output_tensor.has_value() ? std::optional<DataType>(output_tensor.value().dtype()) : dtype_arg;
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
 
@@ -67,6 +73,15 @@ Tensor rms_norm(
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = compute_kernel_config.value_or(rmsnorm_default_compute_config(arch));
+    // fp32 math to a bf16 result: round in DEST to nearest even, as ttnn.typecast does (the packer's own fp32 ->
+    // bf16 conversion rounds some values otherwise), so the result equals typecast(rms_norm(x)).
+    std::optional<operations::unary::UnaryWithParam> round_bf16;
+    const bool fp32_dest = std::get<2>(get_compute_kernel_config_args(arch, kernel_config_val));
+    if (dtype == DataType::BFLOAT16 && input_tensor.dtype() == DataType::FLOAT32 && fp32_dest) {
+        round_bf16 = operations::unary::UnaryWithParam(
+            operations::unary::UnaryOpType::TYPECAST,
+            {static_cast<float>(DataType::FLOAT32), static_cast<float>(DataType::BFLOAT16)});
+    }
     return ttnn::prim::layer_norm(
         input_tensor,
         epsilon,
@@ -79,8 +94,15 @@ Tensor rms_norm(
             input_tensor.tensor_spec().tile().get_height(),
             input_tensor.tensor_spec().tile().get_width())),
         kernel_config_val,
-        std::nullopt,  // dtype
-        prim::LayerNormType::RMSNORM);
+        dtype,
+        prim::LayerNormType::RMSNORM,
+        prim::DistributedLayerNormStage::NOT_DISTRIBUTED,
+        std::nullopt,  // stats
+        std::nullopt,  // recip_tensor
+        round_bf16,
+        output_tensor,
+        output_col_tiles,
+        extra_output_tensors);
 }
 
 }  // namespace ttnn

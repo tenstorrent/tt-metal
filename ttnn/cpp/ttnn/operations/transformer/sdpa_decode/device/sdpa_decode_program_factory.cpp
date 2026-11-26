@@ -90,11 +90,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     const bool use_attention_mask = attn_mask.has_value();
     const bool use_attention_sink = attention_sink.has_value();
+    const bool use_pending = tensor_args.pending_kv.has_value();  // speculative verify rows (non-paged only)
     // ========== Tensor Shapes ==========
     auto q_shape = input_tensor_q.padded_shape();
     q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);
     const auto& q_shape_unpadded = input_tensor_q.logical_shape();
-    const auto& k_shape = input_tensor_k.padded_shape();
+    const bool unit_k_col = program_config.has_value() && program_config->unit_k_tile_col;
+    auto k_shape = input_tensor_k.padded_shape();
+    if (unit_k_col) {
+        k_shape[3] += TILE_WIDTH;  // the K tile column the reader writes (not in the tensor)
+    }
     const auto& v_shape = input_tensor_v.padded_shape();
 
     // ========== Core Dimensions ==========
@@ -677,6 +682,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             is_cur_pos_tensor_sharded ? cur_pos_buffer : nullptr);
         add_cb(CBIndex::c_15, cur_pos_stick_size, cur_pos_df, cur_pos_stick_size);
     }
+    if (use_pending) {
+        // c_9 (the page table CB, unused without paging): this kv group's pending K / V tiles + the position stick
+        const uint32_t pend_bytes = (DHt + vDHt) * k_tile_size + 64;
+        add_cb(CBIndex::c_9, pend_bytes, k_df, pend_bytes);
+    }
     if (is_paged_attention) {
         uint32_t page_table_cb_size = is_page_table_sharded ? B * page_table_stick_size : page_table_stick_size;
         add_cb(
@@ -847,6 +857,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     } else {
         tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(reader_compile_time_args_common);
     }
+    if (use_pending) {
+        tt_metal::TensorAccessorArgs(*tensor_args.pending_kv->buffer()).append_to(reader_compile_time_args_common);
+        tt_metal::TensorAccessorArgs(*tensor_args.pending_pos->buffer()).append_to(reader_compile_time_args_common);
+    }
 
     std::vector<uint32_t> writer_compile_time_args_common = {
         PNHt,
@@ -929,6 +943,20 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
 
+    const uint32_t qk_skip_head_dim = program_config.has_value() ? program_config->qk_skip_head_dim : 0;
+    TT_FATAL(
+        qk_skip_head_dim % TILE_WIDTH == 0 && qk_skip_head_dim < DH,
+        "qk_skip_head_dim ({}) must be a multiple of {} below the K head dim ({})",
+        qk_skip_head_dim,
+        TILE_WIDTH,
+        DH);
+    if (qk_skip_head_dim > 0) {
+        compute_defines["SDPA_DECODE_QK_SKIP_TILES"] = std::to_string(qk_skip_head_dim / TILE_WIDTH);
+    }
+    if (use_half_tile && program_config.has_value() && program_config->exact_exp_half_tile) {
+        compute_defines["SDPA_EXACT_EXP_PARTIAL"] = "1";
+    }
+
     KernelDescriptor::Defines compute_defines_vec;
     compute_defines_vec.reserve(compute_defines.size());
     for (auto& [k, v] : compute_defines) {
@@ -943,14 +971,72 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = std::move(reader_compile_time_args_common);
-    reader_desc.config = ReaderConfigDescriptor{};
+    // Non-paged K without multicast between cores: the reader streams K over both NOCs (read_kv_mask_chunks), which
+    // needs dynamic NOC mode on both data movement kernels. The paged and K-multicast paths keep dedicated NOCs.
+    const bool two_noc_k = !is_paged_attention && !(use_col_major_group_indexing && q_heads_parallel_factor > 1);
+    const auto dm_noc_mode =
+        two_noc_k ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
+    if (two_noc_k) {
+        reader_desc.defines.emplace_back("SDPA_DECODE_TWO_NOC", "1");
+    }
+    if (use_pending) {
+        TT_FATAL(q_heads_parallel_factor == 1 && num_kv_heads == 1, "pending_kv needs the kv groups as the batch");
+        reader_desc.defines.emplace_back("SDPA_DECODE_PENDING", "1");
+        if (program_config.has_value() && program_config->pending_tok0 > 0) {
+            reader_desc.defines.emplace_back("SDPA_DECODE_PEND_TOK0", std::to_string(program_config->pending_tok0));
+        }
+    }
+    TT_FATAL(
+        use_pending || !program_config.has_value() || program_config->pending_tok0 == 0,
+        "pending_tok0 needs pending_kv");
+    // one sink block of PNHt tiles per batch (validate allows [B * padded heads, 32])
+    if (use_attention_sink && q_shape[1] > 1 && attention_sink->padded_shape()[0] == q_shape[1] * q_shape[2]) {
+        TT_FATAL(q_heads_parallel_factor == 1, "A per-batch attention sink needs q_heads_parallel_factor == 1");
+        reader_desc.defines.emplace_back("SDPA_DECODE_SINK_PER_BATCH", "1");
+    }
+    if (program_config.has_value() && program_config->const_k_tile_col.has_value()) {
+        const uint32_t col = program_config->const_k_tile_col.value();
+        TT_FATAL(col < DHt, "const_k_tile_col ({}) must be below the K head dim in tiles ({})", col, DHt);
+        // only the two-NOC flash MLA reader (read_k_chunks_pipelined) uses it
+        if (two_noc_k && reuse_k) {
+            reader_desc.defines.emplace_back("SDPA_DECODE_K_CONST_COL", std::to_string(col));
+        }
+        if (unit_k_col) {
+            TT_FATAL(two_noc_k && reuse_k && !use_attention_mask, "unit_k_tile_col needs the two-NOC flash MLA reader");
+            reader_desc.defines.emplace_back("SDPA_DECODE_K_UNIT_COL", "1");
+        }
+    }
+    if (program_config.has_value() && program_config->unit_v_tile_col) {
+        TT_FATAL(
+            two_noc_k && !reuse_k && !use_pending && !use_attention_mask && use_mla,
+            "unit_v_tile_col needs non-paged flash MLA decode with a V tensor, no K multicast, mask or pending_kv");
+        reader_desc.defines.emplace_back("SDPA_DECODE_V_UNIT_COL", "1");
+    }
+    reader_desc.config = DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = tt::tt_metal::NOC::NOC_0,  // ReaderConfigDescriptor's NOC (the paged K multicast relies on it)
+        .noc_mode = dm_noc_mode};
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kernel_path + "dataflow/writer_decode_all.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
-    writer_desc.config = WriterConfigDescriptor{};
+    if (program_config.has_value() && program_config->rows_per_token > 0) {
+        const uint32_t g = program_config->rows_per_token;
+        TT_FATAL(is_causal, "rows_per_token needs a causal call");
+        TT_FATAL(
+            num_q_heads % g == 0 && num_q_heads <= 16,
+            "rows_per_token ({}) must divide the q rows ({}), at most 16",
+            g,
+            num_q_heads);
+        writer_desc.defines.emplace_back("SDPA_DECODE_ROW_GROUP", std::to_string(g));
+        writer_desc.defines.emplace_back("SDPA_DECODE_ROW_TOKENS", std::to_string(num_q_heads / g));
+    }
+    writer_desc.config = DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = tt::tt_metal::NOC::NOC_1,  // WriterConfigDescriptor's NOC
+        .noc_mode = dm_noc_mode};
 
     if (spec_packed) {
         // Defines (not compile-time args) so the unpacked kernels build exactly as before.
@@ -1069,6 +1155,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_rt_args.push_back(page_table_buffer);
         reader_rt_args.push_back(attn_mask_buffer);
         reader_rt_args.push_back(attention_sink_buffer);
+        if (use_pending) {
+            reader_rt_args.push_back(tensor_args.pending_kv->buffer());
+            reader_rt_args.push_back(tensor_args.pending_pos->buffer());
+        }
         reader_rt_args.push_back(page_table_stick_size);
         reader_rt_args.push_back(static_cast<uint32_t>(do_output));
         reader_rt_args.push_back(cur_head);
@@ -1162,7 +1252,18 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));
+    TT_FATAL(desc.kernels.size() == kSdpaDecodeKernels, "sdpa_decode: kernel count changed (extra kernel indices)");
 
+    if (const auto& extra = operation_attributes.extra_kernels.desc) {
+        CoreRangeSet used;
+        for (const auto& k : desc.kernels) {
+            used = used.merge(k.core_ranges);
+        }
+        for (const auto& k : extra->kernels) {
+            TT_FATAL(!used.intersects(k.core_ranges), "sdpa_decode extra_kernels: cores overlap the op's cores");
+            desc.kernels.push_back(k);
+        }
+    }
     return desc;
 }
 

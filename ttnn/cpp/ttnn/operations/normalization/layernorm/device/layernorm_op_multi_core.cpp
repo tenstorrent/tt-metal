@@ -122,6 +122,9 @@ const m2::TensorParamName RESIDUAL{"residual"};
 const m2::TensorParamName GAMMA_T{"weight"};
 const m2::TensorParamName BETA_T{"bias"};
 const m2::TensorParamName OUTPUT{"output"};
+// Extra destinations of the tile writer (LayerNormInputs::extra_output_tensors).
+const m2::TensorParamName OUTPUT_X1{"output_x1"};
+const m2::TensorParamName OUTPUT_X2{"output_x2"};
 // Backing store for the RECIPROCALS buffer. No kernel binds an accessor to it: the Welford
 // compute kernels reach the LUT through the borrowed buffer's base pointer, so the tensor exists
 // in the spec purely to resolve that buffer's address at each enqueue.
@@ -834,6 +837,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     ////////////////////////////////////////////////////////////////////////////
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = INPUT, .spec = a.tensor_spec()});
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
+    const auto& extra_outputs = tensor_args.extra_output_tensors;
+    for (std::size_t i = 0; i < extra_outputs.size(); ++i) {
+        spec.tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = i == 0 ? OUTPUT_X1 : OUTPUT_X2, .spec = extra_outputs[i].tensor_spec()});
+    }
     if (b) {
         spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = RESIDUAL, .spec = b.value().tensor_spec()});
     }
@@ -997,7 +1005,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         .compile_time_args = {{"block_size", block_size}},
         // writer_start is a tile-row index for the row-major writer and a flat tile offset for
         // the tile writer, so the schema carries the host's own name for it.
-        .runtime_arg_schema = {.runtime_arg_names = {"Wt", "num_tile_rows", "writer_start"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"Wt", "num_tile_rows", "writer_start", "row_skip"}},
         .hw_config = create_writer_datamovement_config(),
     };
     if (input_is_row_major) {
@@ -1009,6 +1017,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         bind_dfb(writer, OUT, "out", m2::DFBEndpointType::CONSUMER);
     }
     bind_tensor(writer, OUTPUT, "dst");
+    if (!extra_outputs.empty()) {
+        TT_FATAL(!input_is_row_major, "LayerNorm extra_output_tensors needs a TILE input");
+        writer.compiler_options.defines.emplace("EXTRA_DSTS", std::to_string(extra_outputs.size()));
+        bind_tensor(writer, OUTPUT_X1, "dst_x1");
+        if (extra_outputs.size() > 1) {
+            bind_tensor(writer, OUTPUT_X2, "dst_x2");
+        }
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compute kernel
@@ -1316,11 +1332,19 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
         // For the RM output writer start_tile_row is the starting tile-row index for this core,
         // not the flat tile offset, because the RM writer computes row addresses directly.
-        const uint32_t writer_start = input_is_row_major ? curr_row : tile_offset;
+        // The tile writer may target a column window of a wider preallocated output (output_tensor):
+        // it starts at the window's first tile of its first row and skips the rest of each row.
+        const uint32_t out_Wt = output.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+        const uint32_t row_skip = input_is_row_major ? 0 : out_Wt - Wt;
+        const uint32_t writer_start =
+            input_is_row_major ? curr_row : curr_row * out_Wt + operation_attributes.output_col_tiles;
         m2::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
-            {{"Wt", Wt}, {"num_tile_rows", num_tile_rows_per_core}, {"writer_start", writer_start}});
+            {{"Wt", Wt},
+             {"num_tile_rows", num_tile_rows_per_core},
+             {"writer_start", writer_start},
+             {"row_skip", row_skip}});
         if (input_is_row_major) {
             m2::AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"H_logical", H_logical}});
         }
@@ -1371,6 +1395,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
     run_args.tensor_args.emplace(INPUT, a.mesh_tensor());
     run_args.tensor_args.emplace(OUTPUT, output.mesh_tensor());
+    for (std::size_t i = 0; i < extra_outputs.size(); ++i) {
+        run_args.tensor_args.emplace(i == 0 ? OUTPUT_X1 : OUTPUT_X2, extra_outputs[i].mesh_tensor());
+    }
     if (b) {
         run_args.tensor_args.emplace(RESIDUAL, b.value().mesh_tensor());
     }

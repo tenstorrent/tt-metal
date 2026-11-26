@@ -61,6 +61,9 @@ void kernel_main() {
     // Global Q scheduling args follow phase_2 slot.
     const uint32_t global_q_start = get_arg_val<uint32_t>(4);
     const uint32_t global_q_count = get_arg_val<uint32_t>(5);
+#ifdef SDPA_REL_BIAS
+    sdpa_rel_q_off = get_arg_val<uint32_t>(6);  // query row 0's position among the keys
+#endif
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;

@@ -1,0 +1,257 @@
+# SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
+# SPDX-License-Identifier: Apache-2.0
+"""Fused block attention residual: rms(partial) + seal + depth attention in ONE program per call (the unfused
+residual.AttnRes: seal 4 ops + attend 5-9 ops; FusedRowOps.seal: 4 ops -> 0 or 1).
+
+Drop-in for residual.RowOps.seal / residual.AttnRes (same signatures). Differences the integrator must know:
+  * The block-state stack is ONE dense fp32 buffer per FusedRowOps (rows 0..4), updated in place. Every call
+    returns that same buffer as "the stack". This is safe for the model's dataflow: rows >= depth are never read,
+    and the loop restart (passes 2-3) rewrites rows 1.. with the same or newer values before they are read.
+  * AttnRes(stack, partial, depth) leaves rms(partial) in row depth-1, so the boundary-layer seal of the same
+    tensor right after is free (FusedRowOps.seal skips it).
+  * Use FusedRowOps only for the block stack. MessageAttnRes builds its own 2-row stacks with seal(None, ..):
+    keep residual.RowOps for it.
+  * Outputs are per-module buffers, valid until that module's next call (the model consumes them in the app).
+"""
+
+import os
+import struct
+
+import torch
+
+import ttnn
+from models.demos.inkling2_mini.tt.fused import common as F
+
+MAX_DEPTH = 5
+# one-query calls with sealed rows: their products before the partial arrives (same products, same order)
+EARLY_PROD = os.environ.get("INKLING_ATTNRES_EARLY", "1") == "1"
+
+
+def f32_bits(x):
+    return struct.unpack("<I", struct.pack("<f", x))[0]
+
+
+def writer_args(args, o_row=0, o_row2=0, tw_n=0):
+    """attnres_writer args: the role's args (<= 8), then the R-row output offsets at 8, 9, 10."""
+    assert len(args) <= 8
+    return args + [0] * (8 - len(args)) + [o_row, o_row2, tw_n]
+
+
+class FusedRowOps:
+    def __init__(self, device, c=2304, eps=1e-6):
+        self.device = device
+        self.c = c
+        self.eps = eps
+        self.T = F.pages(c)
+        self.stacks = [F.dense_tensor(device, torch.zeros(MAX_DEPTH, c))]  # per verify row (F.per_row)
+        m = torch.zeros(1, 1, 32, 32)
+        m[..., 0, :] = 1.0  # reduce scaler: row 0 of every face
+        m[..., 16, :] = 1.0
+        self.scaler = ttnn.from_torch(m, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        self._fresh = [{}]  # per verify row: stack row -> tensor whose rms is in that row now
+
+    @property
+    def stack(self):
+        """The block-state stack of the verify row being recorded (F.per_row; row 0 outside it)."""
+        r = F.row_index()
+        while len(self.stacks) <= r:
+            self.stacks.append(F.dense_tensor(self.device, torch.zeros(MAX_DEPTH, self.c)))
+        return self.stacks[r]
+
+    @property
+    def fresh(self):
+        r = F.row_index()
+        while len(self._fresh) <= r:
+            self._fresh.append({})
+        return self._fresh[r]
+
+    def seal(self, stack, h, k, h_row=0):
+        """Stack with rms(h) in row k. Free if the last write of row k was rms(h) (an AttnRes partial).
+        h_row: the row of h to seal (R verify rows: row r of an R-row h)."""
+        if self.fresh.get(k) is not h:
+            self.run(h, k, p_row=h_row)
+        return self.stack
+
+    def run(
+        self,
+        partial,
+        k,
+        q=None,
+        nq=0,
+        out=None,
+        out_rows=None,
+        out_dense=None,
+        norm=None,
+        o_row=0,
+        tw_n=0,
+        p_row=0,
+        wait=False,
+    ):
+        """norm: (dense fp32 weight, bf16 row) -> also the weighted rms of output 0 into that row (an L1 row: the
+        MoE input; a DRAM row: the attention input).
+        o_row, tw_n: outputs at vector o_row of a shared R-row output, tw_n twin vectors (attnres_writer).
+        wait: in a joined program (common.py joined), read the partial only after the part writing it signalled."""
+        F.check_row_input(partial)
+        T, ntc, d = self.T, self.c // 32, k + 1
+        assert 0 <= k < MAX_DEPTH and self.c % 32 == 0
+        named = dict(
+            ntc=ntc,
+            pages=T,
+            nq=nq,
+            k=k,
+            has_weight=0,
+            out_rows=nq if out_rows is None else out_rows,
+            split3=0,
+            split_out=0,
+            has_norm=self._has_norm(norm),
+        )
+        reader = F.kernel(
+            "attnres_reader.cpp",
+            ttnn.ReaderConfigDescriptor(),
+            named,
+            [
+                *F.input_args(partial, p_row),
+                q.buffer_address() if q is not None else 0,
+                self.stack.buffer_address(),
+                self.scaler.buffer_address(),
+                0,  # no rms weight
+                *self._norm_args(norm, True),
+            ],
+            defines=self._defines(wait, nq, k),
+        )
+        writer = F.kernel(
+            "attnres_writer.cpp",
+            ttnn.WriterConfigDescriptor(),
+            named,
+            writer_args(
+                [
+                    self.stack.buffer_address(),
+                    out.buffer_address() if out is not None else 0,
+                    out_dense.buffer_address() if out_dense is not None else 0,
+                    *self._norm_args(norm, False),
+                ],
+                o_row,
+                0,
+                tw_n,
+            ),
+        )
+        compute = F.kernel(
+            "attnres_compute.cpp",
+            F.compute_config([5] if norm is not None else [], full_sync=True),
+            dict(
+                sit=F.SCALAR_IT,
+                pages=T,
+                nq=nq,
+                k=k,
+                has_weight=0,
+                has_norm=self._has_norm(norm),
+                inv_c=f32_bits(1.0 / self.c),
+                eps=f32_bits(self.eps),
+            ),
+            defines=[d for d in self._defines(False, nq, k) or [] if d[0] != "ATTNRES_WAIT_SEM"] or None,
+        )
+        f32 = ttnn.float32
+        cbs = [
+            F.cb(0, F.input_dtype(partial), T),
+            F.cb(1, f32, max(1, nq * T)),
+            F.cb(2, f32, max(1, k * T)),
+            F.cb(3, f32, 1),
+            F.cb(16, f32, T),
+            F.cb(17, f32, max(1, nq * T)),
+            F.stage_cb(24, ntc),
+            F.cb(25, f32, 1),
+            F.cb(26, f32, 1),
+            F.cb(27, f32, max(1, nq * d)),
+            F.cb(28, f32, max(1, nq * d)),
+        ]
+        if norm is not None:
+            assert nq >= 1
+            cbs += [F.cb(5, f32, T), F.cb(19, norm[1].dtype, T)]
+        tw = F.twin(partial)
+        io = [partial] + ([tw[0]] if tw else []) + [self.scaler] + ([q] if q is not None else []) + [self.stack]
+        io += ([out_dense] if out_dense is not None else []) + ([out] if out is not None else [])
+        io = list(norm) + io if norm is not None else io
+        F.run(io, [reader, writer, compute], cbs)
+        self.fresh[k] = partial
+        return out
+
+    @staticmethod
+    def _defines(wait, nq, k):
+        d = [("ATTNRES_WAIT_SEM", "1")] if wait else []
+        if EARLY_PROD and nq == 1 and k > 0 and F._REC is None:
+            d.append(("ATTNRES_EARLY_PROD", "1"))
+        return d or None
+
+    @staticmethod
+    def _has_norm(norm):
+        """0: no norm; 1: norm output row in L1; 2: in DRAM."""
+        if norm is None:
+            return 0
+        return 2 if norm[1].memory_config().buffer_type == ttnn.BufferType.DRAM else 1
+
+    @staticmethod
+    def _norm_args(norm, reader):
+        if norm is None:
+            return []
+        w, o = norm
+        row = F.row_index() if o.shape[-2] > 1 else 0  # an R-row MoE input (F.per_row): this verify row's tile row
+        return ([w.buffer_address()] if reader else []) + [
+            o.buffer_address(),
+            F.tile_bytes(o.dtype),
+            F.ES[o.dtype],
+            row,
+        ]
+
+
+class FusedAttnRes:
+    """softmax_depth(q . rms(S)^T / sqrt(C)) . rms(S), S = [sealed block states..., partial]."""
+
+    def __init__(self, rows: FusedRowOps, weights, name, num_queries=1):
+        w = weights[name]
+        w = ttnn.to_torch(w) if isinstance(w, ttnn.Tensor) else w
+        q = w.float().reshape(-1, w.shape[-1])[:num_queries]
+        self.rows = rows
+        self.nq = num_queries
+        self.q = F.dense_tensor(rows.device, q * q.shape[-1] ** -0.5)  # 1/sqrt(C) folded into q
+        self.out = F.OutCache(rows.device)
+
+    def __call__(self, stack, partial, depth: int, split=True, repeat_rows=None, row_out=True, norm=None, wait=False):
+        """stack: ignored (rows.stack is used; rows 0..depth-2 sealed). partial: row. Returns a list of
+        num_queries fp32 rows (split=False: one [1,1,num_queries,C] tensor). repeat_rows=3 with 1 query: the
+        output in rows 0..2 (replaces the model's ttnn.repeat before the q/k/v message gates).
+        norm: a 1-weight FusedRowNorm (the MoE input norm with its L1 row, or a local layer's attention input norm
+        with its DRAM row): returns its output row (weighted rms of the attn-res output, in this program) instead;
+        the attn-res output itself is then not written at all."""
+        r = self.rows
+        n_out = repeat_rows or self.nq
+        o_row = tw_n = 0
+        if F.n_rows() > 1 and norm is None:
+            # R verify rows (F.per_row): one shared output, row r's n_out vectors at r * n_out (row form and twin,
+            # the twin with the repeated rows too), so R-row consumers (message gates) read it as one tensor
+            nr = F.n_rows()
+            out, out_dense = self.out.shared_twin(("out", n_out), nr * n_out, r.c, ttnn.float32, nr * n_out)
+            o_row, tw_n = F.row_index() * n_out, n_out
+        else:
+            out, out_dense = self.out.get_twin(("out", n_out), n_out, r.c, ttnn.float32, nvec=self.nq)
+        # row_out=False: only the dense twin is written ; the returned tensor is then valid only as the input
+        # of another fused kernel (which reads the twin), never for a ttnn op.
+        if norm is not None:
+            assert len(norm.w) == 1
+            nrow = norm.l1_rows(1)[0] if norm.out_l1 else norm.out.get(("row", 0), 1, r.c, norm.out_dtype)
+            r.run(partial, depth - 1, self.q, self.nq, None, 0, None, norm=(norm.w[0], nrow), wait=wait)
+            return nrow
+        out = r.run(
+            partial,
+            depth - 1,
+            self.q,
+            self.nq,
+            out,
+            n_out if row_out else 0,
+            out_dense,
+            o_row=o_row,
+            tw_n=tw_n,
+            wait=wait,
+        )
+        if not split:
+            return out
+        return [out] if self.nq == 1 else [ttnn.slice(out, [0, 0, j, 0], [1, 1, j + 1, r.c]) for j in range(self.nq)]

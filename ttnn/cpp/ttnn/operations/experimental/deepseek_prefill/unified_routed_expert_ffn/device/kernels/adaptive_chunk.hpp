@@ -28,7 +28,43 @@
 // is valid in BRISC, NCRISC, and TRISC translation units alike.
 namespace adaptive_chunk {
 
-constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGridY tile-rows
+// M-row cores of one row group; a chunk spans per_core_M * kGridY tile-rows. The host defines it with the group
+// size (the grid's rows / UNIFIED_RE_ROW_GROUPS), so the kernels' row math always matches the host's.
+#ifndef UNIFIED_RE_GRID_Y
+#define UNIFIED_RE_GRID_Y 8
+#endif
+constexpr uint32_t kGridY = UNIFIED_RE_GRID_Y;
+
+// Row groups: the grid's rows split into kRowGroups groups of kGridY rows, each an independent grid (its own weight
+// multicast down its part of each column) running its own subset of the experts. An expert's tail chunk then
+// rounds up to kGridY tile-rows of one group instead of to the whole grid's rows. RowGroupSchedule gives every
+// expert to the group with the least work so far (tile-row units per core row, ties to the lower group); all three
+// kernels run it over the same counts in the same order, so they agree, and a kernel treats an expert of another
+// group as a zero count.
+#ifndef UNIFIED_RE_ROW_GROUPS
+#define UNIFIED_RE_ROW_GROUPS 1
+#endif
+constexpr uint32_t kRowGroups = UNIFIED_RE_ROW_GROUPS;
+
+struct RowGroupSchedule {
+    uint32_t load[kRowGroups] = {};
+    // count (tokens) of the next expert -> that count if it belongs to group my_group, else 0
+    uint32_t take(uint32_t count, uint32_t my_group) {
+        if constexpr (kRowGroups == 1) {
+            return count;
+        } else {
+            uint32_t g = 0;
+            for (uint32_t i = 1; i < kRowGroups; ++i) {
+                if (load[i] < load[g]) {
+                    g = i;
+                }
+            }
+            const uint32_t tiles = (count + 31) / 32;
+            load[g] += (tiles + kGridY - 1) / kGridY;
+            return g == my_group ? count : 0u;
+        }
+    }
+};
 
 // Row-major x, tilized once per M-row: how many gate/up K-blocks ahead of its matmul an
 // owner core tilizes (it tilizes block kb + kXTilizeLookahead before MACing kb). The
