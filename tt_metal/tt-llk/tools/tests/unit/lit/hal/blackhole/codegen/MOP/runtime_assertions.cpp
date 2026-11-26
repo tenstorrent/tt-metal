@@ -178,7 +178,7 @@ extern "C" __attribute__((noinline, used)) void reference_template1_runtime_unsu
     mop_cfg[8] = OP;
 }
 
-// A last_inner patch with a runtime outer count checks that the outer count is above 1.
+// A last_inner patch with a runtime outer count checks only its width and an outer count of 0.
 extern "C" __attribute__((noinline, used)) void template1_runtime_patch_last_inner(const std::uint32_t outer, const std::uint32_t operation)
 {
     mop::program(mop::loop(outer, mop::loop(4, OP)).patch(mop::last_inner, operation));
@@ -188,7 +188,6 @@ extern "C" __attribute__((noinline, used)) void reference_template1_runtime_patc
 {
     hal::detail::require(outer < 1024, "Template 1 MOP loop count must fit in 10 bits");
     hal::detail::require(outer != 0, "Template 1 MOP configuration issues nothing");
-    hal::detail::require(outer != 1, "Template 1 MOP last_inner op is never issued with an outer count of 1");
     volatile std::uint32_t *mop_cfg = reference_mop_cfg();
     ckernel::mop_sync();
     mop_cfg[0] = outer;
