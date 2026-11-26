@@ -19,7 +19,7 @@
 // are not read (their tiles are padding: their outputs are never written back). Named CT args: x_row_major_cb (RM_CB),
 // x_page_bytes (the token row's bytes / PPR), row_chunks_per_read_barrier (BATCH), token_index_arg (the runtime-arg
 // index of the token index address, x_indexed), x_pages_per_row (PPR); flat_options: NUM_EXPERTS = local_experts, MT =
-// row_tiles_per_sub_block, NSB = super_blocks_per_sub_block (super-blocks per row)
+// x_row_tiles (an x block's row tiles), NSB = super_blocks_per_sub_block (super-blocks per row)
 // x_indexed: flat row r (region space) reads x row token_index[r] (x = the all-gathered tokens rather than a dispatch
 // buffer). Each sub-block's MT x 32 indices are read once (one small read + barrier) into this RISC's schedule scratch
 // (free after load_schedule).

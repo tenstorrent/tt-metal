@@ -50,6 +50,8 @@ nb::dict plan_dict(const FlatRoutedExpertPlan& p) {
     d["gate_up_weight_slots"] = p.gate_up_weight_slots;
     d["gate_up_pairs_per_core"] = p.gate_up_pairs_per_core;
     d["row_tiles_per_sub_block"] = p.row_tiles_per_sub_block;
+    // (the ring's capacity in blocks of row_tiles_per_sub_block row tiles; with row passes the kernels move x in
+    // smaller blocks, a row pass's rows each, MT / pass rows times as many)
     d["x_ring_blocks"] = p.x_ring_blocks;
     d["column_groups_per_weight_slot"] = p.column_groups_per_weight_slot;
     d["units_per_core"] = p.units_per_core;
@@ -98,8 +100,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
                 h buffers, then 2, then fewer sub-block rows).
             x_bf16 (bool): x in bf16 after the tilize (else bfp8, the default).
             h_bf16 (bool): h in bf16 after gate/up (else bfp8, the default).
-            x_ring_fill (bool): the gate/up cores' x ring grown into the arena's leftover L1 when it holds a whole
-                sub-block (default); off: a sub-block's worth (the combine, whose landing pool takes that L1).
+            x_ring_fill (bool): let the planner grow the gate/up cores' x ring into the arena's spare L1 (plans with
+                row passes and whole-tile gate/up only; default on); off keeps that L1 free (the combine's landing
+                pool uses it).
     )doc")
         .def(
             "__init__",

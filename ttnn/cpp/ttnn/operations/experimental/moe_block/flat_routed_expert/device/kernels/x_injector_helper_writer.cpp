@@ -16,8 +16,9 @@
 // from DRAM itself: each tilized super-block goes into slot b % LAND_SLOTS of the primary's landing ring once the
 // primary freed it (CREDIT_SEM here counts freed slots), then the primary's DATA_SEM is bumped after the write is
 // acknowledged. Named CT args: x_super_block_cb, x_landing_slots (LAND_SLOTS), x_primary_data_sem (DATA_SEM, on the
-// primary), x_helper_credit_sem (CREDIT_SEM, here); flat_options: MT = row_tiles_per_sub_block, x_tile_bytes,
-// local_experts, super_blocks_per_sub_block (NSB)
+// primary), x_helper_credit_sem (CREDIT_SEM, here); flat_options: MT = x_row_tiles (an x block's row tiles),
+// x_tile_bytes, local_experts, super_blocks_per_sub_block (NSB)
+//
 // RT: 0 primary xy, 1 landing ring address, 2 super-blocks, 3 round, 4 place, 5.. expert_schedule.hpp args
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
 #include <stdint.h>

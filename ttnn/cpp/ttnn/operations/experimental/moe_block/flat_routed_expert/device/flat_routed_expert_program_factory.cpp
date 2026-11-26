@@ -148,15 +148,23 @@ FlatProgramHandles add_flat_routed_expert_program(
         banks);
     // x after the tilize and h after gate/up: bfp8 tiles, or bf16 with layout.x_bf16 / h_bf16 (the plan's sizes)
     const uint32_t x_tile = p.x_tile_bytes, h_tile = p.h_tile_bytes;
-    // gate/up row passes (DST holds fewer than a sub-block's gate/up tiles): row tiles a pass (4 DST tiles' worth, at
-    // most the sub-block's), else 0
+    // Row passes: when DST cannot hold a whole sub-block's gate/up tiles, the gate/up compute does a sub-block in
+    // passes of RP row tiles each (4 DST tiles' worth, at most the sub-block's MT); RP 0: one pass.
     const bool gu_rp = p.gate_up_row_passes && !p.gate_up_full_sync;
     const uint32_t RP = gu_rp ? std::min(MT, std::max(1u, 4 / p.gate_up_weight_tiles_per_row)) : 0;
-    // the x path's blocks: a row pass's rows with row passes (each pass then reads and frees its own x blocks, so the
-    // next sub-block's x streams in through the whole sub-block, not only behind its last pass), else a sub-block's.
-    // The ring keeps its bytes: x_ring_blocks of MT rows hold MT / XR times as many x blocks.
+    // The x path moves x in blocks of XR row tiles: a row pass's rows with row passes, else a sub-block's. Each pass
+    // then waits for and frees its own x blocks, so the next sub-block's x streams in during the whole sub-block, not
+    // only once the last pass frees the ring. The ring keeps its bytes: p.x_ring_blocks blocks of MT row tiles are
+    // MT / XR times as many x blocks.
     const uint32_t XR = gu_rp ? RP : MT;
     TT_FATAL(MT % XR == 0, "flat_routed_expert: x rows {} do not divide the sub-block's {}", XR, MT);
+    // (the x path counts an expert's x row groups - XR row tiles over all K blocks - in 16 bits: the x forwarder's
+    // list, gate_up_core_reader.cpp)
+    TT_FATAL(
+        (uint64_t(p.max_tokens_per_expert) + XR * 32 - 1) / (XR * 32) < (1u << 16),
+        "flat_routed_expert: {} tokens an expert in x row groups of {} rows: over 65535 row groups",
+        p.max_tokens_per_expert,
+        XR * 32);
     const uint32_t x_blk = MT * kKBlk, x_ring_bytes = p.x_ring_blocks * x_blk * x_tile;
     const uint32_t x_bytes = XR * kKBlk * x_tile;  // an x block
     const uint32_t PIN = cfg.pin;
@@ -175,30 +183,30 @@ FlatProgramHandles add_flat_routed_expert_program(
     for (uint32_t ci = 0; ci < ngu; ++ci) {
         rect_cores[p.rectangle_of(p.gate_up_cores[ci])].push_back(ci);
     }
-    // x delivery: x read once by the helpers (the plan's two full rectangles, one helper each) and unicast snakes, no
-    // multicast: the NOC0 wedge of a relay's multicast into the gate/up rectangle beside the weight and DRAM
-    // traffic. Each primary unicasts its blocks into its rectangle's snake head; the gate/up cores forward them
-    // along the snake (down a column, wrapping inside the rectangle, one column over, on down), each piece once its
-    // successor has freed the block's slot. One snake a rectangle (2: the relay writes every block twice - GLM-5.3 M
-    // 1024 238.7 vs 205.5 us / expert, multicast 211.5), 4 cut-through pieces, the forwarder on the gate/up NCRISC
-    // (gate_up_x_forwarder.cpp) on NOC0 with 3 or 6 pieces in flight (below), the receiver (gate_up_core_reader.cpp,
-    // BRISC) on NOC1.
+    // x delivery: x is read from DRAM once, by the helper relays (one per gate/up rectangle), and delivered by unicast
+    // "snakes", not multicast (a relay's multicast into its rectangle wedged NOC0 beside the weight and DRAM traffic).
+    // Each primary relay writes its blocks into its rectangle's snake head; every gate/up core then forwards each block
+    // to the next core of the snake (down a column, wrapping inside the rectangle, one column over, on down) once that
+    // core has freed the block's ring slot. A block travels as x_pieces pieces, each forwarded as soon as it has
+    // arrived (cut-through: the next core need not wait for the whole block). The forwarder runs on the
+    // gate/up NCRISC on NOC0 (gate_up_x_forwarder.cpp), the receiver on the BRISC on NOC1 (gate_up_core_reader.cpp).
     const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
-    // (a row tile a piece with the x path split by row pass - the pieces' size before the split: GLM-5.3 4x4 M 320, 4 /
-    // 2 pieces a block of 2 row tiles 1192.4 / 1055.4 us; the forwarder's pieces in flight carry half the bytes at 4)
+    // Pieces a block: one a row tile when the x path is split by row pass (XR < MT: fewer, larger pieces than 4 a
+    // block, so the pieces in flight carry more bytes); else 4, or 2 / 1 when 4 pieces would not be 16-byte aligned.
     const uint32_t x_pieces = XR < MT && aligned(XR) ? XR : (aligned(4) ? 4 : (aligned(2) ? 2 : 1));
-    // The forwarder keeps X_FWD_DEPTH pieces in flight while it forwards an expert of at least X_FWD_DEEP_ROW_TILES row
-    // tiles, X_FWD_SHALLOW below. Against 3 everywhere (P150): GLM-5.3 4x4 10240 uniform -5.1% / zipf -2.7%, 8x4 10240
-    // -3.1%, DSV4.1-Flash 8x4 5120 hot -12.1% / 10240 -6.3%, K3 8x4 5120 hot -2.8%; no case +0.3% or more. 6 everywhere
-    // slowed the short experts (GLM-5.3-Flash +2.2%, M3 +1.9%; and GLM-5.3 8x4 5120 - 5 row tiles an expert - in the
-    // MoE block on a Galaxy); a threshold of 5 row tiles, too (M3 +1.8%); 8 missed DSV4.1-Flash 10240.
-    // 8 pieces in flight: worse everywhere (the weight reads' transaction ids start at 8).
+    // Pieces the forwarder keeps in flight: X_FWD_DEPTH while it forwards a schedule entry (an expert, or a pinned
+    // expert's share) of at least X_FWD_DEEP_ROW_TILES row tiles, X_FWD_SHALLOW for shorter entries (whose weight
+    // reads, beside it on the NOC, it would slow). The
+    // forwarder's transaction ids are 1 .. X_FWD_DEPTH; the weight reads' on the same RISC start at 8.
     constexpr uint32_t X_FWD_DEPTH = 6, X_FWD_SHALLOW = 3, X_FWD_DEEP_ROW_TILES = 6;
     log_info(
         tt::LogOp,
-        "flat_routed_expert: x read once (helpers), unicast snakes (snakes 1 pieces {} NCRISC forwarder NOC0 depth {})",
+        "flat_routed_expert: x read once (helpers), unicast snakes: {} pieces a block, {} in flight for schedule "
+        "entries of {}+ row tiles, else {}",
         x_pieces,
-        X_FWD_DEPTH);
+        X_FWD_DEPTH,
+        X_FWD_DEEP_ROW_TILES,
+        X_FWD_SHALLOW);
     struct XLink {
         uint32_t pred = 0, succ0 = 0;
     };
@@ -274,10 +282,9 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["x_slot_free_sem"] = SFREE;
     options["x_indexed"] = t.token_index.has_value() ? 1 : 0;
     options["x_chain_pieces"] = x_pieces;
-    // x (the primaries' writes into the snake heads, the snake's forwarding) on unicast VC 3, its own: h is on 0, the
-    // weight read requests and the default writes on 1, row-major y on 2 (the combine sets none). Against VC 1 (P150):
-    // GLM-5.3 4x4 10240 1155.6 -> 1108.1 us (-4.1%), 8x4 10240 -4.0%, 8x4 5120 hot -2.2%, DSV4.1-Flash 10240 -1.4%; the
-    // short experts within +1% (GLM-5.3-Flash +1.0%, 4x4 7680 +0.9%).
+    // x (the primaries' writes into the snake heads, the snake's forwarding) gets unicast VC 3 to itself, so it does
+    // not queue behind other traffic: h is on VC 0, the weight read requests and the default writes on 1, row-major y
+    // on 2 (the combine uses none of them).
     options["x_vc"] = 3;
     options["x_credit_sem"] = 0;  // (an x primary relay's own)
     // the gate/up cores: the x receiver's consumed / end counts for the x forwarder (semaphores 2 / 3, free there)
@@ -289,20 +296,20 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["gate_up_weight_ring_blocks"] = p.gate_up_weight_ring_blocks;
     options["gate_up_block_bytes"] = p.weight_block_tiles * w_tile;
     options["gate_up_blocks_per_expert"] = p.gate_up_k_blocks;
-    // gate/up weight reads in flight a core: 1 at 16+ experts a chip of whole-tile gate / up (GLM-5.3 4x4: the 8 cores
-    // of a bank then share it evenly - at 2 some waited 300-450 us at M 80, their slot-mates 6-30; M 80 / 160 / 240
-    // -3 .. -4%), else 2 (1 slows 8 experts a chip and the 16-column units, up to +7%).
+    // Gate/up weight reads in flight a core: 1 at 16+ experts a chip with whole-tile gate / up - a bank's cores then
+    // share it evenly (at 2, some cores of a bank got far more of it than others) - else 2 (fewer experts a chip and
+    // the half-width units need the second read in flight).
     const uint32_t gu_rif = E >= 16 && !p.half_width_gate_up ? 1 : FlatRoutedExpertPlan::gate_up_reads_in_flight;
     options["gate_up_reads_in_flight"] = gu_rif;
     options["gate_up_read_pieces"] = p.gate_up_block_pieces;
     options["gate_up_mailbox_sem"] = 0;
     options["gate_up_grant_sem"] = GRANT;
     options["gate_up_data_sem"] = DATA;
-    // Until a gate/up core has its first sub-block's x, it grants its weight reads 8 landing slots, not the ring's two
-    // loads: the 64 cores' ring fill (2 experts' gate/up weights at once) slows the x snake's start, and the snake's
-    // tail sets every core's pace (the h buffers). Loads of 24+ blocks only - shorter ones need the prefetch (GLM-5.3-
-    // Flash, 16: +1.8% at 8, +3.7% at 4). Against no cap (P150): GLM-5.3 4x4 10240 -1.3% / zipf -0.6%, 8x4 5120 -1.0
-    // .. -1.6%, 8x4 10240 -1.6% / -1.4%, K2.7 -1.1%.
+    // Start-up cap: until a gate/up core has its first x row group (all K blocks of the first x_row_tiles rows), it
+    // lets its weight reads fill only 8 landing slots of its ring, not the whole ring (two experts' gate/up weights).
+    // All 64 cores filling their rings at launch slows the start of the x snake, and the snake's tail paces every core
+    // (through the h buffers). Only for loads of 24+ blocks: shorter ones need the full prefetch. 0: no cap. (The
+    // reader lifts it early when its x ring holds fewer than K blocks: gate_up_core_reader.cpp.)
     options["gate_up_w_start"] = p.gate_up_k_blocks >= 24 ? 8u : 0u;
     // the h exchange: the gate/up cores' slices into the down chain heads' buffers (one gather semaphore a buffer), go
     options["gate_up_core_count"] = ngu;
@@ -315,8 +322,8 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["half_width_gate_up"] = p.half_width_gate_up ? 1 : 0;
     options["gate_up_units"] = p.units_per_core;
     options["gate_up_units_h_tiles"] = p.units_per_core ? p.h_tiles_per_core : 0;
-    options["row_pass_rows"] = RP;
-    options["x_ring_blocks"] = p.x_ring_blocks * (MT / XR);
+    options["row_tiles_per_pass"] = RP;
+    options["x_ring_blocks"] = p.x_ring_blocks * (MT / XR);  // (in x blocks of XR row tiles)
     options["x_row_tiles"] = XR;
     options["y_row_major"] = cfg.y_row_major ? 1 : 0;
     options["y_row_major_rows"] = 0;  // (the down kernels': their column width's)
@@ -503,8 +510,8 @@ FlatProgramHandles add_flat_routed_expert_program(
                         {"x_primary_data_sem", k ? 7u : 4u},
                         {"x_helper_credit_sem", 5}})));
         }
-        // (a super-block as the x path ships it: XR row tiles - the primary places helper k's ring at k landing rings
-        // of these, x_injector_writer.cpp)
+        // (a super-block as the x path ships it: XR row tiles. On the primary, helper k's landing ring starts after k
+        // rings of relay_landing_slots such super-blocks - x_injector_writer.cpp)
         const uint32_t sbb = XR * p.super_block_tiles * x_tile;
         for (uint32_t idx = 0; idx < p.relay_cores.size(); ++idx) {
             const CoreCoord rl = p.relay_cores[idx];
