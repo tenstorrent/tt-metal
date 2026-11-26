@@ -151,7 +151,8 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
     def _window(self, layout: HybridLayout) -> WindowSoftmax:
         if layout not in self._windows:
             # Stage 4 levers, off by default until accepted: OPENVDN_WINDOW_SP=1 splits each group's queries over
-            # the SP devices; OPENVDN_WINDOW_CHUNKS="q,k" sets the SDPA chunk sizes (default 32,32).
+            # the SP devices; OPENVDN_WINDOW_CHUNKS="q,k" sets the SDPA chunk sizes (default 32,32);
+            # OPENVDN_WINDOW_ALIGNED=1 runs the groups on the frame-padded, tile-aligned layout.
             split = os.environ.get("OPENVDN_WINDOW_SP") == "1" and self.sp_factor > 1
             q_chunk, k_chunk = (int(c) for c in os.environ.get("OPENVDN_WINDOW_CHUNKS", "32,32").split(","))
             self._windows[layout] = WindowSoftmax(
@@ -167,6 +168,7 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
                 else None,
                 q_chunk=q_chunk,
                 k_chunk=k_chunk,
+                aligned=os.environ.get("OPENVDN_WINDOW_ALIGNED") == "1",
             )
         return self._windows[layout]
 
