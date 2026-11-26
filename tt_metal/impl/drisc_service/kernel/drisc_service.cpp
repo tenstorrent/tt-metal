@@ -19,8 +19,8 @@ constexpr uint32_t PUBLISH_TRID = NOC_MAX_TRANSACTION_ID;
 constexpr uint32_t PULL_TRIDS_MASK = ((1u << PUBLISH_TRID) - 1) & ~((1u << MAX_INFLIGHT_TRANSACTIONS) - 1);
 static_assert(__builtin_popcount(PULL_TRIDS_MASK) == abi::PULL_TRIDS);
 
-// The guard linker script holds the kernel's text below the batch windows.
-asm(".globl drisc_service_text_limit\n.set drisc_service_text_limit, %0" ::"i"(l1::BATCH_WINDOWS_START));
+// The guard linker script holds the kernel's text below the drain records, which sit below the batch windows.
+asm(".globl drisc_service_text_limit\n.set drisc_service_text_limit, %0" ::"i"(l1::DRAIN_RECORDS_START));
 
 // do_crt1 from firmware_common.h, which compiles only with the JIT's full define set. Both are in substitutes.o.
 extern "C" void wzerorange(uint32_t* start, uint32_t* end);
@@ -249,6 +249,7 @@ uint32_t turn_bytes = l1::CHUNK_SIZE;
 // The drain job takes the next turn once the copy clients have started drain::hold_turns turns since its last hold, or
 // at once when no client has a command to carve. Its turn stops accepting; it holds the seat once the transactions in
 // flight retire (main).
+bool drain_live;  // drain::active(), kept here so a copy turn checks one flag
 bool drain_handover;
 uint32_t drain_turns;        // copy turns started since the last hold
 uint32_t drain_handover_at;  // wall clock, low word, when accepting stopped for the pending hold
@@ -296,13 +297,13 @@ FORCE_INLINE void start_transaction(
 FORCE_INLINE void accept_transactions(TransactionRing& txn_ring, BounceArena& bounce_arena, DmaInFlight& dma) {
     while (!txn_ring.full()) {
         if (turn_bytes >= l1::CHUNK_SIZE) {
-            if (drain::active() && drain_turns >= drain::hold_turns) {
+            if (__builtin_expect(drain_live && drain_turns >= drain::hold_turns, 0)) {
                 request_drain_turn();
                 return;
             }
             uint32_t picked;
             if (!pick_client(picked)) {
-                if (drain::active()) {
+                if (__builtin_expect(drain_live, 0)) {
                     request_drain_turn();
                 }
                 return;
@@ -445,7 +446,7 @@ constexpr uint32_t NO_DRAIN_OWNER = abi::MAX_CLIENTS;
 uint32_t drain_owner = NO_DRAIN_OWNER;
 
 // Starts the drain job when the job block's owner word names an attached client.
-void try_start_drain() {
+[[gnu::noinline]] void try_start_drain() {
     const uint32_t owner = drain::job_block()->owner;
     if (abi::slot_word_type(owner) != abi::SLOT_ATTACH) {
         return;
@@ -457,6 +458,7 @@ void try_start_drain() {
                 abi::slot_word(abi::SLOT_DETACH, clients[s].gen),
                 &command_block->header.heartbeat);
             drain_owner = s;
+            drain_live = drain::active();
             drain_turns = 0;
             drain_handover = false;
             return;
@@ -470,6 +472,18 @@ void rearm_after_hold() {
     noc_init(l1::SCRATCH);
     noc_write_init_state<write_cmd_buf, CQ_NOC_mkp>(noc_index, NOC_UNICAST_WRITE_VC);
     noc_local_state_init(noc_index);
+}
+
+// The drain job's turn, once every transaction has retired: one hold, then the kernel's NoC state back.
+[[gnu::noinline]] void take_drain_turn() {
+    drain::hold();
+    rearm_after_hold();
+    drain_live = drain::active();
+    if (drain_live) {
+        drain::note_handover(static_cast<uint32_t>(get_timestamp()) - drain_handover_at);
+    }
+    drain_handover = false;
+    drain_turns = 0;
 }
 
 // Attach slot s if its request is an ATTACH the kernel has not answered yet.
@@ -514,6 +528,7 @@ bool scan_slots() {
             if (s == drain_owner) {
                 drain::abort();
                 drain_owner = NO_DRAIN_OWNER;
+                drain_live = false;
                 drain_handover = false;
             }
             if (s == turn_slot) {
@@ -586,7 +601,7 @@ int main() {
             break;
         }
         const uint32_t done_changed = retire_transactions(txn_ring, bounce_arena, dma);
-        if (!drain_handover) {
+        if (__builtin_expect(!drain_handover, 1)) {
             accept_transactions(txn_ring, bounce_arena, dma);
         }
         issue_writes(txn_ring, dma, done_changed);
@@ -594,15 +609,9 @@ int main() {
         // only once every transaction has retired. Batch-window pulls use IDs and L1 it never touches. A publish must
         // be acked too: both sides resync the NoC's write counters from the NIU at a handover, and an ack landing
         // after that would leave the acked count one past the issued count, so a flush check waits forever.
-        if (drain_handover && !txn_ring.has_reading() && !txn_ring.has_writing() &&
+        if (__builtin_expect(drain_handover, 0) && !txn_ring.has_reading() && !txn_ring.has_writing() &&
             ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, PUBLISH_TRID)) {
-            drain::hold();
-            rearm_after_hold();
-            if (drain::active()) {
-                drain::note_handover(static_cast<uint32_t>(get_timestamp()) - drain_handover_at);
-            }
-            drain_handover = false;
-            drain_turns = 0;
+            take_drain_turn();
         }
     }
 

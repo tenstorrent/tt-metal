@@ -33,7 +33,7 @@ constexpr bool kSingleNoc = kReadNoc == kEgressNoc;
 
 constexpr uint32_t kStageBase = l1::BOUNCE_BUFFER_START;
 constexpr uint32_t kNStage = 7;
-constexpr uint32_t kCoreRecords = abi::DrainLayout::records_addr;
+constexpr uint32_t kCoreRecords = l1::DRAIN_RECORDS_START;
 constexpr uint32_t kCtrlAddr = abi::DrainLayout::ctrl_addr;
 constexpr uint32_t kSocketConfigAddr = abi::DrainLayout::socket_config_addr;
 constexpr uint32_t kMaxCores = abi::DRAIN_MAX_CORES;
@@ -1009,7 +1009,8 @@ static void drain_step() {
 
 // Reads the job block; the service calls it once the owner word names an attached client, passing that client's
 // exit mailbox, the word that marks its exit, and the service heartbeat the job bumps during holds.
-inline void start(volatile uint32_t* exit_mailbox, uint32_t exit_word, volatile uint32_t* heartbeat) {
+// Out of line, like hold(), so none of the job's code lands in the service's main loop.
+[[gnu::noinline]] void start(volatile uint32_t* exit_mailbox, uint32_t exit_word, volatile uint32_t* heartbeat) {
     owner_exit = exit_mailbox;
     owner_exit_word = exit_word;
     service_heartbeat = heartbeat;
@@ -1049,7 +1050,7 @@ inline bool active() { return state == kRunning || state == kDraining; }
 constexpr uint32_t kOneMsCycles = 1350000;  // at the 1.35 GHz AICLK
 
 // One hold: hold_sweeps sweeps, or the stop sweeps and the finish once the host asked to stop.
-inline void hold() {
+[[gnu::noinline]] void hold() {
     const uint32_t start = static_cast<uint32_t>(get_timestamp());
     noc_local_state_init(kEgressNoc);
     if constexpr (!kSingleNoc) {

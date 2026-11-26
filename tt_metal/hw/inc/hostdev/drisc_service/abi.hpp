@@ -14,7 +14,7 @@
 namespace tt::tt_metal::drisc_service::abi {
 
 // Bump on any change to this file that the kernel and the host must agree on.
-inline constexpr uint32_t ABI_VERSION = 10;
+inline constexpr uint32_t ABI_VERSION = 11;
 inline constexpr size_t CONTROL_PAGE_SIZE = 4096;
 
 // The kernel's build. Its ELF carries one in section BUILD_BLOCK_SECTION, which the host checks before loading it,
@@ -224,7 +224,9 @@ static_assert(sizeof(ControlPage) <= CONTROL_PAGE_SIZE);
 // turn in the kernel's round-robin after every `hold_turns` copy turns (each up to CHUNK_SIZE bytes), or at once when
 // no client has a command: it holds the seat for `hold_sweeps` drain sweeps. The kernel first lets its transactions
 // retire, and the drain job leaves the NoCs and its staging idle before it hands the seat back. Its staging overlays
-// the bounce arena; what must survive between holds lives here, at the top of L1 above the arena.
+// the bounce arena; what the host writes lives here, at the top of L1 above the arena, and the per-core records it
+// keeps between holds lie in the firmware window below the batch windows (l1::DRAIN_RECORDS_START), so the arena
+// keeps its four whole chunks.
 inline constexpr uint32_t DRAIN_MAX_CORES = 18;      // worker cores one drain job drains (140 cores over 8 banks x 2)
 inline constexpr uint32_t DRAIN_RECORD_BYTES = 128;  // per-core record the job keeps; kRelayCoreRecordBytes
 inline constexpr uint32_t DRAIN_CTRL_BYTES = 64;     // kernel_profiler::ResidentCtrl: stop, done, heartbeat
@@ -251,16 +253,15 @@ struct DrainJobBlock {
 };
 
 struct DrainLayout {
-    // The 3 KB the kernel takes off its bounce arena plus the 512 B of L1 above the arena.
-    static constexpr uint32_t records_addr = MEM_DRISC_L1_SIZE - 3 * 1024 - 512;
-    static constexpr uint32_t ctrl_addr = records_addr + DRAIN_MAX_CORES * DRAIN_RECORD_BYTES;
+    // The 512 B of L1 above the bounce arena.
+    static constexpr uint32_t ctrl_addr = MEM_DRISC_L1_SIZE - 512;
     static constexpr uint32_t socket_config_addr = ctrl_addr + DRAIN_CTRL_BYTES;
     static constexpr uint32_t job_addr = socket_config_addr + DRAIN_SOCKET_CONFIG_BYTES;
     static constexpr uint32_t owner_addr = job_addr + offsetof(DrainJobBlock, owner);
-    static constexpr uint32_t base_addr = records_addr;
+    static constexpr uint32_t base_addr = ctrl_addr;
     static constexpr uint32_t end_addr = MEM_DRISC_L1_SIZE;
 };
-static_assert(DrainLayout::records_addr % 64 == 0 && DrainLayout::ctrl_addr % 64 == 0);
+static_assert(DrainLayout::ctrl_addr % 64 == 0);
 static_assert(DrainLayout::socket_config_addr % 64 == 0 && DrainLayout::job_addr % 64 == 0);
 static_assert(DrainLayout::job_addr + sizeof(DrainJobBlock) <= DrainLayout::end_addr);
 
