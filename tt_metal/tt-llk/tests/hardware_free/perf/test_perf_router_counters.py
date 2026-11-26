@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 import pytest
+from helpers.perf.marker_rows import marker_row, tracy_analysis
 from tt_llk_perf import headers, router_counters, router_metrics
 
 # arch: (bank offsets, NoC count, counter bits, what one count is)
@@ -217,11 +218,17 @@ def test_firmware_pair_layout_matches_the_decoder():
     path = _internal_dir() / "profiler" / "router_counters.hpp"
     if not path.is_file():
         pytest.skip("not inside a tt-metal checkout")
-    words = dict(re.findall(r"data\[w \+ ([23])\] = (.+?);", path.read_text()))
-    assert set(words) == {"2", "3"}
-    high, low = words["2"], words["3"]
-    assert "ROUTER_NOCS" in high and "kOption" in low
-    assert "values[j + 1]" in high and "values[j]" in low
+    text = path.read_text()
+    # put_ts_data takes the high payload word before the low one.
+    assert re.search(
+        r"ROUTER_COUNTERS_HEADER_PROFILER_ID, [\w:]*ROUTER_NOCS, kOption\)", text
+    )
+    assert re.search(r"const \w+ lo = router_counters_values\[2 \* k\];", text)
+    assert re.search(
+        r"const \w+ hi = 2 \* k \+ 1 < kTotal \? router_counters_values\[2 \* k \+ 1\]",
+        text,
+    )
+    assert re.search(r"ROUTER_COUNTERS_PAIR_PROFILER_ID_BASE \+ k, hi, lo\)", text)
     flat = [11, 22, 33, 44]
     pairs = {k: (flat[2 * k + 1] << 32) | flat[2 * k] for k in range(2)}
     launch = router_counters.unpack_launch((1 << 32) | ON, pairs)
@@ -309,50 +316,20 @@ def test_metric_labels():
     assert router_metrics.router_metric_label("other") == "other"
 
 
-def _tracy_analysis():
-    import importlib.util
-
-    pytest.importorskip("pandas")
-    pytest.importorskip("loguru")
-    path = (
-        Path(__file__).resolve().parents[5]
-        / "tools"
-        / "tracy"
-        / "perf_counter_analysis.py"
-    )
-    if not path.is_file():
-        pytest.skip("not inside a tt-metal checkout")
-    spec = importlib.util.spec_from_file_location(
-        "perf_counter_analysis_under_test", path
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _marker(run, risc, marker_id, time, data, core=(1, 2)):
-    return {
-        "run_host_id": run,
-        "core_x": core[0],
-        "core_y": core[1],
-        "risc_type": risc,
-        "marker_id": marker_id,
-        "record_time": time,
-        "data": data,
-    }
-
-
-def _launch_rows(run, risc, time, flat, option=ON, nocs=2):
-    rows = [_marker(run, risc, 9120, time, (nocs << 32) | option)]
-    rows += [_marker(run, risc, 9121 + k, time, v) for k, v in _pairs(flat).items()]
+def _launch_rows(run, risc, time, flat, option=ON, nocs=2, device=0):
+    rows = [marker_row(run, risc, 9120, time, (nocs << 32) | option, device=device)]
+    rows += [
+        marker_row(run, risc, 9121 + k, time, v, device=device)
+        for k, v in _pairs(flat).items()
+    ]
     return rows
 
 
 def test_tracy_decoder_makes_one_row_per_launch_and_noc():
-    analysis = _tracy_analysis()
+    analysis = tracy_analysis()
     rows = _launch_rows(7, "BRISC", 1000, [128, 0, 0, 64])
     rows += _launch_rows(8, "BRISC", 2000, [0, 0, 0, 0])
-    rows.append(_marker(7, "BRISC", 9100, 1000, 5))
+    rows.append(marker_row(7, "BRISC", 9100, 1000, 5))
     df = analysis.decode_router_counter_markers(rows, "blackhole")
     assert len(df) == 4
     first = df[(df["run_host_id"] == 7) & (df["noc"] == 0)].iloc[0]
@@ -363,7 +340,7 @@ def test_tracy_decoder_makes_one_row_per_launch_and_noc():
 
 
 def test_tracy_decoder_skips_other_cores_and_broken_launches():
-    analysis = _tracy_analysis()
+    analysis = tracy_analysis()
     assert (
         analysis.decode_router_counter_markers(
             _launch_rows(1, "NCRISC", 10, [1, 2, 3, 4]), "blackhole"
@@ -381,7 +358,7 @@ def test_tracy_decoder_skips_other_cores_and_broken_launches():
 
 
 def test_tracy_decoder_quasar_has_one_noc():
-    analysis = _tracy_analysis()
+    analysis = tracy_analysis()
     flat = [1, 2, 3, 4, 10, 20, 30, 40]
     df = analysis.decode_router_counter_markers(
         _launch_rows(1, "QUASAR_DM0", 10, flat, nocs=1), "quasar"
@@ -391,3 +368,13 @@ def test_tracy_decoder_quasar_has_one_noc():
         and df["router_in_count"][0] == 100
         and df["count_kind"][0] == "ALL_FLIT"
     )
+
+
+def test_tracy_decoder_keeps_chips_apart():
+    analysis = tracy_analysis()
+    rows = _launch_rows(7, "BRISC", 1000, [128, 0, 0, 64], device=0)
+    rows += _launch_rows(7, "BRISC", 1000, [5, 0, 0, 0], device=1)
+    df = analysis.decode_router_counter_markers(rows, "blackhole")
+    assert sorted(set(df["device_id"])) == [0, 1] and len(df) == 4
+    chip1 = df[(df["device_id"] == 1) & (df["noc"] == 0)].iloc[0]
+    assert chip1["OUT_PORT1"] == 5

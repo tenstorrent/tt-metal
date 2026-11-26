@@ -455,6 +455,10 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         !(get_profiler_noc_counters_enabled() && get_streaming_profiler_enabled()),
         "TT_METAL_PROFILE_NOC_COUNTERS writes into the device profiler buffers and cannot be combined with "
         "TT_METAL_STREAMING_PROFILER.");
+    TT_FATAL(
+        !(get_profiler_router_counters_enabled() && get_streaming_profiler_enabled()),
+        "TT_METAL_PROFILE_ROUTER_COUNTERS writes into the device profiler buffers and cannot be combined with "
+        "TT_METAL_STREAMING_PROFILER.");
     // The DRAM (TT_METAL_DEVICE_PROFILER) and streaming (TT_METAL_STREAMING_PROFILER) device profilers are
     // mutually exclusive modes: their device producers overlay the same L1 profiler region with different
     // layouts, and their hosts would both drive it. Refuse here, at MetalContext construction, before any
@@ -479,6 +483,9 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_profiler_noc_counters_enabled() && get_profiler_trace_only()),
         "TT_METAL_PROFILE_NOC_COUNTERS cannot be combined with TT_METAL_TRACE_PROFILER.");
+    TT_FATAL(
+        !(get_profiler_router_counters_enabled() && get_profiler_trace_only()),
+        "TT_METAL_PROFILE_ROUTER_COUNTERS cannot be combined with TT_METAL_TRACE_PROFILER.");
     TT_FATAL(
         !get_profiler_dram_controller_enabled() || get_profiler_dram_counters_enabled(),
         "TT_METAL_PROFILE_DRAM_CONTROLLER needs TT_METAL_PROFILE_DRAM_COUNTERS, which opens the capture window.");
@@ -1424,9 +1431,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             constexpr unsigned long kPerVc = 0x01000000ul;
             unsigned long mask = kVcBits | kBankBits;
             if (std::strcmp(value, "on") != 0) {
-                char* end = nullptr;
-                mask = std::strtoul(value, &end, 0);
-                if (end == value || *end != '\0' || mask > (kVcBits | kBankBits | kPerVc)) {
+                mask = parse_u32_list("TT_METAL_PROFILE_ROUTER_COUNTERS", value, 1)[0];
+                if (mask > (kVcBits | kBankBits | kPerVc)) {
                     TT_THROW(
                         "TT_METAL_PROFILE_ROUTER_COUNTERS=\"{}\" is not an option mask. Expected \"on\" or an "
                         "integer of virtual channel bits 0-15, port bits 16-23 and the keep-apart bit 24.",

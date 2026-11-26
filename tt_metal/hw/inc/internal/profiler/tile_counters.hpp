@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The per-launch captures of the tile-wide counters: the NoC interface counters and the NoC router counters. The
-// firmware opens them before it starts the cores of a launch; the core that closes them holds back room for their
-// markers at its start and waits for the other cores at its end. Each compiles to nothing unless its option is on.
+// Hooks of the tile-wide captures (NoC interface and router counters); the closing core holds back room for the markers
+// at its start and waits for the other cores at its end. Each compiles to nothing unless its option is on.
 
 #pragma once
 

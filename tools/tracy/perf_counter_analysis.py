@@ -325,14 +325,16 @@ def decode_noc_counter_markers(rows: List[Dict[str, Any]], device_arch: str) -> 
 
 
 def decode_router_counter_markers(rows: List[Dict[str, Any]], device_arch: str) -> Optional[pd.DataFrame]:
-    """One row per tile launch and NoC from the router counter markers (ids 9120 to 9136) of a device log.
+    """One row per tile launch and NoC from the router counter markers of a device log; tt_llk_perf/router_counters.py
+    has the marker layout.
 
-    Each row is a dict with run_host_id, core_x, core_y, risc_type, marker_id, record_time and data. The markers of a
-    launch share one timestamp. A launch with a pair missing (a full profiler buffer) is skipped. The result has one
-    column per captured port, or per port and virtual channel, the output and input totals and what one count is.
+    Each row is a dict with device_id (the PCIe slot column), run_host_id, core_x, core_y, risc_type, marker_id,
+    record_time and data. A launch with a pair missing (a full profiler buffer) is skipped.
     """
     out = []
-    for (run_host_id, core_x, core_y, risc_type, time), by_id in _router_counters.group_launches(rows).items():
+    for (device_id, run_host_id, core_x, core_y, risc_type, time), by_id in _router_counters.group_launches(
+        rows
+    ).items():
         if not _router_counters.capture_core(device_arch, risc_type) or _router_counters.HEADER_MARKER_ID not in by_id:
             continue
         pairs = {
@@ -350,6 +352,7 @@ def decode_router_counter_markers(rows: List[Dict[str, Any]], device_arch: str) 
         for noc, counts in decoded["counts"].items():
             out.append(
                 {
+                    "device_id": device_id,
                     "run_host_id": run_host_id,
                     "core_x": core_x,
                     "core_y": core_y,

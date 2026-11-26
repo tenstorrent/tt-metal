@@ -12,7 +12,7 @@ virtual channel when the option keeps them apart. A last pair with an odd value 
 All markers of a launch carry the same timestamp.
 """
 
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple
 
 from . import headers, router_metrics
 
@@ -93,14 +93,17 @@ def decode_router_launch(arch, launch: Launch, include_dir=None) -> Dict[str, ob
     }
 
 
-def group_launches(rows) -> Optional[Dict[tuple, Dict[int, int]]]:
-    """(run_host_id, core_x, core_y, risc_type, record_time) -> {marker id: payload} for the router counter markers."""
+def group_launches(rows) -> Dict[tuple, Dict[int, int]]:
+    """(device_id, run_host_id, core_x, core_y, risc_type, record_time) -> {marker id: payload} for the router counter
+    markers. A mesh op gives every chip one run_host_id, so launches are keyed by device too.
+    """
     launches: Dict[tuple, Dict[int, int]] = {}
     for row in rows:
         marker_id = int(row["marker_id"])
         if marker_id not in MARKER_IDS:
             continue
         key = (
+            row["device_id"],
             row["run_host_id"],
             row["core_x"],
             row["core_y"],
