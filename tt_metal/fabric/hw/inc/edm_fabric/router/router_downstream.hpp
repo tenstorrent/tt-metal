@@ -144,9 +144,11 @@ struct DownstreamTraits {
     // Whether VC's forwards go to one destination for the whole run, which its forward buffer pair then keeps
     // (FullPresetForwards): the router picks no downstream at run time (not intermesh, not on a mesh's edge), and every
     // VC forwarded on the pair has one live downstream (every 1D router; an E/W-facing 2D router inside a mesh), the
-    // same. Otherwise the pair is partially preset, so no VC's commands overwrite another's preset.
+    // same. Otherwise the pair is partially preset, so no VC's commands overwrite another's preset. Not where VC2 over
+    // the domain's mesh is on the pair: its downstreams are the domain's, which the pair's owner VC may not have.
     static constexpr bool one_destination = !is_intermesh_router && !is_intermesh_router_on_edge &&
                                             !is_intramesh_router_on_edge &&
+                                            !(vc2_domain && ((CommandBuffers::vcs_on_forward_pair(VC) >> 2) & 1u)) &&
                                             pair_has_one_destination<VC>(std::make_index_sequence<MAX_NUM_VCS>{});
 
     static_assert(count > 0 && count <= max_downstreams);
