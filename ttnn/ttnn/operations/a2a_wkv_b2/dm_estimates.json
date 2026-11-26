@@ -866,6 +866,1162 @@
    },
    "calculator": "04e7272304fd3bb3",
    "measurements": []
+  },
+  {
+   "id": "280a5bca",
+   "kind": "sweep",
+   "utc": "2026-11-26T17:53:42.564113+00:00",
+   "phase": "Refinement 2",
+   "label": "sweep",
+   "schedule": {
+    "op": "a2a_wkv_b2",
+    "case": "attn [96,160,512] bf16 RM, 1024 B sticks, one head (160 consecutive pages) per core",
+    "work_bytes": 15728640,
+    "top": 6,
+    "max_l1_bytes": 131072,
+    "candidates": [
+     {
+      "name": "attn_sticks",
+      "family": "dram_read",
+      "placement": "interleaved",
+      "bytes": 1024
+     }
+    ],
+    "vary": {
+     "cores": [
+      96
+     ],
+     "batch": [
+      8,
+      16,
+      32,
+      64
+     ],
+     "noc": [
+      0,
+      1,
+      "split"
+     ]
+    }
+   },
+   "result": {
+    "op": "a2a_wkv_b2",
+    "case": "attn [96,160,512] bf16 RM, 1024 B sticks, one head (160 consecutive pages) per core",
+    "work_bytes": 15728640,
+    "stats": {
+     "evaluated": 12,
+     "estimated": 12,
+     "refused": 0,
+     "over_l1_cap": 0,
+     "shortlisted": 6,
+     "wall_s": 65.86
+    },
+    "groups": [
+     {
+      "name": "attn_sticks batch=16 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 32287.40740740741,
+      "details": {
+       "pass_cycles": 43588.0,
+       "steady_cycles_per_pass": 43017.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 43010.0,
+        "dram_channel": 42240.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 31864.444444444445,
+      "rank": 1,
+      "candidate_id": "314f6b2885fe631e",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 16384,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 16,
+       "cores": 96,
+       "noc": "split",
+       "name": "attn_sticks batch=16 cores=96 noc=split",
+       "pages_per_core": 160
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "attn_sticks batch=32 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 32389.62962962963,
+      "details": {
+       "pass_cycles": 43726.0,
+       "steady_cycles_per_pass": 43091.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 43010.0,
+        "dram_channel": 42240.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 31919.25925925926,
+      "rank": 2,
+      "candidate_id": "07ef1db4a1a78c5b",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 32768,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 32,
+       "cores": 96,
+       "noc": "split",
+       "name": "attn_sticks batch=32 cores=96 noc=split",
+       "pages_per_core": 160
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "attn_sticks batch=32 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 38011.851851851854,
+      "details": {
+       "pass_cycles": 51316.0,
+       "steady_cycles_per_pass": 51001.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 51000.0,
+        "dram_channel": 42240.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 37778.51851851852,
+      "rank": 3,
+      "candidate_id": "b09d3b1eeb0d0e06",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 32768,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 32,
+       "cores": 96,
+       "noc": 0,
+       "name": "attn_sticks batch=32 cores=96 noc=0",
+       "pages_per_core": 160
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "attn_sticks batch=8 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 38013.333333333336,
+      "details": {
+       "pass_cycles": 51318.0,
+       "steady_cycles_per_pass": 50999.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 51000.0,
+        "dram_channel": 42240.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 37777.03703703704,
+      "rank": 4,
+      "candidate_id": "9a1838a756db8797",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 8192,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 8,
+       "cores": 96,
+       "noc": 0,
+       "name": "attn_sticks batch=8 cores=96 noc=0",
+       "pages_per_core": 160
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "attn_sticks batch=16 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 38016.2962962963,
+      "details": {
+       "pass_cycles": 51322.0,
+       "steady_cycles_per_pass": 50999.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 51000.0,
+        "dram_channel": 42240.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 37777.03703703704,
+      "rank": 5,
+      "candidate_id": "9a6f20267adb7e7a",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 16384,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 16,
+       "cores": 96,
+       "noc": 0,
+       "name": "attn_sticks batch=16 cores=96 noc=0",
+       "pages_per_core": 160
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "attn_sticks batch=64 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 38755.555555555555,
+      "details": {
+       "pass_cycles": 52320.0,
+       "steady_cycles_per_pass": 51699.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 51612.0,
+        "dram_channel": 50688.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 38295.555555555555,
+      "rank": 6,
+      "candidate_id": "4c1d7c474e7edb7f",
+      "padding_pct": 19.999999999999996,
+      "l1_bytes_per_core": 65536,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 64,
+       "cores": 96,
+       "noc": "split",
+       "name": "attn_sticks batch=64 cores=96 noc=split",
+       "pages_per_core": 192
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     }
+    ],
+    "refusals": {},
+    "cross_family": false,
+    "note": "One family: the order is as reliable as that family's ranking."
+   },
+   "calculator": "04e7272304fd3bb3",
+   "measurements": []
+  },
+  {
+   "id": "4c3aa780",
+   "kind": "sweep",
+   "utc": "2026-11-26T17:54:14.769030+00:00",
+   "phase": "Refinement 2",
+   "label": "sweep",
+   "schedule": {
+    "op": "a2a_wkv_b2",
+    "case": "W [96,512,128] bfp8_b, 1088 B tiles, one head (64 consecutive tiles) per core",
+    "work_bytes": 6684672,
+    "top": 6,
+    "max_l1_bytes": 69632,
+    "candidates": [
+     {
+      "name": "w_tiles",
+      "family": "dram_read",
+      "placement": "interleaved",
+      "bytes": 1088
+     }
+    ],
+    "vary": {
+     "cores": [
+      96
+     ],
+     "batch": [
+      8,
+      16,
+      32,
+      64
+     ],
+     "noc": [
+      0,
+      1,
+      "split"
+     ]
+    }
+   },
+   "result": {
+    "op": "a2a_wkv_b2",
+    "case": "W [96,512,128] bfp8_b, 1088 B tiles, one head (64 consecutive tiles) per core",
+    "work_bytes": 6684672,
+    "stats": {
+     "evaluated": 12,
+     "estimated": 12,
+     "refused": 0,
+     "over_l1_cap": 0,
+     "shortlisted": 6,
+     "wall_s": 26.61
+    },
+    "groups": [
+     {
+      "name": "w_tiles batch=64 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 13869.62962962963,
+      "details": {
+       "pass_cycles": 18724.0,
+       "steady_cycles_per_pass": 18245.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 18216.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 13514.814814814814,
+      "rank": 1,
+      "candidate_id": "f281307dced23334",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 69632,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 64,
+       "cores": 96,
+       "noc": "split",
+       "name": "w_tiles batch=64 cores=96 noc=split",
+       "pages_per_core": 64
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "w_tiles batch=16 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 13894.814814814816,
+      "details": {
+       "pass_cycles": 18758.0,
+       "steady_cycles_per_pass": 18233.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 18216.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 13505.925925925925,
+      "rank": 2,
+      "candidate_id": "5de6eae0185b97a7",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 17408,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 16,
+       "cores": 96,
+       "noc": "split",
+       "name": "w_tiles batch=16 cores=96 noc=split",
+       "pages_per_core": 64
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "w_tiles batch=32 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 13897.777777777777,
+      "details": {
+       "pass_cycles": 18762.0,
+       "steady_cycles_per_pass": 18187.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 18216.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 13471.851851851852,
+      "rank": 3,
+      "candidate_id": "3eb25def2674a510",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 34816,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 32,
+       "cores": 96,
+       "noc": "split",
+       "name": "w_tiles batch=32 cores=96 noc=split",
+       "pages_per_core": 64
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "w_tiles batch=32 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 16235.555555555557,
+      "details": {
+       "pass_cycles": 21918.0,
+       "steady_cycles_per_pass": 21599.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 21600.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 15999.25925925926,
+      "rank": 4,
+      "candidate_id": "77a1b181635bbb3b",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 34816,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 32,
+       "cores": 96,
+       "noc": 0,
+       "name": "w_tiles batch=32 cores=96 noc=0",
+       "pages_per_core": 64
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "w_tiles batch=64 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 16237.037037037036,
+      "details": {
+       "pass_cycles": 21920.0,
+       "steady_cycles_per_pass": 21601.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 21600.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 16000.740740740743,
+      "rank": 5,
+      "candidate_id": "10727f354c238633",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 69632,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 64,
+       "cores": 96,
+       "noc": 0,
+       "name": "w_tiles batch=64 cores=96 noc=0",
+       "pages_per_core": 64
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "w_tiles batch=16 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 16238.518518518518,
+      "details": {
+       "pass_cycles": 21922.0,
+       "steady_cycles_per_pass": 21599.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 21600.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 15999.25925925926,
+      "rank": 6,
+      "candidate_id": "a5a56add7b19899d",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 17408,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 16,
+       "cores": 96,
+       "noc": 0,
+       "name": "w_tiles batch=16 cores=96 noc=0",
+       "pages_per_core": 64
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     }
+    ],
+    "refusals": {},
+    "cross_family": false,
+    "note": "One family: the order is as reliable as that family's ranking."
+   },
+   "calculator": "04e7272304fd3bb3",
+   "measurements": []
+  },
+  {
+   "id": "c92d491d",
+   "kind": "sweep",
+   "utc": "2026-11-26T17:55:26.308726+00:00",
+   "phase": "Refinement 2",
+   "label": "sweep",
+   "schedule": {
+    "op": "a2a_wkv_b2",
+    "case": "attn [96,160,512] bf16 RM, 1024 B sticks, one head (160 consecutive pages) per core",
+    "work_bytes": 15728640,
+    "top": 6,
+    "max_l1_bytes": 131072,
+    "candidates": [
+     {
+      "name": "attn_sticks",
+      "family": "dram_read",
+      "placement": "interleaved",
+      "bytes": 1024
+     }
+    ],
+    "vary": {
+     "cores": [
+      96
+     ],
+     "batch": [
+      8,
+      16,
+      32,
+      64
+     ],
+     "noc": [
+      0,
+      1,
+      "split"
+     ]
+    }
+   },
+   "result": {
+    "op": "a2a_wkv_b2",
+    "case": "attn [96,160,512] bf16 RM, 1024 B sticks, one head (160 consecutive pages) per core",
+    "work_bytes": 15728640,
+    "stats": {
+     "evaluated": 12,
+     "estimated": 12,
+     "refused": 0,
+     "over_l1_cap": 0,
+     "shortlisted": 6,
+     "wall_s": 64.69
+    },
+    "groups": [
+     {
+      "name": "attn_sticks batch=16 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 32287.40740740741,
+      "details": {
+       "pass_cycles": 43588.0,
+       "steady_cycles_per_pass": 43017.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 43010.0,
+        "dram_channel": 42240.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 31864.444444444445,
+      "rank": 1,
+      "candidate_id": "314f6b2885fe631e",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 16384,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 16,
+       "cores": 96,
+       "noc": "split",
+       "name": "attn_sticks batch=16 cores=96 noc=split",
+       "pages_per_core": 160
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "attn_sticks batch=32 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 32389.62962962963,
+      "details": {
+       "pass_cycles": 43726.0,
+       "steady_cycles_per_pass": 43091.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 43010.0,
+        "dram_channel": 42240.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 31919.25925925926,
+      "rank": 2,
+      "candidate_id": "07ef1db4a1a78c5b",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 32768,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 32,
+       "cores": 96,
+       "noc": "split",
+       "name": "attn_sticks batch=32 cores=96 noc=split",
+       "pages_per_core": 160
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "attn_sticks batch=32 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 38011.851851851854,
+      "details": {
+       "pass_cycles": 51316.0,
+       "steady_cycles_per_pass": 51001.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 51000.0,
+        "dram_channel": 42240.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 37778.51851851852,
+      "rank": 3,
+      "candidate_id": "b09d3b1eeb0d0e06",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 32768,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 32,
+       "cores": 96,
+       "noc": 0,
+       "name": "attn_sticks batch=32 cores=96 noc=0",
+       "pages_per_core": 160
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "attn_sticks batch=8 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 38013.333333333336,
+      "details": {
+       "pass_cycles": 51318.0,
+       "steady_cycles_per_pass": 50999.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 51000.0,
+        "dram_channel": 42240.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 37777.03703703704,
+      "rank": 4,
+      "candidate_id": "9a1838a756db8797",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 8192,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 8,
+       "cores": 96,
+       "noc": 0,
+       "name": "attn_sticks batch=8 cores=96 noc=0",
+       "pages_per_core": 160
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "attn_sticks batch=16 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 38016.2962962963,
+      "details": {
+       "pass_cycles": 51322.0,
+       "steady_cycles_per_pass": 50999.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 51000.0,
+        "dram_channel": 42240.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 37777.03703703704,
+      "rank": 5,
+      "candidate_id": "9a6f20267adb7e7a",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 16384,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 16,
+       "cores": 96,
+       "noc": 0,
+       "name": "attn_sticks batch=16 cores=96 noc=0",
+       "pages_per_core": 160
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "attn_sticks batch=64 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 38755.555555555555,
+      "details": {
+       "pass_cycles": 52320.0,
+       "steady_cycles_per_pass": 51699.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 51612.0,
+        "dram_channel": 50688.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 38295.555555555555,
+      "rank": 6,
+      "candidate_id": "4c1d7c474e7edb7f",
+      "padding_pct": 19.999999999999996,
+      "l1_bytes_per_core": 65536,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1024,
+       "batch": 64,
+       "cores": 96,
+       "noc": "split",
+       "name": "attn_sticks batch=64 cores=96 noc=split",
+       "pages_per_core": 192
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     }
+    ],
+    "refusals": {},
+    "cross_family": false,
+    "note": "One family: the order is as reliable as that family's ranking."
+   },
+   "calculator": "04e7272304fd3bb3",
+   "measurements": []
+  },
+  {
+   "id": "396f7029",
+   "kind": "sweep",
+   "utc": "2026-11-26T17:55:59.315379+00:00",
+   "phase": "Refinement 2",
+   "label": "sweep",
+   "schedule": {
+    "op": "a2a_wkv_b2",
+    "case": "W [96,512,128] bfp8_b, 1088 B tiles, one head (64 consecutive tiles) per core",
+    "work_bytes": 6684672,
+    "top": 6,
+    "max_l1_bytes": 69632,
+    "candidates": [
+     {
+      "name": "w_tiles",
+      "family": "dram_read",
+      "placement": "interleaved",
+      "bytes": 1088
+     }
+    ],
+    "vary": {
+     "cores": [
+      96
+     ],
+     "batch": [
+      8,
+      16,
+      32,
+      64
+     ],
+     "noc": [
+      0,
+      1,
+      "split"
+     ]
+    }
+   },
+   "result": {
+    "op": "a2a_wkv_b2",
+    "case": "W [96,512,128] bfp8_b, 1088 B tiles, one head (64 consecutive tiles) per core",
+    "work_bytes": 6684672,
+    "stats": {
+     "evaluated": 12,
+     "estimated": 12,
+     "refused": 0,
+     "over_l1_cap": 0,
+     "shortlisted": 6,
+     "wall_s": 25.83
+    },
+    "groups": [
+     {
+      "name": "w_tiles batch=64 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 13869.62962962963,
+      "details": {
+       "pass_cycles": 18724.0,
+       "steady_cycles_per_pass": 18245.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 18216.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 13514.814814814814,
+      "rank": 1,
+      "candidate_id": "f281307dced23334",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 69632,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 64,
+       "cores": 96,
+       "noc": "split",
+       "name": "w_tiles batch=64 cores=96 noc=split",
+       "pages_per_core": 64
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "w_tiles batch=16 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 13894.814814814816,
+      "details": {
+       "pass_cycles": 18758.0,
+       "steady_cycles_per_pass": 18233.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 18216.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 13505.925925925925,
+      "rank": 2,
+      "candidate_id": "5de6eae0185b97a7",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 17408,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 16,
+       "cores": 96,
+       "noc": "split",
+       "name": "w_tiles batch=16 cores=96 noc=split",
+       "pages_per_core": 64
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "w_tiles batch=32 cores=96 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 13897.777777777777,
+      "details": {
+       "pass_cycles": 18762.0,
+       "steady_cycles_per_pass": 18187.0,
+       "binding": "NoC link ['link', 1, 0, 10, 0, 9]",
+       "lower_bounds_cycles": {
+        "noc_link": 18216.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 96,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 13471.851851851852,
+      "rank": 3,
+      "candidate_id": "3eb25def2674a510",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 34816,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 32,
+       "cores": 96,
+       "noc": "split",
+       "name": "w_tiles batch=32 cores=96 noc=split",
+       "pages_per_core": 64
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "w_tiles batch=32 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 16235.555555555557,
+      "details": {
+       "pass_cycles": 21918.0,
+       "steady_cycles_per_pass": 21599.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 21600.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 15999.25925925926,
+      "rank": 4,
+      "candidate_id": "77a1b181635bbb3b",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 34816,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 32,
+       "cores": 96,
+       "noc": 0,
+       "name": "w_tiles batch=32 cores=96 noc=0",
+       "pages_per_core": 64
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "w_tiles batch=64 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 16237.037037037036,
+      "details": {
+       "pass_cycles": 21920.0,
+       "steady_cycles_per_pass": 21601.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 21600.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 16000.740740740743,
+      "rank": 5,
+      "candidate_id": "10727f354c238633",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 69632,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 64,
+       "cores": 96,
+       "noc": 0,
+       "name": "w_tiles batch=64 cores=96 noc=0",
+       "pages_per_core": 64
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "w_tiles batch=16 cores=96 noc=0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 16238.518518518518,
+      "details": {
+       "pass_cycles": 21922.0,
+       "steady_cycles_per_pass": 21599.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 21600.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 96
+      },
+      "steady_ns_per_pass": 15999.25925925926,
+      "rank": 6,
+      "candidate_id": "a5a56add7b19899d",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 17408,
+      "config": {
+       "family": "dram_read",
+       "placement": "interleaved",
+       "bytes": 1088,
+       "batch": 16,
+       "cores": 96,
+       "noc": 0,
+       "name": "w_tiles batch=16 cores=96 noc=0",
+       "pages_per_core": 64
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     }
+    ],
+    "refusals": {},
+    "cross_family": false,
+    "note": "One family: the order is as reliable as that family's ranking."
+   },
+   "calculator": "04e7272304fd3bb3",
+   "measurements": []
   }
  ]
 }

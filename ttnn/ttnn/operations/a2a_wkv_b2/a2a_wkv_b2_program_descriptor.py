@@ -6,11 +6,14 @@
 Regime R1 of op_design.md (matmul-first, heads over cores, streamed mt rounds):
 
   worker cores (one head each at 96 workers):
-    reader  (NCRISC, NoC 0): W[h] (Kt x Nt bf8 tiles) once per head, then attn sticks per mt block
+    reader  (NCRISC, NoC 0 or 1 per READ_NOC_SPLIT): W[h] (Kt x Nt bf8 tiles) once per head, then attn
+                           sticks per mt block
     compute               : tilize(mt_block x Kt) -> matmul_block([mt_block x Kt] @ [Kt x Nt]) -> cb_out
-    writer  (BRISC,  NoC 1): local head -> output L1 tiles; every block -> bump sem_blocks_done
+    writer  (BRISC, the other NoC): local head -> output L1 tiles; remote head block -> bump the head
+                           slot's block counter (GlobalSemaphore)
   fabric_tx cores (one per stream = (direction, link)):
-    reader  (NCRISC, NoC 0): poll a worker's sem_blocks_done, pull its block from cb_out into cb_tx_stage
+    reader  (NCRISC, NoC 0): poll a head's block counter, pull its block from cb_out into cb_tx_stage;
+                             reset each head's counter to 0 after its last block
     writer  (BRISC)        : ready handshake, scatter-write packets to the destination's output tiles
                              over the fabric, done handshake (flush), wait for the peer's done
 
@@ -33,6 +36,11 @@ MT_BLOCK = 1  # token tile rows per block (op_design.md: mt_block)
 ATTN_RM_DEPTH = 2  # cb_attn_rm depth in blocks (reader fetches mt+1 while compute tilizes mt)
 TX_BATCH = 8  # packets per fabric_tx batch: one pull barrier (reader), one flush + pop (writer)
 TX_BUFFERS = 2  # cb_tx_stage depth in batches (pull batch b+1 overlaps send of batch b)
+# Worker read NoC split (Refinement 2): which worker cores swap their reader onto NoC 1 (and their writer
+# onto NoC 0), so the DRAM read stream's responses use both NoCs' links. Each kernel still uses one NoC
+# (dedicated mode), so no cross-NoC counter state is involved. "none" = every reader on NoC 0 (Phase 0);
+# "checker" = cores with odd (x + y) read on NoC 1.
+READ_NOC_SPLIT = "all"
 MAX_MATMUL_CORES = 110  # matmul di/dt cap
 SCATTER_MAX_CHUNKS = 4  # NOC_SCATTER_WRITE_MAX_CHUNKS
 DEST_TILES_HALF_SYNC_16B = 8  # DEST capacity (half sync, 16-bit)
@@ -43,9 +51,6 @@ CB_ATTN_RM = 1
 CB_ATTN_TILED = 2
 CB_OUT = 3
 CB_TX_STAGE = 4
-
-# Program semaphore ids
-SEM_BLOCKS_DONE = 0
 
 TILE = 32
 
@@ -58,6 +63,7 @@ def _div_up(a, b):
 # Cross-chip semaphores: created once per mesh device on the first (eager) call
 # ---------------------------------------------------------------------------
 _SEM_CACHE = []  # [(mesh_device, sem_ready, sem_done)]
+_COUNTER_CACHE = []  # [(mesh_device, [block counter per head slot])]
 
 
 def get_cross_chip_semaphores(mesh_device):
@@ -70,6 +76,19 @@ def get_cross_chip_semaphores(mesh_device):
     done = ttnn._ttnn.ccl_host.make_ccl_semaphore(mesh_device, 0)
     _SEM_CACHE.append((mesh_device, ready, done))
     return ready, done
+
+
+def get_block_counter_semaphores(mesh_device, num_slots):
+    """One GlobalSemaphore per worker head slot: the slot's published-block count (zero between calls).
+
+    Persistent addresses (unlike a program semaphore, which a worker re-initialises only at its own
+    launch, possibly after a fabric_tx core has polled it). Created on the first (eager) call."""
+    for dev, sems in _COUNTER_CACHE:
+        if dev is mesh_device and len(sems) >= num_slots:
+            return sems[:num_slots]
+    sems = [ttnn._ttnn.ccl_host.make_ccl_semaphore(mesh_device, 0) for _ in range(num_slots)]
+    _COUNTER_CACHE.append((mesh_device, sems))
+    return sems
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +122,16 @@ def _ring_streams(n, hpc):
 
 def _stream_core_index(direction, link, num_links):
     return (0 if direction > 0 else 1) * num_links + link
+
+
+def _reads_on_noc1(core):
+    if READ_NOC_SPLIT == "none":
+        return False
+    if READ_NOC_SPLIT == "all":
+        return True
+    if READ_NOC_SPLIT == "checker":
+        return (core.x + core.y) % 2 == 1
+    raise ValueError(f"unknown READ_NOC_SPLIT {READ_NOC_SPLIT!r}")
 
 
 def _coord_with(coord_tuple, axis, value):
@@ -190,6 +219,9 @@ def create_mesh_program_descriptor(
     for s in streams:
         tx_core_of[(s["dir"], s["link"])] = tx_cores[_stream_core_index(s["dir"], s["link"], num_links)]
 
+    counter_addrs = [
+        ttnn.get_global_semaphore_address(c) for c in get_block_counter_semaphores(mesh_device, heads_per_core)
+    ]
     sem_ready_addr = ttnn.get_global_semaphore_address(sem_ready)
     sem_done_addr = ttnn.get_global_semaphore_address(sem_done)
     fabric_defines = list(ttnn.get_fabric_kernel_defines("Linear"))
@@ -224,33 +256,63 @@ def create_mesh_program_descriptor(
             cb(CB_OUT, ttnn.bfloat8_b, out_tile_bytes, heads_per_core * Mt * Nt),
             cb(CB_TX_STAGE, ttnn.bfloat8_b, out_tile_bytes, TX_BUFFERS * TX_BATCH * tiles_per_packet),
         ]
-        semaphores = [
-            ttnn.SemaphoreDescriptor(
-                id=SEM_BLOCKS_DONE, core_type=ttnn.CoreType.WORKER, core_ranges=program_set, initial_value=0
-            )
-        ]
+        semaphores = []  # block counters are GlobalSemaphores (counter_addrs)
 
         # ---------------- worker kernels ----------------
         w_reader_ct = [CB_WEIGHT, CB_ATTN_RM, Kt, Nt, Mt, mt_block, T, stick_bytes, attn_page_bytes, w_tile_bytes, TILE]
         w_reader_ct += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
         w_reader_ct += ttnn.TensorAccessorArgs(weight).get_compile_time_args()
-        w_reader_rt = ttnn.RuntimeArgs()
+        w_reader_rt = {}  # (x, y) -> args; split per read-NoC set below
         compute_rt = ttnn.RuntimeArgs()
-        w_writer_rt = ttnn.RuntimeArgs()
+        w_writer_rt = {}
         for core, start, cnt in worker_assign:
-            w_reader_rt[core.x][core.y] = [input_tensor.buffer_address(), weight.buffer_address(), start, cnt]
+            w_reader_rt[(core.x, core.y)] = [input_tensor.buffer_address(), weight.buffer_address(), start, cnt]
             compute_rt[core.x][core.y] = [cnt]
-            w_writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start, cnt, r]
-        w_writer_ct = [CB_OUT, Mt, Nt, mt_block, hpc, n, SEM_BLOCKS_DONE, out_tile_bytes] + out_ct_accessor
+            w_writer_rt[(core.x, core.y)] = [output_tensor.buffer_address(), start, cnt, r] + counter_addrs[:cnt]
+        w_writer_ct = [CB_OUT, Mt, Nt, mt_block, hpc, n, out_tile_bytes] + out_ct_accessor
         compute_ct = [CB_ATTN_RM, CB_ATTN_TILED, CB_WEIGHT, CB_OUT, Kt, Nt, Mt, mt_block]
 
-        worker_reader = ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_reader.cpp"),
-            core_ranges=worker_set,
-            compile_time_args=w_reader_ct,
-            runtime_args=w_reader_rt,
-            config=ttnn.ReaderConfigDescriptor(),
-        )
+        # Worker kernels: one reader/writer descriptor pair per read-NoC set (same sources and args).
+        def _subset(rt, cores):
+            sub = ttnn.RuntimeArgs()
+            for c in cores:
+                sub[c.x][c.y] = rt[(c.x, c.y)]
+            return sub
+
+        worker_kernels = []
+        for on_noc1 in (False, True):
+            cores = [c for c in worker_cores if _reads_on_noc1(c) == on_noc1]
+            if not cores:
+                continue
+            crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+            if on_noc1:
+                reader_cfg = ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
+                )
+                writer_cfg = ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                )
+            else:
+                reader_cfg = ttnn.ReaderConfigDescriptor()
+                writer_cfg = ttnn.WriterConfigDescriptor()
+            worker_kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_reader.cpp"),
+                    core_ranges=crs,
+                    compile_time_args=w_reader_ct,
+                    runtime_args=_subset(w_reader_rt, cores),
+                    config=reader_cfg,
+                )
+            )
+            worker_kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_writer.cpp"),
+                    core_ranges=crs,
+                    compile_time_args=w_writer_ct,
+                    runtime_args=_subset(w_writer_rt, cores),
+                    config=writer_cfg,
+                )
+            )
         worker_compute = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_compute.cpp"),
             core_ranges=worker_set,
@@ -258,17 +320,10 @@ def create_mesh_program_descriptor(
             runtime_args=compute_rt,
             config=compute_kernel_config,
         )
-        worker_writer = ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_writer.cpp"),
-            core_ranges=worker_set,
-            compile_time_args=w_writer_ct,
-            runtime_args=w_writer_rt,
-            config=ttnn.WriterConfigDescriptor(),
-        )
 
         # ---------------- fabric_tx kernels ----------------
         max_stream_heads = max(len(s["heads"]) for s in streams)
-        tx_reader_ct = [CB_TX_STAGE, CB_OUT, SEM_BLOCKS_DONE, Mt, Nt, mt_block, tiles_per_packet, out_tile_bytes]
+        tx_reader_ct = [CB_TX_STAGE, CB_OUT, Mt, Nt, mt_block, tiles_per_packet, out_tile_bytes]
         tx_reader_ct += [TX_BATCH, max_stream_heads]
         tx_writer_ct = [CB_TX_STAGE, Mt, Nt, mt_block, tiles_per_packet, out_tile_bytes, n, l1_alignment, TX_BATCH]
         tx_writer_ct += out_ct_accessor
@@ -289,7 +344,7 @@ def create_mesh_program_descriptor(
             for h_local in s["heads"]:
                 wcore, hi = head_owner[d * hpc + h_local]
                 wv = mesh_device.worker_core_from_logical_core(wcore)
-                reader_args += [wv.x, wv.y, hi]
+                reader_args += [wv.x, wv.y, hi, counter_addrs[hi]]
             tx_reader_rt[tx_core.x][tx_core.y] = reader_args
 
             writer_args = [
@@ -323,11 +378,11 @@ def create_mesh_program_descriptor(
         )
 
         pd = ttnn.ProgramDescriptor(
-            kernels=[worker_reader, worker_compute, worker_writer, tx_reader, tx_writer],
+            kernels=[*worker_kernels, worker_compute, tx_reader, tx_writer],
             semaphores=semaphores,
             cbs=cbs,
         )
-        TX_WRITER_IDX = 4
+        TX_WRITER_IDX = len(pd.kernels) - 1
         for tx_core, nbr_node, link, writer_args in tx_plan:
             # Fabric connection block FIRST (FabricStreamSender consumes it from arg 0).
             fabric_args = ttnn._ttnn.ccl_host.build_ccl_fabric_rt_args(

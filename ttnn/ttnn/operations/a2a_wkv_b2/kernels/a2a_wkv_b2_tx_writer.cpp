@@ -12,14 +12,32 @@
 //   announce_done  : fabric atomic inc with flush -> peer sem_done (after the last data packet)
 //   await_done     : local wait sem_done >= 1 (the peer's data has landed here), reset 0
 //
+// Packet headers: a fabric send writes the payload, then the header, from L1 with non-blocking NoC
+// writes, so a header must not be re-programmed until the previous packet that used it has left L1.
+// Packets of a batch therefore rotate over a ring of independently armed scatter headers
+// (hdr_ring, derived from the per-RISC header pool); the ring is only reused after a flush (per batch,
+// or mid-batch when a batch is longer than the ring). Re-arming one header per packet without a flush
+// sent packet i's payload with packet i+1's addresses (Refinement 2 finding).
+//
 // The peer is the destination's stream that targets this chip; it sends exactly one ready and one
 // done per call, so every count is 1. Resets happen right after each wait (see op_design.md
 // "Synchronization contract" for why the next call always sees 0).
 
+#include <array>
 #include <cstdint>
+#include <utility>
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/ccl/ccl_helpers_dataflow.hpp"
+
+namespace {
+template <typename Stream, size_t... I>
+FORCE_INLINE auto arm_scatter_ring(
+    Stream& stream, uint32_t chunk_bytes, uint32_t max_chunks, std::index_sequence<I...>) {
+    using Channel = decltype(stream.arm_scatter_write(chunk_bytes, max_chunks));
+    return std::array<Channel, sizeof...(I)>{((void)I, stream.arm_scatter_write(chunk_bytes, max_chunks))...};
+}
+}  // namespace
 
 void kernel_main() {
     constexpr uint32_t cb_tx_stage = get_compile_time_arg_val(0);
@@ -41,6 +59,12 @@ void kernel_main() {
     constexpr uint32_t tiles_per_source_head = ring_size * Mt * Nt;
     constexpr uint32_t packet_bytes = tiles_per_packet * tile_bytes;
     constexpr uint32_t batch_pages = tx_batch * tiles_per_packet;
+    // Header pool: inc + unicast take one header each, the rest (up to tx_batch) form the scatter ring.
+    constexpr uint32_t headers_per_risc = NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType;
+    constexpr uint32_t other_headers = 2;
+    static_assert(headers_per_risc > other_headers, "no packet header left for the scatter ring");
+    constexpr uint32_t hdr_ring =
+        tx_batch < headers_per_risc - other_headers ? tx_batch : headers_per_risc - other_headers;
 
     using namespace dataflow_kernel_lib::ccl;
 
@@ -80,8 +104,8 @@ void kernel_main() {
     noc_semaphore_set(sem_ready, 0);
 
     auto unicast_ch = stream.arm_unicast_write(tile_bytes);  // single-tile tail packets
-    [[maybe_unused]] auto scatter_ch =
-        stream.arm_scatter_write(tile_bytes, tiles_per_packet > 1 ? tiles_per_packet : 2);
+    [[maybe_unused]] auto scatter_ring = arm_scatter_ring(
+        stream, tile_bytes, tiles_per_packet > 1 ? tiles_per_packet : 2, std::make_index_sequence<hdr_ring>{});
 
     uint64_t dst_addrs[tiles_per_packet] = {};
     for (uint32_t mb = 0; mb < num_mt_blocks; ++mb) {
@@ -94,6 +118,7 @@ void kernel_main() {
             const uint32_t k = (round_packets - q0) < tx_batch ? (round_packets - q0) : tx_batch;
             cb_wait_front(cb_tx_stage, batch_pages);
             const uint32_t base = get_read_ptr(cb_tx_stage);
+            bool unicast_used = false;
             for (uint32_t i = 0; i < k; ++i) {
                 const uint32_t q = q0 + i;
                 const uint32_t s = q / packets_per_block;
@@ -106,9 +131,17 @@ void kernel_main() {
                     dst_addrs[c] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(out, tile0 + c, 0);
                 }
                 if (chunks == 1) {
+                    if (unicast_used) {
+                        stream.flush();  // the unicast header is still being read by the previous tail packet
+                    }
                     unicast_ch.write(dst_addrs[0], l1);
+                    unicast_used = true;
                 } else {
-                    scatter_ch.write_scatter(dst_addrs, chunks, l1);
+                    const uint32_t r = i % hdr_ring;
+                    if (r == 0 && i != 0) {
+                        stream.flush();  // ring wraps inside the batch: its headers must have left L1
+                    }
+                    scatter_ring[r].write_scatter(dst_addrs, chunks, l1);
                 }
             }
             stream.flush();  // every payload of the batch has left its L1 slot before the reader reuses it
