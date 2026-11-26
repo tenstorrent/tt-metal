@@ -69,9 +69,9 @@ constexpr bool units = flat_options::gate_up_units != 0;
 constexpr uint32_t row_width = units ? flat_options::gate_up_units : 2 * tile_pairs;
 // the h tiles this core produces per row tile
 constexpr uint32_t h_row_tiles = units ? flat_options::gate_up_units_h_tiles : tile_pairs;
-// row tiles in DST at once: the whole sub-block, or with row passes row_pass_rows
-constexpr bool row_passes = flat_options::row_pass_rows != 0;
-constexpr uint32_t pass_row_tiles = row_passes ? flat_options::row_pass_rows : row_tiles;
+// row tiles in DST at once: the whole sub-block, or with row passes row_tiles_per_pass
+constexpr bool row_passes = flat_options::row_tiles_per_pass != 0;
+constexpr uint32_t pass_row_tiles = row_passes ? flat_options::row_tiles_per_pass : row_tiles;
 static_assert(pass_row_tiles * row_width <= compute_kernel_lib::DEST_AUTO_LIMIT, "a pass's gate/up tiles fit DST");
 
 // 16-column units: 1 when this core's first unit is the right half of an h tile (runtime arg 0)
@@ -111,12 +111,11 @@ FORCE_INLINE void free_weight_block() {
     ++weight_blocks_freed;
 }
 
-// The K steps of one x block: x row tiles [rows][x_block_k_tiles] from tile x_index on, times the weight block at
-// w_index (row-major, row_width tiles a K row). One matmul_block_k: the unpacker unpacks the K steps and the math runs
-// them in one LLK call - bit-identical to a matmul_block a step, without the per-step call overhead (the 2 x 2 tile
-// output of a GLM-5.3 row pass is short on math per call). A full sub-block (or pass) takes the compile-time row
-// count FULL, which lets the LLK unroll its per-tile loops; only a short last sub-block runs with the runtime one.
-// The short form is out of line: the TRISCs fetch the K loop's code, and a second inlined copy slows the common one.
+// One x block times one weight block: x row tiles [rows][x_block_k_tiles] from tile x_index on, times the weight block
+// at w_index (row-major, row_width tiles a K row). All K steps go in one matmul_block_k call, which saves the per-step
+// call overhead (bit-identical to a matmul_block a step). A full sub-block or pass uses the compile-time row count FULL
+// so the LLK can unroll its loops; a short last one uses the runtime count in an out-of-line copy, which keeps the
+// common path's code small for the TRISCs' instruction fetch.
 __attribute__((noinline)) void matmul_x_block_short(uint32_t x_index, uint32_t w_index, uint32_t rows) {
     matmul_block_k(
         x_cb, weight_cb, x_index, w_index, 0, false, row_width, rows, x_block_k_tiles, x_block_k_tiles, row_width);

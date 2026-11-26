@@ -17,8 +17,8 @@
 // tiles, row tile major in the gate/up cores' x ring) goes out as MT unicast pieces into the rectangle's snake head,
 // once the whole super-block's ring slots are free there (the head's freed word); the gate/up cores forward it along
 // the snake (gate_up_core_reader.cpp / gate_up_x_forwarder.cpp). The head's XARR moves by a batch's pieces once its
-// writes are acknowledged. Named CT args (flat_options): MT = row_tiles_per_sub_block, TILE_BYTES = x_tile_bytes,
-// X_SLOTS = x_ring_blocks, XARR_SEM = x_arrived_sem, KBLK = x_block_k_tiles, NUM_E = local_experts, NSB =
+// writes are acknowledged. Named CT args (flat_options): MT = x_row_tiles (an x block's row tiles), TILE_BYTES =
+// x_tile_bytes, X_SLOTS = x_ring_blocks, XARR_SEM = x_arrived_sem, KBLK = x_block_k_tiles, NUM_E = local_experts, NSB =
 // super_blocks_per_sub_block
 // RT: 0 x ring address, 1 snake head xy, 2 the head's freed word address (here), 3 helper 0 xy, 4 landing rings
 //     address, 5 landing slots, 6 helper 1 xy, 7.. the expert_schedule.hpp args
@@ -90,9 +90,9 @@ void kernel_main() {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])), hb + 1);
         const uint32_t src = land + (hh * land_slots + hb % land_slots) * sb_tiles * tb;
         // The whole super-block goes out as one batch once its last block's ring slot is free. Batches in flight are
-        // only counted into the head's XARR on retirement: every wait retires the acknowledged ones, else a compute
-        // that needs the whole ring (row passes: all Ht / KBLK blocks of a sub-block resident, GLM-5.3 24 of 24)
-        // never sees the last batch and never frees one (deadlock).
+        // counted into the head's XARR only when retired, so every wait retires the acknowledged ones: otherwise the
+        // compute could be waiting on blocks that have landed but are not yet counted, never free a ring slot, and
+        // this wait for a free slot would never end (deadlock).
         invalidate_l1_cache();
         while (sent + per_sb > *freed + x_slots) {
             chain_retire(kChainDepth);

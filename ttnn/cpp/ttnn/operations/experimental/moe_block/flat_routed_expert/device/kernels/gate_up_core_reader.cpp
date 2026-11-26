@@ -24,12 +24,13 @@
 //     chain head with a GATH increment there, once go >= v (counted by the down
 //     cores' coordinator).
 //
-// Named CT args: x_cb (X_CB), weight_cb (IN1_CB), h_local_cb (H_LOCAL_CB); flat_options: X_BLK_TILES = MT x
-//     x_block_k_tiles, SLOT_TILES = gate_up_block_tiles, NK_GU = gate_up_blocks_per_expert (weight blocks of a load,
-//     x blocks of a virtual expert), W_SLOTS = gate_up_weight_ring_blocks, MT = row_tiles_per_sub_block, H_TILE_BYTES
-//     = h_tile_bytes, NCC = gate_up_core_count, DATA_SEM = gate_up_data_sem, GO_SEM = go_sem, HBUF = h_buffers,
-//     XARR_SEM = x_arrived_sem, X_SLOTS = x_ring_blocks, NP = gate_up_tile_pairs, h_gather_sem_1 / _2 (the GATH ids
-//     of h buffers 1, 2), X_PIECES = x_chain_pieces (the x arrival semaphore counts pieces), NUM_E = local_experts
+// Named CT args: x_cb (X_CB), weight_cb (IN1_CB), h_local_cb (H_LOCAL_CB); flat_options: X_BLK_TILES = x_row_tiles x
+//     x_block_k_tiles (an x block), SLOT_TILES = gate_up_block_tiles, NK_GU = gate_up_blocks_per_expert (weight blocks
+//     of a load; x blocks of an x row group), W_SLOTS = gate_up_weight_ring_blocks, MT = row_tiles_per_sub_block,
+//     H_TILE_BYTES = h_tile_bytes, NCC = gate_up_core_count, DATA_SEM = gate_up_data_sem, GO_SEM = go_sem, HBUF =
+//     h_buffers, XARR_SEM = x_arrived_sem, X_SLOTS = x_ring_blocks, NP = gate_up_tile_pairs, h_gather_sem_1 / _2 (the
+//     GATH ids of h buffers 1, 2), X_PIECES = x_chain_pieces (the x arrival semaphore counts pieces), NUM_E =
+//     local_experts
 // RT: 0 the grant counter's sem id here, 1 column group CG, 2 NH (chain heads of the group), 3 the GATH sem id, 4
 //     h_all address, 5.. the expert_schedule.hpp args. Common args: the NH head xy
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
@@ -121,12 +122,15 @@ void kernel_main() {
         }
         *sem(flat_options::gate_up_mailbox_sem) = 1;
     }
-    // Until the first sub-block's x has arrived, at most gate_up_w_start landing slots granted (0: the whole ring),
-    // the weight reads kept off the NoC while x ramps up; then the whole ring.
+    // Start-up cap: grant at most gate_up_w_start landing slots (0: the whole ring), keeping the weight reads off the
+    // NoC while x ramps up, until the first x row group is in - its nk_gu x blocks (one a K block), or as many as the
+    // x ring holds if fewer: the compute may keep its first weight blocks until it has the rest of them, so the cap
+    // must lift once no more x can arrive without it (else neither side moves).
     constexpr uint32_t w_start = get_named_compile_time_arg_val("gate_up_w_start");
     constexpr uint32_t w_first = w_start && w_start < w_slots ? w_start : w_slots;
     uint32_t x_pub = 0, x_cons = 0;
-    auto w_cap = [&]() { return w_start == 0 || x_pub >= nk_gu ? w_slots : w_first; };
+    constexpr uint32_t w_lift = nk_gu < x_slots ? nk_gu : x_slots;  // (x blocks published that lift the cap)
+    auto w_cap = [&]() { return w_start == 0 || x_pub >= w_lift ? w_slots : w_first; };
     grant(w_first);  // every landing slot starts free
     uint32_t granted = w_first, pushed = 0;
     uint32_t h_sent = 0, h_pending = 0;

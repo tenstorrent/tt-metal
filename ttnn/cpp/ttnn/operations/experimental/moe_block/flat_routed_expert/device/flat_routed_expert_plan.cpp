@@ -286,7 +286,7 @@ FlatRoutedExpertPlan make_plan(
         }
         const uint32_t np = per / 2;
         const bool pairs = per % 2 == 0 && p.intermediate_tiles % np == 0 && (p.intermediate_tiles / np) % slots == 0;
-        // (x_ring: a given ring size - the plan search grows the ring past a sub-block, below)
+        // (x_ring != 0: plan with exactly that ring size - the plan search's ring growth, below)
         std::vector<uint32_t> ring_sizes = {24u, 16u, 12u};
         if (x_ring != 0) {
             ring_sizes = {x_ring};
@@ -678,7 +678,7 @@ FlatRoutedExpertPlan make_plan(
         p.dynamic_counts_bytes = 4 * dyn_half;
         p.static_l1_bytes = 0;  // (every CB is in the arena)
     }
-    if (x_ring != 0 && gu_bytes > budget) {  // (a ring the search tries: too large, quietly - an arena past budget)
+    if (x_ring != 0 && gu_bytes > budget) {  // (too large: an over-budget plan, which stops the search's ring growth)
         p.arena_tiles = budget / 2048 + 1;
         return p;
     }
@@ -854,11 +854,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
             try {
                 auto p = make_plan(mesh_device, cfg, budget, mt, hbuf);
                 if (p.arena_tiles * 2048 <= budget) {
-                    // the x ring grown into the leftover L1 while the sub-block rows and h buffers stay (with row
-                    // passes the ring holds a whole sub-block: each block past it lets the next sub-block's x in during
-                    // the first pass; GLM-5.3 4x4 M 320 on a p150: 24 / 26 / 28 blocks 1258 / 1227 / 1217 us). Pair
-                    // splits only: the 16-column-unit ones lose (p150, filled vs not: GLM-5.3 4x4 10240 -3.3%, 8x4 5120
-                    // hot -3.2%, 8x4 10240 -2.6%; M3 +2.4%, K3 4x4 2560 +1.5%, V4.1-Flash hot +1.0%)
+                    // Grow the x ring into the spare L1, one block at a time, as long as the plan keeps its sub-block
+                    // rows and h buffers: more x can then arrive ahead of the compute. Only with row passes and whole
+                    // tile pairs - the 16-column-unit splits get slower with it.
                     if (cfg.layout.x_ring_fill && p.gate_up_row_passes && p.units_per_core == 0) {
                         for (uint32_t xs = p.x_ring_blocks + 1; xs <= 2 * p.gate_up_k_blocks; ++xs) {
                             try {
