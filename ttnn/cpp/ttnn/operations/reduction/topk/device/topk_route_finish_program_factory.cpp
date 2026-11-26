@@ -38,11 +38,11 @@
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 #include <limits>
 
@@ -127,8 +127,8 @@ void set_runtime_args(
             program,
             shared.reader_kernel_id,
             core,
-            {input.buffer()->address(),    // src_addr (TILE bf16 logits)
-             indices.buffer()->address(),  // idx_addr (RM u32 sticks)
+            {input.mesh_buffer().address(),    // src_addr (TILE bf16 logits)
+             indices.mesh_buffer().address(),  // idx_addr (RM u32 sticks)
              start_unit,
              nunits_this_core,
              logical_rows,               // R (per-unit valid-row clamp)
@@ -139,15 +139,15 @@ void set_runtime_args(
             program,
             shared.writer_kernel_id,
             core,
-            {values_out.buffer()->address(),   // dst values
-             indices_out.buffer()->address(),  // dst indices
+            {values_out.mesh_buffer().address(),   // dst values
+             indices_out.mesh_buffer().address(),  // dst indices
              start_unit,
              nunits_this_core,
-             input.buffer()->address(),    // src_addr (TILE bf16 logits, writer's gather rows)
-             indices.buffer()->address(),  // idx_addr (RM u32 sticks, writer's gather rows)
-             logical_rows,                 // R (per-unit valid-row clamp)
-             split.row_tiles_per_batch,    // R_p / 32 (unit -> batch decomposition)
-             split.k_rounded});            // per-unit valid-column clamp
+             input.mesh_buffer().address(),    // src_addr (TILE bf16 logits, writer's gather rows)
+             indices.mesh_buffer().address(),  // idx_addr (RM u32 sticks, writer's gather rows)
+             logical_rows,                     // R (per-unit valid-row clamp)
+             split.row_tiles_per_batch,        // R_p / 32 (unit -> batch decomposition)
+             split.k_rounded});                // per-unit valid-column clamp
 
         start_unit += nunits_this_core;
     }
@@ -164,7 +164,7 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
     const Tensor& values_out = std::get<0>(tensor_return_value);
     const Tensor& indices_out = std::get<1>(tensor_return_value);
 
-    auto program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram(*input.device());
 
     const auto split = compute_work_split(input, indices);
     const auto grid = input.device()->compute_with_storage_grid_size();

@@ -30,9 +30,8 @@ from models.experimental.bevformer.model_config import (
     tt_fpn_kwargs,
     tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tt.tt_common import is_pointwise
+from models.experimental.bevformer.tt.tt_common import conv_output_size, is_pointwise
 from models.experimental.bevformer.tt.tt_resnet import TTResNet
-
 
 # --- Shared helpers ---------------------------------------------------------------------------
 
@@ -200,8 +199,8 @@ def create_perception_transformer_parameters(transformer, device, dtype=WEIGHT_D
 
 # Each BatchNorm is folded into the conv before it. The backbone's conv input shapes are recorded
 # from one reference forward; the FPN's follow from its input levels' shapes. The weights stay on
-# the host: conv2d lays them out for its input on the device. A stride-1 1x1 conv whose activations
-# are in DRAM runs as a matmul instead and gets a Linear's weight; the DCNs get their op's weight,
+# the host: conv2d lays them out for its input on the device. A 1x1 conv whose activations are in
+# DRAM runs as a matmul instead and gets a Linear's weight; the DCNs get their op's weight,
 # laid out for the order it samples its columns in.
 
 
@@ -254,7 +253,12 @@ def _resnet_preprocessor(model, resnet, tt_kwargs):
         linear_dtype = tt_kwargs["weights_dtype"] if dram_activation and is_pointwise(conv) else None
         return _conv_parameters(weight, bias, linear_dtype, ttnn.float32)
 
-    parameters = {"conv1": conv_parameters(model.conv1, model.bn1, False)}
+    # The stem conv reads convert_to_hwc's pixels, their channels padded to the L1 alignment;
+    # zero weights on the padding keep it the reference conv.
+    weight, bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
+    padding = TTResNet.stem_hwc_channels(weight.shape[1]) - weight.shape[1]
+    weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, 0, padding))
+    parameters = {"conv1": _conv_parameters(weight, bias, None, ttnn.float32)}
     for layer_idx in range(1, 5):
         prefix = f"layer{layer_idx}"
         parameters[prefix] = {}
@@ -315,8 +319,7 @@ def create_fpn_parameters(model, input_tensors, tt_kwargs=None):
     for fpn_conv in model.fpn_convs[len(level_shapes) :]:
         shapes.append((batch, height, width))
         conv = fpn_conv.conv
-        height = (height + 2 * conv.padding[0] - conv.kernel_size[0]) // conv.stride[0] + 1
-        width = (width + 2 * conv.padding[1] - conv.kernel_size[1]) // conv.stride[1] + 1
+        height, width = conv_output_size(height, width, conv.kernel_size, conv.stride, conv.padding)
 
     def conv_args(conv_module, shape):
         conv = conv_module.conv

@@ -6,7 +6,7 @@
 
 #include <tuple>
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "matmul_wo_device_operation_types.hpp"

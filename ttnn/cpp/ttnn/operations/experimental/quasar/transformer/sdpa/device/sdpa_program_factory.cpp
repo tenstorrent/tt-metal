@@ -7,10 +7,10 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "ttnn/operations/math.hpp"
 #include <hostdevcommon/common_values.hpp>
 #include <bit>
@@ -21,7 +21,6 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
@@ -163,7 +162,7 @@ ChunkedParams compute_chunked_params(
         TT_FATAL(p.page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
     } else {
         p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-        p.page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
+        p.page_table_stick_size = page_table_tensor.mesh_buffer().aligned_page_size();
         TT_FATAL(
             p.page_table_stick_size % 32 == 0,
             "page table page size in bytes must be a multiple of 32 due to address alignment");

@@ -37,7 +37,6 @@ PACK_UNTILIZE_RUN_TYPES = [
     PerfRunType.UNPACK_ISOLATE,
     PerfRunType.MATH_ISOLATE,
     PerfRunType.PACK_ISOLATE,
-    PerfRunType.L1_CONGESTION,
 ]
 
 
@@ -106,6 +105,7 @@ def pack_untilize_block_ct_dim(benchmark, formats, dest_acc, full_ct_dim):
     dest_acc=pack_untilize_dest_acc_modes,
     full_rt_dim=pack_untilize_rt_dims,
     full_ct_dim=pack_untilize_ct_dims,
+    dest_sync=[DestSync.Half],
     run_types=[PACK_UNTILIZE_RUN_TYPES],
     loop_factor=[64],
     compile_time_formats=lambda benchmark: [
@@ -120,6 +120,7 @@ def test_perf_pack_untilize(
     dest_acc,
     full_rt_dim,
     full_ct_dim,
+    dest_sync,
     run_types,
     loop_factor,
     compile_time_formats,
@@ -132,7 +133,7 @@ def test_perf_pack_untilize(
         formats,
         dest_acc,
         dimensions,
-        DestSync.Half,
+        dest_sync,
         tile_dst_ct_offset=0,
         is_perf=is_perf,
         perf_report=perf_report,

@@ -6,15 +6,15 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "hostdevcommon/kernel_structs.h"
 
 #include "multi_scale_deformable_attn_device_operation.hpp"
@@ -86,10 +86,10 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     const uint32_t attn_stick_raw = P * attn.element_size();
     const uint32_t output_stick_raw = D * output.element_size();
 
-    const uint32_t value_stick_aligned = aligned_page_size(value_stick_raw, value.buffer()->buffer_type());
-    const uint32_t grid_stick_aligned = aligned_page_size(grid_stick_raw, grid.buffer()->buffer_type());
-    const uint32_t attn_stick_aligned = aligned_page_size(attn_stick_raw, attn.buffer()->buffer_type());
-    const uint32_t output_stick_aligned = aligned_page_size(output_stick_raw, output.buffer()->buffer_type());
+    const uint32_t value_stick_aligned = aligned_page_size(value_stick_raw, value.memory_config().buffer_type());
+    const uint32_t grid_stick_aligned = aligned_page_size(grid_stick_raw, grid.memory_config().buffer_type());
+    const uint32_t attn_stick_aligned = aligned_page_size(attn_stick_raw, attn.memory_config().buffer_type());
+    const uint32_t output_stick_aligned = aligned_page_size(output_stick_raw, output.memory_config().buffer_type());
 
     // Tile size (bf16): 32 * 32 * 2 = 2048 bytes.
     const auto data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);

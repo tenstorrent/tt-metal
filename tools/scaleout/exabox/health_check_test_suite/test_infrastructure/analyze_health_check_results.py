@@ -63,9 +63,10 @@ ACKNOWLEDGED_CHECKS = {"cpld_fw_old"}
 EXCLUDED_CHECKS = {"snapshot_capture"}
 
 # checks whose details list offending BDFs or ETH port paths - keep more text
-# for triage. The qsfp_* entries name the ports at fault ("ubb=2/asic=1/
-# eth=6 -> ..."), which is the whole value of the row: truncated to 140 they
-# say a link is down without saying which.
+# for triage. The qsfp_* and eth_status_* entries name the ports at fault
+# ("ubb=2/asic=1/eth=6 -> ...", "UBB2/U6 ch4 (TRACE P9, dev 13)"), which is the
+# whole value of the row: truncated to 140 they say a link is down without
+# saying which.
 DETAIL_RICH = {
     "pcie_gen",
     "gddr_speed",
@@ -79,6 +80,15 @@ DETAIL_RICH = {
     "qsfp_link_asymmetry",
     "qsfp_cage_gaps",
     "qsfp_collection_failures",
+    "eth_status_pcie_gate",
+    "eth_status_links_down",
+    "eth_status_heartbeat",
+    "eth_status_fec_uncorrected",
+    "eth_status_retrains",
+    "eth_status_builtin_links",
+    "eth_status_cable_lanes",
+    "eth_status_cable_trays_alike",
+    "eth_status_cabling",
 }
 
 # numeric forensic checks: dropped from checks_fact, folded into runs rollups.

@@ -8,12 +8,12 @@
 #include <random>
 #include <string>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "uniform_device_operation.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::uniform {
 
@@ -206,7 +206,7 @@ void UniformDeviceOperation::UniformProgramFactory::override_runtime_arguments(
     constexpr uint32_t compute_kernel_idx = 1;
 
     const auto [lower_bound_bits, upper_bound_bits] = uniform_range(operation_attributes);
-    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t out_addr = output.mesh_buffer().address();
 
     const auto ws = uniform_work_split(output);
     const auto layout = uniform_core_layout(ws);

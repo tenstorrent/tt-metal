@@ -22,8 +22,8 @@
 #include <cstdlib>
 #include <string>
 #include <tools/profiler/op_profiler.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <ttnn/operations/core/core.hpp>
 #include <utility>
 #include <vector>

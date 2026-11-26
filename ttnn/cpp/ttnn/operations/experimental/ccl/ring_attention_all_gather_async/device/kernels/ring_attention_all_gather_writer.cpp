@@ -16,6 +16,7 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
+#include "ring_attention_balance.hpp"
 #include "ring_attention_rank_mapping.hpp"
 #include <algorithm>
 #include <cstdint>
@@ -55,19 +56,22 @@ enum CompileTimeArg : uint32_t {
     kNumFixedCompileTimeArgs,
 };
 
-constexpr uint32_t my_transport_rank = get_compile_time_arg_val(kMyTransportRank);
+// Per-chip values (the transport rank, the target counts per direction, the unicast route) are common runtime args,
+// not compile-time args, so every chip of a mesh runs the same binary (one program for the whole mesh; see the
+// program factory).
+uint32_t my_transport_rank;  // common arg 0
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(kReservedPacketHeaderCbId);
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(kCbOutputId);
 constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(kPacketSizeInPages);
 constexpr uint32_t output_page_size = get_compile_time_arg_val(kOutputPageSize);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(kNumTargetsForwardDirection);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(kNumTargetsBackwardDirection);
+uint32_t num_targets_forward_direction;   // common arg 1
+uint32_t num_targets_backward_direction;  // common arg 2
 constexpr bool fuse_op = get_compile_time_arg_val(kFuseOp);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(kTopology));
 constexpr uint32_t num_inputs = get_compile_time_arg_val(kNumInputs);
 constexpr bool direction = get_compile_time_arg_val(kDirection);  // 1 is forward, 0 is backward
-constexpr uint32_t unicast_route_arg0 = get_compile_time_arg_val(kUnicastRouteArg0);
-constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(kUnicastRouteArg1);
+uint32_t unicast_route_arg0;                                      // common arg 3
+uint32_t unicast_route_arg1;                                      // common arg 4
 // Trace-safe metadata path: when set, the writer recomputes the gather extent (valid_pages) on-device
 // from kv_actual_isl[0] (a 1-element uint32 DRAM tensor) so it stays matched to the reader's on-device
 // recompute (else they desync under a placeholder host logical_n). When false neither this nor the
@@ -76,7 +80,8 @@ constexpr bool has_metadata = get_compile_time_arg_val(kHasMetadata);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(kCbMetaId);
 constexpr uint32_t num_links = get_compile_time_arg_val(kNumLinks);
 constexpr bool split_forwarding_enabled = get_compile_time_arg_val(kSplitForwardingEnabled);
-constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(kFullMeshRankMapping);
+constexpr uint32_t full_mesh_rank_mapping =
+    get_compile_time_arg_val(kFullMeshRankMapping);  // k{Axis,RowMajor,ColumnMajor}RankMapping
 constexpr auto snake_orientation =
     static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(kSnakeOrientation));
 constexpr uint32_t mesh_rows = get_compile_time_arg_val(kMeshRows);
@@ -84,16 +89,19 @@ constexpr uint32_t mesh_cols = get_compile_time_arg_val(kMeshCols);
 constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialReadinessEnabled);
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
+#ifdef RING_ATTENTION_BALANCE
+constexpr bool has_balance = true;
+#else
+constexpr bool has_balance = false;
+#endif
 
 static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness requires one gathered input");
 static_assert(
     !partial_readiness_enabled || !split_forwarding_enabled,
     "partial readiness and split forwarding are mutually exclusive");
-static_assert(
-    !partial_readiness_enabled || (num_targets_forward_direction > 0 && num_targets_backward_direction > 0),
-    "partial readiness requires both ring directions");
 
-template <typename AddrGenType, typename FabricSender>
+// poll() runs after every packet (the load-balancing exchange's sends interleave with the gather's).
+template <typename AddrGenType, typename FabricSender, typename Poll>
 FORCE_INLINE void write_bank_owned_slices(
     CircularBuffer& cb_output,
     AddrGenType& output_addrgen,
@@ -102,7 +110,8 @@ FORCE_INLINE void write_bank_owned_slices(
     uint32_t output_page_base,
     uint32_t valid_pages,
     uint32_t first_bank,
-    uint32_t bank_stride) {
+    uint32_t bank_stride,
+    Poll& poll) {
     ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
         output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
     uint32_t first_page_offset = 0;
@@ -117,6 +126,7 @@ FORCE_INLINE void write_bank_owned_slices(
             cb_output.get_read_ptr(),
             batch * output_page_size);
         cb_output.pop_front(packet_size_in_pages);
+        poll();
     }
 }
 
@@ -138,11 +148,22 @@ FORCE_INLINE void discard_bank_owned_slices(
 }
 
 void kernel_main() {
+    my_transport_rank = get_common_arg_val<uint32_t>(0);
+    num_targets_forward_direction = get_common_arg_val<uint32_t>(1);
+    num_targets_backward_direction = get_common_arg_val<uint32_t>(2);
+    unicast_route_arg0 = get_common_arg_val<uint32_t>(3);
+    unicast_route_arg1 = get_common_arg_val<uint32_t>(4);
+    // partial readiness requires both ring directions
+    ASSERT(!partial_readiness_enabled || (num_targets_forward_direction > 0 && num_targets_backward_direction > 0));
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, kNumFixedCompileTimeArgs + num_inputs>();
     constexpr uint32_t kMetaArgsOffset = has_metadata
                                              ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
                                              : (kNumFixedCompileTimeArgs + num_inputs);
     constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
+    // The balance accessors follow the gather's (ring_attention_balance::Accessors).
+    [[maybe_unused]] constexpr uint32_t kBalanceArgsOffset =
+        has_metadata ? meta_args.next_compile_time_args_offset()
+                     : std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset();
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -229,6 +250,12 @@ void kernel_main() {
             input_tile_id_end);
     }
 
+    // The balance runtime args (ring_attention_balance::Arg), then its scratch CB's id.
+    [[maybe_unused]] const uint32_t balance_args = arg_idx;
+    if constexpr (has_balance) {
+        arg_idx += ring_attention_balance::kNumArgs + 1;
+    }
+
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
     /* Args for overlapped all gather */
@@ -252,7 +279,7 @@ void kernel_main() {
     cb_packet_header.push_back(1);
 
     // pre-populate packet headers
-    constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info = {
+    const ccl_routing_utils::line_unicast_route_info_t unicast_route_info = {
         .dst_mesh_id = static_cast<uint16_t>(unicast_route_arg0),
         .dst_chip_id = static_cast<uint16_t>(unicast_route_arg1)};
 
@@ -264,7 +291,7 @@ void kernel_main() {
         fabric_connection.is_logically_connected() ? (direction == 1 ? &fabric_connection.get_backward_connection()
                                                                      : &fabric_connection.get_forward_connection())
                                                    : nullptr;
-    constexpr uint32_t num_targets_in_direction =
+    const uint32_t num_targets_in_direction =
         direction == 1 ? num_targets_backward_direction : num_targets_forward_direction;
 
     const uint64_t out_ready_sem_noc_addr_in_pkt =
@@ -274,15 +301,33 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
     const auto signal_output_ready = [&]() {
-        if constexpr (num_targets_in_direction) {
+        if (num_targets_in_direction) {
             fabric_direction_connection->wait_for_empty_write_slot();
             fabric_direction_connection->send_payload_flush_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
         }
     };
 
+    [[maybe_unused]] volatile PACKET_HEADER_TYPE* balance_data_hdr = nullptr;
+    [[maybe_unused]] volatile PACKET_HEADER_TYPE* balance_inc_hdr = nullptr;
+    [[maybe_unused]] uint32_t balance_scratch = 0;
+    if constexpr (has_balance) {
+        cb_packet_header.reserve_back(1);
+        balance_data_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cb_packet_header.get_write_ptr());
+        cb_packet_header.push_back(1);
+        cb_packet_header.reserve_back(1);
+        balance_inc_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cb_packet_header.get_write_ptr());
+        cb_packet_header.push_back(1);
+        const auto& scratch_cb =
+            get_local_cb_interface(get_arg_val<uint32_t>(balance_args + ring_attention_balance::kNumArgs));
+        balance_scratch = scratch_cb.fifo_limit - scratch_cb.fifo_size;
+    }
+    ring_attention_balance::Exchange<has_balance, direction == 1, kBalanceArgsOffset> balance(
+        balance_args, balance_scratch, balance_data_hdr, balance_inc_hdr);
+    const auto balance_poll = [&]() { balance.poll(fabric_direction_connection); };
+
     uint32_t slice_writes = 0;
-    constexpr uint32_t my_tensor_rank =
+    const uint32_t my_tensor_rank =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
@@ -301,7 +346,7 @@ void kernel_main() {
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
                 const uint32_t output_page_base =
                     bh_idx * output_pages_per_batch_head + my_tensor_rank * input_pages_per_batch_head;
-                if constexpr (num_targets_in_direction) {
+                if (num_targets_in_direction) {
                     if constexpr (partial_readiness_enabled) {
                         const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
                             input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
@@ -313,7 +358,8 @@ void kernel_main() {
                             output_page_base,
                             first_pages,
                             worker_link[input_idx],
-                            num_links);
+                            num_links,
+                            balance_poll);
                         signal_output_ready();
                         write_bank_owned_slices(
                             cb_output,
@@ -323,7 +369,8 @@ void kernel_main() {
                             output_page_base + first_pages,
                             input_valid_pages[input_idx] - first_pages,
                             worker_link[input_idx],
-                            num_links);
+                            num_links,
+                            balance_poll);
                     } else {
                         write_bank_owned_slices(
                             cb_output,
@@ -333,7 +380,8 @@ void kernel_main() {
                             output_page_base,
                             input_valid_pages[input_idx],
                             worker_link[input_idx],
-                            num_links);
+                            num_links,
+                            balance_poll);
                     }
                 } else {
                     discard_bank_owned_slices(
@@ -370,7 +418,7 @@ void kernel_main() {
                     if (num_pages_to_read == 2) {
                         uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
 
-                        if constexpr (num_targets_in_direction) {
+                        if (num_targets_in_direction) {
                             scatter_fabric_write_unidir(
                                 tile_id,
                                 second_tile_id,
@@ -389,7 +437,7 @@ void kernel_main() {
                     } else {
                         ASSERT(num_pages_to_read == 1);
 
-                        if constexpr (num_targets_in_direction) {
+                        if (num_targets_in_direction) {
                             fabric_write_unidir(
                                 tile_id,
                                 output_addrgens[input_idx],
@@ -402,6 +450,7 @@ void kernel_main() {
 
                     tiles_read += num_pages_to_read;
                     cb_output.pop_front(packet_size_in_pages);
+                    balance_poll();
                 }
                 tile_id_start += output_pages_per_batch_head;
                 tiles_read = input_tile_id_start[input_idx];
@@ -431,9 +480,9 @@ void kernel_main() {
 
     uint32_t writes_expected = 0;
     if constexpr (topology == Topology::Linear) {
-        if constexpr (direction == 1 && num_targets_backward_direction) {
+        if (direction == 1 && num_targets_backward_direction) {
             writes_expected = num_targets_forward_direction;
-        } else if constexpr (direction == 0 && num_targets_forward_direction) {
+        } else if (direction == 0 && num_targets_forward_direction) {
             writes_expected = num_targets_backward_direction;
         }
     } else if constexpr (topology == Topology::Ring) {
@@ -500,7 +549,8 @@ void kernel_main() {
                             output_page_base,
                             first_pages,
                             first_bank,
-                            bank_stride);
+                            bank_stride,
+                            balance_poll);
                         signal_output_ready();
                         write_bank_owned_slices(
                             cb_output,
@@ -510,7 +560,8 @@ void kernel_main() {
                             output_page_base + first_pages,
                             input_valid_pages[input_idx] - first_pages,
                             first_bank,
-                            bank_stride);
+                            bank_stride,
+                            balance_poll);
                     } else {
                         write_bank_owned_slices(
                             cb_output,
@@ -520,7 +571,8 @@ void kernel_main() {
                             output_page_base,
                             input_valid_pages[input_idx],
                             first_bank,
-                            bank_stride);
+                            bank_stride,
+                            balance_poll);
                     }
                 }
             } else {
@@ -590,6 +642,7 @@ void kernel_main() {
 
                         tiles_read += num_pages_to_read;
                         cb_output.pop_front(packet_size_in_pages);
+                        balance_poll();
                     }
                     tile_id_start += output_pages_per_batch_head;
                     tiles_read = relay_start;
@@ -604,6 +657,8 @@ void kernel_main() {
 
         slice_writes++;
     }
+
+    balance.finish(fabric_direction_connection);
 
     // Drain in-flight writes BEFORE closing the EDM connections.
     noc_obj.async_atomic_barrier();

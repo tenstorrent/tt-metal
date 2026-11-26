@@ -41,7 +41,7 @@ To create a tensor with row-major layout, you can pass layout=ttnn.ROW_MAJOR_LAY
 
 ```python3
 ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-ttnn_tensor = ttnn.full(42, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+ttnn_tensor = ttnn.full([64, 64], 42, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 ```
 
 
@@ -70,7 +70,7 @@ To create a tensor with a tile layout, you can pass layout=ttnn.TILE_LAYOUT in m
 
 ```python3
 ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT)
-ttnn_tensor = ttnn.full(42, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+ttnn_tensor = ttnn.full([64, 64], 42, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 ttnn_tensor = ttnn.to_layout(ttnn_rm_tensor, ttnn.TILE_LAYOUT)
 ```
 

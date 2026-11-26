@@ -7,6 +7,9 @@
 from __future__ import annotations
 
 import os, random
+from collections.abc import Mapping
+from contextlib import contextmanager
+
 import numpy as np
 import ttnn
 import ttml
@@ -191,14 +194,61 @@ def initialize_device(yaml_config: dict):
     ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
 
 
+_PRECISION_DTYPE_NAMES = {ttnn.DataType.BFLOAT16: "bfloat16", ttnn.DataType.FLOAT32: "float32"}
+
+
+def _precision_block_as_yaml(precision):
+    """``precision`` with each ``ttnn.DataType`` value written as its YAML name, so ``ttnn.DataType.FLOAT32`` and
+    ``"float32"`` mean the same. ``None`` is no block. A block that is not a mapping, or a value that is neither a
+    string, ``None`` nor a bf16/fp32 ``ttnn.DataType``, raises ``TypeError``: converted to YAML it could read as
+    unset."""
+    if precision is None:
+        return None
+    if not isinstance(precision, Mapping):
+        raise TypeError(
+            f'precision must be a dict such as {{"master_dtype": "float32"}} or None, got '
+            f"{type(precision).__name__} {precision!r}"
+        )
+    converted = {}
+    for key, value in precision.items():
+        if isinstance(value, ttnn.DataType):
+            if value not in _PRECISION_DTYPE_NAMES:
+                raise TypeError(f"precision.{key} must be BFLOAT16 or FLOAT32, got {value}")
+            value = _PRECISION_DTYPE_NAMES[value]
+        elif value is not None and not isinstance(value, str):
+            raise TypeError(
+                f'precision.{key} must be "bfloat16", "float32" or a ttnn.DataType, got {type(value).__name__} {value!r}'
+            )
+        converted[key] = value
+    return converted
+
+
+def validate_precision(precision: dict | None) -> None:
+    """Check the YAML's ``training_config.precision`` block, given as a dict, without applying it: the errors
+    ``apply_precision`` would raise, with no model and no device needed. ``None`` means no block."""
+    ttml.core.validate_precision_config({"precision": _precision_block_as_yaml(precision)})
+
+
+def apply_precision(model, precision: dict | None) -> None:
+    """Apply the YAML's ``training_config.precision`` block, given as a dict, to *model*'s parameters with
+    ``ttml.core.apply_precision_config``, as ``create_optimizer`` does with the whole config. ``None`` means no block:
+    the parameters keep their dtype and no reduce dtype is stored, so a value stored earlier in the process is cleared.
+    Values are ``"bfloat16"``/``"float32"`` or the matching ``ttnn.DataType``. Call it once per run, after the model is
+    built and before weights load and the optimizer is created (see ``docs/MIXED_PRECISION.md``)."""
+    ttml.core.apply_precision_config({"precision": _precision_block_as_yaml(precision)}, model.parameters())
+
+
 def create_optimizer(model, yaml_config: dict):
     """Create an optimizer from the optimizer config YAML.
 
     Accepts either a top-level YAML config dict (with training_config.optimizer)
     or the optimizer dict directly (detected by the presence of a "type" key).
     Passes the dict straight to the C++ optimizer factory. With a top-level
-    config, training_config.precision.master_dtype first stores the model's
-    trainable parameters in that dtype, so the optimizer state follows it.
+    config, training_config.precision is applied first: master_dtype stores the
+    model's trainable parameters in that dtype, so the optimizer state follows
+    it, and reduce_dtype (none when unset) becomes the dtype the gradient syncs
+    sum in when a call passes none (ttml.sync_gradients, the FSDP backward hook,
+    C++ synchronize_gradients). An optimizer dict alone applies neither.
 
     Args:
         model: Model to optimize
@@ -219,7 +269,7 @@ def create_optimizer(model, yaml_config: dict):
         if _is_pipeline_parallel(yaml_config):
             optimizer_cfg = {**optimizer_cfg, "allow_empty_param_groups": True}
         params = model.parameters()
-        ttml.core.apply_precision_config(tc, params)
+        ttml.core.apply_precision_config({**tc, "precision": _precision_block_as_yaml(tc.get("precision"))}, params)
         return ttml.optimizers.create_optimizer(optimizer_cfg, params)
     return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
 
@@ -275,6 +325,73 @@ def build_causal_mask(T: int, device: bool = False):
     if not device:
         return m
     return ttml.autograd.Tensor.from_numpy(m, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+
+
+def scaled_dot_product_attention_auto(query, key, value, mask=None):
+    """Fused SDPA when q_seq == k_seq and the mask is None or [1, 1, q_seq, q_seq], composite otherwise."""
+    # TODO: #39558
+    q_seq = query.shape()[2]
+    fused = q_seq == key.shape()[2] and (mask is None or list(mask.shape()) == [1, 1, q_seq, q_seq])
+    sdpa = (
+        ttml.ops.attention.scaled_dot_product_attention
+        if fused
+        else ttml.ops.attention.scaled_dot_product_attention_composite
+    )
+    return sdpa(query, key, value, mask)
+
+
+def build_rope_params_from_config(config, head_dim: int) -> "ttml.ops.rope.RotaryEmbeddingParams":
+    """RoPE tables for a Llama or Qwen3 config."""
+    scaling = ttml.ops.rope.RopeScalingParams()
+    rs = config.rope_scaling
+    if rs.scaling_factor != 0.0 and rs.original_context_length != 0:
+        scaling.scaling_factor = rs.scaling_factor
+        scaling.high_freq_factor = rs.high_freq_factor
+        scaling.low_freq_factor = rs.low_freq_factor
+        scaling.original_context_length = rs.original_context_length
+    return ttml.ops.rope.build_rope_params(config.max_position_embeddings, head_dim, config.rope_theta, scaling)
+
+
+def deallocate_tensors(tensors) -> None:
+    if tensors is None:
+        return
+    if not isinstance(tensors, (list, tuple)):
+        tensors = [tensors]
+    for t in tensors:
+        if t is None:
+            continue
+        if isinstance(t, ttml.autograd.Tensor):
+            ttnn.deallocate(t.get_value(), force=True)
+        elif isinstance(t, ttnn.Tensor):
+            ttnn.deallocate(t, force=True)
+
+
+def resolve_pad_token_id(tokenizer) -> int:
+    pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    if pad is None:
+        raise ValueError("tokenizer has neither pad_token_id nor eos_token_id")
+    return int(pad)
+
+
+def resolve_stop_token_ids(tokenizer) -> set:
+    """Union of the tokenizer's EOS/PAD ids plus any chat-template stop
+    tokens present in the vocab (across llama-3 and qwen3 templates).
+    """
+    stop_ids: set = set()
+    if tokenizer.eos_token_id is not None:
+        stop_ids.add(int(tokenizer.eos_token_id))
+    if tokenizer.pad_token_id is not None:
+        stop_ids.add(int(tokenizer.pad_token_id))
+    for tok in ("<|eot_id|>", "<|end_of_text|>", "<|eom_id|>", "<|im_end|>", "<|endoftext|>"):
+        tid = tokenizer.convert_tokens_to_ids(tok)
+        if tid is not None and tid >= 0 and tid != tokenizer.unk_token_id:
+            stop_ids.add(int(tid))
+    return stop_ids
+
+
+def repeat_interleave(items, n: int) -> list:
+    """Repeat each item ``n`` times in place: ``[a, b]`` -> ``[a, a, b, b]``."""
+    return [item for item in items for _ in range(n)]
 
 
 def summary(model) -> None:
@@ -377,3 +494,21 @@ class no_grad:
                 return func(*args, **kwargs)
 
         return wrapper
+
+
+@contextmanager
+def run_mode(module, mode: "ttml.modules.RunMode"):
+    """Temporarily set ``module`` (and all its submodules) to ``mode``, restoring each one's previous mode on exit.
+
+    Usage:
+        with run_mode(model, RunMode.EVAL), no_grad():
+            # dropout off, no graph building; previous mode restored afterwards
+    """
+    prev = [(m, m.get_run_mode()) for m in module.modules()]
+    module.set_run_mode(mode)
+    try:
+        yield module
+    finally:
+        # modules() yields parents first, so each child's restore overrides its parent's recursive one.
+        for m, m_mode in prev:
+            m.set_run_mode(m_mode)

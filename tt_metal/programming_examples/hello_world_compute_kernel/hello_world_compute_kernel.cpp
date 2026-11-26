@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include "tt-metalium/kernel_types.hpp"
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -32,7 +32,7 @@ int main() {
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     // Configure and create the kernel
     // This kernel does not perform any computation, it simply prints a message to show the compute cores running.

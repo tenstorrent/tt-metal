@@ -5,21 +5,21 @@
 #include "rms_allgather_program_factory.hpp"
 
 #include <algorithm>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
@@ -1280,7 +1280,7 @@ void RMSAllGatherProgramFactory::override_runtime_arguments(
     }
     uint32_t gamma_address = 0;
     if (tensor_args.weight.has_value()) {
-        Buffer* const gamma_buffer = tensor_args.weight.value().buffer();
+        const auto* const gamma_buffer = &tensor_args.weight.value().mesh_buffer();
         TT_FATAL(gamma_buffer != nullptr, "rms_allgather weight (gamma) tensor buffer is null");
         gamma_address = static_cast<uint32_t>(gamma_buffer->address());
     }

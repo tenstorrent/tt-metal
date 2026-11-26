@@ -7,8 +7,9 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <utility>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
@@ -146,7 +147,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_dtype, op_attr.output_layout_, mem_config, output_shape, padded_output_shape));
 }
 
@@ -158,7 +159,7 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
             op_attr.sliding_window_config_.input_hw.first, op_attr.sliding_window_config_.input_hw.second);
 
         // the index output spec is the same as the input spec just with a different data type
-        tt::tt_metal::TensorLayout output_layout_ind(
+        tt::tt_metal::TensorLayout output_layout_ind = tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             index_dtype,
             output_spec_data.page_config(),
             output_spec_data.memory_config(),
@@ -239,6 +240,7 @@ std::vector<ttnn::Tensor> pool2d(
     uint32_t memory_used,
     bool config_tensor_in_dram) {
     using OperationType = ttnn::operations::pool::Pool2D;
+    ttnn::verify_numerical_configuration(input_tensor.device()->arch(), compute_kernel_config);
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .sliding_window_config_ = sliding_window_config,

@@ -30,6 +30,7 @@ driver that lives outside ``tests/sources/``.
 
 import atexit
 import collections
+import contextlib
 import datetime
 import gc
 import json
@@ -38,6 +39,7 @@ import os
 import re
 import signal
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
@@ -86,7 +88,12 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import LLKAssertException
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
-from helpers.perf.core import PerfConfig, PerfReport, combine_perf_reports
+from helpers.perf.core import (
+    CODE_SHIFTS,
+    PerfConfig,
+    PerfReport,
+    combine_perf_reports,
+)
 from helpers.simulation_server import SimulationServer, pid_alive
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
@@ -104,8 +111,8 @@ _SIM_HOST_PID_KEY = "llk_sim_host_pid"
 
 
 # This is a workaround for this issue: https://github.com/tenstorrent/tt-exalens/issues/958
-# In a nutshell, everything except Tensix GPRs is accessible over NoC, thus ignoring that allows us to dump
-# most of the Tensix state, without causing any runtime issues.
+# In a nutshell, everything except Tensix GPRs is accessible over NoC; TensixState.fetch reads GPRs
+# from a BRISC-made L1 copy instead (silicon only).
 # Quasar is a no-op: ttexalens has no Tensix register description yet
 # (hardware/quasar/device.py raises NotImplementedError).
 def override_gprs_used_by_tensix_dump():
@@ -248,6 +255,13 @@ def pytest_addoption(parser):
         "truncated at session start; one that cannot be is a usage error). Reporting "
         "only, except that the sweep's records are required: a sweep cell whose record "
         "is not written fails.",
+    )
+    parser.addoption(
+        "--ulp-variants",
+        default=None,
+        metavar="PATH",
+        help="Write one JSON record per SFPU ULP sweep cell built (its node, op, key and "
+        "build directory) to PATH, truncated at session start; for helpers.ulp_affected.",
     )
     parser.addoption(
         "--ulp-emit",
@@ -545,6 +559,11 @@ def pytest_configure(config):
     if config.getoption("--ulp-measure"):
         # Set in the workers too; only the file preparation below is master-only.
         utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
+    if config.getoption("--ulp-variants"):
+        from . import ulp_affected
+
+        # Set in the workers too; only the truncation below is master-only.
+        ulp_affected.VARIANTS_PATH = Path(config.getoption("--ulp-variants")).absolute()
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
@@ -560,6 +579,9 @@ def pytest_configure(config):
             raise pytest.UsageError(
                 f"--ulp-measure: cannot prepare the file: {exc}"
             ) from exc
+        if config.getoption("--ulp-variants"):
+            ulp_affected.VARIANTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            ulp_affected.VARIANTS_PATH.write_text("")
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):
@@ -748,7 +770,15 @@ def _select_node_list(config, items):
     wanted = {
         line.strip() for line in Path(path).read_text().splitlines() if line.strip()
     }
-    selected = [item for item in items if item.nodeid in wanted]
+    order, module_order = {}, {}
+    for line in Path(path).read_text().splitlines():
+        if line.strip():
+            order.setdefault(line.strip(), len(order))
+            module_order.setdefault(line.strip().split("::")[0], len(module_order))
+    selected = sorted(
+        (item for item in items if item.nodeid in wanted),
+        key=lambda item: (module_order[item.nodeid.split("::")[0]], order[item.nodeid]),
+    )
     config.hook.pytest_deselected(
         items=[item for item in items if item.nodeid not in wanted]
     )
@@ -758,11 +788,11 @@ def _select_node_list(config, items):
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
-    A test weighs its module's cost from perf_split_costs.json (perf_split_costs_sol.json with
-    --speed-of-light, which compiles every variant) divided by the module's test count. The
+    A test weighs its measured duration from LLK_SPLIT_DURATIONS, or, without that file, its
+    module's cost from the perf_split_costs table divided by the module's test count. The
     chunks are contiguous, so a module's tests, and the ELFs they share, stay in one shard
-    except at a cut point. build_perf_split_costs.py rebuilds both tables. This runs before
-    _collapse_runtime_only_variants, so the compile and run passes cut the same list.
+    except at a cut point. This runs before _collapse_runtime_only_variants, so the compile
+    and run passes cut the same list.
     """
     splits = config.getoption("--perf-splits")
     group = config.getoption("--perf-group")
@@ -773,26 +803,9 @@ def _split_by_cost(config, items):
             "--perf-splits N and --perf-group G go together, with 1 <= G <= N"
         )
 
-    arch = TestConfig.CHIP_ARCH.value
-    costs_file = (
-        "perf_split_costs_sol.json"
-        if TestConfig.SPEED_OF_LIGHT
-        else "perf_split_costs.json"
-    )
-    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
-    module_cost = table.get(arch)
-    if module_cost is None:
-        raise pytest.UsageError(f"{costs_file} has no costs for {arch}")
-
-    modules = [item.path.stem for item in items]
-    unknown = sorted(set(modules) - module_cost.keys())
-    if unknown:
-        logger.warning(
-            f"--perf-splits: {costs_file} has no cost for {', '.join(unknown)}; "
-            "each counts as 1 s"
-        )
-    tests_in = collections.Counter(modules)
-    weights = [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
+    weights = _weights_from_durations(items)
+    if weights is None:
+        weights = _weights_from_table(items)
     total = sum(weights)
     if total == 0:
         weights, total = [1.0] * len(items), float(len(items))
@@ -806,6 +819,88 @@ def _split_by_cost(config, items):
         before += weight
     config.hook.pytest_deselected(items=deselected)
     items[:] = selected
+
+
+def _module_costs():
+    costs_file = (
+        "perf_split_costs_sol.json"
+        if TestConfig.SPEED_OF_LIGHT
+        else "perf_split_costs.json"
+    )
+    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
+    return costs_file, table.get(TestConfig.CHIP_ARCH.value)
+
+
+def _weights_from_table(items):
+    costs_file, module_cost = _module_costs()
+    if module_cost is None:
+        raise pytest.UsageError(
+            f"{costs_file} has no costs for {TestConfig.CHIP_ARCH.value}"
+        )
+    modules = [item.path.stem for item in items]
+    unknown = sorted(set(modules) - module_cost.keys())
+    if unknown:
+        logger.warning(
+            f"--perf-splits: {costs_file} has no cost for {', '.join(unknown)}; "
+            "each counts as 1 s"
+        )
+    tests_in = collections.Counter(modules)
+    return [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
+
+
+def _weights_from_durations(items):
+    path = os.environ.get("LLK_SPLIT_DURATIONS")
+    if not path or not Path(path).is_file():
+        return None
+    try:
+        durations = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as error:
+        logger.warning(
+            f"--perf-splits: {path} is unreadable ({error}); using the table"
+        )
+        return None
+    if not isinstance(durations, dict):
+        logger.warning(f"--perf-splits: {path} is not an object; using the table")
+        return None
+    known = [durations[item.nodeid] for item in items if item.nodeid in durations]
+    if not known:
+        return None
+    mean = sum(known) / len(known)
+    logger.info(
+        f"--perf-splits: {path} has durations for {len(known)} of {len(items)} tests"
+    )
+    return [durations.get(item.nodeid, mean) for item in items]
+
+
+def _store_split_durations(session):
+    config = session.config
+    if config.getoption("--perf-splits") is None:
+        return
+    workers = config.getoption("numprocesses", None)
+    workers = workers if isinstance(workers, int) and workers > 0 else 1
+    path = Path(".perf_split_durations")
+    durations = (
+        json.loads(path.read_text())
+        if TestConfig.BUILD_MODE == BuildMode.CONSUME and path.is_file()
+        else {}
+    )
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is None:
+        return
+    reports = [
+        r
+        for rs in reporter.stats.values()
+        for r in rs
+        if isinstance(r, pytest.TestReport)
+    ]
+    total = sum(r.duration for r in reports)
+    start = getattr(config, "_llk_split_start", None)
+    scale = (time.perf_counter() - start) / total if start and total else 1 / workers
+    for report in reports:
+        durations[report.nodeid] = (
+            durations.get(report.nodeid, 0.0) + report.duration * scale
+        )
+    path.write_text(json.dumps(durations))
 
 
 def _restore_test_order(config, items):
@@ -1090,6 +1185,10 @@ def pytest_runtest_setup(item):
     if _worker_fatal is not None:
         _fail_xdist_worker(item, _worker_fatal)
 
+    stop_at = os.environ.get("LLK_STOP_AT")
+    if stop_at and datetime.datetime.now().timestamp() > float(stop_at):
+        pytest.skip("past the LLK_STOP_AT deadline")
+
     if _sim_host_pid is not None and not pid_alive(_sim_host_pid):
         _fail_xdist_worker(
             item, f"Simulation host (PID {_sim_host_pid}) is no longer running."
@@ -1114,6 +1213,7 @@ def pytest_runtest_setup(item):
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
+    session.config._llk_split_start = time.perf_counter()
     # Under xdist no test runs on the controller; start the host before xdist's (trylast)
     # pytest_sessionstart spawns the workers.
     if (
@@ -1151,8 +1251,12 @@ def _dump_perf_report(test_module: str, worker_id: str, report: PerfReport):
     """Write this worker's raw and post-processed CSVs of the module, over every chunk of it the worker ran."""
     # More than one schema means two unrelated tests/ops share this module (split them into separate files) or one
     # test emits inconsistent columns across its sweep.
+    # Keyed by the output directory too: each code position dumps into its own directory, and a
+    # shared key would carry position 0's rows into every other position's file.
     merged = _module_report(
-        f"{test_module}.{worker_id}", report, f"{test_module} (worker {worker_id})"
+        f"{TestConfig.PERF_DATA_DIR}/{test_module}.{worker_id}",
+        report,
+        f"{test_module} (worker {worker_id})",
     )
     merged.dump_csv(TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv")
 
@@ -1203,6 +1307,7 @@ def perf_report(request, worker_id):
     test_module = request.path.stem
 
     temp_report = PerfReport()
+    PerfConfig.SHIFT_REPORTS = {shift: PerfReport() for shift in CODE_SHIFTS[1:]}
 
     try:
         yield temp_report
@@ -1216,6 +1321,24 @@ def perf_report(request, worker_id):
         return
 
     _dump_perf_report(test_module, worker_id, temp_report)
+    for shift, report in PerfConfig.SHIFT_REPORTS.items():
+        with _shift_output(shift):
+            _dump_perf_report(test_module, worker_id, report)
+
+
+@contextlib.contextmanager
+def _shift_output(shift):
+    saved_dir, saved_tag = TestConfig.PERF_DATA_DIR, os.environ.get("PERF_RUN_TAG")
+    TestConfig.PERF_DATA_DIR = TestConfig.ARTEFACTS_DIR / f"temp_perf_data_p{shift}"
+    os.environ["PERF_RUN_TAG"] = f"p{shift}"
+    try:
+        yield
+    finally:
+        TestConfig.PERF_DATA_DIR = saved_dir
+        if saved_tag is None:
+            os.environ.pop("PERF_RUN_TAG", None)
+        else:
+            os.environ["PERF_RUN_TAG"] = saved_tag
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -1281,9 +1404,13 @@ def pytest_sessionfinish(session):
         return
 
     _finish_ulp_emit(session)
+    _store_split_durations(session)
 
     if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()
+        for shift in CODE_SHIFTS[1:]:
+            with _shift_output(shift):
+                combine_perf_reports()
 
         # This was set by pytest CLI argument in pytest_configure call
         if _RECORD_TEST_ORDER:

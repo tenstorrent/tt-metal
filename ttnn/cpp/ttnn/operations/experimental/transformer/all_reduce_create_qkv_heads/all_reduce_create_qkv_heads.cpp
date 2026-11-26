@@ -34,6 +34,18 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> all_reduce_cr
         "Input Tensor dim must be 4 while given dim = {}",
         input_tensor.padded_shape().size());
     TT_FATAL(
+        num_heads > 0 && num_kv_heads_val > 0,
+        "num_heads ({}) and num_kv_heads ({}) must be greater than 0",
+        num_heads,
+        num_kv_heads_val);
+    TT_FATAL(
+        static_cast<uint64_t>(num_heads) + 2 * static_cast<uint64_t>(num_kv_heads_val) <=
+            input_tensor.padded_shape()[3],
+        "num_heads ({}) + 2 * num_kv_heads ({}) exceeds the fused width {}",
+        num_heads,
+        num_kv_heads_val,
+        input_tensor.padded_shape()[3]);
+    TT_FATAL(
         input_tensor.padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0,
         "Input shape {} must be divisible by num_heads + 2*num_kv_heads = {}",
         input_tensor.padded_shape()[3],

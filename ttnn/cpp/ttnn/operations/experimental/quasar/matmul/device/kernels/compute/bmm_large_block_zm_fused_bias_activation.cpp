@@ -97,6 +97,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
     CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    // Undo the MxFp4 2x src format matmul_init latched (see mm_uninit); no-op otherwise.
+    mm_uninit(in0_cb_id, in1_cb_id);
     // Reconfigure input
     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
     copy_init(mm_partials_cb_id);
@@ -104,7 +106,9 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
+    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     copy_block(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 
     mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
@@ -131,10 +135,12 @@ inline void reblock_and_untilize(
         out_cb.reserve_back(out_block_w);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             tile_regs_acquire();
+            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             for (uint32_t w = 0; w < out_subblock_w; w++) {
                 uint32_t tile_index = block_offset + within_block_index + w;
                 copy_tile(interm_cb_id, tile_index, w);
             }
+            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
             tile_regs_commit();
             tile_regs_wait();
             pack_untilize_dest<out_subblock_w, out_block_w>(out_cb_id, 1, n);
@@ -516,6 +522,8 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                 pack_reconfig_l1_acc(0);
 #endif
+                // Undo the MxFp4 2x src format matmul_init latched (see mm_uninit); no-op otherwise.
+                mm_uninit(in0_cb_id, in1_cb_id);
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
                 if constexpr (row_broadcast_bias) {
                     add_bcast_rows_init(mm_partials_cb_id, bias_cb_id);
@@ -589,6 +597,8 @@ void kernel_main() {
                     pack_relu_config(ReluConfig::none());
 #endif  // PACK_RELU
 #ifndef FUSE_BIAS
+                    // Undo the MxFp4 2x src format matmul_init latched (see mm_uninit); no-op otherwise.
+                    mm_uninit(in0_cb_id, in1_cb_id);
                     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                     pack_reconfig_data_format(out_cb_id);

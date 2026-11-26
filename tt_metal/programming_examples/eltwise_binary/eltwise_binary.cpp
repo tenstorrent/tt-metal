@@ -2,19 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <random>
 #include <string_view>
 #include <vector>
-#include "tt-metalium/base_types.hpp"
+#include "tt-metalium/workload/specification/compute_modes.hpp"
 
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -37,7 +37,7 @@ int main(int /*argc*/, char** /*argv*/) {
         distributed::MeshWorkload workload;
         // Execute across this device range. Here it spans the whole mesh (1x1).
         auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
         constexpr CoreCoord core = {0, 0};

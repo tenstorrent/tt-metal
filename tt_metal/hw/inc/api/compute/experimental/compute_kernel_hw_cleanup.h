@@ -40,7 +40,7 @@
  * can drain to zero, and cfg_state_id matches hardware.
  *
  * Rendezvouses T0/T1/T2 through hardware mailboxes, serializes configuration
- * in T0→T1→T2 order, and programs both cfg banks identically to:
+ * in T0→T1→T2 order, and programs cfg bank 0 (the bank kernels run on; nothing selects bank 1) to:
  *   - source and pack formats: Float16_b;
  *   - tile geometry: one 32x32 tile;
  *   - faces: four 16x16 faces;
@@ -53,8 +53,9 @@
  *   - the address counters reset by pack Dest init;
  *   - Default pack ADDR_MOD.
  *
- * Startup does not establish ambient unpack/math MOP or math ADDR_MOD state;
- * Cleanup uses NOP MOPs for unpack/math and zeros math ADDR_MOD_0..7.
+ * Cleanup leaves the unpack/math MOPs as NOPs and math ADDR_MOD_0..5 zero; ADDR_MOD_6/7 hold
+ * their hw_configure invariants (dest += 2 / zero advance), so an op sequence after cleanup may
+ * go straight to its format reconfig.
  * Pack MOP, strides, and PAC X are poisoned as well, so a following op must call
  * pack_init or pack_reconfig_data_format<true> before packing.
  *

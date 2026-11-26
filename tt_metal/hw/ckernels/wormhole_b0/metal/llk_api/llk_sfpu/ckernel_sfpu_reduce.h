@@ -14,7 +14,6 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -244,7 +243,7 @@ inline void perform_reduce_col_sum_avg() {
     // Determine if integer or float mode at compile time
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
-         INSTRUCTION_MODE == InstrModLoadStore::LO16);
+         INSTRUCTION_MODE == InstrModLoadStore::UINT16);
 
     // Optimized column reduction: Reduce → Add → Transpose → HalfReduce
     // Instead of the naive Transpose → Reduce → Transpose → Reduce → Add approach, we first reduce
@@ -285,7 +284,7 @@ inline void perform_reduce_col_sum_avg() {
         }
 
         // Step 1: Tree-reduce across registers (LREG0-3→LREG0, LREG4-7→LREG4) without transpose.
-        lltt::replay(0, 6);
+        TTI_REPLAY(0, 6, 0, 0);
 
         // Step 2: Cross-face addition — all 4 positions carry meaningful partial sums.
         if constexpr (is_integer_mode) {
@@ -302,9 +301,9 @@ inline void perform_reduce_col_sum_avg() {
 
         // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed).
         if constexpr (is_integer_mode) {
-            lltt::replay(0, 3);  // Reuse first 3 positions of sequential integer buffer (A1,A2,A3)
+            TTI_REPLAY(0, 3, 0, 0);  // Reuse first 3 positions of sequential integer buffer (A1,A2,A3)
         } else {
-            lltt::replay(6, 4);  // Half reduce with NOP for 2-cycle SFPADD latency
+            TTI_REPLAY(6, 4, 0, 0);  // Half reduce with NOP for 2-cycle SFPADD latency
             // The half reduce ends with an SFPADD producing LREG0; its next consumer (SFPSTORE for SUM, the
             // SFPMUL for AVG) needs one cycle. LREG4-7 are dead after the transpose, so that slot takes the
             // next face pair's first lower load instead of a NOP (a NOP on the last face pair).
@@ -479,7 +478,7 @@ static_assert(
  */
 template <HorizontalFold fold>
 inline void record_horizontal_reduce_stage() {
-    lltt::record(horizontal_stage_replay_start<fold>(), horizontal_stage_replay_len<fold>());
+    TTI_REPLAY(horizontal_stage_replay_start<fold>(), horizontal_stage_replay_len<fold>(), 0, 1);
     horizontal_reduce_rotate_first();
     horizontal_reduce_rotate_step();
     horizontal_reduce_fold<fold>();
@@ -492,21 +491,21 @@ inline void record_horizontal_reduce_stage() {
 template <HorizontalFold fold>
 inline void horizontal_stage_ror1() {
     constexpr std::uint32_t start = horizontal_stage_replay_start<fold>();
-    lltt::replay(start, HORIZONTAL_ROTATE_LEN);
-    lltt::replay(start + 2 * HORIZONTAL_ROTATE_LEN, horizontal_fold_len<fold>());
+    TTI_REPLAY(start, HORIZONTAL_ROTATE_LEN, 0, 0);
+    TTI_REPLAY(start + 2 * HORIZONTAL_ROTATE_LEN, horizontal_fold_len<fold>(), 0, 0);
 }
 
 template <HorizontalFold fold>
 inline void horizontal_stage_ror2() {
-    lltt::replay(horizontal_stage_replay_start<fold>(), horizontal_stage_replay_len<fold>());
+    TTI_REPLAY(horizontal_stage_replay_start<fold>(), horizontal_stage_replay_len<fold>(), 0, 0);
 }
 
 template <HorizontalFold fold>
 inline void horizontal_stage_ror4() {
     constexpr std::uint32_t start = horizontal_stage_replay_start<fold>();
-    lltt::replay(start, 2 * HORIZONTAL_ROTATE_LEN);
-    lltt::replay(start + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN);
-    lltt::replay(start + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN + horizontal_fold_len<fold>());
+    TTI_REPLAY(start, 2 * HORIZONTAL_ROTATE_LEN, 0, 0);
+    TTI_REPLAY(start + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN, 0, 0);
+    TTI_REPLAY(start + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN + horizontal_fold_len<fold>(), 0, 0);
 }
 
 /**
@@ -598,7 +597,7 @@ inline void horizontal_reduce_max_int32() {
  * 4. Use horizontal_reduce_max to consolidate 8 SFPU columns into column 0
  * 5. Store the per-row max into column 0
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16).
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or UINT16).
  *         Int32 and UInt32 MAX/MIN do not use this helper; they take perform_reduce_row_max_tile_int32.
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in a 32-bit dest).
  * @param tile_row_offset Base row offset for this tile in the dest register
@@ -677,7 +676,7 @@ inline void perform_reduce_row_sum_tile(
     // Determine if integer or float mode at compile time
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
-         INSTRUCTION_MODE == InstrModLoadStore::LO16);
+         INSTRUCTION_MODE == InstrModLoadStore::UINT16);
 
     // Process tile in 2 face-pairs: (f0+f1) for tile rows 0-15, (f2+f3) for tile rows 16-31
     // Each face-pair iteration processes 8 rows (two groups of 4 rows each)
@@ -725,7 +724,7 @@ inline void perform_reduce_row_sum_tile(
                 tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_second + 2);
 
             // Replay the full tree-reduce buffer (both int and float use 6 instructions)
-            lltt::replay(0, 6);
+            TTI_REPLAY(0, 6, 0, 0);
 
             // Horizontal reduction: consolidate all 8 SFPU columns into column 0 (interleaved for latency hiding)
             horizontal_reduce<is_integer_mode>();
@@ -781,7 +780,7 @@ inline void sum_first_columns_across_tiles(
     std::uint32_t tile_row_base, std::uint32_t block_ct_dim, RowAvgReciprocal recip = {}) {
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
-         INSTRUCTION_MODE == InstrModLoadStore::LO16);
+         INSTRUCTION_MODE == InstrModLoadStore::UINT16);
 
     // Row offset for each of the 8 partial row-sum results (face 0: 0,4,8,12; face 2: 32,36,40,44)
     constexpr std::uint32_t RESULT_ROWS[8] = {0, 4, 8, 12, 32, 36, 40, 44};
@@ -859,7 +858,7 @@ inline void sum_first_columns_across_tiles(
  * Mirrors sum_first_columns_across_tiles but uses SFPSWAP instead of SFPADD
  * to keep maximum values rather than sums.
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16).
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or UINT16).
  *         Int32 and UInt32 MAX/MIN do not use this helper; they take max_first_columns_across_tiles_int32.
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in a 32-bit dest).
  * @tparam pack_low16 Whether the final store uses mode 9 (low->high 16-bit) for a UInt16 output.
@@ -968,7 +967,7 @@ inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t
  * two's-complement path (perform_reduce_row_max_min_int32 / calculate_reduce_max_min_int32_col).
  *
  * @tparam pool_type MAX or MIN.
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16)
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or UINT16)
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  * @param block_rt_dim Number of tiles along y axis of tensor (row tiles)
  */
@@ -1175,16 +1174,16 @@ inline void configure_addrmod_max_min(std::uint32_t num_cols) {
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = 16},
+        .dest = {.incr = static_cast<std::int16_t>(skip_rows)},
     }
-        .set(ADDR_MOD_6);
+        .set(ADDR_MOD_5);
 
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = static_cast<std::int16_t>(skip_rows)},
+        .dest = {.incr = 16},
     }
-        .set(ADDR_MOD_5);
+        .set(ADDR_MOD_4);
 }
 
 // ============================================================================
@@ -1206,7 +1205,7 @@ template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type>
 inline void init_reduce_max_min_int32() {
     _init_sfpu_config_reg();
 
-    lltt::record(0, COL_MAX_MANUAL_REPLAY_LEN);
+    TTI_REPLAY(0, COL_MAX_MANUAL_REPLAY_LEN, 0, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG5, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, 1);
@@ -1225,7 +1224,7 @@ template <PoolType pool_type>
 inline void init_reduce_max_min_int32_signed() {
     _init_sfpu_config_reg();
 
-    lltt::record(0, COL_MAX_INT32_SIGNED_REPLAY_LEN);
+    TTI_REPLAY(0, COL_MAX_INT32_SIGNED_REPLAY_LEN, 0, 1);
     _emit_int32_signed_cswap_<p_sfpu::LREG7, p_sfpu::LREG6>();
     _emit_int32_signed_cswap_<p_sfpu::LREG6, p_sfpu::LREG5>();
     _emit_int32_signed_cswap_<p_sfpu::LREG5, p_sfpu::LREG4>();
@@ -1238,8 +1237,8 @@ inline void init_reduce_max_min_int32_signed() {
  *        For MIN operations, inverts the swap direction by configuring the SFPU control register.
  *
  * @tparam INSTRUCTION_MODE The instruction mode for the float/unsigned formats that reach here: DEFAULT (FP32,
- * FP16B) or LO16. Int32 and UInt32 MAX/MIN use init_reduce_max_min_int32_signed, and UInt16 in a 32-bit Dest the manual
- * column path, instead, so it does not go through this init.
+ * FP16B) or UINT16. Int32 and UInt32 MAX/MIN use init_reduce_max_min_int32_signed, and UInt16 in a 32-bit Dest the
+ * manual column path, instead, so it does not go through this init.
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN inverts the swap direction for minimum reduction.
  * @param num_cols The number of columns to process (typically 32 for a single tile, or multiple of 32 for block
  * operations)
@@ -1274,7 +1273,7 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     // When clearing high bits (UInt16 in 32-bit dest), two extra SFPAND ops mask the garbage high bits
     // of the manually loaded face-1 columns (LREG0/LREG1) before the compare-and-swap, so the buffer
     // grows from 9 to 11 instructions.
-    lltt::record<lltt::NoExec>(0, col_max_loadmacro_replay_len<clear_high_bits>());
+    TTI_REPLAY(0, col_max_loadmacro_replay_len<clear_high_bits>(), 0, 1);
     TTI_INCRWC(0, 4, 0, 0);
     TTI_SFPLOADMACRO(5, INSTRUCTION_MODE, ADDR_MOD_3, 2);
     TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, 16);
@@ -1288,7 +1287,7 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     TTI_SFPLOADMACRO(0, INSTRUCTION_MODE, ADDR_MOD_3, 0);
 
     // Dummy loads to increment dest counters
-    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_2, 0);
+    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_0, 0);
     TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_1, 0);
 }
 
@@ -1302,7 +1301,7 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
  * @note The row SUM/AVG calculate replays the row window instead of recording it, so call this init again after
  *       anything else records into the SFPU half of the replay buffer.
  *
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
+ * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, UINT16, DEFAULT
  * (FP32, FP16B)
  * @tparam pool_type The PoolType enum value (SUM or AVG). AVG with a float format preloads the 1/32 constant.
  */
@@ -1313,7 +1312,7 @@ inline void init_reduce_sum_avg() {
     // Determine if integer or float mode based on INSTRUCTION_MODE
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
-         INSTRUCTION_MODE == InstrModLoadStore::LO16);
+         INSTRUCTION_MODE == InstrModLoadStore::UINT16);
 
     // Float AVG divides by 32 by multiplying by 1/32. Preload that constant once here (only when it is
     // actually needed: float AVG) into the programmable float const register AVG_RECIP_REG so
@@ -1327,7 +1326,7 @@ inline void init_reduce_sum_avg() {
     if constexpr (is_integer_mode) {
         // Integer replay buffer: 6 sequential instructions (1-cycle SFPIADD latency, no NOPs needed)
         // Positions 0-2 form a natural half-reduce for LREG0-3 (reusable via replay(0, 3))
-        lltt::record(0, COL_SUM_INT_REPLAY_LEN);
+        TTI_REPLAY(0, COL_SUM_INT_REPLAY_LEN, 0, 1);
 
         // Upper face column summation (LREG0-3)
         TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, 4);  // LREG2 = LREG2 + LREG3
@@ -1342,7 +1341,7 @@ inline void init_reduce_sum_avg() {
         // Float replay buffer: 10 instructions total
         // Positions 0-5: Full reduce, interleaved to eliminate NOPs (B hides A's 2-cycle latency)
         // Positions 6-9: Half reduce for LREG0-3 only, with NOP for dependent SFPADD chain
-        lltt::record(0, COL_SUM_FLOAT_REPLAY_LEN);
+        TTI_REPLAY(0, COL_SUM_FLOAT_REPLAY_LEN, 0, 1);
 
         // Full reduce (positions 0-5): interleaved upper/lower face summation
         TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // A1
@@ -1438,7 +1437,7 @@ inline void calculate_reduce_max_min_uint16() {
             // Masked load straight into LREG4-7, where the recorded swap buffer reduces them.
             load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
 
-            lltt::replay(0, 3);  // compare-and-swap reduce LREG4-7 -> LREG4
+            TTI_REPLAY(0, 3, 0, 0);  // compare-and-swap reduce LREG4-7 -> LREG4
 
             TT_SFPMOV(0, p_sfpu::LREG4, PARTIAL_LREG[i], 0);
         }
@@ -1451,7 +1450,7 @@ inline void calculate_reduce_max_min_uint16() {
 
         // Transpose so the 4 partial results of each column sit in one register, reduce, transpose back.
         TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::replay(0, 3);
+        TTI_REPLAY(0, 3, 0, 0);
         TTI_SFPTRANSP(0, 0, 0, 0);
 
         // Swap to combine the two vertically adjacent faces (even and odd columns).
@@ -1537,7 +1536,7 @@ inline void calculate_reduce_max_min_int32_col() {
         for (std::uint32_t i = 0; i < NUM_FACES; i++) {
             load_face_data<INSTRUCTION_MODE, false, p_sfpu::LREG4>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
 
-            lltt::replay(0, REPLAY_LEN);  // signed compare-and-swap reduce LREG4-7 -> LREG4
+            TTI_REPLAY(0, REPLAY_LEN, 0, 0);  // signed compare-and-swap reduce LREG4-7 -> LREG4
 
             TT_SFPMOV(0, p_sfpu::LREG4, PARTIAL_LREG[i], 0);
         }
@@ -1550,7 +1549,7 @@ inline void calculate_reduce_max_min_int32_col() {
 
         // Transpose so the 4 partial results of each column sit in one register, reduce, transpose back.
         TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::replay(0, REPLAY_LEN);
+        TTI_REPLAY(0, REPLAY_LEN, 0, 0);
         TTI_SFPTRANSP(0, 0, 0, 0);
 
         // Signed compare-and-swap to combine the two vertically adjacent faces (even and odd columns).
@@ -1583,7 +1582,7 @@ inline void calculate_reduce_max_min_int32_col() {
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN uses inverted swap direction for minimum reduction.
  * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (MAX and MIN).
  * @tparam INSTRUCTION_MODE The instruction mode for the float/unsigned formats that reach here: DEFAULT (FP32,
- * FP16B) or LO16. Int32 and UInt32 MAX/MIN use the dedicated two's-complement path
+ * FP16B) or UINT16. Int32 and UInt32 MAX/MIN use the dedicated two's-complement path
  * (calculate_reduce_max_min_int32_col / perform_reduce_row_max_min_int32), and UInt16 in a 32-bit Dest the manual
  * column path (calculate_reduce_max_min_uint16), instead.
  * @param block_ct_dim Number of tiles along x axis (column tiles, default 1).
@@ -1630,26 +1629,26 @@ inline void calculate_reduce_max_min(
         TTI_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, 18);
 
         // First tile processing (F0, F1, F2, F3)
-        lltt::replay(0, replay_buffer_offset);
-        lltt::replay(0, replay_buffer_offset);
-        lltt::replay(0, replay_buffer_next_face);
+        TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+        TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+        TTI_REPLAY(0, replay_buffer_next_face, 0, 0);
 
-        lltt::replay(0, replay_buffer_offset);
-        lltt::replay(0, replay_buffer_offset);
-        lltt::replay(0, replay_buffer_offset);
-        lltt::replay(0, replay_buffer_next_face + 1);
+        TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+        TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+        TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+        TTI_REPLAY(0, replay_buffer_next_face + 1, 0, 0);
 
         // Remaining tiles
         for (std::uint32_t i = 0; i < block_rt_dim - 1; i++) {
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_next_face);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_next_face, 0, 0);
 
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_next_face + 1);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_next_face + 1, 0, 0);
         }
 
         // Reset dest RWC counter
@@ -1689,7 +1688,7 @@ inline void calculate_reduce_max_min(
  *
  * @tparam pool_type The reduction operation, currently supported: (SUM, AVG)
  * @tparam reduce_dim REDUCE_COL (all formats) or REDUCE_ROW (SUM all formats; AVG float formats only)
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
+ * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, UINT16, DEFAULT
  * (FP32, FP16B)
  * @tparam is_signed_int True when the reduce format is signed (Int32). Passed separately from INSTRUCTION_MODE
  * because UInt32 shares the INT32 mode; see perform_int_average().
@@ -1712,7 +1711,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
     // supported (integer AVG stays column-only, where the divisor is the fixed 32 rows of a tile).
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
-         INSTRUCTION_MODE == InstrModLoadStore::LO16);
+         INSTRUCTION_MODE == InstrModLoadStore::UINT16);
 
     // Compile-time assertions to restrict to currently supported operations
     static_assert(
@@ -1727,7 +1726,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
          INSTRUCTION_MODE == InstrModLoadStore::FP32 || INSTRUCTION_MODE == InstrModLoadStore::FP16B);
     static_assert(
         is_supported_reduce_instr_mode,
-        "INSTRUCTION_MODE must be one of: INT32, INT32_2S_COMP, LO16, DEFAULT, FP32, FP16B");
+        "INSTRUCTION_MODE must be one of: INT32, INT32_2S_COMP, UINT16, DEFAULT, FP32, FP16B");
 
     if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
         perform_reduce_col_sum_avg<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int>();

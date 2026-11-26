@@ -502,8 +502,3 @@ class MelDecoder(Module):
         x = self._host_to_device(latent)
         y = self._forward_device(x, traced=True, tracer_trace_key=tuple(latent.shape))
         return self._device_to_host(y)
-
-    def release_trace(self) -> None:
-        """Free all captured decode traces (call on shutdown or before re-warming)."""
-        for tracer in type(self)._forward_device._tracers_keyed.get(self, {}).values():
-            tracer.release_trace()

@@ -20,7 +20,7 @@ from models.tt_dit.encoders.qwen25vl.vision_qwen25vl import Qwen25VlVisionModel
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
-from models.tt_dit.utils import tensor
+from models.tt_dit.utils import cache, tensor
 from models.tt_dit.utils.mesh import reshape_for_factor
 from models.tt_dit.utils.padding import torch_pad
 from models.tt_dit.utils.tracing import Tracer
@@ -99,9 +99,10 @@ class TextEncoder:
     ) -> None:
         """Build the encoder, and the vision tower if ``prompt_format`` takes images.
 
-        With ``offload``, the device weights are loaded for each ``encode_cfg`` and freed after it,
-        which leaves their memory to the transformer. Encoding is then never traced. With
-        ``offload_vision``, only the vision tower's weights are, and only around encoding the images.
+        With ``offload``, the caller pages ``encoder`` and ``vision`` in for each ``encode_cfg`` and
+        out after it, which leaves their memory to the transformer. Encoding is then never traced.
+        With ``offload_vision``, only ``vision`` is paged. Both need ``TT_DIT_CACHE_DIR``, which the
+        reloads read from.
 
         The vision tower pads its patches to one length per image count up to ``max_images``: that
         many images of the largest patch count among ``vision_image_sizes``, the (width, height) the
@@ -111,7 +112,11 @@ class TextEncoder:
         self._parallel_config = parallel_config
         self._format = prompt_format
         self._offload = offload and not use_torch
-        self._offload_vision = offload_vision and not use_torch
+        # Only the edit formats have a vision tower to offload.
+        self._offload_vision = offload_vision and not use_torch and prompt_format.image_prompt is not None
+        if (self._offload or self._offload_vision) and not cache.cache_dir_is_set():
+            msg = "offloading the text encoder needs the TT_DIT_CACHE_DIR cache"
+            raise ValueError(msg)
         self._tokenizer = transformers.Qwen2Tokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer")
         self._processor: transformers.Qwen2VLProcessor | None = None
         if prompt_format.image_prompt is not None:
@@ -156,10 +161,30 @@ class TextEncoder:
                         device=device, parallel_config=parallel_config, ccl_manager=ccl_manager
                     )
             ttnn.synchronize_device(device)
-            if self._offload:
-                self._deallocate_weights()
-            elif self._offload_vision and self._vision is not None:
-                self._vision.deallocate_weights()
+
+    @property
+    def encoder(self) -> Qwen25VlEncoder | None:
+        return self._encoder
+
+    @property
+    def vision(self) -> Qwen25VlVisionModel | None:
+        return self._vision
+
+    @property
+    def offload(self) -> bool:
+        return self._offload
+
+    @property
+    def offload_vision(self) -> bool:
+        return self._offload_vision
+
+    @property
+    def encoder_spec(self) -> dict:
+        return self._checkpoint.spec(device=self._device, parallel_config=self._parallel_config)
+
+    @property
+    def vision_spec(self) -> dict:
+        return self._checkpoint.vision_spec(device=self._device, parallel_config=self._parallel_config)
 
     @torch.no_grad()
     def encode_cfg(
@@ -197,7 +222,6 @@ class TextEncoder:
         with self._reshape():
             if self._offload:
                 traced = False
-                self._load_weights()
             image_inputs = self._encode_images(images) if images else None
             for cfg_pass in cfg_passes:
                 if image_inputs is not None:
@@ -209,25 +233,9 @@ class TextEncoder:
                 outputs.append(embeds.repeat_interleave(num_images_per_prompt, dim=0))
             if image_inputs is not None and image_inputs.embeds is not None:
                 ttnn.deallocate(image_inputs.embeds)
-            if self._offload:
-                self._deallocate_weights()
         on_event(SectionEnd("qwen_encoding"))
 
         return outputs
-
-    def _load_weights(self) -> None:
-        assert self._encoder is not None
-        self._checkpoint.load_weights(self._encoder, device=self._device, parallel_config=self._parallel_config)
-        if self._vision is not None:
-            self._checkpoint.load_vision_weights(
-                self._vision, device=self._device, parallel_config=self._parallel_config
-            )
-
-    def _deallocate_weights(self) -> None:
-        assert self._encoder is not None
-        self._encoder.deallocate_weights()
-        if self._vision is not None:
-            self._vision.deallocate_weights()
 
     def _encode_images(self, images: Sequence[Image.Image]) -> _ImageInputs:
         assert self._processor is not None
@@ -237,8 +245,6 @@ class TextEncoder:
         embeds = None
         if self._vision is not None:
             device = self._device
-            if self._offload_vision:
-                self._checkpoint.load_vision_weights(self._vision, device=device, parallel_config=self._parallel_config)
             patch_count = pixel_values.shape[0]
             min_patches = next((b for b in self._vision_patch_buckets if b >= patch_count), 0)
             vision_inputs = self._vision.prepare_inputs(pixel_values, grid_thw, min_patches=min_patches)
@@ -257,8 +263,6 @@ class TextEncoder:
                 cu_seqlens=vision_inputs.cu_seqlens,
                 cu_window_seqlens=vision_inputs.cu_window_seqlens,
             )
-            if self._offload_vision:
-                self._vision.deallocate_weights()
         return _ImageInputs(images=list(images), pixel_values=pixel_values, grid_thw=grid_thw, embeds=embeds)
 
     def prompt_length(self, prompt: str, *, images: Sequence[Image.Image] = ()) -> int:

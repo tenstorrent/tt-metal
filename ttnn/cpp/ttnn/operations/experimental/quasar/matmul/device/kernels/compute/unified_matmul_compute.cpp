@@ -142,13 +142,17 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                     if (reload_partials) {
                         // Reload this subblock's partials into DST; the matmul MOP must be re-initialised
                         // after any copy_init.
+                        // Undo the MxFp4 2x src format matmul_init latched (see mm_uninit); no-op otherwise.
+                        mm_uninit(dfb::A_slice, dfb::B_slice);
                         reconfig_data_format_srca(dfb::B_slice, dfb::C_partials);
                         copy_init(dfb::C_partials);
+                        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
                         copy_block(
                             dfb::C_partials,
                             /*start_in_tile_index=*/entry_tile,
                             /*start_dst_tile_index=*/0,
                             subblock_tiles);
+                        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                         reconfig_data_format_srca(dfb::C_partials, dfb::B_slice);
                         matmul_block_init(
                             dfb::A_slice,
@@ -162,6 +166,8 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                     if (K_chunk == 0) {
                         // The bias tile over each subblock column, broadcast down every row of the DST tiles
                         // in that column; it is unpacked through SrcB, where the A slice's tiles go.
+                        // Undo the MxFp4 2x src format matmul_init latched (see mm_uninit); no-op otherwise.
+                        mm_uninit(dfb::A_slice, dfb::B_slice);
                         reconfig_data_format_srcb(dfb::A_slice, dfb::bias);
                         unary_bcast_init<BroadcastType::ROW>(dfb::bias);
                         for (uint32_t m = 0; m < subblock_M_tiles; ++m) {

@@ -4,7 +4,7 @@
 
 #include "create_qkv_heads_from_separate_tensors_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
@@ -124,7 +124,7 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate_on_program_cache_mis
         (q_input_shape[3]) /
         (num_w_cores * TILE_WIDTH);  // number of tiles in width dimension  - multiple tiles per head, multiple heads
                                      // per group, multiple tensors in group, multiple groups per cores
-    uint32_t q_shard_ht = ((q_input_shape[0] * q_input_shape[2]) / (num_w_cores * TILE_HEIGHT));
+    uint32_t q_shard_ht = ((q_input_shape[0] * q_input_shape[2]) / (num_h_cores * TILE_HEIGHT));
     uint32_t k_shard_wt = (kv_input_shape[3] / (2 * num_w_cores * TILE_WIDTH));
     uint32_t k_shard_ht = ((kv_input_shape[0] * kv_input_shape[2]) / (num_h_cores * TILE_HEIGHT));
 

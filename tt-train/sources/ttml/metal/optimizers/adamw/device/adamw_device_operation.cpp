@@ -19,12 +19,12 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
                             const ttnn::Tensor& tensor,
                             const std::string& name,
                             const tt::tt_metal::Layout required_layout,
-                            const tt::tt_metal::DataType required_dtype) {
+                            const std::vector<tt::tt_metal::DataType>& required_dtypes) {
         check_device_tensor(
             tensor,
             "AdamW",
             name,
-            {.dtypes = {required_dtype}, .layout = required_layout, .buffer_type = tt::tt_metal::BufferType::DRAM});
+            {.dtypes = required_dtypes, .layout = required_layout, .buffer_type = tt::tt_metal::BufferType::DRAM});
 
         // Logical shapes must match for element-for-element correspondence with the parameter;
         // padding alone cannot tell apart tensors that round up to the same tile extent.
@@ -68,16 +68,23 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
         enchantum::to_string(param_dtype));
 
     // Validate all tensors
-    check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, param_dtype);
-    // Gradient is always bf16
-    check_tensor(grad, "Gradient", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, {param_dtype});
+    // The gradient may be bf16 or fp32 whatever the parameter's dtype: one accumulated in fp32 is read as it is.
+    check_tensor(
+        grad,
+        "Gradient",
+        tt::tt_metal::Layout::TILE,
+        {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32});
     // Optimizer states must match param dtype
-    check_tensor(exp_avg, "Exponential Average Buffer", tt::tt_metal::Layout::TILE, param_dtype);
-    check_tensor(exp_avg_sq, "Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+    check_tensor(exp_avg, "Exponential Average Buffer", tt::tt_metal::Layout::TILE, {param_dtype});
+    check_tensor(exp_avg_sq, "Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, {param_dtype});
 
     if (max_exp_avg_sq.has_value()) {
         check_tensor(
-            max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+            max_exp_avg_sq.value(),
+            "Max Exponential Average Squared Buffer",
+            tt::tt_metal::Layout::TILE,
+            {param_dtype});
     }
 }
 
@@ -96,17 +103,23 @@ std::vector<tt::tt_metal::TensorTopology> AdamWDeviceOperation::compute_output_t
     return {tensor_args.param.tensor_topology()};
 }
 
+// lr, beta1, beta2, beta1_pow, beta2_pow, epsilon, weight_decay and stochastic_rounding_seed are left out of the key:
+// they change from step to step (weight_decay also from parameter to parameter) and reach the kernels only through
+// runtime args, which AdamWProgramFactory::override_runtime_arguments re-applies on every cache hit. Every other
+// attribute and the full spec of every tensor (memory config and padded shape included), as well as whether
+// max_exp_avg_sq is present, are keyed.
 ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& param_tensor = tensor_args.param;
-    const auto& param_logical_shape = param_tensor.logical_shape();
-    auto amsgrad = args.amsgrad;
-    auto stochastic_rounding = args.stochastic_rounding;
-    auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
-    auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, param_tensor.dtype(), param_logical_shape);
-
-    return hash;
+    operation_attributes_t keyed_args = args;
+    keyed_args.lr = 0.0F;
+    keyed_args.beta1 = 0.0F;
+    keyed_args.beta2 = 0.0F;
+    keyed_args.beta1_pow = 0.0F;
+    keyed_args.beta2_pow = 0.0F;
+    keyed_args.epsilon = 0.0F;
+    keyed_args.weight_decay = 0.0F;
+    keyed_args.stochastic_rounding_seed = std::nullopt;
+    return tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(keyed_args, tensor_args);
 }
 
 }  // namespace ttml::metal::optimizers::adamw::device
