@@ -58,7 +58,9 @@ GTEST_ENV_KEYS = tuple(dict.fromkeys(k for spec in TESTS.values() for k in spec.
 
 # Pytest-based tests, keyed like TESTS but run through the repo venv's pytest
 # (python_env/bin/pytest, falling back to PATH) instead of the gtest binary.
-# Each entry is a pytest node id plus its extra args.
+# Each entry is a pytest node id plus its extra args and, optionally, environment
+# set for that run only ("{logs_dir}" in a value becomes the check's log
+# directory), recorded in the check as env_overrides like a gtest's.
 #
 # didt_matmul_galaxy: dI/dt worst-case matmul across the full galaxy mesh (8x4),
 # 1000 workload iterations with a determinism check every 50 (20 checks) —
@@ -100,6 +102,16 @@ PYTESTS = {
     "gddr_act_all": {
         "target": "tests/dram/test_dram_act_patterns.py::test_dram_act_all_ctrls_screen",
         "args": ["-s"],
+    },
+    # gddr_retention: every DRAM address the allocator leaves free is written
+    # once, then read back and compared 5, 7 and 8 s later. gddr_fast/gddr_full
+    # read each chunk straight back, so they never test retention. The JSON
+    # report, with every failing address and its flipped bits, goes to the
+    # check's log directory.
+    "gddr_retention": {
+        "target": "tools/scaleout/exabox/health_check_test_suite/gddr/test_gddr_retention.py::test_gddr_retention",
+        "args": ["-s"],
+        "env": {"RETENTION_OUT_DIR": "{logs_dir}"},
     },
 }
 
@@ -166,14 +178,15 @@ def run_pytest_test(
     # as an argv list (no shell).
     target = spec["target"]
     cmd = [pytest_bin, target, *spec["args"]]
-    test_env = env.copy()
+    env_overrides = {key: value.format(logs_dir=logs_dir) for key, value in spec.get("env", {}).items()}
+    test_env = {**env, **env_overrides}
     test_env.setdefault("PYTHONPATH", str(tt_metal))
     log_path = logs_dir / f"{name}.log"
     # Only the output dir survives the container.
     result_path = logs_dir / f"{name}.json"
     test_env["DIAG_RESULT_JSON"] = str(result_path)
     # shlex.join keeps args with spaces (-k "galaxy and bf16_HiFi2") copy-pasteable
-    cmdline = shlex.join(cmd)
+    cmdline = shlex.join([f"{key}={value}" for key, value in env_overrides.items()] + cmd)
     log(f"--- test '{name}' (pytest) ---")
     log(f"  cmd:  {cmdline}")
     log(f"  log:  {log_path}")
@@ -191,6 +204,7 @@ def run_pytest_test(
                     "command": cmdline,
                     "rc": 0,
                     "duration_s": 0.0,
+                    "env_overrides": env_overrides,
                     "log_file": str(log_path),
                     "testcases": {"passed": 0, "failed": 0, "failures": []},
                 },
@@ -242,6 +256,7 @@ def run_pytest_test(
         "command": cmdline,
         "rc": rc,
         "duration_s": dt,
+        "env_overrides": env_overrides,
         "log_file": str(log_path),
         "testcases": {"passed": passed, "failed": failed, "failures": failures},
     }

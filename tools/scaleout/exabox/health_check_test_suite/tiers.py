@@ -93,7 +93,7 @@ class Tier:
 
 _WEEKLY = Tier(
     resets=("-r", "-glx_reset", "-glx_reset"),
-    tests=("gddr_full", "gddr_act_c3", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
+    tests=("gddr_full", "gddr_retention", "gddr_act_c3", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
     retest=("gddr_act_c3",),
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
@@ -112,7 +112,8 @@ TIERS: dict[str, Tier] = {
         eth_summary=True,
         sys_triage=True,
     ),
-    # The scheduled run.
+    # The scheduled run. gddr_retention is left to weekly, full and the
+    # deployment runner.
     "daily": Tier(
         resets=("-r", "-glx_reset"),
         tests=("gddr_fast", "eth_link_up", "eth_bandwidth"),
