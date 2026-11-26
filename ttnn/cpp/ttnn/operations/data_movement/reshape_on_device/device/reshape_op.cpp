@@ -6,6 +6,7 @@
 #include "reshape_on_device/device/reshape_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -86,6 +87,22 @@ void ReshapeDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.padded_shape()[3] % ROW_MAJOR_WIDTH == 0 &&
                 operation_attributes.padded_output_shape[3] % ROW_MAJOR_WIDTH == 0,
             "Operand/target width must be a multiple of 8");
+        // The row-major reader packs each input row at a running offset in L1, and a DRAM read needs that offset
+        // aligned like its source: when the width changes, a DRAM input's rows must be a multiple of the DRAM
+        // alignment, or the rows land at the wrong offsets.
+        const uint32_t input_width = input_tensor_a.padded_shape()[3];
+        if (input_tensor_a.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
+            input_width != operation_attributes.padded_output_shape[3]) {
+            const uint32_t row_bytes = input_width * input_tensor_a.element_size();
+            const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+            TT_FATAL(
+                row_bytes % dram_alignment == 0,
+                "A ROW_MAJOR input in DRAM whose width changes needs rows that are a multiple of the DRAM alignment "
+                "({} "
+                "B), but its rows are {} B. Move the input to L1 or use ttnn::reshape.",
+                dram_alignment,
+                row_bytes);
+        }
     } else {
         TT_THROW("Unsupported layout for reshape");
     }

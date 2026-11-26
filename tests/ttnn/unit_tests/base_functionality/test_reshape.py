@@ -1443,3 +1443,13 @@ def test_reshape_on_device_docstring_supported_inputs(dtype, layout, input_buffe
             if same_last_dim:
                 assert output.buffer_address() == input_tensor.buffer_address()
             assert_exact(expected, ttnn.to_torch(output))
+
+
+def test_reshape_on_device_rejects_unaligned_dram_rows(device, expect_error):
+    """A BFLOAT16 ROW_MAJOR input in DRAM with rows of 48 bytes, reshaped to a new width, breaks the DRAM rule of the
+    ttnn.reshape_on_device docstring. The op raises instead of returning misplaced rows."""
+    input_tensor = ttnn.from_torch(
+        torch.ones(1, 1, 96, 24), dtype=ttnn.bfloat16, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    with expect_error(RuntimeError, "multiple of the DRAM alignment"):
+        ttnn.reshape_on_device(input_tensor, 1, 1, 48, 48)
