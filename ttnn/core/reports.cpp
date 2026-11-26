@@ -9,9 +9,9 @@
 #include <map>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 namespace ttnn::reports {
 

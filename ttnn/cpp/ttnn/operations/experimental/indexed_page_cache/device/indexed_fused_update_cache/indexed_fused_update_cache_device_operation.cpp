@@ -9,7 +9,7 @@
 #include <limits>
 #include <variant>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "ttnn/device_operation.hpp"
 

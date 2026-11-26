@@ -1,45 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <cstdint>
-#include <memory>
-#include <ostream>
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/mesh_event.hpp> moved to <tt-metalium/execution/mesh_event.hpp>.
+// This forwarding header will be removed after 2027-03-05.
+#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
+// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
+#warning \
+    "<tt-metalium/mesh_event.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/execution/mesh_event.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
+#endif
 
-#include <tt-metalium/mesh_coord.hpp>
-
-namespace tt::tt_metal::distributed {
-
-class MeshCommandQueue;
-class MeshDevice;
-class MeshEventImpl;
-
-class MeshEvent {
-public:
-    MeshEvent(uint32_t id, MeshCommandQueue& cq, const MeshCoordinateRange& device_range);
-    [[deprecated(
-        "Use MeshEvent(uint32_t, MeshCommandQueue&, const MeshCoordinateRange&) instead. MeshEvent(uint32_t, "
-        "MeshDevice*, uint32_t, const MeshCoordinateRange&) will be removed after September 9th, 2026.")]]
-    MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range);
-    explicit MeshEvent(MeshEventImpl impl);
-
-    MeshEvent(const MeshEvent& other);
-    MeshEvent& operator=(const MeshEvent& other);
-    MeshEvent(MeshEvent&& other) noexcept;
-    MeshEvent& operator=(MeshEvent&& other) noexcept;
-    ~MeshEvent();
-
-    MeshDevice* device() const;
-
-    MeshEventImpl& impl();
-    const MeshEventImpl& impl() const;
-
-    friend std::ostream& operator<<(std::ostream& os, const MeshEvent& event);
-
-private:
-    std::unique_ptr<MeshEventImpl> impl_;
-};
-
-}  // namespace tt::tt_metal::distributed
+#include <tt-metalium/execution/mesh_event.hpp>  // IWYU pragma: export

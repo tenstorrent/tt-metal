@@ -14,7 +14,7 @@ Usage from the training loop::
 The logger is intentionally minimal and side-effect free beyond the CSV
 append: no device calls, no torch imports, no global state. It relies on
 ``MoE.read_activation_probabilities()`` which must be called *before*
-``update_expert_bias()`` (which resets the underlying ``_token_counts``).
+``update_expert_biases()`` (which resets the underlying ``_token_counts``).
 
 CSV schema
 ----------

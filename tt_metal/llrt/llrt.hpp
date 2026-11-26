@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "llrt/hal.hpp"
 #include "binary_metadata.hpp"
 #include "tt_memory.h"

@@ -19,7 +19,7 @@
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
 #include "serialization/serializable.hpp"
-#include "tt-metalium/distributed_context.hpp"
+#include "tt-metalium/mesh/multihost/distributed_context.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -149,6 +149,14 @@ void py_module(nb::module_& m) {
         "Apply training_config.precision before creating the optimizer: precision.master_dtype to the parameters, "
         "and precision.reduce_dtype (None when unset) as the dtype the gradient syncs sum in by default. Returns the "
         "master dtype applied, or None.");
+
+    m.def(
+        "cast_fp32_gradients_to_bf16",
+        &ttml::core::cast_fp32_gradients_to_bf16,
+        nb::arg("parameters"),
+        "Replace every fp32 gradient of parameters with its bf16 cast; bf16 and missing gradients stay as they are. "
+        "With reduce_dtype float32 a gradient can be fp32 when the step starts: an optimizer whose math takes bf16 "
+        "gradients, such as one registered from Python, calls this first.");
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
@@ -329,6 +337,7 @@ void py_module(nb::module_& m) {
                 // DistributedContext::send takes Span<std::byte> (non-const),
                 // but underlying MPI_Send treats it as readonly.
                 auto* ptr = reinterpret_cast<std::byte*>(const_cast<char*>(data.c_str()));
+                nb::gil_scoped_release release;
                 self.send(ttsl::Span<std::byte>(ptr, data.size()), DistRank{dest}, DistTag{tag});
             },
             nb::arg("data"),
@@ -337,13 +346,24 @@ void py_module(nb::module_& m) {
         py_dist_ctx.def(
             "recv",
             [](DistributedContext& self, std::size_t nbytes, int source, int tag) -> nb::bytes {
-                std::vector<std::byte> buffer(nbytes);
-                self.recv(ttsl::Span<std::byte>(buffer.data(), buffer.size()), DistRank{source}, DistTag{tag});
-                return nb::bytes(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+                auto result = nb::steal<nb::bytes>(PyBytes_FromStringAndSize(nullptr, static_cast<Py_ssize_t>(nbytes)));
+                if (!result.is_valid()) {
+                    throw nb::python_error();
+                }
+                auto* ptr = reinterpret_cast<std::byte*>(PyBytes_AsString(result.ptr()));
+                {
+                    nb::gil_scoped_release release;
+                    self.recv(ttsl::Span<std::byte>(ptr, nbytes), DistRank{source}, DistTag{tag});
+                }
+                return result;
             },
             nb::arg("nbytes"),
             nb::arg("source"),
             nb::arg("tag") = 0);
+        py_dist_ctx.def("duplicate", [](DistributedContext& self) -> std::shared_ptr<DistributedContext> {
+            nb::gil_scoped_release release;
+            return self.duplicate();
+        });
 
         // Bind SocketManager methods
         auto py_socket_manager =

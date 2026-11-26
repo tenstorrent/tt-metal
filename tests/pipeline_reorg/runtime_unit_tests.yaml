@@ -411,6 +411,16 @@
   team: runtime
   budget_type: unit
 
+# --- DispatchContext Tests (SD) ---
+- name: runtime_sd_dispatch_context
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*DispatchContext*'
+  skus:
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+  budget_type: unit
+
 # Service Core Manager Tests (BH only, SD + FD)
 - name: service_core_manager
   cmd: |

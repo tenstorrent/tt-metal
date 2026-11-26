@@ -9,9 +9,9 @@
 
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
-#include "tt-metalium/buffer.hpp"
-#include "tt-metalium/circular_buffer_config.hpp"
-#include "tt-metalium/program_descriptors.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer_config.hpp"
+#include "tt-metalium/workload/legacy/program_descriptors.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"

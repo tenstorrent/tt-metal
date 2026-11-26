@@ -5,7 +5,7 @@
 #include "reshape_op.hpp"
 #include "reshape_on_device/device/reshape_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 
 #include "ttnn/tensor/tensor_ops.hpp"
