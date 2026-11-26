@@ -21,6 +21,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.blackhole.qwen36.demo.text_demo import DEVICE_PARAMS
 from models.demos.blackhole.qwen36.tests.test_factory import _resolve_mesh_shape
 from models.demos.blackhole.qwen36.tt.spec_argmax_fused import LANES, FusedShardArgmax
 from models.demos.blackhole.qwen36.tt.spec_penalties import (
@@ -272,3 +273,199 @@ def test_the_commit_trace_adds_each_tracked_users_commit(mesh_device):
         assert int(rig.pen.read([0])[0][0, 7]) == int(counts[0, 7]) + 2
     finally:
         rig.release()
+
+
+# ------------------------------------------------------------------------------------------------- the model, served
+K = 3
+MAX_MODEL_LEN = 4096
+KINDS = {
+    "repetition": dict(repetition_penalty=1.3),
+    "frequency": dict(frequency_penalty=0.6),
+    "presence": dict(presence_penalty=0.8),
+}
+
+
+class _Runner:
+    """B = 1 calls into Qwen36MTPContractForCausalLM as the plugin runner makes them for a greedy request with
+    penalties. ``device``: every step is an argmax_ids verify of a device-sampled step (the device applies the
+    penalties); else every step is a logits verify and the host applies vLLM's penalties to each column after the
+    committed output and the drafts before it (the plugin's logits walk), then takes the argmax. ``drafts``: verify the
+    drafter's proposals; without them every verify is one column, so both paths run the same computation."""
+
+    def __init__(self, cls, kv, layout, seed):
+        from models.demos.blackhole.qwen36.tests.spec_block_helpers import SpecBlocks
+
+        self.cls, self.kv = cls, kv
+        self.bs = layout.block_size
+        self.width = -(-MAX_MODEL_LEN // self.bs)
+        g = torch.Generator().manual_seed(seed)
+        free = (torch.randperm(layout.num_blocks - 1, generator=g) + 1).tolist()
+        self.state = SpecBlocks(layout, K, "none", free=free[: layout.num_groups * (K + 1)])
+        self.free, self.blocks = free[layout.num_groups * (K + 1) :], []
+
+    def _table(self, last):
+        need = min(self.width, -(-(last + 2 * (K + 1)) // self.bs))
+        new = []
+        while len(self.blocks) < need:
+            new.append(self.free.pop())
+            self.blocks.append(new[-1])
+        if new:
+            self.cls.zero_kv_cache_blocks(self.kv, new)
+        return torch.tensor([self.blocks + [0] * (self.width - len(self.blocks))], dtype=torch.int32)
+
+    def run(self, prompt, max_new, penalty, device, drafts):
+        import time
+        from types import SimpleNamespace
+
+        cls, P = self.cls, len(prompt)
+        rep = penalty.get("repetition_penalty", 1.0)
+        freq = penalty.get("frequency_penalty", 0.0)
+        pres = penalty.get("presence_penalty", 0.0)
+        bmax = cls.model[0].args.max_batch_size
+
+        def pick(x, history):
+            return int(reference_penalties(x.float(), prompt, history, rep, freq, pres).argmax())
+
+        self.state.admit(0)
+        logits, _ = cls.prefill_forward(
+            torch.tensor([prompt], dtype=torch.int32),
+            self._table(P - 1),
+            self.kv,
+            prompt_lens=torch.tensor([P]).numpy(),
+            start_pos=torch.tensor([0]).numpy(),
+            empty_slots=[0],
+            enable_trace=True,
+            mamba_state=self.state.state({0: self.state.prefill(0, 0, P)}, bmax, intermediate=()),
+        )
+        out, proposal, acc, seconds, steps = [pick(logits[0, -1], [])], [], 1, 0.0, 0
+        sampling = SimpleNamespace(
+            temperature=[0.0], top_k=[1], top_p=[1.0], seed=[None], repetition_penalty=[rep],
+            frequency_penalty=[freq], presence_penalty=[pres],
+        )  # fmt: skip
+        while len(out) < max_new:
+            pos0 = P + len(out) - 1
+            n = len(proposal) if drafts else 0
+            tok = torch.full((1, 1 + K), -1, dtype=torch.int32)
+            pos = torch.full((1, 1 + K), -1, dtype=torch.int32)
+            tok[0, : 1 + n] = torch.tensor([out[-1]] + proposal[:n], dtype=torch.int32)
+            pos[0, : 1 + n] = torch.arange(pos0, pos0 + 1 + n, dtype=torch.int32)
+            kw = dict(
+                tokens=tok,
+                start_pos=pos,
+                page_table=self._table(pos0),
+                kv_cache=self.kv,
+                enable_trace=True,
+                read_from_device=False,
+                num_valid_drafts=torch.tensor([n], dtype=torch.int32),
+                accepted_counts=torch.tensor([acc], dtype=torch.int32),
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
+                mamba_state=self.state.state({0: self.state.decode(0, pos0, 1 + n)}, bmax),
+            )
+            t0 = time.perf_counter()
+            if device:
+                res = cls.decode_forward(
+                    spec_mode="argmax_ids",
+                    sampling_params=sampling,
+                    prompt_tokens=torch.tensor([prompt], dtype=torch.int32),
+                    output_tokens=torch.tensor([out], dtype=torch.int32),
+                    **kw,
+                )
+                ids = cls.read_decode_output(res.argmax_ids)[0].tolist()
+            else:
+                res = cls.decode_forward(spec_mode="logits", **kw)
+                ids = [pick(res.logits[0, j], out + proposal[:j]) for j in range(n + 1)]
+            seconds += time.perf_counter() - t0
+            steps += 1
+            j = 0
+            while j < n and proposal[j] == ids[j]:
+                j += 1
+            new = (proposal[:j] + [ids[j]])[: max_new - len(out)]
+            out.extend(new)
+            acc = len(new)
+            self.state.commit(0, acc)
+            committed = torch.full((1, 1 + K), -1, dtype=torch.int32)
+            cpos = torch.full((1, 1 + K), -1, dtype=torch.int32)
+            committed[0, :acc] = torch.tensor(new, dtype=torch.int32)
+            cpos[0, :acc] = torch.arange(pos0 + 1, pos0 + 1 + acc, dtype=torch.int32)
+            d = cls.propose_draft_tokens(K, committed, cpos, torch.tensor([acc], dtype=torch.int32), hidden=res.hidden)
+            proposal = [int(t) for t in d.draft_token_ids[0, : int(d.num_valid[0])]]
+        cls.release_request(0)
+        self.state.release(0)
+        return out, steps, seconds
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_a_greedy_penalised_request_commits_the_host_paths_tokens(mesh_device):
+    """Qwen3.8 on the class the plugin serves, warmed for device sampling: a greedy request with each penalty kind
+    decodes the same tokens on the device path (argmax_ids verifies with the penalties applied on the device) as on
+    the host path (logits verifies, vLLM's penalties and the argmax on the host), one column per verify; with drafts
+    the device path still matches, up to a near tie the different verify grouping can flip. The device counts end equal
+    to the request's committed output. Logs the time per verify of both paths."""
+    import math
+    import os
+    from types import SimpleNamespace
+
+    from transformers import AutoTokenizer
+
+    from models.demos.blackhole.qwen36.demo.text_demo import _get_prompt
+    from models.demos.blackhole.qwen36.tests.gdn_block_helpers import PluginLayout
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36MTPContractForCausalLM
+
+    if not (os.environ.get("HF_MODEL") or os.environ.get("MODEL_WEIGHTS_DIR")):
+        pytest.skip("set HF_MODEL (checkpoint dir)")
+    if _shards(mesh_device) == 1:
+        pytest.skip("the verify penalties are on the TP path")
+    mesh_device.enable_program_cache()
+    hf_config = SimpleNamespace(_name_or_path=os.environ.get("HF_MODEL"))
+    cls = Qwen36MTPContractForCausalLM.initialize_vllm_model(
+        hf_config, mesh_device, max_batch_size=1, max_seq_len=MAX_MODEL_LEN, tt_data_parallel=1, optimizations=None
+    )
+    model = cls.model[0]
+    probe = PluginLayout.for_model(model, num_blocks=1)
+    width = math.ceil(MAX_MODEL_LEN / probe.block_size)
+    layout = PluginLayout.for_model(model, num_blocks=width + probe.num_groups * (K + 1) + 8)
+    kv = cls.allocate_kv_cache_per_layer(layout.per_layer_specs)
+    for enable_trace in (False, True):
+        cls.warmup_model_prefill(enable_trace=enable_trace, kv_cache=kv, can_sample_on_device=True)
+        cls.warmup_model_decode(
+            enable_trace=enable_trace, kv_cache=kv, max_batch_size=1, num_blocks=width, can_sample_on_device=True
+        )
+    assert model._vfy_penalties is not None and cls.model_capabilities["supports_spec_device_penalties"]
+    tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
+    prompt = _get_prompt(130, tokenizer)[0].tolist()
+    n_prog = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        for i, (kind, penalty) in enumerate(KINDS.items()):
+            runs = {}
+            for path, device, drafts in (
+                ("host", False, False),
+                ("device", True, False),
+                ("device+drafts", True, True),
+            ):
+                runs[path] = _Runner(cls, kv, layout, seed=10 * i + len(runs)).run(prompt, 48, penalty, device, drafts)
+                out, steps, seconds = runs[path]
+                logger.info(
+                    f"[penalties] {kind} {path}: {len(out)} tokens in {steps} verifies, "
+                    f"{1000 * seconds / steps:.1f} ms per verify, {len(out) / seconds:.1f} tokens/s"
+                )
+            host, device = runs["host"][0], runs["device"][0]
+            assert device == host, f"{kind}: the device path left the host path at {_first_difference(device, host)}"
+            drafted = runs["device+drafts"][0]
+            at = _first_difference(drafted, host)
+            logger.info(f"[penalties] {kind}: drafted device path equals the host path for {at} of {len(host)} tokens")
+            assert at >= 16, f"{kind}: the drafted device path left the host path at token {at}"
+            assert runs["device+drafts"][1] < runs["device"][1], f"{kind}: no draft was accepted"
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    assert mesh_device.num_program_cache_entries() == n_prog, "program cache grew"
+    cls.release_persistent_capture()
+
+
+def _first_difference(a, b):
+    return next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
