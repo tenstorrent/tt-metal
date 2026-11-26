@@ -36,6 +36,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
     const std::uint32_t INPUT_TILE_CNT            = params.INPUT_TILE_CNT;
+    const std::uint32_t NUM_BLOCKS                = params.NUM_BLOCKS;
+    const std::uint32_t INPUT_NUM_TILES_IN_BLOCK  = params.INPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const Operand& buffer_A                       = params.buffer_A;
     const Operand& buffer_B                       = params.buffer_B;
 #endif
@@ -66,9 +69,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 // add_tiles / mul_tiles unpack one tile per call, acc_to_dest included.
-                for (std::uint32_t i = 0; i < INPUT_TILE_CNT; i++)
+                const std::uint32_t num_tiles_per_accum = INPUT_NUM_TILES_IN_BLOCK / OUTPUT_NUM_TILES_IN_BLOCK;
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    _llk_unpack_binary_operands_(i, i, tensor_shape);
+                    for (std::uint32_t dest_idx = 0; dest_idx < OUTPUT_NUM_TILES_IN_BLOCK; dest_idx++)
+                    {
+                        for (std::uint32_t tile = 0; tile < num_tiles_per_accum; tile++)
+                        {
+                            const std::uint32_t i = block * INPUT_NUM_TILES_IN_BLOCK + dest_idx * num_tiles_per_accum + tile;
+                            _llk_unpack_binary_operands_(i, i, tensor_shape);
+                        }
+                    }
                 }
             }
         }

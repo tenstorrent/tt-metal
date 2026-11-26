@@ -36,6 +36,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
     const std::uint32_t num_faces           = tensor_shape.total_num_faces();
+    const std::uint32_t tiles_in_block      = INPUT_NUM_TILES_IN_BLOCK;
 
     {
         START_PERF_MEASURE("INIT")
@@ -77,9 +78,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
                     // The *_tiles_bcast calls unpack one tile per call.
-                    for (std::uint32_t tile = 0; tile < INPUT_NUM_TILES_IN_BLOCK; tile++)
+                    for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
-                        const std::uint32_t l1_tile_idx = block * INPUT_NUM_TILES_IN_BLOCK + tile;
+                        const std::uint32_t l1_tile_idx = block * tiles_in_block + tile;
                         _llk_unpack_binary_broadcast_operands_(l1_tile_idx /*start_l1_tile_idx_0*/, l1_tile_idx /*start_l1_tile_idx_1*/, tensor_shape);
                     }
                 }
