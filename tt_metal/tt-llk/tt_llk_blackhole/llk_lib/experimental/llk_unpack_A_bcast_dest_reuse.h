@@ -83,22 +83,9 @@ inline void _llk_unpack_A_bcast_dest_reuse_mop_config_(
 }
 
 /**
- * @brief Initialize the unpacker for the bcast dest-reuse op (SCALAR or COL): num_tiles tiles of SrcA from one
- * _llk_unpack_A_ call, SrcB fed a dummy dvalid for the MOVD2B on the math thread.
- *
- * Owns unpacker A's X span: every real UNPACR of the MOP targets SrcA, so this init programs x_end on
- * unpacker A (where DEST_TO_SRCB also routes the operand address) and does not inherit it; Tile_x_dim, the
- * Y stride and the XY counters are inherited and must still be canonical.
- *
- * @tparam num_tiles: Tiles the MOP walks per _llk_unpack_A_ call.
- * @tparam BType/acc_to_dest/binary_reuse_dest: Must be (SCALAR or COL) / true / DEST_TO_SRCB (static_assert).
- * @param transpose_of_faces, within_face_16x16_transpose: Fold a 32x32 transpose into the unpack (num_tiles == 1,
- *        num_faces == 4 only).
- * @param face_r_dim: Rows per face; sets the X span.
- * @param num_faces: Faces per tile (1, 2 or 4).
- * @note Pairs with @ref _llk_math_bcast_dest_reuse_init_ on the math thread. The matching execute is the generic
- *       @ref _llk_unpack_A_ with the same `<BType, true, DEST_TO_SRCB>` arguments; other arguments route the L1
- *       address to unpacker B, which the static_assert here cannot see.
+ * @brief Initialize unpacker A for bcast dest-reuse (`SCALAR` or `COL`, `num_tiles` per `_llk_unpack_A_`).
+ * @note Pairs with @ref _llk_math_bcast_dest_reuse_init_ on the math thread and @ref _llk_unpack_A_
+ *       with the same `<BType, true, DEST_TO_SRCB>` template arguments.
  */
 template <
     std::uint32_t num_tiles,
@@ -119,12 +106,7 @@ inline void _llk_unpack_A_bcast_dest_reuse_init_(
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
 
-    // x-start/x-end is per-unpacker state, so program it on the unpacker the MOP issues real (non-ZEROSRC)
-    // UNPACRs against. The only configurations this init accepts (SCALAR/COL + acc_to_dest + DEST_TO_SRCB, see
-    // the static_assert in _llk_unpack_A_bcast_dest_reuse_mop_config_) read L1 on SrcA alone: SrcB is fed a
-    // ZEROSRC UNPACR_NOP for the MOVD2B on the math thread and never reads L1, so its X counter is unused.
-    // That is also where _llk_unpack_A_ routes the L1 base address for DEST_TO_SRCB whatever the broadcast type
-    // (_llk_unpack_A_address_on_unpacker_A_), so the X span and the address must land on the same unpacker.
+    // Real UNPACRs read L1 on SrcA only (SrcB gets a ZEROSRC NOP), so program x_end on UNP_A.
     static_assert(
         _llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(),
         "bcast_dest_reuse unpack: the X span is programmed on unpacker A, so the operand address must be routed there too");

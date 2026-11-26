@@ -34,6 +34,7 @@ class RowNormParams(TemplateParameter):
     row_norm_tile_h: int
     row_norm_num_tiles: int
     row_norm_scale_sum: bool
+    row_norm_stats_is_fp32: bool
     row_norm_inv_width_bits: int
     row_norm_epsilon_bits: int
 
@@ -44,6 +45,7 @@ class RowNormParams(TemplateParameter):
             f"constexpr std::uint32_t ROW_NORM_TILE_H = {self.row_norm_tile_h};\n"
             f"constexpr std::uint32_t ROW_NORM_NUM_TILES = {self.row_norm_num_tiles};\n"
             f"constexpr bool ROW_NORM_SCALE_SUM = {'true' if self.row_norm_scale_sum else 'false'};\n"
+            f"constexpr bool ROW_NORM_STATS_IS_FP32 = {'true' if self.row_norm_stats_is_fp32 else 'false'};\n"
             f"constexpr std::uint32_t ROW_NORM_INV_WIDTH_BITS = 0x{self.row_norm_inv_width_bits:08x}u;\n"
             f"constexpr std::uint32_t ROW_NORM_EPSILON_BITS = 0x{self.row_norm_epsilon_bits:08x}u;\n"
         )
@@ -72,7 +74,10 @@ def _run_row_norm(
     dest_acc: DestAccumulation,
     tiles_f32: torch.Tensor,
     scale_sum: bool = True,
+    stats_is_fp32: bool | None = None,
 ) -> torch.Tensor:
+    if stats_is_fp32 is None:
+        stats_is_fp32 = dest_acc == DestAccumulation.Yes
     width = num_tiles * (tile_h // num_rows) * 32
     inv_width = 1.0 / float(width)
     data_format = (
@@ -99,6 +104,7 @@ def _run_row_norm(
                 row_norm_tile_h=tile_h,
                 row_norm_num_tiles=num_tiles,
                 row_norm_scale_sum=scale_sum,
+                row_norm_stats_is_fp32=stats_is_fp32,
                 row_norm_inv_width_bits=_f32_bits(inv_width),
                 row_norm_epsilon_bits=_f32_bits(EPSILON),
             )
@@ -170,3 +176,55 @@ def test_sfpu_row_norm(
         var = (x - mean).square().mean(dim=-1, keepdim=True)
         want = (x - mean) * torch.rsqrt(var + EPSILON)
         torch.testing.assert_close(got, want, atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("num_rows", [1, 2, 4, 8])
+@pytest.mark.parametrize("tile_h_kind", ["native", "16", "32"])
+@pytest.mark.parametrize(
+    ("dest_acc", "stats_is_fp32"),
+    [
+        (DestAccumulation.No, False),
+        (DestAccumulation.Yes, True),
+        (DestAccumulation.Yes, False),
+    ],
+)
+def test_sfpu_row_norm_wide_row_multichunk(
+    num_rows: int,
+    tile_h_kind: str,
+    dest_acc: DestAccumulation,
+    stats_is_fp32: bool,
+) -> None:
+    """Two-chunk wide-row LayerNorm exercising ACCUMULATE=true and mixed FP32 DEST / double-BF16 stats."""
+    tile_h = num_rows if tile_h_kind == "native" else int(tile_h_kind)
+    num_tiles = 2
+    torch.manual_seed(99 + num_rows * 13 + tile_h)
+    # Use distinct distributions for chunk 0 and chunk 1 so dropping chunk 1 fails noticeably.
+    chunk0 = torch.randn(1, 32, 32) + 1.5
+    chunk1 = torch.randn(1, 32, 32) * 2.5 - 2.0
+    tiles = torch.cat([chunk0, chunk1], dim=0)
+    if dest_acc == DestAccumulation.No:
+        tiles = tiles.to(torch.bfloat16).float()
+
+    out = _run_row_norm(
+        4,
+        num_rows,
+        tile_h,
+        num_tiles,
+        dest_acc,
+        tiles,
+        stats_is_fp32=stats_is_fp32,
+    )
+    x = _logical_rows(tiles, num_rows, tile_h)
+    got = _logical_rows(out, num_rows, tile_h)
+    mean = x.mean(dim=-1, keepdim=True)
+    var = (x - mean).square().mean(dim=-1, keepdim=True)
+    want = (x - mean) * torch.rsqrt(var + EPSILON)
+
+    if dest_acc == DestAccumulation.No:
+        atol, rtol = 2e-2, 2e-2
+    elif stats_is_fp32:
+        atol, rtol = 1e-4, 1e-4
+    else:
+        # Double-BF16 stats preserve ~15-bit mantissa (~1e-4) in FP32 DEST.
+        atol, rtol = 1e-3, 1e-3
+    torch.testing.assert_close(got, want, atol=atol, rtol=rtol)

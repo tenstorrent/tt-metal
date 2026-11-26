@@ -2,20 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute API for per-row RMSNorm and LayerNorm on packed (M, 32) tiles and zero-copy stacked
-// (16, 32) / (32, 32) views (M in {1, 2, 4, 8}, tile_h in {M, 16, 32}).
-//
-// Tile indices passed as template parameters (stats_tile) are relative to first_tile. Each call
-// waits for SFPU completion before returning so FPU/pack ops may follow directly on DEST.
-//
-// Compact 1-tile LayerNorm stats layout shared across row_reduce_mean, row_sum_centered_squares,
-// row_finalize_inv_std, and row_center_scale:
-//   - Face 0 (SFPU vec offset 0): per-row mean (rows 0..3 in vec 0, rows 4..7 in vec 2).
-//   - Face 1 (SFPU vec offset 8): per-row sum of squared deviations, then inv_std after finalize
-//     (rows 0..3 in vec 8, rows 4..7 in vec 10).
-//   - When stats_is_fp32 is false (BF16 stats CB or BF16 DEST), each statistic is split into a
-//     hi + lo double-BF16 pair across even/odd column vectors (vec + 0 / vec + 1, vec + 2 / vec + 3)
-//     so packing through a BF16 L1 stats CB preserves ~15-bit mantissa even under FP32 DEST.
+// Per-row RMSNorm and LayerNorm Compute API for packed (M, 32) and stacked (16/32, 32) tiles
+// (M in {1, 2, 4, 8}, tile_h in {M, 16, 32}). `stats_tile` is relative to `first_tile`; Face 0
+// holds mean and Face 1 holds sum-of-squares / inv_std (hi+lo double-BF16 when !stats_is_fp32).
 #pragma once
 
 #include <cstdint>
@@ -47,27 +36,17 @@ ALWI void check_row_norm_dest_range(const std::uint32_t first_tile) {
 }  // namespace detail
 #endif  // TRISC_MATH
 
-/**
- * @brief Initialize SFPU address modes and rsqrt constants for per-row norm ops.
- * @note Call before any `row_*` normalization function on the math thread.
- */
+/** @brief Initialize SFPU address modes and rsqrt constants for `row_*` norm ops. */
 ALWI void row_norm_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::_row_norm_init_, (APPROX))); }
 
 /**
- * @brief Single-pass in-DST per-row RMSNorm across `num_tiles` starting at `first_tile`.
- *
- * Computes `x[r, :] *= rsqrt(sum_c(x[r, c]^2) * inv_width + epsilon)` (or `rsqrt(sum + epsilon)`
- * when `scale_sum` is false) in place across `[first_tile, first_tile + num_tiles)`.
- *
- * @tparam num_rows Logical independent rows packed per tile (`1`, `2`, `4`, or `8`).
- * @tparam tile_h Physical tile height in rows (`num_rows`, `16`, or `32`).
- * @tparam num_tiles Contiguous DST tiles belonging to the row span (`1 <= num_tiles <= 8`).
- * @tparam fast_approx Select fast approximate rsqrt refinement.
- * @tparam scale_sum Multiply the sum of squares by `inv_width` before adding `epsilon`.
- * @tparam is_fp32_dest_acc_en Whether FP32 DEST accumulation is enabled (defaults to `DST_ACCUM_MODE`).
- * @param first_tile Base DST tile index in the acquired DEST section.
- * @param inv_width_bits IEEE-754 FP32 bit pattern of `1 / width` (ignored when `!scale_sum`).
- * @param epsilon_bits IEEE-754 FP32 bit pattern of `epsilon`.
+ * @brief In-place per-row RMSNorm across `[first_tile, first_tile + num_tiles)`.
+ * @tparam num_rows Logical rows per tile (`1`, `2`, `4`, or `8`).
+ * @tparam tile_h Physical tile height (`num_rows`, `16`, or `32`).
+ * @tparam num_tiles Contiguous DST tiles in the row span (`1 <= num_tiles <= 8`).
+ * @param first_tile Base DST tile index.
+ * @param inv_width_bits IEEE-754 FP32 bits of `1 / width` (ignored when `!scale_sum`).
+ * @param epsilon_bits IEEE-754 FP32 bits of `epsilon`.
  */
 template <
     std::uint32_t num_rows,

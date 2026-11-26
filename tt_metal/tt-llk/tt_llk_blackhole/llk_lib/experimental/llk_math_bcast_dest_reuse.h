@@ -120,28 +120,10 @@ inline void bcast_dest_reuse_move_dest_to_srcb()
 }
 
 /**
- * @brief Output[tile] = SrcA[tile] (+, -, *) bcast(DST[src_index]) for num_tiles tiles.
- *
- * Moves either element [0] (BroadcastType::SCALAR) or Face 0 column 0 across all 16 rows
- * (BroadcastType::COL) from DST[src_index] into SrcB via MOVD2B, then broadcasts it across
- * num_tiles consecutive SrcA tiles into DEST starting at dst_index.
- *
- * @tparam eltwise_binary_type FPU op: ELWADD, ELWSUB, or ELWMUL.
- * @tparam bcast_type Broadcast mode: BroadcastType::SCALAR or BroadcastType::COL.
- * @tparam num_tiles Number of consecutive tiles walked per call (matches the unpack init).
- * @tparam Dst Destination sync mode (DstSync::SyncHalf or DstSync::SyncFull).
- * @tparam is_fp32_dest_acc_en Whether FP32 DEST accumulation is enabled.
- * @tparam math_fidelity FPU math fidelity (non-LoFi phases apply to ELWMUL).
- * @tparam clear_dest When true, ZEROACC the acquired DEST section between MOVD2B and the MOP.
- *         ELWMUL accumulates into DEST, so set true unless the output tiles are already zero
- *         (and no other tile in the section is live).
- * @param src_index DEST tile holding the broadcast scalar or Face 0 column-0 vector.
- * @param dst_index Starting DEST tile for the output tiles.
- * @param tensor_shape Tile geometry (face_r_dim == FACE_R_DIM and num_faces in {2, 4} for COL;
- *        num_faces in {1, 2, 4} for SCALAR).
- * @note No op that leaves the Src zero-substitution flag at keep (copy_init / datacopy) may run
- *       between @ref _llk_math_bcast_dest_reuse_init_ and this call: the MOP would keep denormal
- *       Src operands it should flush. Checked on entry under LLK asserts.
+ * @brief `DST[dst_index + t] = SrcA[t] (+, -, *) bcast(DST[src_index])` for `num_tiles` tiles.
+ * @tparam clear_dest ZEROACC the acquired DEST section after MOVD2B (`ELWMUL` accumulates into DEST).
+ * @note Do not run `copy_init` / `datacopy` between @ref _llk_math_bcast_dest_reuse_init_ and this call
+ *       (leaves the Src zero-substitution flag at keep; asserted under LLK asserts).
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -293,18 +275,8 @@ inline void bcast_dest_reuse_configure_addrmod(const std::uint32_t num_faces)
 }
 
 /**
- * @brief Initialize the FPU for @ref _llk_math_bcast_dest_reuse_: addr-mods and the num_tiles MOP.
- *
- * @tparam eltwise_binary_type FPU op: ELWADD, ELWSUB, or ELWMUL.
- * @tparam bcast_type Broadcast mode: BroadcastType::SCALAR or BroadcastType::COL.
- * @tparam num_tiles Number of consecutive tiles walked per call.
- * @tparam math_fidelity FPU math fidelity.
- * @param tensor_shape Tile geometry (face_r_dim == FACE_R_DIM and num_faces in {2, 4} for COL;
- *        num_faces in {1, 2, 4} for SCALAR).
- * @param acc_to_dest Dest-accumulate field of the ELWADD/ELWSUB MOP instructions.
- * @note Establishes the operand-driven default Src zero-substitution state, which the execute asserts under
- *       LLK asserts; an op that leaves it at keep (copy_init / datacopy) must be followed by this init again.
- *       Pairs with @ref _llk_unpack_A_bcast_dest_reuse_init_ on the unpack thread.
+ * @brief Initialize addr-mods, MOP, and default Src zero-substitution state for @ref _llk_math_bcast_dest_reuse_.
+ * @note Pairs with @ref _llk_unpack_A_bcast_dest_reuse_init_ on the unpack thread.
  */
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, std::uint32_t num_tiles, MathFidelity math_fidelity>
 inline void _llk_math_bcast_dest_reuse_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t acc_to_dest = 0)

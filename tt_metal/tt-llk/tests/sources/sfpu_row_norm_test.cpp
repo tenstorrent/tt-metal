@@ -7,7 +7,8 @@
 //   OP_MODE == 0: _calculate_row_rmsnorm_
 //   OP_MODE == 1: _calculate_row_reduce_scale_add_rsqrt_
 //   OP_MODE == 2: _calculate_row_layernorm_
-//   OP_MODE == 3: wide-row 3-stage layernorm (reduce_mean + sum_centered_squares + finalize_inv_std + center_scale)
+//   OP_MODE == 3: single-chunk wide-row 3-stage layernorm
+//   OP_MODE == 4: 2-chunk wide-row layernorm (chunk 0 ACCUMULATE=false, chunk 1 ACCUMULATE=true)
 
 #include <cstdint>
 
@@ -129,11 +130,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ROW_NORM_INV_WIDTH_BITS,
             ROW_NORM_EPSILON_BITS);
     }
-    else
+    else if constexpr (ROW_NORM_OP_MODE == 3)
     {
         constexpr std::uint32_t kStatsTile = ROW_NORM_NUM_TILES;
         _llk_math_eltwise_unary_sfpu_params_(
-            ckernel::sfpu::_calculate_row_reduce_mean_<is_fp32_dest_acc_en, ROW_NORM_NUM_ROWS, ROW_NORM_TILE_H, ROW_NORM_NUM_TILES, kStatsTile>,
+            ckernel::sfpu::
+                _calculate_row_reduce_mean_<is_fp32_dest_acc_en, ROW_NORM_NUM_ROWS, ROW_NORM_TILE_H, ROW_NORM_NUM_TILES, kStatsTile, ROW_NORM_STATS_IS_FP32>,
             0 /* dst_index */,
             VectorMode::RC_custom,
             ROW_NORM_INV_WIDTH_BITS);
@@ -144,18 +146,104 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 ROW_NORM_TILE_H,
                 ROW_NORM_NUM_TILES,
                 kStatsTile,
-                false /* ACCUMULATE */>,
+                false /* ACCUMULATE */,
+                false /* ZERO_MEAN */,
+                ROW_NORM_STATS_IS_FP32>,
             0 /* dst_index */,
             VectorMode::RC_custom);
         _llk_math_eltwise_unary_sfpu_params_(
-            ckernel::sfpu::_calculate_row_finalize_inv_std_<false /* APPROX */, false /* FAST_APPROX */, is_fp32_dest_acc_en, ROW_NORM_NUM_ROWS, kStatsTile>,
+            ckernel::sfpu::_calculate_row_finalize_inv_std_<
+                false /* APPROX */,
+                false /* FAST_APPROX */,
+                is_fp32_dest_acc_en,
+                ROW_NORM_NUM_ROWS,
+                kStatsTile,
+                ROW_NORM_STATS_IS_FP32>,
             0 /* dst_index */,
             VectorMode::RC_custom,
             ROW_NORM_INV_WIDTH_BITS,
             ROW_NORM_EPSILON_BITS);
         _llk_math_eltwise_unary_sfpu_params_(
-            ckernel::sfpu::_calculate_row_center_scale_<is_fp32_dest_acc_en, ROW_NORM_NUM_ROWS, ROW_NORM_TILE_H, ROW_NORM_NUM_TILES, kStatsTile>,
+            ckernel::sfpu::_calculate_row_center_scale_<
+                is_fp32_dest_acc_en,
+                ROW_NORM_NUM_ROWS,
+                ROW_NORM_TILE_H,
+                ROW_NORM_NUM_TILES,
+                kStatsTile,
+                false /* ZERO_MEAN */,
+                ROW_NORM_STATS_IS_FP32>,
             0 /* dst_index */,
+            VectorMode::RC_custom);
+    }
+    else
+    {
+        static_assert(ROW_NORM_NUM_TILES == 2, "OP_MODE 4 splits 2 tiles into two 1-tile chunks");
+        constexpr std::uint32_t kStatsTile = ROW_NORM_NUM_TILES;
+        _llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::
+                _calculate_row_reduce_mean_<is_fp32_dest_acc_en, ROW_NORM_NUM_ROWS, ROW_NORM_TILE_H, ROW_NORM_NUM_TILES, kStatsTile, ROW_NORM_STATS_IS_FP32>,
+            0 /* dst_index */,
+            VectorMode::RC_custom,
+            ROW_NORM_INV_WIDTH_BITS);
+        // Chunk 0 (tile 0, stats at relative offset 2 -> tile 2): initialize variance sum.
+        _llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::_calculate_row_sum_centered_squares_<
+                is_fp32_dest_acc_en,
+                ROW_NORM_NUM_ROWS,
+                ROW_NORM_TILE_H,
+                1 /* NUM_TILES */,
+                2 /* STATS_TILE */,
+                false /* ACCUMULATE */,
+                false /* ZERO_MEAN */,
+                ROW_NORM_STATS_IS_FP32>,
+            0 /* dst_index */,
+            VectorMode::RC_custom);
+        // Chunk 1 (tile 1, stats at relative offset 1 -> tile 2): accumulate into existing sum.
+        _llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::_calculate_row_sum_centered_squares_<
+                is_fp32_dest_acc_en,
+                ROW_NORM_NUM_ROWS,
+                ROW_NORM_TILE_H,
+                1 /* NUM_TILES */,
+                1 /* STATS_TILE */,
+                true /* ACCUMULATE */,
+                false /* ZERO_MEAN */,
+                ROW_NORM_STATS_IS_FP32>,
+            1 /* dst_index */,
+            VectorMode::RC_custom);
+        _llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::_calculate_row_finalize_inv_std_<
+                false /* APPROX */,
+                false /* FAST_APPROX */,
+                is_fp32_dest_acc_en,
+                ROW_NORM_NUM_ROWS,
+                kStatsTile,
+                ROW_NORM_STATS_IS_FP32>,
+            0 /* dst_index */,
+            VectorMode::RC_custom,
+            ROW_NORM_INV_WIDTH_BITS,
+            ROW_NORM_EPSILON_BITS);
+        _llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::_calculate_row_center_scale_<
+                is_fp32_dest_acc_en,
+                ROW_NORM_NUM_ROWS,
+                ROW_NORM_TILE_H,
+                1 /* NUM_TILES */,
+                2 /* STATS_TILE */,
+                false /* ZERO_MEAN */,
+                ROW_NORM_STATS_IS_FP32>,
+            0 /* dst_index */,
+            VectorMode::RC_custom);
+        _llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::_calculate_row_center_scale_<
+                is_fp32_dest_acc_en,
+                ROW_NORM_NUM_ROWS,
+                ROW_NORM_TILE_H,
+                1 /* NUM_TILES */,
+                1 /* STATS_TILE */,
+                false /* ZERO_MEAN */,
+                ROW_NORM_STATS_IS_FP32>,
+            1 /* dst_index */,
             VectorMode::RC_custom);
     }
 

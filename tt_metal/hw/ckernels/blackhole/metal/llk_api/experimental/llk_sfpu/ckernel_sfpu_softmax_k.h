@@ -2,14 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Per-row softmax over the first k columns (1 <= k <= FACE_C_DIM) of an (M, 16) or (M, 32)
-// tile (M in {1, 2, 4, 8}) residing in DST via standard copy_tile.
-//
-// Handles unsorted or presorted inputs, zero logits inside [0, k), arbitrary odd or even k, and
-// dirty tail elements in [k, FACE_C_DIM) (masked before max and zeroed after exp). Each row is
-// normalized independently:
-//   M in {1, 2, 4}: 1 SFPU row-group (rows 0..3)
-//   M == 8:         2 SFPU row-groups (rows 0..3, rows 4..7)
+// Per-row softmax over the first k columns (1 <= k <= FACE_C_DIM) of NUM_ROWS in {1, 2, 4, 8}
+// in face 0 of a DST tile. Masked tail columns [k, FACE_C_DIM) are excluded from max and zeroed.
 #pragma once
 
 #include <cstdint>
@@ -46,17 +40,14 @@ sfpi_inline sfpi::vFloat eval_exp(sfpi::vFloat x) {
 
 namespace ckernel::sfpu {
 
-// __attribute__((noinline)) keeps GCC's rvtt_replay buffer scoped to this leaf SFPU call. Ends with
-// STALL_MATH on WAIT_SFPU because _llk_math_eltwise_sfpu_done_() only clears dst_reg_addr and
-// follow-on FPU ops do not wait on SFPU.
+// noinline scopes GCC's rvtt_replay buffer to this leaf; WAIT_SFPU drains before follow-on FPU ops.
 template <bool is_fp32_dest_acc_en, std::uint32_t NUM_ROWS>
 __attribute__((noinline)) inline void _calculate_softmax_k_(const std::uint32_t k) {
     static_assert(softmax_k_detail::valid_num_rows<NUM_ROWS>, "softmax_k: NUM_ROWS must be 1, 2, 4, or 8");
     LLK_ASSERT(k >= 1u && k <= FACE_C_DIM, "softmax_k: k must be in [1, FACE_C_DIM]");
 
-    // Largest negative finite BF16 value (-3.38953139e38f): finite in both BF16 and FP32 so
-    // subtracting row_max never creates NaN for finite active logits.
-    constexpr float kNegLarge = -3.38953139e38f;
+    // Masked columns must not exceed any finite logit in the DEST format.
+    constexpr float kNegLarge = is_fp32_dest_acc_en ? -3.402823466e38f : -3.38953139e38f;
     constexpr int kEvenColMask = static_cast<int>(FACE_C_DIM - 2);
 
 #pragma GCC unroll 2

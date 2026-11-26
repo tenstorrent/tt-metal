@@ -321,10 +321,9 @@ inline void perform_reduce_col_sum_avg() {
 // the next cycle (only SFPNOP issues), so this hides no latency, but it keeps every consumer two
 // instructions behind its producer and the sequences need no explicit SFPNOPs.
 //
-// The row SUM/AVG/MAX/MIN tiles no longer use this helper: they reduce four accumulators at once with the merged
-// butterfly further down (perform_reduce_row_face_pair). horizontal_reduce_max stays for
-// perform_reduce_row_max_int32_tile, which only UInt16 in a 32-bit Dest reaches (Int32 and UInt32 row MAX/MIN
-// take perform_reduce_row_max_min_int32).
+// horizontal_reduce_max is used by perform_reduce_row_max_int32_tile (UInt16 in a 32-bit Dest).
+// Float row SUM/AVG/MAX/MIN use the merged 4-accumulator butterfly (perform_reduce_row_face_pair),
+// and Int32/UInt32 row MAX/MIN use perform_reduce_row_max_min_int32.
 //
 // All horizontal reduces are issued inline; none is recorded. Replaying them gives the same TILE_LOOP (the
 // row bodies are SFPU-bound, not issue-bound) while recording costs ~25-28 cycles per init, and ttnn re-inits

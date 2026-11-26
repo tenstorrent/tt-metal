@@ -19,6 +19,7 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIM,
     EltwiseBinaryGolden,
+    SrcFormatModel,
     round_to_dest_width,
 )
 from helpers.llk_params import (
@@ -173,12 +174,40 @@ def _run(
     return device, seen_A, seed, scalar
 
 
+def _tight_tolerances(output_format, *, mathop=MathOperation.Elwmul, dirty_dest=False):
+    if output_format == DataFormat.Float32:
+        if mathop == MathOperation.Elwmul:
+            return dict(custom_atol=1e-5, custom_rtol=1e-5)
+        # FPU ELWADD/ELWSUB aligns the smaller operand into the 10-bit TF32 adder
+        # (up to 1 TF32 ULP of max(|A|, |B|) <= 2^-8 ~= 3.9e-3 for operands in [-4, 4]).
+        return dict(custom_atol=5e-3, custom_rtol=2e-3)
+    # BF16 DEST rounds each phase to 7-bit mantissa (1 ULP = 2^-7 ~= 7.8e-3); keep rtol
+    # below the shift from a dropped phase while allowing 1-ULP rounding. When adding
+    # onto a dirty DEST seeded in [-4, 4], allow 1-ULP cancellation (~0.03125).
+    return dict(custom_atol=0.05 if dirty_dest else 2e-3, custom_rtol=8e-3)
+
+
+def _to_src_reg(tensor, data_format):
+    rounded = SrcFormatModel.from_src_format(
+        data_format, SrcFormatModel.to_src_format(data_format, tensor)
+    ).to(torch.float32)
+    return torch.where(tensor == 0, torch.zeros_like(rounded), rounded)
+
+
 def _expected(seen_A, scalar, mathop, math_fidelity, output_format, dest_prior=None):
+    scalar_tensor = (
+        scalar if isinstance(scalar, torch.Tensor) else torch.full_like(seen_A, scalar)
+    )
     if mathop == MathOperation.Elwadd:
-        return seen_A + scalar
+        return _to_src_reg(seen_A, output_format) + _to_src_reg(
+            scalar_tensor, output_format
+        )
+    if mathop == MathOperation.Elwsub:
+        return _to_src_reg(seen_A, output_format) - _to_src_reg(
+            scalar_tensor, output_format
+        )
 
     binary_golden = EltwiseBinaryGolden()
-    scalar_tensor = torch.full_like(seen_A, scalar)
 
     product = None
     for fidelity_iteration in range(_FIDELITY_PHASES[math_fidelity]):
@@ -188,7 +217,29 @@ def _expected(seen_A, scalar, mathop, math_fidelity, output_format, dest_prior=N
         phase = a_masked.to(torch.float32) * b_masked.to(torch.float32)
         product = phase if product is None else product + phase
 
-    return product if dest_prior is None else dest_prior + product
+    if dest_prior is None:
+        return product
+    return _to_src_reg(dest_prior, output_format) + product
+
+
+def _operands_with_full_mantissa_scalar(formats, num_tiles):
+    """Build operands whose broadcast scalar populates the low SrcB fidelity bits."""
+    src_A, _cnt_A, src_B, _cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=[num_tiles * TILE_DIM, TILE_DIM],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=[TILE_DIM, TILE_DIM],
+        spec_A=StimuliSpec.uniform(low=OPERAND_LOW, high=OPERAND_HIGH),
+        spec_B=StimuliSpec.uniform(low=OPERAND_LOW, high=OPERAND_HIGH),
+    )
+    # Maximize the low SrcB fidelity-bit ratio (1 + 15*2^-10 for TF32, 1 + 2^-7 for BF16)
+    # so HiFi3/HiFi4 phases shift the product well past the tight tolerance bounds.
+    low_bit_scalar = (
+        1.0146484375 if formats.input_format == DataFormat.Float32 else 1.0078125
+    )
+    src_B = src_B.clone()
+    src_B.view(-1)[0] = low_bit_scalar
+    return src_A, src_B
 
 
 @parametrize(
@@ -204,12 +255,28 @@ def test_bcast_scalar_dest_reuse(
 ):
     _skip_unsupported(formats, dest_acc)
 
+    operands = (
+        _operands_with_full_mantissa_scalar(formats, num_tiles)
+        if mathop == MathOperation.Elwmul
+        else None
+    )
     device, seen_A, _seed, scalar = _run(
-        formats, dest_acc, mathop, math_fidelity, num_tiles, clear_dest=clear_dest
+        formats,
+        dest_acc,
+        mathop,
+        math_fidelity,
+        num_tiles,
+        clear_dest=clear_dest,
+        operands=operands,
     )
     golden = _expected(seen_A, scalar, mathop, math_fidelity, formats.output_format)
 
-    assert passed_test(golden, device, formats.output_format), (
+    assert passed_test(
+        golden,
+        device,
+        formats.output_format,
+        **_tight_tolerances(formats.output_format, mathop=mathop),
+    ), (
         f"bcast-scalar dest reuse mismatch (op={mathop.name}, "
         f"fidelity={math_fidelity.name}, num_tiles={num_tiles}, "
         f"clear_dest={clear_dest}, scalar={scalar:.6f})"
@@ -247,7 +314,12 @@ def test_bcast_scalar_dest_reuse_mul_accumulates_into_dirty_dest(
         seen_A, scalar, MathOperation.Elwmul, math_fidelity, formats.output_format
     )
 
-    assert passed_test(accumulating, device, formats.output_format), (
+    assert passed_test(
+        accumulating,
+        device,
+        formats.output_format,
+        **_tight_tolerances(formats.output_format, dirty_dest=True),
+    ), (
         f"ELWMUL with clear_dest=False did not accumulate onto the seeded DEST "
         f"(fidelity={math_fidelity.name}, scalar={scalar:.6f})."
     )
@@ -321,7 +393,10 @@ def test_bcast_scalar_dest_reuse_partial_faces(
         base = tile * ELEMENTS_PER_TILE
 
         assert passed_test(
-            golden_covered, device[base : base + covered], formats.output_format
+            golden_covered,
+            device[base : base + covered],
+            formats.output_format,
+            **_tight_tolerances(formats.output_format, mathop=mathop),
         ), (
             f"the {num_faces} face(s) the MOP covers in tile {tile} are wrong "
             f"(op={mathop.name}, fidelity={math_fidelity.name}, num_tiles={num_tiles}, "
@@ -363,7 +438,12 @@ def test_bcast_scalar_dest_reuse_unpack_full_transpose(
 
     golden = _expected(transposed, scalar, mathop, math_fidelity, formats.output_format)
 
-    assert passed_test(golden, device, formats.output_format), (
+    assert passed_test(
+        golden,
+        device,
+        formats.output_format,
+        **_tight_tolerances(formats.output_format, mathop=mathop),
+    ), (
         f"unpack_full_transpose mismatch (op={mathop.name}, "
         f"fidelity={math_fidelity.name}, scalar={scalar:.6f})"
     )
@@ -668,19 +748,20 @@ def test_bcast_col_dest_reuse(
         ]
     )
 
-    bcast = col_vec.float().repeat(active_h // 16).view(1, active_h, 1)
-    a_ref = a_tiles.float()
-    if mathop == MathOperation.Elwmul:
-        want = a_ref * bcast
-    elif mathop == MathOperation.Elwadd:
-        want = a_ref + bcast
-    else:
-        want = a_ref - bcast
+    bcast = (
+        col_vec.float()
+        .repeat(active_h // 16)
+        .view(1, active_h, 1)
+        .expand(num_tiles, active_h, 32)
+        .reshape(-1)
+    )
+    a_ref = a_tiles.float().reshape(-1)
+    want = _expected(a_ref, bcast, mathop, math_fidelity, data_format).reshape(
+        num_tiles, active_h, 32
+    )
 
-    if mathop == MathOperation.Elwmul and math_fidelity == MathFidelity.LoFi:
-        atol, rtol = 0.08, 0.07
-    elif dest_acc == DestAccumulation.Yes:
-        atol, rtol = 2e-2, 5e-3
+    if dest_acc == DestAccumulation.Yes:
+        atol, rtol = 1e-5, 1e-5
     else:
-        atol, rtol = 2e-2, 2e-2
+        atol, rtol = 2e-3, 1.2e-2
     torch.testing.assert_close(out, want, atol=atol, rtol=rtol)

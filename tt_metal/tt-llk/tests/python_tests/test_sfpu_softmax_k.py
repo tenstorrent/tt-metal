@@ -12,14 +12,12 @@ Per-row softmax over the first ``k`` columns (``1 <= k <= 16``) of ``NUM_ROWS``
   out[r][c] = exp(x[r][c] - max_{c' < k} x[r][c']) / sum_{c' < k} exp(x[r][c'] - max)   c < k
   out[r][c] = 0                                                                          c >= k
 
-Unlike the retired single-band implementation, this kernel:
-  - computes the per-row maximum internally in SFPU (no caller-staged maxima needed),
-  - handles zero logits inside ``[0, k)`` without skipping lanes,
-  - masks dirty tail elements in ``[k, 16)`` before max and zeroes them after exp,
-  - supports arbitrary odd and even ``k in [1, 16]`` across both BF16 and FP32 DEST,
-  - handles 1, 2, 4 (1 SFPU row-group: rows 0..3) and 8 (2 row-groups: rows 0..7) rows.
+Computes the per-row maximum internally in SFPU, accepts zero logits inside ``[0, k)``,
+masks dirty tail elements in ``[k, 16)`` before max and zeroes them after exp, and
+supports odd/even ``k`` across BF16 and FP32 DEST for 1, 2, 4, or 8 rows.
 """
 
+import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.constraints import skip_if_32bit_input_without_dest_acc
@@ -194,3 +192,69 @@ def test_sfpu_softmax_k(
         res_tile[band_rows:, :].flatten(),
         formats.output_format,
     ), "softmax_k modified DEST rows outside its active row band"
+
+
+@pytest.mark.parametrize(
+    ("data_format", "dest_acc", "min_finite"),
+    [
+        (DataFormat.Float32, DestAccumulation.Yes, -3.402823466e38),
+        (DataFormat.Float16_b, DestAccumulation.No, -3.38953139e38),
+    ],
+)
+def test_sfpu_softmax_k_min_finite_singleton(data_format, dest_acc, min_finite):
+    """Singleton k=1 with the lowest finite value in the DEST format must beat masked tail lanes."""
+    formats = input_output_formats([data_format], same=True)[0]
+    torch_format = format_dict[data_format]
+
+    input_tile = torch.zeros((TILE_DIM, TILE_DIM), dtype=torch.float32)
+    input_tile[0, 0] = min_finite
+    input_tile[0, 1:FACE_DIM] = 100.0
+    input_tile = input_tile.to(torch_format)
+
+    src_A = tilize_block(
+        input_tile.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=data_format
+    ).flatten()
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    outcome = execute_llk(
+        is_perf=False,
+        perf_report=None,
+        run_types=None,
+        loop_factor=1,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_softmax_k_test.cpp",
+            formats=formats,
+            templates=[
+                SOFTMAX_K(softmax_k=1, softmax_num_rows=1),
+                DEST_SYNC(DestSync.Half),
+            ],
+            runtimes=[
+                LOOP_FACTOR(1),
+                TILE_COUNT(1),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                data_format,
+                src_B,
+                data_format,
+                data_format,
+                tile_count_A=1,
+                tile_count_B=1,
+                tile_count_res=1,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=data_format.is_32_bit(),
+        ),
+    )
+
+    res_tensor = result_tensor(outcome.result, data_format)
+    res_tile = untilize_block(res_tensor, data_format, [TILE_DIM, TILE_DIM]).reshape(
+        TILE_DIM, TILE_DIM
+    )
+    atol = 1e-4 if data_format == DataFormat.Float32 else 1e-2
+    assert (
+        abs(res_tile[0, 0].to(torch.float32).item() - 1.0) <= atol
+    ), f"singleton min-finite softmax returned {res_tile[0, 0].item()}, expected 1.0"
+    assert bool(
+        (res_tile[0, 1:FACE_DIM].to(torch.float32) == 0.0).all()
+    ), f"tail columns 1..15 must be 0.0: {res_tile[0, 1:FACE_DIM]}"

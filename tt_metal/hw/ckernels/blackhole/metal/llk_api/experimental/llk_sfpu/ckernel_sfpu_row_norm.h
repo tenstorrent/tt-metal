@@ -2,26 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Per-row RMSNorm and LayerNorm SFPU kernels for packed multi-row tiles (M in {1, 2, 4, 8}),
-// supporting native (M, 32) tiles and zero-copy stacked (16, 32) / (32, 32) views holding
-// (TILE_H / M) consecutive (M, 32) tiles (TILE_H in {M, 16, 32}).
-//
-// DST layout (Blackhole):
-//   - copy_tile (A2D) and FPU binary ops place face f at dest tile offset f * 8 SFPU vectors
-//     regardless of face_r_dim; each tile slot spans 32 SFPU vectors (kTileVecs = 32, kFaceVecs = 8).
-//   - Each SFPU vFloat covers 4 rows x 8 columns (2 vectors per 4x16 face row-group: even/odd cols).
-//   - Native (M, 32) tiles (TILE_H == M): 2 faces (f in 0..1); M in {1, 2, 4} uses row-group 0
-//     (1 accumulator), M == 8 uses row-groups 0..1 (2 accumulators: rows 0..3 and 4..7).
-//   - Stacked (16, 32) tiles (TILE_H == 16): 2 faces (f in 0..1), 4 row-groups per face (rg in 0..3).
-//   - Stacked (32, 32) tiles (TILE_H == 32): 4 faces (f in 0..3), 4 row-groups per face (rg in 0..3):
-//       M == 8: rg even -> tokens 0..3, rg odd -> tokens 4..7 (2 accumulators).
-//       M == 4: every (f, rg) -> tokens 0..3 in order (1 accumulator).
-//       M == 2: every (f, rg) -> [tok0, tok1, tok0, tok1]; fold subvecs (0+2, 1+3) via subvec_transp.
-//       M == 1: every (f, rg) -> all 4 subvecs belong to tok0; fold all 4 subvecs via subvec_transp.
-//
-// Compact 1-tile LayerNorm stats layout (STATS_TILE, valid for 2-face (M, 32)/(16, 32) and 4-face (32, 32)):
-//   - Face 0 (offset 0): mean -- top in vec 0 (+ vec 1 hi/lo when !STATS_IS_FP32), bot in vec 2 (+ vec 3).
-//   - Face 1 (offset 8): var / inv_std -- top in vec 8 (+ vec 9), bot in vec 10 (+ vec 11).
+// Per-row RMSNorm and LayerNorm SFPU kernels for packed (M, 32) and stacked (16/32, 32) tiles
+// (M in {1, 2, 4, 8}, TILE_H in {M, 16, 32}). Faces sit at offset f * 8 SFPU vectors regardless of
+// face_r_dim; stacked M in {1, 2} folds subvectors via subvec_transp. Wide-row LayerNorm packs
+// mean in STATS_TILE Face 0 and variance/inv_std in Face 1 (hi+lo double-BF16 when !STATS_IS_FP32).
 #pragma once
 
 #include <cstdint>
@@ -458,11 +442,8 @@ inline void _row_norm_init_() {
     sqrt_init<APPROXIMATION_MODE>();
 }
 
-// All top-level _calculate_row_*_ entry points are __attribute__((noinline)) so GCC's per-function
-// rvtt_replay pass keeps every generated ttreplay strictly local to one leaf SFPU call and never
-// assumes replay-buffer slots stay live across calls to sibling SFPU helpers. Each entry point ends
-// with STALL_MATH on WAIT_SFPU because _llk_math_eltwise_sfpu_done_() only clears dst_reg_addr and
-// follow-on FPU ops (mul_reuse_dest_tiles / add_reuse_dest_tiles / copy_tile) do not wait on SFPU.
+// Entry points are noinline to scope GCC's rvtt_replay buffer per leaf, and end with WAIT_SFPU
+// so follow-on FPU ops see completed DEST writes.
 
 // Single-pass in-DST per-row RMSNorm across NUM_TILES tiles starting at dst_reg[0].
 template <
