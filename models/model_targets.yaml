@@ -607,7 +607,8 @@ targets:
               prefill_t/s: 219.4321
               prefill_time_to_token: 0.3965
               compile_decode: 48.0716
-              compile_prefill: 49.38
+              # Mean of the 11-24..11-26 scheduled runs (53.25 s on f10cs09, 64.67 / 64.82 s on f10cs06 / f10cs08).
+              compile_prefill: 60.91
               # Widened to +/-30% (default is +/-15%): compile_prefill is cache-sensitive
               # (58.91s on f10cs06 run 105288186828 vs 49.38s on f10cs09 run 105412280076,
               # ~19% swing). Observed within +/-30% across both runs (PR #59424, pt.9).
@@ -2596,8 +2597,10 @@ targets:
               decode_t/s: 16.9904
               prefill_t/s: 972.1757
               prefill_time_to_token: 0.0895
-              compile_decode: 24.5857
-              compile_prefill: 27.0992
+              # Means of the 11-24..11-26 scheduled runs on vm-305/306/309 (compile_decode 26.62-27.46 s,
+              # compile_prefill 29.88-31.29 s).
+              compile_decode: 27.15
+              compile_prefill: 30.66
             accuracy: {}
             owner_id: U088413NP0Q # Ashai Reddy
             team: models
