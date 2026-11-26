@@ -63,9 +63,9 @@ sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshol
 // in a general LReg costs an SFPMOV copy per row, while a write to a constant register is dropped.
 // One SFPCONFIG (+2 SFPLOADI) per call buys one instruction per row: 5 instead of 6, 11 before.
 //
-// Prgm1 is call-scoped here. relu_max_init programs no constant register (only ADDR_MOD_6 and the
-// integer clamps' SFPLOADMACRO state), and every production caller runs its init next to its call
-// (ttnn unary chains emit `<op>_init(); <op>(idst);` per op per tile), so no kernel relies on Prgm1
+// Prgm1 is call-scoped here. relu_max_init and relu_clamp_int_init program no constant register,
+// and every production caller runs its init next to its call (ttnn unary chains emit
+// `<op>_init(); <op>(idst);` per op per tile), so no kernel relies on Prgm1
 // surviving across a relu_max call. A fused kernel that programs Prgm1 in its own init and calls
 // relu_max_tile before its own compute would have to re-init.
 //
@@ -212,8 +212,8 @@ inline void _relu_min_(T threshold) {
 // full-range integer clamps below: load, SFPSWAP against the constant register, store. SFPSWAP
 // writes both operands, but a write to a constant register is dropped, so parking the threshold
 // there removes the per-row SFPMOV copy the compiler otherwise emits; the store advances the
-// dest counter through ADDR_MOD_2 (physical slot 6, programmed to +2 by relu_min_init /
-// relu_max_init), so the row needs no separate increment. With INVERT the row is complemented
+// dest counter through ADDR_MOD_2 (physical slot 6, programmed to +2 by relu_clamp_int_init), so
+// the row needs no separate increment. With INVERT the row is complemented
 // before and after the swap (unsigned order mapped onto SFPSWAP's sign-magnitude order).
 //
 // Raw rather than sfpi: sfpi 7.90.0 lowers every max() to SFPSWAP's "VD gets min" mode with the
@@ -277,7 +277,7 @@ sfpi_inline void _clamp_rows_against_lreg12_() {
 }
 
 // calculate_unary_max_min_int32 (SFPLOADMACRO: 2 cycles per row, 4 with the complement) for the
-// clamps that are exactly unary_max/min_[u]int32. relu_min_init / relu_max_init program its macros
+// clamps that are exactly unary_max/min_[u]int32. relu_clamp_int_init programs its macros
 // through unary_max_min_int32_init<true, false>; only the min/max mode of instruction template 0
 // depends on <IS_MAX, IS_UNSIGNED>, so each call writes that template itself and the shared init
 // serves int32 and uint32, relu_min and relu_max.
@@ -417,12 +417,11 @@ inline void relu_clamp_int(uint threshold) {
     }
 }
 
-// The integer clamps above store through ADDR_MOD_2, which the unary SFPU addr-mod base maps to
-// physical slot 6: unary_max_min_int32_init programs it to advance the dest counter by one sfpi row
-// (two counter steps), plus the SFPLOADMACRO state _relu_clamp_loadmacro_ runs on. The float paths
-// load and store with ADDR_MOD_3 and dst_reg++ and use no macro, so this is inert for them. A kernel
-// built with MM_THROTTLE leaves ADDR_MOD_6 alone (see RELU_CLAMP_STORE_INCR).
-inline void _relu_clamp_init_() {
+// Init for relu_clamp_int / relu_clamp_uint. They store through ADDR_MOD_2, which the unary SFPU
+// addr-mod base maps to physical slot 6: unary_max_min_int32_init programs it to advance the dest
+// counter by one sfpi row (two counter steps), plus the SFPLOADMACRO state _relu_clamp_loadmacro_ runs
+// on. A kernel built with MM_THROTTLE leaves ADDR_MOD_6 alone (see RELU_CLAMP_STORE_INCR).
+inline void relu_clamp_int_init() {
     if constexpr (RELU_CLAMP_STORE_INCR) {
         unary_max_min_int32_init<true /* IS_MAX */, false /* IS_UNSIGNED */>();
     } else {
@@ -430,7 +429,7 @@ inline void _relu_clamp_init_() {
     }
 }
 
-inline void relu_min_init() { _relu_clamp_init_(); }
+inline void relu_min_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE>
 inline void relu_min(uint uint_threshold) {
@@ -444,7 +443,7 @@ inline void relu_min(uint uint_threshold) {
     }
 }
 
-inline void relu_max_init() { _relu_clamp_init_(); }
+inline void relu_max_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE>
 inline void relu_max(uint uint_threshold) {

@@ -100,14 +100,8 @@ static_assert(RELU_CLAMP_VARIANT >= 0 && RELU_CLAMP_VARIANT <= 3, "RELU_CLAMP_VA
 
 static void relu_clamp_init()
 {
-    if constexpr (RELU_CLAMP_IS_LOWER_BOUND)
-    {
-        llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, is_fp32_dest_acc_en>();
-    }
-    else
-    {
-        llk_math_eltwise_unary_sfpu_init<SfpuType::relu_max, is_fp32_dest_acc_en>();
-    }
+    // As relu_clamp_int_tile_init.
+    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min>(sfpu::relu_clamp_int_init);
 #if defined(MM_THROTTLE) && MM_THROTTLE > 0
     // The throttled matmul MOP's ADDR_MOD_6: no Dest advance.
     ckernel::addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0, .clr = 1}}.set(ADDR_MOD_6);
