@@ -18,7 +18,7 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-unsupported-end-op1-second-end.cpp 2>&1 | FileCheck %s --check-prefix=UNSUPPORTED_END_OP1
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-zero-outer-count.cpp 2>&1 | FileCheck %s --check-prefix=ISSUES_NOTHING
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/patch-empty-inner.cpp 2>&1 | FileCheck %s --check-prefix=PATCH_EMPTY
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/patch-last-inner-single-outer.cpp 2>&1 | FileCheck %s --check-prefix=PATCH_LAST_INNER
+// RUN: %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/patch-last-inner-single-outer.cpp
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/patch-not-last-op.cpp 2>&1 | FileCheck %s --check-prefix=PATCH_FIELD
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/update-empty.cpp 2>&1 | FileCheck %s --check-prefix=UPDATE_EMPTY
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/update-duplicate.cpp 2>&1 | FileCheck %s --check-prefix=UPDATE_UNIQUE
@@ -54,11 +54,8 @@
 // COUNT_WIDTH: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP loop count must fit in 10 bits
 // COUNT_WIDTH: error: '__builtin_trap()' is not a constant expression
 // PATCH_EMPTY: in 'constexpr' expansion of '{{.*}}::patch<7>
-// PATCH_EMPTY: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP last-iteration ops are never issued with an empty inner loop
+// PATCH_EMPTY: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP last-iteration ops are never issued with an empty inner loop"
 // PATCH_EMPTY: error: '__builtin_trap()' is not a constant expression
-// PATCH_LAST_INNER: in 'constexpr' expansion of '{{.*}}::patch<8>
-// PATCH_LAST_INNER: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP last_inner op is never issued with an outer count of 1
-// PATCH_LAST_INNER: error: '__builtin_trap()' is not a constant expression
 // OPERATION_COUNT: in 'constexpr' expansion of '{{.*}}Runner<hal::mop::MopTemplate::Template0>::operation()
 // OPERATION_COUNT: in 'constexpr' expansion of 'hal::detail::require({{.*}}"MOP encoded count must fit in 7 bits
 // OPERATION_COUNT: error: '__builtin_trap()' is not a constant expression
@@ -155,7 +152,8 @@ constexpr auto bad = mop::loop(1, OP, mop::loop(0, OP)).patch(mop::last_outer, O
 //--- patch-last-inner-single-outer.cpp
 #include "configs.h"
 
-constexpr auto bad = mop::loop(1, mop::loop(1, OP)).patch(mop::last_inner, OP);
+// A placeholder outer count of 1 that update() raises later keeps its last_inner patch.
+constexpr auto placeholder = mop::loop(1, mop::loop(1, OP)).patch(mop::last_inner, OP);
 
 //--- patch-not-last-op.cpp
 #include "configs.h"
