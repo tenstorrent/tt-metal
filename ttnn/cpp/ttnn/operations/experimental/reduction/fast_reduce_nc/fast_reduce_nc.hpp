@@ -11,7 +11,8 @@
 namespace ttnn::experimental::reduction {
 
 // `output_dtype` sets the dtype produced by the final prim::fast_reduce_nc stage;
-// `fp32_intermediate_stages` keeps non-final stages in FLOAT32 to avoid double-rounding.
+// `fp32_intermediate_stages` keeps non-final stages in FLOAT32 to avoid double-rounding; without it, BFLOAT8_B
+// non-final stages are BFLOAT16 and the final stage defaults to BFLOAT8_B.
 // FLOAT32 stages sum on the SFPU at full precision when fp32_dest_acc_en is set, unless
 // `fast_and_approximate_mode` selects the faster FPU path (tf32).
 // `post_mul_scaler` multiplies the result once, in the final stage (mean's 1/N or the caller's scalar).

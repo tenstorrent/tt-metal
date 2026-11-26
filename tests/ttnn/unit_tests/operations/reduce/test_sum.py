@@ -362,6 +362,9 @@ def test_sum_nc_ignores_tile_padding(device, dtype):
         ((3, 7, 100, 100), [1], ttnn.bfloat16),
         ((8, 16, 64, 64), [1, 3], ttnn.float32),
         ((8, 16, 64, 64), [0], ttnn.int32),
+        ((7, 9, 64, 64), [0, 1], ttnn.bfloat8_b),
+        ((2, 3, 41, 64), [0, 2, 3], ttnn.bfloat8_b),
+        ((2, 3, 64, 64), [1, 2, 3], ttnn.bfloat8_b),
     ],
 )
 def test_sum_nc_scalar(device, shape, dim, dtype):
@@ -377,7 +380,9 @@ def test_sum_nc_scalar(device, shape, dim, dtype):
         device_input = device_input.float()
     torch_output = torch.sum(device_input, dim=dim, keepdim=True) * int(scalar)
 
-    output_tensor = ttnn.to_torch(ttnn.sum(input_tensor, dim=dim, keepdim=True, scalar=scalar))
+    output = ttnn.sum(input_tensor, dim=dim, keepdim=True, scalar=scalar)
+    assert output.dtype == dtype
+    output_tensor = ttnn.to_torch(output)
 
     if dtype == ttnn.int32:
         assert torch.equal(output_tensor, torch_output)
@@ -413,3 +418,16 @@ def test_sum_preallocated_output_shape_mismatch(device, expect_error):
     output = ttnn.from_torch(torch.zeros(1, 16, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "does not match the reduced shape"):
         ttnn.sum(input_tensor, dim=0, keepdim=True, output=output)
+
+
+# Summing over C gives 330 and -320, and BFLOAT8_B cannot hold 330 (it rounds to 332).
+# A BFLOAT8_B partial sum therefore turns each exact 10 into 12.
+@pytest.mark.parametrize("dim, expected", [([0, 1], 10.0), ([0, 1, 2], 320.0), (None, 10240.0)])
+def test_sum_bf8b_partial_sums_cancel(device, dim, expected):
+    x = torch.tensor([[64, 64, 64, 64, 74], [-64] * 5], dtype=torch.float32)[:, :, None, None].expand(2, 5, 32, 32)
+    input_tensor = ttnn.from_torch(x.contiguous(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.sum(input_tensor, dim=dim, keepdim=True)
+
+    assert output.dtype == ttnn.bfloat8_b
+    assert torch.equal(ttnn.to_torch(output).float().unique(), torch.tensor([expected]))

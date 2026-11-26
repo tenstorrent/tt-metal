@@ -296,6 +296,9 @@ def test_mean_multi_dim_2_31_elements(device):
         ((3, 7, 100, 100), [1], ttnn.bfloat16, True, 3.0),
         ((8, 16, 64, 64), [0, 3], ttnn.float32, True, 3.0),
         ((8, 16, 64, 64), [1, 2, 3], ttnn.bfloat16, False, 1.0),
+        ((7, 9, 64, 64), [0, 1], ttnn.bfloat8_b, True, 3.0),
+        ((2, 3, 41, 64), [0, 2, 3], ttnn.bfloat8_b, True, 1.0),
+        ((2, 3, 64, 64), [1, 2, 3], ttnn.bfloat8_b, False, 1.0),
     ],
 )
 def test_mean_nc(device, shape, dim, dtype, keepdim, scalar):
