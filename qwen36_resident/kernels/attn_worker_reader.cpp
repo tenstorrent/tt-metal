@@ -395,6 +395,16 @@ void kernel_main() {
                     }
                 }
                 noc_async_read_barrier();
+                if constexpr (kVBfp2) {
+                    // (S0-9: the new v rows onto the Bfp2_b grid, attn_common.hpp rtn_bfp2_tile_row; NOC-written, so
+                    // Blackhole's RISC-V L1 cache is invalidated first)
+                    invalidate_l1_cache();
+                    for (uint32_t r = 0; r < kVR; r++) {
+                        for (uint32_t d = 0; d < Dt; d++) {
+                            rtn_bfp2_tile_row(v + d * kTile, r);
+                        }
+                    }
+                }
                 cb_push_back(cb_kraw, Dt);
                 cb_push_back(cb_vraw, Dt);
             }
@@ -448,6 +458,14 @@ void kernel_main() {
                         }
                     }
                     noc_async_read_barrier();
+                    if constexpr (kVBfp2) {
+                        invalidate_l1_cache();
+                        for (uint32_t a2 = 0; a2 < n_act; a2++) {
+                            for (uint32_t d = 0; d < Dt; d++) {
+                                rtn_bfp2_tile_row(v + d * kTile, act.row[a2]);
+                            }
+                        }
+                    }
                     cb_push_back(cb_kraw, Dt);
                     cb_push_back(cb_vraw, Dt);
                 }
@@ -462,6 +480,12 @@ void kernel_main() {
                     place_row0(grows + (v0 + d) * kRowTile + user_offset(u % batch), v + d * kTile);
                 }
                 noc_async_read_barrier();
+                if constexpr (kVBfp2) {
+                    invalidate_l1_cache();
+                    for (uint32_t d = 0; d < Dt; d++) {
+                        rtn_bfp2_tile_row(v + d * kTile, 0);
+                    }
+                }
                 cb_push_back(cb_kraw, Dt);
                 cb_push_back(cb_vraw, Dt);
             }

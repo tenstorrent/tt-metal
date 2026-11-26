@@ -325,6 +325,35 @@ FORCE_INLINE void rtn_bfp4_tile_row(uint32_t tile, uint32_t row) {
     rtn_bfp4_face_row(t + base);
     rtn_bfp4_face_row(t + base + 128);
 }
+
+// S0-9 stage 2 (named arg kv_v_bfp2): V is stored in Bfp2_b — per 16-element face row one shared exponent (the row's
+// max), a value is 0 or +-2^e. The device packer truncates (values below 2^e become 0), so the tail reader rounds each
+// new v row in bf16 onto that grid first (common.py bfp2_round: +-2^e where |x| >= 2^(e - 1), else 0 — bf16 exponent
+// field >= emax - 1); the tail update and the packer then carry it exactly, and the step's attention (the verify rows'
+// tail tiles in V's format included) sees the row as a later step reads it back
+constexpr bool kVBfp2 = get_named_compile_time_arg_val("kv_v_bfp2") != 0;
+FORCE_INLINE uint32_t rtn_bfp2_one(uint32_t b, uint32_t emax) {
+    const uint32_t e = (b >> 7) & 0xFF;
+    return e == 0 || e + 1 < emax ? 0 : (b & 0x8000) | (emax << 7);
+}
+FORCE_INLINE void rtn_bfp2_face_row(volatile tt_l1_ptr uint32_t* w) {
+    uint32_t emax = 0;
+    for (uint32_t i = 0; i < 8; i++) {
+        const uint32_t x = w[i], e0 = (x >> 7) & 0xFF, e1 = (x >> 23) & 0xFF;
+        emax = e0 > emax ? e0 : emax;
+        emax = e1 > emax ? e1 : emax;
+    }
+    for (uint32_t i = 0; i < 8; i++) {
+        const uint32_t x = w[i];
+        w[i] = rtn_bfp2_one(x & 0xFFFF, emax) | (rtn_bfp2_one(x >> 16, emax) << 16);
+    }
+}
+FORCE_INLINE void rtn_bfp2_tile_row(uint32_t tile, uint32_t row) {
+    volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile);
+    const uint32_t base = (row < 16 ? 0 : 256) + (row & 15) * 8;
+    rtn_bfp2_face_row(t + base);
+    rtn_bfp2_face_row(t + base + 128);
+}
 constexpr uint32_t cb_stage = 2;   // leader: gated output rows as batch x 32 tiles (heads x Dt)
 
 // byte offset of row r inside a 32x32 bf16 tile, face 0 (columns 0..15); face 1 is + kFace

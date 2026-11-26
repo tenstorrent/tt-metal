@@ -30,6 +30,11 @@ from loguru import logger
 import ttnn
 from qwen36_resident import PKG_DIR
 from qwen36_resident.common import (
+    BFP2,
+    BFP2_FORMAT,
+    bfp2_decode,
+    bfp2_encode,
+    bfp2_round,
     EPS,
     HIDDEN,
     INTER,
@@ -172,7 +177,10 @@ KV_ROW = (HD // TILE) * TILE_BYTES[K_DT]  # one position tile of a K cache page 
 # mantissas: corpus NLL +0.13% at 8K, within noise at 32K; the pool holds ~34% more tokens per byte)
 V_BFP4 = os.environ.get("RESIDENT_KV_V_BFP4", "0") == "1"
 SPEC_SAMPLE = os.environ.get("RESIDENT_SPEC_SAMPLE", "0") == "1"
-V_DT = ttnn.bfloat4_b if V_BFP4 else ttnn.bfloat8_b
+# S0-9 stage 2 (RESIDENT_KV_V_BFP2, default off; with V_ROT): the V pool in Bfp2_b tiles (raw uint32 pages through the
+# host codec, common.py bfp2_*; CBs declared Bfp2_b), ~3.3M tokens; the decode writer rounds the new row to nearest
+V_BFP2 = os.environ.get("RESIDENT_KV_V_BFP2", "0") == "1"
+V_DT = BFP2 if V_BFP2 else (ttnn.bfloat4_b if V_BFP4 else ttnn.bfloat8_b)
 V_ROW = (HD // TILE) * TILE_BYTES[V_DT]  # one position tile of a V cache page
 
 
@@ -196,6 +204,7 @@ HAD = hadamard(HD)  # (S0-8: K's rotation; q gets the same so q . k is unchanged
 # (HAD is its own inverse): the leader's normalize_gate (attn_common.hpp kVRot) and the prefill after SDPA
 V_ROT = os.environ.get("RESIDENT_V_ROT", "0") == "1"
 assert not V_ROT or K_BFP4, "S0-9 V_ROT rides on S0-8 (RESIDENT_KV_K_BFP4=1): HAD tile and scratch"
+assert not V_BFP2 or V_ROT, "S0-9 V in bfp2 needs the rotation (RESIDENT_V_ROT=1)"
 
 
 # Live decode models, for the persistent-L1 layout check of traces captured beside them (see l1_layout)
@@ -410,7 +419,9 @@ def rope(t, cos, sin):
 
 
 def quantize_rows(t, dtype=ttnn.bfloat8_b):
-    """bf8 of each row on its own (bf8 shares exponents within 16 elements of a row)."""
+    """bf8 of each row on its own (bf8 shares exponents within 16 elements of a row); BFP2: the Bfp2_b grid"""
+    if dtype == BFP2:
+        return bfp2_round(t)
     rows = t.reshape(-1, t.shape[-1])
     padded = torch.zeros((rows.shape[0] + TILE - 1) // TILE * TILE, rows.shape[1])
     padded[: rows.shape[0]] = rows
@@ -1184,7 +1195,7 @@ class ResidentModel:
         )
 
         def cache(which, sts_=sts):
-            assert not V_BFP4, "RESIDENT_KV_V_BFP4: paged KV only (the contiguous caches share one K / V stride)"
+            assert not V_BFP4 and not V_BFP2, "RESIDENT_KV_V_BFP4 / _BFP2: paged KV only (one K / V stride)"
             assert not K_BFP4, "RESIDENT_KV_K_BFP4: paged KV only (the contiguous caches share one K / V stride)"
             if sts_[0].K is None:
                 # no host images: zero-filled on device (stale rows are only ever read masked, but must be finite)
@@ -1410,6 +1421,10 @@ class ResidentModel:
             kv_page = TILE_BYTES[ttnn.bfloat8_b]
 
             def cb(idx, grid_, pages, dt=ttnn.bfloat16, page=full_page, tiny_tile=False):
+                if dt == BFP2:  # (S0-9: a format ttnn has no dtype for — set by its tt::DataFormat id)
+                    fd = ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.bfloat8_b, page_size=page)
+                    fd.data_format_as_uint8 = BFP2_FORMAT
+                    return ttnn.CBDescriptor(total_size=pages * page, core_ranges=grid_, format_descriptors=[fd])
                 fd = ttnn.CBFormatDescriptor(buffer_index=idx, data_format=dt, page_size=page)
                 if tiny_tile:
                     fd = ttnn.CBFormatDescriptor(
@@ -1818,6 +1833,7 @@ class ResidentModel:
                 ("sem_raddr", SEM_RADDR),
                 ("attn_tails", self.attn_tails),  # (attn_common.hpp kTails)
                 ("kv_v_tile", TILE_BYTES[V_DT]),  # (attn_common.hpp kVTile: the V cache's tile, S0)
+                ("kv_v_bfp2", int(V_BFP2)),  # (attn_common.hpp kVBfp2: the tail reader rounds new v rows, S0-9)
                 ("kv_k_tile", TILE_BYTES[K_DT]),  # (attn_common.hpp kKvTile: the K cache's tile, S0-8)
                 ("hub_bfp8", int(HUB_BFP8 and self.groups > 1)),  # (O-1c: bfp8 hub partials)
                 ("hub_res", int(self.hub_res)),  # (O-1c accuracy: the hub adds the residual, mlp_hub.cpp kHubRes)
@@ -2983,6 +2999,12 @@ class ResidentModel:
             ttnn.BufferType.DRAM,
             ttnn.ShardSpec(dram_grid, [self._kv_pool_rows * TILE, HD], ttnn.ShardOrientation.ROW_MAJOR),
         )
+        # (S0-9 V in bfp2: uint32 rows of V_ROW B — a bank's kv_pool_rows position tiles, as the tile pool's shards)
+        self._pool_mc_v = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(dram_grid, [self._kv_pool_rows, V_ROW // 4], ttnn.ShardOrientation.ROW_MAJOR),
+        )
         if self._share is not None:  # (share: the other geometry's pools; the same page geometry)
             sh = self._share
             assert sh.kv_paged and (sh.kv_blocks, sh.kv_block_size, sh._kv_pool_rows) == (
@@ -2991,26 +3013,25 @@ class ResidentModel:
                 self._kv_pool_rows,
             ), "share: another KV pool geometry"
             assert sts[0].K is None, "share: no host KV images (the pool is the shared model's)"
-            assert sh.V_t.dtype == V_DT, "share: a V pool of another format"
+            assert sh.V_t.dtype == (ttnn.uint32 if V_DT == BFP2 else V_DT), "share: a V pool of another format"
             assert sh.K_t.dtype == K_DT, "share: a K pool of another format"
             self.K_t, self.V_t = sh.K_t, sh.V_t
             return
         pools = []
         for which in ("K", "V"):
             dt = V_DT if which == "V" else K_DT  # (S0: V's format; S0-8: K's)
+            bfp2 = which == "V" and V_DT == BFP2
+            mc = self._pool_mc_v if bfp2 else self._pool_mc
             if sts[0].K is None:  # no host images (State kv=False): zero-filled on device
-                shape = [banks * self._kv_pool_rows * TILE, HD]
-                pools.append(device_zeros(self.mesh, shape, dt, self._pool_mc))
+                if bfp2:  # (S0-9: raw rows of a position tile's 8 Bfp2_b tiles, the tile pool's bank / offset mapping)
+                    shape = [banks * self._kv_pool_rows, V_ROW // 4]
+                    pools.append(device_zeros(self.mesh, shape, ttnn.uint32, mc, layout=ttnn.ROW_MAJOR_LAYOUT))
+                else:
+                    shape = [banks * self._kv_pool_rows * TILE, HD]
+                    pools.append(device_zeros(self.mesh, shape, dt, mc))
             else:
                 pools.append(
-                    ttnn.from_torch(
-                        self._kv_pool_host(sts, which),
-                        dtype=dt,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=self.mesh,
-                        memory_config=self._pool_mc,
-                        mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
-                    )
+                    self._pool_host_tensor(self._kv_pool_host(sts, which), which, device=self.mesh, memory_config=mc)
                 )
             ttnn.synchronize_device(self.mesh)
         # (not restored by reset(): positions at or past a step's are only read masked; stale rows are finite)
@@ -3077,10 +3098,26 @@ class ResidentModel:
         pages = (tbl[:, None] * self.kv_tpb + torch.arange(self.kv_tpb)).reshape(-1)
         return k, r, hist_el, pages
 
+    def _pool_host_read(self, dev, which):
+        """the pool tensor dev as float [n * banks * rows * TILE, HD] (host; S0-9's bfp2 V through the codec)"""
+        raw = ttnn.to_torch(dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+        if which == "V" and V_DT == BFP2:
+            return bfp2_decode(raw.contiguous().view(torch.uint8).reshape(raw.shape[0], -1), HD)
+        return raw.float()
+
+    def _pool_host_tensor(self, x, which, **kw):
+        """float [n * banks * rows * TILE, HD] -> a host (kw: device=, memory_config=) tensor of the pool's format"""
+        per_chip = ttnn.ShardTensorToMesh(self.mesh, dim=0)
+        if which == "V" and V_DT == BFP2:
+            words = bfp2_encode(x).contiguous().view(torch.int32)
+            return ttnn.from_torch(words, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=per_chip, **kw)
+        dt = V_DT if which == "V" else K_DT
+        return ttnn.from_torch(x, dtype=dt, layout=ttnn.TILE_LAYOUT, mesh_mapper=per_chip, **kw)
+
     def _pool_rows(self, t):
         """the pool tensor t as [n, copies, pages per copy, TILE, HD] (host)"""
         d = self.d
-        host = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).float()
+        host = self._pool_host_read(t, "V" if t is self.V_t else "K")
         host = host.reshape(d.n, d.banks, self._kv_pool_rows, TILE, HD)
         page = torch.arange(self._attn_copies * self.kv_copy_pages)
         return host[:, page % d.banks, page // d.banks].reshape(d.n, self._attn_copies, self.kv_copy_pages, TILE, HD)
@@ -3134,24 +3171,14 @@ class ResidentModel:
         ]
         n, banks = d.n, d.banks
         for which, dev in (("K", self.K_t), ("V", self.V_t)):
-            pool = cat(dev).float().reshape(n, banks, self._kv_pool_rows, TILE, HD)
+            pool = self._pool_host_read(dev, which).reshape(n, banks, self._kv_pool_rows, TILE, HD)
             new = self._kv_pool_host([st], which, tables=[self.block_tables[s]]).reshape(
                 n, banks, self._kv_pool_rows, TILE, HD
             )
             for c in range(self._attn_copies):
                 pg = c * self.kv_copy_pages + pages
                 pool[:, pg % banks, pg // banks] = new[:, pg % banks, pg // banks]
-            writes.append(
-                (
-                    ttnn.from_torch(
-                        pool.reshape(-1, HD),
-                        dtype=V_DT if which == "V" else K_DT,
-                        layout=ttnn.TILE_LAYOUT,
-                        mesh_mapper=per_chip,
-                    ),
-                    dev,
-                )
-            )
+            writes.append((self._pool_host_tensor(pool.reshape(-1, HD), which), dev))
         for host, dev in writes:
             ttnn.copy_host_to_device_tensor(host, dev)
         ttnn.synchronize_device(self.mesh)
@@ -3178,17 +3205,7 @@ class ResidentModel:
         for which, dev in (("K", self.K_t), ("V", self.V_t)):
             # (paged: the whole pool, st's caches through user 0's block table)
             kv = self._kv_pool_host([st], which) if self.kv_paged else self._kv_host(st, which)
-            hosts.append(
-                (
-                    ttnn.from_torch(
-                        kv,
-                        dtype=V_DT if which == "V" else K_DT,
-                        layout=ttnn.TILE_LAYOUT,
-                        mesh_mapper=per_chip,
-                    ),
-                    dev,
-                )
-            )
+            hosts.append((self._pool_host_tensor(kv, which), dev))
         for host, dev in hosts:
             ttnn.copy_host_to_device_tensor(host, dev)
         ttnn.synchronize_device(self.mesh)
