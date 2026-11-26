@@ -63,7 +63,7 @@ class TestRetest(unittest.TestCase):
                 None,
                 Path("."),
                 ("gddr_act_c3", "gddr_act_all"),
-                "-r",
+                "-glx_reset",
                 first,
                 phase,
                 dry_run,
@@ -75,13 +75,13 @@ class TestRetest(unittest.TestCase):
     def test_reruns_after_reset_and_snapshot(self):
         phase, snap, reset, tests = self._run(first_run(gddr_act_c3=PASS, gddr_act_all=PASS, gddr_full=FAIL))
         reset.assert_called_once()
-        self.assertEqual(reset.call_args.args[1], ("-r",))
+        self.assertEqual(reset.call_args.args[1], ("-glx_reset",))
         # Its reset log must not overwrite the pre-test loop's reset_1_r.log.
         self.assertEqual(reset.call_args.kwargs["logs_dir"], self.logs / "retest")
         tests.assert_called_once()
         self.assertEqual(tests.call_args.args[1], ("gddr_act_c3", "gddr_act_all"))
         self.assertEqual(tests.call_args.kwargs["name_suffix"], retest.RETEST_SUFFIX)
-        self.assertEqual(snap.name, "snapshot_after_retest_r")
+        self.assertEqual(snap.name, "snapshot_after_retest_glx_reset")
         self.assertEqual(snap.status, PASS)
         ok = next(c for c in phase.checks if c.name == "retest_reset_ok")
         self.assertEqual(ok.status, PASS)

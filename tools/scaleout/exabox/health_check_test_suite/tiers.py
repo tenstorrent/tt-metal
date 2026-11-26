@@ -54,8 +54,9 @@ class Tier:
 
     # Rerun after retest_reset + snapshot (GDDR ACT alias is boot-dependent).
     # Only if all passed the first time. --skip-reset / --skip-tests skip it.
+    # -glx_reset to match the deployment runner's per-iteration reset.
     retest: tuple[str, ...] = ()
-    retest_reset: str = "-r"
+    retest_reset: str = "-glx_reset"
 
     # Reset run between the tests and the triage phase. Two reasons it sits
     # there: the triage probes open every chip read-write, so they must not
