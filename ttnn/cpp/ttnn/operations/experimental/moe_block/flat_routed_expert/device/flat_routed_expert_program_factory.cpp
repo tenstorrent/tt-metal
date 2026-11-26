@@ -179,7 +179,7 @@ FlatProgramHandles add_flat_routed_expert_program(
     // tiles, X_FWD_SHALLOW below. Against 3 everywhere (P150): GLM-5.3 4x4 10240 uniform -5.1% / zipf -2.7%, 8x4 10240
     // -3.1%, DSV4.1-Flash 8x4 5120 hot -12.1% / 10240 -6.3%, K3 8x4 5120 hot -2.8%; no case +0.3% or more. 6 everywhere
     // slowed the short experts (GLM-5.3-Flash +2.2%, M3 +1.9%; and GLM-5.3 8x4 5120 - 5 row tiles an expert - in the
-    // MoE block on a Galaxy, b26a0166954); a threshold of 5 row tiles, too (M3 +1.8%); 8 missed DSV4.1-Flash 10240.
+    // MoE block on a Galaxy); a threshold of 5 row tiles, too (M3 +1.8%); 8 missed DSV4.1-Flash 10240.
     // 8 pieces in flight: worse everywhere (the weight reads' transaction ids start at 8).
     constexpr uint32_t X_FWD_DEPTH = 6, X_FWD_SHALLOW = 3, X_FWD_DEEP_ROW_TILES = 6;
     log_info(
@@ -307,12 +307,6 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["row_pass_rows"] = gu_rp ? std::max(1u, 4 / p.gate_up_weight_tiles_per_row) : 0;
     options["x_ring_blocks"] = p.x_ring_blocks;
     options["y_row_major"] = cfg.y_row_major ? 1 : 0;
-    // (MEASUREMENT ONLY: the kernels' wait probes, kernels/zz_probes.hpp)
-    // (MEASUREMENT ONLY: FLAT_GU_K_STEPS=0 - the gate/up matmul a matmul_block a K step, the A/B of matmul_block_k)
-    options["gate_up_k_steps"] = std::getenv("FLAT_GU_K_STEPS") == nullptr || std::getenv("FLAT_GU_K_STEPS")[0] != '0';
-    options["gate_up_skip_activation"] =
-        std::getenv("FLAT_GU_SKIP_ACT") != nullptr && std::getenv("FLAT_GU_SKIP_ACT")[0] == '1';  // (MEASUREMENT ONLY)
-    options["zz_flat_probes"] = std::getenv("FLAT_ZZ_PROBES") != nullptr && std::getenv("FLAT_ZZ_PROBES")[0] == '1';
     options["y_row_major_rows"] = 0;  // (the down kernels': their column width's)
     options["down_core_count"] = ND;
     options["h_arrived_sem"] = HARR;
@@ -412,7 +406,6 @@ FlatProgramHandles add_flat_routed_expert_program(
         kernel_descriptor.core_ranges = rect_ranges(cores);
         kernel_descriptor.named_compile_time_args = {kernel_options.begin(), kernel_options.end()};  // (sorted by name)
         kernel_descriptor.opt_level = KernelBuildOptLevel::O3;  // (ComputeConfig's default)
-        zz_env_defines(kernel_descriptor);                      // (MEASUREMENT ONLY: probes)
         kernel_descriptor.config =
             ComputeConfigDescriptor{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32, .dst_full_sync_en = full_sync};
         return add_kernel(program, std::move(kernel_descriptor));
