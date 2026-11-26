@@ -28,12 +28,11 @@ from .vae import (
     VaeUpBlock,
     _norm,
     fold_quant_conv_mean,
+    warm_token_gather,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-    import torch
 
 
 # https://github.com/black-forest-labs/flux2/blob/6bb103559da75b67d75bf77cebba0027ba412ebc/src/flux2/autoencoder.py#L271
@@ -142,6 +141,8 @@ class Flux2VaeDecoder(Module):
         # The sliced convs end with a tiled reshape at every width per chip that is not whole tiles, which the
         # warm size (1024x1024) does not have at any level.
         warm_dram_slice_flatten(ctx.device)
+        # So does the mid block's token gather where the token rows per chip are not whole tiles.
+        warm_token_gather(ctx, channel_counts[0])
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # remove encoder state

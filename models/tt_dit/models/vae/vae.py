@@ -102,6 +102,26 @@ def _all_gather_tokens(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
     return x
 
 
+def warm_token_gather(ctx: VaeContext, channels: int) -> None:
+    """Gather a token count per chip that is not whole tiles once, as _all_gather_tokens does.
+
+    ttnn gathers such rows through all_broadcast and a row-shift concat, whose programs take the row count at run
+    time, but a model warmed at a size whose token rows are whole tiles never runs them, so their kernels would
+    compile at the first size that is not. Calling this during warm-up compiles them there."""
+    if ctx.h_factor <= 1 and ctx.w_factor <= 1:
+        return
+    x = ttnn.from_torch(
+        torch.zeros(1, 1, ttnn.TILE_SIZE + ttnn.TILE_SIZE // 2, channels),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=ctx.device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(ctx.device),
+    )
+    ttnn.deallocate(_all_gather_tokens(ctx, x))
+    ttnn.deallocate(x)
+
+
 def _get_neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tensor, dim: int) -> int:
     """Cap links at the product of dimensions above ``dim`` (kernel constraint)."""
     upper_dims = 1
