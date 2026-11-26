@@ -133,15 +133,16 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
                     tt::LogFabric, "fabric graph: no inter-domain router on Z yet: {} chan {}", p.node, p.eth_chan);
             }
         }
-        // a landing feeds its own plane's routers: none on a plane where the chip has no other router
+        // a landing feeds its own plane's routers: none on a plane where the chip has other routers but none there (a
+        // chip without routers is its whole domain: a landing only delivers)
         std::map<FabricNodeId, std::set<uint32_t>> planes;
         for (const auto& p : ports) {
             planes[p.node].insert(p.plane);
         }
         const auto routed = [&](const PerimeterPort& p) {
             const auto it = planes.find(p.node);
-            return p.link_trained && *p.direction != RoutingDirection::Z && it != planes.end() &&
-                   it->second.contains(p.plane);
+            return p.link_trained && *p.direction != RoutingDirection::Z &&
+                   (it == planes.end() || it->second.contains(p.plane));
         };
         std::vector<PerimeterPort> with_routers;
         std::copy_if(perimeter_.begin(), perimeter_.end(), std::back_inserter(with_routers), routed);
