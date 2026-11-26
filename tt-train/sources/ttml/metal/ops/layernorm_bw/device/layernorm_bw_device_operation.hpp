@@ -38,8 +38,8 @@ ttml::metal::ops::layernorm_bw::device::LayerNormBackwardDeviceOperation::tensor
     const ttnn::Tensor& mean_tensor,
     const ttnn::Tensor& rstd_tensor,
     const ttnn::Tensor& dL_dout_tensor,
+    const ttml::metal::ops::layernorm_bw::device::LayerNormBackwardOutputs& outputs = {},
     const std::optional<ttnn::Tensor>& preallocated_dx = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_dbeta_components = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt);
 
 }  // namespace ttnn::prim
