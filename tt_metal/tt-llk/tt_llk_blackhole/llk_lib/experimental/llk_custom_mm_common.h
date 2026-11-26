@@ -55,6 +55,12 @@ constexpr bool custom_mm_split_acc(const CustomMmDestLayout layout)
     return layout == CustomMmDestLayout::DefaultSplitAcc || layout == CustomMmDestLayout::DenseSplitAcc;
 }
 
+// Whether in0 is a full [32, 32] tile (its faces 16 rows) rather than a short [{1, 2, 4, 8}, 32] one.
+constexpr bool custom_mm_full_in0_r_dim(const std::uint32_t in0_face_r_dim)
+{
+    return in0_face_r_dim == MAX_FACE_R_DIM;
+}
+
 // Faces in a narrow in1 tile: [32, 16], or [16, 32] with transpose. A full in1 tile has MAX_NUM_FACES.
 constexpr std::uint32_t CUSTOM_MM_NARROW_IN1_NUM_FACES = MAX_NUM_FACES / 2;
 

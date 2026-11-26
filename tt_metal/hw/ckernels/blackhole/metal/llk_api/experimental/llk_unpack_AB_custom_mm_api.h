@@ -75,7 +75,8 @@ inline void llk_unpack_AB_custom_mm(
     const std::uint32_t tile_index_0,
     const std::uint32_t tile_index_1,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t rt_dim = 1) {
     SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandA_id = get_operand_id(operand1);
@@ -93,6 +94,17 @@ inline void llk_unpack_AB_custom_mm(
                                 unpack_src_format[operandB_id], 2 * get_operand_face_r_dim(operandB_id) * FACE_C_DIM) >>
                             4),
         "custom_mm: above 255 k-tiles the in0 CB page must be exactly two in0 faces");
+    // (a [32, 32] in0 tile: its faces have 16 rows; in0 is then [rt_dim, kt_dim] tiles, row-major)
+    const bool full_in0 = custom_mm_full_in0_r_dim(get_operand_face_r_dim(operandB_id));
     _llk_unpack_AB_custom_mm_<read_transposed>(
-        base_address_A, base_address_B, tile_index_A, tile_index_B, tile_size_A, tile_size_B, kt_dim, ct_dim);
+        base_address_A,
+        base_address_B,
+        tile_index_A,
+        tile_index_B,
+        tile_size_A,
+        tile_size_B,
+        kt_dim,
+        ct_dim,
+        rt_dim,
+        full_in0);
 }
