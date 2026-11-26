@@ -11,9 +11,12 @@
 namespace ttnn::prim {
 
 ReshapeViewDeviceOperation::program_factory_t ReshapeViewDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         return ReshapeViewRMProgramFactory{};
+    }
+    if (reshape_view_tiled_keeps_last_dim(operation_attributes, tensor_args.input)) {
+        return ReshapeViewTiledRowsProgramFactory{};
     }
     return ReshapeViewTiledProgramFactory{};
 }

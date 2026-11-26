@@ -567,6 +567,32 @@ namespace {
 
 enum class ReshapeImpl { ROUTED, NATIVE, CODEGEN };
 
+// A tiled reshape that keeps the last dim runs natively on ReshapeViewTiledRowsProgramFactory: its kernels take the
+// shapes as runtime args, so they compile once for every shape, and it keeps no page map. On a Wormhole chip it beat
+// codegen's tile-rows program on most such shapes (median 0.78x of codegen's device time, 0.27x to 1.45x over 68
+// shapes), while codegen's tile-rows program compiles per shape. So routing leaves these calls to native. The worst
+// case was a large unflatten with whole-tile C, [1,1,4800,256] to [1,64,75,256], at 1.45x. Must accept only calls
+// that reshape_view_tiled_keeps_last_dim accepts after the squeeze to rank 3, or they land on the page-map factory.
+bool native_takes_row_factory(const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape) {
+    using tt::constants::TILE_HEIGHT;
+    using tt::constants::TILE_WIDTH;
+    const auto dtype = tensor.dtype();
+    const bool native_dtype = dtype == DataType::BFLOAT16 || dtype == DataType::FLOAT32 || dtype == DataType::INT32 ||
+                              dtype == DataType::UINT32 || is_block_float(dtype);
+    if (tensor.layout() != Layout::TILE || !native_dtype || logical_shape.rank() < 2 ||
+        tensor.logical_shape().rank() < 2 || tensor.logical_shape()[-1] != logical_shape[-1]) {
+        return false;
+    }
+    const auto& tile = tensor.tensor_spec().tile();
+    const auto tile_shape = tile.get_tile_shape();
+    const auto face_shape = tile.get_face_shape();
+    const auto& in = tensor.logical_shape();
+    const auto& padded = tensor.padded_shape();
+    return tile_shape[0] == TILE_HEIGHT && tile_shape[1] == TILE_WIDTH && face_shape[0] == 16 && face_shape[1] == 16 &&
+           padded.rank() == in.rank() && padded[-1] == tt::round_up(in[-1], TILE_WIDTH) &&
+           padded[-2] == tt::round_up(in[-2], TILE_HEIGHT);
+}
+
 // The codegen plan when routing should take it. The padded shape and pad_value are free-function arguments the prim
 // never sees, so call_contract_violation checks them here.
 std::optional<reshape_codegen::LaunchPlan> routed_codegen_plan(
@@ -577,6 +603,7 @@ std::optional<reshape_codegen::LaunchPlan> routed_codegen_plan(
     const MemoryConfig& mem_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     if (!operations::data_movement::codegen_supported_on_arch(tensor) ||
+        native_takes_row_factory(tensor, logical_shape) ||
         reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value) != nullptr) {
         return std::nullopt;
     }

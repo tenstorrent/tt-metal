@@ -1118,3 +1118,58 @@ def test_reshape_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert output.layout == layout
     assert output.memory_config().buffer_type == buffer_type
     assert_exact(ttnn.to_torch(input_tensor).reshape(1, 1, 100, 64), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        # conv2d's flatten of a DRAM-sliced output, the width not whole tiles.
+        ((1, 2, 40, 32), (1, 1, 80, 32)),
+        ((1, 64, 74, 512), (1, 1, 64 * 74, 512)),
+        ((2, 5, 19, 96), (1, 1, 190, 96)),
+        # Odd widths, single rows, padded channels and the reverse direction.
+        ((1, 3, 37, 64), (1, 1, 111, 64)),
+        ((1, 7, 1, 32), (1, 1, 7, 32)),
+        ((1, 2, 17, 20), (1, 1, 34, 20)),
+        ((1, 1, 80, 32), (1, 2, 40, 32)),
+        ((3, 1, 45, 48), (1, 5, 27, 48)),
+        # Rank 3 in the API.
+        ((4, 33, 48), (2, 66, 48)),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1])
+def test_reshape_tiled_keeps_last_dim(input_shape, output_shape, dtype, buffer_type, device):
+    """A tiled reshape that keeps the last dim moves whole rows; its kernels compute the rows each output tile takes
+    instead of reading a page map."""
+    torch.manual_seed(0)
+    if dtype == ttnn.uint32:
+        torch_input = torch.randint(0, 2000, input_shape, dtype=torch.int32)
+    elif dtype == ttnn.int32:
+        torch_input = torch.randint(-1000, 1000, input_shape, dtype=torch.int32)
+    else:
+        torch_input = torch.randn(input_shape, dtype=torch.float32 if dtype == ttnn.float32 else torch.bfloat16)
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
+    x = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    y = ttnn.reshape(x, output_shape)
+    assert tuple(y.shape) == output_shape
+    # uint32 comes back as torch.uint32, which torch does not compare with int32.
+    assert torch.equal(ttnn.to_torch(y).to(torch_input.dtype), torch_input.reshape(output_shape))
+
+
+@pytest.mark.parametrize("output_sharded", [True, False], ids=["to_sharded", "to_interleaved"])
+def test_reshape_tiled_keeps_last_dim_height_sharded(output_sharded, device):
+    """The row reshape reads and writes through tensor accessors, so height-sharded L1 tensors take it as well."""
+    torch.manual_seed(0)
+    input_shape, output_shape = (1, 4, 40, 64), (1, 1, 160, 64)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    sharded = ttnn.create_sharded_memory_config(
+        (64, 64),
+        core_grid=ttnn.CoreGrid(y=1, x=4),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    x = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded)
+    y = ttnn.reshape(x, output_shape, memory_config=None if output_sharded else ttnn.DRAM_MEMORY_CONFIG)
+    assert y.is_sharded() == output_sharded
+    assert torch.equal(ttnn.to_torch(y), torch_input.reshape(output_shape))
