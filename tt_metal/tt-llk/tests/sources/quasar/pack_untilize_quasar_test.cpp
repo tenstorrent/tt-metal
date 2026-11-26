@@ -198,9 +198,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
+        }
 
-            _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
-
+        // compute_kernel_hw_startup, then pack_untilize_init's datacopy init (only its ALU config for unpack to dest).
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+        _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+        if constexpr (!unpack_to_dest)
+        {
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
         }
