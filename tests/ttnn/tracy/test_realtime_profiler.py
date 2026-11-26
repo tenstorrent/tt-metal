@@ -162,6 +162,22 @@ def _export_zones_unwrapped(tracy_file: Path, out_csv: Path):
         )
 
 
+# The csvexport modes the zone alignment test uses, by name: the flags come from this table, never from a caller.
+_CSVEXPORT_MODES = {
+    "host_zones": ("-u",),
+    "device_zones": ("-g",),
+}
+
+
+def _export_zones_csv(mode: str, tracy_file: Path, out_csv: Path):
+    """Export a capture's zones, comma separated, with one of the fixed csvexport modes in _CSVEXPORT_MODES."""
+    flags = _CSVEXPORT_MODES[mode]
+    capture = tracy_file.resolve(strict=True)
+    assert capture.suffix == ".tracy", f"Not a Tracy capture: {capture}"
+    with open(out_csv, "w") as f:
+        subprocess.run([str(CSVEXPORT_TOOL), *flags, str(capture)], stdout=f, stderr=subprocess.DEVNULL, check=True)
+
+
 def _save_artifacts(test_name: str, **files: Path):
     """Copy files into ARTIFACTS_ROOT/<test_name>/ for post-mortem analysis."""
     dest = ARTIFACTS_ROOT / test_name
@@ -742,11 +758,8 @@ def test_tracy_zone_alignment(tmp_path):
     assert rc == 0, f"Workload failed (rc={rc})"
     assert tracy_file.exists(), f"Tracy trace file not generated: {tracy_file}"
 
-    # Comma separated, so the host and device exports parse the same way.
-    with open(host_csv, "w") as f:
-        subprocess.run([str(CSVEXPORT_TOOL), "-u", str(tracy_file)], stdout=f, stderr=subprocess.DEVNULL, check=True)
-    with open(device_csv, "w") as f:
-        subprocess.run([str(CSVEXPORT_TOOL), "-g", str(tracy_file)], stdout=f, stderr=subprocess.DEVNULL, check=True)
+    _export_zones_csv("host_zones", tracy_file, host_csv)
+    _export_zones_csv("device_zones", tracy_file, device_csv)
 
     enqueues = _enqueue_program_start_ns(host_csv)
     zones = _device_zones(device_csv)
