@@ -742,9 +742,20 @@ def test_sqrt_edge_specials_bit_exact(approx_mode):
                 f"sqrt(0x{in_bits:08X}) = 0x{got:08X}, expected {want_str}"
             )
     assert not mismatches, "; ".join(mismatches)
-    assert torch.allclose(
-        res[len(_SQRT_EDGE_PROBES) :], torch.tensor(2.0), rtol=1e-2, atol=0.0
-    )
+    filler = res[len(_SQRT_EDGE_PROBES) :]
+    if approx_mode == ApproximationMode.Yes:
+        # The 10-bit algorithm's sqrt(4) is 2 * (1 + 8.8e-4).
+        assert torch.allclose(filler, torch.tensor(2.0), rtol=2.0**-10, atol=0.0)
+    else:
+        # sqrt(4) = 2 exactly, so a weakened refinement shows up bitwise.
+        filler_bits = filler.view(torch.int32)
+        off = (filler_bits != 0x40000000).nonzero().flatten()
+        assert off.numel() == 0, (
+            f"sqrt(4.0) != 0x40000000 on {off.numel()} lanes, "
+            f"first 0x{filler_bits[off[0]].item() & 0xFFFFFFFF:08X}"
+            if off.numel()
+            else ""
+        )
 
 
 def _fp16_lanes(mask, x, got, limit=4):
