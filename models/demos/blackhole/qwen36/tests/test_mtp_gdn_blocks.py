@@ -1264,8 +1264,8 @@ def test_a_bucket_drafter_drafts_what_the_full_width_drafter_drafts(mesh_device,
     (MTPSpecEngine.propose with and without the bucket traces), and the drafts of the live rows are equal, and equal
     to the drafts of the runner's propose after it. Then a chained run of three requests (_async_run: one-enqueue
     steps, every verify over the unread one) with the bucket traces equals the same run on the 8-row trace: the
-    committed tokens and counts of every verify, and no program compiles in either run. QWEN36_PAIR_LAYERS sets the
-    layer count."""
+    committed tokens and counts of every verify, and after a short warm run of the same requests no program compiles in
+    either run. QWEN36_PAIR_LAYERS sets the layer count."""
     from models.demos.blackhole.qwen36.tt.spec_engine import MTPSpecEngine
 
     K, B = 3, 8
@@ -1315,6 +1315,7 @@ def test_a_bucket_drafter_drafts_what_the_full_width_drafter_drafts(mesh_device,
     async_prompts = {q: p[: lens[q]].tolist() for q, p in zip(lens, _prompts(3, 600, seed=59))}
     hint = lambda q, p0: K if p0 % 5 else 1
     records = {}
+    _async_run(pair, async_prompts, True, hint, 4)  # compiles what this run needs beyond the warmup (prompt lengths)
     programs = mesh_device.num_program_cache_entries()
     mesh_device.set_program_cache_misses_allowed(False)
     try:
@@ -1340,7 +1341,8 @@ def test_drafter_bucket_cost(mesh_device, monkeypatch, reset_seeds, ensure_gc):
       asynchronous scheduling) of 1 and of 3 requests, with the drafter row buckets and on the 8-row drafter: wall time
       per verify, and the requests' committed tokens of both runs (their streams are compared position by position;
       a different draft can only change which drafts the verify accepts, so equal streams are expected but not
-      asserted). Both runs compile no program. QWEN36_PAIR_LAYERS sets the layer count."""
+      asserted). After a short warm run of the same requests, no run compiles a program. QWEN36_PAIR_LAYERS sets the
+      layer count."""
     K, steps = 3, 48
     pair = Pair(mesh_device, monkeypatch, K, "align", n_layers=PAIR_LAYERS, bmax=8, block_size=1024)
     eng = pair.spec._engine()
@@ -1349,11 +1351,12 @@ def test_drafter_bucket_cost(mesh_device, monkeypatch, reset_seeds, ensure_gc):
     hint = lambda q, p0: K
     pool = _prompts(3, 900, seed=61)
     lens = {0: 700, 1: 520, 2: 610}
-    programs = mesh_device.num_program_cache_entries()
     summary = []
     for n in (1, 3):
         prompts = {q: pool[q][: lens[q]].tolist() for q in range(n)}
         times, records = {}, {}
+        _async_run(pair, prompts, True, hint, 4)  # compiles what this run needs beyond the warmup (prompt lengths)
+        programs = mesh_device.num_program_cache_entries()
         mesh_device.set_program_cache_misses_allowed(False)
         try:
             for name, traces in (("8-row", {}), ("buckets", buckets), ("8-row again", {}), ("buckets again", buckets)):
@@ -1379,7 +1382,7 @@ def test_drafter_bucket_cost(mesh_device, monkeypatch, reset_seeds, ensure_gc):
             f"{n} requests: {best['buckets']:.2f} ms per verify with drafter buckets, {best['8-row']:.2f} ms on the "
             f"8-row drafter (whole chained run incl. prefill / {steps}; all runs {[round(v, 2) for v in times.values()]})"
         )
-    assert mesh_device.num_program_cache_entries() == programs, "a program compiled after the capture"
+        assert mesh_device.num_program_cache_entries() == programs, "a program compiled after the warm run"
     for b in (None, 4, 2, 1):
         trace_id = eng._dr_trace if b is None else buckets[b]
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
