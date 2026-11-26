@@ -21,10 +21,12 @@ q . state and the readout are unchanged, and V is not permuted.
 
 Tensor parallel by head, as H3: each device projects, normalises and attends with its own heads (the softmax gate,
 the linear branch and its gates are sharded the same way), then the outputs are gathered on TP for the column-parallel
-`to_out` and `to_out_linear`. Sequence parallel by gathering: the SP-fractured rows are all-gathered, every device
-computes the whole (logical, unpadded) sequence for its heads, and `mesh_partition` hands each device its rows back.
-That repeats the attention work on every SP device; correct first, and the place to start for stage 4 (frame halo for
-the conv and window, per-frame statistics gathered for the scans).
+`to_out` and `to_out_linear`. Sequence parallel by gathering: the SP-fractured rows are all-gathered so every device
+holds the whole (logical, unpadded) sequence for its TP heads, and `mesh_partition` hands each device its rows back.
+The heavy work is then split over the SP devices (stage 4): each window group's queries by row (`WindowSoftmax`), and
+the linear branch by head, from its raw projections to the readout (`OpenVDNLinearBranch`, `_head_split`), each
+reassembled with one all-gather. Still repeated on every SP device: the projections' gathers, the softmax gate,
+`to_out` / `to_out_linear` and the output assembly.
 """
 
 from __future__ import annotations
@@ -103,19 +105,20 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             mesh_device=mesh_device,
             tp_mesh_axis=tp_axis,
         )
-        # Stage 4 levers, off by default until accepted: OPENVDN_CONV_SP=1 splits the spatial conv's frames over SP,
-        # OPENVDN_BRANCH_SP=1 (with it) the branch's other per-frame stages by frame, =heads its delta-rule math by
-        # head; OPENVDN_PARALLEL_SCAN=1 the log-depth scan.
-        if os.environ.get("OPENVDN_CONV_SP") == "1" and self.sp_factor > 1:
+        # The linear branch's work is split over the SP devices, which all hold the whole sequence (stage 4). Env
+        # switches, for A/B runs: OPENVDN_CONV_SP=0 turns the split off; OPENVDN_BRANCH_SP=heads (default) splits the
+        # whole branch by head from the raw projections on, =1 splits the conv and the per-frame stages by frame
+        # (slower), =0 only the spatial conv by frame; OPENVDN_PARALLEL_SCAN=0 takes the sequential scan.
+        if os.environ.get("OPENVDN_CONV_SP", "1") == "1" and self.sp_factor > 1:
             self.linear_attention.frame_split = (
                 self.sp_mesh_axis,
                 self.sp_factor,
                 lambda t, dim: self._gather(t, dim=dim, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor),
             )
             self.linear_attention.branch_split = {"1": "frames", "heads": "heads"}.get(
-                os.environ.get("OPENVDN_BRANCH_SP", ""), ""
+                os.environ.get("OPENVDN_BRANCH_SP", "heads"), ""
             )
-        self.linear_attention.parallel_scan = os.environ.get("OPENVDN_PARALLEL_SCAN") == "1"
+        self.linear_attention.parallel_scan = os.environ.get("OPENVDN_PARALLEL_SCAN", "1") == "1"
         col = dict(mesh_device=mesh_device, mesh_axis=tp_axis, compute_kernel_config=config)
         # Column-parallel like `to_out`: TP-gathered readout in, TP-fractured hidden out.
         self.to_out_linear = ColParallelLinear(self.inner_dim, self.hidden_size, bias=False, **col)
@@ -153,10 +156,10 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
 
     def _window(self, layout: HybridLayout) -> WindowSoftmax:
         if layout not in self._windows:
-            # Stage 4 levers, off by default until accepted: OPENVDN_WINDOW_SP=1 splits each group's queries over
-            # the SP devices; OPENVDN_WINDOW_CHUNKS="q,k" sets the SDPA chunk sizes (default 32,32);
-            # OPENVDN_WINDOW_ALIGNED=1 runs the groups on the frame-padded, tile-aligned layout.
-            split = os.environ.get("OPENVDN_WINDOW_SP") == "1" and self.sp_factor > 1
+            # Each group's queries are split over the SP devices and the groups run on the frame-padded, tile-aligned
+            # layout (stage 4). Env switches, for A/B runs: OPENVDN_WINDOW_SP=0, OPENVDN_WINDOW_ALIGNED=0 turn them
+            # off; OPENVDN_WINDOW_CHUNKS="q,k" sets the SDPA chunk sizes (32,32 measured best).
+            split = os.environ.get("OPENVDN_WINDOW_SP", "1") == "1" and self.sp_factor > 1
             q_chunk, k_chunk = (int(c) for c in os.environ.get("OPENVDN_WINDOW_CHUNKS", "32,32").split(","))
             self._windows[layout] = WindowSoftmax(
                 self.mesh_device,
@@ -171,7 +174,7 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
                 else None,
                 q_chunk=q_chunk,
                 k_chunk=k_chunk,
-                aligned=os.environ.get("OPENVDN_WINDOW_ALIGNED") == "1",
+                aligned=os.environ.get("OPENVDN_WINDOW_ALIGNED", "1") == "1",
             )
         return self._windows[layout]
 
