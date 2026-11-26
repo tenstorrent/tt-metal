@@ -409,7 +409,7 @@ inline void _exp_init_loadmacro_(
  */
 template <sfpi::DataLayout LAYOUT>
 struct SfpuSrcsOp<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>
-    : SfpuSrcsOpBase<SfpuSrcsOp<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>, 1 /*ARITY*/> {
+    : SfpuSrcsOpBase<SfpuSrcsOp<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>, 1 /*L1_INPUTS*/> {
     using Layout = SrcsLayout<LAYOUT>;
     static_assert(Layout::ops <= 4, "Replay cycles LREG0-3 (d & 3); >4 in-flight macros would reuse a live LREG");
 

@@ -49,7 +49,9 @@ void kernel_main() {
         // Stage B, trisc3: mid -> exp on SrcS -> out.
         dfb_mid.wait_front(1);
         dfb_out.reserve_back(1);
-        ExpOp::tile(unpack_from(dfb_mid), pack_to(dfb_out));
+        ExpOp::unpack(dfb_mid);
+        ExpOp::pack(dfb_out);
+        ExpOp::tile();
         dfb_mid.pop_front(1);  // must not free the entry before unpacker 2 has read it
         dfb_out.push_back(1);  // must not post the entry before packer 1 has written it
     }

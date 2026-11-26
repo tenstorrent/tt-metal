@@ -19,8 +19,9 @@ namespace {
 enum class SfpuOpRoute {
     Dest,                // unpack, math and pack own the DFB ends; the SFPU op runs on Dest
     Srcs,                // trisc3 owns both DFB ends; the SFPU op runs on SrcS
+    SrcsTwoInputs,       // Srcs with a second input, in1
     FpuDestThenSrcs,     // unpack / pack own in and the producer end of mid; trisc3 owns the rest
-    FpuDestAndL1ToSrcs,  // FpuDestThenSrcs plus a second input, in1, that trisc3 reads straight from L1
+    FpuDestAndL1ToSrcs,  // unpack owns in; trisc3 owns in1 and out and reads the FPU result straight from Dest
 };
 
 struct SfpuOpDfbCase {
@@ -33,12 +34,14 @@ struct SfpuOpDfbCase {
 
 float exp_of_in(float in, float /*in1*/) { return std::exp(in); }
 float exp_of_2in(float in, float /*in1*/) { return std::exp(2.0f * in); }
+float in_plus_in1(float in, float in1) { return in + in1; }
 float two_in_plus_in1(float in, float in1) { return 2.0f * in + in1; }
 
 void run_sfpu_op_dfb_case(distributed::MeshDevice& mesh_device, const SfpuOpDfbCase& test_case) {
     constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
     const uint32_t total_entries = test_case.total_entries;
-    const bool has_in1 = test_case.route == SfpuOpRoute::FpuDestAndL1ToSrcs;
+    const bool has_in1 =
+        test_case.route == SfpuOpRoute::SrcsTwoInputs || test_case.route == SfpuOpRoute::FpuDestAndL1ToSrcs;
     const NodeCoord node{0, 0};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_entries, DataType::BFLOAT16);
@@ -97,21 +100,25 @@ void run_sfpu_op_dfb_case(distributed::MeshDevice& mesh_device, const SfpuOpDfbC
             bind(DFB_OUT, "out", PRODUCE, /*on_trisc3=*/false);
             break;
         case SfpuOpRoute::Srcs:
+        case SfpuOpRoute::SrcsTwoInputs:
             bind(DFB_IN, "in", CONSUME, /*on_trisc3=*/true);
             bind(DFB_OUT, "out", PRODUCE, /*on_trisc3=*/true);
             break;
         case SfpuOpRoute::FpuDestThenSrcs:
-        case SfpuOpRoute::FpuDestAndL1ToSrcs:
             bind(DFB_IN, "in", CONSUME, /*on_trisc3=*/false);
             bind(DFB_MID, "mid", PRODUCE, /*on_trisc3=*/false);
             bind(DFB_MID, "mid", CONSUME, /*on_trisc3=*/true);
             bind(DFB_OUT, "out", PRODUCE, /*on_trisc3=*/true);
             dataflow_buffers.push_back(make_spec(DFB_MID));
-            if (has_in1) {
-                bind(DFB_IN1, "in1", CONSUME, /*on_trisc3=*/true);
-                dataflow_buffers.push_back(make_spec(DFB_IN1));
-            }
             break;
+        case SfpuOpRoute::FpuDestAndL1ToSrcs:
+            bind(DFB_IN, "in", CONSUME, /*on_trisc3=*/false);
+            bind(DFB_OUT, "out", PRODUCE, /*on_trisc3=*/true);
+            break;
+    }
+    if (has_in1) {
+        bind(DFB_IN1, "in1", CONSUME, /*on_trisc3=*/true);
+        dataflow_buffers.push_back(make_spec(DFB_IN1));
     }
     // Every kernel here reads a subset of these.
     compute.compile_time_args = {
@@ -217,9 +224,11 @@ SFPU_OP_DFB_TEST(SfpuOpSrcsExp, "sfpu_exp_srcs_dfb_quasar.cpp", Srcs, exp_of_in,
 // The same with rings smaller than the run: a credit posted before unpacker 2 or packer 1 is done shows up as
 // wrong data.
 SFPU_OP_DFB_TEST(SfpuOpSrcsExpRingPressure, "sfpu_exp_srcs_dfb_quasar.cpp", Srcs, exp_of_in, 2, 16)
+// Two inputs from L1 on SrcS: trisc3 unpacks dfb_in and dfb_in1 and adds them.
+SFPU_OP_DFB_TEST(SfpuOpSrcsAdd, "sfpu_add_srcs_dfb_quasar.cpp", SrcsTwoInputs, in_plus_in1, 8, 8)
 // Mixed: FPU add on Dest -> pack into a DFB inside the core -> trisc3 runs exp on SrcS.
 SFPU_OP_DFB_TEST(SfpuOpMixedFpuAddThenSrcsExp, "fpu_add_sfpu_exp_srcs_quasar.cpp", FpuDestThenSrcs, exp_of_2in, 8, 8)
-// Two-input SrcS op: one input is the FPU result from Dest, the other a tile trisc3 reads straight from L1.
+// Two-input SrcS op: input 0 is the FPU result, read straight from Dest; input 1 is a tile trisc3 unpacks from L1.
 SFPU_OP_DFB_TEST(
     SfpuOpSrcsAddDestAndL1Inputs, "fpu_add_sfpu_add_srcs_quasar.cpp", FpuDestAndL1ToSrcs, two_in_plus_in1, 8, 8)
 

@@ -26,7 +26,9 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_entries; i++) {
         dfb_in.wait_front(1);
         dfb_out.reserve_back(1);
-        ExpOp::tile(unpack_from(dfb_in), pack_to(dfb_out));
+        ExpOp::unpack(dfb_in);
+        ExpOp::pack(dfb_out);
+        ExpOp::tile();
         dfb_in.pop_front(1);   // must not free the entry before unpacker 2 has read it
         dfb_out.push_back(1);  // must not post the entry before packer 1 has written it
     }

@@ -167,7 +167,6 @@ class SfpuOperand {
 
 public:
     using value_type = typename FORMAT::value_type;
-    static constexpr SfpuReg reg = REG;
 
     sfpi_inline constexpr explicit SfpuOperand(int base_offset = 0) : base_offset_(base_offset) {}
 
@@ -182,8 +181,8 @@ private:
 };
 
 /**
- * @brief output[d] = MATH::apply(inputs[d]...) for d < ITERATIONS, on Dest or SrcS operands, for any number of
- *        inputs.
+ * @brief output[d] = MATH::apply(inputs[d]...) for d < ITERATIONS, for any number of inputs. Each operand names its
+ *        own register file, Dest or SrcS.
  *
  * @tparam MATH: Math policy with a static apply() taking one argument per input.
  * @tparam ITERATIONS: Number of SFPI steps to walk.
@@ -196,9 +195,6 @@ sfpi_inline void calculate_operands(const Setup& setup, const Output& output, co
     static_assert(ITERATIONS > 0, "An SFPU op requires at least one SFPI access");
     static_assert(std::is_same_v<Setup, decltype(math_setup<MATH>())>, "setup must be the value of math_setup<MATH>()");
     static_assert(sizeof...(Inputs) == math_arity<MATH>, "MATH::apply takes one argument per input operand");
-    static_assert(
-        ((Inputs::reg == Output::reg) && ...),
-        "An SFPU op reads and writes one register file; no pipeline delivers a mixed set");
     static_assert(
         std::is_same_v<
             decltype(detail::math_apply<MATH>(setup, std::declval<typename Inputs::value_type>()...)),
@@ -223,9 +219,6 @@ sfpi_inline void calculate_binary_operands_two_rows(
     const Input1& b_input1,
     const Output& b_output) {
     static_assert(detail::is_single_instruction_math<MATH>, "two rows together need a single-instruction MATH");
-    static_assert(
-        Input0::reg == Output::reg && Input1::reg == Output::reg,
-        "An SFPU op reads and writes one register file; no pipeline delivers a mixed set");
     static_assert(
         std::is_same_v<
             decltype(MATH::apply(
