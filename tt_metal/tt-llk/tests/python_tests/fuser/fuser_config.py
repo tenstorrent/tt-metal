@@ -188,6 +188,24 @@ class FuserConfig(TestConfig):
         self._kernel_sources = code_generator.write_kernel(self.test_name)
         self.build_elfs()
 
+    def _path_free(self, options):
+        """The compile options with the build and checkout roots replaced by placeholders."""
+        roots = [
+            (root, tag)
+            for path, tag in (
+                (self.ARTEFACTS_DIR, "<artefacts>"),
+                (self.LLK_ROOT, "<llk>"),
+            )
+            for root in {str(path), str(path.resolve())}
+        ]
+        roots.sort(key=lambda item: len(item[0]), reverse=True)
+        out = []
+        for arg in options:
+            for root, tag in roots:
+                arg = arg.replace(root, tag)
+            out.append(arg)
+        return out
+
     def _compile_kernel_part(self, name, compile_command, source):
         if (
             self.global_config.architecture != ChipArchitecture.QUASAR
@@ -200,10 +218,18 @@ class FuserConfig(TestConfig):
 
         variant_dir = self.ARTEFACTS_DIR / self.test_name / self.variant_id
         options = [arg for arg in compile_command[:-2] if arg != f"-I{variant_dir}"]
+        # The cached kernel's __FILE__ (profiler zone names) is relative to the build root, as the
+        # tree's own sources are to LLK_ROOT, so the ELF does not depend on where it was built.
+        artefact_roots = sorted(
+            {str(self.ARTEFACTS_DIR), str(self.ARTEFACTS_DIR.resolve())}
+        )
+        options += [f"-fmacro-prefix-map={root}/=" for root in artefact_roots]
         kernel = self._kernel_sources[name]
         source_include = self._kernel_source_include()
         expanded_source = source.replace(source_include, kernel)
-        key = sha256(repr((options, expanded_source)).encode()).hexdigest()
+        key = sha256(
+            repr((self._path_free(options), expanded_source)).encode()
+        ).hexdigest()
         cache_dir = self.ARTEFACTS_DIR / "fused-kernels" / key
         cache_dir.mkdir(parents=True, exist_ok=True)
         cached_elf = cache_dir / "kernel.elf"
