@@ -59,6 +59,25 @@ FORCE_INLINE void normalize_gate() {
     cb_push_back(cb_rl, 1);
 
     cb_wait_front(cb_rl, 1);
+    if constexpr (kVRotPass) {
+        // o = osum / rowsum into cb_vr1, for the reader to place into its pass's rows (pass_out rotates and gates)
+        cb_reserve_back(cb_vr1, Dt);
+        reconfig_data_format(cb_osum, cb_rl);
+        pack_reconfig_data_format(cb_vr1);
+        mul_bcast_cols_init(cb_osum, cb_rl);
+        for (uint32_t d = 0; d < Dt; d++) {
+            tile_regs_acquire();
+            mul_tiles_bcast_cols(cb_osum, cb_rl, d, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_vr1);
+            tile_regs_release();
+        }
+        cb_push_back(cb_vr1, Dt);
+        cb_pop_front(cb_osum, kPart);
+        cb_pop_front(cb_rl, 1);
+        return;
+    }
     cb_wait_front(cb_gs, Dt);
     if constexpr (kVRot) {
         // o = osum / rowsum into cb_vr1, rotated back (V is stored rotated), then * gs into cb_out
@@ -115,6 +134,30 @@ FORCE_INLINE void normalize_gate() {
     cb_pop_front(cb_osum, kPart);
     cb_pop_front(cb_rl, 1);
     cb_pop_front(cb_gs, Dt);
+}
+
+// S0-9 2d (kVRotPass): a pass's normalized outputs (cb_vp, placed by the reader) rotated back by HAD, then * the pass's
+// sigmoid(gate) into cb_out
+FORCE_INLINE void pass_out() {
+    had_mm_stage(cb_vp, cb_vr2);
+    had_bfly_stage(cb_rotx, cb_rotx, cb_vr2, cb_rot2);
+    cb_wait_front(cb_rotx, Dt);
+    cb_wait_front(cb_gs_pass, Dt);
+    cb_reserve_back(cb_out, Dt);
+    reconfig_data_format(cb_rotx, cb_gs_pass);
+    pack_reconfig_data_format(cb_out);
+    mul_init(cb_rotx, cb_gs_pass);
+    for (uint32_t d = 0; d < Dt; d++) {
+        tile_regs_acquire();
+        mul_tiles(cb_rotx, cb_gs_pass, d, d, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_out);
+        tile_regs_release();
+    }
+    cb_push_back(cb_out, Dt);
+    cb_pop_front(cb_rotx, Dt);
+    cb_pop_front(cb_gs_pass, Dt);
 }
 
 }  // namespace
@@ -188,7 +231,14 @@ void kernel_main() {
                     stage(p + 1, j);
                 }
                 sum_partials<false>(children);
+                if constexpr (kVRotPass) {
+                    cb_reserve_back(cb_vdone, 1);  // (the partials are summed: their slots may be rewritten)
+                    cb_push_back(cb_vdone, 1);
+                }
                 normalize_gate();
+                if (kVRotPass && (j + 1 == kQPerPass || k + 1 == n_act)) {
+                    pass_out();
+                }
             }
         } else {
             // (O-2: q two users ahead, as the writer sends it)
@@ -201,7 +251,14 @@ void kernel_main() {
                     prep(k + ahead);
                 }
                 sum_partials<false>(children);
+                if constexpr (kVRotPass) {
+                    cb_reserve_back(cb_vdone, 1);
+                    cb_push_back(cb_vdone, 1);
+                }
                 normalize_gate();
+                if (kVRotPass && (k % kQPerPass == kQPerPass - 1 || k + 1 == n_act)) {
+                    pass_out();
+                }
             }
         }
     }

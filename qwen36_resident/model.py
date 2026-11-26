@@ -1726,6 +1726,8 @@ class ResidentModel:
                 *([cb(41, lead_grid, Dt)] if groups > 1 else []),  # (row groups: the staged q, attn_common.hpp)
                 # (row groups: two passes' sigmoid(gate), attn_common.hpp kGatePass)
                 *([cb(42, lead_grid, 2 * Dt)] if groups > 1 else []),
+                # (S0-9 2d: the leader reader's per-user "normalized" tokens for the writer, attn_common.hpp cb_vdone)
+                *([cb(50, lead_grid, 4, page=16)] if V_ROT and groups > 1 else []),
                 # tail core
                 cb(11, tail_grid, Dt),
                 cb(12, tail_grid, 4 * (self.vusers or groups) if packed else 2 * LR),

@@ -210,10 +210,58 @@ void kernel_main() {
             cb_pop_front(cb_q_mc, Dt);
         }
     };
+    // (S0-9 2d: pending passes in cb_out — first users, oldest first — and the next user of the oldest to stage)
+    uint32_t vp_q[2] = {0, 0}, vp_n = 0, vp_j = 0;
+    bool vp_ready = false;
+    auto stage_pass_user = [&]() {
+        const uint32_t k0 = vp_q[0], ka = k0 + vp_j, uj = act.row[ka];
+        cb_wait_front(cb_out, Dt);
+        const uint32_t out = get_read_ptr(cb_out);
+        for (uint32_t h = 0; h < heads; h++) {
+            for (uint32_t d = 0; d < Dt; d++) {
+                const uint32_t src = out + d * kTile + row_offset(vp_j * heads + h);
+                const uint32_t dst =
+                    stage + ((uj / users) * heads * Dt + h * Dt + d) * kRowTile + user_offset(uj % users);
+                noc_async_read(get_noc_addr(src), dst, kFaceRow);
+                noc_async_read(get_noc_addr(src + kFace), dst + batch * kFaceRow, kFaceRow);
+            }
+        }
+        noc_async_read_barrier();
+        vp_j++;
+        if (vp_j == kQPerPass || ka + 1 == n_act) {
+            cb_pop_front(cb_out, Dt);
+            vp_q[0] = vp_q[1];
+            vp_n--;
+            vp_j = 0;
+        }
+    };
     // rows 0..heads-1 of user (active index) k's output into row u of the staged tiles, then (the layer's last
     // user) the layer's output to the streamers
     auto stage_out = [&](uint32_t it) {
         const uint32_t k = it % n_act, u = act.row[k];
+        if constexpr (kVRotPass) {
+            // (S0-9 2d: a pass's output — user j of the pass in rows j * heads .. — staged one user an iteration
+            // during the next pass, so the writer never waits for a pass's rotation at its end; cb_out holds two
+            // passes. The layer's last user stages everything left, then the layer goes out.)
+            const bool last = k + 1 == n_act;
+            cb_wait_front(cb_vdone, 1);  // (user k's partials summed — before the caller's next M, attn_common.hpp)
+            cb_pop_front(cb_vdone, 1);
+            if (vp_n > 0 && (vp_ready || last)) {
+                stage_pass_user();
+            }
+            if (k % kQPerPass == kQPerPass - 1 || last) {
+                vp_q[vp_n++] = k - k % kQPerPass;  // (this pass's first user: staged from the next iteration on)
+            }
+            vp_ready = vp_n > 0;
+            if (last) {
+                while (vp_n > 0) {
+                    stage_pass_user();
+                }
+                vp_ready = false;
+                layer_out(it / n_act);
+            }
+            return;
+        }
         cb_wait_front(cb_out, Dt);
         mark_it(it, 3);
         const uint32_t out = get_read_ptr(cb_out);

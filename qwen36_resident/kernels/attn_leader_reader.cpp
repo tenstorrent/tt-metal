@@ -295,7 +295,7 @@ void kernel_main() {
                 place_user(k + ahead);
             }
         }
-        if constexpr (kGatePass) {
+        if constexpr (kGatePass && !kVRotPass) {
             extract_gs(k);
         }
 
@@ -308,5 +308,24 @@ void kernel_main() {
             mark(l, 3);
         }
         push_resident(cb_parts, fanin * kPart);
+        if constexpr (kVRotPass) {
+            // (S0-9 2d: user k's normalized rows — compute's, right after these partials — into rows j * heads .. of
+            // its pass's tile set; the pass's last user hands the set to compute. Before any later wait: the pass's
+            // output, which the next layer's rows depend on, needs it)
+            const uint32_t j = k % kQPerPass;
+            if (j == 0) {
+                cb_reserve_back(cb_vp, Dt);
+            }
+            cb_wait_front(cb_vr1, Dt);
+            const uint32_t src = get_read_ptr(cb_vr1), dst = get_write_ptr(cb_vp);
+            for (uint32_t d = 0; d < Dt; d++) {
+                copy_tile_rows(src + d * kTile, 0, dst + d * kTile, j * heads, heads);
+            }
+            noc_async_read_barrier();
+            cb_pop_front(cb_vr1, Dt);
+            if (j + 1 == kQPerPass || k + 1 == n_act) {
+                cb_push_back(cb_vp, Dt);
+            }
+        }
     }
 }

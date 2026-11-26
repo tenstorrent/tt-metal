@@ -274,6 +274,17 @@ constexpr uint32_t cb_knr = 45;    // S0-8: the tail's rotated k rows before the
 // cb_vr2, Dt each), apart from the staged q prep's cb_rotx / cb_rot2
 constexpr bool kVRot = get_named_compile_time_arg_val("v_rot") != 0;
 constexpr uint32_t cb_vr1 = 48, cb_vr2 = 49;
+// S0-9 2d (kVRotPass: the batched leader's passes, kGatePass): the rotation back once per q pass instead of per user —
+// compute normalizes user j of a pass into cb_vr1, the reader places its rows at rows j * heads .. of the pass's tile
+// set (cb_vp: cb_gs's space, the per-user gate rows are not extracted then), and at the pass's end compute rotates the
+// set (cb_vp -> cb_vr2, the butterflies through cb_rot2 into cb_rotx: the q prep's scratch, empty at a pass's end) and
+// gates it with the pass's cb_gs_pass into cb_out; the writer stages the pass's users from it
+constexpr bool kVRotPass = kVRot && kGatePass;
+constexpr uint32_t cb_vp = cb_gs;
+// (kVRotPass: a token a user, leader compute -> writer, pushed once its partials are summed. The writer's wait for user
+// i - 1's output before M(i + 1) is what keeps the group heads from writing partial(i + 1) into the parity half compute
+// still reads partial(i - 1) from; with the output once a pass, the writer waits for this token instead.)
+constexpr uint32_t cb_vdone = 50;
 
 // S0-8: the device packer truncates toward zero when it packs bfp4, so a decode-written K row is rounded to nearest on
 // the bfp4 grid first (by the tail writer, as prefill/kernels/v_rtn.cpp rounds the prefill's): one face row (16 bf16
