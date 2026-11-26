@@ -1,1 +1,2 @@
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/g6_to_layout/test_g6_to_layout.py","modes":["dev","non-dev"],"passed":28,"ts":"2026-11-26T19:41:15+00:00"}
+{"event":"perf_measure","device_kernel_ns":{"(1,1024,1024,3)":807138,"(1,512,2048,128)":1354312,"(8,1024,2560)":209784,"(1,1,131072)":17504,"(1,32,2560)":2730},"note":"wide shapes ~400 GB/s in+out (DRAM-bound); W=3 shape writer-issue-bound (~1M 16B row writes), lamp L4","ts":"2026-11-26T19:44:20+00:00"}
