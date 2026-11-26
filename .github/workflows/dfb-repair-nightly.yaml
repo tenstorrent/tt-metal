@@ -439,9 +439,17 @@ jobs:
             git push -q --force-with-lease="refs/heads/$branch:" origin "HEAD:refs/heads/$branch" # create only
             if ! gh pr create --draft --base main --head "$branch" --title "$(head -c 200 "$RUNNER_TEMP/title.txt")" \
                 --body-file "$RUNNER_TEMP/pr_body.md" >> "$GITHUB_STEP_SUMMARY"; then
-              git push -q origin --delete "$branch" # so the next night queues it again
-              echo "::error::$gid: the draft PR could not be opened"
-              exit 1
+              # GitHub refused the PR (for example, Actions may not open PRs here): keep the branch and give the link
+              # to GitHub's PR form, which fills in the title and description from the branch's one commit, and the
+              # link to the branch, where its bin icon deletes it.
+              link="https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+              drop="https://github.com/$GITHUB_REPOSITORY/branches/all?query=$branch"
+              {
+                printf -- '- %s: GitHub did not let the bot open the PR.\n' "$gid"
+                printf -- '  - Open it as a draft: %s\n' "$link"
+                printf -- '  - Or drop the fix: delete its branch with the bin icon here: %s\n' "$drop"
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::$gid: GitHub did not let the bot open the PR. Open it: $link or delete the branch: $drop"
             fi
             n=$((n + 1))
           done 3< "$RUNNER_TEMP/queue.txt"
