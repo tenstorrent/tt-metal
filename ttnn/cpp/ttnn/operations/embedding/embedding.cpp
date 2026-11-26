@@ -6,9 +6,11 @@
 
 #include <utility>
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "device/embedding_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize_force.hpp"
 #include <ttnn/operations/copy/typecast/typecast.hpp>
 
 namespace ttnn {
@@ -21,14 +23,29 @@ ttnn::Tensor embedding(
     ttnn::prim::EmbeddingsType embeddings_type,
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    bool runtime_rows) {
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }
+    // A TILE weight is untilized before the lookup, which turns BFLOAT8_B into BFLOAT16: that is the dtype a
+    // ROW_MAJOR output will actually have.
+    const auto row_major_output_dtype = weight_arg.layout() == ttnn::TILE_LAYOUT
+                                            ? operations::data_movement::untilize_output_dtype(weight_arg.dtype())
+                                            : weight_arg.dtype();
+    TT_FATAL(
+        layout.value_or(weight_arg.layout()) == ttnn::TILE_LAYOUT || !dtype.has_value() ||
+            dtype.value() == row_major_output_dtype,
+        "Can only typecast output embeddings when producing TILE_LAYOUT output");
     Tensor mutable_weight = weight_arg;
 
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
-        mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
+        // runtime_rows: untilize the interleaved table with the native multi-core program, which takes its
+        // row count at runtime (the routed untilize may pick the shape-specific codegen program).
+        mutable_weight = runtime_rows && !mutable_weight.is_sharded()
+                             ? ttnn::operations::data_movement::detail::untilize_force_native(
+                                   mutable_weight, std::nullopt, true, std::nullopt, runtime_rows)
+                             : ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
     auto original_input_rank = input_tensor.logical_shape().rank();
@@ -52,9 +69,6 @@ ttnn::Tensor embedding(
             }
         } else if (weight_arg.layout() == ttnn::TILE_LAYOUT) {
             fused_tilized = true;
-        } else {
-            bool typecast_needed = dtype.has_value() && (dtype.value() != weight.dtype());
-            TT_FATAL(!typecast_needed, "Can only typecast output embeddings when producing TILE_LAYOUT output");
         }
     }
 
@@ -65,7 +79,8 @@ ttnn::Tensor embedding(
         embeddings_type,
         memory_config,
         pad_token,
-        optional_output_tensor);
+        optional_output_tensor,
+        runtime_rows);
     // Don't include batch_size if there was none
     if (original_input_rank == 1) {
         embeddings = ttnn::reshape(embeddings, Shape({sentence_size, hidden_embedding_dim}));

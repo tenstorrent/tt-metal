@@ -18,7 +18,7 @@
 #include "ttnn/operations/experimental/conv3d/prepare_conv3d_weights.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 namespace ttnn::operations::experimental::conv3d::detail {
 

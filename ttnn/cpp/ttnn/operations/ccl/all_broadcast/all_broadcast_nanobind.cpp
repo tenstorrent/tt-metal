@@ -12,7 +12,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "all_broadcast.hpp"
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 namespace ttnn::operations::ccl {

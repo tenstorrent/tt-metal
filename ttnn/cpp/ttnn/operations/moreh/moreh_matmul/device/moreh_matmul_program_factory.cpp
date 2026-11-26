@@ -5,7 +5,7 @@
 #include <string>
 
 #include "moreh_matmul_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -113,7 +113,7 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
+    using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
     const Tensor& input = tensor_args.input;
     const Tensor& other = tensor_args.other;

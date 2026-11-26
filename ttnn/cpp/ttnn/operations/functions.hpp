@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <functional>
 #include <iterator>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <optional>
 #include <random>
@@ -18,6 +18,7 @@
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_impl.hpp>
 #include "ttnn/common/constants.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn {
 
@@ -44,7 +45,8 @@ inline TensorLayout legacy_tensor_layout_from_padded_shape(
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
-    auto layout = TensorLayout::fromPaddedShape(dtype, page_config, memory_config, logical_shape, padded_shape);
+    auto layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+        dtype, page_config, memory_config, logical_shape, padded_shape);
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #elif defined(__GNUC__)

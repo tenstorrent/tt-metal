@@ -3,10 +3,10 @@
 
 #include "pack_scaled_fp8_kv_cache_program_factory.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache.hpp"
 
@@ -25,7 +25,7 @@ PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgram
     const auto* output_buffer = &output.mesh_buffer();
     const uint32_t rows = args.latent.logical_volume() / packed::LATENT_WIDTH;
 
-    Program program;
+    Program program = CreateProgram(*args.latent.device());
     const auto grid = args.latent.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, group_1, group_2, rows_group_1, rows_group_2] = split_work_to_cores(grid, rows);
     auto cores = corerange_to_cores(all_cores, num_cores, true);

@@ -4,8 +4,8 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include <tt-metalium/tensor/tensor_types.hpp>
-#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 

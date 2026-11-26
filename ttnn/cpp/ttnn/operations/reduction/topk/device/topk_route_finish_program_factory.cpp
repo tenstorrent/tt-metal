@@ -38,11 +38,11 @@
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 #include <limits>
 
@@ -164,7 +164,7 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
     const Tensor& values_out = std::get<0>(tensor_return_value);
     const Tensor& indices_out = std::get<1>(tensor_return_value);
 
-    auto program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram(*input.device());
 
     const auto split = compute_work_split(input, indices);
     const auto grid = input.device()->compute_with_storage_grid_size();

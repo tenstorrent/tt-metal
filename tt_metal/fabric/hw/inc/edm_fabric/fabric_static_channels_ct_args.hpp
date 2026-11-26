@@ -8,14 +8,12 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
 // Per-channel buffer allocation data, read directly from compile-time args.
-// Each entry contains 4 args: base_address, num_slots, remote_address, remote_num_slots.
+// Each entry contains 2 args: base_address, num_slots.
 template <size_t CT_ARG_IDX_BASE>
 struct ChannelBufferEntry {
     static constexpr size_t base_address = get_compile_time_arg_val(CT_ARG_IDX_BASE);
     static constexpr size_t num_slots = get_compile_time_arg_val(CT_ARG_IDX_BASE + 1);
-    static constexpr size_t remote_address = get_compile_time_arg_val(CT_ARG_IDX_BASE + 2);
-    static constexpr size_t remote_num_slots = get_compile_time_arg_val(CT_ARG_IDX_BASE + 3);
-    static constexpr size_t ARGS_PER_ENTRY = 4;
+    static constexpr size_t ARGS_PER_ENTRY = 2;
 };
 
 // Parses a block of channel allocation CT args emitted by the host.
@@ -23,7 +21,7 @@ struct ChannelBufferEntry {
 // CT arg layout:
 //   [0xabcd1234]                                         <- alignment tag
 //   [num_entries]                                        <- total channel entries
-//   [entry_0: base, slots, remote_base, remote_slots]   <- 4 args per entry
+//   [entry_0: base, slots]                               <- 2 args per entry
 //   [entry_1: ...]
 //   ...
 //   [sender_channel_to_entry_idx[NumSenderChannels]]     <- index mapping
@@ -38,7 +36,7 @@ struct ChannelAllocations {
         "CT args.");
 
     static constexpr size_t num_entries = get_compile_time_arg_val(CT_ARG_IDX_BASE + 1);
-    static constexpr size_t ARGS_PER_ENTRY = 4;
+    static constexpr size_t ARGS_PER_ENTRY = 2;
     static constexpr size_t entries_base_idx = CT_ARG_IDX_BASE + 2;
 
     // Access a specific entry by index

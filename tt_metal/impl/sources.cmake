@@ -13,6 +13,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_env.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/context/simulator_termination.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/threading/thread_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/firmware_initializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/fabric_firmware_initializer.cpp
@@ -43,12 +44,14 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/drisc_l1_arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dram_sender_topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_prefetcher_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_prefetcher_manager_dispatch_engine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/cross_node_dfb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/prefetcher_pipe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/prefetcher_pipe_dram_sender.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/drisc_service/seat_lock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat8.cpp
@@ -80,6 +83,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/placement/work_unit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/program_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/dfb.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/fabric_connection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/prefetcher_pipe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/sram_arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/resource.cpp
@@ -92,6 +96,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/prefetcher_pipe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/resource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/scratchpad.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/fabric_connection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/processor_assignment/processor_assignment.cpp
@@ -100,7 +105,10 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/address_ranges.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/size_class_index.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocation_request.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/bank_manager.cpp
@@ -111,6 +119,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/slow_dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/kernel_compile_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/program/kernel_config_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptor_patching.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
@@ -143,6 +152,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_mem_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_telemetry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/operation_timeout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/aux_region_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_cq_interface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/hardware_command_queue.cpp
@@ -159,6 +169,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/dispatch_s.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/relay_mux.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/tensor_prefetcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/tensor_prefetcher_kernels.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/data.cpp
@@ -171,6 +183,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_device_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_capture_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/event/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types_from_flatbuffer.cpp
@@ -191,6 +204,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/page_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/tensor_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/tensor_layout_apis_with_custom_alignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/memory_config/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/distributed_tensor_configs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp

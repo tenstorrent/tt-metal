@@ -8,20 +8,21 @@
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
 namespace ttnn::prim {
 
@@ -43,9 +44,11 @@ ttnn::device_operation::ProgramArtifacts
 UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
-    tt::DataFormat input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat input_dfb_data_format =
+        get_untilize_with_unpadding_dfb_data_format(input.dtype(), input.device()->arch());
     uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
-    tt::DataFormat output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_dfb_data_format =
+        get_untilize_with_unpadding_dfb_data_format(output.dtype(), input.device()->arch());
     uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
     const auto& input_mesh_tensor = input.mesh_tensor();

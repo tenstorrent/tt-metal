@@ -12,7 +12,9 @@
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+
+#include <variant>
 
 namespace ttnn::operations::data_movement::transpose {
 
@@ -27,6 +29,50 @@ using tt::tt_metal::BufferType;
 inline bool needs_shard_spec_synthesis(const tt::tt_metal::MemoryConfig& mc) {
     return mc.is_sharded() && !mc.shard_spec().has_value() &&
            !(mc.created_with_nd_shard_spec() && mc.nd_shard_spec().has_value());
+}
+
+// True when the RM WH device op's per-core L1 need (its non-tensor-backed CBs plus an L1 output
+// buffer, which is allocated after lowest_occupied_compute_l1_address() is sampled) exceeds what
+// is free, so the caller should route to permute instead. CB counts mirror the selected factory.
+inline bool rm_wh_exceeds_l1_budget(
+    const Tensor& a, const MemoryConfig& output_mem_config, bool output_mem_config_is_explicit, float pad_value) {
+    const ttnn::prim::TransposeParams attributes{
+        .dim = ttnn::prim::TransposeOpDim::WH,
+        .output_mem_config = output_mem_config,
+        .pad_value = pad_value,
+        .output_mem_config_is_explicit = output_mem_config_is_explicit};
+    const ttnn::prim::TransposeInputs tensor_args{.input = a};
+
+    const uint64_t Wt = tt::div_up(a.logical_shape()[3], tt::constants::TILE_WIDTH);
+    const uint64_t Ht = tt::div_up(a.logical_shape()[2], tt::constants::TILE_HEIGHT);
+    const uint64_t tile_size = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(a.dtype()));
+    const auto factory = ttnn::prim::TransposeDeviceOperation::select_program_factory(attributes, tensor_args);
+    uint64_t num_cb_tiles = 0;
+    if (std::holds_alternative<ttnn::prim::TransposeWHShardedRMProgramFactory>(factory)) {
+        // Input/output CBs alias the shard buffers; the ht > 8 path adds untilize + staging CBs.
+        num_cb_tiles = 2 * Wt + Ht * Wt + (Ht > 8 ? 3 * Ht : 0);
+    } else {
+        num_cb_tiles = 2 * Wt + 2 * Ht + Ht * Wt;
+    }
+    uint64_t required = num_cb_tiles * tile_size;
+
+    auto* device = a.device();
+    const auto& allocator = device->allocator();
+    if (output_mem_config.buffer_type() == BufferType::L1) {
+        const auto output_spec = ttnn::prim::TransposeDeviceOperation::compute_output_specs(attributes, tensor_args);
+        // HYBRID mode aligns every L1 page to the DRAM alignment, so round each page, not just the
+        // total, using the larger of the two alignments.
+        const uint64_t page_alignment =
+            std::max<uint64_t>(allocator->get_alignment(BufferType::L1), allocator->get_alignment(BufferType::DRAM));
+        required += output_spec.compute_consumed_memory_bytes_per_bank(
+            page_alignment, allocator->get_num_banks(BufferType::L1));
+    }
+
+    const auto lowest_address = device->lowest_occupied_compute_l1_address();
+    const uint64_t l1_top = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+    const uint64_t l1_base = allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t max_l1_space = l1_top > l1_base ? l1_top - l1_base : 0;
+    return required > max_l1_space;
 }
 
 inline Tensor transpose_(
@@ -188,21 +234,9 @@ inline Tensor transpose_(
             if (interleaved_rm) {
                 return prim_permute(a, ttsl::SmallVector<uint32_t>({0, 1, 3, 2}));
             }
-            if (a.layout() == Layout::ROW_MAJOR) {
-                // Only compute the RM WH CB-vs-L1 budget when actually on the RM WH path:
-                // the allocator query and padded-shape arithmetic are wasted work otherwise.
-                const uint32_t W_padded = round_up(a.logical_shape()[3], tt::constants::TILE_WIDTH);
-                const uint32_t H_padded = round_up(a.logical_shape()[2], tt::constants::TILE_HEIGHT);
-                const uint32_t cb_size_for_rm = (2 * W_padded + 2 * H_padded + H_padded * W_padded) * a.element_size();
-                auto* device = a.device();
-                auto lowest_address = device->lowest_occupied_compute_l1_address();
-                uint32_t max_l1_space =
-                    lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-                max_l1_space =
-                    max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-                if (cb_size_for_rm > max_l1_space) {
-                    return prim_permute(a, ttsl::SmallVector<uint32_t>({0, 1, 3, 2}));
-                }
+            if (a.layout() == Layout::ROW_MAJOR &&
+                rm_wh_exceeds_l1_budget(a, output_mem_constructed, output_mem_config_is_explicit, pad_value)) {
+                return prim_permute(a, ttsl::SmallVector<uint32_t>({0, 1, 3, 2}));
             }
             break;
         default: break;
@@ -307,7 +341,11 @@ ttnn::Tensor transpose_impl(
     const bool wh = 5 == (normalized_dim1 + normalized_dim2);  // 2+3=5
     const bool cn = 1 == (normalized_dim1 + normalized_dim2);  // 0+1
     const bool bfloat8_supported = wh || cn;
-    const bool typecast = input_unsqueezed.dtype() == DataType::BFLOAT8_B and !bfloat8_supported;
+    // Only the WH and CN kernels handle block-float tiles; the others move flat face lines, so bfloat8_b and
+    // bfloat4_b go through bfloat16 there.
+    const DataType input_dtype = input_unsqueezed.dtype();
+    const bool typecast =
+        (input_dtype == DataType::BFLOAT8_B || input_dtype == DataType::BFLOAT4_B) and !bfloat8_supported;
     Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
     Tensor output;
@@ -340,7 +378,7 @@ ttnn::Tensor transpose_impl(
             input_typecasted, transpose_dims[normalized_dim1][normalized_dim2], memory_config_arg, pad_value);
     }
     output = initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
-    return typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
+    return typecast ? ttnn::typecast(output, input_dtype) : output;
 }
 
 }  // namespace ttnn::operations::data_movement::transpose

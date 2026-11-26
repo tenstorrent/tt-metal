@@ -8,13 +8,7 @@
 
 #include "core_config.h"
 #include "dev_mem_map.h"
-#if __has_include("registers/overlay_reg.h")
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
-#else
-// Saturn has no register headers yet, so its L1 size is hardcoded here. Once they are added, drop this
-// fallback and include overlay_addresses.h unconditionally.
-#define MEM_L1_SIZE (3 * 1024 * 1024)
-#endif
 
 /**
  * @brief Transform L1 address to the format used by LLK functions
@@ -131,7 +125,7 @@ constexpr std::uint32_t L1_REGION_END = L1_ADDRESS(MEM_L1_BASE + MEM_L1_SIZE);
  * @param address The LLK-transformed L1 address to validate
  * @return true if address is within valid tile data region [L1_REGION_START, L1_REGION_END)
  */
-inline static bool is_valid_L1_address(const std::uint32_t address)
+inline bool is_valid_L1_address(const std::uint32_t address)
 {
     return (address >= ckernel::L1_REGION_START && address < ckernel::L1_REGION_END);
 }

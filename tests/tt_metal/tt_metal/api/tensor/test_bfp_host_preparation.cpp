@@ -11,11 +11,11 @@
 #include <random>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/tensor/host_tensor.hpp>
-#include <tt-metalium/tensor/tensor_apis.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/memory/tensor/host_tensor.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/host_bfp_conversion.hpp>
 #include "common/executor.hpp"

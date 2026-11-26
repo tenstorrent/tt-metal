@@ -83,8 +83,9 @@ class LlamaMLP(AbstractModuleBase):
         # Fused gate+up: on one device the rows are [gate | up]. Under TP, device d takes a contiguous
         # slice and reads it as [gate_d | up_d], so the full weight is
         # [gate_0 | up_0 | gate_1 | up_1 | ...] and its row order changes with the TP size.
-        # Checkpoints re-shard it without knowing this order:
-        # https://github.com/tenstorrent/tt-metal/issues/60900
+        # ttml.checkpointing re-shards it without knowing this order
+        # (https://github.com/tenstorrent/tt-metal/issues/60900); ttml.distributed_checkpointing knows it from the
+        # fused_segments declared below.
         gate_up_size = 2 * intermediate_size
 
         # Each device's gate|up half is I/tp wide and must stay tile-aligned, or the packed
@@ -107,6 +108,8 @@ class LlamaMLP(AbstractModuleBase):
                 has_bias=False,
                 gather_output=False,
                 axis_name="tp",
+                # Global segment sizes of the fused [gate | up] weight, so checkpoints can reshard it across TP sizes.
+                fused_segments=(intermediate_size, intermediate_size),
             )
             self.w2 = RowParallelLinear(
                 intermediate_size,
@@ -199,10 +202,11 @@ class LlamaBlock(AbstractModuleBase):
         kv_cache: Optional[ttml.models.KvCache] = None,
         layer_idx: Optional[int] = None,
         new_tokens: Optional[int] = None,
+        rope_positions: Optional[ttml.ops.rope.RotaryEmbeddingPositions] = None,
     ) -> ttml.autograd.Tensor:
         residual = input
         h = self.attention_norm(input)
-        h = self.attention(h, mask, kv_cache, layer_idx, new_tokens)
+        h = self.attention(h, mask, kv_cache, layer_idx, new_tokens, rope_positions)
         h = ttml.ops.binary.add(h, residual)
 
         residual = h

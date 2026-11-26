@@ -13,7 +13,7 @@ from models.experimental.swin_s.tests.pcc.test_ttnn_swin_transformer import (
 from models.experimental.swin_s.reference.swin_transformer import SwinTransformer
 from models.experimental.swin_s.tt.tt_swin_transformer import TtSwinTransformer
 from models.common.utility_functions import divup, is_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.swin_s.common import load_torch_model
 from models.demos.utils.common_demo_utils import get_mesh_mappers

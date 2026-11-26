@@ -39,7 +39,12 @@ In Claude Code, `/perf-regression-check perf_math_matmul` (or "compare perf of
 
 Env knobs: `PERF_COMPARE_HOME` (cache + reports, default `~/.cache/tt-llk-perf-compare`),
 `WORK_ROOT` (worktrees and build trees, default `/tmp/tt-llk-perf-compare`), `PRODUCER_JOBS`,
-`CONSUMER_JOBS`, `RESET_BETWEEN_RUNS=1`, `SPARSE_PATHS`, `ALLOW_CROSS_HOST=1`.
+`CONSUMER_JOBS`, `RESET_BETWEEN_RUNS=1`, `SPARSE_PATHS`, `ALLOW_CROSS_HOST=1`,
+`TT_LLK_DISABLE_ASSERTS` (default `1`, as Wormhole/Blackhole CI perf builds,
+cache suffix `-noassert`; `0` keeps `LLK_ASSERT` on both sides, suffix
+`-assert`). With asserts off, a commit whose `test_config.py` predates the
+asserts toggle is refused; use a newer baseline or compare both sides with
+asserts.
 
 ## Output
 - `regression_report.md` — verdict, top regressions, top improvements, new points.
@@ -55,6 +60,13 @@ Env knobs: `PERF_COMPARE_HOME` (cache + reports, default `~/.cache/tt-llk-perf-c
   regressions).
 - **Noise:** deltas right at the threshold can be measurement noise. Raise `--iterations` — a
   re-run reuses the sweeps you already paid for and only measures the new ones.
+- **Deterministic deltas:** if every iteration of a side gives identical cycles, more
+  iterations change nothing. On Wormhole a build with unchanged measured code can still sit
+  ±10% away because the kernel layout moved. Prove whether the measured code changed with the
+  "Layout sensitivity" steps in `SKILL.md` before calling it a regression.
+- **Accounting:** a schema version or `tile_cnt` change makes points incomparable; it is not a
+  regression; a rename recorded in the catalog still matches
+  (`../perf-test/references/perf-facts.md`).
 
 ## Cost
 A full sweep per side per iteration, plus a build per commit — for a test like
@@ -68,7 +80,8 @@ includes from outside it), a private build tree, then N producer/consumer sweeps
 between the two sides so thermals and other tenants bias neither. The two sets of CSVs go to
 `perf/regression_compare.py` — the same module the PR gate runs — which reads the raw
 `perf_data` CSVs directly (no Parquet, no database — works on any commit, merged or not) and
-reports median-vs-median per point.
+reports median-vs-median per point. Renames recorded in the schema catalog are mapped first
+(`SKILL.md`, "Interpreting results").
 
 A point is a regression only when it is **both** more than `--threshold` slower **and** more
 than `--min-cycles` slower. Either clause alone produces false positives: percentage on small

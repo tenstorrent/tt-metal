@@ -224,18 +224,23 @@ def _ffmpeg():
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "t2va"):
+def write_wav(audio, sampling_rate: int, path: Path) -> None:
+    """`audio` ((batch, channels, samples) or (channels, samples), in [-1, 1]) as 16-bit PCM; batch 0 only."""
     import wave
 
-    paths = {}
-    wav_path = directory / f"{stem}.wav"
     interleaved = np.ascontiguousarray(audio[0].T if audio.ndim == 3 else audio.T)
     pcm = np.clip(interleaved, -1.0, 1.0)
-    with wave.open(str(wav_path), "wb") as handle:
+    with wave.open(str(path), "wb") as handle:
         handle.setnchannels(pcm.shape[1])
         handle.setsampwidth(2)
         handle.setframerate(sampling_rate)
         handle.writeframes((pcm * 32767.0).astype("<i2").tobytes())
+
+
+def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "t2va"):
+    paths = {}
+    wav_path = directory / f"{stem}.wav"
+    write_wav(audio, sampling_rate, wav_path)
     paths["wav"] = wav_path
     if is_host():
         logger.info(f"wrote {wav_path}")
@@ -487,6 +492,23 @@ def artifact_dir(name: str) -> Path:
     return directory
 
 
+def warm_quietly(pipeline, prompt: str, *, warmup_steps: int | None = 3, **gen_kwargs) -> None:
+    """One quiet generation at the request's shape, so a following call at that shape compiles nothing.
+
+    `warmup_steps=None` warms at the step count in `gen_kwargs`.
+    """
+    if warmup_steps is not None:
+        gen_kwargs = {**gen_kwargs, "num_inference_steps": warmup_steps}
+    with pipeline.quiet():
+        pipeline(prompt, **gen_kwargs)
+
+
+def assert_warm(pipeline, what: str) -> None:
+    """Fail when the last pipeline call compiled any program, so `what` was not measured warm."""
+    missed = {name: count for name, count in pipeline.last_program_cache_misses.items() if count}
+    assert not missed, f"{what} compiled programs after warmup, so it is not warm: {missed}"
+
+
 def run_warm_generation(
     pipeline,
     prompt: str,
@@ -501,13 +523,10 @@ def run_warm_generation(
 
     `warmup_steps=None` warms at the measured step count, for pipelines with fixed steps.
     """
-    warmup_kwargs = gen_kwargs if warmup_steps is None else {**gen_kwargs, "num_inference_steps": warmup_steps}
-
     # # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet
     # # reflect this request's rung. The quiet compile pass runs the *real* request, so it establishes
     # # the rung the measured call will run at -- take the reference from there.
-    with pipeline.quiet():
-        pipeline(prompt, seed=seed, **warmup_kwargs)
+    warm_quietly(pipeline, prompt, warmup_steps=warmup_steps, seed=seed, **gen_kwargs)
     # warm_padded_len = pipeline.last_seq_len.padded
 
     # ttnn.synchronize_device(pipeline.mesh_device)
@@ -522,8 +541,7 @@ def run_warm_generation(
     else:
         output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
 
-    missed = {name: count for name, count in pipeline.last_program_cache_misses.items() if count}
-    assert not missed, f"the measured call compiled programs after warmup, so this number is not warm: {missed}"
+    assert_warm(pipeline, "the measured call")
     return output
 
 
@@ -793,25 +811,35 @@ def _read_optional_image_path(label: str) -> str | None:
         print(f"no such file: {raw}", file=sys.stderr)
 
 
-def _read_prompt() -> str | None:
-    """The prompt text, or a file's contents when the entry names an existing file. `q` quits; EOFError aborts."""
+def _read_prompt(default_prompt: str | None = None) -> str | None:
+    """The prompt text, or a file's contents when the entry names an existing file. `q` quits; EOFError aborts.
+
+    A blank entry takes `default_prompt` when given and re-prompts otherwise.
+    """
+    label = "blank for default, " if default_prompt is not None else ""
     while True:
         try:
-            text = _prompt_line("User prompt (prompt or file path; q to quit): ").strip()
+            text = _prompt_line(f"User prompt (prompt or file path; {label}q to quit): ").strip()
         except EOFError:
             return None
         if text.lower() == "q":
             return None
         if not text:
+            if default_prompt is not None:
+                return default_prompt
             continue
         return Path(text).read_text().strip() if os.path.isfile(text) else text
 
 
 def _read_user_spec(
-    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int, default_seed: int = 0
+    default_aspect_ratio: tuple[int, int],
+    default_duration_s: float,
+    default_num_steps: int,
+    default_seed: int = 0,
+    default_prompt: str | None = None,
 ) -> tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None:
     """Host stdin: prompt (`q` quits), keyframes, then canvas/aspect (only without keyframes), duration, steps, seed."""
-    prompt = _read_prompt()
+    prompt = _read_prompt(default_prompt)
     if prompt is None:
         return None
     try:
@@ -1047,8 +1075,12 @@ def run_user_generations(
     seed: int,
     label: str = "t2va",
     artifact_name: str = "h3_t2va_artifacts",
+    default_prompt: str | None = None,
 ) -> None:
-    """Prompt/keyframes/canvas/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set."""
+    """Prompt/keyframes/canvas/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set.
+
+    A blank prompt reuses `default_prompt`; with None a prompt is required.
+    """
     if not user_input_enabled():
         return
     from PIL import Image
@@ -1057,7 +1089,9 @@ def run_user_generations(
     index = 0
     while True:
         spec = (
-            _read_user_spec(default_aspect_ratio, default_duration_s, num_inference_steps, seed) if is_host() else None
+            _read_user_spec(default_aspect_ratio, default_duration_s, num_inference_steps, seed, default_prompt)
+            if is_host()
+            else None
         )
         spec = _broadcast_user_spec(spec)
         if spec is None:

@@ -24,7 +24,7 @@
  * Input:  8 FP16B values per lane, read from the lower face (rows 0-7) of the DST
  *         tile at offset 32 (face 1).
  * Output: One uint16 bitmask per lane (bits 0-7, one per core), written to row 0
- *         of face 0 of the same DST tile (LO16 mode).
+ *         of face 0 of the same DST tile (LO16_ONLY mode).
  */
 
 namespace ckernel {
@@ -32,7 +32,6 @@ namespace ckernel {
 #ifdef TRISC_MATH
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace sfpu {
@@ -109,7 +108,7 @@ inline void _calculate_top4_() {
     //-------------------------------------------------------------------------
 
     // Pass 1: Bubble maximum value to LREG0 (7 comparisons, right to left)
-    lltt::record<lltt::Exec>(0, 7);
+    TTI_REPLAY(0, 7, 1, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
@@ -119,13 +118,13 @@ inline void _calculate_top4_() {
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
 
     // Pass 2: Bubble 2nd maximum to LREG1 (6 comparisons, right to left)
-    lltt::replay(0, 6);
+    TTI_REPLAY(0, 6, 0, 0);
 
     // Pass 3: Bubble 3rd maximum to LREG2 (5 comparisons, right to left)
-    lltt::replay(0, 5);
+    TTI_REPLAY(0, 5, 0, 0);
 
     // Pass 4: Bubble 4th maximum to LREG3 (4 comparisons, right to left)
-    lltt::replay(0, 4);
+    TTI_REPLAY(0, 4, 0, 0);
 
     // Result: LREG0-3 contain the top 4 values (with their indices in LO 16 bits)
     //-------------------------------------------------------------------------
@@ -158,7 +157,7 @@ inline void _calculate_top4_() {
 
     //-------------------------------------------------------------------------
     // Step 9: Write back the 4 indices as raw uint16 values
-    // Using LO16 mode to write the lower 16 bits (the indices)
+    // Using LO16_ONLY mode to write the lower 16 bits (the indices)
     //-------------------------------------------------------------------------
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, 0);  // Write 1st index
