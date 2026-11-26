@@ -152,10 +152,41 @@ def _erf_erfc_atol(mathop, approx_mode, output_format):
         mathop == MathOperation.Erf
         and approx_mode == ApproximationMode.No
         and output_format == DataFormat.Float32
-        and "INP_FLOAT32" in os.environ.get("LLK_EXTRA_DEFINES", "").split(",")
+        and any(
+            define.strip().split("=", 1)[0] == "INP_FLOAT32"
+            for define in os.environ.get("LLK_EXTRA_DEFINES", "").split(",")
+        )
     ):
         return ERF_FP32_TABLE_ATOL
     return ERF_ERFC_ATOL[(mathop, approx_mode, output_format)]
+
+
+# Erf inputs at and past the |x| = 10 clamp, large and infinite, and signed zero, planted on the
+# first lanes. NaN is left out because the simulators disagree on erf(NaN), and the sign of zero
+# is not checked: erf(-0) returns +0.
+ERF_SPECIAL_VALUES = (
+    0.0,
+    -0.0,
+    9.99,
+    -9.99,
+    10.0,
+    -10.0,
+    10.01,
+    -10.01,
+    1.0e5,
+    -1.0e5,
+    3.0e38,
+    -3.0e38,
+    math.inf,
+    -math.inf,
+)
+
+
+def _plant_erf_special_values(src_A: torch.Tensor) -> torch.Tensor:
+    flat = src_A.flatten().clone()
+    n = len(ERF_SPECIAL_VALUES)
+    flat[:n] = torch.tensor(ERF_SPECIAL_VALUES, dtype=torch.float32).to(flat.dtype)
+    return flat.view(src_A.shape)
 
 
 # The six comparison-to-zero modes. These run integer formats too (and UInt16 via
@@ -508,6 +539,8 @@ def prepare_inputs_for_operation(
         max_val = spec.high
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+        if mathop == MathOperation.Erf:
+            src_A = _plant_erf_special_values(src_A)
     elif mathop in ROUNDING_OPS:
         # [-10, 10] spans both signs so floor/ceil differ from trunc. Overlay op_edge_points()
         # so ties and integer knees are exact; a uniform draw does not hit them.
@@ -1935,6 +1968,18 @@ def run_eltwise_unary_sfpu_quasar(
         assert err <= _erf_erfc_atol(
             mathop, approx_mode, formats.output_format
         ), f"{mathop.name} is {err} from the golden"
+
+    if mathop == MathOperation.Erf:
+        n = len(ERF_SPECIAL_VALUES)
+        got = res_tensor.flatten()[:n].to(torch.float64)
+        want = golden_tensor.flatten()[:n].to(torch.float64)
+        bad = ~(
+            (got - want).abs()
+            <= _erf_erfc_atol(mathop, approx_mode, formats.output_format)
+        )
+        assert not bool(
+            bad.any()
+        ), f"Erf special inputs {[ERF_SPECIAL_VALUES[i] for i in torch.nonzero(bad).flatten().tolist()]}: got {got[bad].tolist()}, want {want[bad].tolist()}"
 
     if mathop == MathOperation.Softplus:
         # atol 0.05 lets a flush to 0 through. Require t < -5 to stay positive
