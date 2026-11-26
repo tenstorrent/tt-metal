@@ -12,10 +12,18 @@ jobs:
         os: linux
         arch: amd64
         # GitHub runs the cpu-only leg on ci-test (cpu-docker-image: ci-test-tag).
-        image: {from-job: ci-test-image, image: ci-test}
+        image:
+          from-job: ci-test-image
+          image: ci-test
         resources:
-          requests: {cpu: '4', memory: 16Gi, ephemeral-storage: 30Gi}
-          limits: {cpu: '4', memory: 16Gi, ephemeral-storage: 40Gi}
+          requests:
+            cpu: '4'
+            memory: 16Gi
+            ephemeral-storage: 30Gi
+          limits:
+            cpu: '4'
+            memory: 16Gi
+            ephemeral-storage: 40Gi
     packages:
       artifacts:
         - from-job: asan-build
@@ -29,13 +37,20 @@ jobs:
           content-type: application/junit+xml
           when: always
     env:
-      - {name: ASAN_OPTIONS, value: color=always}
-      - {name: TSAN_OPTIONS, value: color=always}
-      - {name: UBSAN_OPTIONS, value: "color=always:print_stacktrace=1:halt_on_error=1"}
-      - {name: GTEST_COLOR, value: 'yes'}
-      - {name: TT_METAL_WATCHER_TEST_MODE, value: '1'}
-      - {name: TT_LOGGER_LEVEL, value: warn}
-      - {name: LSAN_OPTIONS, value: "suppressions=/usr/share/tt-metalium/lsan.supp"}
+      - name: ASAN_OPTIONS
+        value: color=always
+      - name: TSAN_OPTIONS
+        value: color=always
+      - name: UBSAN_OPTIONS
+        value: color=always:print_stacktrace=1:halt_on_error=1
+      - name: GTEST_COLOR
+        value: 'yes'
+      - name: TT_METAL_WATCHER_TEST_MODE
+        value: '1'
+      - name: TT_LOGGER_LEVEL
+        value: warn
+      - name: LSAN_OPTIONS
+        value: suppressions=/usr/share/tt-metalium/lsan.supp
     steps:
       - id: smoke-cpu
         timeout-ms: 600000

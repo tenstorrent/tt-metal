@@ -6,11 +6,15 @@ jobs:
   - id: ci-test-image
     name: CI test image
     description: Build the tt-metal CI test image (bake target ci-test, Ubuntu 24.04) as a chain image
-    runs-on: {os: linux, arch: amd64}
+    runs-on:
+      os: linux
+      arch: amd64
     temporary-direct-egress: "#1754"
     images:
       resolve-tags: 14d
       bake:
         file: dockerfile/docker-bake.hcl
         targets: [ci-test]
-        variables: {UBUNTU_VERSION: "24.04", PYTHON_VERSION: "3.12"}
+        variables:
+          UBUNTU_VERSION: '24.04'
+          PYTHON_VERSION: '3.12'

@@ -5,17 +5,25 @@ jobs:
     name: LLK hardware-free tests
     description: Run PR Gate's host-only LLK hardware-free tests (no card)
     # The tests read no submodule.
-    checkout: {submodules: false}
+    checkout:
+      submodules: false
     timeout: 20m
     runs-on:
       kubernetes:
         os: linux
         arch: amd64
         # GitHub's llk-ci image, built from tt-llk's own Dockerfiles (its Python deps baked in).
-        image: {from-job: llk-ci-image, image: llk-ci}
+        image:
+          from-job: llk-ci-image
+          image: llk-ci
         resources:
-          requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 20Gi}
-          limits: {memory: 16Gi, ephemeral-storage: 30Gi}
+          requests:
+            cpu: '8'
+            memory: 16Gi
+            ephemeral-storage: 20Gi
+          limits:
+            memory: 16Gi
+            ephemeral-storage: 30Gi
     # GitHub uploads the three JUnit reports run_hardware_free.sh writes.
     artifacts:
       publish:
@@ -33,7 +41,8 @@ jobs:
           when: always
     env:
       # Steps get HOME=/, unwritable, and the image sets none (torrentci#3936).
-      - {name: HOME, value: /tmp/home}
+      - name: HOME
+        value: /tmp/home
     steps:
       - id: setup
         kind: shell
