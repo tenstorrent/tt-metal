@@ -61,6 +61,8 @@ from models.demos.blackhole.qwen36.tt.spec_step import rope_table_rows  # noqa: 
 
 K = 3
 MAX_MODEL_LEN = 8192
+# The largest |payload - float64 log_softmax of the same verify's logits| a logprob may have (supports_spec_device_logprobs).
+LOGPROB_TOL = 1e-4
 
 
 def _sample(logits, gen, temperature=0.7, top_p=0.95):
@@ -139,11 +141,19 @@ class PluginRunner:
 
     A step is a verify iff it has drafts or the previous commit was > 1 token; otherwise a narrow decode
     (no spec_mode, host-sampled from the returned logits) followed by propose_draft_tokens. A request with
-    speculable=False never has its drafts published, so it is always narrow."""
+    speculable=False never has its drafts published, so it is always narrow.
 
-    def __init__(self, model, kv, layout, seed, speculable=True, sample_seed=0):
+    ``logprobs`` (supports_spec_device_logprobs): every verify is sent spec_num_logprobs, its read returns the payload,
+    and the payload of each verified column is checked against that verify's own logits (``verify_logits``, the logits
+    a logits verify would read back), ``check_payload``; the largest differences are kept in ``logprob_errors``. The
+    block cannot be verified again for a reference: the verify writes the state after each column into the row's
+    1 + K GDN blocks, one of which held its start state (mamba_cache_mode "none")."""
+
+    def __init__(self, model, kv, layout, seed, speculable=True, sample_seed=0, logprobs=None):
         self.m, self.kv, self.K = model, kv, K
         self.speculable = speculable
+        self.logprobs = logprobs
+        self.logprob_errors = {"logprob": 0.0, "top": 0.0, "columns": 0, "lower_bound_ranks": 0}
         self.gen = torch.Generator().manual_seed(sample_seed)
         self.bs = layout.block_size
         self.width = math.ceil(MAX_MODEL_LEN / self.bs)
@@ -227,7 +237,7 @@ class PluginRunner:
                 pos = torch.full((1, 1 + K), PAD, dtype=torch.int32)
                 tok[0, : 1 + n] = torch.tensor([out[-1]] + drafts, dtype=torch.int32)
                 pos[0, : 1 + n] = torch.arange(pos0, pos0 + 1 + n, dtype=torch.int32)
-                res = m.decode_forward(
+                block = dict(
                     tokens=tok,
                     start_pos=pos,
                     page_table=self._table(pos0),
@@ -236,7 +246,6 @@ class PluginRunner:
                     read_from_device=False,
                     num_valid_drafts=torch.tensor([n], dtype=torch.int32),
                     accepted_counts=torch.tensor([acc], dtype=torch.int32),
-                    spec_mode="argmax_ids",
                     reload_inputs=True,
                     reload_page_table=False,
                     reload_sampling_params=False,
@@ -244,9 +253,15 @@ class PluginRunner:
                     mamba_state=mamba_state,
                     page_tables_per_layer=per_layer,
                 )
+                asked = {} if self.logprobs is None else {"spec_num_logprobs": torch.tensor([self.logprobs])}
+                res = m.decode_forward(**block, **asked, spec_mode="argmax_ids")
                 assert res.spec_mode == "argmax_ids"
                 # read_from_device=False leaves an argmax_ids verify unread, as the plugin reads it.
-                ids = m.read_decode_output(res.argmax_ids)[0].tolist()
+                read = m.read_decode_output(res.argmax_ids)
+                if self.logprobs is not None:
+                    read, payload = read
+                    self.check_payload(read[0], payload, self.verify_logits(), n)
+                ids = read[0].tolist()
                 assert all(i == PAD for i in ids[n + 1 :]), f"step {len(steps)}: ids past n={n} not -1: {ids}"
                 assert all(i != PAD for i in ids[: n + 1]), f"step {len(steps)}: -1 inside valid ids {ids} (n={n})"
                 j = 0
@@ -279,6 +294,51 @@ class PluginRunner:
         m.release_request(0)
         self.state.release(0)
         return out, {"steps": steps, "stop": stop}
+
+    def verify_logits(self):
+        """[1+K, V] float32 logits of the last verify (B = 1), as the logprobs trace reads them: each device's
+        vocabulary shard in shard order, or one replica of the whole vocabulary when the verify gathers its logits
+        itself. A logits verify reads back these values, all-gathered."""
+        model = self.m.model[0]
+        shard = getattr(model, "_vfy_shard_out", None)
+        if shard is None:
+            whole = ttnn.to_torch(ttnn.get_device_tensors(model._vfy_logits_out)[0])
+            return whole.reshape(-1, whole.shape[-1])[: 1 + self.K].float()
+        parts = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(shard)]
+        return torch.cat([p.reshape(-1, p.shape[-1])[: 1 + self.K].float() for p in parts], dim=1)
+
+    def check_payload(self, ids, payload, logits, n):
+        """The payload of a B = 1 verify's columns 0 .. n against the verify's own logits: ids their argmax, each
+        token's logprob log_softmax's (float64) within LOGPROB_TOL, its rank vLLM's count of logits at or above it (or
+        a lower bound when the token ties a candidate shard boundary), the top-20 ids a stable sort's and their logprobs
+        within LOGPROB_TOL."""
+        x = logits[: n + 1].float()
+        lsm = torch.log_softmax(x.double(), dim=-1)
+        order = torch.sort(x, dim=-1, descending=True, stable=True).indices
+        tok = ids[: n + 1].to(torch.int64)
+        assert torch.equal(tok, order[:, 0]), f"argmax ids {tok.tolist()} vs the logits' {order[:, 0].tolist()}"
+        top = payload.top_token_ids.shape[-1]
+        err = (payload.sampled_logprobs[0, : n + 1].double() - lsm.gather(1, tok[:, None]).reshape(-1)).abs().max()
+        top_err = (payload.top_logprobs[0, : n + 1].double() - lsm.gather(1, order[:, :top])).abs().max()
+        if err > LOGPROB_TOL or top_err > LOGPROB_TOL:
+            for t in range(n + 1):
+                logger.warning(
+                    f"[vllm_class] payload column {t}: token {int(tok[t])} lp {float(payload.sampled_logprobs[0, t]):.5f} "
+                    f"want {float(lsm[t, tok[t]]):.5f}; logits max {float(x[t].max()):.4f} lse "
+                    f"{float(torch.logsumexp(x[t].double(), -1)):.5f}; top ids {payload.top_token_ids[0, t, :6].tolist()} "
+                    f"want {order[t, :6].tolist()}; top lp {[round(float(v), 4) for v in payload.top_logprobs[0, t, :6]]} "
+                    f"want {[round(float(lsm[t, i]), 4) for i in order[t, :6]]}; rank "
+                    f"{int(payload.selected_token_ranks[0, t])}; logits dtype {logits.dtype} shape {tuple(logits.shape)}"
+                )
+        assert err <= LOGPROB_TOL and top_err <= LOGPROB_TOL, f"logprobs off by {float(err):.2e} / {float(top_err):.2e}"
+        assert torch.equal(payload.top_token_ids[0, : n + 1].to(torch.int64), order[:, :top])
+        want_rank = (x >= x.gather(1, tok[:, None])).sum(dim=1)
+        rank = payload.selected_token_ranks[0, : n + 1].to(torch.int64)
+        assert bool((rank <= want_rank).all()), f"ranks {rank.tolist()} above {want_rank.tolist()}"
+        e = self.logprob_errors
+        e["logprob"], e["top"] = max(e["logprob"], float(err)), max(e["top"], float(top_err))
+        e["columns"] += n + 1
+        e["lower_bound_ranks"] += int((rank < want_rank).sum())
 
 
 def _log(name, out, st):
@@ -393,6 +453,14 @@ def test_spec_vllm_class_runner(mesh_device, monkeypatch, warmup):
         assert cls._engine().skipped_propose_calls > skipped0
         assert sampled[0] != outs["P1"][:48], "sampled output equals the greedy output"
         assert sampled[0] == sampled[1], "sampled tokens not reproducible with the same seed"
+
+        # GREEDY P1 with logprobs: each verify's payload against that verify's own logits, same tokens
+        runner = PluginRunner(cls, kv, layout, seed=77, logprobs=5)
+        out, st = runner.run(p1, 64, policies["P1"])
+        _log("P1_logprobs", out, st)
+        logger.info(f"[vllm_class] P1_logprobs payload vs the logits verify: {runner.logprob_errors}")
+        assert out == outs["P1"], "greedy P1 with device logprobs differs from the first run"
+        assert runner.logprob_errors["columns"] > 32, runner.logprob_errors
 
         # GREEDY P1 again: the skip mark was reset by release/prefill, so it speculates again
         out, st = PluginRunner(cls, kv, layout, seed=123).run(p1, 64, policies["P1"])
@@ -591,6 +659,7 @@ def test_capabilities():
     assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
     assert caps["supports_chained_spec_verify"] is True
     assert caps["supports_prefill_over_pending_spec"] is True
+    assert caps["supports_spec_device_logprobs"] is True
     assert caps["supports_prefill_resume_inside_kv_block"] is False
     assert caps["output_tokens_per_step"] == 1
     assert caps["supports_prefix_caching"] is True and caps["supports_chunked_prefill"] is True
@@ -773,6 +842,44 @@ def test_a_verify_read_from_device_false_is_read_through_its_event(gen_eng, expe
     assert _last(eng, "decode_forward")[3]["predecessor"] is pending
     with expect_error(ValueError, "must be a VerifyOutput"):
         gen.decode_forward(**kw, read_from_device=False, spec_predecessor=pending)
+
+
+def test_a_verify_sent_spec_num_logprobs_returns_the_payload_with_its_ids(gen_eng):
+    """spec_num_logprobs with a row at 0 or above asks the engine for the logprobs payload (logprobs=True; none for
+    rows all at -2). Read through the deferred handle, the ids come with the payload as the plugin's SpecLogprobs; a
+    host read (read_from_device=True) carries it in VerifyOutput.logprobs."""
+    from vllm_tt_plugin.spec_decode import SpecLogprobs
+
+    from models.demos.blackhole.qwen36.tt.spec_engine import PendingVerify
+
+    gen, eng = gen_eng
+    payload = (torch.zeros(1, 4), torch.ones(1, 4, dtype=torch.int32), torch.zeros(1, 4, 20), torch.zeros(1, 4, 20))
+    lanes = torch.zeros(1, 1, 1, 32, dtype=torch.int64)
+    lanes[0, 0, 0, :4] = torch.tensor([4, 5, 6, 7])
+    pending = PendingVerify(1, 3, [3], [True], None, 1, set(), reads=SimpleNamespace(event="e", result=lambda: [lanes]))
+    pending.logprobs = True
+    pending.wait = lambda: lanes[0, 0, 0, :4].reshape(1, 4)
+    pending.payload = payload
+
+    def deferred(tokens, start_pos, slot_remap=None, **kw):
+        eng.calls.append(("decode_forward", tokens, start_pos, kw))
+        return VerifyResult(spec_mode=kw["spec_mode"], argmax_ids=pending)
+
+    eng.decode_forward = deferred
+    kw = dict(
+        tokens=torch.tensor([[1, 2, 3, 4]], dtype=torch.int32), start_pos=torch.tensor([10], dtype=torch.int32),
+        page_table=torch.arange(1, 5, dtype=torch.int32).reshape(1, 4), kv_cache=None, enable_trace=True,
+        num_valid_drafts=torch.tensor([3], dtype=torch.int32), accepted_counts=torch.tensor([1], dtype=torch.int32),
+        spec_mode="argmax_ids", mamba_state=MAMBA_STATE, reload_inputs=True, reload_page_table=False,
+    )  # fmt: skip
+    out = gen.decode_forward(**kw, read_from_device=False, spec_num_logprobs=torch.tensor([5], dtype=torch.int32))
+    assert _last(eng, "decode_forward")[3]["logprobs"] is True and out.argmax_ids is pending
+    ids, got = gen.process_decode_output_host(out.argmax_ids)
+    assert ids.tolist() == [[4, 5, 6, 7]] and isinstance(got, SpecLogprobs) and got.top_logprobs is payload[2]
+    out = gen.decode_forward(**kw, read_from_device=True, spec_num_logprobs=torch.tensor([0], dtype=torch.int32))
+    assert out.argmax_ids.tolist() == [[4, 5, 6, 7]] and isinstance(out.logprobs, SpecLogprobs)
+    gen.decode_forward(**kw, read_from_device=False, spec_num_logprobs=torch.tensor([-2], dtype=torch.int32))
+    assert _last(eng, "decode_forward")[3]["logprobs"] is False
 
 
 def test_decode_forward_logits_mode_carries_logits(gen_eng):
