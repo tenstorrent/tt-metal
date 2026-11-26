@@ -1700,6 +1700,25 @@ TEST_F(BidirectionalStageSocketsFixture, MismatchedCableMuxThrows) {
 
     const ttnn::Shape shape({1, 1, 32, 64});
     const D2DEndpointConfig endpoints{.sender_rank = Rank{0}, .receiver_rank = Rank{1}, .distributed_context = ctx};
+
+    // Upfront config validation on create_sender (throws locally before any MPI rendezvous).
+    if (rank == 0) {
+        auto bad_slices = make_bidir_relay_cfg(mesh_device_, shape, kWorkerCores, "d2d-outbound", true, 2, 1);
+        bad_slices.relay_slices = 0;
+        EXPECT_THROW(D2DStreamService::create_sender(mesh_device_, std::move(bad_slices), endpoints), std::exception);
+
+        auto bad_lanes = make_bidir_relay_cfg(mesh_device_, shape, kWorkerCores, "d2d-outbound", true, 2, 0);
+        EXPECT_THROW(D2DStreamService::create_sender(mesh_device_, std::move(bad_lanes), endpoints), std::exception);
+
+        if (!tt::tt_fabric::is_intermesh_vc_disabled(*mesh_device_)) {
+            auto mux_no_relay = make_bidir_relay_cfg(mesh_device_, shape, kWorkerCores, "d2d-outbound", true, 2, 1);
+            mux_no_relay.relay = false;
+            EXPECT_THROW(
+                D2DStreamService::create_sender(mesh_device_, std::move(mux_no_relay), endpoints), std::exception);
+        }
+    }
+    ctx->barrier();
+
     if (rank == 0) {
         auto cfg = make_bidir_relay_cfg(mesh_device_, shape, kWorkerCores, "d2d-outbound", /*cable_mux=*/true, 2, 1);
         EXPECT_THROW(D2DStreamService::create_sender(mesh_device_, std::move(cfg), endpoints), std::exception);
@@ -1707,6 +1726,72 @@ TEST_F(BidirectionalStageSocketsFixture, MismatchedCableMuxThrows) {
         auto cfg = make_bidir_relay_cfg(mesh_device_, shape, kWorkerCores, "d2d-inbound", /*cable_mux=*/false, 1, 1);
         EXPECT_THROW(D2DStreamService::create_receiver(mesh_device_, std::move(cfg), endpoints), std::exception);
     }
+    ctx->barrier();
+
+    // Mixed instage_mux + non-muxed service: when an instage_mux receiver sets
+    // reserve_links_for_later_service = true, it leaves a direct router free so a
+    // subsequent instage_mux = false sender on the same mesh succeeds.
+    const D2DEndpointConfig rev_ep{.sender_rank = Rank{1}, .receiver_rank = Rank{0}, .distributed_context = ctx};
+    std::unique_ptr<D2DStreamServiceSender> mixed_act_out, mixed_grad_out;
+    std::unique_ptr<D2DStreamServiceReceiver> mixed_act_in, mixed_grad_in;
+    if (rank == 0) {
+        mixed_act_out = D2DStreamService::create_sender(
+            mesh_device_,
+            make_bidir_relay_cfg(
+                mesh_device_, shape, kWorkerCores, "d2d-mix-act", /*cable_mux=*/true, 2, 1, true, 0, /*instage_mux=*/true),
+            endpoints);
+    } else if (rank == 1) {
+        mixed_act_in = D2DStreamService::create_receiver(
+            mesh_device_,
+            make_bidir_relay_cfg(
+                mesh_device_,
+                shape,
+                kWorkerCores,
+                "d2d-mix-act",
+                /*cable_mux=*/true,
+                2,
+                2,
+                /*reserve=*/true,
+                0,
+                /*instage_mux=*/true),
+            endpoints);
+    }
+    if (rank == 1) {
+        mixed_grad_out = D2DStreamService::create_sender(
+            mesh_device_,
+            make_bidir_relay_cfg(
+                mesh_device_,
+                shape,
+                kWorkerCores,
+                "d2d-mix-grad",
+                /*cable_mux=*/true,
+                2,
+                1,
+                true,
+                0,
+                /*instage_mux=*/false),
+            rev_ep);
+    } else if (rank == 0) {
+        mixed_grad_in = D2DStreamService::create_receiver(
+            mesh_device_,
+            make_bidir_relay_cfg(
+                mesh_device_,
+                shape,
+                kWorkerCores,
+                "d2d-mix-grad",
+                /*cable_mux=*/true,
+                2,
+                1,
+                /*reserve=*/false,
+                0,
+                /*instage_mux=*/false),
+            rev_ep);
+    }
+    ctx->barrier();
+    mixed_grad_in.reset();
+    mixed_grad_out.reset();
+    mixed_act_in.reset();
+    mixed_act_out.reset();
     ctx->barrier();
 }
 
@@ -1783,7 +1868,7 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalCableMuxCorrectnessAndTear
                         /*cable_mux=*/true,
                         2,
                         2,
-                        /*reserve=*/true,
+                        /*reserve=*/false,
                         0,
                         /*instage_mux=*/true),
                     act_ep);
@@ -1807,7 +1892,6 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalCableMuxCorrectnessAndTear
                         /*instage_mux=*/true),
                     grad_ep);
             } else if (rank == b) {
-                const bool more_services_follow = (b + 1 < world_size - 1);
                 grad_in = D2DStreamService::create_receiver(
                     mesh_device_,
                     make_bidir_relay_cfg(
@@ -1818,7 +1902,7 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalCableMuxCorrectnessAndTear
                         /*cable_mux=*/true,
                         2,
                         2,
-                        more_services_follow,
+                        /*reserve=*/false,
                         0,
                         /*instage_mux=*/true),
                     grad_ep);
@@ -2159,7 +2243,7 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
                         relay_slices),
                     act_ep);
             } else if (rank == b + 1) {
-                const bool more_after_act_in = bidirectional || (b + 1 < world_size - 1);
+                const bool more_after_act_in = !instage_mux && (bidirectional || (b + 1 < world_size - 1));
                 act_in = D2DStreamService::create_receiver(
                     mesh_device_,
                     make_bidir_relay_cfg(
@@ -2197,7 +2281,7 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
                             relay_slices),
                         grad_ep);
                 } else if (rank == b) {
-                    const bool more_after_grad_in = (b + 1 < world_size - 1);
+                    const bool more_after_grad_in = !instage_mux && (b + 1 < world_size - 1);
                     grad_in = D2DStreamService::create_receiver(
                         mesh_device_,
                         make_bidir_relay_cfg(

@@ -90,6 +90,19 @@ FORCE_INLINE constexpr uint32_t pack_go_slot_slice(uint32_t slot, uint32_t slice
 FORCE_INLINE constexpr uint32_t unpack_go_slot(uint32_t packed) { return packed & 0xFFu; }
 FORCE_INLINE constexpr uint32_t unpack_go_slice(uint32_t packed) { return packed >> 8; }
 
+// Split a contiguous page range [begin, end) across 1 or 2 lanes (master gets the extra page on odd length).
+FORCE_INLINE void lane_page_range(
+    uint32_t begin, uint32_t end, bool master, bool two_lanes, uint32_t& out_start, uint32_t& out_end) {
+    if (!two_lanes) {
+        out_start = begin;
+        out_end = end;
+    } else {
+        const uint32_t mid = begin + ((end - begin + 1u) >> 1);
+        out_start = master ? begin : mid;
+        out_end = master ? mid : end;
+    }
+}
+
 // Partition [0, TotalPages) into NumSlices contiguous slices, then split slice `s` across 1 or 2
 // lanes so the union of both lanes in slice `s` is always the exact contiguous range [sb, se),
 // regardless of whether an upstream or downstream hop uses 1 lane or 2 lanes.
@@ -101,14 +114,7 @@ FORCE_INLINE void slice_page_range(uint32_t s, bool master, bool two_lanes, uint
     const uint32_t sb = (s * kQuot) + (s < kRem ? s : kRem);
     const uint32_t s1 = s + 1u;
     const uint32_t se = (s1 * kQuot) + (s1 < kRem ? s1 : kRem);
-    if (!two_lanes) {
-        out_start = sb;
-        out_end = se;
-    } else {
-        const uint32_t mid = sb + ((se - sb + 1u) >> 1);
-        out_start = master ? sb : mid;
-        out_end = master ? mid : se;
-    }
+    lane_page_range(sb, se, master, two_lanes, out_start, out_end);
 }
 
 // Write `size` bytes from L1 to a remote NoC address over fabric, in MaxPayload packets.
@@ -190,8 +196,10 @@ FORCE_INLINE uint32_t pages_per_packet(uint32_t page_size) {
     return fit < 2 ? 1 : floor_pow2(fit);
 }
 
-// Write `count` pages that sit back to back in L1 at l1_src_addr, starting at page `first`, as one
-// scatter packet; a single page goes as a plain write and may carry the fused increment.
+// Write `count` pages that sit back to back in L1 at l1_src_addr, starting at page `first`, as
+// scatter packets (up to min(NOC_SCATTER_WRITE_MAX_CHUNKS, MaxPayload / page_size) pages per packet);
+// a single page (or oversized page > MaxPayload) goes through fabric_write_bytes, and a nonzero
+// inc_addr is fused into the final page.
 template <uint32_t MaxPayload, typename OutAcc>
 FORCE_INLINE void fabric_write_pages(
     tt::tt_fabric::WorkerToFabricEdmSender& conn,
@@ -202,24 +210,47 @@ FORCE_INLINE void fabric_write_pages(
     uint32_t page_size,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header,
     uint64_t inc_addr = 0) {
-    if (count == 1) {
-        fabric_write_bytes<MaxPayload>(conn, out_acc.get_noc_addr(first), l1_src_addr, page_size, header, inc_addr);
-        return;
-    }
-    const uint32_t clamped = count <= NOC_SCATTER_WRITE_MAX_CHUNKS ? count : NOC_SCATTER_WRITE_MAX_CHUNKS;
-    uint64_t dst[NOC_SCATTER_WRITE_MAX_CHUNKS];
-    uint16_t sizes[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];
-    for (uint32_t i = 0; i < clamped; ++i) {
-        dst[i] = out_acc.get_noc_addr(first + i);
-        if (i + 1 < clamped) {
-            sizes[i] = static_cast<uint16_t>(page_size);
+    const uint32_t fit_payload = page_size > 0 ? (MaxPayload / page_size) : 0u;
+    const uint32_t max_scatter =
+        fit_payload < NOC_SCATTER_WRITE_MAX_CHUNKS ? fit_payload : static_cast<uint32_t>(NOC_SCATTER_WRITE_MAX_CHUNKS);
+    uint32_t remaining = count;
+    while (remaining > 0) {
+        if (remaining == 1 || max_scatter < 2) {
+            const uint64_t pkt_inc = (remaining == 1) ? inc_addr : 0;
+            fabric_write_bytes<MaxPayload>(conn, out_acc.get_noc_addr(first), l1_src_addr, page_size, header, pkt_inc);
+            first += 1;
+            l1_src_addr += page_size;
+            remaining -= 1;
+            continue;
         }
+        // Leave the final page for fabric_write_bytes when carrying a fused atomic increment.
+        const uint32_t scatter_budget = (inc_addr != 0 && remaining <= max_scatter) ? (remaining - 1) : remaining;
+        if (scatter_budget == 1) {
+            fabric_write_bytes<MaxPayload>(conn, out_acc.get_noc_addr(first), l1_src_addr, page_size, header, 0);
+            first += 1;
+            l1_src_addr += page_size;
+            remaining -= 1;
+            continue;
+        }
+        const uint32_t chunk = scatter_budget <= max_scatter ? scatter_budget : max_scatter;
+        uint64_t dst[NOC_SCATTER_WRITE_MAX_CHUNKS];
+        uint16_t sizes[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];
+        for (uint32_t i = 0; i < chunk; ++i) {
+            dst[i] = out_acc.get_noc_addr(first + i);
+            if (i + 1 < chunk) {
+                sizes[i] = static_cast<uint16_t>(page_size);
+            }
+        }
+        const uint32_t pkt_bytes = chunk * page_size;
+        header->to_noc_unicast_scatter_write(
+            tt::tt_fabric::NocUnicastScatterCommandHeader(dst, sizes, static_cast<uint8_t>(chunk)), pkt_bytes);
+        conn.wait_for_empty_write_slot();
+        conn.send_payload_without_header_non_blocking_from_address(l1_src_addr, pkt_bytes);
+        conn.send_payload_flush_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+        first += chunk;
+        l1_src_addr += pkt_bytes;
+        remaining -= chunk;
     }
-    header->to_noc_unicast_scatter_write(
-        tt::tt_fabric::NocUnicastScatterCommandHeader(dst, sizes, static_cast<uint8_t>(clamped)), clamped * page_size);
-    conn.wait_for_empty_write_slot();
-    conn.send_payload_without_header_non_blocking_from_address(l1_src_addr, clamped * page_size);
-    conn.send_payload_flush_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
 }
 
 // Copy pages [page_start, page_end) to another chip over fabric, reading up to Depth packets of
@@ -315,10 +346,9 @@ FORCE_INLINE void stream_pages(
 
 // Extra segments (D2DStreamConfig::extra_tensors) ride with the primary tensor in every copy.
 // Their CT args follow the primary accessor's at CtOffset: kRelayExtraSegmentCtArgs words per segment
-// [page_size, half_pages, total_pages], then one accessor block shared by all of them (they are
-// DRAM interleaved). The caller's RT args at addr_arg hold a (src, dst) address pair per segment.
-// The lanes split each segment like the primary: the master takes [0, half) when there are two.
-constexpr uint32_t kRelayExtraSegmentCtArgs = 3;
+// [page_size, total_pages], then one accessor block shared by all of them (they are DRAM interleaved).
+// The caller's RT args at addr_arg hold a (src, dst) address pair per segment.
+constexpr uint32_t kRelayExtraSegmentCtArgs = 2;
 
 // NumExtra is a template parameter so that `if constexpr` defers the accessor block: with no
 // extra segments it would sit past the last CT arg.
@@ -342,20 +372,14 @@ FORCE_INLINE void stream_extra_segments(
         for (uint32_t s = 0; s < NumExtra; ++s) {
             const uint32_t ct = CtOffset + (kRelayExtraSegmentCtArgs * s);
             const uint32_t seg_page_size = kernel_compile_time_args[ct];
-            const uint32_t half = kernel_compile_time_args[ct + 1];
-            const uint32_t total = kernel_compile_time_args[ct + 2];
+            const uint32_t total = kernel_compile_time_args[ct + 1];
+            uint32_t p_start = 0;
+            uint32_t p_end = 0;
+            lane_page_range(0u, total, master, two_lanes, p_start, p_end);
             const auto in_acc = TensorAccessor(seg_args, get_arg_val<uint32_t>(addr_arg + (2 * s)), seg_page_size);
             const auto out_acc = TensorAccessor(seg_args, get_arg_val<uint32_t>(addr_arg + (2 * s) + 1), seg_page_size);
             stream_sized_pages<MaxPayload, SlotBytes, Depth, TridBase>(
-                noc,
-                conn,
-                in_acc,
-                out_acc,
-                cb_l1_addr,
-                master ? 0u : half,
-                (master && two_lanes) ? half : total,
-                seg_page_size,
-                header);
+                noc, conn, in_acc, out_acc, cb_l1_addr, p_start, p_end, seg_page_size, header);
         }
     }
 }

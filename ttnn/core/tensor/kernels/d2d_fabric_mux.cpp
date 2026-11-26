@@ -95,7 +95,7 @@ void forward_data_hot(
     bool& edm_open,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
-    [[maybe_unused]] uint8_t channel_id) {
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     constexpr bool use_worker_credit_addr = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     const bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
@@ -120,7 +120,11 @@ void forward_data_hot(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        fabric_connection.wait_for_empty_write_slot();
+        while (!fabric_connection.edm_has_space_for_packet<1>()) {
+            if (got_immediate_termination_signal<true>(termination_signal_ptr)) {
+                return;
+            }
+        }
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, packet_header->get_payload_size_including_header());
 
@@ -147,11 +151,15 @@ void kernel_main() {
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
+    // Host D2DMuxRegistry::acquire zeroes the entire mux L1 map before EnqueueMeshWorkload; skip
+    // clearing termination_signal_address here so an early host termination write is never wiped.
     auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
     for (uint32_t i = 0; i < num_regions_to_clear; i++) {
         auto address = get_arg_val<uint32_t>(rt_args_idx++);
         auto size = get_arg_val<uint32_t>(rt_args_idx++);
-        zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(l1_base + address), size);
+        if (address != termination_signal_address) {
+            zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(l1_base + address), size);
+        }
     }
 
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
@@ -318,7 +326,7 @@ void kernel_main() {
                         edm_open,
                         full_size_channel_connection_established[c],
                         StreamId{channel_stream_ids[c]},
-                        c);
+                        termination_signal_ptr);
                 }
             }
 
@@ -331,7 +339,7 @@ void kernel_main() {
                     edm_open,
                     header_only_channel_connection_established[c],
                     StreamId{sid},
-                    c + NUM_FULL_SIZE_CHANNELS);
+                    termination_signal_ptr);
             }
         }
 

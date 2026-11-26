@@ -203,9 +203,9 @@ struct D2DStreamConfig {
 
     // Relay mode, receiver side: whether this process builds another D2D service on the same mesh after this
     // receiver, as a middle pipeline stage builds its outbound sender after its inbound receiver. Then each entry
-    // relay takes a second forward lane only while another link of that direction stays free, so the later
-    // service still finds a router (two services on one chip cannot share one). A terminal stage builds no
-    // later service: it sets false, and its entry relays take every lane they can use.
+    // relay takes a second forward lane only while another direct link of that direction stays free, so a later
+    // non-muxed service still finds a router. Set false on a terminal stage, or when all later services on this
+    // mesh set instage_mux = true (they share link 0's mux and need no dedicated direct router).
     bool reserve_links_for_later_service = true;
 };
 

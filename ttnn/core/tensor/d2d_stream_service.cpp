@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <chrono>
 #include <climits>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -448,9 +449,9 @@ void apply_intermesh_vc_disabled(D2DStreamConfig& cfg, const distributed::MeshDe
     }
 }
 
-// Checks the receiver's stage-gate config. Runs before anything is allocated or
-// exchanged with the peer, so a bad config throws before the sender launches.
-void validate_stage_gate(const D2DStreamConfig& cfg) {
+// Common config checks shared by create_pair, create_sender, and create_receiver.
+// Runs before anything is allocated or exchanged with the peer.
+void validate_stream_config(const D2DStreamConfig& cfg) {
     TT_FATAL(
         cfg.max_sender_lanes >= 1, "D2DStreamService: max_sender_lanes must be >= 1, got {}", cfg.max_sender_lanes);
     TT_FATAL(
@@ -460,9 +461,19 @@ void validate_stage_gate(const D2DStreamConfig& cfg) {
     TT_FATAL(
         (!cfg.cable_mux && !cfg.instage_mux) || cfg.relay,
         "D2DStreamService: cable_mux / instage_mux require relay mode");
+    TT_FATAL(
+        cfg.fabric_link_group.empty() || cfg.share_fabric_links,
+        "D2DStreamService: fabric_link_group '{}' needs LEASE mode (share_fabric_links == true); an OWN-mode "
+        "service holds its fabric connections for its whole life, so it cannot share a router",
+        cfg.fabric_link_group);
     if (cfg.relay) {
         TT_FATAL(cfg.share_fabric_links, "D2DStreamService: relay mode requires share_fabric_links == true");
     }
+}
+
+// Checks the receiver's stage-gate config. Runs before anything is allocated or
+// exchanged with the peer, so a bad config throws before the sender launches.
+void validate_stage_gate(const D2DStreamConfig& cfg) {
     const auto gate = enabled_stage_gate(cfg);
     if (!gate) {
         return;
@@ -829,8 +840,10 @@ private:
     std::vector<std::tuple<tt::tt_fabric::FabricNodeId, CoreCoord, D2DMuxSlot, uint8_t>> mux_held_;
 };
 
-// Matches tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE (device-side header).
-constexpr uint32_t kMuxGracefulTerminate = 1u;
+// Matches tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE (device-side header).
+// All client services have already drained, closed their mux channels, and exited before the last
+// D2DMuxInstance reference drops; IMMEDIATELY_TERMINATE exits promptly even on abnormal teardown.
+constexpr uint32_t kMuxImmediateTerminate = 2u;
 constexpr uint8_t kMuxBuffersPerChannel = 16;
 
 // Persistent FabricMux (d2d_fabric_mux.cpp) on a dispatch-column service core, holding
@@ -861,13 +874,13 @@ struct D2DMuxInstance {
                 auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
                 auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
                 if (launched && config.has_value()) {
-                    std::vector<uint32_t> term{kMuxGracefulTerminate};
+                    tt::tt_metal::distributed::Finish(mesh->mesh_command_queue());
+                    std::vector<uint32_t> term{kMuxImmediateTerminate};
                     tt::tt_metal::detail::WriteToDeviceL1(
                         device,
                         mux_logical_core,
                         static_cast<uint32_t>(config->get_termination_signal_address()),
                         term);
-                    tt::tt_metal::distributed::Finish(mesh->mesh_command_queue());
                     svc.wait_done(device, mux_logical_core);
                 }
                 workload.reset();
@@ -907,13 +920,13 @@ public:
         CoreCoord eth_core,
         const CommonPlan& common,
         bool lease_upstream) {
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const Key key{device->id(), eth_core};
         const size_t full_buf_bytes =
             tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() + common.fabric_max_payload_size;
 
-        if (auto it = muxes_.find(key); it != muxes_.end()) {
+        for (auto it = muxes_.find(key); it != muxes_.end(); it = muxes_.find(key)) {
             if (auto existing = it->second.lock()) {
                 TT_FATAL(
                     existing->lease_upstream == lease_upstream && existing->full_buf_bytes == full_buf_bytes,
@@ -922,6 +935,9 @@ public:
                     eth_core);
                 return existing;
             }
+            // Expired entry still present in `muxes_`: the previous instance's destructor is running
+            // right now and will erase `key` + notify once hardware teardown finishes.
+            cv_.wait(lock);
         }
 
         auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
@@ -934,20 +950,20 @@ public:
             eth_core);
         const CoreCoord mux_core = claimable.back();
 
-        auto inst = std::make_shared<D2DMuxInstance>();
-        inst->mesh_device = mesh;
-        inst->coord = coord;
-        inst->src_node = src_node;
-        inst->dst_node = dst_node;
-        inst->link_index = link_index;
-        inst->eth_core = eth_core;
-        inst->mux_logical_core = mux_core;
-        inst->mux_virtual_core = device->worker_core_from_logical_core(mux_core);
-        inst->full_buf_bytes = full_buf_bytes;
-        inst->lease_upstream = lease_upstream;
+        auto raw = std::make_unique<D2DMuxInstance>();
+        raw->mesh_device = mesh;
+        raw->coord = coord;
+        raw->src_node = src_node;
+        raw->dst_node = dst_node;
+        raw->link_index = link_index;
+        raw->eth_core = eth_core;
+        raw->mux_logical_core = mux_core;
+        raw->mux_virtual_core = device->worker_core_from_logical_core(mux_core);
+        raw->full_buf_bytes = full_buf_bytes;
+        raw->lease_upstream = lease_upstream;
 
         svc.claim(device, {mux_core});
-        inst->core_claimed = true;
+        raw->core_claimed = true;
 
         const tt::tt_fabric::FabricMuxConfig sizing_cfg(
             *mesh,
@@ -961,20 +977,20 @@ public:
         const size_t map_bytes =
             tt::align(sizing_cfg.get_memory_map_end_address(), static_cast<size_t>(common.l1_alignment));
 
-        inst->mux_l1_base = svc.allocate_l1(device, mux_core, map_bytes);
-        inst->l1_allocated = true;
+        raw->mux_l1_base = svc.allocate_l1(device, mux_core, map_bytes);
+        raw->l1_allocated = true;
 
         std::vector<uint32_t> zero(map_bytes / sizeof(uint32_t), 0u);
-        tt::tt_metal::detail::WriteToDeviceL1(device, mux_core, static_cast<uint32_t>(inst->mux_l1_base), zero);
+        tt::tt_metal::detail::WriteToDeviceL1(device, mux_core, static_cast<uint32_t>(raw->mux_l1_base), zero);
 
-        inst->config.emplace(
+        raw->config.emplace(
             *mesh,
             /*num_full_size_channels=*/kMuxChannelsPerType,
             /*num_header_only_channels=*/kMuxChannelsPerType,
             kMuxBuffersPerChannel,
             kMuxBuffersPerChannel,
             full_buf_bytes,
-            static_cast<size_t>(inst->mux_l1_base),
+            static_cast<size_t>(raw->mux_l1_base),
             tt::CoreType::WORKER);
 
         auto program = CreateProgram();
@@ -985,19 +1001,19 @@ public:
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
-                .compile_args = inst->config->get_fabric_mux_compile_time_args_for_relay_mux(),
+                .compile_args = raw->config->get_fabric_mux_compile_time_args_for_relay_mux(),
                 .named_compile_args = {{"lease_upstream_edm", lease_upstream ? 1u : 0u}},
                 .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
         const auto mux_rt =
-            inst->config->get_fabric_mux_run_time_args(*mesh, src_node, dst_node, link_index, program, mux_core);
+            raw->config->get_fabric_mux_run_time_args(*mesh, src_node, dst_node, link_index, program, mux_core);
         SetRuntimeArgs(program, mux_kernel, mux_core, mux_rt);
 
-        inst->workload = std::make_unique<distributed::MeshWorkload>();
-        inst->workload->add_program(distributed::MeshCoordinateRange(coord), std::move(program));
+        raw->workload = std::make_unique<distributed::MeshWorkload>();
+        raw->workload->add_program(distributed::MeshCoordinateRange(coord), std::move(program));
 
         fabric_link_registry().set_mux_alive(src_node, eth_core, true);
-        EnqueueMeshWorkload(mesh->mesh_command_queue(), *inst->workload, /*blocking=*/false);
-        inst->launched = true;
+        EnqueueMeshWorkload(mesh->mesh_command_queue(), *raw->workload, /*blocking=*/false);
+        raw->launched = true;
 
         log_info(
             tt::LogMetal,
@@ -1005,12 +1021,20 @@ public:
             lease_upstream ? "in-stage" : "cable",
             coord,
             mux_core,
-            inst->mux_virtual_core,
+            raw->mux_virtual_core,
             eth_core,
             link_index,
             src_node,
             dst_node);
 
+        std::shared_ptr<D2DMuxInstance> inst(raw.release(), [this, key](D2DMuxInstance* ptr) {
+            delete ptr;
+            {
+                std::lock_guard guard(mutex_);
+                muxes_.erase(key);
+            }
+            cv_.notify_all();
+        });
         muxes_[key] = inst;
         return inst;
     }
@@ -1018,22 +1042,13 @@ public:
 private:
     using Key = std::pair<tt::ChipId, CoreCoord>;
     std::mutex mutex_;
+    std::condition_variable cv_;
     std::map<Key, std::weak_ptr<D2DMuxInstance>> muxes_;
 };
 
 D2DMuxRegistry& d2d_mux_registry() {
     static ttsl::Indestructible<D2DMuxRegistry> registry;
     return registry.get();
-}
-
-// A lease group lets services share routers because their caller takes turns between
-// them; in OWN mode a service holds its connection for life, so no turn ever ends.
-void validate_fabric_link_group(const D2DStreamConfig& cfg) {
-    TT_FATAL(
-        cfg.fabric_link_group.empty() || cfg.share_fabric_links,
-        "D2DStreamService: fabric_link_group '{}' needs LEASE mode (share_fabric_links == true); an OWN-mode "
-        "service holds its fabric connections for its whole life, so it cannot share a router",
-        cfg.fabric_link_group);
 }
 
 // Which end of a D2D stream a service is, for its router claims and their messages.
@@ -1069,7 +1084,8 @@ std::vector<uint32_t> claim_forwarding_links(
     const std::string& group,
     FabricLinkClaims& claims,
     uint32_t keep_free = 0,
-    bool allow_empty = false) {
+    bool allow_empty = false,
+    bool has_prior_lane = false) {
     const char* role = role_name(service_role);
     const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh, src, dst);
     TT_FATAL(!links.empty(), "D2DStreamService: no fabric link from the {} at coord {} toward its peer", role, coord);
@@ -1089,7 +1105,7 @@ std::vector<uint32_t> claim_forwarding_links(
             break;
         }
         const CoreCoord eth = tt::tt_fabric::get_forwarding_eth_core(mesh, src, dst, link);
-        if (!claimed.empty() && keep_free > 0) {
+        if ((!claimed.empty() || has_prior_lane) && keep_free > 0) {
             uint32_t later_free = 0;
             for (size_t j = i + 1; j < links.size(); ++j) {
                 later_free += fabric_link_registry().is_free(
@@ -2223,8 +2239,6 @@ Program build_sender_program(
     bool relay_per_lane_arrived = false) {
     auto program = CreateProgram();
 
-    const uint32_t total_pages = plan.num_socket_pages * plan.pages_per_chunk;
-    const uint32_t half = (total_pages + 1) / 2;  // lane 0 takes the odd page
     const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     auto accessor_ct = TensorAccessorArgs(input_buffer).get_compile_time_args();
     std::vector<uint32_t> page_sizes = {tensor_page_size};
@@ -2255,9 +2269,6 @@ Program build_sender_program(
                           .set_page_size(header_cb, header_size);
         CreateCircularBuffer(program, service_core, ph_cfg);
 
-        const uint32_t lane_start = lane * half;
-        const uint32_t lane_end = (lane + 1 == num_lanes) ? total_pages : (lane + 1) * half;
-
         std::vector<uint32_t> ct_args = {
             socket_config_addr,
             termination_addr,
@@ -2284,22 +2295,15 @@ Program build_sender_program(
             link_grant_addr,               // [22] service-core L1 (lease ping-pong word)
             lane == 0 ? 1u : 0u,           // [23] is_master
             num_lanes,                     // [24]
-            lane_start,                    // [25]
-            lane_end,                      // [26]
-            go_count_addr,                 // [27] shared L1: master -> sub
-            done_count_addr,               // [28] shared L1: sub -> master
-            kSenderReadRingSlots,          // [29] trid-ring depth = scratch CB slot capacity
+            go_count_addr,                 // [25] shared L1: master -> sub
+            done_count_addr,               // [26] shared L1: sub -> master
+            kSenderReadRingSlots,          // [27] trid-ring depth = scratch CB slot capacity
         };
         ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
         for (const auto& seg : extra_segments) {
-            const uint32_t seg_half = (seg.num_pages + 1) / 2;
-            const uint32_t seg_start = std::min(lane * seg_half, seg.num_pages);
-            const uint32_t seg_end =
-                (lane + 1 == num_lanes) ? seg.num_pages : std::min((lane + 1) * seg_half, seg.num_pages);
             ct_args.push_back(seg.page_size);
             ct_args.push_back(static_cast<uint32_t>(seg.input_buffer->address()));
-            ct_args.push_back(seg_start);
-            ct_args.push_back(seg_end);
+            ct_args.push_back(seg.num_pages);
         }
         if (!extra_segments.empty()) {
             TensorAccessorArgs(*extra_segments.front().input_buffer).append_to(ct_args);
@@ -2540,11 +2544,7 @@ SenderSideResources build_sender_side(
     // router fails cleanly. One RISC + one link per lane, capped by config and by the
     // forwarding links no other D2D service on the chip holds. Relay mode claims its
     // relay connections in claim_relay_links instead.
-    TT_FATAL(cfg.max_sender_lanes >= 1, "D2DStreamService: max_sender_lanes must be >= 1");
-    TT_FATAL(
-        (!cfg.cable_mux && !cfg.instage_mux) || cfg.relay,
-        "D2DStreamService: cable_mux / instage_mux require relay mode");
-    validate_fabric_link_group(cfg);
+    validate_stream_config(cfg);
     LaneLinks lane_links_per_coord;
     const std::vector<distributed::MeshCoordinate> no_claim_coords;
     for (const auto& coord : cfg.relay ? no_claim_coords : coords) {
@@ -2734,10 +2734,7 @@ ReceiverSideResources build_receiver_side(
     // Choose each coord's credit-return router first, before any allocation: one
     // forwarding link toward the sender that no other D2D service on the chip holds.
     // Relay mode claims its relay connections in claim_relay_links instead.
-    TT_FATAL(
-        (!cfg.cable_mux && !cfg.instage_mux) || cfg.relay,
-        "D2DStreamService: cable_mux / instage_mux require relay mode");
-    validate_fabric_link_group(cfg);
+    validate_stream_config(cfg);
     std::map<distributed::MeshCoordinate, uint32_t> ack_link_per_coord;
     const std::vector<distributed::MeshCoordinate> no_claim_coords;
     for (const auto& coord : cfg.relay ? no_claim_coords : coords) {
@@ -3048,12 +3045,11 @@ std::vector<uint32_t> claim_lanes_maybe_mux(
     D2DServiceRole direct_role,
     const std::string& mux_holder,
     const std::string& group,
-    uint32_t keep_free_when_direct,
+    uint32_t keep_free,
     FabricLinkClaims& claims,
     MuxBinding* out_mux) {
     if (!use_mux) {
-        return claim_forwarding_links(
-            mesh, coord, src_node, dst_node, want_lanes, direct_role, group, claims, keep_free_when_direct);
+        return claim_forwarding_links(mesh, coord, src_node, dst_node, want_lanes, direct_role, group, claims, keep_free);
     }
     const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh, src_node, dst_node);
     TT_FATAL(!links.empty(), "D2DStreamService mux: no fabric link at coord {} ({} -> {})", coord, src_node, dst_node);
@@ -3082,8 +3078,9 @@ std::vector<uint32_t> claim_lanes_maybe_mux(
             direct_role,
             group,
             claims,
-            /*keep_free=*/0u,
-            /*allow_empty=*/!require_all_lanes);
+            keep_free,
+            /*allow_empty=*/!require_all_lanes,
+            /*has_prior_lane=*/true);
         chosen.insert(chosen.end(), direct.begin(), direct.end());
     }
     return chosen;
@@ -3154,7 +3151,7 @@ void claim_relay_links(
                 D2DServiceRole::ExitRelayCable,
                 fmt::format("D2D exit relay (cable mux full) at coord {} ({} -> {})", e, exit_node, entry_node),
                 group,
-                /*keep_free_when_direct=*/0u,
+                /*keep_free=*/0u,
                 claims,
                 relay.cable_mux ? &relay.cable_mux_bindings[p] : nullptr);
         }
@@ -3179,7 +3176,7 @@ void claim_relay_links(
                 D2DServiceRole::Sender,
                 fmt::format("D2D sender (in-stage mux lane 0) at coord {} ({} -> {})", c, src_node, exit_node),
                 group,
-                /*keep_free_when_direct=*/0u,
+                /*keep_free=*/0u,
                 claims,
                 &mux_b);
             if (relay.instage_mux) {
@@ -3244,7 +3241,7 @@ void claim_relay_links(
                 D2DServiceRole::EntryRelayForward,
                 fmt::format("D2D entry relay (in-stage forward lane 0) at coord {} ({} -> {})", e, entry_node, w.first),
                 group,
-                /*keep_free_when_direct=*/cfg.reserve_links_for_later_service ? 1u : 0u,
+                /*keep_free=*/cfg.reserve_links_for_later_service ? 1u : 0u,
                 claims,
                 &mux_b);
             if (relay.instage_mux) {
@@ -3568,15 +3565,14 @@ uint32_t relay_slot_bytes(const CommonPlan& common) {
     return packed_slot_bytes(common.fabric_max_payload_size, page_sizes);
 }
 
-// Both relays' compile args: the primary accessor, [page_size, half_pages, total_pages] per extra
-// segment, then one accessor block for all extra segments (they are DRAM interleaved). Layout must
-// stay in sync with d2d_relay::stream_extra_segments.
+// Both relays' compile args: the primary accessor, [page_size, total_pages] per extra segment,
+// then one accessor block for all extra segments (they are DRAM interleaved). Layout must stay
+// in sync with d2d_relay::stream_extra_segments.
 std::vector<uint32_t> relay_compile_args(
     const CommonPlan& common, const std::vector<Tensor>& backings, const distributed::MeshCoordinate& c) {
     auto args = TensorAccessorArgs(*backings.front().mesh_buffer().get_device_buffer(c)).get_compile_time_args();
     for (size_t i = 1; i < backings.size(); ++i) {
-        const uint32_t n = common.segments[i].num_pages;
-        args.insert(args.end(), {common.segments[i].page_size, (n + 1) / 2, n});
+        args.insert(args.end(), {common.segments[i].page_size, common.segments[i].num_pages});
     }
     if (backings.size() > 1) {
         TensorAccessorArgs(*backings[1].mesh_buffer().get_device_buffer(c)).append_to(args);
@@ -4305,6 +4301,7 @@ D2DStreamService::create_pair(
         sender_mesh->shape(),
         receiver_mesh->shape());
     CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg, *sender_mesh);
+    CMAKE_UNIQUE_NAMESPACE::validate_stream_config(cfg);
     CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
     // Run the mapper once; both sides share the per-shard spec + topology.
@@ -4406,6 +4403,7 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
         *endpoints.sender_rank);
 
     CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg, *sender_mesh);
+    CMAKE_UNIQUE_NAMESPACE::validate_stream_config(cfg);
 
     // Run the mapper locally; the receiver process runs the same mapper on its
     // identically-shaped mesh and derives the same per-shard spec.
@@ -4515,6 +4513,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
         *ctx->rank(),
         *endpoints.receiver_rank);
     CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg, *receiver_mesh);
+    CMAKE_UNIQUE_NAMESPACE::validate_stream_config(cfg);
     CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
     auto mo = CMAKE_UNIQUE_NAMESPACE::run_mapper(cfg);

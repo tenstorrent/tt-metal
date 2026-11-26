@@ -95,20 +95,18 @@ constexpr uint32_t sender_metadata_l1_addr = get_compile_time_arg_val(20);
 // (open at entry, never release); 1 = LEASE mode (hold nothing until granted a turn).
 constexpr uint32_t share_fabric_links = get_compile_time_arg_val(21);
 constexpr uint32_t link_grant_addr = get_compile_time_arg_val(22);
-// Lane block (indices 23..28).
-constexpr uint32_t is_master = get_compile_time_arg_val(23);  // 1 = lane 0 / master, 0 = sub
-constexpr uint32_t num_lanes = get_compile_time_arg_val(24);  // Flush-incs to bytes_sent per transfer
-[[maybe_unused]] constexpr uint32_t page_start = get_compile_time_arg_val(25);
-[[maybe_unused]] constexpr uint32_t page_end = get_compile_time_arg_val(26);
-constexpr uint32_t go_count_addr = get_compile_time_arg_val(27);    // shared L1: master -> sub
-constexpr uint32_t done_count_addr = get_compile_time_arg_val(28);  // shared L1: sub -> master
-// [29] num_read_slots: trid-ring depth (power of 2), = the scratch CB's slot capacity.
+// Lane block (indices 23..26).
+constexpr uint32_t is_master = get_compile_time_arg_val(23);        // 1 = lane 0 / master, 0 = sub
+constexpr uint32_t num_lanes = get_compile_time_arg_val(24);        // Flush-incs to bytes_sent per transfer
+constexpr uint32_t go_count_addr = get_compile_time_arg_val(25);    // shared L1: master -> sub
+constexpr uint32_t done_count_addr = get_compile_time_arg_val(26);  // shared L1: sub -> master
+// [27] num_read_slots: trid-ring depth (power of 2), = the scratch CB's slot capacity.
 // Decoupled from pages_per_chunk so the read pipeline runs at full depth regardless of
 // the (vestigial) socket chunk plan; the host sizes the scratch CB to match.
-constexpr uint32_t num_read_slots = get_compile_time_arg_val(29);
-constexpr auto input_tensor_accessor_args = TensorAccessorArgs<30>();
+constexpr uint32_t num_read_slots = get_compile_time_arg_val(27);
+constexpr auto input_tensor_accessor_args = TensorAccessorArgs<28>();
 // Each extra segment appends kExtraSegmentCtArgs words here:
-// [aligned page_size, src_addr, page_start, page_end]. One TensorAccessorArgs
+// [aligned page_size, src_addr, total_pages]. One TensorAccessorArgs
 // block shared by every extra segment follows them (all DRAM interleaved). Each segment's
 // receiver backing address is one RT arg after the primary's.
 constexpr uint32_t num_extra_segments = get_named_compile_time_arg_val("num_extra_segments");
@@ -119,7 +117,7 @@ constexpr uint32_t num_slices = get_named_compile_time_arg_val("num_slices");
 constexpr uint32_t recv_inc_offset = get_named_compile_time_arg_val("recv_inc_offset");
 constexpr uint32_t kTotalPages = num_socket_pages * pages_per_chunk;
 constexpr uint32_t extra_segments_ct_offset = input_tensor_accessor_args.next_compile_time_args_offset();
-constexpr uint32_t kExtraSegmentCtArgs = 4;
+constexpr uint32_t kExtraSegmentCtArgs = 3;
 
 constexpr uint32_t kRingDepth = d2d_relay::floor_pow2(num_read_slots);
 constexpr uint32_t kLaneId = is_master ? 0u : 1u;
@@ -144,18 +142,14 @@ FORCE_INLINE void stream_extra_segments(
         for (uint32_t s = 0; s < NumExtra; ++s) {
             const uint32_t ct_idx = extra_segments_ct_offset + (kExtraSegmentCtArgs * s);
             const uint32_t seg_page_size = kernel_compile_time_args[ct_idx];
+            const uint32_t total = kernel_compile_time_args[ct_idx + 2];
+            uint32_t p_start = 0;
+            uint32_t p_end = 0;
+            d2d_relay::lane_page_range(0u, total, is_master != 0, num_lanes > 1, p_start, p_end);
             const auto in_acc = TensorAccessor(seg_accessor_args, kernel_compile_time_args[ct_idx + 1], seg_page_size);
             const auto out_acc = TensorAccessor(seg_accessor_args, receiver_addrs[s], seg_page_size);
             d2d_relay::stream_sized_pages<fabric_max_payload_size, slot_bytes, kRingDepth, kTridBase>(
-                noc,
-                conn,
-                in_acc,
-                out_acc,
-                cb_l1_addr,
-                kernel_compile_time_args[ct_idx + 2],
-                kernel_compile_time_args[ct_idx + 3],
-                seg_page_size,
-                data_packet_header_addr);
+                noc, conn, in_acc, out_acc, cb_l1_addr, p_start, p_end, seg_page_size, data_packet_header_addr);
         }
     }
 }
