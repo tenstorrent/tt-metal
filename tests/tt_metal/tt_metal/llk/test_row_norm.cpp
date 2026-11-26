@@ -133,7 +133,8 @@ std::vector<float> run_row_norm(
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     SetRuntimeArgs(program, writer, core, {output_buf->address(), 0, out_tiles});
 
-    const float inv_width = 1.0f / static_cast<float>(num_tiles * (tile_h / num_rows) * tile_dim);
+    const uint32_t row_width = num_tiles * (tile_h / num_rows) * tile_dim;
+    const float inv_width = 1.0f / static_cast<float>(row_width);
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest) {
         unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
