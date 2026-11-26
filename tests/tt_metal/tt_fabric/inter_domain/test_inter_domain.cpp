@@ -278,9 +278,11 @@ void run(Mode mode) {
             }
             const bool lower = *domain < *peer_domain;
             const uint32_t rank = lower ? p.chan : q.chan;
-            auto it = cables.find({p.asic, q.asic});
+            // keyed alike in both domains: each connects (which waits for the peer's end) in the same order
+            const auto key = lower ? std::pair{p.asic, q.asic} : std::pair{q.asic, p.asic};
+            auto it = cables.find(key);
             if (it == cables.end() || rank < it->second.rank) {
-                cables[{p.asic, q.asic}] = Cable{p, q, std::nullopt, rank};
+                cables[key] = Cable{p, q, std::nullopt, rank};
             }
         }
     }
