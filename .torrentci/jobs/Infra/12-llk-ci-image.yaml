@@ -1,0 +1,25 @@
+---
+# The LLK CI image (GitHub's llk-ci-tag, .github/scripts/llk-build-docker-images.sh):
+# tt-llk's own Dockerfile.base (Ubuntu 22.04) and Dockerfile.ci (its test
+# requirements) on top. Dockerfile.ci names the base by its ghcr reference; the
+# build context swaps in the base built here, as the script's FROM patch does.
+# Direct egress until the mirror covers its hosts (#1754).
+jobs:
+  - id: llk-ci-image
+    name: LLK CI image
+    description: Build the tt-llk CI image (Dockerfile.base, then Dockerfile.ci, Ubuntu 22.04) as a chain image
+    runs-on: {os: linux, arch: amd64}
+    temporary-direct-egress: "#1754"
+    images:
+      resolve-tags: 14d
+      build:
+        - name: llk-base
+          dockerfile: tt_metal/tt-llk/.github/Dockerfile.base
+          context: tt_metal/tt-llk
+          context-mode: derived
+        - name: llk-ci
+          dockerfile: tt_metal/tt-llk/.github/Dockerfile.ci
+          context: tt_metal/tt-llk
+          context-mode: derived
+          build-contexts:
+            ghcr.io/tenstorrent/tt-llk/tt-llk-base-ubuntu-22-04: {build: llk-base}

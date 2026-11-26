@@ -9,11 +9,13 @@ jobs:
       kubernetes:
         os: linux
         arch: amd64
-        image: docker.io/library/python:3.10-bookworm@sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8
+        # GitHub's llk-ci image, built from tt-llk's own Dockerfiles (its Python deps baked in).
+        image: {from-job: llk-ci-image, image: llk-ci}
         resources:
           requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 20Gi}
           limits: {memory: 16Gi, ephemeral-storage: 30Gi}
     env:
+      # Steps get HOME=/, unwritable, and the image sets none (torrentci#3936).
       - {name: HOME, value: /tmp/home}
     steps:
       - id: setup
@@ -21,11 +23,9 @@ jobs:
         shell:
           run:
             - mkdir -p "$HOME"
-            - python3 -m venv /tmp/venv
-            - /tmp/venv/bin/pip install -q -r tt_metal/tt-llk/tests/requirements.txt
-            - . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
+            - cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
       - id: hardware-free
         kind: shell
         shell:
           run:
-            - . /tmp/venv/bin/activate && cd tt_metal/tt-llk && ./tests/run_hardware_free.sh
+            - cd tt_metal/tt-llk && ./tests/run_hardware_free.sh
