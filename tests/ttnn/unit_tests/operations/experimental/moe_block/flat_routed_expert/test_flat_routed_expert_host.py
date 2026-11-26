@@ -38,13 +38,13 @@ def _tagged(rows, cols, base):
 
 
 def _rotate(nd, banks):
-    """Every down core's blocks rotated over all banks (block k of core d in bank (d + k) % banks), one slot a core."""
+    """Every down core's blocks rotated over all banks (block k of core d in bank (d + k) % banks), one region a core."""
     return [[(d + j) % banks for j in range(banks)] for d in range(nd)], list(range(nd)), nd
 
 
 def _layout(E, H, I, banks, nd, np_, nu, patterns=None):
     """A plan's layout facts for a small synthetic split (the fields flat_weight_regions reads). patterns: the down
-    cores' (bank patterns, slots, slot count) - by default rotated over all banks."""
+    cores' (bank patterns, region bases, regions per bank) - by default rotated over all banks."""
     it, ht = I // 32, H // 32
     ngrp = 2 * it // nu if nu else it // np_
     pcds = [ht // nd + (d < ht % nd) for d in range(nd)]
@@ -53,11 +53,11 @@ def _layout(E, H, I, banks, nd, np_, nu, patterns=None):
         -(-E * (it // weights_py.down_k_block_tiles(p, it)) // banks) * weights_py.down_k_block_tiles(p, it) * p
         for p in pcds
     )
-    pats, slots, slot_count = patterns or _rotate(nd, banks)
+    pats, bases, per_bank = patterns or _rotate(nd, banks)
     return dict(
         down_bank_patterns=pats,
-        down_weight_slots=slots,
-        down_weight_slot_count=slot_count,
+        down_weight_region_bases=bases,
+        down_weight_regions_per_bank=per_bank,
         gate_up_weight_slots=banks,
         column_groups_per_weight_slot=ngrp // banks,
         gate_up_pairs_per_core=np_,
@@ -81,7 +81,7 @@ def test_flat_weight_regions_places_every_tile(units):
     ]
     regions, dregs = weights_py.flat_weight_regions(W, lay)
     assert len(regions) == lay["gate_up_weight_slots"] and len({r.shape for r in regions}) == 1
-    assert len(dregs) == lay["down_weight_slot_count"] * banks and len({r.shape for r in dregs}) == 1
+    assert len(dregs) == lay["down_weight_regions_per_bank"] * banks and len({r.shape for r in dregs}) == 1
     if not units:  # whole tiles: every gate / up tile once, every tile uniform
         got = torch.cat(regions)
         assert bool((got == got[:, :1, :1]).all())
@@ -99,9 +99,9 @@ def test_flat_weight_regions_places_every_tile(units):
     assert sorted(nz.tolist()) == sorted(want.tolist())
 
 
-# Down cores' bank patterns (8 banks; H 256: 8 tile columns): (patterns, slots, slot count) as the plan gives them -
-# each core's dram_banks positions (block k at position k % banks) in one bank, or split over two (contiguous or
-# interleaved positions), cores stacked in one bank at consecutive slots.
+# Synthetic down layouts (8 banks; H 256: 8 tile columns), as (patterns, region bases, regions per bank): rotation over
+# all banks, one-bank cores, cores split over two banks (contiguous or interleaved entries), cores stacked in one bank,
+# and split cores whose region bases leave gaps. Block k of a core reads from the bank in its pattern's entry k % 8.
 DOWN_PATTERNS = {
     "rotate": (4, _rotate(4, 8)),
     "one-bank": (8, ([[d] * 8 for d in range(8)], [0] * 8, 8)),
@@ -114,14 +114,25 @@ DOWN_PATTERNS = {
             8,
         ),
     ),
+    # split cores whose region bases leave gaps (a base is the first region free in all of a core's banks): bank 3
+    # holds core 3's regions 0..7, nothing at 8..13, core 6's at 14..19 - 20 regions a bank
+    "fragmented": (
+        7,
+        (
+            [[0] * 8, [1] * 8, [2] * 8, [3] * 8, [0] * 6 + [1] * 2, [1] * 4 + [2] * 4, [2] * 2 + [3] * 6],
+            [0, 0, 0, 0, 8, 10, 14],
+            20,
+        ),
+    ),
 }
 
 
 @pytest.mark.parametrize("name", DOWN_PATTERNS)
 def test_down_weight_regions_match_the_reader(name):
-    """Every down core's blocks, read where down_weight_reader.cpp reads them - block k at position j = k % banks of
-    the core's pattern, in that bank (k / banks) x (the bank's positions) + (its positions before j) blocks from the
-    core's slot - are its K-blocks of Wd in order (expert, K-block), and no region holds two cores' blocks."""
+    """Every down core's blocks, read where down_weight_reader.cpp reads them, are its K-blocks of Wd in order
+    (expert, K-block), and no region holds two cores' blocks. The reader: block k comes from the bank in pattern entry
+    j = k % banks, (k / banks) x (the entries naming that bank) + (those entries before j) blocks past the core's
+    region base there."""
     E, H, I, banks = 3, 256, 1024, 8
     nd, patterns = DOWN_PATTERNS[name]
     lay = _layout(E, H, I, banks, nd=nd, np_=1, nu=0, patterns=patterns)
@@ -131,9 +142,11 @@ def test_down_weight_regions_match_the_reader(name):
     ]
     _, dregs = weights_py.flat_weight_regions(W, lay)
     sub, it = lay["down_weight_region_tiles"], I // 32
-    assert len(dregs) == lay["down_weight_slot_count"] * banks and all(r.shape[0] == sub for r in dregs)
-    bank_tiles = [torch.cat(dregs[b::banks])[:, 0, 0] for b in range(banks)]  # (bank b: its regions by slot)
-    pats, slots = lay["down_bank_patterns"], lay["down_weight_slots"]
+    assert len(dregs) == lay["down_weight_regions_per_bank"] * banks and all(r.shape[0] == sub for r in dregs)
+    # (the device tensor is sized by flat_weight_shapes: the same packing on shape-only tensors)
+    assert weights_py.flat_weight_shapes(H, I, E, lay)["w_d"] == (len(dregs), sub)
+    bank_tiles = [torch.cat(dregs[b::banks])[:, 0, 0] for b in range(banks)]  # (bank b: its regions in order)
+    pats, bases = lay["down_bank_patterns"], lay["down_weight_region_bases"]
     for d in range(nd):
         p, c0 = lay["down_columns_per_core"][d], lay["down_first_columns"][d]
         kb = weights_py.down_k_block_tiles(p, it)
@@ -142,7 +155,7 @@ def test_down_weight_regions_match_the_reader(name):
         for k, block in enumerate(want):
             j = k % banks
             b = pat[j]
-            at = slots[d] * sub + ((k // banks) * pat.count(b) + pat[:j].count(b)) * kb * p
+            at = bases[d] * sub + ((k // banks) * pat.count(b) + pat[:j].count(b)) * kb * p
             got = bank_tiles[b][at : at + kb * p]
             assert torch.equal(got, block), f"{name}: down core {d} block {k} (bank {b}, tile {at})"
     nz = torch.cat(bank_tiles)
@@ -150,7 +163,7 @@ def test_down_weight_regions_match_the_reader(name):
 
 
 def test_down_weight_regions_reject_overlap(expect_error):
-    """Two down cores given the same (slot, bank) region is a plan error, not a silent overwrite."""
+    """Two down cores given the same (region, bank) is a plan error, not a silent overwrite."""
     lay = _layout(3, 256, 1024, 8, nd=8, np_=1, nu=0, patterns=([[0] * 8] * 8, [0] * 8, 8))
     W = [(torch.ones(256, 1024), torch.ones(256, 1024), torch.ones(1024, 256))] * 3
     with expect_error(ValueError, "another core's"):

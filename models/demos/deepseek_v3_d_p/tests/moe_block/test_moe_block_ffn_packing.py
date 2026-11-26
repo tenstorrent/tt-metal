@@ -45,8 +45,8 @@ FLAT = dict(
     row_tiles_per_sub_block=4,
     # (each core's 8 positions in one bank, cores 8 and 9 stacked after cores 0 and 1)
     down_bank_patterns=[[d % 8] * 8 for d in range(10)],
-    down_weight_slots=[d // 8 * 8 for d in range(10)],
-    down_weight_slot_count=16,
+    down_weight_region_bases=[d // 8 * 8 for d in range(10)],
+    down_weight_regions_per_bank=16,
 )
 
 

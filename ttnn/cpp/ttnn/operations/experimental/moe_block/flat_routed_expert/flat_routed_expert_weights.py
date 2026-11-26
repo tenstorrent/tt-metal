@@ -55,18 +55,20 @@ def _hg_units(Wg, Wu):
 
 def flat_weight_regions(W_l, lay):
     """One device's weights in the plan's per-core bank regions. W_l: per local expert (Wg [H, I], Wu [H, I],
-    Wd [I, H]); lay: the plan's as_dict(). Returns (gate/up regions per weight slot, down regions per bank and down
-    core), each a list of equal-size [tiles, 32, 32]:
+    Wd [I, H]); lay: the plan's as_dict(). Returns (gate/up regions, one a weight slot; down regions, down_weight_
+    regions_per_bank x dram_banks of them, region i x dram_banks + b being bank b's i-th - a down core's or zero
+    padding), each a list of equal-size [tiles, 32, 32]:
     * weight slot r (one a DRAM bank: bank_sharded puts it in bank r): per expert, per K-block of KBLK tiles, its
       column_groups_per_weight_slot column groups' blocks (group r * column_groups_per_weight_slot + group):
       [KBLK x (gate, up) x gate_up_pairs_per_core] tile pairs, or with 16-column units units_per_core unit tiles
       [gate | up] of 16 columns each;
     * down core d: per expert, per K-block of down_k_block_tiles(down_columns_per_core[d]) tiles, its
-      [K-block x down_columns_per_core[d]] columns from down_first_columns[d], over the banks of its bank pattern
-      (down_bank_patterns[d]: block k at position k % dram_banks, the bank(s) nearest the core) from its slot
-      (down_weight_slots[d]), zero-padded to the widest core's region (down_weight_region_tiles), in
-      down_weight_slot_count regions a bank. The layout follows the plan (the chip's DRAM endpoints and harvesting), so
-      a cache of packed weights is keyed on these fields."""
+      [K-block x down_columns_per_core[d]] columns from down_first_columns[d]. Block k goes to the bank in entry
+      k % dram_banks of the core's bank pattern (down_bank_patterns[d]: the bank(s) nearest the core); in each of its
+      banks the core's blocks sit in order of k from its region base (down_weight_region_bases[d]), in regions of
+      down_weight_region_tiles (the widest core's share of one bank), zero-padded. The layout follows the plan (the
+      chip's DRAM endpoints and harvesting), so a cache of packed weights is keyed on these fields; flat_weight_shapes
+      sizes the tensors by running this same packing on shape-only tensors."""
     tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)  # noqa: E731
     nu = lay.get("units_per_core") or 0
     if nu:  # 16-column units: unit u's tile = [gate | up] of columns 16 u..; a column group's NU units in order
@@ -105,13 +107,12 @@ def flat_weight_regions(W_l, lay):
             ]
         )
 
-    # down core d's block k at position j = k % banks of its bank pattern. Regions of one position's blocks
-    # (down_weight_region_tiles); a core with c positions in a bank takes regions u .. u + c - 1 there
-    # (u = down_weight_slots[d]): region slot * banks + bank (which bank_sharded puts in that bank at offset
-    # slot * region), the core's blocks of that bank in order of k, zero-padded
+    # down core d's block k goes to the bank in pattern entry k % banks. A core with c entries naming bank b takes c
+    # consecutive regions there, from its region base u: regions (u .. u + c - 1) x banks + b (bank_sharded puts region
+    # i x banks + b in bank b at offset i x region), holding the core's blocks of that bank in order of k, zero-padded
     banks, sub = lay["dram_banks"], lay["down_weight_region_tiles"]
-    pats, slots = lay["down_bank_patterns"], lay["down_weight_slots"]
-    dregs = [None] * lay["down_weight_slot_count"] * banks
+    pats, bases = lay["down_bank_patterns"], lay["down_weight_region_bases"]
+    dregs = [None] * lay["down_weight_regions_per_bank"] * banks
     for d in range(lay["down_core_count"]):
         k_ = down_k_block_tiles(pcds[d], it)
         blocks = dreg(d).reshape(-1, k_ * pcds[d], 32, 32)
@@ -123,9 +124,9 @@ def flat_weight_regions(W_l, lay):
             pad = torch.zeros(c * sub - mine.shape[0], 32, 32, dtype=mine.dtype, device=mine.device)
             run = torch.cat([mine, pad])
             for i in range(c):
-                r = (slots[d] + i) * banks + b
+                r = (bases[d] + i) * banks + b
                 if dregs[r] is not None:
-                    raise ValueError(f"down core {d}: region (slot {slots[d] + i}, bank {b}) is another core's")
+                    raise ValueError(f"down core {d}: region {bases[d] + i} of bank {b} is another core's")
                 dregs[r] = run[i * sub : (i + 1) * sub]
     ref = next(r_ for r_ in dregs if r_ is not None)
     return regions, [torch.zeros_like(ref) if r_ is None else r_ for r_ in dregs]

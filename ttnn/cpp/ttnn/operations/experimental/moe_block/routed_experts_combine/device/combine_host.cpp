@@ -265,13 +265,15 @@ std::tuple<uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t> combine_choic
 
 CreditPolicy credit_policy(
     uint32_t N, uint32_t landing_slots_per_source, bool shared_landing, std::optional<uint32_t> batch) {
-    // A source gets its credits back (and idle snapshots go out) every b consumed rows:
+    // A source chip gets its landing-slot credits back (and idle snapshots go out) every b consumed rows:
     // - > 16 chips (a Galaxy): 8, or 6 us old - with 31 sources the snapshots' own traffic counts;
-    // - 16 chips (a Galaxy's 4x4 sub-torus), landing rings: 4 - with the ports spread over the core columns
-    //   (port_placement.cpp) the rows drain fast enough that a batch of 8 holds the sources back;
-    // - a shared landing: 1 - a grant is on its source's critical path;
-    // - fewer chips: at most half a source's landing slots, else a source with D slots waits for 8 consumed rows (or
-    //   the age).
+    // - 16 chips (a Galaxy's 4x4 sub-torus) with landing rings (each source its own receive slots): 4 - with the ports
+    //   spread over the core columns (port_placement.cpp) the rows drain fast enough that a batch of 8 holds the
+    //   sources back;
+    // - a shared landing (one receive pool for all sources) at <= 16 chips: 1 - a credit is on its source's critical
+    //   path;
+    // - fewer chips with landing rings: at most half a source's slots (D), else a source with D slots waits for 8
+    //   consumed rows (or the age).
     // A config's credit_batch wins.
     CreditPolicy p;
     const uint32_t b = batch                        ? std::max<uint32_t>(1, *batch)
