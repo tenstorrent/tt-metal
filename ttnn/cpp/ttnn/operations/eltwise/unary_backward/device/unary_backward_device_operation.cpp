@@ -103,8 +103,8 @@ void validate_operand(std::string_view op_name, const Tensor& tensor, std::strin
         return;
     }
 
-    // Sharded operands are supported: the factory either aliases each circular buffer to its
-    // tensor's shard or addresses every operand through TensorAccessor. What is NOT supported
+    // Sharded operands are supported: the factory either borrows each tensor's shard as its
+    // dataflow buffer or addresses every operand through TensorAccessor. What is NOT supported
     // is a legacy shard spec whose shard is not a whole number of tiles, because the tiled
     // program is one-to-one on physical tiles.
     //
@@ -278,9 +278,9 @@ ttsl::hash::hash_t UnaryBackwardDeviceOperation::compute_program_hash(
     // args carries op_type, so entries for two different gradients can never collide.
     // Each tensor is keyed as Metal 2.0 matches it under match_padded_shape_only +
     // relax_tensor_layout_alignment: its padded shape plus its TensorLayout minus Alignment. Its memory config carries
-    // the shard spec: the factory sizes globally allocated CBs from the shard shape and takes its core ranges from the
-    // shard grid, none of which a cache hit can refresh. Its padded shape, not just the volume, matters because a
-    // sharded buffer's TensorAccessorArgs bake its shape in pages into compile-time args and the row-major path bakes
+    // the shard spec: the factory sizes the DFBs it borrows from the shard shape and takes its core ranges from the
+    // shard grid, none of which a cache hit can refresh. Its padded shape, not just the volume, matters because the
+    // tensor binding of a sharded tensor packs its shape in pages into compile-time args and the row-major path bakes
     // in the row width. Its layout selects tile or row-major kernels (#59915). The logical shape and Alignment are left
     // out: the factory works only from the padded shape, which Alignment only feeds.
     const auto padded_key = [](const Tensor& tensor) {
@@ -288,8 +288,8 @@ ttsl::hash::hash_t UnaryBackwardDeviceOperation::compute_program_hash(
             tensor.tensor_spec(), {.match_padded_shape_only = true, .relax_tensor_layout_alignment = true});
     };
     // args only carries the requested output_dtype/output_memory_config; when the caller supplies its
-    // own output tensor that is what the factory actually binds, sizing the destination CB from its
-    // dtype and baking a TensorAccessorArgs for its buffer into the writer's compile-time args, so key
+    // own output tensor that is what the factory actually binds, sizing the destination DFB from its
+    // dtype and baking the accessor arguments of its binding into the writer's compile-time args, so key
     // on the tensor that is really used.
     const auto& preallocated = tensor_args.preallocated_input_grad;
     return operation::hash_operation<UnaryBackwardDeviceOperation>(
