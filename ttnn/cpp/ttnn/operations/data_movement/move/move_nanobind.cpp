@@ -23,7 +23,7 @@ void bind_move(nb::module_& mod) {
             that tensors deallocated earlier left free. This can compact device memory.
 
             Args:
-                input_tensor (ttnn.Tensor): the tensor to move, on device. No other tensor, such as a view from ``ttnn.view``, may share its device buffer. It is deallocated by the call and must not be used afterwards.
+                input_tensor (ttnn.Tensor): the tensor to move, on device. It is deallocated by the call and must not be used afterwards, unless another tensor, such as a view from ``ttnn.view``, shares its device buffer: an interleaved `input_tensor` is then returned unmoved, and a sharded one raises.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output. Defaults to `None`, which uses the input tensor's memory configuration. For an interleaved input it must be interleaved, and for a sharded input `None` or the input's memory configuration.
@@ -47,7 +47,7 @@ void bind_move(nb::module_& mod) {
                 On Blackhole, the input can also be an ``FP8_E4M3`` tensor in ROW_MAJOR layout.
 
                 When an interleaved output is in the input's buffer type, each core's share of the tensor must fit in
-                that core's free L1: anywhere above the allocator's base for a DRAM tensor, and below the output for an
+                that core's free L1: anywhere above the allocator's base for a DRAM tensor, and below the input for an
                 L1 tensor. A core's share is the tensor's number of pages divided by the number of cores in the
                 device's compute grid, rounded up, times the page size rounded up to the tensor's buffer alignment. A
                 page is a tile for a TILE tensor and a row for a ROW_MAJOR one.
