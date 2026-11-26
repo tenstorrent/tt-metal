@@ -131,7 +131,7 @@ Ring tests (`ring1x4`) run on row 0 of any system mesh 4 chips wide (LoudBox 2x4
 elsewhere. CI (Blaze models prefill, `kimi_k3_moonvit`) runs `-m synthetic -k "real_rows_from_each_chip or
 model_trace_perf or small_image"` on a Galaxy; `test_vision_model_small_image` runs the full model on a 48x48-patch
 image against an fp32 CPU reference computed in the test; `test_full_size_model_trace_perf` (random weights) asserts the traced model's
-time on the largest processor grid against `MODEL_TRACE_LIMIT_MS` and checks no output.
+time on the largest processor grid against the system mesh's `MODEL_TRACE_LIMIT_MS` and checks no output.
 Row-wise tests run on one P150 (`p150`) standing in for one ring chip: it runs that chip's 16,896-row
 quarter of the padded sequence (`MeshRows`).
 

@@ -40,7 +40,9 @@ import ttnn
 from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import checkpoint_path
 from models.experimental.kimi_k3_moonvit_v2.tests import goldens
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    LOUDBOX_SHAPE,
     REAL,
+    RING_SIZE,
     SYNTHETIC,
     ALL_LAYERS,
     RING,
@@ -76,9 +78,11 @@ ENCODER_PCC = 0.99
 ENCODER_RELATIVE_RMSE = 0.15
 MODEL_RELATIVE_RMSE = 0.17
 # `test_full_size_model_trace_perf`: the largest grid the processor makes, and the upper limit on one
-# traced replay of the model there, with headroom over the current time so run-to-run noise does not fail it.
+# traced replay of the model there per system mesh, with headroom over the current time so run-to-run
+# noise does not fail it. The Galaxy is slower: fewer cores per chip and slower links.
 PERF_SIZE = SIZES["510x132"]
-MODEL_TRACE_LIMIT_MS = 3100
+GALAXY_SHAPE = (8, RING_SIZE)
+MODEL_TRACE_LIMIT_MS = {LOUDBOX_SHAPE: 3100, GALAXY_SHAPE: 4150}
 
 
 @pytest.fixture(params=list(SIZES.values()), ids=list(SIZES))
@@ -392,7 +396,11 @@ def test_full_size_model_trace(mesh_device, sp_axis, num_links, config, referenc
 @SYNTHETIC
 def test_full_size_model_trace_perf(mesh_device, sp_axis, num_links, config, reference):
     """`test_full_size_model_trace` on PERF_SIZE with random weights, for time only: no saved outputs,
-    no output checks. Asserts the time per replay against MODEL_TRACE_LIMIT_MS."""
+    no output checks. Asserts the time per replay against the system mesh's MODEL_TRACE_LIMIT_MS."""
+    system_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
+    if system_shape not in MODEL_TRACE_LIMIT_MS:
+        pytest.skip(f"no time limit for system mesh {system_shape}")
+    limit_ms = MODEL_TRACE_LIMIT_MS[system_shape]
     tt, pixels, grid_thws = model_inputs(mesh_device, sp_axis, num_links, config, reference, PERF_SIZE)
     inputs = tt.prepare_inputs(pixels, grid_thws)
 
@@ -407,6 +415,4 @@ def test_full_size_model_trace_perf(mesh_device, sp_axis, num_links, config, ref
             f"full-size {PERF_SIZE[0]}x{PERF_SIZE[1]} model ({config.num_hidden_layers} layers, merger, "
             "projector), random weights"
         )
-    assert (
-        milliseconds <= MODEL_TRACE_LIMIT_MS
-    ), f"{milliseconds:.1f} ms per traced replay > {MODEL_TRACE_LIMIT_MS} ms limit"
+    assert milliseconds <= limit_ms, f"{milliseconds:.1f} ms per traced replay > {limit_ms} ms limit on {system_shape}"
