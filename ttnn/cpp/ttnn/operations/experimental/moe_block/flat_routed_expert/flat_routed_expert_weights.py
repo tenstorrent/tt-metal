@@ -214,7 +214,7 @@ def flat_weight_shapes(H, I, E, lay):
     return {"w_gu": (len(regions), regions[0].shape[0]), "w_d": (len(dregs), dregs[0].shape[0])}
 
 
-FLAT_LAYOUT_FIELDS = ("arena_bytes", "x_bf16", "h_bf16")
+FLAT_LAYOUT_FIELDS = ("arena_bytes", "x_bf16", "h_bf16", "x_ring_fill")
 
 
 def flat_layout(layout=None, **kw):
