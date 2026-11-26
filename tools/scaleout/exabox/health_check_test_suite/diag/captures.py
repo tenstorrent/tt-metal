@@ -86,6 +86,15 @@ def _regs(bmc: Bmc, names, trays=HSC_BUS) -> dict[str, dict]:
     return {f"{t}:{a:#04x}": v for (t, a), v in hsc.read_regs(bmc, names, trays).items()} if bmc.cmd else {}
 
 
+def _unread(r: dict) -> list[str]:  # the latch registers an HSC did not answer
+    return [n for n in ("STATUS_WORD", "STATUS_INPUT") if r.get(n) is None]
+
+
+def _latch_say(r: dict) -> str:
+    u = _unread(r)
+    return " ".join(x for x in ("+".join(sorted(_bits(r))), "+".join(u) + " not read" if u else "") if x) or "none"
+
+
 def _bits(r: dict) -> set[str]:
     return hsc._flags((r.get("STATUS_WORD") or 0, r.get("STATUS_INPUT") or 0))
 
@@ -152,11 +161,12 @@ def _run_start(bmc: Bmc, st: dict, args) -> list[str]:
         limits = ("IOUT_OC_FAULT_LIMIT", "IOUT_OC_WARN_LIMIT", *hsc.VIN_LIMITS, "READ_IOUT_PEAK")
         regs = st["run"]["regs"] = _regs(bmc, (*names, *limits))
     if not bmc.cmd or all(r["STATUS_WORD"] is None for r in regs.values()):
-        log(
-            f"HSC check not run: {bmc.why or 'no HSC answered'}; tray 12 V under-voltage latches and min VIN not judged"
-        )
-        return []
-    pre = []
+        why = f"{bmc.why or 'no HSC answered'}; tray 12 V under-voltage latches and min VIN not judged"
+        log(f"HSC check not run: {why}")
+        st["unread"] = list(st["run"].get("regs", {}))  # said once, for the host: not again per HSC at each stage end
+        return [f"HSC INCOMPLETE host: no HSC read: {why}"] if bmc.cmd else []
+    pre, inc = [], []
+    st["unread"] = []
     for k, r in regs.items():
         sw, si = r["STATUS_WORD"], r["STATUS_INPUT"]
         log(f"HSC run start {_where(k)}: " + ", ".join(f"{n} {_hx(r[n])}" for n in names))
@@ -165,10 +175,14 @@ def _run_start(bmc: Bmc, st: dict, args) -> list[str]:
             pre.append(f"{_where(k)}: {'+'.join(sorted(b))} (STATUS_WORD {_hx(sw)}, STATUS_INPUT {_hx(si)})")
         if (sw or 0) & hsc.CML:
             pre.append(f"{_where(k)}: comm fault (CML), not power")
+        if u := _unread(r):
+            st["unread"].append(k)
+            inc.append(_incomplete(k, u, "at the run start", sw))
         p, w = r["READ_IOUT_PEAK"], _plaus(r["IOUT_OC_WARN_LIMIT"])
         if p is not None and w and p * IOUT_LSB >= w:
             pre.append(f"{_where(k)}: IOUT peak {p * IOUT_LSB:.1f} A at or above its own IOUT_OC_WARN_LIMIT {w:.0f} A")
     out = [f"HSC WARN host: {'; '.join(pre)}; latched before the run: pre-existing, not from this run"] if pre else []
+    out += inc
     if not args.hsc_clear:
         return out
     if off := [_where(k) for k, r in regs.items() if (r["STATUS_WORD"] or 0) & 0x40]:
@@ -177,8 +191,17 @@ def _run_start(bmc: Bmc, st: dict, args) -> list[str]:
     sent = [k for k, r in regs.items() if r["STATUS_WORD"] is not None and bmc.clear_faults(int(k[0]), int(k[2:], 16))]
     st["run"]["cleared"] = after = _regs(bmc, ("STATUS_WORD", "STATUS_INPUT"))
     left = [f"{k} {'+'.join(sorted(b))}" for k, r in after.items() if (b := _bits(r))]
+    left += [f"{k} {'+'.join(u)} not read" for k, r in after.items() if (u := _unread(r))]
     log(f"HSC latch: CLEAR_FAULTS sent once to {len(sent)} HSC(s); after it: {', '.join(left) or 'all clear'}")
     return out
+
+
+def _incomplete(k: str, unread: list[str], when: str, sw) -> str:
+    cml = ", comm fault (CML) set" if (sw or 0) & hsc.CML else ""
+    return (
+        f"HSC INCOMPLETE {_where(k)}: {' and '.join(unread)} not read {when}{cml}; its VIN_UV latch state is unknown, "
+        "so this tray's 12 V feed was not judged"
+    )
 
 
 def _vin_rows(d: Path, t0: float) -> dict[str, list[tuple[float, float | None]]]:
@@ -203,6 +226,9 @@ def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st:
         b = before.get(k) or {}
         sw0, si0, sw1, si1 = b.get("STATUS_WORD"), b.get("STATUS_INPUT"), a["STATUS_WORD"], a["STATUS_INPUT"]
         s = samples.get(k, [])
+        if (u := _unread(a)) and k not in st.setdefault("unread", []):
+            st["unread"].append(k)
+            out.append(_incomplete(k, u, f"at the end of {step}", sw1))
         vins = [x * VIN_LSB for x in (b.get("READ_VIN"), a["READ_VIN"]) if x and 6 <= x * VIN_LSB <= 15]
         vins = [v for v, _ in s] + vins
         uv = [n for bit, n in INPUT_BITS.items() if None not in (si0, si1) and si1 & bit and not si0 & bit]
@@ -291,6 +317,8 @@ def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st:
     judged = "UV latched: " + (", ".join(uvl) or "none")
     if not uvl and low:
         judged = f"UV not judged: load not reached ({args.load_pct:.0f}% of the planned load)"
+    if unr := {k: _unread(a) for k, a in after.items() if _unread(a)}:
+        judged += "; not read, UV not judged there: " + ", ".join(f"{k} {'+'.join(u)}" for k, u in unr.items())
     vmin = ", ".join(f"{k} {min(v for v, _ in s):.2f}" for k, s in samples.items() if s)
     sags = ", ".join(f"{k} {r:.1f}" for k, r in sag.items()) or "none"
     info.append(f"HSC after {step}: {judged}; poll min VIN V {vmin or 'none'}; sag R max mOhm {sags}")
@@ -902,10 +930,7 @@ def _reset(bmc: Bmc, st: dict, d: Path, step: str, status: str, args) -> list[st
     st["dropped"] = []
     if bmc.cmd:
         r = _regs(bmc, ("STATUS_WORD", "STATUS_INPUT"))
-        latched = (
-            f"{k} {'not read' if v['STATUS_WORD'] is None else '+'.join(sorted(_bits(v))) or 'none'}"
-            for k, v in r.items()
-        )
+        latched = (f"{k} {_latch_say(v)}" for k, v in r.items())
         log(f"HSC latch before {step}: " + ", ".join(latched))
     have = set(chips())
     if trays := sorted({_tray(b) for b in ALL_BDFS if b not in have} - set(st.get("dumped", {}).get(step, []))):

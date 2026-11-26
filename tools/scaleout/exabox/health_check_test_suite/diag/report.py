@@ -38,7 +38,7 @@ ONELINK = re.compile(XBDF + r" e([0-9,]+) <-> " + XBDF + r" e([0-9,]+) ([^;(]*?)
 AFTER = re.compile(r" \[(after fault \(.*, no reset\))\]$")  # a finding made after a fault no reset cleared
 PEER = re.compile(r" \(to (?!(?:0000:)?[0-9a-f]{2}:)[^()]*\)")  # a QSFP line's far end on another host
 DIED = re.compile(r"CHUNK FAIL chunk \d+/\d+ .*no chunk-end readback, the load died or hung")
-INC = re.compile(r"^(ETH|HANG) INCOMPLETE ")
+INC = re.compile(r"^(ETH|HANG|HSC) INCOMPLETE ")
 STAGE = {
     "P0": "stage 1 gate",
     "P1": "stage 2 pre-run checks",
@@ -127,7 +127,7 @@ def ids(xs):
 
 
 def hit(u, l):
-    return re.search(rf"tray {u}([^0-9]|$)", l)
+    return re.search(rf"tray {u}([^0-9]|$)", l) or l.startswith("HSC INCOMPLETE host:")  # host-wide: every tray
 
 
 def thru(lines, rx):
@@ -135,6 +135,10 @@ def thru(lines, rx):
 
 
 # ── cause: one line per finding under its tray ──────────────────────────────────────────────────────────────────────
+
+
+def is_warn(l):  # '<CHECK> WARN ...' and metal's '<CHECK> WARN: ...'
+    return " WARN " in l or " WARN:" in l
 
 
 def tray_lines(lines, u, drop_trays=None, stages=None):
@@ -146,7 +150,7 @@ def tray_lines(lines, u, drop_trays=None, stages=None):
             continue
         if drop_trays and str(u) not in drop_trays and DIED.search(l) and stages.get(l) in dstages | {None}:
             continue
-        if " WARN " in l or l.startswith(("ETH INCOMPLETE ", "HANG INCOMPLETE ")):
+        if is_warn(l) or l.startswith(("ETH INCOMPLETE ", "HANG INCOMPLETE ", "HSC INCOMPLETE ")):
             if hit(u, re.sub(r" by tray [1-4](?: and tray [1-4])* power loss", "", PEER.sub("", l))):
                 warns.append(l)
         elif hit(u, PEER.sub("", re.sub(r", BMC after: .*", "", l))):
@@ -301,7 +305,7 @@ def cause(
 
 
 def rule(l, kind, u, findings, stage, lines):
-    s, warn = l.lower(), " WARN " in l
+    s, warn = l.lower(), is_warn(l)
     rerun = f"rerun {RERUN}"
     cf = CONFIG_RE.search(l) if l.startswith("ETH ") else None
     if cf:
@@ -339,6 +343,11 @@ def rule(l, kind, u, findings, stage, lines):
         return (
             f"POWER: 12 V feed of tray {u}{f' (HSC {ha.group(1)})' if ha else ''}: tray 12 V input lost or under-voltage: HSC OFF/under-voltage latch newly set during the run (12 V-lost evidence)",
             POWER_NEXT.format(u=u),
+        )
+    if kind == "tray" and l.startswith("HSC INCOMPLETE "):
+        return (
+            f"tray {u}'s 12 V power controller (HSC) could not be read, so its under-voltage latches and min VIN were not judged: not a fault proven, not a pass either",
+            f"rerun; if it repeats, check the BMC in-band route and the HSC I2C bus (comm fault, CML) of tray {u}",
         )
     if kind == "tray" and l.startswith("HSC WARN ") and "marginal 12 V feed" in l:
         return f"marginal 12 V feed of tray {u}, no trip or latch this run: the feed sagged or came near its over-current trip under load, as on boxes whose trays tripped later: a warning only, not a power fault yet -> next: check tray {u}'s feed: a low idle VIN points at the PSU output, a big drop from idle to loaded at the bus bar or contacts; rerun the bus-bar stage"
@@ -760,7 +769,8 @@ def tray_block(raw, raw_stages, findings="findings.txt", known=None, stopped="")
             out.append(f"KNOWN-DROP tray {u} (known dropped, not tested)")
             continue
         fails, warns = tray_lines(lines, u, dt, stages)
-        nf, nw, mine = len(fails), sum(" WARN " in l for l in warns), [l for l in lines if hit(u, l)]
+        nf, nw, mine = len(fails), sum(is_warn(l) for l in warns), [l for l in lines if hit(u, l)]
+        nh = sum(l.startswith("HSC INCOMPLETE ") for l in mine)
         ni = sum("INCOMPLETE (test-infra)" in l for l in mine)
         nv = sum(bool(INC.match(l)) and "start reset skipped; ETH not-active-at-open not judged" in l for l in mine)
         nd = next(
@@ -795,6 +805,8 @@ def tray_block(raw, raw_stages, findings="findings.txt", known=None, stopped="")
             )
         elif xs:
             out.append(f"INCOMPLETE tray {u} ({'' if xs.startswith('inter-host') else 'external ETH ports '}{xs}{w})")
+        elif nh:
+            out.append(f"INCOMPLETE tray {u} (power controller not read: {nh} HSC finding(s): 12 V feed not judged{w})")
         elif nv:
             out.append(
                 f"INCOMPLETE tray {u} ({nv} ETH core(s) not active again at mesh open: start reset skipped; ETH not-active-at-open not judged{w})"
@@ -807,7 +819,7 @@ def tray_block(raw, raw_stages, findings="findings.txt", known=None, stopped="")
                 if wb
                 else f"PASS tray {u}" + (f" ({nw} warn)" if nw else "")
             )
-        if nf + nw + nv or xs:
+        if nf + nw + nv + nh or xs:
             out += why(lines, u, stages, 10, findings, dt, tags)
     return out
 
@@ -1754,6 +1766,12 @@ def lines(run_dir, args) -> list[str]:
         if a.get("only") == "trays":
             return trays
     fam, out = {}, [] if a.get("only") else trays
+    kt = str(a.get("known_tray") or "")
+    hs = [l for l in raw if l.startswith("HSC INCOMPLETE ") and not (kt and re.search(rf"tray {kt}\b", l))]
+    if hs and not rc and not (a.get("result") or "").startswith("INCOMPLETE"):  # a power controller not read is never a pass
+        who = sorted({m.group(1) for l in hs if (m := re.match(r"HSC INCOMPLETE tray ([1-4])\b", l))})
+        rc, vt = 9, "INCOMPLETE (exit 9)"
+        a["result"] = "INCOMPLETE: tray power controllers (HSC) not read" + (f" on tray {', '.join(who)}" if who else "")
     out += verdict(rc, vt, "\n".join(raw), a.get("result") or "", commit, mode, rerun)
     r = recommend(rc, vt, "\n".join(trays), "\n".join(raw), mode, commit, rd(a.get("fix")), fam, rerun)
     return out + [f"Repair recommendation: {lead(r, fam, history(a.get('repair_history')))}"]

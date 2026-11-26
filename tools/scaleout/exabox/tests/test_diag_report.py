@@ -129,6 +129,56 @@ def test_clean_run(tmp_path):
     ]
 
 
+SEL = (
+    "SEL-HISTORY WARN: tray 4: 3 BMC SEL entries of the last 30 days name its power path (info for the repair: "
+    "not from this run)"
+)
+HSC_UNREAD = [
+    f"HSC INCOMPLETE tray {t} ({b}) HSC {a}: STATUS_INPUT not read at the run start, comm fault (CML) set; its VIN_UV "
+    "latch state is unknown, so this tray's 12 V feed was not judged"
+    for t, b in ((1, "01:00.0-08:00.0"), (4, "81:00.0-88:00.0"))
+    for a in ("0x40", "0x42")
+]
+
+
+def test_warn_colon_line_is_a_warn_not_a_failed_check(tmp_path):  # b02u08 leg B: 'RESULT: 1 failed check' with PASS
+    out = run(tmp_path, [SEL], rc=0, verdict="PASS")
+    assert out[3] == "PASS tray 4 (1 warn)"
+    assert "RESULT: 1 failed check" not in "\n".join(out)
+
+
+def test_unread_hsc_is_incomplete_never_pass(tmp_path):  # b02u08 leg B: STATUS_INPUT not read on tray 1 and 4
+    out = run(tmp_path, HSC_UNREAD, rc=9, verdict="INCOMPLETE (exit 9)")
+    assert out[0].startswith("INCOMPLETE tray 1 (power controller not read: 2 HSC finding(s)")
+    i4 = next(i for i, l in enumerate(out) if l.startswith("INCOMPLETE tray 4 (power controller not read"))
+    assert "PASS tray 2" in out and "PASS tray 3" in out and not any(l.startswith("FAIL") for l in out[: i4 + 1])
+    assert any("12 V power controller (HSC) could not be read" in l for l in out)
+    assert out[-1].startswith("Repair recommendation: none determined (INCOMPLETE (exit 9))")
+
+
+def test_unread_hsc_with_exit_0_is_not_a_pass(tmp_path):  # the bash verdict said PASS (rc 0): the report must not
+    out = run(tmp_path, HSC_UNREAD + [SEL], rc=0, verdict="PASS")
+    assert out[-2].startswith("Final verdict: INCOMPLETE (not a fault): tray power controllers (HSC) not read on tray 1")
+    assert "Final verdict: PASS" not in "\n".join(out)
+    assert out[-1].startswith("Repair recommendation: none determined (INCOMPLETE")
+
+
+def test_known_dropped_tray_hsc_unread_is_not_incomplete(tmp_path):
+    out = run(tmp_path, HSC_UNREAD[2:], rc=0, verdict="PASS", known_tray="4")
+    assert "KNOWN-DROP tray 4 (known dropped, not tested)" in out
+    assert not any("INCOMPLETE" in l for l in out)
+
+
+def test_host_wide_hsc_incomplete_marks_every_tray(tmp_path):
+    host = "HSC INCOMPLETE host: no HSC read: ipmitool rc 124; tray 12 V under-voltage latches and min VIN not judged"
+    out = run(tmp_path, [host], rc=0, verdict="PASS")
+    assert [l for l in out if l.startswith(("INCOMPLETE tray", "PASS tray"))][:4] == [
+        f"INCOMPLETE tray {t} (power controller not read: 1 HSC finding(s): 12 V feed not judged)" for t in range(1, 5)
+    ]
+    assert "Final verdict: PASS" not in "\n".join(out)
+    assert "not read on tray 1" not in "\n".join(out)  # the host line says "tray 12 V", not tray 1
+
+
 def test_incomplete_and_known_tray(tmp_path):
     out = run(
         tmp_path, POWER, rc=9, verdict="INCOMPLETE (exit 9)", known_tray="4", stopped="no load ran: discovery failed"

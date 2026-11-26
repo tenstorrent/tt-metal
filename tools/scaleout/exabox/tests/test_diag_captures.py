@@ -225,6 +225,47 @@ class TestHscJudge(unittest.TestCase):
         f3.run("reset", "C2", hsc_clear=True)
         self.assertFalse(f3.clears())
 
+    def test_unread_status_input_is_incomplete_not_all_clear(self):  # b02u08 leg B: CML, then STATUS_INPUT not read
+        f = Fake(self)
+        for t in hsc.HSC_BUS:
+            for a in hsc.HSC_ADDRS:
+                f.set(t, a, 0x79, "02 00")  # STATUS_WORD: CML only
+                f.set(t, a, 0x7C, None)  # STATUS_INPUT: no answer
+        f.set(1, 0x42, 0x79, "02 20")  # 0x2002 as in the log
+        with mock.patch.object(captures, "log") as log:
+            out = f.run("stage-start", hsc_clear=True)
+            end = f.run("stage-end")
+        inc = [x for x in out if x.startswith("HSC INCOMPLETE ")]
+        self.assertEqual(len(inc), 8)
+        self.assertIn("tray 1 (01:00.0-08:00.0) HSC 0x42: STATUS_INPUT not read at the run start, comm fault (CML) set", inc[1])
+        self.assertEqual([x for x in end if x.startswith("HSC INCOMPLETE ")], [])  # once per HSC, not again at the stage end
+        said = [c.args[0] for c in log.call_args_list]
+        self.assertFalse([x for x in said if x.endswith("after it: all clear")])
+        self.assertTrue([x for x in said if "UV not judged there: 1:0x40 STATUS_INPUT" in x or "1:0x40 STATUS_INPUT" in x])
+
+    def test_no_hsc_answering_is_said_once_for_the_host(self):
+        f = Fake(self)
+        for t in hsc.HSC_BUS:
+            for a in hsc.HSC_ADDRS:
+                f.set(t, a, 0x79, None)
+        out = f.run("stage-start") + f.run("stage-end")
+        self.assertEqual([x.split(":")[0] for x in out if x.startswith("HSC INCOMPLETE")], ["HSC INCOMPLETE host"])
+
+    def test_status_input_asked_twice_when_it_misses_once_after_status_word_answered(self):
+        f, seen = Fake(self), []
+        real = f.raw
+
+        def raw(bmc, *a, lock=True):
+            if a[:2] == (6, 0x52) and a[-1] == 0x7C and not seen:
+                seen.append(1)
+                return None
+            return real(bmc, *a, lock=lock)
+
+        bmc = hsc.Bmc(str(f.ipmi), str(f.d / "lock"))
+        with mock.patch.object(hsc.Bmc, "raw", lambda b, *x, lock=True: raw(b, *x, lock=lock)):
+            r = hsc.read_regs(bmc, ("STATUS_WORD", "STATUS_INPUT"), trays=(1,))
+        self.assertTrue(all(v["STATUS_INPUT"] is not None for v in r.values()))
+
     def test_no_route_reads_nothing(self):
         a = _args(ipmitool="/nonexistent/ipmitool")
         with tempfile.TemporaryDirectory() as t:

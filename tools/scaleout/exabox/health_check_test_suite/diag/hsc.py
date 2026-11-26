@@ -167,7 +167,8 @@ class Bmc:
 
 def read_regs(bmc: Bmc, names, trays=HSC_BUS) -> dict[tuple[int, int], dict[str, int | None]]:
     """The named registers of every HSC of *trays*; an HSC that does not answer the first is not read further (each
-    miss costs a timeout). Under sudo a VIN limit is read only where its exact command is listed."""
+    miss costs a timeout); STATUS_INPUT, which holds the VIN_UV latches, is asked a second time when it
+    fails (not by timeout) after STATUS_WORD answered. Under sudo a VIN limit is read only where its exact command is listed."""
     out = {}
     for t in trays:
         for a in HSC_ADDRS:
@@ -176,7 +177,10 @@ def read_regs(bmc: Bmc, names, trays=HSC_BUS) -> dict[tuple[int, int], dict[str,
                 code, nb = REG[n]
                 cmd = ("raw", *(f"{x:#04x}" for x in (6, 0x52, HSC_BUS[t], a, nb, code)))
                 listed = n not in VIN_LIMITS or bmc.listed(*cmd)
-                r[n] = bmc.hsc(t, a, n) if listed and (n == names[0] or r[names[0]] is not None) else None
+                ask = listed and (n == names[0] or r[names[0]] is not None)
+                r[n] = bmc.hsc(t, a, n) if ask else None
+                if ask and r[n] is None and n == "STATUS_INPUT" and bmc.failed != "ipmitool rc 124" and bmc.listed(*cmd):
+                    r[n] = bmc.hsc(t, a, n)  # not after a timeout (5 s each) or a read sudo does not list
     return out
 
 
