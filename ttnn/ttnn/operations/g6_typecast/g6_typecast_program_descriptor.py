@@ -70,6 +70,10 @@ def _compute_config(in_dtype, out_dtype):
     config.fp32_dest_acc_en = in_dtype in _WIDE_DEST_DTYPES_IN or out_dtype in _WIDE_DEST_DTYPES_OUT
     config.math_approx_mode = False
     config.dst_full_sync_en = False
+    if out_dtype == ttnn.bfloat8_b:
+        # The default bfp8 pack rounds a group maximum with an all-ones mantissa up across the
+        # exponent boundary, doubling the step of the whole group; the precise pack path does not.
+        config.bfp8_pack_precise = True
     if in_dtype in _WIDE_DEST_DTYPES_IN:
         # SrcA keeps 19 bits; 32-bit sources must bypass it to keep every bit.
         modes = [ttnn.UnpackToDestMode.Default] * (CB_INPUT_TILES + 1)
