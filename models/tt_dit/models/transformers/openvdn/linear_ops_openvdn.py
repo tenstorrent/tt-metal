@@ -230,6 +230,50 @@ def bidirectional_scan(
     return prefix, suffix
 
 
+def parallel_bidirectional_scan(
+    transition: ttnn.Tensor,
+    injection: ttnn.Tensor,
+    *,
+    text_state: ttnn.Tensor | None = None,
+    config: ttnn.DeviceComputeKernelConfig,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """`bidirectional_scan` in log2(F) batched levels instead of F sequential steps (Hillis-Steele). Each frame is
+    the affine map `s -> s T_f + I_f`; composing `a` then `b` gives `(T_a T_b, I_a T_b + I_b)`, so after the levels
+    frame f holds the composition of frames 0..f (forward) or F-1..f (reverse), applied once to the start state.
+    Same products as the sequential scan in another association order (fp32-grade split matmuls throughout)."""
+    num_frames = transition.shape[0]
+
+    def rows(t: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
+        return ttnn.slice(t, [start, 0, 0, 0], [end, t.shape[1], t.shape[2], t.shape[3]])
+
+    def run(reverse: bool) -> ttnn.Tensor:
+        t, i = transition, injection
+        d = 1
+        while d < num_frames:
+            n = num_frames - d
+            # forward: frame f <- (frame f-d) then (frame f); reverse: frame f <- (frame f+d) then (frame f)
+            head, tail = (0, n), (d, num_frames)
+            earlier, later = (tail, head) if reverse else (head, tail)
+            earlier_t, earlier_i = rows(t, *earlier), rows(i, *earlier)
+            later_t, later_i = rows(t, *later), rows(i, *later)
+            later_parts = split_bf16(later_t, 2)
+            new_t = split_matmul(earlier_t, later_parts, config=config)
+            new_i = ttnn.add(split_matmul(earlier_i, later_parts, config=config), later_i)
+            if reverse:
+                t = ttnn.concat([new_t, rows(t, n, num_frames)], dim=0)
+                i = ttnn.concat([new_i, rows(i, n, num_frames)], dim=0)
+            else:
+                t = ttnn.concat([rows(t, 0, d), new_t], dim=0)
+                i = ttnn.concat([rows(i, 0, d), new_i], dim=0)
+            d *= 2
+        if text_state is None:
+            return i
+        start = ttnn.repeat(text_state, ttnn.Shape([num_frames, 1, 1, 1]))
+        return ttnn.add(split_matmul(start, t, config=config), i)
+
+    return run(False), run(True)
+
+
 def gather_indices(bounds: Sequence[tuple[int, int]], num_frames: int) -> dict[str, list]:
     """Host copy of the reference's `_gather_indices`."""
     last_before = [lo - 1 for lo, _ in bounds]

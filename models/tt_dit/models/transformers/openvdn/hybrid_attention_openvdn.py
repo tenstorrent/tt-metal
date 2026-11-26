@@ -103,13 +103,16 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             mesh_device=mesh_device,
             tp_mesh_axis=tp_axis,
         )
-        # Stage 4 lever, off by default until accepted: OPENVDN_CONV_SP=1 splits the spatial conv's frames over SP.
+        # Stage 4 levers, off by default until accepted: OPENVDN_CONV_SP=1 splits the spatial conv's frames over SP,
+        # OPENVDN_BRANCH_SP=1 (with it) the branch's other per-frame stages, OPENVDN_PARALLEL_SCAN=1 the log-depth scan.
         if os.environ.get("OPENVDN_CONV_SP") == "1" and self.sp_factor > 1:
             self.linear_attention.frame_split = (
                 self.sp_mesh_axis,
                 self.sp_factor,
-                lambda t: self._gather(t, dim=1, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor),
+                lambda t, dim: self._gather(t, dim=dim, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor),
             )
+            self.linear_attention.branch_split = os.environ.get("OPENVDN_BRANCH_SP") == "1"
+        self.linear_attention.parallel_scan = os.environ.get("OPENVDN_PARALLEL_SCAN") == "1"
         col = dict(mesh_device=mesh_device, mesh_axis=tp_axis, compute_kernel_config=config)
         # Column-parallel like `to_out`: TP-gathered readout in, TP-fractured hidden out.
         self.to_out_linear = ColParallelLinear(self.inner_dim, self.hidden_size, bias=False, **col)
