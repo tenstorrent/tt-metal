@@ -47,22 +47,38 @@ def test_transpose_block_float_tile(device, shape, dims, dtype):
 
 
 # INT8 regression: the Int8 CB format is sign-magnitude, so unpack/pack turned -128 into 0.
-# row_major_interleaved covers the WH factory path; BH stages 8-bit RM through UINT32 and passes regardless.
+# Sharded cases give each core whole [H, W] blocks, which routes to the sharded WH factories: tile_height_sharded to
+# TransposeWHShardedProgramFactory, row_major_height_sharded to TransposeWHShardedRMProgramFactory writing the output
+# shard directly, and row_major_height_sharded_staged (9 tile rows per block) to its output-staging path. On BH the 8-bit
+# RM cases are staged through interleaved L1 and pass regardless, so only WH exercises the sharded RM factory; the
+# row_major_interleaved case likewise covers the WH factory path.
 @pytest.mark.parametrize(
-    "shape, layout, sharded",
+    "shape, layout, num_shard_cores",
     [
-        ([1, 1, 64, 64], ttnn.TILE_LAYOUT, False),
-        ([1, 1, 50, 70], ttnn.TILE_LAYOUT, False),
-        ([1, 1, 64, 64], ttnn.TILE_LAYOUT, True),
-        ([1, 1, 64, 64], ttnn.ROW_MAJOR_LAYOUT, False),
+        ([1, 1, 64, 64], ttnn.TILE_LAYOUT, None),
+        ([1, 1, 50, 70], ttnn.TILE_LAYOUT, None),
+        ([1, 2, 64, 64], ttnn.TILE_LAYOUT, 2),
+        ([1, 1, 64, 64], ttnn.ROW_MAJOR_LAYOUT, None),
+        ([1, 2, 64, 64], ttnn.ROW_MAJOR_LAYOUT, 2),
+        ([1, 2, 288, 64], ttnn.ROW_MAJOR_LAYOUT, 2),
     ],
-    ids=["tile_interleaved", "tile_interleaved_unaligned", "tile_height_sharded", "row_major_interleaved"],
+    ids=[
+        "tile_interleaved",
+        "tile_interleaved_unaligned",
+        "tile_height_sharded",
+        "row_major_interleaved",
+        "row_major_height_sharded",
+        "row_major_height_sharded_staged",
+    ],
 )
-def test_transpose_wh_int8_min_value(device, shape, layout, sharded):
+def test_transpose_wh_int8_min_value(device, shape, layout, num_shard_cores):
     x = int8_with_min_value(shape)
-    memory_config = height_sharded_l1_config(shape, 2) if sharded else ttnn.DRAM_MEMORY_CONFIG
-    t = ttnn.from_torch(x, dtype=ttnn.int8, layout=layout, device=device, memory_config=memory_config)
+    in_config = out_config = ttnn.DRAM_MEMORY_CONFIG
+    if num_shard_cores is not None:
+        in_config = height_sharded_l1_config(shape, num_shard_cores)
+        out_config = height_sharded_l1_config(shape[:2] + [shape[3], shape[2]], num_shard_cores)
+    t = ttnn.from_torch(x, dtype=ttnn.int8, layout=layout, device=device, memory_config=in_config)
 
-    got = ttnn.to_torch(ttnn.from_device(ttnn.transpose(t, -2, -1)).to(ttnn.ROW_MAJOR_LAYOUT))
+    got = ttnn.to_torch(ttnn.from_device(ttnn.transpose(t, -2, -1, memory_config=out_config)).to(ttnn.ROW_MAJOR_LAYOUT))
 
     assert torch.equal(got, x.transpose(-2, -1))

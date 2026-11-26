@@ -1161,16 +1161,18 @@ def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
 # Routing (interleaved): the last-two swap (0,1,3,2) goes to ttnn::transpose; the other tile cases reach prim::permute.
 # (0,3,1,2) moves one tile dim, so it selects MultiCoreTileRowInvariant with its transpose_wh compute kernel;
 # (3,2,1,0) moves both, so it selects MultiCoreTiledGeneric (transpose_xw_tiled compute kernel).
+# A rank 5 last-two swap is not decomposed to transpose, so it reaches MultiCoreTileInvariant with swap_hw (transpose_wh).
 @pytest.mark.parametrize(
     "layout, shape, dims",
     [
         (ttnn.TILE_LAYOUT, [1, 1, 64, 64], (0, 1, 3, 2)),
+        (ttnn.TILE_LAYOUT, [1, 2, 2, 64, 64], (0, 1, 2, 4, 3)),
         (ttnn.TILE_LAYOUT, [2, 32, 64, 64], (0, 3, 1, 2)),
         (ttnn.TILE_LAYOUT, [32, 32, 32, 32], (3, 2, 1, 0)),
         (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 64, 64], (0, 1, 3, 2)),
         (ttnn.ROW_MAJOR_LAYOUT, [64, 64], (1, 0)),
     ],
-    ids=["tile_wh", "tile_row_invariant", "tile_generic", "row_major_4d", "row_major_2d"],
+    ids=["tile_wh", "tile_invariant_rank5", "tile_row_invariant", "tile_generic", "row_major_4d", "row_major_2d"],
 )
 def test_permute_int8_min_value(device, layout, shape, dims):
     x = int8_with_min_value(shape)
