@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/g6_slice/test_g6_slice.py","modes":["plain","dev"],"passed":33,"ts":"2026-11-26T19:48:13+00:00"}
