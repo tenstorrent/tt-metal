@@ -93,16 +93,33 @@ def _div_up(a: int, b: int) -> int:
     return -(-a // b)
 
 
+def cb_layout(block_ch_tiles: int, block_rows: int, regime: str, *, elem_bytes: int = 2, tile_bytes: int = 2048):
+    """The single definition of every CB capacity: [(cb index, page bytes, pages)].
+
+    Both the L1 budget check (footprint) and the program descriptor read it, so a change to a
+    knob or a depth lands in exactly one place (l1_ledger.md: Capacity column).
+    """
+    stick_bytes = block_ch_tiles * TILE_DIM * elem_bytes
+    layout = [
+        (CB_ROWS, stick_bytes, ROWS_DEPTH * (TILE_DIM * block_rows + HALO_ROWS)),
+        (CB_TAP_TILES, tile_bytes, block_ch_tiles),
+        (CB_WINDOW_TILES, tile_bytes, TAP_COUNT * block_ch_tiles * block_rows),
+        (CB_OUTPUT_TILES, tile_bytes, OUT_DEPTH * block_ch_tiles),
+    ]
+    if regime == REGIME_TILE:
+        layout.append((CB_INPUT_TILES, tile_bytes, IN_DEPTH * block_ch_tiles))
+        layout.append((CB_UNTILIZED_ROWS, tile_bytes, UNTILIZED_DEPTH * block_ch_tiles))
+    return layout
+
+
 def footprint(block_ch_tiles: int, block_rows: int, regime: str, *, elem_bytes: int = 2, tile_bytes: int = 2048) -> int:
     """Per-core CB bytes of a plan (l1_ledger.md: Total per-core footprint)."""
-    stick_bytes = block_ch_tiles * TILE_DIM * elem_bytes
-    total = ROWS_DEPTH * (TILE_DIM * block_rows + HALO_ROWS) * stick_bytes  # cb_rows
-    total += block_ch_tiles * tile_bytes  # cb_tap_tiles
-    total += TAP_COUNT * block_ch_tiles * block_rows * tile_bytes  # cb_window_tiles
-    total += OUT_DEPTH * block_ch_tiles * tile_bytes  # cb_output_tiles
-    if regime == REGIME_TILE:
-        total += (IN_DEPTH + UNTILIZED_DEPTH) * block_ch_tiles * tile_bytes  # TILE hop CBs
-    return total
+    return sum(
+        page_bytes * pages
+        for _, page_bytes, pages in cb_layout(
+            block_ch_tiles, block_rows, regime, elem_bytes=elem_bytes, tile_bytes=tile_bytes
+        )
+    )
 
 
 def select_plan(
@@ -275,18 +292,13 @@ def create_program_descriptor(
     work = assign_work(plan, tensor_seq_tiles, grid_x)
     core_ranges = _row_wise_core_range_set(plan.num_cores, grid_x)
 
-    # ---- circular buffers (capacities derive from the knobs above) ----
-    stick_bytes = w * TILE_DIM * elem_bytes
-    slot_sticks = TILE_DIM * block_rows + HALO_ROWS
+    # ---- circular buffers (capacities: cb_layout, the same source footprint() budgets) ----
     cbs = [
-        _cb(CB_ROWS, stick_bytes, ROWS_DEPTH * slot_sticks, core_ranges, dtype),
-        _cb(CB_TAP_TILES, tile_bytes, w, core_ranges, dtype),
-        _cb(CB_WINDOW_TILES, tile_bytes, TAP_COUNT * w * block_rows, core_ranges, dtype),
-        _cb(CB_OUTPUT_TILES, tile_bytes, OUT_DEPTH * w, core_ranges, dtype),
+        _cb(index, page_bytes, pages, core_ranges, dtype)
+        for index, page_bytes, pages in cb_layout(
+            w, block_rows, plan.regime, elem_bytes=elem_bytes, tile_bytes=tile_bytes
+        )
     ]
-    if tile_input:
-        cbs.append(_cb(CB_INPUT_TILES, tile_bytes, IN_DEPTH * w, core_ranges, dtype))
-        cbs.append(_cb(CB_UNTILIZED_ROWS, tile_bytes, UNTILIZED_DEPTH * w, core_ranges, dtype))
 
     # ---- reader ----
     reader_ct = [w, block_rows, int(tile_input), input_width_tiles, elem_bytes, tile_bytes]

@@ -148,6 +148,15 @@ Named boundary for "minimum": **DRAM/L1-bank traffic of the interleaved tensors 
 | `token_halo_forwarding` | **rejected** — neighbour core sends its last 3 rows over the NoC; superseded by reading 3 sticks (DRAM, once per core) / copying them from the previous slot (L1); a semaphore handshake costs more than 3 small reads and serializes neighbouring token ranges | — | — | — | — |
 | `tap_axis_split` | **rejected** — splitting the 4-term dependent axis across cores moves 4× the partials for a sum that fits one DEST slot | — | — | 4× output-sized partial traffic | — |
 
+> **Verifier note (Phase 0 as built, 2026-11-26).** Three rows/lamps above changed status during
+> implementation, each on a measured device-ns win (see `l1_ledger.md` implementer updates and
+> `verification_report.md`): `tap_multicast_per_group` is **built** (the per-core tap fetch was
+> DRAM-request-bound, not byte-bound: 004 185.9 → 152.9 µs); SiLU runs on the **packer thread**
+> (`apply_activation_from_pack`, Perf lamp "SiLU on the math thread"); the default `block_rows` is
+> capped at `OVERLAP_BLOCK_ROWS = 1` (Perf lamp "Overlap": 004 153 → 129 µs). Measured 004 profile
+> after these: compute-only 109 µs, of which the precise SiLU is ~68 µs (compute without SiLU
+> 40.5 µs); dataflow-only 99 µs; full 130 µs.
+
 Regime selection function (exact, host): `regime = "rm_staged_window" if input.layout == ttnn.ROW_MAJOR_LAYOUT else "tile_untilize_staged_window"`. The intra-regime paths that only some grids/shapes trigger (multi-block cores → L1 halo copy; core-first block with `t0 > 0` → DRAM halo / extra untilized tile-row; ragged last block) are pinned by `plan_limits` tests in the acceptance test (both regimes).
 
 ### Traffic ranking

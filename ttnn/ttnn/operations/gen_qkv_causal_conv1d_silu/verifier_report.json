@@ -1,0 +1,423 @@
+{
+  "summary": {
+    "total": 21,
+    "supported_pass": 17,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 4,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 0
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T32_W2560_q512k512v1536_c256_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=one-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "one",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T64_W2560_q512k512v1536_c256_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T128_W2560_q512k512v1536_c256_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T4096_W2560_q512k512v1536_c256_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=many-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "many",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T64_W2560_q512k512v1536_c256_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=TILE-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T96_W2048_q1024k512v512_c256_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=l1-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "l1",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T128_W2560_q512k512v1536_c128_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=l1-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "l1",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T256_W2048_q1024k512v512_c128_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=l1-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "l1",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T64_W2560_q512k512v1536_c512_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=dram_interleaved-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "dram_interleaved",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T96_W2048_q1024k512v512_c512_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=l1_interleaved-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "l1_interleaved",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T128_W2560_q512k512v1536_c64_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": true,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T96_W3072_q1024k1024v1024_c256_ptok_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=equal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "equal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T128_W896_q512k256v128_c128_ptok_o0-channel_count=narrow-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "narrow",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T256_W2560_q512k512v1536_c160_ptok_o0-channel_count=wide-chunk_blocks=straddling-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "straddling"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T64_W896_q512k256v128_c896_ptok_o0-channel_count=narrow-chunk_blocks=single-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "narrow",
+          "seq_tiles": "few",
+          "chunk_blocks": "single"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T2048_W2048_q1024k512v512_c1024_ptok_o0-channel_count=wide-chunk_blocks=straddling-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=dram_interleaved-seq_tiles=many-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "dram_interleaved",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "many",
+          "chunk_blocks": "straddling"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T32_W192_q96k64v32_c192_ptok_o0-channel_count=narrow-chunk_blocks=single-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=l1_interleaved-seq_tiles=one-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "l1_interleaved",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "narrow",
+          "seq_tiles": "one",
+          "chunk_blocks": "single"
+        },
+        "status": "passed"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T256_W2560_q512k512v1536_c256_p160_o0-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=channel_paged-in_buffer=dram-input_window=exact-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "channel_paged",
+          "input_window": "exact",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T64_W2176_q1024k512v512_c64_ptok_o32-channel_count=wide-chunk_blocks=aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-history_buffer=dram-history_layout=token_paged-in_buffer=dram-input_window=column_window-layout=ROW_MAJOR-output_memory=default-seq_tiles=few-taps_buffer=dram-width_split=unequal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "in_buffer": "dram",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "default",
+          "fp32_dest_acc_en": false,
+          "history_layout": "token_paged",
+          "input_window": "column_window",
+          "width_split": "unequal",
+          "channel_count": "wide",
+          "seq_tiles": "few",
+          "chunk_blocks": "aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T32_W480_q128k128v128_c96_p32_o64-channel_count=narrow-chunk_blocks=straddling-dtype=BFLOAT16-fp32_dest_acc_en=True-history_buffer=l1-history_layout=channel_paged-in_buffer=l1-input_window=column_window-layout=TILE-output_memory=dram_interleaved-seq_tiles=one-taps_buffer=dram-width_split=equal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "in_buffer": "l1",
+          "history_buffer": "l1",
+          "taps_buffer": "dram",
+          "output_memory": "dram_interleaved",
+          "fp32_dest_acc_en": true,
+          "history_layout": "channel_paged",
+          "input_window": "column_window",
+          "width_split": "equal",
+          "channel_count": "narrow",
+          "seq_tiles": "one",
+          "chunk_blocks": "straddling"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/gen_qkv_causal_conv1d_silu/test_golden.py::test_op_loose[T2080_W448_q128k128v128_c384_p32_o0-channel_count=narrow-chunk_blocks=single-dtype=BFLOAT16-fp32_dest_acc_en=True-history_buffer=dram-history_layout=channel_paged-in_buffer=l1-input_window=column_window-layout=TILE-output_memory=l1_interleaved-seq_tiles=many-taps_buffer=dram-width_split=equal]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "in_buffer": "l1",
+          "history_buffer": "dram",
+          "taps_buffer": "dram",
+          "output_memory": "l1_interleaved",
+          "fp32_dest_acc_en": true,
+          "history_layout": "channel_paged",
+          "input_window": "column_window",
+          "width_split": "equal",
+          "channel_count": "narrow",
+          "seq_tiles": "many",
+          "chunk_blocks": "single"
+        },
+        "status": "xfail"
+      }
+    ]
+  }
+}

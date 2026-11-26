@@ -48,6 +48,13 @@ footprint(w, M) = ROWS_DEPTH·(32·M + 3)·64·w          # cb_rows        — s
                   TILE: w·(12288·M + 14720) bytes
 ```
 
+> **Verifier update (single source).** The Capacity column is produced by exactly one function,
+> `cb_layout(block_ch_tiles, block_rows, regime)` in the program-descriptor module: `footprint()`
+> (the L1-budget check in `select_plan`) sums it and `create_program_descriptor` allocates the CBs
+> from it, so the budget and the allocation can no longer drift apart. Audited against the device:
+> the golden run's per-core L1 peak equals this formula on every passing cell (e.g. 001 18,816 B,
+> 005 TILE 54,016 B, 016 150,528 B, 004 301,056 B).
+
 `M`-dependent terms: `cb_rows`, `cb_window_tiles` (12288 B per tile-row per channel tile). Smallest
 plan (w = 1, M = 1): 18,816 B (RM) / 27,008 B (TILE) — always inside the budget, so no golden shape
 is refused for L1. Largest Phase-0 golden plan at the L1-bound block (004 on 11×10: w = 16, M = 3):

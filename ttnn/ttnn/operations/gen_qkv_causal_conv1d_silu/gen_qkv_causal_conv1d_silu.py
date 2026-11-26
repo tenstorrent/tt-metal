@@ -22,8 +22,8 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .gen_qkv_causal_conv1d_silu_program_descriptor import (
+    HALO_ROWS as HISTORY_ROWS,
     L1_BOUND_BYTES,
-    TAP_COUNT,
     TILE_DIM,
     Plan,
     create_program_descriptor,
@@ -32,8 +32,6 @@ from .gen_qkv_causal_conv1d_silu_program_descriptor import (
     select_plan,
     select_regime,
 )
-
-HISTORY_ROWS = TAP_COUNT - 1
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +471,9 @@ def gen_qkv_causal_conv1d_silu(
         fp32_dest_acc_en,
         dst_full_sync_en,
         int(input_column_offset),
+        # [1, 3, C] (token-paged) and [1, C/P, 3P] (channel-paged) coincide when C == 3P, so the
+        # history layout is not implied by the history shape and must key the program itself.
+        page_channels,
         limits,
     )
     entry = _PROGRAM_CACHE.get(key)

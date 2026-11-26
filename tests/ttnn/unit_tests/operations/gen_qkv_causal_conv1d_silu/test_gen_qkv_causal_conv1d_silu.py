@@ -294,8 +294,9 @@ def test_chunk_size_invariance(device):
 @pytest.mark.parametrize("case", [PHASE0_CASES[0], PHASE0_CASES[4]], ids=["rm", "tile"])
 def test_repeat_is_bit_identical(device, case):
     """BB-06: the same call on the same inputs returns bit-identical outputs."""
-    first, _, _ = _run(device, case.values[0])
-    second, _, _ = _run(device, case.values[0])
+    # pytest unpacks each pytest.param above, so `case` is already the case dict.
+    first, _, _ = _run(device, case)
+    second, _, _ = _run(device, case)
     for a, b in zip(first, second):
         assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), "repeat call is not bit-identical"
 
