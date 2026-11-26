@@ -40,7 +40,7 @@ POWER_S = 2  # power poll period
 AER_S = 60  # corrected AER rate poll period
 _MUX = ("raw", "0x06", "0x52", f"{hsc.BRICK_BUS:#04x}", f"{hsc.BRICK_MUX:#04x}")
 BRICK_SUDO = ((*_MUX, "0x01"), (*_MUX, "0x00", "0x01"))  # the mux reads and writes the brick pass makes
-BRICK_LOAD_S = 90  # the poller's brick pass under load (10-15 s of BMC reads): the HSC VIN sampler loses under a sixth
+BRICK_LOAD_S = 110  # the poller's brick pass under load (VOUT, IOUT, VIN: 13-19 s): the HSC VIN sampler loses about a sixth
 RESET_MASK_S = 40  # VR power-good falls this near a reset are the reset's
 COLLAPSE_W, HOLD_W = 50, 600  # one tray at or under COLLAPSE_W while every other holds HOLD_W: its 12 V collapsed
 CPLD_DUMP_MAX = 4
@@ -386,6 +386,29 @@ def _brick_load(d: Path, step: str, t0: float) -> str | None:
         v = ", ".join(f"{k} {x:.3f} V" for k, x in sorted(lo.items())) or "none read"
         return f"bricks during {step}: {len(n)} pass(es), every {BRICK_LOAD_S} s; min Vout {v}"
     return None
+
+
+def _brick_amps(d: Path, step: str, t0: float) -> str | None:
+    """'brick output V/I under load: ...': every brick's Vout and Iout (and the 54 V rail's) from the poller's pass
+    nearest the middle of *step* (t0 to now), one pass: the owner's headroom table reads it."""
+    passes: dict[str, list[list[str]]] = {}
+    for r in (r.split("\t") for r in _lines(d / "brick.tsv")):
+        if len(r) > 4 and r[1] == f"during {step}" and float(r[0]) >= t0:
+            passes.setdefault(r[0], []).append(r)
+    if not passes:
+        return None
+    mid = (t0 + time.time()) / 2
+    t = min(passes, key=lambda k: abs(float(k) - mid))
+    got = {r[2]: r for r in passes[t]}
+
+    def cell(n: str) -> str:
+        r = got.get(n)
+        return f"{n} not read" if r is None or r[3] == "-" else f"{n} {r[3]} V {r[4] + ' A' if r[4] != '-' else '-'}"
+
+    fan = got.get("FAN", ["-"] * 4)[3]
+    rail = f"; 54 V rail {fan} V" if fan != "-" else "; 54 V rail not read"
+    where = f"pass {sorted(passes).index(t) + 1} of {len(passes)}, {float(t) - t0:.0f} s into {step}"
+    return f"brick output V/I under load: {', '.join(map(cell, hsc.BRICKS))}{rail} ({where})"
 
 
 def _dump_tray(bmc: Bmc, d: Path, t: int, what: str) -> str:
@@ -863,6 +886,8 @@ def _stage_end(bmc: Bmc, st: dict, d: Path, step: str, status: str, args) -> lis
         st["aer_last"] = now
     if args.brick_mux:
         if s and (ln := _brick_load(d, step, s["t0"])):
+            log(ln)
+        if s and (ln := _brick_amps(d, step, s["t0"])):
             log(ln)
         _bricks(bmc, d, f"after {step}", args)
     return out

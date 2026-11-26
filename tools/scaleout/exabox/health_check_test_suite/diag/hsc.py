@@ -218,8 +218,8 @@ def _exp(mode: int) -> int:  # the exponent of a VOUT_MODE byte: 5 bits, two's c
 
 def _brick(bmc: Bmc, name: str, addr: int, modes: dict, load: bool, stop, fails: list, ident: dict | None) -> tuple:
     """(volts, amps, watts, temp_C, vin) of one brick, None = not read. Vout by the brick's own VOUT_MODE exponent:
-    bricks of one box differ (2^-10 or 2^-12 V); *modes* caches it per brick. Under *load* only VOUT and VIN, and
-    VOUT_MODE only while not cached. A read that fails, other than by timeout, is read once more (the BMC's own I2C traffic drops
+    bricks of one box differ (2^-10 or 2^-12 V); *modes* caches it per brick. Under *load* VOUT, IOUT and VIN (no
+    temperature), and VOUT_MODE only while not cached. A read that fails, other than by timeout, is read once more (the BMC's own I2C traffic drops
     single reads), then named in *fails*; once *stop* says so nothing more is read. *ident* (the idle pass): the brick's
     MFR_* strings and VOUT_MODE and VOUT_COMMAND go in it as text, None = not read."""
 
@@ -246,7 +246,7 @@ def _brick(bmc: Bmc, name: str, addr: int, modes: dict, load: bool, stop, fails:
         cmd = rd(0x21, 2)
         ident[name]["VOUT_COMMAND"] = None if None in (mode, cmd) or mode >> 5 else f"{cmd * 2.0 ** _exp(mode):.4f} V"
     vout, vin = rd(0x8B, 2), rd(0x88, 2)
-    iout, temp = (None, None) if load else (rd(0x8C, 2), rd(0x8D, 2))
+    iout, temp = rd(0x8C, 2), None if load else rd(0x8D, 2)
     v = vout * 2.0 ** _exp(mode) if None not in (mode, vout) and mode >> 5 == 0 else None
     i, temp, vin = (None if x is None else lin11(x) for x in (iout, temp, vin))
     return v, i, v * i if None not in (v, i) else None, temp, vin
@@ -258,7 +258,7 @@ def brick_pass(
     """One pass over the bricks and the fan rail: ``(name, volts, amps, watts, temp_C, vin)`` rows, notes and read
     failures. Per mux channel, under one hold of the I2C lock: save the mux's control byte, select the channel, read
     its two bricks and write the saved byte back, also on an error. *load*: the pass under load reads only each
-    brick's VOUT and VIN (VOUT_MODE from *modes*) and the fan rail's VBUS. Once *stop* says so it reads nothing
+    brick's VOUT, IOUT and VIN (VOUT_MODE from *modes*) and the fan rail's VBUS. Once *stop* says so it reads nothing
     more: the mux is still restored and the rows so far returned. *ident*: the idle pass also reads each brick's
     MFR_* strings, VOUT_MODE and VOUT_COMMAND into it (name -> {field: text})."""
     rows, notes, fails, modes = [], [], [], {} if modes is None else modes
