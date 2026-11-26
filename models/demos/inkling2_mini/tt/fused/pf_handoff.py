@@ -49,7 +49,9 @@ class PfHandoff:
                 assert self.ok(src) and src.shape[-1] == c, (src.dtype, src.shape)
                 args += [src.buffer_address(), trow, len(rows)] + [x for rr in rows for x in rr]
                 io.append(src)
-            rt[core] = args
+            # padded to a length set by the job's shape, not by where its rows fall (the arg count is a compile-time
+            # arg: F.fixed_rt), so one program serves every prompt length: per row at most a group of its own
+            rt[core] = args + [0] * (3 + len(vecs) + 6 * (len(xrows) + len(vecs)) - len(args))
             io += [xh] + [r for r, _, _ in vecs]
         named = F.fixed_rt(dict(wt=wt, blk=BLK, vec_pages=vec_pages), rt)
         k = F.kernel("pf_handoff.cpp", ttnn.ReaderConfigDescriptor(), named, rt, crs)

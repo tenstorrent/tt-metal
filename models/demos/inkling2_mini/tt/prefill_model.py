@@ -1894,15 +1894,17 @@ class Inkling2Prefill:
         each pass length t (multiples of 128) as the last pass and as a full one, from 0, from inside the first
         1024 window and from a later position; the global layers' key buckets (FAR_ROWS). Not covered: the
         positions within `chunk` of the end of the far cache (_far_q: one more SDPA shape per t there)."""
-        c = chunk or self.chunk
+        c, p = chunk or self.chunk, QB // 2  # p: a last pass of t rows has t - p real ones (a pass of t real rows
+        # runs a subset of those programs)
         ts = range(QB, c + 1, QB)
-        w = [(0, t) for t in ts] + [(0, c + t) for t in ts] + [(0, 2 * c + QB)]
+        w = [(0, t - p) for t in ts] + [(0, c + t - p) for t in ts] + [(0, 2 * c + QB - p)]
         for o in range(QB, WINDOW, QB):  # a first pass to the window's end, last or not; then the same past 1024
-            w += [(o, WINDOW - o), (o, WINDOW - o + QB), (WINDOW + o, WINDOW - o), (WINDOW + o, WINDOW - o + QB)]
+            n = WINDOW - o
+            w += [(o, n - p), (o, n + QB - p), (WINDOW + o, n - p), (WINDOW + o, n + QB - p)]
         if _HAS_QOFF:
             qts = sorted({self._far_q(FAR_ROWS, t, max_ctx)[0] for t in ts})
             for kb in range(FAR_ROWS, max_ctx + 1, FAR_ROWS):
-                w += [(kb - q, q) for q in qts if kb - q >= WINDOW]
+                w += [(kb - q, q - p) for q in qts if kb - q >= WINDOW]
         return [(s, n) for s, n in w if s + n <= max_ctx and (s == 0 or n >= TAPS)]
 
     def _mem_print(self):
