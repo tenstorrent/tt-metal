@@ -11,7 +11,7 @@
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/legacy/circular_buffer_constants.h>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 #include "ttnn/operations/experimental/quasar/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
@@ -239,7 +239,9 @@ tt::tt_metal::ProgramDescriptor PerTokenCastBackProgramFactory::create_descripto
 
         // cb_loop_count: reader -> compute mailbox for the device-computed num_blocks (see read_tile_value).
         // one uint32 (num_blocks), rounded up to the L1 alignment
-        const uint32_t loop_count_page_bytes = tt::align(sizeof(uint32_t), hal::get_l1_alignment());
+        const uint32_t loop_count_page_bytes = tt::align(
+            sizeof(uint32_t),
+            tt::tt_metal::experimental::get_device_properties(*input_e4m3.device()).node_local_mem_alignment());
         add_cb(cb_loop_count_idx, fp32_df, loop_count_page_bytes, loop_count_page_bytes);
 
         // Per-kernel private scratch for the three metadata vectors (reader and writer each read them).

@@ -14,7 +14,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -102,7 +102,7 @@ bool can_use_interleaved_to_sharded(
     MeshDevice* device = input_tensor.device();
     uint32_t src_alignment = device->allocator()->get_alignment(input_tensor.memory_config().buffer_type());
     uint32_t dst_alignment = device->allocator()->get_alignment(output_mem_config.buffer_type());
-    uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(*device).dram_alignment();
 
     tt::DataFormat input_cb_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_cb_df = tt::tt_metal::datatype_to_dataformat_converter(resolved_dtype);

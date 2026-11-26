@@ -12,7 +12,7 @@
 #include <limits>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/utils/work_split.hpp>
@@ -184,7 +184,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         num_links);
 
     auto fabric_max_packet_size = local_only ? 0 : tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    auto l1_alignment = tt::tt_metal::experimental::get_device_properties(*mesh_device).node_local_mem_alignment();
 
     const auto [neighbors, directions] =
         local_only ? std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>>{}

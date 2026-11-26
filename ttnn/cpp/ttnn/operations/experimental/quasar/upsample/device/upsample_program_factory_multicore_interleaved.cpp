@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <string>
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -96,7 +96,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         // Row-major layout specific calculations
         input_unit_size = input.padded_shape()[-1] * input.element_size();
         output_unit_size = output.padded_shape()[-1] * output.element_size();
-        aligned_input_unit_size = tt::round_up(input_unit_size, hal::get_dram_alignment());
+        aligned_input_unit_size = tt::round_up(
+            input_unit_size, tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment());
 
         /*
         For Row-major layout, a unit of work is one row (stick) of the input tensor

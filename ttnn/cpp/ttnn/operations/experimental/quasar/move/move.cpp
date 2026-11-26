@@ -12,7 +12,7 @@
 
 #include <algorithm>
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
@@ -96,7 +96,9 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
         output_tensor.mesh_buffer().page_size(),
         num_l1_banks,
         std::max(
-            {hal::get_l1_alignment(), ghost_input_tensor.buffer()->alignment(), output_tensor.buffer()->alignment()}));
+            {tt::tt_metal::experimental::get_device_properties(*ghost_input_tensor.device()).node_local_mem_alignment(),
+             ghost_input_tensor.buffer()->alignment(),
+             output_tensor.buffer()->alignment()}));
 
     if (move_within_same_mem_space) {
         switch (input_mem_config.buffer_type()) {

@@ -11,7 +11,7 @@
 #include "tilize_multi_core_width_sharded_program_factory.hpp"
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
@@ -157,7 +157,8 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             (input_tensor_a.shard_spec().has_value() ? input_tensor_a.shard_spec().value().shape[1]
                                                      : input_tensor_a.nd_shard_spec().value().shard_shape[-1]);
         const uint32_t page_size_bytes = input_tensor_a.mesh_buffer().page_size();
-        const uint32_t alignment_requirement = hal::get_l1_alignment();
+        const uint32_t alignment_requirement =
+            tt::tt_metal::experimental::get_device_properties(*input_tensor_a.device()).node_local_mem_alignment();
         TT_FATAL(
             page_size_bytes == input_tensor_a.mesh_buffer().aligned_page_size(),
             "Input row-major shard width {} bytes gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "

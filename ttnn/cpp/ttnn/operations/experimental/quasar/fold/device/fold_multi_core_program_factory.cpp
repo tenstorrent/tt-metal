@@ -4,7 +4,7 @@
 
 #include "fold_device_op.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -44,8 +44,10 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
     uint32_t num_dst_rows = num_pixels / (width * stride_h);
     uint32_t pixels_per_dst_row = stride_h * width;
 
-    const uint32_t aligned_pixel_size = tt::align(pixel_size, hal::get_l1_alignment());
-    const uint32_t aligned_dst_pixel_size = tt::align(dst_pixel_size, hal::get_l1_alignment());
+    const uint32_t l1_alignment = tt::tt_metal::experimental::get_device_properties(*tensor_args.input_tensor.device())
+                                      .node_local_mem_alignment();
+    const uint32_t aligned_pixel_size = tt::align(pixel_size, l1_alignment);
+    const uint32_t aligned_dst_pixel_size = tt::align(dst_pixel_size, l1_alignment);
 
     // ---- Resource names ----
     const TensorParamName INPUT{"input"};

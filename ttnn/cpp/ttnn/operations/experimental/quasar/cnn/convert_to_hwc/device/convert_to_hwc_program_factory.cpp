@@ -9,7 +9,7 @@
 #include "tt-metalium/data_formats/data_format.hpp"
 #include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
@@ -251,7 +251,8 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     config.gather_l1_output_shard_width = config.output_shard_height;
 
     // Alignment requirements
-    config.alignment_elements = compute_alignment_requirement_in_elements(output.dtype());
+    config.alignment_elements = compute_alignment_requirement_in_elements(
+        output.dtype(), tt::tt_metal::experimental::get_device_properties(*output.device()).node_local_mem_alignment());
 
     log_debug(
         tt::LogType::LogOp,
@@ -353,9 +354,8 @@ void setup_circular_buffers(
         core_grid, CBIndex::CB_OUT, cb_out_total_size, cb_out_page_size, config.output_format, output.buffer()));
 }
 
-uint32_t compute_alignment_requirement_in_elements(tt::tt_metal::DataType output_dtype) {
+uint32_t compute_alignment_requirement_in_elements(tt::tt_metal::DataType output_dtype, uint32_t l1_alignment_bytes) {
     const uint32_t element_size_bytes = tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
-    const uint32_t l1_alignment_bytes = tt::tt_metal::hal::get_l1_alignment();
     return l1_alignment_bytes / element_size_bytes;
 }
 

@@ -10,7 +10,7 @@
 #include <utility>
 #include <limits>
 #include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/utils/work_split.hpp>
@@ -281,7 +281,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // 8-at-a-time (read_batch_size==8), double-buffered against the writer drain to keep overlap.
     const uint32_t read_batch_size = is_row_major ? 8u : 32u;
 
-    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment();
     uint32_t total_batches = (tokens_per_device + read_batch_size - 1) / read_batch_size;
 
     // Largest divisor of (hidden_size / 32) that is <= 8.  Mirrors the combine program factory.

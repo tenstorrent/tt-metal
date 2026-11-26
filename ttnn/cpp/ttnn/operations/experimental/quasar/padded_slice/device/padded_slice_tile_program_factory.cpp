@@ -20,7 +20,7 @@
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <vector>
@@ -415,9 +415,10 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
 
     uint32_t max_read_size = 4096;
 
+    const auto props = tt::tt_metal::experimental::get_device_properties(*device);
     auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
     TT_FATAL(
         output_row_size_bytes % dst_buffer_alignment == 0,
         "Output row size {} must be aligned to the destination buffer {} alignment {}",

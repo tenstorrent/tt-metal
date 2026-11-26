@@ -172,13 +172,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
     // tensor-backed sharded operands keep their natural stride.
     const uint32_t in0_aligned_tile_size =
-        in0_is_sharded
-            ? in0_single_tile_size
-            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+        in0_is_sharded ? in0_single_tile_size
+                       : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+                             device, in0_single_tile_size);
     const uint32_t in1_aligned_tile_size =
-        in1_is_sharded
-            ? in1_single_tile_size
-            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
+        in1_is_sharded ? in1_single_tile_size
+                       : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+                             device, in1_single_tile_size);
     uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     uint32_t in2_block_tiles = 0;
@@ -1207,11 +1207,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
     // tensor-backed sharded operands keep their natural stride.
     const uint32_t in0_aligned_tile_size =
-        in0_is_sharded
-            ? in0_single_tile_size
-            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+        in0_is_sharded ? in0_single_tile_size
+                       : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+                             device, in0_single_tile_size);
     const uint32_t in1_aligned_tile_size =
-        operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
+        operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(device, in1_single_tile_size);
     uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     const auto& a_shape_logical =
@@ -3006,13 +3006,13 @@ void override_program_parameters(
     // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
     // tensor-backed sharded operands keep their natural stride.
     const uint32_t in0_aligned_tile_size =
-        in0_is_sharded
-            ? in0_single_tile_size
-            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+        in0_is_sharded ? in0_single_tile_size
+                       : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+                             device, in0_single_tile_size);
     const uint32_t in1_aligned_tile_size =
-        in1_is_sharded
-            ? in1_single_tile_size
-            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
+        in1_is_sharded ? in1_single_tile_size
+                       : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+                             device, in1_single_tile_size);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
@@ -4037,11 +4037,11 @@ void override_program_parameters(
     // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
     // tensor-backed sharded operands keep their natural stride.
     const uint32_t in0_aligned_tile_size =
-        in0_is_sharded
-            ? in0_single_tile_size
-            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+        in0_is_sharded ? in0_single_tile_size
+                       : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+                             device, in0_single_tile_size);
     const uint32_t in1_aligned_tile_size =
-        operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
+        operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(device, in1_single_tile_size);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
@@ -5446,13 +5446,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
     // tensor-backed sharded operands keep their natural stride.
     const uint32_t in0_aligned_tile_size =
-        in0_is_sharded
-            ? in0_single_tile_size
-            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+        in0_is_sharded ? in0_single_tile_size
+                       : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+                             device, in0_single_tile_size);
     const uint32_t in1_aligned_tile_size =
-        in1_is_sharded
-            ? in1_single_tile_size
-            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
+        in1_is_sharded ? in1_single_tile_size
+                       : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+                             device, in1_single_tile_size);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
@@ -6544,11 +6544,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
     // tensor-backed sharded operands keep their natural stride.
     const uint32_t in0_aligned_tile_size =
-        in0_is_sharded
-            ? in0_single_tile_size
-            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+        in0_is_sharded ? in0_single_tile_size
+                       : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(
+                             device, in0_single_tile_size);
     const uint32_t in1_aligned_tile_size =
-        operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
+        operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(device, in1_single_tile_size);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 

@@ -22,7 +22,8 @@ namespace ttnn::operations::experimental::quasar::conv3d {
 // TILE_WIDTH) and L1 alignment, and is the smallest such value -> smallest
 // circular buffers. Used as the shared default in both prepare_conv3d_weights
 // and conv3d so their K-row blocking always agrees (issues #42146, #47316).
-uint32_t default_c_in_block(uint32_t kernel_vol);
+// `l1_alignment` is the L1 alignment of the device the conv runs on.
+uint32_t default_c_in_block(uint32_t kernel_vol, uint32_t l1_alignment);
 
 Tensor convert_conv_weight_tensor_to_grouped_layout(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);

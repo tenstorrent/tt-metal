@@ -11,7 +11,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include "ttnn/operations/experimental/quasar/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -33,7 +33,9 @@ namespace q = ttnn::operations::experimental::quasar::binary;
 
 // nextafter
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const float eps = tt::tt_metal::hal::get_eps();
+    auto* device = input_a.device();
+    TT_FATAL(device != nullptr, "nextafter input A must be allocated on device");
+    const float eps = tt::tt_metal::experimental::get_device_properties(*device).sfpu_eps();
     Tensor result(input_a);
     {
         Tensor eps_gt(input_a);

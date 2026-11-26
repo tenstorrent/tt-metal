@@ -15,7 +15,7 @@
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 using namespace tt::tt_metal;
 
@@ -321,7 +321,9 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
         // Misaligned W-begin needs SliceRmProgramFactory's tt_memmove fixup (issue #50714).
         const uint32_t begins_bytes_last =
             args.slice_start.rank() > 0 ? args.slice_start[-1] * input.element_size() : 0u;
-        const bool w_begin_aligned = (begins_bytes_last % ::hal::get_l1_alignment()) == 0;
+        const uint32_t l1_alignment =
+            tt::tt_metal::experimental::get_device_properties(*input.device()).node_local_mem_alignment();
+        const bool w_begin_aligned = (begins_bytes_last % l1_alignment) == 0;
         const bool height_sharded_in_out_no_step =
             input.is_sharded() &&
             input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&

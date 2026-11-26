@@ -63,7 +63,7 @@ tt::DataFormat get_interm_data_format(bool packer_l1_acc_en, bool fp32_dest_acc_
  * it does not look). Tensor-backed sharded operands keep their natural stride. The readers compute the same value
  * from NOC_DRAM_READ_ALIGNMENT_BYTES.
  */
-uint32_t get_interleaved_tile_stride(uint32_t tile_size);
+uint32_t get_interleaved_tile_stride(const tt::tt_metal::distributed::MeshDevice& device, uint32_t tile_size);
 
 uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a);
 

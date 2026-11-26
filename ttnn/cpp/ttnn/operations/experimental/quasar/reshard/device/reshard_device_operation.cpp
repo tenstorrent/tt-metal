@@ -8,7 +8,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 
@@ -171,7 +171,8 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
                                    out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 
         if (!is_height_to_height) {
-            const uint32_t alignment = hal::get_l1_alignment();
+            const uint32_t alignment =
+                tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment();
 
             uint32_t input_page_size = input_tensor.mesh_buffer().page_size();
             uint32_t input_aligned_page_size = input_tensor.mesh_buffer().aligned_page_size();

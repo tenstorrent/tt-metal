@@ -6,7 +6,7 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/utils/work_split.hpp>
@@ -70,8 +70,9 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
     auto stick_size_padded = W_padded * a.element_size();
     auto stick_size_padded_front = front_pad[-1] * a.element_size();
     auto stick_size_padded_end = stick_size_padded - stick_size - stick_size_padded_front;
-    uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, hal::get_l1_alignment());
-    uint32_t stick_size_padded_DRAM_aligned = tt::align(stick_size_padded, hal::get_dram_alignment());
+    const auto props = tt::tt_metal::experimental::get_device_properties(*a.device());
+    uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, props.node_local_mem_alignment());
+    uint32_t stick_size_padded_DRAM_aligned = tt::align(stick_size_padded, props.dram_alignment());
 
     // Input page-based addressing
     uint32_t num_input_pages_in_row = 1;
@@ -129,7 +130,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
         packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
 
-    bool unaligned = stick_size_padded_aligned % hal::get_dram_alignment() != 0;
+    bool unaligned = stick_size_padded_aligned % props.dram_alignment() != 0;
     bool has_pad_align = (stick_size_padded_front != 0) || unaligned;
 
     uint32_t num_sticks_per_barrier = get_num_stick_per_barrier(stick_size_padded_aligned);
