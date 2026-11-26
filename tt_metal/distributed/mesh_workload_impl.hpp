@@ -247,6 +247,8 @@ private:
     friend class tt::tt_metal::Program;
 
     bool use_prefetcher_cache_ = false;
+    // Whether the kernel-config block fits the KERNEL_CONFIG window, as fast dispatch needs. Set by finalize_offsets.
+    bool fits_kernel_config_window_ = true;
 
 public:
     // Main User-Facing API building blocks
@@ -314,7 +316,14 @@ public:
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
     void check_circular_buffers_bound();
+    // Compiles and finalizes the workload; in fast dispatch, also throws if its kernel-config block does not fit the
+    // KERNEL_CONFIG window.
     void compile(MeshDevice* mesh_device);
+    // Whether the finalized workload's kernel-config block, kernel binaries included, fits the KERNEL_CONFIG window.
+    bool fits_kernel_config_window() const { return fits_kernel_config_window_; }
+    // Throws with the size breakdown of the kernel-config block, for a finalized workload whose block does not fit the
+    // KERNEL_CONFIG window.
+    [[noreturn]] void throw_kernel_config_window_overflow(MeshDevice* mesh_device);
     // Compile/finalize the workload and commit its kernel binaries to DRAM without executing it.
     // The returned owner must remain alive while commands referencing the binary addresses may execute.
     std::shared_ptr<MeshBuffer> prepare_for_command_list(MeshCommandQueue& mesh_cq);

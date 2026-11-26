@@ -369,9 +369,12 @@ def check_undeclared_fusion(live: LiveTensor, entry: Entry) -> None:
 
 
 def check_param_groups(optimizer, scalars: dict[str, Any], strict: bool) -> None:
-    """The checkpoint's param groups must be the live optimizer's: the same count and, group by group, the same
-    params. Checked before any tensor is placed, so a mismatch leaves the model and optimizer untouched instead of
-    surfacing from ``set_state_dict`` after every tensor was replaced.
+    """The live optimizer's param groups must fit the checkpoint's: the same number of groups, and every live member
+    of a group among the checkpoint's members of that group. The checkpoint records each group's members over every
+    rank of the saving world (a rank of a multi-mesh world holds only its own), so one rank's optimizer may hold fewer
+    (under ``strict``, ``check_member_union`` then requires the ranks to hold every one between them), while a param
+    in another group, or one the checkpoint never saw, is refused. Checked before any tensor is placed, so a mismatch
+    leaves the model and optimizer untouched.
 
     A checkpoint without optimizer scalars was saved without an optimizer. A strict load refuses it when the live
     optimizer records param groups: an optimizer whose state is scalars only (SGD without momentum, say) would
@@ -405,18 +408,61 @@ def check_param_groups(optimizer, scalars: dict[str, Any], strict: bool) -> None
                 stacklevel=3,
             )
             continue
-        if saved == live_members:
+        saved_set = {n for n in saved.split("\n") if n}
+        live_set = {n for n in live_members.split("\n") if n}
+        extra = live_set - saved_set
+        if extra:
+            raise CheckpointError(
+                f"optimizer param group {group} holds params the checkpoint's group {group} does not: "
+                f"{sorted(extra)[:3]}; build the optimizer with the same param groups"
+            )
+
+
+def live_group_members(optimizer) -> dict[str, list[str]]:
+    """The live optimizer's members per param group (the group's index as a string), for ``check_member_union``; a
+    group without a member list is left out."""
+    state = optimizer.get_state_dict()
+    members: dict[str, list[str]] = {}
+    for group in range(int(state.get("num_param_groups") or 0)):
+        names = state.get(f"param_groups.{group}.params")
+        if names is not None:
+            members[str(group)] = sorted(n for n in names.split("\n") if n)
+    return members
+
+
+def check_member_union(scalars: dict[str, Any], live_by_rank: list[dict[str, list[str]]]) -> None:
+    """Under ``strict``: the ranks' live members of each param group, together, must be the checkpoint's members of
+    that group. A param the checkpoint's group holds and no rank's optimizer holds would otherwise stop being trained
+    without a word when the optimizer keeps no per-parameter state (SGD without momentum), since no state tensor of
+    it is left over for ``strict`` to refuse. ``live_by_rank`` holds each rank's ``live_group_members``; on one process
+    that is its own, and the members must equal the checkpoint's."""
+    for group in range(int(scalars.get("optimizer/num_param_groups") or 0)):
+        saved = scalars.get(f"optimizer/param_groups.{group}.params")
+        lists = [live[str(group)] for live in live_by_rank if str(group) in live]
+        if saved is None or not lists:  # no member list to compare: check_param_groups warned
             continue
-        saved_set, live_set = set(saved.split("\n")), set(live_members.split("\n"))
-        raise CheckpointError(
-            f"optimizer param group {group} holds different params in the checkpoint: only saved "
-            f"{sorted(saved_set - live_set)[:3]}, only live {sorted(live_set - saved_set)[:3]}; build the optimizer with "
-            f"the same param groups"
-        )
+        missing = {n for n in saved.split("\n") if n} - set().union(*lists)
+        if missing:
+            raise CheckpointError(
+                f"optimizer param group {group}: the checkpoint's group holds params no rank's optimizer holds: "
+                f"{sorted(missing)[:3]}; build the optimizer with the same param groups, or load with strict=False"
+            )
+
+
+def is_structural_scalar(key: str) -> bool:
+    """A scalar that describes the optimizer's own structure rather than its progress: the parameter names of a
+    param group. It is never written back (each rank's optimizer keeps its own list, which on a multi-mesh world
+    holds only that rank's parameters); ``check_param_groups`` checks it against the checkpoint's list, the union over
+    the saving ranks, before anything is placed."""
+    return bool(_PARAM_GROUP_MEMBERS.search(key))
+
+
+_PARAM_GROUP_MEMBERS = re.compile(r"(^|/)param_groups\.\d+\.params$")
 
 
 def restore_scalars(optimizer, scalars: dict[str, Any]) -> list[str]:
-    """Put the checkpoint's scalars into the optimizer's state dict and re-install it; returns the keys applied."""
+    """Put the checkpoint's scalars into the optimizer's state dict and re-install it; returns the keys applied.
+    Structural scalars (``is_structural_scalar``) keep the live optimizer's own value."""
     if not scalars:
         return []
     state = optimizer.get_state_dict()
@@ -428,6 +474,8 @@ def restore_scalars(optimizer, scalars: dict[str, Any]) -> list[str]:
             key = "optimizer/" + "/".join(path + (str(name),))
             if isinstance(child, dict):
                 walk(child, path + (str(name),))
+            elif is_structural_scalar(key):
+                continue
             elif isinstance(child, (bool, int, float, str)) and key in scalars:
                 node[name] = bool(scalars[key]) if isinstance(child, bool) else type(child)(scalars[key])
                 applied.append(key)
@@ -462,12 +510,34 @@ def mesh_device():
     return ttml.autograd.AutoContext.get_instance().get_device()
 
 
-def world_record() -> dict:
+def local_coords() -> list[tuple[int, ...]]:
+    """The mesh coordinates this process holds: every coordinate on a single-host mesh, this host's devices of a
+    multi-host mesh. get_local_mesh_coord_range is their bounding box, which also holds other hosts' devices when this
+    host's do not form a box, so each coordinate is checked."""
+    view = mesh_device().get_view()
+    return [tuple(int(x) for x in c) for c in view.get_local_mesh_coord_range() if view.is_local(c)]
+
+
+def mesh_id() -> int:
+    """The id the control plane gave this process's mesh; a plain single-host mesh reports 0."""
+    return int(mesh_device().get_system_mesh_id())
+
+
+def rank_record(rank: int, world_rank: int) -> dict:
+    """This process's entry of the world record: its ranks, mesh id, the global mesh shape and axis names, and
+    the coordinates it holds."""
     device = mesh_device()
     mesh = ttml.maybe_mesh()
     shape = list(mesh.shape) if mesh is not None else list(device.shape)
     axis_names = list(mesh.axis_names) if mesh is not None else [f"_{i}" for i in range(len(shape))]
-    return {"group_size": 1, "ranks": [{"world_rank": 0, "mesh_id": 0, "shape": shape, "axis_names": axis_names}]}
+    return {
+        "rank": int(rank),
+        "world_rank": int(world_rank),
+        "mesh_id": mesh_id(),
+        "shape": shape,
+        "axis_names": axis_names,
+        "local_coords": [list(c) for c in local_coords()],
+    }
 
 
 def check_label_unchanged(live: LiveTensor, when: str) -> None:
