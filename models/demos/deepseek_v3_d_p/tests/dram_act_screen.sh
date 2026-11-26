@@ -23,6 +23,9 @@ Options
   -p, --steps LIST      comma list of all8,cafull,random,v2fast,v2full,writes,caforms,wmis (default all8,cafull,random)
       --random-always   run random on every boot (default: only on a boot where an earlier step hit)
       --no-reset        skip the reset before the first boot (board was just reset)
+      --reset MODE      reset method: auto, ttop_ipmi, glx_reset_auto, tt_smi_r, none (default auto: the ttop socket,
+                        else glx_reset_auto when /dev/ipmi0 exists, else none). Use tt_smi_r on a host where
+                        glx_reset_auto is not allowed.
   -o, --out DIR         output directory (default <repo>/repro_logs/act_screen/<start time>)
       --dry-run         print the plan and the reset method, touch no device
   -h, --help            this text
@@ -84,7 +87,7 @@ EOF
 
 V2FAST=3:orig_bank3/sdpa16,3:orig_bank3/sdpa
 V2FULL=$V2FAST,7:orig_bank3/sdpa16,1:orig_bank3/sdpa16,6:orig_bank3/sdpa16,0:orig_bank3/sdpa16,2:orig_bank3/sdpa16,4:orig_bank3/sdpa16,5:orig_bank3/sdpa16
-NB=1 CTRL=3 SECS=120 STEPS=all8,cafull,random RANDOM_ALWAYS=0 RESET_FIRST=1 OUT="" DRY=0
+NB=1 CTRL=3 SECS=120 STEPS=all8,cafull,random RANDOM_ALWAYS=0 RESET_FIRST=1 RESET_ARG=auto OUT="" DRY=0
 while [[ $# -gt 0 ]]; do
   case $1 in
     -h|--help) usage; exit 0 ;;
@@ -94,6 +97,7 @@ while [[ $# -gt 0 ]]; do
     -p|--steps) STEPS=$2; shift 2 ;;
     --random-always) RANDOM_ALWAYS=1; shift ;;
     --no-reset) RESET_FIRST=0; shift ;;
+    --reset) RESET_ARG=$2; shift 2 ;;
     -o|--out) OUT=$2; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     *) echo "unknown argument $1 (see --help)" >&2; exit 2 ;;
@@ -120,6 +124,11 @@ elif [[ -e /dev/ipmi0 ]]; then
 else
   RESET_MODE=none
 fi
+case $RESET_ARG in
+  auto) ;;
+  ttop_ipmi|glx_reset_auto|tt_smi_r|none) RESET_MODE=$RESET_ARG ;;
+  *) echo "unknown reset mode $RESET_ARG (see --help)" >&2; exit 2 ;;
+esac
 
 board_reset() {
   case $RESET_MODE in
@@ -139,13 +148,14 @@ PY
       ;;
     # The venv and PYTHONPATH (repo root) break the host tt-smi import.
     glx_reset_auto) env -u PYTHONPATH -u VIRTUAL_ENV tt-smi -glx_reset_auto ;;
+    tt_smi_r) env -u PYTHONPATH -u VIRTUAL_ENV tt-smi -r ;;
   esac
 }
 
 do_reset() {  # do_reset <boot>
   local log=$OUT/reset_$1.log r n
   if [[ $RESET_MODE == none ]]; then
-    say "${Y}[WARN]${N} no $SOCK socket and no /dev/ipmi0: no reset, boot $1 continues on the current power-up"
+    say "${Y}[WARN]${N} reset mode none: boot $1 continues on the current power-up"
     return
   fi
   say "${B}reset${N} ($RESET_MODE) ..."
