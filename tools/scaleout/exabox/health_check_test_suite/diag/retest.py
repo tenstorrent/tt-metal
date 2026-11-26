@@ -91,5 +91,5 @@ def run_retest(
         snap_phase.rollup()
         print_phase_summary(snap_phase.name, asdict(snap_phase))
 
-    run_tests(tt_metal, names, phase, dry_run, logs_dir, suffix=RETEST_SUFFIX)
+    run_tests(tt_metal, names, phase, dry_run, logs_dir, name_suffix=RETEST_SUFFIX)
     return snap_phase

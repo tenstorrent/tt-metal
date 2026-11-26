@@ -8,6 +8,7 @@ TESTS and PYTESTS define the steps a tier can list under ``tests`` in tiers.py.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -176,6 +177,10 @@ def run_pytest_test(
     test_env = env.copy()
     test_env.setdefault("PYTHONPATH", str(tt_metal))
     log_path = logs_dir / f"{name}.log"
+    # A test that honors DIAG_RESULT_JSON writes its results there. The container keeps only the output dir, so
+    # anything written under the repo is lost when it exits.
+    result_path = logs_dir / f"{name}.json"
+    test_env["DIAG_RESULT_JSON"] = str(result_path)
     # shlex.join keeps args with spaces (-k "galaxy and bf16_HiFi2") copy-pasteable
     cmdline = shlex.join(cmd)
     log(f"--- test '{name}' (pytest) ---")
@@ -204,6 +209,7 @@ def run_pytest_test(
 
     emit_running(name)
 
+    result_path.unlink(missing_ok=True)
     t0 = time.time()
     passed = 0
     failed = 0
@@ -240,28 +246,37 @@ def run_pytest_test(
         suffix += f"  passed={passed} failed={failed}"
     emit_result(name, status, suffix=suffix)
     details = f"target={target} rc={rc} dur={dt:.1f}s " f"passed={passed} failed={failed} log={log_path}"
-    phase.add(
-        Check(
-            name=name,
-            status=status,
-            details=details,
-            data={
-                "target": target,
-                "command": cmdline,
-                "rc": rc,
-                "duration_s": dt,
-                "log_file": str(log_path),
-                "testcases": {"passed": passed, "failed": failed, "failures": failures},
-            },
-            ip="other",
-        )
-    )
+    data = {
+        "target": target,
+        "command": cmdline,
+        "rc": rc,
+        "duration_s": dt,
+        "log_file": str(log_path),
+        "testcases": {"passed": passed, "failed": failed, "failures": failures},
+    }
+    summary = read_result_summary(result_path)
+    if summary is not None:
+        data["result_file"] = str(result_path)
+        data["summary"] = summary
+        if summary.get("details"):
+            details += f" {summary['details']}"
+    phase.add(Check(name=name, status=status, details=details, data=data, ip="other"))
+
+
+def read_result_summary(path: Path) -> dict | None:
+    """The ``summary`` object of a test's result JSON, or None. An unreadable file
+    never changes the verdict: pass/fail comes from pytest."""
+    try:
+        summary = json.loads(path.read_text()).get("summary")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return summary if isinstance(summary, dict) else None
 
 
 def run_tests(
-    tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool, logs_dir: Path, suffix: str = ""
+    tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool, logs_dir: Path, name_suffix: str = ""
 ) -> None:
-    """Run the named TESTS / PYTESTS entries, in order. ``suffix`` goes on each
+    """Run the named TESTS / PYTESTS entries, in order. ``name_suffix`` goes on each
     check and log name, so a rerun does not overwrite the first run's."""
     binary = next(
         (tt_metal / c for c in DEPLOYMENT_BIN_CANDIDATES if (tt_metal / c).is_file()),
@@ -289,7 +304,7 @@ def run_tests(
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     for test in names:
-        name = f"{test}{suffix}"
+        name = f"{test}{name_suffix}"
         if test in PYTESTS:
             run_pytest_test(name, PYTESTS[test], tt_metal, env, phase, dry_run, logs_dir)
             continue

@@ -80,7 +80,7 @@ class TestRetest(unittest.TestCase):
         self.assertEqual(reset.call_args.kwargs["logs_dir"], self.logs / "retest")
         tests.assert_called_once()
         self.assertEqual(tests.call_args.args[1], ("gddr_act_c3", "gddr_act_all"))
-        self.assertEqual(tests.call_args.kwargs["suffix"], retest.RETEST_SUFFIX)
+        self.assertEqual(tests.call_args.kwargs["name_suffix"], retest.RETEST_SUFFIX)
         self.assertEqual(snap.name, "snapshot_after_retest_r")
         self.assertEqual(snap.status, PASS)
         ok = next(c for c in phase.checks if c.name == "retest_reset_ok")

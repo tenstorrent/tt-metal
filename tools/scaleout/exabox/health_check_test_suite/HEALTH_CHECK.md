@@ -170,6 +170,13 @@ die the alias shows on some boots and not others, so a clean run clears that
 boot only. A self-test plants the alias on every chip first, so a decode
 regression fails the check rather than passing it.
 
+A hit names the die for syseng. The check's `details` end with
+`hits: chip <id> (UBB<n> ASIC<n> tray <serial> <bdf> ASIC ID <id>) <n> bad reads on <target>`,
+and `data.summary.hits` in `diag_report.json` has the same per chip plus the
+alias bits and the first bad read. The full per-target results are in
+`logs/<check>.json`: the runner passes that path to every pytest as
+`DIAG_RESULT_JSON`, and the ACT tests write their results there.
+
 That is why the ACT tests run twice: when they pass, the `retest` phase resets
 the unit with `tt-smi -r`, takes and validates a snapshot as the pre-test reset
 loop does, and runs them again on the new boot (`gddr_act_c3_after_reset` in

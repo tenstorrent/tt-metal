@@ -934,6 +934,27 @@ def act_config(env=os.environ):
     return chips, cfg
 
 
+def hit_summary(results):
+    """Per-chip hits with the die's identity, short enough for a health-check report."""
+    hits = [
+        {
+            "chip": row["chip"],
+            **{k: row.get(k) for k in ("asic_id", "ubb", "asic_pos", "tray_serial", "bdf")},
+            "target": row["target"],
+            "arm": row["arm"],
+            "bad_reads": row["bad_reads"],
+            "alias_bits": row.get("alias_bits"),
+            "first": row.get("first"),
+        }
+        for row in results
+        if row["bad_reads"]
+    ]
+    details = "; ".join(
+        f"chip {h['chip']} ({ident_str(h)}) {h['bad_reads']} bad reads on {h['target']}" for h in hits
+    )
+    return {"hits": hits, "details": f"hits: {details}" if hits else "no hits"}
+
+
 def run_act(chips, cfg):
     assert all(form in FORMS for _, _, form in cfg["v2_plan"]), cfg["v2_plan"]
     assert all(form in FORMS for form in cfg["ca_forms"]), cfg["ca_forms"]
@@ -956,9 +977,21 @@ def run_act(chips, cfg):
         try:
             run_patterns(drv, cfg)
         finally:
-            (OUT_DIR / f"act_{os.environ.get('SLURM_JOB_ID', 'local')}_{int(time.time())}.json").write_text(
+            # The health-check runner names the file in DIAG_RESULT_JSON and reads back its summary.
+            out = os.environ.get("DIAG_RESULT_JSON") or (
+                OUT_DIR / f"act_{os.environ.get('SLURM_JOB_ID', 'local')}_{int(time.time())}.json"
+            )
+            Path(out).write_text(
                 json.dumps(
-                    {"config": cfg, "host": host_line, "asics": idents, "results": drv.results}, indent=1, default=str
+                    {
+                        "summary": hit_summary(drv.results),
+                        "config": cfg,
+                        "host": host_line,
+                        "asics": idents,
+                        "results": drv.results,
+                    },
+                    indent=1,
+                    default=str,
                 )
             )
         for r in runs:
