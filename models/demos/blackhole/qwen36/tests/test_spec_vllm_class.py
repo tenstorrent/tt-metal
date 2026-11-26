@@ -558,7 +558,7 @@ def test_spec_vllm_class_masked_verify(mesh_device, monkeypatch):
         # A token-masked chained verify (supports_chained_spec_verify with supports_spec_device_mask): verify A of the
         # request's next block, left unread; verify B chained over it with deferred sampling (placeholders, the
         # positions of a full acceptance, every count's start block); A's propose fills B's block, and B's ids under a
-        # random mask must equal the masked argmax of a logits verify of that block.
+        # random mask must equal the masked argmax of a logits verify of that block, run over scratch windows.
         chained0, pos0, n = eng.chained_steps, P + len(out) - 1, len(proposal)
         tok = torch.full((1, 1 + K), PAD, dtype=torch.int32)
         pos = torch.full((1, 1 + K), PAD, dtype=torch.int32)
@@ -579,7 +579,10 @@ def test_spec_vllm_class_masked_verify(mesh_device, monkeypatch):
         )
         res_a = cls.sample_deferred_decode(payload, sampling_params=greedy, num_valid_drafts=torch.tensor([n]))
         upper = pos0 + 1 + K
-        windows, by_count = runner.state.chained(0, scheduled=upper)
+        # B writes its states into blocks of its own, so the blocks of A's window, the start blocks of every count B
+        # can continue from, keep A's states for the reference below.
+        by_count = [list(w) for w in runner.state.last[0]]
+        windows = [[runner.free.pop() for _ in range(K + 1)] for _ in range(layout.num_groups)]
         payload = cls.decode_forward(
             tokens=torch.full((1, 1 + K), PAD, dtype=torch.int32),
             start_pos=torch.arange(upper, upper + 1 + K, dtype=torch.int32).reshape(1, -1),
@@ -625,7 +628,7 @@ def test_spec_vllm_class_masked_verify(mesh_device, monkeypatch):
             page_table=runner._table(upper),
             num_valid_drafts=torch.tensor([nb], dtype=torch.int32),
             accepted_counts=torch.tensor([acc], dtype=torch.int32),
-            mamba_state=runner.state.state({0: (windows, [by_count[g][acc - 1] for g in range(len(by_count))])}, 1),
+            mamba_state=runner.state.state({0: (scratch, [by_count[g][acc - 1] for g in range(len(by_count))])}, 1),
             page_tables_per_layer=[runner._table(upper)] * len(model.layer_indices),
             spec_mode="logits",
             read_from_device=True,
