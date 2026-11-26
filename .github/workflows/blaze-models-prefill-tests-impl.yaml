@@ -325,18 +325,20 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # archive: false uploads one file per artifact, named after the file, so each plot gets its own step; a leg
-      # with several launches writes one plot per launch.
+      # archive: false uploads one file per artifact, named after the file, so each plot (one per launch) gets its
+      # own step. overwrite replaces a retried leg's plot by deleting the artifact `name` names, so `name` must be
+      # the file name.
       - name: List prefill plots
         id: prefill-plots
         if: always() && !cancelled()
         continue-on-error: true
+        shell: bash
         run: |
           shopt -s nullglob
           plots=("$PREFILL_SUMMARIES"/plots/*.png)
           [ "${#plots[@]}" -gt 4 ] && echo "::warning::${#plots[@]} prefill plots, only the first 4 are uploaded"
           for i in 0 1 2 3; do
-            [ -n "${plots[$i]:-}" ] && echo "png${i}=${plots[$i]}" >> "$GITHUB_OUTPUT"
+            [ -n "${plots[$i]:-}" ] && printf 'png%s=%s\nname%s=%s\n' "$i" "${plots[$i]}" "$i" "$(basename "${plots[$i]}")" >> "$GITHUB_OUTPUT"
           done
           exit 0
       - name: ⬆️ Upload prefill plot 1
@@ -344,33 +346,41 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
+          name: ${{ steps.prefill-plots.outputs.name0 }}
           path: ${{ steps.prefill-plots.outputs.png0 }}
           retention-days: 30
           archive: false
+          overwrite: true
       - name: ⬆️ Upload prefill plot 2
         if: always() && !cancelled() && steps.prefill-plots.outputs.png1
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
+          name: ${{ steps.prefill-plots.outputs.name1 }}
           path: ${{ steps.prefill-plots.outputs.png1 }}
           retention-days: 30
           archive: false
+          overwrite: true
       - name: ⬆️ Upload prefill plot 3
         if: always() && !cancelled() && steps.prefill-plots.outputs.png2
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
+          name: ${{ steps.prefill-plots.outputs.name2 }}
           path: ${{ steps.prefill-plots.outputs.png2 }}
           retention-days: 30
           archive: false
+          overwrite: true
       - name: ⬆️ Upload prefill plot 4
         if: always() && !cancelled() && steps.prefill-plots.outputs.png3
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
+          name: ${{ steps.prefill-plots.outputs.name3 }}
           path: ${{ steps.prefill-plots.outputs.png3 }}
           retention-days: 30
           archive: false
+          overwrite: true
 
       - name: 📊 Publish prefill summaries
         if: always() && !cancelled()
