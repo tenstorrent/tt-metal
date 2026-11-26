@@ -1023,9 +1023,9 @@ inline void _bitonic_topk_phases_steps(
     if constexpr (FUSED) {
         if (i_start_phase == 0 && (i_end_phase == 4 || i_end_phase == 5)) {
             if (topk_replay_init >= 0) {
-                lltt::record<lltt::NoExec>(0, ldst_count);
+                TTI_REPLAY(0, ldst_count, 0, 1);
                 bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
-                lltt::record<lltt::NoExec>(8, ldst_count);
+                TTI_REPLAY(8, ldst_count, 0, 1);
                 bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
             }
             const bool argmin = (static_cast<bool>(idir) == static_cast<bool>(SortDir::ArgMin));
