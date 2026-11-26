@@ -229,8 +229,8 @@ TARGET mapping (placement and refinement classes):
 | in_buffer / history_buffer / taps_buffer = l1 | built (TensorAccessor reads where the tensor lies) | — |
 | output_memory l1_interleaved | built (writer accessor; per-core L1 share of q/k/v subtracted from the CB budget) | — |
 | fp32_dest_acc_en True | built (compute define; DEST_AUTO_LIMIT halves) | — |
-| input_window column_window (refinement 1) | refused | **knob-turn**: RM byte offset `2·(offset + c0)` inside the input page; TILE page `r·W_t + offset/32 + c`. No CB, block or schedule change. |
-| history_layout channel_paged (refinement 2) | refused | **knob-turn**: reader-only — history (row r, channel c) lives in page `c / P` at element `r·P + c mod P`; a group whose channels straddle pages issues one read per contiguous 32-aligned run per row. |
+| input_window column_window (refinement 1) | refused — **built in Refinement 1** | **knob-turn**: RM byte offset `2·(offset + c0)` inside the input page; TILE page `r·W_t + offset/32 + c` (`W_t = ceil(W/32)`, the padded width, so W need not be a multiple of 32). No CB, block or schedule change. |
+| history_layout channel_paged (refinement 1) | refused — **built in Refinement 1** | **knob-turn**: reader-only — history (row r, channel c) lives in page `c / P` at element `r·P + c mod P`; a group whose channels straddle pages issues one read per contiguous 32-aligned run per row (reader `read_history_halo`, CT arg `history_page_channels`, 0 = token-paged). |
 | sharded placements | not in TARGET; refused by validation | — |
 
 ## Work Distribution

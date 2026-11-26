@@ -81,7 +81,7 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0) — one entry per feature_spec TARGET axis
+# 2. SUPPORTED (Phase 0 + Refinement 1: column_window, channel_paged) — one entry per TARGET axis
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -92,8 +92,8 @@ SUPPORTED = {
     "taps_buffer": ["dram", "l1"],
     "output_memory": ["default", "dram_interleaved", "l1_interleaved"],
     "fp32_dest_acc_en": [False, True],
-    "history_layout": ["token_paged"],
-    "input_window": ["exact"],
+    "history_layout": ["token_paged", "channel_paged"],
+    "input_window": ["exact", "column_window"],
     "width_split": ["unequal", "equal"],
     "channel_count": ["wide", "narrow"],
     "seq_tiles": ["few", "one", "many"],
@@ -508,6 +508,7 @@ def gen_qkv_causal_conv1d_silu(
             fp32_dest_acc_en=fp32_dest_acc_en,
             dst_full_sync_en=dst_full_sync_en,
             input_column_offset=int(input_column_offset),
+            page_channels=page_channels,
         )
         entry = (plan, descriptor, work)
         _PROGRAM_CACHE[key] = entry

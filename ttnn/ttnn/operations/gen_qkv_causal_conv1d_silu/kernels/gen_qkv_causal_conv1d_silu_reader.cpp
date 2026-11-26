@@ -14,7 +14,7 @@
 //   load_rows_block  one cb_rows slot per block: sticks [0,3) = halo (tokens t0-3..t0-1),
 //                    sticks [3, 3 + 32*rows) = body. A stick is the block's contiguous channel slice
 //                    of one token row (64 * block_ch_tiles B).
-//                    halo source: t0 == 0          -> history pages 0..2
+//                    halo source: t0 == 0          -> history rows 0..2 (read_history_halo)
 //                                 later block      -> previous slot's last 3 body sticks (L1 -> L1)
 //                                 core-first, t0>0 -> RM: input rows t0-3..t0-1;
 //                                                     TILE: rows 29..31 of untilized tile-row t0/32-1
@@ -74,6 +74,37 @@ FORCE_INLINE void issue_tap_rows(
     }
 }
 
+// History halo: the 3 history rows of channels [c0, c0 + 32 * block_ch_tiles) -> sticks 0..2 of the slot.
+//   token-paged   (history_page_channels == 0): [1, 3, C]      row r = page r, channel c at element c.
+//   channel-paged (history_page_channels == P): [1, C/P, 3P]   row r of channel c = page c / P,
+//                 element r * P + c % P. A group whose channel slice straddles pages issues one read
+//                 per contiguous run per row; every run starts on a multiple of 32 channels (c0 and P
+//                 are tile multiples), i.e. 64 B aligned in source and destination.
+template <uint32_t block_ch_tiles, uint32_t history_page_channels, uint32_t elem_bytes, typename Accessor>
+FORCE_INLINE void read_history_halo(const Accessor& history_acc, uint32_t slot_base, uint32_t ch_group_tile_start) {
+    constexpr uint32_t group_channels = block_ch_tiles * TILE_DIM;
+    constexpr uint32_t stick_bytes = group_channels * elem_bytes;
+    const uint32_t c0 = ch_group_tile_start * TILE_DIM;
+    for (uint32_t r = 0; r < HALO_ROWS; ++r) {
+        const uint32_t dst_row = slot_base + r * stick_bytes;
+        if constexpr (history_page_channels == 0) {
+            noc_async_read(history_acc.get_noc_addr(r, c0 * elem_bytes), dst_row, stick_bytes);
+        } else {
+            constexpr uint32_t P = history_page_channels;
+            for (uint32_t c = c0; c < c0 + group_channels;) {
+                const uint32_t page = c / P;
+                const uint32_t in_page = c - page * P;
+                const uint32_t run_end = (page + 1) * P < c0 + group_channels ? (page + 1) * P : c0 + group_channels;
+                noc_async_read(
+                    history_acc.get_noc_addr(page, (r * P + in_page) * elem_bytes),
+                    dst_row + (c - c0) * elem_bytes,
+                    (run_end - c) * elem_bytes);
+                c = run_end;
+            }
+        }
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -84,7 +115,8 @@ void kernel_main() {
     constexpr uint32_t input_width_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
-    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr uint32_t history_page_channels = get_compile_time_arg_val(6);  // 0: token-paged history
+    constexpr auto input_args = TensorAccessorArgs<7>();
     constexpr auto history_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto tap0_args = TensorAccessorArgs<history_args.next_compile_time_args_offset()>();
     constexpr auto tap1_args = TensorAccessorArgs<tap0_args.next_compile_time_args_offset()>();
@@ -120,9 +152,9 @@ void kernel_main() {
     const auto history_acc = TensorAccessor(history_args, history_addr);
     Noc noc;
 
-    // Byte offset of this core's channel slice inside a token row (input) / history row.
+    // Byte offset of this core's channel slice inside a token row of the input (column window:
+    // the convolution channels start input_col_offset_tiles tiles into the row).
     const uint32_t input_byte_offset = (input_col_offset_tiles + ch_group_tile_start) * channel_tile_bytes;
-    const uint32_t history_byte_offset = ch_group_tile_start * channel_tile_bytes;
 
     // ---- load_taps: the group's sender issues the DRAM reads; receivers wait for the multicast ----
     auto tap_sender = taps_mcast.optional_sender(noc);
@@ -167,10 +199,8 @@ void kernel_main() {
         // Halo sticks [0, 3): tokens block_t0 - 3 .. block_t0 - 1.
         bool halo_from_untilized = false;
         if (block_seq_start == 0) {
-            for (uint32_t r = 0; r < HALO_ROWS; ++r) {
-                noc_async_read(
-                    history_acc.get_noc_addr(r, history_byte_offset), slot_base + r * stick_bytes, stick_bytes);
-            }
+            read_history_halo<block_ch_tiles, history_page_channels, elem_bytes>(
+                history_acc, slot_base, ch_group_tile_start);
         } else if (block_idx > 0) {
             // The previous block is full-height: its last 3 body sticks sit at [32*block_rows, +3).
             copy_local(noc, prev_slot_base + TILE_DIM * block_rows * stick_bytes, slot_base, HALO_ROWS * stick_bytes);

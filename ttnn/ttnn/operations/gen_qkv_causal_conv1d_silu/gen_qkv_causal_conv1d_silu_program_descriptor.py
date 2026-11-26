@@ -276,6 +276,7 @@ def create_program_descriptor(
     fp32_dest_acc_en: bool,
     dst_full_sync_en: bool,
     input_column_offset: int = 0,
+    page_channels: Optional[int] = None,
 ):
     """Build the single program. Returns (descriptor, work) — `work` lists the cores in the
     order their runtime args were written (used to rewrite addresses on a cache hit)."""
@@ -283,7 +284,9 @@ def create_program_descriptor(
     elem_bytes = input_tensor.element_size()
     tile_bytes = ttnn.tile_size(dtype)
     tensor_seq_tiles = int(input_tensor.shape[1]) // TILE_DIM
-    input_width_tiles = int(input_tensor.shape[2]) // TILE_DIM
+    # TILE regime page stride of one tile-row: the (padded) width in tiles. Column window: the
+    # convolution channels are tiles [offset/32, offset/32 + C/32) of each tile-row.
+    input_width_tiles = _div_up(int(input_tensor.shape[2]), TILE_DIM)
     width_tiles = [x // TILE_DIM for x in widths]
     w = plan.block_ch_tiles
     block_rows = plan.block_rows
@@ -301,7 +304,8 @@ def create_program_descriptor(
     ]
 
     # ---- reader ----
-    reader_ct = [w, block_rows, int(tile_input), input_width_tiles, elem_bytes, tile_bytes]
+    history_page_channels = 0 if page_channels is None else int(page_channels)  # 0: token-paged [1, 3, C]
+    reader_ct = [w, block_rows, int(tile_input), input_width_tiles, elem_bytes, tile_bytes, history_page_channels]
     for t in [input_tensor, history] + list(taps):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     # ---- writer ----

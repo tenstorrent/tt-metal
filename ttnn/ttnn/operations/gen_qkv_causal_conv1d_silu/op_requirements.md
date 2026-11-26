@@ -46,7 +46,7 @@
 - **Golden baseline**: 17 / 21 passing; 4 `xfail_expected` (conv1d-012, -013, -018, -019); 0 loud (per `verifier_report.json`)
 - **Perf targets**: 001 8.7 µs, 002 10.4 µs, 003 13.2 µs, 004 128–131 µs — all beat native ("must") and "target"
 
-### [ ] Refinement 1 — Reader addressing generality: input_window column_window + history_layout channel_paged
+### [x] Refinement 1 — Reader addressing generality: input_window column_window + history_layout channel_paged
 
 **Goal**: add `"column_window"` to `SUPPORTED["input_window"]` and `"channel_paged"` to `SUPPORTED["history_layout"]`, for both input layouts (ROW_MAJOR and TILE) and every placement already supported, natively in the reader:
 - **column_window**: read the convolution channels `[input_column_offset, input_column_offset + C)` of a wider input (`W > C` and/or `input_column_offset > 0`) where it lies.

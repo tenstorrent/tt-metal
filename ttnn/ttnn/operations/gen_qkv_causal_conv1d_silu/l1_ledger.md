@@ -76,7 +76,7 @@ the DRAM-bound target 004 (T 4096, C 2560, 11×10 grid: w 16, G 5, U 22) and the
 |--------|----------------|---------------|--------------------------|
 | input (RM) | 1× + 3 sticks per core whose range starts at `t0 > 0` (004: 105 cores × 3 KiB = 315 KiB, +1.5%; 001: 0) | the whole core range streams once through `cb_rows`; later blocks' halo is copied from the previous slot in L1, only a core's first halo is re-read | none (core-local halo copies: 3 sticks per later block) |
 | input (TILE) | 1× + one tile-row (`w` tiles) per core with `t0 > 0` | same; the halo needs rows 29..31 of the preceding tile-row | core-local: one L1→L1 copy of every untilized tile-row (1× input bytes, same core) |
-| history | 1× per channel (only the `t0 = 0` core of each group reads it) | only the first tile-row needs it | none |
+| history | 1× per channel (only the `t0 = 0` core of each group reads it). Requests: token-paged 3 per group; channel-paged (Refinement 1) 3 × (pages the group's channel slice spans) per group, each a contiguous 32-channel-aligned run (conv1d-012, P 160 vs 256-channel groups: ≤ 3 pages → ≤ 9 requests) | only the first tile-row needs it | none |
 | taps | **1× per channel** (implemented regime `tap_multicast_per_group`): only the slot-0 core of each channel group reads row 0 of its tap tiles (2 × 32 B per tap per channel tile) | reuse-shared across the token split; the group's sender multicasts the packed tap tiles to the other `cores_per_group − 1` cores | NoC multicast of `w·2048` B per group to ≤ 3 rectangles (004: 5 groups × 32 KiB); 0 DRAM |
 | q, k, v | 1× | written once from `cb_output_tiles` | none |
 | actual_start, predecessor_carry | 0 | never read (one sequence-parallel rank) | none |
