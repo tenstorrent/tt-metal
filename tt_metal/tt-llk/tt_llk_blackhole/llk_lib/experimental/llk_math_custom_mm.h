@@ -20,9 +20,10 @@ using namespace ckernel::math;
 
 // CUSTOM_MM
 // Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
-// in0 tile shape: [{1, 2, 4, 8}, 32]
+// in0 tile shape: [{1, 2, 4, 8}, 32], or [32, 32] (a full in0 tile: in1 [32, 32], no transpose, the Default layout,
+//                 no finalize; [32, 32] output tiles)
 // in1 tile shape: [32, 32] or [32, 16] ([16, 32] with transpose), giving [{1, 2, 4, 8}, 32] or [{1, 2, 4, 8}, 16] output tiles
-// rt_dim: 1
+// rt_dim: 1, or any integer of 1 or more with a full in0 tile: output tile (r, c) at dst_index + r * ct_dim + c
 // ct_dim: any integer from 1 to 34, as long as the ct_dim output tiles fit in the DEST sync region
 //         (custom_mm_tile_rows of the CustomMmDestLayout each)
 // kt_dim: any integer of 1 or more
@@ -158,6 +159,96 @@ inline void custom_mm_configure_narrow_mop(const std::uint32_t operandB_face_r_d
     tmp.program();
 }
 
+// The fifteen MVMULs of a [32, 32] x [32, 32] tile pair the replay holds; the MOP issues the sixteenth (end of tile
+// or end of k-row, as for a short in0 tile)
+constexpr std::uint32_t CUSTOM_MM_FULL_IN0_REPLAY_LEN = 15;
+
+// Address mods a [32, 32] in0 tile adds (over custom_mm_configure_addrmod's ADDR_MOD_0, 1, 4 and 5; 2 and 3 end the
+// tile and the k-row as for a short in0 tile). An MVMUL multiplies 8 SrcB rows by one SrcA face into 8 DEST rows, so
+// a tile pair is 16 of them. With in0 faces (row, k) at SrcB row 16 * (2 * row + k), in1 faces (k, col) at SrcA row
+// 16 * (2 * k + col) and output faces (row, col) at DEST row 16 * (2 * row + col), the walk goes: the two 8-row
+// halves of an in0 face, then the output face column, then the face row, then the k face:
+//
+//   k  row col half | SrcA SrcB DEST | then
+//   0   0   0   0   |   0    0    0  | next half
+//   0   0   0   1   |   0    8    8  | next column
+//   0   0   1   0   |  16    0   16  | next half
+//   0   0   1   1   |  16    8   24  | next face row
+//   0   1   0   0   |   0   32   32  | next half
+//   0   1   0   1   |   0   40   40  | next column
+//   0   1   1   0   |  16   32   48  | next half
+//   0   1   1   1   |  16   40   56  | next k face
+//   1   ...           32/48 16-56 0-56, the same eight steps one k face on in both sources
+//
+// SrcA / SrcB counters wrap at 64 rows and DEST at 1024, so a step back is the complement.
+inline void custom_mm_configure_full_in0_addrmod()
+{
+    addr_mod_t {
+        .srca = {.incr = 0, .clr = 0, .cr = 0},
+        .srcb = {.incr = 8, .clr = 0, .cr = 0},
+        .dest = {.incr = 8, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_0); // Next half: the lower 8 rows of the same in0 and output faces
+
+    addr_mod_t {
+        .srca = {.incr = 16, .clr = 0, .cr = 0},
+        .srcb = {.incr = 64 - 8, .clr = 0, .cr = 0},
+        .dest = {.incr = 8, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_1); // Next column: the next in1 and output face, back to the top half of the in0 face
+
+    addr_mod_t {
+        .srca = {.incr = 64 - 16, .clr = 0, .cr = 0},
+        .srcb = {.incr = 24, .clr = 0, .cr = 0},
+        .dest = {.incr = 8, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_4); // Next face row: the in0 face two on, back to the first in1 face of this k face
+
+    addr_mod_t {
+        .srca = {.incr = 16, .clr = 0, .cr = 0},
+        .srcb = {.incr = 64 - 24, .clr = 0, .cr = 0},
+        .dest = {.incr = 1024 - 56, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_5); // Next k face: one face on in SrcA and SrcB, back to the top of the output tile
+}
+
+inline void custom_mm_configure_full_in0_mop(const std::uint32_t ct_dim)
+{
+    load_replay_buf(
+        ckernel::math::replay_buf_offset,
+        CUSTOM_MM_FULL_IN0_REPLAY_LEN,
+        []
+        {
+            // Two k faces of eight MVMULs each; the MOP issues the very last one
+            for (std::uint32_t k_face = 0; k_face < 2; k_face++)
+            {
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0 /*instr_mod19*/, ADDR_MOD_0, 0 /*dst*/); // row 0, column 0, top half
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0 /*instr_mod19*/, ADDR_MOD_1, 0 /*dst*/); // row 0, column 0, bottom half
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0 /*instr_mod19*/, ADDR_MOD_0, 0 /*dst*/); // row 0, column 1, top half
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0 /*instr_mod19*/, ADDR_MOD_4, 0 /*dst*/); // row 0, column 1, bottom half
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0 /*instr_mod19*/, ADDR_MOD_0, 0 /*dst*/); // row 1, column 0, top half
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0 /*instr_mod19*/, ADDR_MOD_1, 0 /*dst*/); // row 1, column 0, bottom half
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0 /*instr_mod19*/, ADDR_MOD_0, 0 /*dst*/); // row 1, column 1, top half
+                if (k_face == 0)
+                {
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0 /*instr_mod19*/, ADDR_MOD_5, 0 /*dst*/); // row 1, column 1, bottom half
+                }
+            }
+        });
+
+    // As custom_mm_configure_mop: ct_dim tiles of one k-tile on one SrcB bank; the last clears both sources and
+    // returns DEST to the first tile for the next k-tile
+    const std::uint32_t mvmul_base      = TT_OP_REPLAY(ckernel::math::replay_buf_offset, CUSTOM_MM_FULL_IN0_REPLAY_LEN, 0, 0);
+    const std::uint32_t mvmul_end_tile  = TT_OP_MVMUL(p_setrwc::CLR_A, 0 /*instr_mod19*/, ADDR_MOD_2, 0 /*dst*/);
+    const std::uint32_t mvmul_end_block = TT_OP_MVMUL(p_setrwc::CLR_AB, 0 /*instr_mod19*/, ADDR_MOD_3, 0 /*dst*/);
+
+    ckernel_template tmp = ckernel_template(1 /*outer_loop_len*/, ct_dim, mvmul_base, mvmul_end_tile);
+    tmp.set_last_inner_loop_instr(mvmul_end_block);
+    tmp.set_last_outer_loop_instr(mvmul_end_block);
+
+    tmp.program();
+}
+
 template <bool split_acc>
 inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
 {
@@ -244,7 +335,15 @@ inline void _llk_math_custom_mm_init_(
     LLK_ASSERT(ct_dim >= 1 && ct_dim <= CUSTOM_MM_MAX_CT_DIM, "custom_mm: ct_dim must be 1 to 34");
     LLK_ASSERT(custom_mm_legal_in1_num_faces(in1_num_faces), "custom_mm: in1 must have 4 faces, or 2 for a [32, 16] tile");
     custom_mm_configure_addrmod<transpose, layout>();
-    if (custom_mm_narrow(in1_num_faces))
+    if (custom_mm_full_in0_r_dim(operandB_face_r_dim))
+    {
+        LLK_ASSERT(
+            !transpose && layout == CustomMmDestLayout::Default && in1_num_faces == TILE_NUM_FACES,
+            "custom_mm: a [32, 32] in0 tile takes a [32, 32] in1, no transpose and the Default layout");
+        custom_mm_configure_full_in0_addrmod();
+        custom_mm_configure_full_in0_mop(ct_dim);
+    }
+    else if (custom_mm_narrow(in1_num_faces))
     {
         custom_mm_configure_narrow_addrmod<layout>();
         custom_mm_configure_narrow_mop(operandB_face_r_dim, ct_dim);
@@ -283,7 +382,8 @@ inline void _llk_math_custom_mm_(
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim        = 1,
-    const std::uint32_t in1_num_faces = TILE_NUM_FACES)
+    const std::uint32_t in1_num_faces = TILE_NUM_FACES,
+    const std::uint32_t rt_dim        = 1)
 {
     LLK_ASSERT(
         math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
@@ -296,6 +396,22 @@ inline void _llk_math_custom_mm_(
     static_assert(!finalize || custom_mm_split_acc(layout), "custom_mm: finalize merges split partials, so it needs a SplitAcc layout");
     constexpr std::uint32_t tile_rows     = custom_mm_tile_rows(layout);
     constexpr DstTileShape dst_tile_shape = tile_rows == 16 ? DstTileShape::Tile16x16 : (tile_rows == 32 ? DstTileShape::Tile32x16 : DstTileShape::Tile32x32);
+
+    if (custom_mm_full_in0_r_dim(operandB_face_r_dim))
+    {
+        LLK_ASSERT(!finalize, "custom_mm: a [32, 32] in0 tile has no split accumulators to finalize");
+        // One pass per in0 tile-row, into that row's ct_dim output tiles; each MOP is one k-tile of the row
+        for (std::uint32_t r = 0; r < rt_dim; r++)
+        {
+            math::set_dst_write_addr<dst_tile_shape, UnpackDestination::SrcRegs>(dst_index + r * ct_dim);
+            for (std::uint32_t i = 0; i < kt_dim; i++)
+            {
+                TTI_MOP(1, 0, 0);
+            }
+        }
+        return;
+    }
+    LLK_ASSERT(rt_dim == 1, "custom_mm: rt_dim above 1 needs a [32, 32] in0 tile");
     math::set_dst_write_addr<dst_tile_shape, UnpackDestination::SrcRegs>(dst_index);
 
     // Run mop kt_dim - 1 times, the last inner dim is handled separately to choose whether to run finalization or not

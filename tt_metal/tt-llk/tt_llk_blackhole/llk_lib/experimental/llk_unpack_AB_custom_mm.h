@@ -19,16 +19,29 @@ using namespace ckernel::unpacker;
 
 // CUSTOM_MM
 // Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
-// in0 tile shape: [{1, 2, 4, 8}, 32]
+// in0 tile shape: [{1, 2, 4, 8}, 32], or [32, 32] (a full in0 tile: in1 [32, 32], no transpose, the Default layout)
 // in1 tile shape: [32, 32] or [32, 16] ([16, 32] with transpose), giving [{1, 2, 4, 8}, 32] or [{1, 2, 4, 8}, 16] output tiles
-// rt_dim: 1
+// rt_dim: 1, or any integer of 1 or more with a full in0 tile (one pass over the weights per in0 tile-row)
 // ct_dim: any integer from 1 to 34 (DEST capacity also bounds it, see llk_custom_mm_common.h)
 // kt_dim: any integer of 1 or more
 // fidelity: LoFi only
 // throttle: not supported
 
-inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
+inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1, const bool full_in0 = false)
 {
+    if (full_in0)
+    {
+        // Five instructions, as the short sequence: the replay layout below counts on it
+        TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+        // The whole [32, 32] in0 tile in one instruction, its four faces into SrcB rows 0 to 63, from the SrcB base
+        // address with no counter steps: the base then moves on a tile (SCRATCH_SEC2). Stepping the face counters
+        // would not reach the next tile of a bfp format, whose exponent section sits in front of its faces.
+        TTI_UNPACR_COMMON(SrcB, 0b00000000, 1); // Also set dvalid
+        TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+        TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 2, THCON_SEC1_REG3_Base_address_ADDR32);
+        TTI_NOP; // (a CFGSHIFTMASK takes 2 cycles; the next unpacks read the addresses they update)
+        return;
+    }
     // Unpack SrcA (in1, full tile, uses CFGSHIFTMASK to manipulate L1 addr and keeps SrcA addr fixed at 0)
     TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
 
@@ -61,17 +74,17 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
 // TT_MOP has a 7-bit loop count.
 constexpr std::uint32_t CUSTOM_MM_MAX_MOP_ITERATIONS = 128;
 
-inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, const bool post1)
+inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, const bool post1, const bool full_in0 = false)
 {
     LLK_ASSERT(ct_dim >= 1 && ct_dim <= CUSTOM_MM_MAX_CT_DIM, "custom_mm: ct_dim must be 1 to 34");
 
     load_replay_buf(
         0,
         32,
-        [post1]
+        [post1, full_in0]
         {
             // Full unpack (both SrcA and SrcB)
-            _llk_unpack_AB_custom_mm_iter_insns(post1);
+            _llk_unpack_AB_custom_mm_iter_insns(post1, full_in0);
 
             // Loop 8 times to fill up the replay buffer
             for (std::uint32_t i = 0; i < 8; i++)
@@ -184,13 +197,16 @@ inline void _llk_unpack_AB_custom_mm_init_(
     const std::uint32_t unpA_num_faces = TILE_NUM_FACES)
 {
     LLK_ASSERT(custom_mm_legal_in1_num_faces(unpA_num_faces), "custom_mm: in1 must have 4 faces, or 2 for a [32, 16] tile");
+    const bool full_in0 = custom_mm_full_in0_r_dim(unpB_face_r_dim);
+    LLK_ASSERT(!full_in0 || (!transpose && unpA_num_faces == TILE_NUM_FACES), "custom_mm: a [32, 32] in0 tile takes a [32, 32] in1, no transpose");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
 
     // UnpA unpacks full tiles, of 4 faces or 2 for a [32, 16] tile
     const std::uint32_t unpA_x_end = unpA_num_faces * FACE_R_DIM * FACE_C_DIM - 1;
     // UnpB unpacks [{1, 2, 4, 8}, 32] tiles which only have top two faces and only a single face per instruction
     // so a single instruction only unpacks unpB_face_r_dim rows
-    const std::uint32_t unpB_x_end = unpB_face_r_dim * FACE_C_DIM - 1;
+    // (a [32, 32] in0 tile goes in whole, its four faces in one instruction)
+    const std::uint32_t unpB_x_end = (full_in0 ? TILE_NUM_FACES : 1) * unpB_face_r_dim * FACE_C_DIM - 1;
     TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
 
@@ -198,7 +214,7 @@ inline void _llk_unpack_AB_custom_mm_init_(
     // More details under tt-metal#38518
     const bool post1 = unpA_dst_format == to_underlying(DataFormat::Bfp4_b);
 
-    _llk_unpack_AB_custom_mm_mop_config_(ct_dim, post1);
+    _llk_unpack_AB_custom_mm_mop_config_(ct_dim, post1, full_in0);
 
     if constexpr (clear_src)
     {
@@ -218,6 +234,8 @@ inline void _llk_unpack_AB_custom_mm_init_(
 // Most k-tiles one SrcB base address covers: k-tile k reads faces k and k + 1 of an 8-bit Y + 8-bit Z face index,
 // which reaches face 255 + 255 = 510, so k-tile 255 would need face 511 and alias.
 constexpr std::uint32_t CUSTOM_MM_MAX_KT_PER_WALK = 255;
+// (A [32, 32] in0 tile's walk steps the SrcB base address, not the face counters: no face index limit.)
+constexpr std::uint32_t CUSTOM_MM_FULL_IN0_MAX_KT_PER_WALK = 0xFFFF;
 
 /**
  * @brief Issue the SrcA/SrcB unpack of a kt_dim x ct_dim block with the MOP that @ref _llk_unpack_AB_custom_mm_init_
@@ -243,8 +261,10 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t tile_size_b,
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
-    const std::uint32_t kt_dim)
+    const std::uint32_t kt_dim,
+    const bool full_in0 = false)
 {
+    const std::uint32_t max_kt_per_walk = full_in0 ? CUSTOM_MM_FULL_IN0_MAX_KT_PER_WALK : CUSTOM_MM_MAX_KT_PER_WALK;
     LLK_ASSERT(kt_dim >= 1, "custom_mm: kt_dim must be at least 1");
     // Program the SrcA base once; CFGSHIFTMASK advances it across all walks
     cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
@@ -253,12 +273,17 @@ inline void _llk_unpack_AB_custom_mm_run_(
     cfg[SCRATCH_SEC0_val_ADDR32] = block_increment;
     // inner_increment moves to next tile_row (next inner_dim)
     cfg[SCRATCH_SEC1_val_ADDR32] = inner_increment;
+    if (full_in0)
+    {
+        // the in0 tile step of a [32, 32] in0 tile's walk (the short tiles step the face counters instead)
+        cfg[SCRATCH_SEC2_val_ADDR32] = tile_size_b;
+    }
 
     constexpr std::uint32_t mop_template_0 = 0;
     constexpr std::uint32_t no_skip_zmask  = 0;
 
     // Split kt_dim into near-equal walks; the first kt_dim % num_walks take one extra k-tile
-    const std::uint32_t num_walks  = (kt_dim + CUSTOM_MM_MAX_KT_PER_WALK - 1) / CUSTOM_MM_MAX_KT_PER_WALK;
+    const std::uint32_t num_walks  = (kt_dim + max_kt_per_walk - 1) / max_kt_per_walk;
     const std::uint32_t base_kt    = kt_dim / num_walks;
     const std::uint32_t long_walks = kt_dim % num_walks;
     std::uint32_t walk_kt          = 0;
@@ -321,8 +346,11 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim)
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim = 1,
+    const bool full_in0        = false)
 {
+    LLK_ASSERT(rt_dim == 1 || full_in0, "custom_mm: rt_dim above 1 needs a [32, 32] in0 tile");
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
@@ -331,9 +359,14 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
     const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;
 
-    // Wait for all contexts to be free
-    wait_for_next_context(1);
-    reset_config_context();
+    // One pass over the weights per in0 tile-row (in0 [rt_dim, kt_dim] tiles, row-major): every weight tile is
+    // unpacked rt_dim times, every in0 tile once
+    for (std::uint32_t r = 0; r < rt_dim; r++)
+    {
+        // Wait for all contexts to be free
+        wait_for_next_context(1);
+        reset_config_context();
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, tile_size_b, block_increment, inner_increment, kt_dim);
+        _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b + r * kt_dim * tile_size_b, tile_size_b, block_increment, inner_increment, kt_dim, full_in0);
+    }
 }
