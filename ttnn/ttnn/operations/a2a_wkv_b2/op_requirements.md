@@ -45,7 +45,7 @@
 - **Golden baseline**: 7 / 7 passing (2 supported_pass + 5 regression), 0 loud categories
 - **Perf baseline**: 131.6 µs per call (trace replay) = 3.0× SOL. Critical path: the fabric_tx neighbour streams end at about 120 µs, against about 65 µs for the workers.
 
-### [ ] Refinement 1 — Speed up the fabric_tx sender path (perf-flagged profile)
+### [x] Refinement 1 — Speed up the fabric_tx sender path (perf-flagged profile)
 
 **Type**: perf
 
@@ -93,6 +93,15 @@ Re-profile after each lever: the tx tail is the end of the last fabric_tx BRISC 
 - back-to-back and trace replay still bit-identical.
 
 The guard set is this single cell, so no regression on it is the no-regression requirement.
+
+**Outcome**: 131.5 → **102.5 µs per call** (trace replay). The tx tail past the worker stream shrank from about 54.5 to about 25 µs (last tx BRISC 120.6 → 90.8 µs; workers end at about 65.5 µs). PCC 0.999907; golden 7/7; regression bit-identical.
+- **What landed**: batched pull (one barrier per `TX_BATCH = 8` packets) with cached monotonic polls, and the writer twin (one flush + pop per batch). `TX_BATCH` 4–8 tie; 12/24 are slower, and a deeper `TX_BUFFERS` is flat.
+- **Bottleneck now**: the fabric send itself, about 0.32–0.4 µs per 4,352 B packet (≈ 11–13 GB/s per link-0 sender), applied to the data the workers publish late. Writer SEND is 47.5 µs of the 120-packet stream; the pulls are 4.9 µs.
+- **Measured and not kept**:
+  - ready-order send: 109 µs, and its metadata path costs about 11 µs in strict order;
+  - tx pull on NoC 1: wrong output, undiagnosed, little headroom.
+- **Not available**: bigger packets (the fabric payload is fixed at 4,352 B by the fabric config).
+- **Next**: an earlier worker publish (Refinement 2), then more than one sender per link via the mux (Refinement 3) to parallelize the per-packet send cost. Not done here because both are out of this refinement's scope.
 
 ### [ ] Refinement 2 — Speed up the worker DRAM read stream (perf-flagged profile)
 

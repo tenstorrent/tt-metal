@@ -152,7 +152,7 @@ are a **communication role**; they do no compute.
 | `cb_attn_tiled` | — | 1 block | tilize and matmul run on the same TRISCs one after another; a second block buys nothing |
 | `cb_weight` | — | 1 head (resident across `m`) | residency, not overlap (heads_per_core = 1) |
 | `cb_out` | — | all of the core's blocks (heads_per_core × Mt × Nt) | blocks stay until fabric_tx pulls them; no back-pressure handshake |
-| `cb_tx_stage` (fabric_tx) | `tx_depth` | 2 packets | pull of packet p+1 over the NoC overlaps the fabric send of packet p |
+| `cb_tx_stage` (fabric_tx) | `tx_buffers · tx_batch` | 2 batches of 8 packets | pull of batch b+1 (one barrier) overlaps the fabric send of batch b (one flush); polls cached per head (Refinement 1) |
 
 ### Mechanism caps
 
@@ -323,7 +323,7 @@ on every core (`pull_block` relies on it). Indices are any distinct values.
 | `cb_attn_rm` | 1 | 2048 (tile-sized page holding 64 B × 32 rows of RM data; 16 pages = 32 sticks × 1024 B) | `attn_rm_depth · mt_block · Kt` (32) | spans k, one mt block; streams m | Float16_b | reader (worker) | compute | per mt block |
 | `cb_attn_tiled` | 2 | 2048 | `mt_block · Kt` (16) | spans k of one block; streams m | Float16_b | compute (tilize) | compute (matmul) | per mt block |
 | `cb_out` | 3 | 1088 | `heads_per_core · Mt · Nt` (20) | spans m, n of the core's heads (bounded: heads_per_core = ceil(H/num_workers) ≤ 1 at ≥ 96 workers) | Bfp8_b | compute | writer (worker) | whole program (fabric_tx reads it in place) |
-| `cb_tx_stage` | 4 | 1088 | `tx_depth · tiles_per_packet` (8) | one packet per slot; streams the stream's blocks | Bfp8_b | reader (fabric_tx) | writer (fabric_tx) | whole program |
+| `cb_tx_stage` | 4 | 1088 | `tx_buffers · tx_batch · tiles_per_packet` (64) | one packet per slot, batches of `tx_batch`; streams the stream's blocks | Bfp8_b | reader (fabric_tx) | writer (fabric_tx) | whole program |
 
 `cb_out` has one CB producer (compute) and one CB consumer (the worker writer). fabric_tx reads its
 pages over the NoC, not through CB credit; ordering comes from `sem_blocks_done` (bumped by the writer

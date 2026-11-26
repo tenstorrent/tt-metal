@@ -27,7 +27,7 @@ with open(path) as f:
             k = (int(x), int(y), risc.strip())
             end[key][k] = max(end[key].get(k, 0), t)
 runs = sorted({k[1] for k in end})
-for run in runs[-2:]:
+for run in runs[-8:]:
     print(f"== run {run}")
     for key in sorted(k for k in end if k[1] == run):
         s = start[key]
