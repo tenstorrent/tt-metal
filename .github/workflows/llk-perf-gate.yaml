@@ -78,6 +78,7 @@ jobs:
         timeout-minutes: 20
         with:
           fetch-depth: 0
+          filter: blob:none
       - name: Find the branch point
         id: find
         env:
