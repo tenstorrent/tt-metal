@@ -20,6 +20,7 @@
 #include <new>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -118,17 +119,21 @@ TEST_F(SeatLockFiles, CPU_GateAdmitsOneAttachAtATime) {
     const SeatGate again(seat, gate_timeout);
 }
 
-size_t open_files() {
+// Files this process has open in `dir`.
+size_t open_files_in(const std::filesystem::path& dir) {
     size_t count = 0;
-    for ([[maybe_unused]] const auto& entry : std::filesystem::directory_iterator("/proc/self/fd")) {
-        count++;
+    for (const auto& entry : std::filesystem::directory_iterator("/proc/self/fd")) {
+        std::error_code error;
+        const std::filesystem::path target = std::filesystem::read_symlink(entry.path(), error);
+        if (!error && target.parent_path() == dir) {
+            count++;
+        }
     }
     return count;
 }
 
 // A process keeps one file open per chip, however many seats it holds there and however it holds them.
 TEST_F(SeatLockFiles, CPU_OneOpenFilePerChip) {
-    const size_t before = open_files();
     std::vector<SeatLock> held;
     for (uint32_t y = 0; y < 12; y++) {
         held.push_back(SeatLock::try_acquire_exclusive({.asic_id = 1, .noc0_x = 0, .noc0_y = y}).value());
@@ -136,12 +141,12 @@ TEST_F(SeatLockFiles, CPU_OneOpenFilePerChip) {
     }
     {
         const SeatGate gate(seat, gate_timeout);
-        EXPECT_EQ(open_files(), before + 1);
+        EXPECT_EQ(open_files_in(dir()), 1u);
     }
     held.push_back(SeatLock::try_acquire_exclusive({.asic_id = 2, .noc0_x = 0, .noc0_y = 0}).value());
-    EXPECT_EQ(open_files(), before + 2);
+    EXPECT_EQ(open_files_in(dir()), 2u);
     held.clear();
-    EXPECT_EQ(open_files(), before) << "a chip file stayed open with nothing held in it";
+    EXPECT_EQ(open_files_in(dir()), 0u) << "a chip file stayed open with nothing held in it";
 }
 
 TEST_F(SeatLockFiles, CPU_LockIsReleasedWhenItsLastOwnerGoes) {
