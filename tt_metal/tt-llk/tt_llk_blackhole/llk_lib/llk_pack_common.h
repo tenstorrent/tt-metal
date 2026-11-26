@@ -50,14 +50,26 @@ inline void _llk_packer_set_math_semaphore_()
 
 inline void llk_pack_pre_dst_write();
 
+// The early offset write is one RMWCIB of the offset's second byte: a WRCFG holds the config unit the other threads share for two
+// cycles, which delays a math re-init in the same window (perf_generalized_moe_gate combine). Fast untilize moves the GPR offsets.
+static_assert((DEST_REGISTER_HALF_SIZE & 0xff) == 0 && (DEST_REGISTER_HALF_SIZE >> 8) <= 0xf, "the DEST half offset is in bits 8-11");
+constexpr std::uint32_t PACK_DEST_OFFSET_B1_MASK = 0xf;
+
 // One SyncHalf release with the half known at compile time: the ZEROACC and WRCFG words are fixed, so the RISC computes none.
-template <bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t half, bool offset_first, bool offset_nops, bool pre = false>
+template <bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t half, bool offset_first, bool offset_nops, bool pre = false, bool offset_by_gpr = true>
 inline void _llk_pack_dest_half_done_()
 {
     constexpr std::uint32_t next_half_gpr = half ? p_gpr_pack::DEST_OFFSET_LO : p_gpr_pack::DEST_OFFSET_HI;
-    if constexpr (offset_first)
+    if constexpr (offset_first && !offset_by_gpr)
+    {
+        TTI_RMWCIB1(PACK_DEST_OFFSET_B1_MASK, half ? 0 : DEST_REGISTER_HALF_SIZE >> 8, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+    }
+    else if constexpr (offset_first)
     {
         TTI_WRCFG(next_half_gpr, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+    }
+    if constexpr (offset_first)
+    {
         if constexpr (pre)
         {
             llk_pack_pre_dst_write();
@@ -115,15 +127,30 @@ inline void _llk_pack_dest_section_done_()
                                   (pack_bound || !((is_fp32_dest_acc_en && pack_reconfig_u2d<Dst>) ||
                                                    ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en) ||
                                                    ckernel::packer::llk_pack_copy<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en)));
+    constexpr bool offset_by_gpr = pack_fast_untilize_linked<Dst>;
     if constexpr (Dst == DstSync::SyncHalf && by_branch)
     {
         if (dest_offset_id == 0)
         {
-            _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 0, offset_first, offset_nops, !is_fp32_dest_acc_en && ckernel::packer::llk_pack_pre_dst_sync<Dst>()>();
+            _llk_pack_dest_half_done_<
+                is_fp32_dest_acc_en,
+                clear_dest,
+                0,
+                offset_first,
+                offset_nops,
+                !is_fp32_dest_acc_en && ckernel::packer::llk_pack_pre_dst_sync<Dst>(),
+                offset_by_gpr>();
         }
         else
         {
-            _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 1, offset_first, offset_nops, !is_fp32_dest_acc_en && ckernel::packer::llk_pack_pre_dst_sync<Dst>()>();
+            _llk_pack_dest_half_done_<
+                is_fp32_dest_acc_en,
+                clear_dest,
+                1,
+                offset_first,
+                offset_nops,
+                !is_fp32_dest_acc_en && ckernel::packer::llk_pack_pre_dst_sync<Dst>(),
+                offset_by_gpr>();
         }
         flip_packer_dest_offset_id();
     }
@@ -131,8 +158,18 @@ inline void _llk_pack_dest_section_done_()
     {
         const std::uint32_t done_half = dest_offset_id % 2;
         flip_packer_dest_offset_id();
-        // Arithmetic pick of the next half's GPR: a branch on the parity here lets GCC duplicate the loop body per half
-        TT_WRCFG(p_gpr_pack::DEST_OFFSET_HI - (p_gpr_pack::DEST_OFFSET_HI - p_gpr_pack::DEST_OFFSET_LO) * done_half, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        // Arithmetic pick of the next half's offset: a branch on the parity here lets GCC duplicate the loop body per half
+        if constexpr (offset_by_gpr)
+        {
+            TT_WRCFG(
+                p_gpr_pack::DEST_OFFSET_HI - (p_gpr_pack::DEST_OFFSET_HI - p_gpr_pack::DEST_OFFSET_LO) * done_half,
+                p_cfg::WRCFG_32b,
+                DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        }
+        else
+        {
+            TT_RMWCIB1(PACK_DEST_OFFSET_B1_MASK, (DEST_REGISTER_HALF_SIZE >> 8) * (1 - done_half), DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        }
         if constexpr (!is_fp32_dest_acc_en && ckernel::packer::llk_pack_pre_dst_sync<Dst>())
         {
             llk_pack_pre_dst_write();
