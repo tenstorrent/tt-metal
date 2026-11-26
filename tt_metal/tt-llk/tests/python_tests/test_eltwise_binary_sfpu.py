@@ -1155,11 +1155,7 @@ _REMAINDER_SIGN_EDGE_PAIRS = [
 
 
 def test_eltwise_binary_sfpu_remainder_sign_edges():
-    """Float32 remainder on sign and exact-multiple edges: nonzero lanes bit-exact.
-
-    Zero lanes compare by value: WH SFPMAD flushes -0 to +0, where torch keeps -0 for
-    a negative divisor.
-    """
+    """Float32 remainder sign edges; zero lanes by value, since WH flushes -0 to +0."""
     res, golden = sfpu_binary(
         input_output_formats([DataFormat.Float32])[0],
         DestAccumulation.Yes,

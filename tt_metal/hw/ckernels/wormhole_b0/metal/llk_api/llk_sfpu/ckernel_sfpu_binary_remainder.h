@@ -294,13 +294,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat a, sfpi::vFloat b)
     sfpi::vFloat div_result = a * sfpu_reciprocal_iter<2>(b);
     sfpi::vFloat floor_div = _floor_body_(div_result);
 
-    // Corrections run on q = (a - floor_div * b) * sign(b): wrong sign is q < 0,
-    // overshoot is q >= |b|. q is formed as a * sign(b) - floor_div * |b|: the
-    // products by +-1.0 and the MADs on |b| round symmetrically, so every lane
-    // equals a - floor_div * b times sign(b). SFPMAD/SFPMUL flush a -0 result to
-    // +0 (tt-isa-documentation WormholeB0 SFPMAD.md, IEEE754 divergence), so q is
-    // never -0 and the q < 0 compare cannot fire on a zero remainder.
-    // a * sign(b) does not depend on floor_div.
+    // q = (a - floor_div * b) * sign(b); SFPMAD/SFPMUL flush -0 to +0 (WH SFPMAD.md), so the q < 0
+    // sign correction never fires on a zero remainder.
     sfpi::vFloat sign_b = sfpi::copysgn(sfpi::vFloat(1.0f), b);
     sfpi::vFloat b_abs = sfpi::abs(b);
     sfpi::vFloat a_rel = a * sign_b;
@@ -313,9 +308,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat a, sfpi::vFloat b)
     v_if(q < sfpi::vFloat(0.0f)) { q += b_abs; }
     v_endif;
 
-    // Magnitude correction, same-sign operands only: reciprocal imprecision can
-    // make floor() one too low, leaving |result| >= |b|. a_rel >= 0 differs from
-    // sign(a) == sign(b) only for a zero (or denormal) a, where q is +0 here.
+    // Same-sign operands only: a floor one too low leaves q >= |b|.
     v_if(a_rel >= sfpi::vFloat(0.0f)) {
         v_if(diff >= sfpi::vFloat(0.0f)) { q = diff; }
         v_endif;
