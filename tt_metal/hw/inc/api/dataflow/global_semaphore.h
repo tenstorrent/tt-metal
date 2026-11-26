@@ -106,6 +106,11 @@ public:
     // Advanced: writes v. Not atomic.
     FORCE_INLINE void set(uint32_t v) { semaphore_detail::set<CORE_TYPE>(l1_addr_, SCOPE, v); }
 
+    // Advanced: the semaphore's L1 address (the host's GlobalSemaphore::address()), the same on every core and chip.
+    // For kernels that use the address directly, for example to build fabric packet headers or to pass it to
+    // helpers. New code should use the methods of this class instead.
+    FORCE_INLINE uint32_t address() const { return l1_addr_; }
+
     // ---- Another core on the same chip (NoC) ----
 
     template <bool posted = false>
