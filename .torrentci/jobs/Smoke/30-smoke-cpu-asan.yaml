@@ -11,7 +11,8 @@ jobs:
       kubernetes:
         os: linux
         arch: amd64
-        image: {from-job: ci-build-image, image: ci-build}
+        # GitHub runs the cpu-only leg on ci-test (cpu-docker-image: ci-test-tag).
+        image: {from-job: ci-test-image, image: ci-test}
         resources:
           requests: {cpu: '4', memory: 16Gi, ephemeral-storage: 30Gi}
           limits: {cpu: '4', memory: 16Gi, ephemeral-storage: 40Gi}
