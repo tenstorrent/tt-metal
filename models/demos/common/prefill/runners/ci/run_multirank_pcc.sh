@@ -493,7 +493,7 @@ cleanup() {
       fi
       "${GANTT_PY}" "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
         --ranklogs "${RANKLOGS}" --real-chunks "${REAL_CHUNKS}" \
-        -o "${GANTT_DIR}/${RUN_NAME}_pipeline_gantt.png" \
+        -o "${GANTT_DIR}/${RUN_NAME}_${CONFIG}_pipeline_gantt.png" \
         || echo "gantt render failed (non-fatal)"
       if [ -n "${GANTT_TMP}" ]; then
         rm -rf "${GANTT_TMP}"

@@ -21,12 +21,12 @@ _RANK_LAYERS = re.compile(r"\[pp rank (\d+)/(\d+)\] .*?layers=\[(\d+), (\d+)\)")
 # A stage whose acks are closer than this apart (median gap) acked as a batch, not layer by layer: the producer
 # drains a batch in well under a millisecond, while a layer takes several.
 _MIN_LAYER_ACK_GAP_S = 0.5e-3
-# Each runner rank's start-up line (prefill_runner.py): its stage mesh, layers, chunking, packing, slots and layout.
+# Each runner rank's start-up line (prefill_runner.py).
 _RANK_SETUP = re.compile(
     r"\[pp rank (?P<rank>\d+)/(?P<ranks>\d+)\] mesh=\((?P<rows>\d+), (?P<cols>\d+)\) "
     r"layers=\[(?P<lo>\d+), (?P<hi>\d+)\) .*?chunk_size=(?P<chunk>\d+) forward_chunks=(?P<cpf>\d+) "
-    r"max_seq_len=\d+ num_users=(?P<users>\d+)"
-    r"(?: sp=(?P<sp>\d+) tp=(?P<tp>\d+) sp_axis=(?P<axis>\d+) traced=(?P<traced>[01]))?"
+    r"max_seq_len=\d+ num_users=(?P<users>\d+) "
+    r"sp=(?P<sp>\d+) tp=(?P<tp>\d+) sp_axis=(?P<axis>\d+) traced=(?P<traced>[01])"
 )
 
 # Chunks spanned by a throughput probe. A single chunk can run half again as long as its neighbours,
@@ -243,19 +243,18 @@ def _setup_from_logs(root):
     if not ranks:
         return ""
     g = ranks[min(ranks)]
-    stages = f"{g['ranks']} stage{'s' if g['ranks'] != '1' else ''} x [{g['rows']},{g['cols']}]"
-    if g["sp"] is not None:
-        stages += f" (SP{g['sp']} on mesh axis {g['axis']}, TP{g['tp']})"
+    stages = (
+        f"{g['ranks']} stage{'s' if g['ranks'] != '1' else ''} x [{g['rows']},{g['cols']}]"
+        f" (SP{g['sp']} on mesh axis {g['axis']}, TP{g['tp']})"
+    )
     counts = [int(r["hi"]) - int(r["lo"]) for _, r in sorted(ranks.items())]
     layers = f"{sum(counts)} layers" + (f" as {'+'.join(map(str, counts))}" if len(counts) > 1 else "")
     if len(ranks) < int(g["ranks"]):
         layers += f" ({len(ranks)} of {g['ranks']} ranks reported)"
     cpf = int(g["cpf"])
     packing = f"{cpf} per forward (packed)" if cpf > 1 else "1 per forward"
-    parts = [stages, layers, f"{g['users']} slots", f"{g['chunk']}-token chunks, {packing}"]
-    if g["traced"] is not None:
-        parts.append("traced" if g["traced"] == "1" else "eager")
-    return ", ".join(parts)
+    tracing = "traced" if g["traced"] == "1" else "eager"
+    return ", ".join([stages, layers, f"{g['users']} slots", f"{g['chunk']}-token chunks, {packing}", tracing])
 
 
 def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None, chunks_per_forward=1, setup="", stages=()):
@@ -446,6 +445,8 @@ def main():
     )
     if lines:
         _publish(lines, args.summary_name)
+    if rec and args.real_chunks > 0:
+        rec["expected_chunks"] = args.real_chunks
     _publish_json(rec, args.summary_name)
 
 

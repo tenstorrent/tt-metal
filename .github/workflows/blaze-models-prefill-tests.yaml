@@ -350,7 +350,7 @@ jobs:
           MODEL: ${{ matrix.model }}
         run: |
           id=$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
-            --jq ".artifacts[] | select(.name == \"${MODEL}_pipeline_gantt.png\") | .id" | head -1)
+            --jq ".artifacts[] | select(.name == \"${MODEL}_sc4_pipeline_gantt.png\") | .id" | head -1)
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           if [ -n "$id" ]; then
             echo "url=${run_url}/artifacts/${id}" >> "$GITHUB_OUTPUT"

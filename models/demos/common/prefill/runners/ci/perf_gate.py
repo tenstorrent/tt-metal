@@ -177,6 +177,12 @@ def main():
         return 1
 
     if baselines is None:
+        # No baseline's deepest probe to check depth against: the whole request must have retired, or a run cut short
+        # would report a shallow rate and pass.
+        expected, measured = rec.get("expected_chunks", 0), rec.get("num_chunks", 0)
+        if expected and measured < expected:
+            fail(f"TPS GATE FAIL: {measured} of the request's {expected} chunks retired; the run did not finish")
+            return 1
         print(f"TPS: {probes[label]:,.0f} tok/s {label} (no PREFILL_EXPECTED_TPS set -- reporting, not gating)")
         return 0
 

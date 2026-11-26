@@ -195,7 +195,7 @@ def main():
             for cfg, c in ((base_cfg, base), (ref_cfg, ref))
             if c
         ]
-        lines += [f"run: {c['setup']}" for c in (base, ref) if c.get("setup")]
+        lines += [f"run: {cfg} {c['setup']}" for cfg, c in ((base_cfg, base), (ref_cfg, ref)) if c.get("setup")]
         lines.append("request: " + " | ".join(shapes))
         lines.append(f"gain = how many times better {ref_cfg} is than {base_cfg}")
         if not note:
