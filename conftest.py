@@ -1058,6 +1058,28 @@ def pytest_addoption(parser):
         "and +50 mV through ARC (without it, only the firmware's VCORE)",
     )
     parser.addoption(
+        "--vdd-offsets",
+        action="store",
+        default=None,
+        help="With --didt-vf-sweep: VDD offsets over the firmware's VCORE to run at every clock, in mV, comma "
+        "separated (e.g. 0,25,50); overrides --enable-vdd-offsets",
+    )
+    parser.addoption(
+        "--vf-sweep-start-step",
+        action="store",
+        type=int,
+        default=0,
+        help="With --didt-vf-sweep: skip the first N (clock, VDD offset) steps, to resume a sweep after a hang. "
+        "The reference outputs are still taken at the lowest sweep clock",
+    )
+    parser.addoption(
+        "--vf-sweep-results",
+        action="store",
+        default=None,
+        help="With --didt-vf-sweep: append one JSON line per sweep event (reference, step start, step end) to this "
+        "file as the sweep runs, so a driver can tell which step hung",
+    )
+    parser.addoption(
         "--grid-size",
         action="store",
         default=None,

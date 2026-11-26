@@ -72,9 +72,9 @@ RCFILE="$(mktemp)"
 echo 0 > "$RCFILE"
 { PYTHONUNBUFFERED=1 $PYTHON -m pytest tests/didt/test_minimal_matmul.py::test_minimal_matmul \
 	-k "all and bf16_HiFi2" \
-	--didt-workload-iterations 100 \
+	--didt-workload-iterations 1000 \
 	--determinism-check-interval 50 \
-	--timeout 400 -q --tb=line --junitxml="$junit" 2>&1 || echo "$?" > "$RCFILE"; } | tee "$log"
+	--timeout 2400 -q --tb=line --junitxml="$junit" 2>&1 || echo "$?" > "$RCFILE"; } | tee "$log"
 rc="$(cat "$RCFILE")"
 rm -f "$RCFILE"
 

@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from concurrent.futures import ThreadPoolExecutor
+import json
+import os
+import time
 
 from loguru import logger
 import torch
@@ -22,7 +25,13 @@ class OpParameter:
 class OpTestBase:
     # VF sweep settings for tests that do not pass them to the constructor. tests/didt/conftest.py fills these from
     # --didt-vf-sweep / --sweep-iterations for each test, so every didt test gets the sweep without signature changes.
-    vf_sweep_defaults = {"freqs": None, "sweep_iterations": None, "vdd_offsets": None}
+    vf_sweep_defaults = {
+        "freqs": None,
+        "sweep_iterations": None,
+        "vdd_offsets": None,
+        "start_step": 0,
+        "results_path": None,
+    }
 
     def __init__(
         self,
@@ -40,6 +49,8 @@ class OpTestBase:
         vf_sweep_freqs=None,
         sweep_iterations=None,
         vdd_offsets=None,
+        vf_sweep_start_step=None,
+        vf_sweep_results_path=None,
     ):
         self.mesh_device = mesh_device
         # This will be removed once we rebase onto new main with the new open_mesh_device API
@@ -71,6 +82,14 @@ class OpTestBase:
             sweep_iterations = OpTestBase.vf_sweep_defaults["sweep_iterations"]
         if vdd_offsets is None:
             vdd_offsets = OpTestBase.vf_sweep_defaults["vdd_offsets"]
+        if vf_sweep_start_step is None:
+            vf_sweep_start_step = OpTestBase.vf_sweep_defaults.get("start_step") or 0
+        if vf_sweep_results_path is None:
+            vf_sweep_results_path = OpTestBase.vf_sweep_defaults.get("results_path")
+        # Resuming a sweep (e.g. after a hang) skips its first vf_start_step steps; the reference outputs are still
+        # taken at the lowest sweep clock. Every sweep event is appended to vf_results_path as one JSON line.
+        self.vf_start_step = vf_sweep_start_step
+        self.vf_results_path = vf_sweep_results_path
         self.vf_sweep_freqs = list(vf_sweep_freqs) if vf_sweep_freqs else None
         self.sweep_iterations = sweep_iterations
         self.vdd_offsets = list(vdd_offsets) if vdd_offsets else [0]
@@ -80,7 +99,10 @@ class OpTestBase:
             if any(o < 0 or o > 100 for o in self.vdd_offsets):
                 raise ValueError(f"VDD offsets must be 0-100 mV, got {self.vdd_offsets}")
             # One step per (clock, offset), offsets in the order given within each clock.
-            self.vf_steps = [(mhz, off) for mhz in self.vf_sweep_freqs for off in self.vdd_offsets]
+            all_steps = [(mhz, off) for mhz in self.vf_sweep_freqs for off in self.vdd_offsets]
+            if not 0 <= self.vf_start_step < len(all_steps):
+                raise ValueError(f"VF sweep start step {self.vf_start_step} is outside the {len(all_steps)} steps")
+            self.vf_steps = all_steps[self.vf_start_step :]
             self.loop_count = len(self.vf_steps) * self.sweep_iterations
 
         # Weights and activations tensors are needed for subclasses to run the operation
@@ -170,6 +192,27 @@ class OpTestBase:
                 clock.release()
                 logger.info(f"VF sweep: released the forced AICLK and VDD on devices {list(self.device_ids)}")
 
+    def _record_sweep_event(self, event, **fields):
+        """Append one sweep event to vf_results_path (if set), flushed to disk so it survives a hang or a kill."""
+        if not self.vf_results_path:
+            return
+        record = {"event": event, "time": time.time(), **fields}
+        with open(self.vf_results_path, "a") as f:
+            f.write(json.dumps(record) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+    def _record_step_end(self, step):
+        self._record_sweep_event(
+            "end",
+            step=step["step"],
+            mhz=step["mhz"],
+            offset=step["offset"],
+            checks=step["checks"],
+            nd={str(d): n for d, n in zip(self.device_ids, step["nd"])},
+            vcore={str(d): v for d, v in zip(self.device_ids, step["vcore"])},
+        )
+
     def _set_sweep_clock(self, clock, mhz, label):
         """Drain the devices, hand VDD back to the firmware, force AICLK, wait until every device reports it and
         return {device_id: VCORE mV} (the firmware's voltage for that clock).
@@ -247,6 +290,7 @@ class OpTestBase:
                 # For DRAM we keep all a_t[act] live; we still switch self.activations each time, so
                 # determinism checking is unchanged (different inputs, match reference per activation).
                 num_nd_outputs = [0] * num_devices
+                reference_failed = set()
                 reference_out = [None for _ in range(num_activation_tensors)]
                 for act in range(num_activation_tensors):
                     self.activations = self.convert_activations_to_memory_config(a_t[act])
@@ -260,8 +304,13 @@ class OpTestBase:
                         if failed:
                             logger.warning(f"Device {self.device_ids[output_id]} reference output {act} failed")
                             num_nd_outputs[output_id] += 1
+                            reference_failed.add(self.device_ids[output_id])
                     if self.activation.mem_config.buffer_type == ttnn.BufferType.L1:
                         self.deallocate_activations()
+                if clock is not None:
+                    self._record_sweep_event(
+                        "reference", mhz=min(self.vf_sweep_freqs), failed=sorted(int(d) for d in reference_failed)
+                    )
 
             current_act_tensor = 0
             out = [None] * num_devices
@@ -272,10 +321,17 @@ class OpTestBase:
             logger.debug("Starting iterations")
             for i in range(self.loop_count):
                 if clock is not None and i % self.sweep_iterations == 0:
+                    if sweep_steps:
+                        self._record_step_end(sweep_steps[-1])
                     step_idx = i // self.sweep_iterations
                     mhz, offset = self.vf_steps[step_idx]
+                    total_steps = self.vf_start_step + len(self.vf_steps)
                     label = (
-                        f"step {step_idx + 1}/{len(self.vf_steps)} " f"(iterations {i}-{i + self.sweep_iterations - 1})"
+                        f"step {self.vf_start_step + step_idx + 1}/{total_steps} "
+                        f"(iterations {i}-{i + self.sweep_iterations - 1})"
+                    )
+                    self._record_sweep_event(
+                        "start", step=self.vf_start_step + step_idx, mhz=mhz, offset=offset, total_steps=total_steps
                     )
                     if step_idx == 0 or self.vf_steps[step_idx - 1][0] != mhz:
                         base_vcore = self._set_sweep_clock(clock, mhz, label)
@@ -288,6 +344,7 @@ class OpTestBase:
                             clock.release_vdd()
                         vcore = base_vcore
                     step = {
+                        "step": self.vf_start_step + step_idx,
                         "mhz": mhz,
                         "offset": offset,
                         "checks": 0,
@@ -347,6 +404,9 @@ class OpTestBase:
                 logger.debug(f"Iteration = {i}, done!")
 
         if clock is not None:
+            if sweep_steps:
+                self._record_step_end(sweep_steps[-1])
+            self._record_sweep_event("done")
             self._log_sweep_summary(sweep_steps)
 
         catch_nd_on_fail = True

@@ -22,15 +22,25 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(autouse=True)
 def didt_vf_sweep(request):
-    """Hand --didt-vf-sweep / --sweep-iterations to OpTestBase, so every didt test runs the sweep unchanged."""
+    """Hand the VF sweep options to OpTestBase, so every didt test runs the sweep unchanged."""
     freqs = request.config.getoption("--didt-vf-sweep")
     iterations = request.config.getoption("--sweep-iterations")
     offsets = None
     if freqs:
         freqs = [int(f) for f in freqs.replace(" ", "").split(",") if f]
         iterations = 1000 if iterations is None else iterations
-        offsets = VDD_OFFSETS_MV if request.config.getoption("--enable-vdd-offsets") else [0]
+        explicit = request.config.getoption("--vdd-offsets")
+        if explicit:
+            offsets = [int(o) for o in explicit.replace(" ", "").split(",") if o]
+        else:
+            offsets = VDD_OFFSETS_MV if request.config.getoption("--enable-vdd-offsets") else [0]
     saved = dict(OpTestBase.vf_sweep_defaults)
-    OpTestBase.vf_sweep_defaults = {"freqs": freqs or None, "sweep_iterations": iterations, "vdd_offsets": offsets}
+    OpTestBase.vf_sweep_defaults = {
+        "freqs": freqs or None,
+        "sweep_iterations": iterations,
+        "vdd_offsets": offsets,
+        "start_step": request.config.getoption("--vf-sweep-start-step") if freqs else 0,
+        "results_path": request.config.getoption("--vf-sweep-results") if freqs else None,
+    }
     yield
     OpTestBase.vf_sweep_defaults = saved

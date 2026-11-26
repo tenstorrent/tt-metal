@@ -7,19 +7,22 @@ ITERATIONS=5
 PYTHON="$(command -v python3 || command -v python)"
 SKIP_RESET=0
 CONTINUE_ON_FAILURE=0
+RUN_VF_SWEEP=0
 RESET_CMD="tt-smi -glx_reset"
 MGD="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 
 usage() {
 	cat << EOF
 Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links] [--mgd <path>]
+          [--run-vf-sweep]
 
-Run the deployment test suite (Ethernet, DRAM, PCIe read/write, NOC, DIDT).
+Run the deployment test suite (Ethernet, DRAM, PCIe read/write, NOC, NOC integrity (OpTestBase), DIDT).
 Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
 An iteration is a board reset followed by one run of the Ethernet, DRAM and PCIe tests.
-After all iterations, the NOC tests run once, then the boards are reset and DIDT runs once.
+After all iterations, the C++ NOC tests run once, then the boards are reset and the Python NOC
+integrity test (tests/didt/test_noc_integrity.py) runs once, then the boards are reset and DIDT runs once.
 
 Optional:
     --output <logdir>                       Directory where the log file is written
@@ -34,6 +37,12 @@ Optional:
                                             10 links per chip are expected.
     --mgd <path>                            Path to the mesh graph descriptor (.textproto) file to
                                             use for the Ethernet, DRAM, NOC and PCIe tests (default: $MGD).
+    --run-vf-sweep                          After all tests: if DIDT failed on non-determinism, or a NOC test failed
+                                            on a hang or non-determinism, re-run that workload as a clock x VDD sweep
+                                            (AICLK 800/1000/1200/1350 MHz x firmware VCORE +0/+25/+50 mV) and report
+                                            where the failure is gone and the working (clock, Vmin) pairs. Failures
+                                            from timeouts or machine problems do not trigger it. Hangs inside the
+                                            sweep are recovered with a board reset, also under --skip-reset.
     -h                                      Display this help message and exit
 
 Examples:
@@ -45,6 +54,9 @@ Examples:
 
     Stress run of 20 iterations without resets, collecting every failure:
         $0 --output ./logs --iterations 20 --skip-reset --continue-on-failure
+
+    Full qualification, and find where DIDT / NOC failures go away:
+        $0 --output ./logs --run-vf-sweep
 
     Run on a partially cabled system:
         $0 --output ./logs --no-eth-links
@@ -76,6 +88,9 @@ do
 	--no-eth-links)
 		ETH_TEST_EXPECTED_LINKS=0
 		export ETH_TEST_EXPECTED_LINKS
+		;;
+	--run-vf-sweep)
+		RUN_VF_SWEEP=1
 		;;
 	--mgd)
 		if [ -z "$2" ]; then echo "Missing argument to $1"; exit 1; fi
@@ -109,14 +124,25 @@ if [ -n "$MGD" ]; then
 	export TT_MESH_GRAPH_DESC_PATH
 fi
 
+if ! $PYTHON -c 'import pytest, ttnn' > /dev/null 2>&1
+then
+	echo "$PYTHON cannot import pytest and ttnn. Activate the tt-metal Python environment first (source python_env/bin/activate)."
+	exit 1
+fi
+
 mkdir -p "$LOGDIR"
 
 RUN_LOG="$LOGDIR/deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
 : > "$RUN_LOG"
+# Per-test logs (NOC, DIDT) and VF sweep results of this run
+RUN_DIR="${RUN_LOG%.log}"
+mkdir -p "$RUN_DIR"
 
 WORKDIR="$(mktemp -d)"
 # Carries a command's exit status out of the tee pipeline
 RCFILE="$WORKDIR/rc"
+# Output of the last run_logged command alone
+STEP_LOG="$WORKDIR/step.log"
 trap 'rm -rf "$WORKDIR"' EXIT
 trap 'rm -rf "$WORKDIR"; exit 130' HUP INT TERM
 
@@ -174,6 +200,7 @@ emit_setup() {
 	emit "$(printf '%-24s %s' 'Continue on failure:' "$([ "$CONTINUE_ON_FAILURE" -eq 1 ] && echo true || echo false)")"
 	emit "$(printf '%-24s %s' 'Checking eth links:' "$checking_eth_links")"
 	emit "$(printf '%-24s %s' 'Mesh graph descriptor:' "${MGD:-<auto>}")"
+	emit "$(printf '%-24s %s' 'VF sweep on failure:' "$([ "$RUN_VF_SWEEP" -eq 1 ] && echo true || echo false)")"
 }
 
 # emit_status <text> <passed|failed>: print a line ending in a pass/fail verdict.
@@ -189,7 +216,7 @@ emit_status() {
 # run_logged: run a command and set $rc to its exit status.
 run_logged() {
 	echo 0 > "$RCFILE"
-	{ "$@" 2>&1 || echo "$?" > "$RCFILE"; } | tee -a "$RUN_LOG"
+	{ "$@" 2>&1 || echo "$?" > "$RCFILE"; } | tee "$STEP_LOG" | tee -a "$RUN_LOG"
 	rc="$(cat "$RCFILE")"
 }
 
@@ -240,6 +267,30 @@ if bad:
 PY
 }
 
+# run_pytest <command...>: run a pytest command, failing if any selected test was skipped or none ran.
+run_pytest() {
+	results="$WORKDIR/pytest.xml"
+	rm -f "$results"
+	"$@" --junitxml="$results" || return $?
+	$PYTHON - "$results" << 'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+try:
+    root = ET.parse(sys.argv[1]).getroot()
+except (OSError, ET.ParseError) as e:
+    sys.exit(f"Could not read pytest results: {e}")
+
+suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+tests = sum(int(s.get("tests", 0)) for s in suites)
+skipped = sum(int(s.get("skipped", 0)) for s in suites)
+if tests == 0:
+    sys.exit("No tests were run")
+if skipped:
+    sys.exit(f"{skipped} of {tests} tests were skipped")
+PY
+}
+
 # run_reset <message>: reset the boards and return its exit status.
 run_reset() {
 	emit_section "$1"
@@ -269,7 +320,7 @@ run_test() {
 	return 0
 }
 
-# run_tests: runs one round of every per-iteration test (NOC and DIDT run once, separately, after all iterations).
+# run_tests: runs one round of every per-iteration test (NOC, NOC integrity and DIDT run once, separately, after all iterations).
 # Sets last_eth_ok, last_dram_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
 # Returns 1 if any test failed, 0 otherwise.
 run_tests() {
@@ -307,7 +358,7 @@ run_tests() {
 emit_banner "DEPLOYMENT TESTS RUN"
 emit "$(printf '%-12s %s' 'Date:' "$(date)")"
 emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
-emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write (per iteration), NOC, DIDT (once, after all iterations)')"
+emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write (per iteration), NOC, NOC integrity (OpTestBase), DIDT (once, after all iterations)')"
 emit_setup
 emit "$RULE_HEAVY"
 
@@ -370,11 +421,39 @@ then
 	noc_ok=1
 else
 	noc_ok=0
+	noc_rc="$rc"
+	cp "$STEP_LOG" "$RUN_DIR/noc_cpp.log"
 	if [ "$rc" -eq 2 ]
 	then
 		emit ""
 		emit_bold "NOC tests left chips wedged. Reset the boards with '$RESET_CMD' before running anything else on them."
 	fi
+fi
+
+# NOC integrity on OpTestBase (Python port of the NOC test above, Ethernet + corner Tensix sources),
+# runs once after the C++ NOC tests, regardless of whether anything above failed.
+# Reset first: the C++ NOC tests can leave chips wedged.
+emit_banner "NOC integrity, OpTestBase (single run after all iterations)"
+noc_py_reset_ok=1
+if [ "$SKIP_RESET" -eq 0 ]
+then
+	if ! run_reset "Resetting boards ($RESET_CMD)..."
+	then
+		noc_py_reset_ok=0
+	fi
+fi
+if [ "$noc_py_reset_ok" -eq 0 ]
+then
+	emit_status "NOC integrity tests (OpTestBase):" failed
+	noc_py_ok=0
+else
+	# Active Ethernet cores only accept kernels in slow dispatch.
+	run_test 'NOC integrity tests (OpTestBase)' run_pytest \
+		env TT_METAL_SLOW_DISPATCH_MODE=1 PYTHONUNBUFFERED=1 $PYTHON -m pytest \
+		"tests/didt/test_noc_integrity.py::test_noc_integrity" -k "galaxy and all" \
+		--didt-workload-iterations 20 --determinism-check-interval 5 \
+		--timeout 1200 -q --tb=line &&
+		noc_py_ok=1 || { noc_py_ok=0; noc_py_rc="$rc"; cp "$STEP_LOG" "$RUN_DIR/noc_py.log"; }
 fi
 
 # DIDT runs once, after NOC, regardless of whether anything above failed.
@@ -394,7 +473,76 @@ then
 else
 	sleep 5
 	run_test 'DIDT tests' sh tests/tt_metal/tt_metal/deployment/didt/test_runner.sh --output "$LOGDIR/didt" --mgd "$MGD" &&
-		didt_ok=1 || didt_ok=0
+		didt_ok=1 || { didt_ok=0; didt_rc="$rc"; cp "$STEP_LOG" "$RUN_DIR/didt.log"; }
+fi
+
+# classify <didt|noc_cpp|noc_py> <log> <rc>: print '<PASS|ND|HANG|OTHER> <reason>' for a failed test.
+classify() {
+	$PYTHON tests/tt_metal/tt_metal/deployment/vf_sweep/vf_sweep.py classify --kind "$1" --log "$2" --rc "$3" 2>&1 ||
+		echo "OTHER could not classify the failure"
+}
+
+# run_vf_sweep <didt|noc>: sweep one workload; sets vf_<test>_result to its one-line verdict.
+run_vf_sweep() {
+	sweep_dir="$RUN_DIR/vf_sweep_$1"
+	if [ "$SKIP_RESET" -eq 1 ]; then initial_reset=--no-initial-reset; else initial_reset=; fi
+	run_logged $PYTHON tests/tt_metal/tt_metal/deployment/vf_sweep/vf_sweep.py sweep --test "$1" \
+		--output "$sweep_dir" --reset-cmd "$RESET_CMD" $initial_reset
+	if [ -f "$sweep_dir/verdict.txt" ]
+	then
+		result="$(cat "$sweep_dir/verdict.txt")"
+	else
+		result="INCONCLUSIVE: the sweep did not finish (exit code $rc, see $sweep_dir)"
+	fi
+	eval "vf_$1_result=\"\$result\""
+}
+
+vf_noc_result="not run"
+vf_didt_result="not run"
+if [ "$RUN_VF_SWEEP" -eq 1 ]
+then
+	emit_banner "VF SWEEP OF FAILING TESTS"
+	noc_trigger=""
+	if [ "$noc_ok" -eq 0 ]
+	then
+		set -- $(classify noc_cpp "$RUN_DIR/noc_cpp.log" "$noc_rc")
+		emit "NOC tests (C++): $*"
+		case "$1" in HANG|ND) noc_trigger="NOC tests (C++) $1" ;; esac
+	fi
+	if [ "$noc_py_ok" -eq 0 ] && [ -f "$RUN_DIR/noc_py.log" ]
+	then
+		set -- $(classify noc_py "$RUN_DIR/noc_py.log" "$noc_py_rc")
+		emit "NOC integrity tests (OpTestBase): $*"
+		case "$1" in HANG|ND) noc_trigger="${noc_trigger:+$noc_trigger, }NOC integrity (OpTestBase) $1" ;; esac
+	fi
+	didt_trigger=""
+	if [ "$didt_ok" -eq 0 ] && [ -f "$RUN_DIR/didt.log" ]
+	then
+		set -- $(classify didt "$RUN_DIR/didt.log" "$didt_rc")
+		emit "DIDT tests: $*"
+		case "$1" in ND) didt_trigger="DIDT ND" ;; esac
+	fi
+
+	if [ -n "$noc_trigger" ]
+	then
+		emit_section "VF sweep: NOC integrity (OpTestBase), triggered by $noc_trigger"
+		run_vf_sweep noc
+	elif [ "$noc_ok" -eq 0 ] || [ "$noc_py_ok" -eq 0 ]
+	then
+		vf_noc_result="not run (NOC failures were not hangs or non-determinism)"
+	else
+		vf_noc_result="not run (NOC tests passed)"
+	fi
+	if [ -n "$didt_trigger" ]
+	then
+		emit_section "VF sweep: DIDT minimal_matmul, triggered by $didt_trigger"
+		run_vf_sweep didt
+	elif [ "$didt_ok" -eq 0 ]
+	then
+		vf_didt_result="not run (DIDT failure was not non-determinism)"
+	else
+		vf_didt_result="not run (DIDT passed)"
+	fi
 fi
 
 emit_banner "DEPLOYMENT TEST SUITE - RESULTS SUMMARY (${iterations_run}/${ITERATIONS} iterations ran)"
@@ -407,13 +555,20 @@ emit "$(printf '%-20s %s' 'DRAM tests:'      "$dram_pass/$iterations_run iterati
 emit "$(printf '%-20s %s' 'PCIe read test:'  "$pcie_read_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe write test:' "$pcie_write_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'NOC tests:'       "$([ "$noc_ok" -eq 1 ] && echo passed || echo failed)")"
+emit "$(printf '%-20s %s' 'NOC integrity (py):' "$([ "$noc_py_ok" -eq 1 ] && echo passed || echo failed)")"
 emit "$(printf '%-20s %s' 'DIDT tests:'      "$([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
-emit "$RULE_LIGHT"
-if [ "$iteration_failures" -gt 0 ] || [ "$noc_ok" -eq 0 ] || [ "$didt_ok" -eq 0 ]
+if [ "$RUN_VF_SWEEP" -eq 1 ]
 then
-	emit_bold "$(printf '%-20s %s' 'Overall:' "$((iterations_run - iteration_failures))/$iterations_run iterations passed, NOC $([ "$noc_ok" -eq 1 ] && echo passed || echo failed), DIDT $([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
+	emit "$(printf '%-20s %s' 'NOC VF sweep:'  "$vf_noc_result")"
+	emit "$(printf '%-20s %s' 'DIDT VF sweep:' "$vf_didt_result")"
+	emit "$(printf '%-20s %s' 'VF sweep logs:' "$RUN_DIR/vf_sweep_*/sweep.log")"
+fi
+emit "$RULE_LIGHT"
+if [ "$iteration_failures" -gt 0 ] || [ "$noc_ok" -eq 0 ] || [ "$noc_py_ok" -eq 0 ] || [ "$didt_ok" -eq 0 ]
+then
+	emit_bold "$(printf '%-20s %s' 'Overall:' "$((iterations_run - iteration_failures))/$iterations_run iterations passed, NOC $([ "$noc_ok" -eq 1 ] && echo passed || echo failed), NOC integrity (py) $([ "$noc_py_ok" -eq 1 ] && echo passed || echo failed), DIDT $([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
 	emit "$RULE_HEAVY"
 	exit 1
 fi
-emit_bold "$(printf '%-20s %s' 'Overall:' "All $iterations_run iterations passed, NOC passed, DIDT passed")"
+emit_bold "$(printf '%-20s %s' 'Overall:' "All $iterations_run iterations passed, NOC passed, NOC integrity (py) passed, DIDT passed")"
 emit "$RULE_HEAVY"
