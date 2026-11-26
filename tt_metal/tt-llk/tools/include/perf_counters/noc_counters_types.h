@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -54,5 +55,27 @@ struct Entry
     std::uint8_t reg;
     NocGroup group;
 };
+
+// The counters every architecture captures, in capture order; reg is the same index on all of them.
+// clang-format off
+inline constexpr std::array<Entry, 16> noc_counters = {
+    {
+    {NocCounter::MST_RD_REQ_SENT, 0x5, NocGroup::MASTER},
+    {NocCounter::MST_RD_DATA_WORD_RECEIVED, 0x3, NocGroup::MASTER},
+    {NocCounter::MST_NONPOSTED_WR_REQ_SENT, 0xA, NocGroup::MASTER},
+    {NocCounter::MST_NONPOSTED_WR_DATA_WORD_SENT, 0x8, NocGroup::MASTER},
+    {NocCounter::MST_POSTED_WR_REQ_SENT, 0xB, NocGroup::MASTER},
+    {NocCounter::MST_POSTED_WR_DATA_WORD_SENT, 0x9, NocGroup::MASTER},
+    {NocCounter::SLV_RD_REQ_RECEIVED, 0x35, NocGroup::SLAVE},
+    {NocCounter::SLV_RD_DATA_WORD_SENT, 0x33, NocGroup::SLAVE},
+    {NocCounter::SLV_NONPOSTED_WR_REQ_RECEIVED, 0x3A, NocGroup::SLAVE},
+    {NocCounter::SLV_NONPOSTED_WR_DATA_WORD_RECEIVED, 0x38, NocGroup::SLAVE},
+    {NocCounter::SLV_POSTED_WR_REQ_RECEIVED, 0x3B, NocGroup::SLAVE},
+    {NocCounter::SLV_POSTED_WR_DATA_WORD_RECEIVED, 0x39, NocGroup::SLAVE},
+    {NocCounter::MST_NONPOSTED_ATOMIC_SENT, 0x6, NocGroup::ATOMIC},
+    {NocCounter::MST_POSTED_ATOMIC_SENT, 0x7, NocGroup::ATOMIC},
+    {NocCounter::SLV_NONPOSTED_ATOMIC_RECEIVED, 0x36, NocGroup::ATOMIC},
+    {NocCounter::SLV_POSTED_ATOMIC_RECEIVED, 0x37, NocGroup::ATOMIC}}};
+// clang-format on
 
 } // namespace llk::perf::noc

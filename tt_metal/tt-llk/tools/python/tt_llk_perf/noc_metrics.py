@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""NoC interface counter metrics. Kept apart from metrics.py: that module's keys are the warehouse metric catalog
-(helpers/perf/schema.py METRIC_BASES), and these are per-run profiler metrics.
+"""NoC interface counter metrics.
 
 Inputs are the counts of one NoC over one launch, by counter name, and the data word size in bytes. A metric whose
 inputs were not captured (its group was off) reads None. Directions are from the tile's point of view: "in" is data
-arriving (data read from elsewhere, data written by others), "out" is data leaving.
+arriving (data read from elsewhere, data written by others), "out" is data leaving. A data word is a flit at the
+destination, so words times the word size is exact for aligned transfers and an upper bound otherwise.
 """
 
 from .metrics import safe_div
@@ -14,8 +14,6 @@ from .metrics import safe_div
 NOC_PREFIX = "noc_"
 
 NOC_METRIC_LABELS = {
-    "noc_read_bytes": "NoC Bytes Read",
-    "noc_write_bytes": "NoC Bytes Written",
     "noc_bytes_in": "NoC Bytes In",
     "noc_bytes_out": "NoC Bytes Out",
     "noc_issued_read_bytes": "NoC Bytes Read by this Tile",
@@ -79,8 +77,6 @@ def compute_noc_metrics(counts, word_bytes) -> dict:
         "noc_issued_write_bytes": issued_write,
         "noc_served_read_bytes": served_read,
         "noc_served_write_bytes": served_write,
-        "noc_read_bytes": _add(issued_read, served_read),
-        "noc_write_bytes": _add(issued_write, served_write),
         "noc_bytes_in": _add(issued_read, served_write),
         "noc_bytes_out": _add(issued_write, served_read),
         "noc_issued_read_reqs": issued_read_reqs,

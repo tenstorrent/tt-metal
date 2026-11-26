@@ -10,7 +10,7 @@ counter[2k + 1] << 32 | counter[2k]). The counters are the per-NoC deltas over t
 table order of the selected groups. All markers of a launch carry the same timestamp.
 """
 
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple
 
 from . import headers, noc_metrics
 
@@ -49,7 +49,12 @@ def unpack_launch(header: int, pairs: Dict[int, int]) -> Launch:
 
 
 def decode_launch(arch, launch: Launch, include_dir=None) -> Dict[int, Dict[str, int]]:
-    """NoC index -> {counter name: count over the launch}. Raises when the pair count does not fit the tables."""
+    """NoC index -> {counter name: count over the launch}. Raises when the NoC or pair count does not fit the tables."""
+    num_nocs = headers.noc_counter_table(arch, include_dir).num_nocs
+    if launch.num_nocs != num_nocs:
+        raise ValueError(
+            f"the launch header says {launch.num_nocs} NoCs, {arch} has {num_nocs}"
+        )
     selected = headers.noc_selected_counters(arch, launch.group_mask, include_dir)
     expected = len(selected) * launch.num_nocs
     if expected != len(launch.counters):
@@ -81,14 +86,17 @@ def decode_noc_launch(arch, launch: Launch, include_dir=None) -> Dict[str, objec
     }
 
 
-def group_launches(rows) -> Optional[Dict[tuple, Dict[int, Dict[int, int]]]]:
-    """(run_host_id, core_x, core_y, risc_type, record_time) -> {marker id: payload} for the NoC counter markers."""
+def group_launches(rows) -> Dict[tuple, Dict[int, int]]:
+    """(device_id, run_host_id, core_x, core_y, risc_type, record_time) -> {marker id: payload} for the NoC counter
+    markers. A mesh op gives every chip one run_host_id, so launches are keyed by device too.
+    """
     launches: Dict[tuple, Dict[int, Dict[int, int]]] = {}
     for row in rows:
         marker_id = int(row["marker_id"])
         if marker_id not in MARKER_IDS:
             continue
         key = (
+            row["device_id"],
             row["run_host_id"],
             row["core_x"],
             row["core_y"],

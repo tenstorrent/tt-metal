@@ -282,14 +282,14 @@ def decode_riscv_pmc_markers(rows: List[Dict[str, Any]], device_arch: str) -> Op
 
 
 def decode_noc_counter_markers(rows: List[Dict[str, Any]], device_arch: str) -> Optional[pd.DataFrame]:
-    """One row per tile launch and NoC from the NoC interface counter markers (ids 9100 to 9116) of a device log.
+    """One row per tile launch and NoC from the NoC interface counter markers of a device log; tt_llk_perf/noc_counters.py
+    has the marker layout.
 
-    Each row is a dict with run_host_id, core_x, core_y, risc_type, marker_id, record_time and data. The markers of a
-    launch share one timestamp. A launch with a pair missing (a full profiler buffer) is skipped. The result has the
-    named counters of the NoC, the data word size and the byte and request totals.
+    Each row is a dict with device_id (the PCIe slot column), run_host_id, core_x, core_y, risc_type, marker_id,
+    record_time and data. A launch with a pair missing (a full profiler buffer) is skipped.
     """
     out = []
-    for (run_host_id, core_x, core_y, risc_type, time), by_id in _noc_counters.group_launches(rows).items():
+    for (device_id, run_host_id, core_x, core_y, risc_type, time), by_id in _noc_counters.group_launches(rows).items():
         if not _noc_counters.capture_core(device_arch, risc_type) or _noc_counters.HEADER_MARKER_ID not in by_id:
             continue
         pairs = {
@@ -307,6 +307,7 @@ def decode_noc_counter_markers(rows: List[Dict[str, Any]], device_arch: str) -> 
         for noc, counts in decoded["counts"].items():
             out.append(
                 {
+                    "device_id": device_id,
                     "run_host_id": run_host_id,
                     "core_x": core_x,
                     "core_y": core_y,

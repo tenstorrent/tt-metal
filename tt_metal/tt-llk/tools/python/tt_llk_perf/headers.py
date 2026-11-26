@@ -342,8 +342,8 @@ def riscv_event_select(arch, kind, names, include_dir=None) -> int:
     return select
 
 
-# NoC interface (NIU) counters: noc_counters_types.h has the names and groups, noc_counters_<arch>.h the table of
-# {name, status register index, group} in capture order plus the data word size and NoC count.
+# NoC interface (NIU) counters: noc_counters_types.h has the names, groups and the {name, status register index, group}
+# table in capture order, noc_counters_<arch>.h the data word size and NoC count.
 _NOC_ARCH_HEADER = {
     "blackhole": "noc_counters_blackhole.h",
     "wormhole": "noc_counters_wormhole.h",
@@ -396,10 +396,12 @@ def noc_counter_table(arch, include_dir=None) -> NocTable:
         )
     header = find_include_dir(include_dir) / _NOC_ARCH_HEADER[arch]
     text = _strip_comments(header.read_text())
-    decl = _NOC_TABLE_DECL.search(text)
+    types = find_include_dir(include_dir) / "noc_counters_types.h"
+    table_text = _strip_comments(types.read_text())
+    decl = _NOC_TABLE_DECL.search(table_text)
     if decl is None:
-        raise ValueError(f"{header}: no noc_counters table found")
-    chunk = text[decl.end() :].split("}};", 1)[0]
+        raise ValueError(f"{types}: no noc_counters table found")
+    chunk = table_text[decl.end() :].split("}};", 1)[0]
     entries = [NocEntry(n, int(r, 0), g) for n, r, g in _NOC_ENTRY.findall(chunk)]
     if len(entries) != int(decl.group(1)):
         raise ValueError(
