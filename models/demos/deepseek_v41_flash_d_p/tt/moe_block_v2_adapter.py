@@ -350,6 +350,10 @@ class TtMoEBlockV2Layer:
                     # F281: through the resident runner's device-weight registry (a rebuilt model keeps these files' copies;
                     # outside the runner: ttnn.load_tensor as before)
                     w = {k: device_weights.load_tensor(p, self.mesh) for k, p in cand.items()}
+                    from . import load_ahead
+
+                    if not load_ahead._CHOSEN:  # (LOAD_THREADS: later layers' reads take this variant)
+                        load_ahead.note_expert_files(self._prefix(), cand.values())
                     logger.info(
                         f"MOE_BLOCK_V2 layer={self.layer} routed weights cache hit{label} {time.time() - t0:.1f} s"
                     )

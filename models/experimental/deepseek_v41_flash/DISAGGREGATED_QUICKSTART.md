@@ -147,7 +147,7 @@ This one command starts both servers as a single `tt-run` job: prefill on this h
 prefill: <prefill hostname>, decode: <decode hostname> (<DECODE_IP>), MPI interface: <interface>
 ```
 
-A cold start takes about 6.5 minutes: ~200 s loading weights, ~160 s compiling, ~22 s warming up. Watch for these
+The prefill server listens about 3 minutes after launch (u20-40, 2026-11-25: ~12 s opening the mesh, ~95 s loading weights, ~45 s compiling, ~21 s warming up) once the prefill host holds its Engram tables in `/dev/shm` and the routed experts' weight files (160 GB) in its page cache. The first start on a host also builds the Engram tables (~5 minutes, see section 5), and the first start after a reboot also reads the expert files from disk (~3 minutes at that host's 0.9 GB/s). The prefill server loads with 10 worker threads that read the next layers' weight files while each layer uploads (`--load-threads`, or `DEEPSEEK_V41_PREFILL_LOAD_THREADS` through this script; 0 for the serial load). Watch for these
 log lines, in order:
 
 1. `prefill server on ...`: prefill is listening.
@@ -256,7 +256,7 @@ TCP:
 | Decode rank fails with `No such file or directory` at launch | The decode host's clone is not at the same path as the prefill host's (section 2). |
 | `prefill server ... not listening yet; retrying` | Prefill is still loading. Decode gives up after `--prefill-wait` seconds. |
 | Decode cannot connect to the prefill server | From the decode host, run `nc -zv $PREFILL_IP $PREFILL_PORT`. If it fails, fix the IP or the network route. |
-| The first prefill start spends many minutes building Engram tables | Expected. They are saved to `/dev/shm/deepseek_v41_d_p_engram`, and later starts reuse them. |
+| Every prefill start spends minutes building Engram tables (`engram layer N: packed rows built in ...`) | The first start saves them to `/dev/shm/deepseek_v41_d_p_engram` (2 x 104 GB), and later starts map them in seconds. That needs ~210 GB free in `/dev/shm` on the prefill host (`df -h /dev/shm`); without it the server logs `... GB free, the packed engram rows need ...` and rebuilds them every start. A decode server's own tables (`/dev/shm/deepseek_v41_engram`) are a different format and take the same space. |
 
 More detail: `PREFILL_D_P_FABRIC_PUSH.md` (fabric push), `PREFILL_D_P_INTEGRATION.md` (TCP),
 `PREFILL_D_P_PREFIX_CACHE.md` (prefix cache).

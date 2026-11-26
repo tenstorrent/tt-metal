@@ -588,7 +588,16 @@ def main(argv: list[str] | None = None) -> int:
         help="embedding rows for image-span tokens (3 span delimiters, then the images' vision rows; an image takes "
         "184-1024): 0 takes no images; 16384 costs 40 MiB a chip (default 16384)",
     )
+    p.add_argument(
+        "--load-threads",
+        type=int,
+        default=int(os.environ.get("DEEPSEEK_V41_PREFILL_LOAD_THREADS", "10")),
+        help="worker threads that read the next layers' weight files into the page cache and compute the dense "
+        "weights' bfp8 statistics while the main thread builds each layer in order (metal_2's LOAD_THREADS; "
+        "0: the serial build; default 10; env DEEPSEEK_V41_PREFILL_LOAD_THREADS, which tt-run forwards to the ranks)",
+    )
     args = p.parse_args(argv)
+    os.environ["DS41_LOAD_THREADS"] = str(max(0, args.load_threads))
     try:
         checkpoint = _checkpoint()
     except FileNotFoundError as exc:
@@ -597,6 +606,11 @@ def main(argv: list[str] | None = None) -> int:
     # metal_2's settings give a process that has imported pytest (its model build does) ENGRAM_TABLE=mmap: random reads
     # of the ~190 GB checkpoint tables, which leave a 1M-token prompt host-bound for many minutes. Serve from RAM.
     os.environ.setdefault("DS41_ENGRAM_TABLE", "resident")
+    # ... and the same pytest import turns ENGRAM_SHM_DIR off (its test value): the packed bfp8 rows (2 x 104 GB) were
+    # rebuilt from the checkpoint at every start (~5 min on one thread, layer 1's load waiting ~80 s for it). Keep them
+    # in tmpfs so a restart maps them in seconds (the first start builds them there; without room it builds in
+    # anonymous memory as before, and logs it).
+    os.environ.setdefault("DS41_ENGRAM_SHM_DIR", "/dev/shm/deepseek_v41_d_p_engram")
 
     from models.demos.common.bringup.core.spec import Spec
     from models.demos.common.bringup.testing.harness import close_mesh, open_mesh
