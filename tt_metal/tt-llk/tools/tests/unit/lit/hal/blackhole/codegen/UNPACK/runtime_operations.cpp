@@ -173,13 +173,13 @@ extern "C" __attribute__((noinline, used)) void reference_run_runtime_clear_valu
         1 /*Unpack_Pop*/);
 }
 
-// The wait is the Stall_Clr_Cntrl field.
-extern "C" __attribute__((noinline, used)) void run_runtime_both_banks_clear(const unpack::ClearWait wait)
+// The both-bank clear value is the Src_ClrVal_Ctrl field, always with the Matrix-bank wait.
+extern "C" __attribute__((noinline, used)) void run_runtime_both_banks_clear(const unpack::ClearValue value)
 {
-    unpack::experimental::clear_both_banks(unpack::Unpacker1, {.wait = wait});
+    unpack::experimental::clear_both_banks(unpack::Unpacker1, {.value = value});
 }
 
-extern "C" __attribute__((noinline, used)) void reference_run_runtime_both_banks_clear(const unpack::ClearWait wait)
+extern "C" __attribute__((noinline, used)) void reference_run_runtime_both_banks_clear(const unpack::ClearValue value)
 {
     TT_UNPACR_NOP(
         1 /*Unpacker_Select*/,
@@ -187,9 +187,9 @@ extern "C" __attribute__((noinline, used)) void reference_run_runtime_both_banks
         0 /*Msg_Clr_Cnt*/,
         0 /*Set_Dvalid*/,
         0 /*Clr_to1_fmt_Ctrl*/,
-        static_cast<std::uint32_t>(wait),
+        0 /*Stall_Clr_Cntrl*/,
         1 /*Bank_Clr_Ctrl*/,
-        0 /*Src_ClrVal_Ctrl*/,
+        static_cast<std::uint32_t>(value),
         1 /*Unpack_Pop*/);
 }
 
@@ -312,7 +312,7 @@ extern "C" void accept_clear_boundaries()
 {
     unpack::Unpacker0.clear({.value = unpack::ClearValue::NegativeInfinity, .handoff = unpack::SrcHandoff::FlipAndSetDataValid});
     unpack::Unpacker0.clear({.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep, .wait = unpack::ClearWait::MatrixBank});
-    unpack::experimental::clear_both_banks(unpack::Unpacker1, {.value = unpack::ClearValue::One, .wait = unpack::ClearWait::MatrixBank});
+    unpack::experimental::clear_both_banks(unpack::Unpacker1, {.value = unpack::ClearValue::One});
 }
 
 // ASSERT-LABEL: <accept_clear_boundaries>:
