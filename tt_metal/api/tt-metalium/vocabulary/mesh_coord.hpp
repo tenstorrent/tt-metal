@@ -22,8 +22,8 @@
 #include <fmt/format.h>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/shape_base.hpp>
-#include <tt-metalium/maybe_remote.hpp>
+#include <tt-metalium/vocabulary/shape_base.hpp>
+#include <tt-metalium/vocabulary/maybe_remote.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 

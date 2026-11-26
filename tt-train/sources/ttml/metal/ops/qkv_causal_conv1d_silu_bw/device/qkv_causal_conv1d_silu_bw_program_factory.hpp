@@ -7,8 +7,8 @@
 #include <array>
 #include <cstdint>
 #include <string_view>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <vector>
 
 #include "hostdevcommon/qkv_causal_conv1d_silu_bw_layout.hpp"

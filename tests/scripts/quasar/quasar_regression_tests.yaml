@@ -538,6 +538,13 @@ unit_tests_llk:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
+  # Dropout after a datacopy and after an FPU add.
+  - filter: "LLKMeshDeviceFixture.TensixComputeDropout:LLKMeshDeviceFixture.TensixComputeDropoutAfterFpuAdd"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
   # Typecast pairs that do not hit the in-test skip (UInt8, Int16, or a
   # non-Float32 input packed to Int32).
   - filter: "*Float16_b_to_Float32*:*Float16_b_to_MxFp8P*:*Float16_b_to_MxFp8R*:*Float32_to_Float16_b*:*Float32_to_Int32*:*Float32_to_MxFp8P*:*Float32_to_MxFp8R*:*Int32_to_Float16_b*:*Int32_to_Float32*:*Int32_to_MxFp8P*:*Int32_to_MxFp8R*:*MxFp8P_to_Float16_b*:*MxFp8P_to_Float32*:*MxFp8R_to_Float16_b*:*MxFp8R_to_Float32*"
@@ -580,10 +587,10 @@ unit_tests_llk:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  # Matmul cases on LLKMeshDeviceFixture that do not skip on Quasar.
+  # Matmul cases on LLKMeshDeviceFixture that do not skip on Quasar, plus the Quasar int8 matmul suite.
   # No-MOP and MxFp4x2 are on LLKQuasarMeshDeviceSingleCardFixture. Single-tile and single-block
   # single-tile matmul skip on Quasar.
-  - filter: "LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul:LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockL1AccComputeMatmul"
+  - filter: "LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul:LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockL1AccComputeMatmul:QuasarMatmulInt8/LLKQuasarMatmulInt8Fixture.*"
     config: 1x3
     back2back: true
     env:

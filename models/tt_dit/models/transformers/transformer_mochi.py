@@ -24,7 +24,6 @@ from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm, RMSNorm
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache
 from ...utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ...utils.padding import pad_vision_seq_parallel
 from ...utils.substate import pop_substate, rename_substate
@@ -759,6 +758,13 @@ class MochiCheckpoint:
         self.patch_size: int = self._config.patch_size
         self.in_channels: int = self._config.in_channels
 
+    @property
+    def model_name(self) -> str:
+        return os.path.basename(self._name)
+
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        return self._state_dict
+
     def build(
         self,
         *,
@@ -785,22 +791,4 @@ class MochiCheckpoint:
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
-        )
-
-    def load(
-        self,
-        model: MochiTransformer3DModel,
-        *,
-        mesh_device: ttnn.MeshDevice,
-        parallel_config: DiTParallelConfig,
-    ) -> None:
-        """Load (or reload) weights for a previously-built transformer."""
-        cache.load_model(
-            tt_model=model,
-            get_torch_state_dict=lambda: self._state_dict,
-            model_name=os.path.basename(self._name),
-            subfolder="transformer",
-            parallel_config=parallel_config,
-            mesh_shape=tuple(mesh_device.shape),
-            mesh_device=mesh_device,
         )

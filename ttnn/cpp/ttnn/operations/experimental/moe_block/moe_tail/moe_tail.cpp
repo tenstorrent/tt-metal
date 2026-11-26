@@ -5,10 +5,10 @@
 #include <tracy/Tracy.hpp>
 #include "moe_tail.hpp"
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/distributed/api.hpp"

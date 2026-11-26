@@ -26,6 +26,7 @@ from helpers.llk_params import (
 from helpers.param_config import (
     DEST_DEPTH_BLOCK_COUNTS,
     InputOutputFormat,
+    flat_axes,
     generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
@@ -1056,41 +1057,35 @@ def prepare_binary_max_min_inputs(src_A, src_B, input_format, output_format):
     return in0, in1
 
 
-def _generate_max_min_combinations(
-    formats_list: List[InputOutputFormat],
-    input_dimensions_list=([32, 32],),
-):
-    """Generate max/min resolved routes and the operation-specific axes."""
-    combinations = []
-    for format_variant in generate_quasar_sfpu_format_variants(
-        MathOperation.SfpuBinaryMax, formats_list
-    ):
-        for is_max_op in [True, False]:
-            for input_dimensions in input_dimensions_list:
-                combinations.append(
-                    (
-                        format_variant,
-                        is_max_op,
-                        input_dimensions,
-                    )
-                )
-    return combinations
+MAX_MIN_FLAT_NAMES = ("formats", "dest_acc", "is_max_op", "input_dimensions")
+_MAX_MIN_INPUT_DIMENSIONS = [[32, 32]]
 
 
-MAX_MIN_FLOAT_SWEEP = dict(
-    formats_dest_acc_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-    ),
+def _generate_max_min_combinations(formats_list: List[InputOutputFormat]):
+    """Generate (formats, dest_acc, is_max_op, input_dimensions) for each resolved max/min route."""
+    return [
+        (variant.formats, variant.dest_acc, is_max_op, input_dimensions)
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.SfpuBinaryMax, formats_list
+        )
+        for is_max_op in [True, False]
+        for input_dimensions in _MAX_MIN_INPUT_DIMENSIONS
+    ]
+
+
+MAX_MIN_FLOAT_SWEEP = flat_axes(
+    MAX_MIN_FLAT_NAMES,
+    _generate_max_min_combinations(SFPU_BINARY_MAX_MIN_FLOAT_FORMATS),
 )
-MAX_MIN_INT32_SWEEP = dict(
-    formats_dest_acc_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_INT32_FORMATS,
-    ),
+MAX_MIN_INT32_SWEEP = flat_axes(
+    MAX_MIN_FLAT_NAMES,
+    _generate_max_min_combinations(SFPU_BINARY_MAX_MIN_INT32_FORMATS),
 )
 
 
 def _run_max_min(
-    format_variant,
+    formats,
+    dest_acc,
     is_max_op,
     input_dimensions,
     spec,
@@ -1102,8 +1097,12 @@ def _run_max_min(
     is_perf=False,
     perf_report=None,
 ):
-    formats = format_variant.formats
-    dest_acc = format_variant.dest_acc
+    format_variant = resolve_quasar_sfpu_variant(
+        MathOperation.SfpuBinaryMax, formats, dest_acc
+    )
+    assert (
+        format_variant is not None
+    ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
     binary_op = "MAX" if is_max_op else "MIN"
     src0_idx, src1_idx, dst_idx = tile_indices
     num_faces = MAX_NUM_FACES
@@ -1227,7 +1226,10 @@ def _run_max_min(
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_float_quasar(
-    formats_dest_acc_is_max_input_dims,
+    formats,
+    dest_acc,
+    is_max_op,
+    input_dimensions,
     tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -1236,10 +1238,10 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
     perf_report=None,
 ):
     """Binary SFPU max/min for the non-redundant floating-point formats."""
-    format_variant, is_max_op, input_dimensions = formats_dest_acc_is_max_input_dims
     spec = StimuliSpec.uniform(low=-0.9, high=1.1)
     _run_max_min(
-        format_variant,
+        formats,
+        dest_acc,
         is_max_op,
         input_dimensions,
         spec,
@@ -1258,7 +1260,10 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
-    formats_dest_acc_is_max_input_dims,
+    formats,
+    dest_acc,
+    is_max_op,
+    input_dimensions,
     tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -1267,12 +1272,11 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
     perf_report=None,
 ):
     """Binary SFPU max/min (Int32)."""
-    format_variant, is_max_op, input_dimensions = formats_dest_acc_is_max_input_dims
-    formats = format_variant.formats
     iinfo = torch.iinfo(format_dict[formats.input_format])
     spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
     _run_max_min(
-        format_variant,
+        formats,
+        dest_acc,
         is_max_op,
         input_dimensions,
         spec,
@@ -1289,8 +1293,8 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
 # Family 4 — quant / requant / dequant. Mixed int/float operands with a runtime
 # fp32 zero-point. Ported from Blackhole ckernel_sfpu_quant.h.
 #
-#   quant:   out_int32 = clamp(round(A_fp32 * scale_fp32 + zp), -127, 127)
-#   requant: out_int32 = clamp(round(int32_to_fp32(A) * scale_fp32 + zp), -127, 127)
+#   quant:   out_int32 = clamp(round(A_fp32 * scale_fp32) + zp, -128, 127)
+#   requant: out_int32 = clamp(round(int32_to_fp32(A) * scale_fp32 + zp), -128, 127)
 #   dequant: out_fp32  = (int32_to_fp32(A) - zp) * scale_fp32
 #
 # Operand A and the fp32 scale B are both staged into buffer_A as raw 32-bit words
@@ -1304,14 +1308,15 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
 # call runs ITERATIONS=8 unrolled rows, covering the whole 1024-element dst tile.
 _PROCESSED_ELEMS = MAX_TILE_ELEMENTS
 
-# SMAG8 saturation: the STOCH_RND fp32->sint8 path clamps magnitude to 127, so the
-# representable output range is [-127, +127] (-128 is NOT representable).
-_QUANT_INT8_MIN = -127
+# The round and the SFPSWAP clamp both run in two's complement, so the full int8 range is
+# representable; SIGN_MAGNITUDE_FORMAT only picks how the result is stored in Dest.
+_QUANT_INT8_MIN = -128
 _QUANT_INT8_MAX = 127
 
 # Pinned lanes per tile (two per face) that discriminate the SFPCAST SM<->2's-comp mod1 values.
 _QUANT_PINNED_LANES = 8
-# A*scale+zp target that STOCH_RND rounds to sign-magnitude -0 (0x80000000).
+# Rounder input on the pinned lanes: a negative whose magnitude rounds to zero, so the round has to
+# give +0 and not sign-magnitude -0 (0x80000000). Quant adds its zero point after, landing on 3.
 _QUANT_NEG_ZERO_PROD = -0.25
 
 
@@ -1344,16 +1349,17 @@ def _run_quant(
     # ---- stimuli (one tile's worth of active datums) ----
     n = MAX_TILE_ELEMENTS
 
-    # Scale: small positive fp32 so the quantized magnitudes stay inside [-127,127].
+    # Scale: small positive fp32 so the quantized magnitudes stay inside [-128,127].
     scale = torch.rand(n, dtype=torch.float32) * 0.04 + 0.01  # [0.01, 0.05)
     # Zero-point: a small fp32 offset.
     zero_point = 3.0
 
-    # Pinned lanes: SFPCAST Mod1 2 and Mod1 3 differ from each other only at 0x80000000.
-    # Even entries of `pinned` give A*scale+zp = _QUANT_NEG_ZERO_PROD; odd entries hold INT32_MIN (int, 2's-comp only).
+    # Pinned lanes: SFPCAST Mod1 2 and Mod1 3 differ only at 0x80000000. Even entries of `pinned`
+    # put _QUANT_NEG_ZERO_PROD on the rounder input; odd entries hold INT32_MIN (2's-comp only).
     pinned = torch.arange(0, n, n // _QUANT_PINNED_LANES)
     neg_zero_lanes, int32_min_lanes = pinned[0::2], pinned[1::2]
-    neg_zero_a = (_QUANT_NEG_ZERO_PROD - zero_point) / scale[neg_zero_lanes]
+    rounder_bias = 0.0 if binary_op == "QUANT" else zero_point
+    neg_zero_a = (_QUANT_NEG_ZERO_PROD - rounder_bias) / scale[neg_zero_lanes]
 
     if a_is_int:
         # int32 operand A in a modest range so int*scale stays well within int8.
@@ -1384,17 +1390,19 @@ def _run_quant(
         golden_active = golden_active.to(torch.float32)
         out_dtype = torch.float32
     else:
-        prod = a_float * scale + zero_point
-        rounded = torch.round(prod)  # round-half-to-even matches SFP STOCH_RND NearEven
+        # Matching Blackhole: quant rounds the bare product and adds the zero point afterwards,
+        # requant rounds the product plus the zero point. The two differ at exact halves.
+        exact = a_float.double() * scale.double()
+        if binary_op == "QUANT":
+            rounded = torch.round(exact) + zero_point
+        else:
+            rounded = torch.round((exact + zero_point).float().double())
         clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
         if sign_magnitude:
-            # SM path stores the STOCH_RND SMAG32 result as-is (no SM32_TO_2SC cast):
-            # negatives keep bit31|magnitude and a negative value rounding to 0 stays -0 (0x80000000).
-            neg_zero = (clamped == 0) & (prod < 0)
+            # The kernel rounds in two's complement, then casts the result back to sign-magnitude,
+            # so a negative value rounding to zero gives +0 rather than sign-magnitude -0.
             golden_active = int32_to_smag32(clamped)
-            golden_active[neg_zero] = torch.tensor(-(2**31), dtype=torch.int32)
         else:
-            # 2's-comp path: SM32_TO_2SC maps STOCH_RND negative-zero to 0.
             golden_active = clamped
         out_dtype = torch.int32
 

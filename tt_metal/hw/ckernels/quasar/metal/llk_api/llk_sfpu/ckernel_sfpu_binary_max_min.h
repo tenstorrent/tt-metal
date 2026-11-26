@@ -8,7 +8,6 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -87,7 +86,7 @@ inline void calculate_binary_max_min(
     const std::uint32_t offset1 = dst_index_in1 * tile_stride;
     const std::uint32_t offset2 = dst_index_out * tile_stride;
 
-    lltt::record(0, BINARY_MAX_MIN_REPLAY_LEN);
+    TTI_REPLAY(0, BINARY_MAX_MIN_REPLAY_LEN, 0, 0, 0, 1);
     TT_SFPLOAD(p_sfpu::LREG0, SFPMEM_MODE, ADDR_MOD_7, 0 /* done */, offset0);
     TT_SFPLOAD(p_sfpu::LREG1, SFPMEM_MODE, ADDR_MOD_7, 0 /* done */, offset1);
 
@@ -110,7 +109,7 @@ inline void calculate_binary_max_min(
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        lltt::replay(0, BINARY_MAX_MIN_REPLAY_LEN);
+        TTI_REPLAY(0, BINARY_MAX_MIN_REPLAY_LEN, 0, 0, 0, 0);
     }
 }
 

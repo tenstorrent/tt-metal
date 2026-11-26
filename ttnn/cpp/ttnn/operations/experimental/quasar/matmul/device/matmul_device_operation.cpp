@@ -16,11 +16,11 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
-#include "tt-metalium/hal_types.hpp"
+#include "tt-metalium/vocabulary/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"
 #include "tt-metalium/experimental/tensor_prefetcher.hpp"
-#include "tt-metalium/work_split.hpp"
+#include "tt-metalium/utils/work_split.hpp"
 #include "tt_stl/unreachable.hpp"
 
 namespace ttnn::prim::qsr {

@@ -21,7 +21,7 @@ from models.tt_dit.layers.module import Module
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.flux2.system_messages import SYSTEM_MESSAGE, SYSTEM_MESSAGE_UPSAMPLING_T2I
-from models.tt_dit.utils import cache, tensor
+from models.tt_dit.utils import tensor
 
 
 class PromptEncoder:
@@ -69,23 +69,26 @@ class PromptEncoder:
                 ccl_manager=ccl_manager,
             )
 
-    def load_weights(self) -> None:
-        if not isinstance(self._encoder, Module):
-            return
+    @property
+    def encoder(self) -> Module | torch.nn.Module:
+        return self._encoder
+
+    @property
+    def spec(self) -> dict:
+        """The `cache.load_model` keywords of the TT-NN ``encoder``."""
 
         def get_torch_state_dict() -> dict[str, torch.Tensor]:
             return self._encoder_cls.convert_state(self._load_torch_encoder(self._checkpoint_name).state_dict())
 
-        cache.load_model(
-            self._encoder,
-            model_name=Path(self._checkpoint_name).name,
-            subfolder="text_encoder",
-            parallel_config=self._parallel_config,
-            mesh_shape=tuple(self._device.shape),
-            mesh_device=self._device,
-            dtype=WEIGHT_CACHE_DTYPE,
-            get_torch_state_dict=get_torch_state_dict,
-        )
+        return {
+            "model_name": Path(self._checkpoint_name).name,
+            "subfolder": "text_encoder",
+            "parallel_config": self._parallel_config,
+            "mesh_shape": tuple(self._device.shape),
+            "mesh_device": self._device,
+            "dtype": WEIGHT_CACHE_DTYPE,
+            "get_torch_state_dict": get_torch_state_dict,
+        }
 
     def encode(
         self,

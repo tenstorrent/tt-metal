@@ -5,6 +5,11 @@
 #pragma once
 
 // DEPRECATED-FORWARDING-HEADER: <tt-metalium/device_types.hpp> moved to <tt-metalium/vocabulary/device_types.hpp>.
-// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
+// This forwarding header will be removed after 2027-03-05.
+#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
+// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
+#warning \
+    "<tt-metalium/device_types.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/vocabulary/device_types.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
+#endif
 
 #include <tt-metalium/vocabulary/device_types.hpp>  // IWYU pragma: export

@@ -9,8 +9,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 namespace ttnn::experimental {
 

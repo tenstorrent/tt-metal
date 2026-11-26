@@ -5,8 +5,8 @@ Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
 in the first-step triage tools, the QSFP tests and the sys-triage bundle. The
 `flash` tier reads every on-host ETH link twice with tt-triage instead, with no
-resets and no tests. Emits a single JSON report with per-check
-PASS/WARN/FAIL/SKIP status grouped by IP.
+resets and no tests, then collects the sys-triage bundle. Emits a single JSON
+report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
 
 ## Quick start
 
@@ -14,7 +14,7 @@ PASS/WARN/FAIL/SKIP status grouped by IP.
 export TT_METAL_HOME=/path/to/tt-metal
 cd $TT_METAL_HOME
 
-# Quick ETH link health, the unit read as found (snapshot + two triage reads 30 s apart)
+# Quick ETH link health, the unit read as found (snapshot + two triage reads 30 s apart + sys-triage)
 ./tools/scaleout/exabox/health_check_test_suite/run_diag.sh flash
 
 # Daily tier (2 resets + GDDR fast + eth link_up/bandwidth + triage + QSFP tests)
@@ -61,10 +61,10 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 - `--gh-token` (default `$GH_TOKEN`) installs `tt-syseng-diag` from its private
   release (`tenstorrent/tt-syseng-diag-packages`, `--diag-pkg-version`, default
   `0.0.4`). Without it the QSFP and sys-triage phases report SKIP; every other
-  check still runs. `flash` runs neither phase, so it is never installed for
-  it.
+  check still runs. `flash` needs it for sys-triage only, as it runs no QSFP
+  tests.
 - `--bmc-ip` / `--bmc-user` / `--bmc-password` (default `$BMC_*`) feed the
-  sys-triage phase, `full`, `pre_bmc_reboot` and `post_bmc_reboot` only.
+  sys-triage phase, `flash`, `full`, `pre_bmc_reboot` and `post_bmc_reboot` only.
 - `--bmc-api-url` / `--bmc-api-token` (default `$TT_BMC_API_URL` /
   `$TT_BMC_API_TOKEN`) feed the QSFP collector on every tier; without them it
   reads the FRU with ipmitool and collects no QSFP cages.
@@ -81,28 +81,29 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 
 | Tier | Resets | Tests | Triage | ETH status | QSFP tests | sys-triage | Duration | Use when |
 |---|---|---|---|---|---|---|---|---|
-| `flash` | none | — | — | 2 reads, 30 s apart | — | — | snapshot + 2 triage reads + 30 s | Quick ETH link health, the unit read as found |
+| `flash` | none | — | — | 2 reads, 30 s apart | — | yes, if installed and BMC credentials set | snapshot + 2 triage reads + 30 s + sys-triage | Quick ETH link health, the unit read as found |
 | `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
 | `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | — | yes, if installed | — | ~18 min + triage + ~7 min | Every test, less often |
 | `full` | as `weekly` | as `weekly` | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
 
-The [sys-triage phase](#sys-triage-phase) runs last on `full`, `pre_bmc_reboot`
-and `post_bmc_reboot` only; it collects a bundle for the ticket and never gates
-the run.
+The [sys-triage phase](#sys-triage-phase) runs last on `flash`, `full`,
+`pre_bmc_reboot` and `post_bmc_reboot` only; it collects a bundle for the ticket
+and never gates the run.
 
 The old names still run, with a deprecation warning: `light` and
 `medium` as `daily`, `deploy` as `weekly`, `pre_reboot` as `pre_bmc_reboot`. The
 report records the new name.
 
-`flash` is the quick look at the ETH links. It runs the snapshot and the
-[ETH status phase](#eth-status-phase) and nothing else: no reset, so a fault is
-still there for whoever picks the ticket up, and no tests, so nothing has
-retrained or reset a link before it is read. The other phases are recorded as
-SKIP with the reason. Unlike the triage and QSFP phases, the ETH status phase
-gates the run, since it is the whole of what `flash` checks. `flash` is also the
-one tier that ends with a [summary for the person who ran it](#the-summary).
+`flash` is the quick look at the ETH links. It runs the snapshot, the
+[ETH status phase](#eth-status-phase) and the sys-triage phase and nothing else:
+no reset, so a fault is still there for whoever picks the ticket up, and no
+tests, so nothing has retrained or reset a link before it is read. The other
+phases are recorded as SKIP with the reason. Unlike the triage and QSFP phases,
+the ETH status phase gates the run, since it is the whole of what `flash` checks.
+`flash` is also the one tier that ends with a
+[summary for the person who ran it](#the-summary).
 
 What each tier runs is defined in one place, `TIERS` in
 [`tiers.py`](tiers.py): per tier, the pre-test resets, the tests, the post-test
@@ -560,13 +561,14 @@ MB/PDB and per-tray CPLD DIAG, `tt-smi -s`, `ipmitool sdr elist`, `lspci -vvv`,
 `tt-fw-terminal` vuart. It is forensics for whoever picks up the ticket, not
 findings for this report to judge, so the phase **never gates** the run.
 
-It runs on `full`, `pre_bmc_reboot` and `post_bmc_reboot` only, as their last
-step. On `pre_bmc_reboot` the bundle is the record of the unit's state before the
-BMC power cycles it, and the vuart and scratch reads are worth most on a unit
-nothing has reset since it misbehaved; on `post_bmc_reboot` it records the state
-the reboot left; on `full` it rounds out the logs for a DIIM ticket. It follows
-the QSFP tests because it opens every chip, so nothing may run beside it. The
-other tiers record it as **SKIP** with the reason.
+It runs on `flash`, `full`, `pre_bmc_reboot` and `post_bmc_reboot` only, as
+their last step. On `pre_bmc_reboot` the bundle is the record of the unit's state
+before the BMC power cycles it, and the vuart and scratch reads are worth most on
+a unit nothing has reset since it misbehaved, as on `flash`; on `post_bmc_reboot`
+it records the state the reboot left; on `full` it rounds out the logs for a DIIM
+ticket. It follows the ETH status read and the QSFP tests because it opens every
+chip, so nothing may run beside it. The other tiers record it as **SKIP** with
+the reason.
 
 **Where it comes from.** `sys-triage` ships in the same syseng `.deb` as
 `tt-bh-glx-cluster-debug` and is probed for on PATH the same way
@@ -591,7 +593,7 @@ variable over `--bmc-password`, which is visible in the process list.
 The bundle lands in `<output_dir>/logs/sys_triage/` beside `sys_triage.log`, so
 `collect_run_artifacts()` attaches it to the JIRA ticket with no extra wiring.
 
-**In a container** (`run_diag_docker.sh`), on the three sys-triage tiers only, a few host tools
+**In a container** (`run_diag_docker.sh`), on the sys-triage tiers only, a few host tools
 and paths the image lacks are provided, each best-effort and after the packages
 every tier needs, since a missing one costs a section of the bundle and nothing
 else. Other tiers get the same container as before the phase existed. An image

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rs_matmul_op.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_gather_in0.hpp"
 
 namespace ttnn::operations::experimental::ccl {

@@ -40,9 +40,9 @@ def isolate_program_cache(device):
 @pytest.mark.parametrize("op", ["layer_norm", "rms_norm"])
 @pytest.mark.parametrize("residual_aliases_input", [False, True], ids=["residual", "residual_is_input"])
 def test_norm_second_call_new_weight_bias_residual(device, isolate_program_cache, op, residual_aliases_input):
-    """New weight, bias and residual buffers on the second call. With residual_is_input the first call has
-    a separate residual and the second passes the input tensor as its own residual: same program, but two
-    bindings that now point at one buffer."""
+    """New weight, bias and residual buffers on the second call. With residual_is_input both calls pass the
+    input tensor as its own residual, so two bindings point at one buffer on every call. (Changing the aliasing
+    between calls is a cache miss by design since #65470.)"""
     batch, h, w = 2, 64, 128
     is_layer_norm = op == "layer_norm"
 
@@ -53,7 +53,7 @@ def test_norm_second_call_new_weight_bias_residual(device, isolate_program_cache
         torch_weight = torch.rand((w,), dtype=torch.bfloat16)
         torch_bias = torch.rand((w,), dtype=torch.bfloat16)
 
-        alias = residual_aliases_input and second_call
+        alias = residual_aliases_input
         torch_added = torch_input + (torch_input if alias else torch_residual)
         added = torch_added.float()
         if is_layer_norm:

@@ -9,24 +9,24 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat4.hpp>
+#include <tt-metalium/data_formats/bfloat8.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/tensor/host_tensor.hpp>
-#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/memory/tensor/host_tensor.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
-#include <tt-metalium/float8.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 #include "common_tensor_test_utils.hpp"

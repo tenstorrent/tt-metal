@@ -26,6 +26,7 @@ from placement_check import (  # noqa: E402
     read_candidates,
     read_window_map,
     render,
+    write_blocking,
 )
 
 _BASE = 2000.0
@@ -155,7 +156,7 @@ def test_missing_fingerprint_is_judged_by_the_positions(tmp_path):
 
 def test_position_not_measured_is_unmeasured(tmp_path):
     base = _side(tmp_path / "base", [_BASE] * 5)
-    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb", skip=("p44",))
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb", skip=("p36",))
 
     [result] = _decide(tmp_path, base, cur)
 
@@ -239,7 +240,7 @@ def test_placement_only_is_not_a_failure_but_is_reported(tmp_path):
 
 def test_nothing_measured_is_not_called_clean(tmp_path):
     base = _side(tmp_path / "base", [_BASE] * 5)
-    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb", skip=("p44",))
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb", skip=("p36",))
 
     report = render(_decide(tmp_path, base, cur), "wormhole")
 
@@ -449,3 +450,30 @@ def test_gate_blocks_when_a_leg_left_no_baseline_record(tmp_path):
     _, notes = gate([rows, []], 2, _candidates(tmp_path), "abc", ["abc"])
 
     assert notes == ["1 leg(s) left no record of their baseline."]
+
+
+def test_slack_lists_only_the_rows_the_gate_blocks_on(tmp_path):
+    rows = _cleared(tmp_path)
+    stage1 = _candidates(tmp_path, init=True)
+    out = tmp_path / "blocking.csv"
+
+    results, notes = gate([rows], 1, stage1, "abc", ["abc"])
+    write_blocking(tmp_path / "s1.regressions.csv", results, notes, out)
+    assert pd.read_csv(out)["marker"].tolist() == ["INIT"]
+
+    results, notes = gate([rows], 2, stage1, "abc", ["abc"])
+    write_blocking(tmp_path / "s1.regressions.csv", results, notes, out)
+    assert pd.read_csv(out)["marker"].tolist() == ["INIT", "TILE_LOOP"]
+
+
+def test_slack_lists_confirmed_regressions_first(tmp_path):
+    stage1 = _candidates(tmp_path, init=True)
+    results = [
+        dict(stage1[0], outcome="unmeasured"),
+        dict(stage1[1], outcome="regression"),
+    ]
+    out = tmp_path / "blocking.csv"
+
+    write_blocking(tmp_path / "s1.regressions.csv", results, [], out)
+
+    assert pd.read_csv(out)["marker"].tolist() == ["INIT", "TILE_LOOP"]

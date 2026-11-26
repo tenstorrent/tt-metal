@@ -7,9 +7,9 @@
 #include <memory>
 #include <string>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "host_api/temp_quasar_api.hpp"
