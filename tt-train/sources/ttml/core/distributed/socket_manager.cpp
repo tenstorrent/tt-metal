@@ -5,6 +5,7 @@
 #include "socket_manager.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -207,6 +208,11 @@ std::unique_ptr<ISocket> SocketManager::create_intra_mesh_socket(
     auto mesh_device = ttml::autograd::ctx().get_device_ptr();
 
     const bool direct = params.transport == IntraMeshTransport::Direct;
+    // Slow dispatch starts a workload only once the previous one has finished, and a direct send finishes only once
+    // its peer's recv has answered, so the recv would never start.
+    TT_FATAL(
+        !direct || std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
+        "Direct intra-mesh sockets need fast dispatch: under slow dispatch a direct send waits forever for its recv");
     const auto socket_mem_config =
         direct ? tt::tt_metal::distributed::SocketMemoryConfig(
                      ttnn::BufferType::L1, DirectFabricSocket::fifo_size(*mesh_device))

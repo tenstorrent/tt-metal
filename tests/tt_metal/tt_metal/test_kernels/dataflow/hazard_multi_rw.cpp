@@ -14,7 +14,6 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "c_tensix_core.h"
 
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
