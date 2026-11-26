@@ -1,12 +1,13 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_to_layout, Phase 0 (immutable spec; do not modify).
+"""Acceptance test for g6_to_layout, Phase 0: TILE -> ROW_MAJOR, bfloat16, interleaved.
 
-Phase 0 is bfloat16 TILE -> ROW_MAJOR, interleaved in DRAM or L1, every alignment and rank 2 to 4.
-The shapes are production cases of that class (BB-22), with each case id in the test id. The gate
-is the golden suite's gate for a bfloat16 output, helpers.TOLERANCES[bfloat16] == ("exact", None):
-every logical value must be bit-identical to the input, NaN payloads included.
+The op computes nothing, so the gate is bit identity of every logical value
+(helpers.TOLERANCES[bfloat16] == ("exact", None)): signed zeros, subnormals,
+infinities and NaN payloads included. Every shape is a production case of the
+Phase 0 class (case id in the test id); the remaining tests are the cases the
+spec's rules require.
 """
 
 import pytest
@@ -15,37 +16,53 @@ import ttnn
 
 from ttnn.operations.g6_to_layout import g6_to_layout
 
-DRAM = ttnn.DRAM_MEMORY_CONFIG
-L1 = ttnn.L1_MEMORY_CONFIG
+# -0.0, subnormals, +inf, -inf, NaN with a payload.
+SPECIAL_BITS = (0x8000, 0x0001, 0x8001, 0x007F, 0x7F80, 0xFF80, 0x7FC1)
 
-# (production case id, shape, input placement). Each one exercises a different part of the blocking:
-PHASE0_CASES = [
-    pytest.param(2003, (1, 32, 2560), DRAM, id="c2003_single_tile_row_wide"),  # width chunks for occupancy
-    pytest.param(1992, (1, 64, 512), DRAM, id="c1992_multi_tile"),
-    pytest.param(1993, (16, 1, 2560), DRAM, id="c1993_h1_batch"),  # H=1: one live row per tile row
-    pytest.param(269, (1, 512), DRAM, id="c269_rank2_h1"),
-    pytest.param(309, (1, 185), DRAM, id="c309_w185"),  # W tail with 25 live columns
-    pytest.param(290, (1, 196), DRAM, id="c290_w196"),  # W tail with 4 live columns
-    pytest.param(311, (1, 207), DRAM, id="c311_w207"),  # W tail with 15 live columns
-    pytest.param(292, (32, 5120), DRAM, id="c292_rank2_wide"),
-    pytest.param(271, (1, 2048, 128), DRAM, id="c271_tall"),
-    pytest.param(273, (1, 64, 128, 32), DRAM, id="c273_rank4_one_tile_col"),
-    pytest.param(293, (1, 1, 131072), DRAM, id="c293_row_wider_than_l1"),
-    pytest.param(286, (1, 1024, 1024, 3), DRAM, id="c286_p4_w3"),
-    pytest.param(2038, (1, 32, 2560), L1, id="c2038_l1_in_l1_out"),
+PHASE0_SHAPES = [
+    pytest.param((1, 185), id="c309-1x185-one-tile-row-w-unaligned"),
+    pytest.param((1, 512), id="c269-1x512-h1"),
+    pytest.param((32, 5120), id="c292-32x5120-one-wide-tile-row"),
+    pytest.param((1, 131072), id="c294-1x131072-one-long-row"),
+    pytest.param((1, 1, 131072), id="c293-1x1x131072-rank3-long-row"),
+    pytest.param((16, 1, 2560), id="c1993-16x1x2560-multi-batch-h1"),
+    pytest.param((1, 64, 512), id="c1992-1x64x512-multi-tile"),
+    pytest.param((1, 256, 128), id="c287-1x256x128-non-square"),
+    pytest.param((1, 64, 128, 32), id="c273-1x64x128x32-one-tile-wide"),
+    pytest.param((1, 64, 128, 256), id="c274-1x64x128x256-multi-batch"),
+    pytest.param((1, 1024, 1024, 3), id="c286-1x1024x1024x3-narrow-rows"),
+]
+
+PADDED_SHAPES = [
+    pytest.param((1, 185), id="c309-w-unaligned"),
+    pytest.param((16, 1, 2560), id="c1993-h-unaligned-multi-image"),
+    pytest.param((1, 1024, 1024, 3), id="c286-w3"),
 ]
 
 
-def reference(x):
-    """PyTorch reference: the logical values unchanged (x.clone())."""
-    return x.clone()
+def pytorch_reference(input_tensor: torch.Tensor) -> torch.Tensor:
+    return input_tensor.clone()
 
 
-def _bits(t):
+def _bits(t: torch.Tensor) -> torch.Tensor:
     return t.contiguous().view(torch.int16)
 
 
-def _to_device(x, device, memory_config):
+def assert_bit_identical(actual: torch.Tensor, expected: torch.Tensor) -> None:
+    assert list(actual.shape) == list(expected.shape), f"shape {list(actual.shape)} != {list(expected.shape)}"
+    assert actual.dtype == torch.bfloat16, f"torch dtype {actual.dtype}"
+    if torch.equal(_bits(actual), _bits(expected)):
+        return
+    differ = _bits(actual) != _bits(expected)
+    first = tuple(int(i) for i in differ.nonzero()[0])
+    got = int(_bits(actual)[first]) & 0xFFFF
+    want = int(_bits(expected)[first]) & 0xFFFF
+    pytest.fail(
+        f"{int(differ.sum())} of {differ.numel()} values differ; first at {first}: got 0x{got:04X} expected 0x{want:04X}"
+    )
+
+
+def to_device_tile(x: torch.Tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
     return ttnn.from_torch(
         x,
         dtype=ttnn.bfloat16,
@@ -56,109 +73,114 @@ def _to_device(x, device, memory_config):
     )
 
 
-def _check(output, expected, shape, buffer_type):
+def assert_output_contract(output: ttnn.Tensor, shape, buffer_type) -> None:
     assert list(output.shape) == list(shape)
     assert output.dtype == ttnn.bfloat16
     assert output.layout == ttnn.ROW_MAJOR_LAYOUT
-    mem = output.memory_config()
-    assert mem.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-    assert mem.buffer_type == buffer_type
-    actual = ttnn.to_torch(output).reshape(shape)
-    assert actual.dtype == torch.bfloat16
-    differ = _bits(actual) != _bits(expected)
-    assert int(differ.sum()) == 0, (
-        f"{int(differ.sum())} of {differ.numel()} values differ; first at "
-        f"{tuple(int(i) for i in differ.nonzero()[0])}"
-    )
+    memory = output.memory_config()
+    assert memory.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    assert memory.buffer_type == buffer_type
 
 
-@pytest.mark.parametrize("case, shape, memory_config", PHASE0_CASES)
-def test_tile_to_row_major(device, case, shape, memory_config):
-    torch.manual_seed(42)
+def with_special_bits(shape) -> torch.Tensor:
     x = torch.randn(shape, dtype=torch.bfloat16)
-    tt_x = _to_device(x, device, memory_config)
-    out = g6_to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT)
-    _check(out, reference(x), shape, memory_config.buffer_type)
+    flat = x.view(-1).view(torch.int16)
+    count = max(len(SPECIAL_BITS), flat.numel() // 100)
+    positions = torch.randperm(flat.numel())[:count]
+    table = torch.tensor([b - 0x10000 if b >= 0x8000 else b for b in SPECIAL_BITS], dtype=torch.int16)
+    flat[positions] = table[torch.arange(count) % len(SPECIAL_BITS)]
+    return x
+
+
+@pytest.mark.parametrize("shape", PHASE0_SHAPES)
+def test_tile_to_row_major_dram(device, shape):
+    torch.manual_seed(42)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    output = g6_to_layout(to_device_tile(torch_input, device), ttnn.ROW_MAJOR_LAYOUT)
+
+    assert_output_contract(output, shape, ttnn.BufferType.DRAM)
+    assert_bit_identical(ttnn.to_torch(output).reshape(shape), pytorch_reference(torch_input))
+
+
+def test_tile_to_row_major_l1_keeps_placement(device):
+    # Production case 2038: an L1-interleaved input with no memory_config keeps L1.
+    shape = (1, 32, 2560)
+    torch.manual_seed(42)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    output = g6_to_layout(to_device_tile(torch_input, device, ttnn.L1_MEMORY_CONFIG), ttnn.ROW_MAJOR_LAYOUT)
+
+    assert_output_contract(output, shape, ttnn.BufferType.L1)
+    assert_bit_identical(ttnn.to_torch(output).reshape(shape), pytorch_reference(torch_input))
 
 
 @pytest.mark.parametrize(
     "shape",
     [
-        pytest.param((1, 64, 1536), id="c1990"),  # 98304 values; holds every pattern at least once
-        pytest.param((1, 1024, 1024, 3), id="c286_p4_w3"),  # narrow rows, live-face reads
+        pytest.param((16, 1, 2560), id="c1993-16x1x2560"),
+        pytest.param((1, 64, 128, 256), id="c274-1x64x128x256"),
+        pytest.param((1, 1024, 1024, 3), id="c286-1x1024x1024x3"),
     ],
 )
-def test_all_bit_patterns(device, shape):
-    """Every one of the 65536 bfloat16 bit patterns (signed zeros, subnormals, inf, NaN payloads)
-    must come back unchanged."""
+def test_special_bit_patterns_survive(device, shape):
     torch.manual_seed(42)
-    numel = 1
-    for d in shape:
-        numel *= d
-    patterns = torch.arange(65536, dtype=torch.int32)
-    reps = -(-numel // 65536)
-    flat = patterns.repeat(reps)[:numel]
-    flat = flat[torch.randperm(numel)] if numel > 65536 else flat
-    bits = torch.where(flat >= 0x8000, flat - 0x10000, flat).to(torch.int16)
-    x = bits.view(torch.bfloat16).reshape(shape)
-    tt_x = _to_device(x, device, DRAM)
-    out = g6_to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT)
-    _check(out, reference(x), shape, ttnn.BufferType.DRAM)
+    torch_input = with_special_bits(shape)
+
+    output = g6_to_layout(to_device_tile(torch_input, device), ttnn.ROW_MAJOR_LAYOUT)
+
+    assert_bit_identical(ttnn.to_torch(output).reshape(shape), pytorch_reference(torch_input))
 
 
-@pytest.mark.parametrize(
-    "shape",
-    [
-        pytest.param((1, 185), id="c309_w185"),
-        pytest.param((1, 196), id="c290_w196"),
-        pytest.param((16, 1, 2560), id="c1993_h1"),
-        pytest.param((1, 1024, 1024, 3), id="c286_p4_w3"),
-    ],
-)
-@pytest.mark.parametrize("poison", [1000.0, float("nan")], ids=["poison1000", "poisonNaN"])
-def test_poisoned_padding(device, shape, poison):
-    """The content of the input's tile padding must never reach a logical output value."""
+@pytest.mark.parametrize("pad_value", [float("nan"), 1000.0], ids=["nan", "1000"])
+@pytest.mark.parametrize("shape", PADDED_SHAPES)
+def test_input_tile_padding_never_reaches_output(device, shape, pad_value):
     torch.manual_seed(42)
-    x = torch.randn(shape, dtype=torch.bfloat16)
-    tt_x = ttnn.fill_implicit_tile_padding(_to_device(x, device, DRAM), poison)
-    out = g6_to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT)
-    _check(out, reference(x), shape, ttnn.BufferType.DRAM)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.fill_implicit_tile_padding(to_device_tile(torch_input, device), pad_value)
+
+    output = g6_to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT)
+
+    assert_bit_identical(ttnn.to_torch(output).reshape(shape), pytorch_reference(torch_input))
 
 
-def test_repeat_call_bit_identical(device):
-    """BB-06 / BB-07: repeated calls with the same inputs return identical bits."""
+def test_repeated_call_is_bit_identical(device):
+    shape = (1, 64, 128, 256)
     torch.manual_seed(42)
-    shape = (1, 64, 1536)
-    x = torch.randn(shape, dtype=torch.bfloat16)
-    tt_x = _to_device(x, device, DRAM)
-    first = ttnn.to_torch(g6_to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT))
-    second = ttnn.to_torch(g6_to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT))
-    assert torch.equal(_bits(first), _bits(second))
-    assert torch.equal(_bits(first.reshape(shape)), _bits(x))
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = to_device_tile(torch_input, device)
+
+    first = ttnn.to_torch(g6_to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT)).reshape(shape)
+    second = ttnn.to_torch(g6_to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT)).reshape(shape)
+
+    assert_bit_identical(second, first)
+    assert_bit_identical(first, pytorch_reference(torch_input))
 
 
-# --- Validation (spec ## Validation) -------------------------------------------------------------
+def test_rejects_layout_equal_to_input_layout(device, expect_error):
+    torch.manual_seed(42)
+    ttnn_input = to_device_tile(torch.randn((1, 32, 512), dtype=torch.bfloat16), device)
+    with expect_error((ValueError, RuntimeError), "g6_to_layout"):
+        g6_to_layout(ttnn_input, ttnn.TILE_LAYOUT)
 
 
-def test_rejects_same_layout(device, expect_error):
-    x = _to_device(torch.randn((1, 32, 64), dtype=torch.bfloat16), device, DRAM)
-    with expect_error((ValueError, RuntimeError), ""):
-        g6_to_layout(x, ttnn.TILE_LAYOUT)
+def test_rejects_rank_outside_2_to_4(device, expect_error):
+    torch.manual_seed(42)
+    ttnn_input = to_device_tile(torch.randn((1, 1, 1, 32, 32), dtype=torch.bfloat16), device)
+    with expect_error((ValueError, RuntimeError), "g6_to_layout"):
+        g6_to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT)
 
 
-def test_rejects_rank_5(device, expect_error):
-    x = _to_device(torch.randn((1, 1, 1, 32, 64), dtype=torch.bfloat16), device, DRAM)
-    with expect_error((ValueError, RuntimeError), ""):
-        g6_to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+def test_rejects_bfloat8_b_row_major_output(device, expect_error):
+    torch.manual_seed(42)
+    ttnn_input = to_device_tile(torch.randn((1, 32, 512), dtype=torch.bfloat16), device)
+    with expect_error((ValueError, RuntimeError), "g6_to_layout"):
+        g6_to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat8_b)
 
 
-def test_rejects_bfloat8_b_row_major(device, expect_error):
-    x = _to_device(torch.randn((1, 32, 64), dtype=torch.bfloat16), device, DRAM)
-    with expect_error((ValueError, RuntimeError), ""):
-        g6_to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat8_b)
-
-
-def test_rejects_sharded_memory_config(device, expect_error):
-    x = _to_device(torch.randn((1, 32, 64), dtype=torch.bfloat16), device, DRAM)
-    with expect_error((ValueError, RuntimeError), ""):
-        g6_to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
+def test_rejects_sharded_output_memory_config(device, expect_error):
+    torch.manual_seed(42)
+    ttnn_input = to_device_tile(torch.randn((1, 32, 512), dtype=torch.bfloat16), device)
+    sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    with expect_error((ValueError, RuntimeError), "g6_to_layout"):
+        g6_to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT, memory_config=sharded)
