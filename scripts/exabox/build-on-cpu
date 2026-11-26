@@ -8,7 +8,7 @@ REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
 LOGDIR="/data/$USER/logs"; mkdir -p "$LOGDIR" "/data/$USER/tmp" "/data/$USER/nodehome"
 RC_FILE="$(mktemp -p "/data/$USER/tmp" buildrc.XXXXXX)"; rm -f "$RC_FILE"
 CMD="$(printf '%q ' "$@")"
-JOB="$(sbatch --parsable --partition=cpu_only --nodes=1 --exclude=prx-k8s-slurm-agent-03,prx-k8s-slurm-agent-04,prx-k8s-slurm-agent-05 \
+JOB="$(sbatch --parsable --partition=cpu_only --nodes=1 --exclude=prx-k8s-slurm-agent-04,prx-k8s-slurm-agent-05 \
     --time=01:00:00 --job-name=atamm-build --output="$LOGDIR/atamm-build-%j.out" --export=ALL <<SB
 #!/bin/bash
 echo "node=\$(hostname) cpus=\$(nproc) start=\$(date -u +%FT%TZ)"
