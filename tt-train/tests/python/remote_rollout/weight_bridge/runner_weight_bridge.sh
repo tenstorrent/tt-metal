@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Launches the 2-rank HostWeightBridge transport unit test via tt-run (4->4).
-# Override config locations with --rank-bindings / --hostfile for your machine.
+# Override config locations with --rank-bindings / --hostfile for your machine, or use
+# --split <dir> for a split in tt-train/sources/examples/grpo/configurations.
 
 set -euo pipefail
 
@@ -14,6 +15,7 @@ fi
 
 WB_DIR="${TT_METAL_HOME}/tt-train/tests/python/remote_rollout/weight_bridge"
 TESTS_DIR="${TT_METAL_HOME}/tt-train/tests/python/remote_rollout"
+CONFIG_DIR="${WB_DIR}"
 HOST_FILE="${WB_DIR}/configurations/4_4/hosts.txt"
 RANK_BINDINGS_FILE="${WB_DIR}/configurations/4_4/rank_bindings.yaml"
 TEST_FILE="${WB_DIR}/test_weight_bridge.py"
@@ -26,6 +28,11 @@ while [[ "$#" -gt 0 ]]; do
             shift; RANK_BINDINGS_FILE="$1" ;;
         --test-file)
             shift; TEST_FILE="$1" ;;
+        --split)
+            shift
+            CONFIG_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo"
+            HOST_FILE="${CONFIG_DIR}/configurations/$1/hosts.txt"
+            RANK_BINDINGS_FILE="${CONFIG_DIR}/configurations/$1/rank_bindings.yaml" ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 1
@@ -36,7 +43,7 @@ done
 
 # cd here so the relative mesh_graph_desc_path in rank_bindings.yaml resolves
 # (tt-run resolves it against cwd/TT_METAL_HOME, not the bindings file's dir).
-cd "${WB_DIR}"
+cd "${CONFIG_DIR}"
 
 # --rootdir pins pytest's rootdir so the parent conftest.py is picked up.
 CMD="python3 -m pytest -s -p no:cacheprovider --rootdir=${TESTS_DIR} ${TEST_FILE}"

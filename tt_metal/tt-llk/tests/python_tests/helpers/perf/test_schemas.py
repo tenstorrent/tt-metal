@@ -725,6 +725,34 @@ PERF_TEST_SCHEMAS = {
             "perf_fast_tilize_metal_api": "perf_fast_tilize_metal_api"
         },
     },
+    "perf_fast_tilize_tiny_tiles": {
+        "version": 1,
+        "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "full_ct_dim",
+            "full_rt_dim",
+            "loop_factor",
+            "marker",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_fast_tilize_tiny_tiles": "perf_fast_tilize_tiny_tiles"
+        },
+    },
     "perf_fast_untilize": {
         "version": 5,
         "columns": [
@@ -2164,6 +2192,28 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
         "test_name_aliases": {"perf_sfpu_ema": "perf_sfpu_ema"},
     },
+    "perf_sfpu_logit_softcap": {
+        "version": 3,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "iterations",
+            "logit_softcap_polynomial",
+            "loop_factor",
+            "marker",
+            "tile_cnt",
+            "unpack_to_dest",
+            "value_bits",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sfpu_logit_softcap": "perf_sfpu_logit_softcap"},
+    },
     "perf_sfpu_reduce": {
         "version": 6,
         "columns": [
@@ -3600,6 +3650,39 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {},
         "test_name_aliases": {"perf_sfpu_gated_reduce": "perf_sfpu_gated_reduce"},
+    },
+    "perf_sfpu_generic_moe_gate_topk": {
+        "version": 2,
+        "columns": [
+            "dest_acc",
+            "dest_sync",
+            "eps_bits",
+            "extra_scale_bits",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "full_sort",
+            "generate_indices",
+            "loop_factor",
+            "marker",
+            "normalize",
+            "num_selected_experts",
+            "num_total_experts",
+            "scale_bits",
+            "scores_include_bias",
+            "spread_biased_scores",
+            "tile_cnt",
+            "unpack_to_dest",
+            "zero_tail",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_sfpu_generic_moe_gate_topk": "perf_sfpu_generic_moe_gate_topk"
+        },
     },
 }
 

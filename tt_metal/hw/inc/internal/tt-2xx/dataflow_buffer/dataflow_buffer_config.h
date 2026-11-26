@@ -163,7 +163,15 @@ inline uint32_t dfb_config_header_size() { return sizeof(dfb_global_header_t); }
 
 // Number of init/wait entries in a hart blob (= popcount of participation_mask[h]).
 inline uint8_t dfb_hart_participation_count(uint32_t participation_mask) {
+#if defined(COMPILE_FOR_TRISC)
+    uint8_t n = 0;
+    for (; participation_mask != 0; participation_mask &= participation_mask - 1) {
+        n++;
+    }
+    return n;
+#else
     return static_cast<uint8_t>(__builtin_popcount(participation_mask));
+#endif
 }
 
 // Flag bits for dfb_hart_init_entry_t::flags
@@ -175,7 +183,40 @@ constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
 // Tensix-only TC pool is invisible to DM, and one Neo cannot see another Neo's TCs.
 // Mutually exclusive with DFB_HART_FLAG_REMAPPER_WAIT_DM1.
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_SELF_PROG = (1u << 4);
-constexpr uint8_t DFB_HART_FLAG_TRISC_MASK = 0x0Fu;  // bits 3:0 = tensix_trisc_mask (which TRISC(s) run DFB ops)
+// bits 3:0 = tensix_trisc_mask: which TRISC consumes and which TRISC produces this DFB.
+constexpr uint8_t DFB_TRISC_ROLE_CONSUMER_T0 = (1u << 0);
+constexpr uint8_t DFB_TRISC_ROLE_CONSUMER_T3 = (1u << 1);
+constexpr uint8_t DFB_TRISC_ROLE_PRODUCER_T2 = (1u << 2);
+constexpr uint8_t DFB_TRISC_ROLE_PRODUCER_T3 = (1u << 3);
+constexpr uint8_t DFB_HART_FLAG_TRISC_MASK = 0x0Fu;
+
+// Which DFB ops this TRISC image compiles: unpack consumes, pack produces, trisc3 both, math neither.
+#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU))
+#define DFB_TRISC_CAN_PRODUCE 1
+#else
+#define DFB_TRISC_CAN_PRODUCE 0
+#endif
+#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_ISOLATE_SFPU))
+#define DFB_TRISC_CAN_CONSUME 1
+#else
+#define DFB_TRISC_CAN_CONSUME 0
+#endif
+#define DFB_TRISC_HAS_INTERFACE (DFB_TRISC_CAN_PRODUCE || DFB_TRISC_CAN_CONSUME)
+
+// The tensix_trisc_mask bits for the TRISC image.
+#if defined(UCK_CHLKC_UNPACK)
+constexpr uint8_t DFB_TRISC_MY_CONSUMER_ROLE = DFB_TRISC_ROLE_CONSUMER_T0;
+constexpr uint8_t DFB_TRISC_MY_PRODUCER_ROLE = 0;
+#elif defined(UCK_CHLKC_PACK)
+constexpr uint8_t DFB_TRISC_MY_CONSUMER_ROLE = 0;
+constexpr uint8_t DFB_TRISC_MY_PRODUCER_ROLE = DFB_TRISC_ROLE_PRODUCER_T2;
+#elif defined(UCK_CHLKC_ISOLATE_SFPU)
+constexpr uint8_t DFB_TRISC_MY_CONSUMER_ROLE = DFB_TRISC_ROLE_CONSUMER_T3;
+constexpr uint8_t DFB_TRISC_MY_PRODUCER_ROLE = DFB_TRISC_ROLE_PRODUCER_T3;
+#else
+constexpr uint8_t DFB_TRISC_MY_CONSUMER_ROLE = 0;
+constexpr uint8_t DFB_TRISC_MY_PRODUCER_ROLE = 0;
+#endif
 
 // Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 32B header, followed by
 // uint8_t packed_tile_counter[num_tcs] padded to the next 4B boundary.

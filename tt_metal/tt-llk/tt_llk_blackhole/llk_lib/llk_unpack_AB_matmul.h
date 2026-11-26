@@ -197,7 +197,7 @@ inline void _llk_unpack_AB_matmul_narrow_mop_config_(
             });
     }
 
-    _llk_unpack_AB_matmul_program_mop_(lltt::replay_insn(0, replay_buf_run_len), lltt::replay_insn(replay_buf_run_len, replay_buf_run_len));
+    _llk_unpack_AB_matmul_program_mop_(TT_OP_REPLAY(0, replay_buf_run_len, 0, 0), TT_OP_REPLAY(replay_buf_run_len, replay_buf_run_len, 0, 0));
 }
 
 /**
@@ -238,7 +238,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                     TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 0, stream_z);
                 });
-            _llk_unpack_AB_matmul_program_mop_(lltt::replay_insn(0, 2), lltt::replay_insn(2, 2));
+            _llk_unpack_AB_matmul_program_mop_(TT_OP_REPLAY(0, 2, 0, 0), TT_OP_REPLAY(2, 2, 0, 0));
             return;
         }
     }
@@ -386,7 +386,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
             });
     }
 
-    _llk_unpack_AB_matmul_program_mop_(lltt::replay_insn(0, replay_buf_run_len), lltt::replay_insn(replay_buf_run_len, replay_buf_run_len));
+    _llk_unpack_AB_matmul_program_mop_(TT_OP_REPLAY(0, replay_buf_run_len, 0, 0), TT_OP_REPLAY(replay_buf_run_len, replay_buf_run_len, 0, 0));
 }
 
 /**

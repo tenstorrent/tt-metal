@@ -278,7 +278,7 @@ inline void _llk_unpack_A_mop_config_(
 
             const std::uint32_t outerloop = num_faces < 4 ? 1 : 2;
             const std::uint32_t innerloop = num_faces < 2 ? 1 : 2;
-            ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, replay_buf_len)); // Unpack faces 0/2 && 1/3 to srcA
+            ckernel_template tmp(outerloop, innerloop, TT_OP_REPLAY(0, replay_buf_len, 0, 0)); // Unpack faces 0/2 && 1/3 to srcA
                                                                                               // or 0/1 for 2 face tile
             if (num_faces > 2)
             {

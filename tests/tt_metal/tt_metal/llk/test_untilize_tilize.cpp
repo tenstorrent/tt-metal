@@ -1642,10 +1642,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) 
 // every datum distinct, so a pack that stopped short of the full tile or stepped the wrong face row
 // cannot pass on fill bytes alone.
 //
-// A 16-bit Dest is the only working configuration for an Int8 output today. With a 32-bit Dest the
-// FPU promotes the input to a sign-magnitude word, but get_single_pack_src_format still derives
-// pack_src from the output CB and yields Int8, so the packer reads the SM8 datum (the top byte of
-// the word) and every output datum comes back as its sign bit alone.
+// This runs on a 16-bit Dest, where the Dest datum is the Int8 itself. QuasarComputePackUntilizeInt8Dest32
+// covers the 32-bit Dest.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt8) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
     for (auto& cfg : test_configs) {
@@ -1723,6 +1721,88 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTil
                     /*tile_shape_in_faces=*/{geo[0], geo[1]},
                     /*face_r_dim=*/geo[2]);
             }
+        }
+    }
+}
+
+// Int8 out of a 32-bit Dest, which is the configuration a quantized model runs: the Dest datum is a
+// sign-magnitude word, so pack_src names Int32 and the packer gasket narrows back to Int8 at L1.
+// The round trip is lossless, so the golden is the plain untilize golden.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt8Dest32) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            run_quasar_tilize_untilize_test(
+                this->device(),
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/true,
+                tt::DataFormat::Int8,
+                /*output_data_format=*/tt::DataFormat::Int8);
+        }
+    }
+}
+
+// Pack Untilize Dst Int8 -> Int8 out of a 32-bit Dest (tiles pre-loaded into dest via copy_tile).
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt8Dest32) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            run_quasar_tilize_untilize_test(
+                this->device(),
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE_DST,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/true,
+                tt::DataFormat::Int8,
+                /*output_data_format=*/tt::DataFormat::Int8);
+        }
+    }
+}
+
+// The strided pack path at 32-bit Dest, which a quantized deformable-attention kernel writes its
+// output with. It is the only case here where the packer's input and output datum widths differ,
+// and each side's stride is scaled by a hardware-derived bytes-per-datum.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTileInt8Dest32) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
+    const auto& geometries = QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES;
+    for (auto& cfg : test_configs) {
+        for (const auto& geo : geometries) {
+            for (bool dst_full_sync_en : {true, false}) {
+                run_quasar_tilize_untilize_test(
+                    this->device(),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::UNTILIZE,
+                    dst_full_sync_en,
+                    /*fp32_dest_acc_en=*/true,
+                    tt::DataFormat::Int8,
+                    tt::DataFormat::Int8,
+                    /*tile_shape_in_faces=*/{geo[0], geo[1]},
+                    /*face_r_dim=*/geo[2]);
+            }
+        }
+    }
+}
+
+// UInt8 takes the same Int32 pack_src: Dest has no unsigned 32-bit format, so the byte rides in the
+// magnitude of a signed word with the sign clear.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeUInt8Dest32) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            run_quasar_tilize_untilize_test(
+                this->device(),
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/true,
+                tt::DataFormat::UInt8,
+                /*output_data_format=*/tt::DataFormat::UInt8);
         }
     }
 }
