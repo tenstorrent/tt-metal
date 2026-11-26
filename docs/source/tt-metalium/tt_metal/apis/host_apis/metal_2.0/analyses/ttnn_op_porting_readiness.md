@@ -2,13 +2,13 @@
 
 **Author:** Audrey and Claude
 
-**Purpose:** Give an auditing Claude the live, per-factory porting-readiness data — Diego's "Operations analysis" sheet — plus how to fetch a fresh copy and how to read it. The [audit recipe](../ai/audit/metal2_audit.md) references this doc when it needs the data.
+**Purpose:** Give an auditing Claude the live, per-factory porting-readiness data — the TTNN "Operations analysis" sheet — plus how to fetch a fresh copy and how to read it. The [audit recipe](../ai/audit/metal2_audit.md) references this doc when it needs the data.
 
 > **Fetch this data yourself, in your main session, once per session.** It is deliberately **not** checked into the repo — the sheet is edited continuously, so a committed copy goes stale fast. Re-download it **even if a `.csv` is already sitting in this folder**; a stale local copy is worse than none. What you must never do is reuse a checked-in copy or one from an earlier session — but a copy you pulled yourself an hour ago is fine, so a session auditing several ops fetches once and reuses it.
 
 ## Source (live)
 
-Google Sheet — *"Operations analysis"*, owned by Diego (`dgomez@tenstorrent.com`):
+Google Sheet — *"Operations analysis"*, owned by Audrey Kertesz (`akertesz@tenstorrent.com`):
 https://docs.google.com/spreadsheets/d/1KUMj8SyBGlNMZlLFgs1MbAZlO2g6EoUc4KaxSlcy8jw/edit?usp=sharing
 
 - **File ID:** `1KUMj8SyBGlNMZlLFgs1MbAZlO2g6EoUc4KaxSlcy8jw`
@@ -72,7 +72,7 @@ The sheet may carry other, informational columns (e.g. `Model`); find any of the
 
 Notes:
 
-- Cell values are mostly `yes` / `no`, but some are `warning`, `PR` (handled in an in-flight PR), blank, or other short tags. **Diego owns these classifications.** The sheet is a shortcut to work you'd otherwise do by hand — **trust it, but cross-check the cheaply-checkable columns against the code** (per the audit subject). On a code-vs-sheet **conflict on one of those columns, or a missing op, the sheet is broken → gate the port** and route it to the readiness-sheet owner to reconcile. That claim is only available where you hold independent evidence — a *derived* cell you can't explain is not a conflict, and the audit routes it differently.
+- Cell values are mostly `yes` / `no`, but some are `warning`, `PR` (handled in an in-flight PR), blank, or other short tags. **The sheet's owner owns these classifications.** The sheet is a shortcut to work you'd otherwise do by hand — **trust it, but cross-check the cheaply-checkable columns against the code** (per the audit subject). On a code-vs-sheet **conflict on one of those columns, or a missing op, the sheet is broken → gate the port** and route it to the readiness-sheet owner to reconcile. That claim is only available where you hold independent evidence — a *derived* cell you can't explain is not a conflict, and the audit routes it differently.
 - **Ignore the trailing summary block.** The last rows aren't ops — they're category totals (`With Smuggled pointers, 66`, and similar) and stray labels. A grep-by-op-path lookup skips them naturally.
 - CSV export covers only the sheet's first tab (`Sheet1`), which today holds all the data.
 - **CSV flattens formulas to values.** Several columns are computed, not hand-entered, and you see only what they evaluated to. That is the intended working set — derived cells are read, not vetted (see `Is able to port?` above) — but know that it's what you're holding, so an unexplained value reads as *out of my view* rather than *wrong*.
@@ -80,5 +80,5 @@ Notes:
 ## Troubleshooting
 
 - **"requires authorization" / "token expired":** the human hasn't authorized — or needs to re-authorize — the Google Drive connector. Point them to [`../human/READ_ME_FIRST.md`](../human/READ_ME_FIRST.md) → *Google Drive MCP setup*. It's a claude.ai account-level action; it cannot be done from inside the session.
-- **File not found / permission denied:** the sheet isn't shared with the human's Google account. Ask the owner (Diego) to broaden the share.
+- **File not found / permission denied:** the sheet isn't shared with the human's Google account. Ask the owner to broaden the share.
 - **Tool name not found when you call it:** load its schema first (step 1); until then it's deferred and uncallable.
