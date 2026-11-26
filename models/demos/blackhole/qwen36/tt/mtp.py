@@ -206,8 +206,8 @@ class Qwen36MTP:
 
     def _init_sharded_argmax(self, parent):
         """Resolve QWEN36_DRAFT_SHARDED_ARGMAX and allocate the two persistent constants it needs.
-        The constants are pre-expanded over B = args.max_batch_size rows, so every binary op in
-        _argmax_sharded is a plain or a column broadcast.
+        The constants are pre-expanded over B = args.max_batch_size rows (other row counts:
+        _argmax_constants), so every binary op in _argmax_sharded is a plain or a column broadcast.
 
         Runs at model-build time, i.e. long before any begin_trace_capture, which is what makes the
         constants usable from inside the traced draft body: the trace bakes in their ADDRESSES and
@@ -244,12 +244,30 @@ class Qwen36MTP:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        self._argmax_consts = {}
+        self._shard_off, self._sel_lane = self._argmax_constants(B)
+        self._sharded_argmax = True
+        self._fused_argmax = FusedShardArgmax(self.mesh_device, vocab, nd)
+        logger.info(
+            f"MTP drafter: per-shard argmax enabled (B={B}, vocab {vocab} = {nd} x {shard}, "
+            f"maxval grid {self._maxval_r}x{self._maxval_c})"
+        )
+
+    def _argmax_constants(self, rows):
+        """The two constants _argmax_sharded binds for a shard of ``rows`` rows: (shard offset [1,1,rows,_LANES] int32,
+        lane index [1,1,rows,_LANES*num_devices] int32), built on the first call per row count. A traced drafter of
+        fewer rows than max_batch_size (a drafter row bucket) runs its body once before its capture, which builds them
+        before any trace bakes in their addresses."""
+        consts = self._argmax_consts.get(rows)
+        if consts is not None:
+            return consts
+        nd, lanes = self.num_devices, self._LANES
         # Device d's vocab shard covers [d*shard, (d+1)*shard): the LM-head weight is sharded with
         # ShardTensorToMesh(dim=-1) (Qwen36Model.__init__) and ShardTensorToMesh(dim=0) here walks
         # the mesh in the same order, so row d lands on the device that owns vocab block d. The
-        # offset is broadcast across all B rows and lanes so the id side never needs a ttnn.pad.
-        off = (torch.arange(nd, dtype=torch.int32) * shard).reshape(nd, 1, 1, 1).repeat(1, 1, B, lanes)
-        self._shard_off = ttnn.from_torch(
+        # offset is broadcast across all rows and lanes so the id side never needs a ttnn.pad.
+        off = (torch.arange(nd, dtype=torch.int32) * self._vocab_shard).reshape(nd, 1, 1, 1).repeat(1, 1, rows, lanes)
+        shard_off = ttnn.from_torch(
             off.contiguous(),
             dtype=ttnn.int32,
             layout=ttnn.TILE_LAYOUT,
@@ -259,20 +277,16 @@ class Qwen36MTP:
         )
         # Lane index of the gathered row, replicated: compared against the winning lane to build the
         # select mask. int32 so that compare is integer-exact (see _argmax_sharded).
-        self._sel_lane = ttnn.from_torch(
-            torch.arange(nd * lanes, dtype=torch.int32).reshape(1, 1, 1, nd * lanes).repeat(1, 1, B, 1),
+        sel_lane = ttnn.from_torch(
+            torch.arange(nd * lanes, dtype=torch.int32).reshape(1, 1, 1, nd * lanes).repeat(1, 1, rows, 1),
             dtype=ttnn.int32,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
-        self._sharded_argmax = True
-        self._fused_argmax = FusedShardArgmax(self.mesh_device, vocab, nd)
-        logger.info(
-            f"MTP drafter: per-shard argmax enabled (B={B}, vocab {vocab} = {nd} x {shard}, "
-            f"maxval grid {self._maxval_r}x{self._maxval_c})"
-        )
+        self._argmax_consts[rows] = (shard_off, sel_lane)
+        return shard_off, sel_lane
 
     def _maxval_dev(self, shard):
         """Max over ONE device's [1,1,B,vocab/tp] fp32 logit shard -> [1,1,B,1] fp32 TILE (per row).
@@ -285,7 +299,7 @@ class Qwen36MTP:
         the fp32 logits it exists to rank. The demo path passes no config because its logits are
         bfloat16, which survives that truncation intact.
         """
-        R, C, B = self._maxval_r, self._maxval_c, self.args.max_batch_size
+        R, C, B = self._maxval_r, self._maxval_c, int(shard.shape[2])
         cfg = self._fp32_cfg
         padded = ttnn.pad(shard, [(0, 0), (0, 0), (0, 0), (0, R * C - self._vocab_shard)], value=self._NEG_FLOOR)
         grid = ttnn.reshape(padded, (1, B, R, C))  # one [R, C] grid per row
@@ -303,7 +317,7 @@ class Qwen36MTP:
 
         Same contract as the gathered argmax_last — same output shape, dtype, layout and tie-break
         (per row) — but the full vocab row is never materialised. Each device argmaxes its own
-        [1,1,B,vocab/tp] fp32 shard (B = args.max_batch_size rows); the winner of each row is then
+        [1,1,B,vocab/tp] fp32 shard (B rows, at most args.max_batch_size); the winner of each row is then
         picked from two _LANES-wide all-gathers (2 x B x 32 x 4 B per device) instead of one
         vocab-wide fp32 one (B x 248320 x 4 B = B x 993 KB).
         Every step is a fixed-shape device op with no host readback, so this runs in the eager
@@ -329,6 +343,7 @@ class Qwen36MTP:
 
         lanes = self._LANES
         topo = self.args.ccl_topology()
+        shard_off, sel_lane = self._argmax_constants(int(logits_shard.shape[2]))
 
         # 1. Local argmax over this device's shard. ttnn.argmax needs ROW_MAJOR for the multicore
         #    last-dim path (a TILE input falls back to a single-core internal untilize).
@@ -344,7 +359,7 @@ class Qwen36MTP:
         ttnn.deallocate(lidx4)
         lidx_i = ttnn.typecast(lidx_t, ttnn.int32)
         ttnn.deallocate(lidx_t)
-        gid = ttnn.add(self._shard_off, lidx_i)  # [1,1,B,lanes] int32, column broadcast over W
+        gid = ttnn.add(shard_off, lidx_i)  # [1,1,B,lanes] int32, column broadcast over W
         ttnn.deallocate(lidx_i)
 
         # 4. One tile-wide value block per row: lane 0 carries the real max, the rest a floor that can
@@ -382,7 +397,7 @@ class Qwen36MTP:
         #    past every real id by the sentinel, then take the row min. Exactly one lane per row is
         #    left alone. The 0/1 mask goes through bfloat16 for the multiply (2**24 is exact there, and
         #    it is the combination tt_sampling.py validated on device) and back to int32 for the add.
-        nw = ttnn.ne(self._sel_lane, cw_i)  # [1,1,B,lanes*nd] int32 1/0, cw_i column-broadcast over W
+        nw = ttnn.ne(sel_lane, cw_i)  # [1,1,B,lanes*nd] int32 1/0, cw_i column-broadcast over W
         ttnn.deallocate(cw_i)
         nw_b = ttnn.typecast(nw, ttnn.bfloat16)
         ttnn.deallocate(nw)
