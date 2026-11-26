@@ -783,8 +783,9 @@
   budget_type: demo
   sp_config: sc1
 
-- name: "(Kimi-K3-2.8T) MoonViT-V2 vision attention and block accuracy 64k, full model traced perf, synthetic weights"
+- name: "(Kimi-K3-2.8T) MoonViT-V2 vision attention and block accuracy 64k, full model small-image accuracy and traced perf, synthetic weights"
   # Sampled rows from each of the 4 ring chips vs an fp32 CPU golden; no full-image reference.
+  # Full model on a 48x48-patch image vs an fp32 CPU reference computed in the test.
   # Perf: the full model traced on the largest processor grid, time per replay asserted, output not checked.
   fabric_profile: torus_xy
   cmd: |
@@ -795,7 +796,8 @@
         models/experimental/kimi_k3_moonvit_v2/tests/test_vision_attention.py \
         models/experimental/kimi_k3_moonvit_v2/tests/test_vision_block.py \
         models/experimental/kimi_k3_moonvit_v2/tests/test_full_size.py \
-        -m synthetic -k "real_rows_from_each_chip or model_trace_perf" -vvv --tb=short
+        models/experimental/kimi_k3_moonvit_v2/tests/test_vision_model.py \
+        -m synthetic -k "real_rows_from_each_chip or model_trace_perf or small_image" -vvv --tb=short
     '
   test_type: kimi_k3_moonvit
   test_tags: [kimi_k3, accuracy]
