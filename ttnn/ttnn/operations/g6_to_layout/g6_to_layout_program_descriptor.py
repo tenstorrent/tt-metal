@@ -31,6 +31,8 @@ CB_BASE_ALIGN_BYTES = 64
 TILES_DEPTH = 2
 ROWS_DEPTH = 2
 BALANCE_SLACK = Fraction(1, 8)
+# Rotate each core's tile / row walk by its index modulo the bank count (catalog `bank_stagger`).
+BANK_STAGGER = False
 
 CB_TILES = 0  # input tile pages (bit view of bf16), reader -> compute
 CB_ROWS = 1  # untilized rows of one segment, compute -> writer
@@ -64,6 +66,9 @@ class Plan:
     tiles_depth: int
     rows_depth: int
     balance_slack: Fraction
+    bank_stagger: bool
+    input_banks: int
+    output_banks: int
     # Formats / budget
     input_dtype: object
     output_dtype: object
@@ -78,7 +83,7 @@ class Plan:
     group_1_segments: int
     group_2: tuple
     group_2_segments: int
-    core_assignment: tuple  # ((x, y), start_segment, num_segments) per used core
+    core_assignment: tuple  # ((x, y), start_segment, num_segments, tile_rotation, row_rotation) per used core
     core_roles: tuple  # ((x, y), "reader/compute/writer" | "idle") over the whole grid
 
     @property
@@ -123,6 +128,9 @@ def compute_plan(
     grid_y,
     num_l1_banks,
     l1_alignment,
+    input_banks,
+    output_banks,
+    bank_stagger=BANK_STAGGER,
 ) -> Plan:
     """Pure function of shape, dtypes, placements and grid (never of measured free L1)."""
     shape = tuple(int(d) for d in shape)
@@ -171,11 +179,14 @@ def compute_plan(
     start = 0
     for cores, count in ((group_1, group_1_segments), (group_2, group_2_segments)):
         for core in cores:
-            assignment.append((core, start, count))
+            core_index = len(assignment)
+            tile_rotation = core_index % input_banks if bank_stagger else 0
+            row_rotation = core_index % output_banks if bank_stagger else 0
+            assignment.append((core, start, count, tile_rotation, row_rotation))
             start += count
     assert start == num_segments, f"g6_to_layout: split covers {start} of {num_segments} segments"
 
-    used = {core for core, _, _ in assignment}
+    used = {entry[0] for entry in assignment}
     roles = tuple(
         ((x, y), "reader/compute/writer" if (x, y) in used else "idle") for y in range(grid_y) for x in range(grid_x)
     )
@@ -197,6 +208,9 @@ def compute_plan(
         tiles_depth=TILES_DEPTH,
         rows_depth=ROWS_DEPTH,
         balance_slack=BALANCE_SLACK,
+        bank_stagger=bank_stagger,
+        input_banks=input_banks,
+        output_banks=output_banks,
         input_dtype=input_dtype,
         output_dtype=output_dtype,
         output_memory_config=output_memory_config,
@@ -249,6 +263,7 @@ def create_program_descriptor(plan: Plan, input_tensor: ttnn.Tensor, output_tens
         plan.height,
         plan.width,
         plan.tile_bytes_in,
+        int(plan.bank_stagger),
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -262,6 +277,7 @@ def create_program_descriptor(plan: Plan, input_tensor: ttnn.Tensor, output_tens
         plan.width,
         plan.tile_bytes_rows,
         output_tensor.buffer_page_size(),
+        int(plan.bank_stagger),
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
@@ -270,9 +286,9 @@ def create_program_descriptor(plan: Plan, input_tensor: ttnn.Tensor, output_tens
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
-    for (x, y), start, count in plan.core_assignment:
-        reader_rt[x][y] = [start, count]
-        writer_rt[x][y] = [start, count]
+    for (x, y), start, count, tile_rotation, row_rotation in plan.core_assignment:
+        reader_rt[x][y] = [start, count, tile_rotation]
+        writer_rt[x][y] = [start, count, row_rotation]
         compute_rt[x][y] = [count]
 
     reader = ttnn.KernelDescriptor(

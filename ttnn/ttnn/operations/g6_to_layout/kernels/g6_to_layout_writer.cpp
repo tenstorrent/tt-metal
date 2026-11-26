@@ -29,7 +29,8 @@ void kernel_main() {
     constexpr uint32_t width = get_compile_time_arg_val(6);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t out_page_bytes = get_compile_time_arg_val(8);
-    constexpr auto output_args = TensorAccessorArgs<9>();
+    constexpr bool bank_stagger = get_compile_time_arg_val(9) != 0;
+    constexpr auto output_args = TensorAccessorArgs<10>();
 
     constexpr uint32_t TILE_DIM = 32;
     constexpr uint32_t row_bytes = out_page_bytes;
@@ -39,6 +40,9 @@ void kernel_main() {
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_segment = get_arg_val<uint32_t>(0);
     const uint32_t num_segments = get_arg_val<uint32_t>(1);
+    // Rows go to consecutive pages, i.e. consecutive DRAM banks; starting each core at its own row
+    // keeps the grid's lockstep writes spread over the banks instead of all on one.
+    const uint32_t row_rotation = get_arg_val<uint32_t>(2);
 
     const auto output = TensorAccessor(output_args, output_addr, out_page_bytes);
     DataflowBuffer cb_rows(cb_rows_id);
@@ -68,9 +72,24 @@ void kernel_main() {
             const uint32_t seg_bytes = bytes_left < row_stride ? bytes_left : row_stride;
             const uint32_t first_page = n * height + ht * TILE_DIM;
 
-            uint32_t row_addr = block_addr + s * segment_bytes;
-            for (uint32_t i = 0; i < rows_live; ++i, row_addr += row_stride) {
-                noc_async_write(row_addr, output.get_noc_addr(first_page + i, byte_offset), seg_bytes);
+            const uint32_t segment_addr = block_addr + s * segment_bytes;
+            if constexpr (bank_stagger) {
+                uint32_t row = row_rotation < rows_live ? row_rotation : row_rotation % rows_live;
+                uint32_t row_addr = segment_addr + row * row_stride;
+                for (uint32_t k = 0; k < rows_live; ++k) {
+                    noc_async_write(row_addr, output.get_noc_addr(first_page + row, byte_offset), seg_bytes);
+                    ++row;
+                    row_addr += row_stride;
+                    if (row == rows_live) {
+                        row = 0;
+                        row_addr = segment_addr;
+                    }
+                }
+            } else {
+                uint32_t row_addr = segment_addr;
+                for (uint32_t row = 0; row < rows_live; ++row, row_addr += row_stride) {
+                    noc_async_write(row_addr, output.get_noc_addr(first_page + row, byte_offset), seg_bytes);
+                }
             }
         }
         {

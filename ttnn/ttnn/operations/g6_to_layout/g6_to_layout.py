@@ -184,6 +184,10 @@ def _output_memory_config(input_tensor, memory_config):
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, input_tensor.memory_config().buffer_type)
 
 
+def _num_banks(device, buffer_type):
+    return ttnn.get_memory_view(device, buffer_type).num_banks
+
+
 def _cache_key(input_tensor, layout, dtype, memory_config):
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
@@ -207,15 +211,18 @@ def select_plan(input_tensor, layout, *, dtype=None, memory_config=None) -> Plan
     if plan is None:
         device = input_tensor.device()
         grid = device.compute_with_storage_grid_size()
+        output_memory = _output_memory_config(input_tensor, memory_config)
         plan = compute_plan(
             tuple(input_tensor.shape),
             input_tensor.dtype,
             _output_dtype(input_tensor, layout, dtype),
-            _output_memory_config(input_tensor, memory_config),
+            output_memory,
             grid.x,
             grid.y,
             ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks,
             ttnn.get_l1_alignment(),
+            _num_banks(device, input_tensor.memory_config().buffer_type),
+            _num_banks(device, output_memory.buffer_type),
         )
         _PLAN_CACHE[key] = plan
     return plan

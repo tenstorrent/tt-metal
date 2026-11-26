@@ -77,7 +77,8 @@ void kernel_main() {
     constexpr uint32_t height = get_compile_time_arg_val(6);
     constexpr uint32_t width = get_compile_time_arg_val(7);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(8);
-    constexpr auto input_args = TensorAccessorArgs<9>();
+    constexpr bool bank_stagger = get_compile_time_arg_val(9) != 0;
+    constexpr auto input_args = TensorAccessorArgs<10>();
 
     constexpr uint32_t face_bytes = tile_bytes / 4;
     constexpr uint32_t last_col_live = width - (tensor_w_tiles - 1) * TILE_DIM;
@@ -87,6 +88,8 @@ void kernel_main() {
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_segment = get_arg_val<uint32_t>(0);
     const uint32_t num_segments = get_arg_val<uint32_t>(1);
+    // Starting each core at its own tile of a segment spreads the grid's lockstep reads over the banks.
+    const uint32_t tile_rotation = get_arg_val<uint32_t>(2);
 
     const auto input = TensorAccessor(input_args, input_addr, tile_bytes);
     DataflowBuffer cb_tiles(cb_tiles_id);
@@ -118,8 +121,18 @@ void kernel_main() {
             const bool ends_tensor_row = first_wt + tiles_live == tensor_w_tiles;
             const uint32_t interior_tiles = ends_tensor_row ? tiles_live - 1 : tiles_live;
             const LiveRanges interior = live_ranges<face_bytes>(rows_live, true);
-            for (uint32_t t = 0; t < interior_tiles; ++t) {
-                read_tile(input, first_tile + t, segment_addr + t * tile_bytes, interior);
+            if constexpr (bank_stagger) {
+                uint32_t t = interior_tiles == 0 ? 0 : tile_rotation % interior_tiles;
+                for (uint32_t k = 0; k < interior_tiles; ++k) {
+                    read_tile(input, first_tile + t, segment_addr + t * tile_bytes, interior);
+                    if (++t == interior_tiles) {
+                        t = 0;
+                    }
+                }
+            } else {
+                for (uint32_t t = 0; t < interior_tiles; ++t) {
+                    read_tile(input, first_tile + t, segment_addr + t * tile_bytes, interior);
+                }
             }
             if (ends_tensor_row) {
                 read_tile(

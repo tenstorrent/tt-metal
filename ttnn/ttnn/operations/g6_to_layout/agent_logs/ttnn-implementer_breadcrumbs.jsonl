@@ -2,3 +2,5 @@
 {"event":"perf_measure","device_kernel_ns":{"(1,1024,1024,3)":807138,"(1,512,2048,128)":1354312,"(8,1024,2560)":209784,"(1,1,131072)":17504,"(1,32,2560)":2730},"note":"wide shapes ~400 GB/s in+out (DRAM-bound); W=3 shape writer-issue-bound (~1M 16B row writes), lamp L4","ts":"2026-11-26T19:44:20+00:00"}
 {"event":"friction","what":"none","ts":"2026-11-26T19:44:39+00:00"}
 {"event":"test_run","result":"pass","detail":"26/26 acceptance, --dev and production; UInt16 CBs keep -0.0/subnormal/inf/NaN bit-exact","ts":"2026-11-26T23:14:29+00:00"}
+{"event":"perf_classification","shape":"(1,1024,1024,3)","detail":"writer-bound: no_writes 169us, no_reads 543us, writes-to-local-L1 388us, baseline ~786-812us; per-core writer time grades by row y (805us top, 285us bottom); bank stagger (L4) flat (815us) -> kept as CT knob, default off","ts":"2026-11-26T23:24:34+00:00"}
+{"event":"test_run","result":"pass","detail":"acceptance 26/26 (--dev + prod); golden 58 passed, 31 xfailed","ts":"2026-11-26T23:24:34+00:00"}
