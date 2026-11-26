@@ -96,7 +96,9 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
     _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, EN_32BIT_DEST>(
-        unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id]);
+        unpack_src_format[srca_operand_id],
+        unpack_dst_format[srca_operand_id],
+        UnpackToDestEn && operand_fits_unpack_to_dest(srca_operand_id));
 }
 
 template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool skip_int8 /*maybe_unused*/ = false>
@@ -161,7 +163,7 @@ inline void llk_unpack_reconfig_data_format(
 }
 
 /**
- * @brief Issues a dummy SrcB dvalid so the math thread can satisfy its SRCB_VLD
- * stall in transpose-dest. Used by the transpose_dest compute API.
+ * @brief Issues a dummy SrcB dvalid so the math thread can satisfy its SRCB_VLD stall in transpose-dest and in
+ * broadcast from DEST. Issued in program order, inside the Dest loan when called between borrow and return.
  */
 inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcB_dummy_valid_(); }

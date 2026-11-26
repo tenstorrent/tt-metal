@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 
+#include "tensix_types.h"
 #include "tensor_shape.h"
 
 inline std::uint32_t get_operand_id(std::uint32_t operand) { return (operand); }
@@ -15,6 +16,14 @@ inline const std::uint32_t get_operand_src_format(const std::uint32_t operand_id
 
 inline const std::uint32_t get_operand_dst_format(const std::uint32_t operand_id) {
     return unpack_dst_format[operand_id];
+}
+
+// UNP_DEST does not widen or narrow (see is_quasar_unpack_reconfig_pair_supported), so the operand width must match the
+// DEST width, else SrcA / SrcB.
+inline bool operand_fits_unpack_to_dest(const std::uint32_t operand_id) {
+    const auto fmt = static_cast<DataFormat>(unpack_dst_format[operand_id]);
+    const bool is_32bit = (fmt == DataFormat::Float32) || (fmt == DataFormat::Int32);
+    return is_32bit == DST_ACCUM_MODE;
 }
 
 inline const std::uint32_t get_operand_num_faces(const std::uint32_t operand_id) {
