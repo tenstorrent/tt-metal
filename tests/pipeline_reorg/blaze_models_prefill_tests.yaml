@@ -999,10 +999,10 @@
       models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
       # CCL perf gates of the 4x4 [RING, RING] carve (a 16-chip sub-torus of this Galaxy): the whole-mesh high_bw_all_gather
       # bandwidth floors, and the sparse KV push plan, table gather and push ceilings at the 1M cache of a stage. Their
-      # numbers depend on the host's power rating, so they run here and not in the 8 kW GLM components leg.
+      # numbers depend on the power rating of the host, so they run here and not in the 8 kW GLM components leg.
       models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 1 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k perf || exit $?
       models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 3 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k perf || exit $?
-      # MoE block perf: host time of one layer on 8x4 @5120, then the carve's host time and per-op device time
+      # MoE block perf: host time of one layer on 8x4 @5120, then host time and per-op device time on the carve
       # in forwards of one, two and four packed 2,560-token chunks, in one process (one seeded weight build for the six
       # cases). ~5 min.
       # (the 8x4 step fails when its one test does not pass: a skip, say; the carve wrapper checks its own six)
