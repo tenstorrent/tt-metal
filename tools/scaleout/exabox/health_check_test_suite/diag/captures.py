@@ -373,33 +373,37 @@ def _brick_rows(d: Path, when: str, rows) -> None:
         fh.writelines("\t".join([t, when, r[0], *map(_f3, r[1:])]) + "\n" for r in rows)
 
 
+def _brick_passes(d: Path, step: str, t0: float) -> dict[str, list[list[str]]]:
+    """The poller's brick.tsv rows of the passes during *step* since *t0*, grouped by the pass's time stamp."""
+    passes: dict[str, list[list[str]]] = {}
+    for r in (r.split("\t") for r in _lines(d / "brick.tsv")):
+        if len(r) > 3 and r[1] == f"during {step}" and float(r[0]) >= t0:
+            passes.setdefault(r[0], []).append(r)
+    return passes
+
+
 def _brick_load(d: Path, step: str, t0: float) -> str | None:
     """The poller's brick passes during *step* since *t0*: the lowest Vout per brick and of the 54 V rail."""
     lo: dict[str, float] = {}
-    n = set()
-    for r in (r.split("\t") for r in _lines(d / "brick.tsv")):
-        if len(r) > 3 and r[1] == f"during {step}" and float(r[0]) >= t0:
-            n.add(r[0])
-            with suppress(ValueError):
-                lo[r[2]] = min(lo.get(r[2], 99.0), float(r[3]))
-    if n:
+    passes = _brick_passes(d, step, t0)
+    for r in (r for rows in passes.values() for r in rows):
+        with suppress(ValueError):
+            lo[r[2]] = min(lo.get(r[2], 99.0), float(r[3]))
+    if passes:
         v = ", ".join(f"{k} {x:.3f} V" for k, x in sorted(lo.items())) or "none read"
-        return f"bricks during {step}: {len(n)} pass(es), every {BRICK_LOAD_S} s; min Vout {v}"
+        return f"bricks during {step}: {len(passes)} pass(es), every {BRICK_LOAD_S} s; min Vout {v}"
     return None
 
 
 def _brick_amps(d: Path, step: str, t0: float) -> str | None:
     """'brick output V/I under load: ...': every brick's Vout and Iout (and the 54 V rail's) from the poller's pass
     nearest the middle of *step* (t0 to now), one pass: the owner's headroom table reads it."""
-    passes: dict[str, list[list[str]]] = {}
-    for r in (r.split("\t") for r in _lines(d / "brick.tsv")):
-        if len(r) > 4 and r[1] == f"during {step}" and float(r[0]) >= t0:
-            passes.setdefault(r[0], []).append(r)
+    passes = _brick_passes(d, step, t0)
     if not passes:
         return None
     mid = (t0 + time.time()) / 2
     t = min(passes, key=lambda k: abs(float(k) - mid))
-    got = {r[2]: r for r in passes[t]}
+    got = {r[2]: r + ["-"] * (5 - len(r)) for r in passes[t]}
 
     def cell(n: str) -> str:
         r = got.get(n)

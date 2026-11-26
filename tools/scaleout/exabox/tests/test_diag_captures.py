@@ -248,7 +248,7 @@ class TestBricks(unittest.TestCase):
         mux = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x00")]
         self.assertEqual(mux, ["0x01", "0x05", "0x02", "0x05", "0x04", "0x05", "0x08", "0x05"])
 
-    def test_load_pass_reads_vout_and_vin_by_the_cached_mode_only(self):
+    def test_load_pass_reads_vout_iout_and_vin_by_the_cached_mode_only(self):
         f = Fake(self)
         f.regs.update({"0x09 0xec 0x01": "05", "0x09 0xc0 0x20": "16", "0x09 0xc2 0x20": "14"})
         f.regs.update({"0x09 0xc0 0x8b": "00 30", "0x09 0xc2 0x8b": "00 c0"})
@@ -259,7 +259,7 @@ class TestBricks(unittest.TestCase):
             f.calls.clear()
             hsc.brick_pass(hsc.Bmc(str(f.ipmi), str(f.d / "lock")), modes, load=True)
         codes = sorted({c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xc")})
-        self.assertEqual(codes, ["0x88", "0x8b"])  # no VOUT_MODE once cached, no IOUT or TEMP
+        self.assertEqual(codes, ["0x88", "0x8b", "0x8c"])  # no VOUT_MODE once cached, no TEMP
         fan = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x01 0x80")]
         self.assertEqual(fan, ["0x05"])  # the 54 V rail's VBUS only
 
