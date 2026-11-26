@@ -154,6 +154,9 @@ serve_profiles:
       # round's groups through four slots — 32-row step 44.65 -> 43.35 ms, served c32 542 -> 555 tok/s
       RESIDENT_HUB_BFP8: "1"
       RESIDENT_HUB_SLOTS: "4"
+      # O-1f (2026-11-26): the hubs route the all-reduce over the chips' ring (with fabric_config FABRIC_1D_RING below):
+      # a link direction carries half the line's end-link load — 32-row step -0.5 ms
+      RESIDENT_FABRIC_RING: "1"
       RESIDENT_PREFILL_CHUNKS: "256,512,1024"
       # prefix caching in host memory (GB; 0 = off): a prompt's state at its last 1,024-token boundary (GDN states,
       # conv history, KV; for the speculating build also the drafter's context taps) is kept in host RAM, and a later
@@ -170,6 +173,7 @@ serve_profiles:
       RESIDENT_SPEC_SAMPLE: "1"
     additional_config:
       tt:
+        fabric_config: FABRIC_1D_RING        # (O-1f: the 2 x 2 mesh's wrap-around links for the hubs' ring routing)
         sample_on_device_mode: decode_only   # the plain geometry's hub sampling (and a verify's sampled column 0)
         prefill_chunk_tokens: 1024           # the TT chunk core: a prompt over the gang cap splits into 1024-token spans
         prefill_gang_tokens: 2048            # prefill gangs; 0 = the interleaved (TTFT-first) policy
@@ -416,5 +420,7 @@ verify:
   - "import os; os.environ['RESIDENT_ATTN_PIPE'] = '1'; import qwen36_resident.model as M; assert M.ATTN_PIPE"
   # batch: O-1c / O-1d reach the model (bfp8 hub partials with the hub's residual, four hub slots)
   - "import os; os.environ['RESIDENT_HUB_BFP8'] = '1'; os.environ['RESIDENT_HUB_SLOTS'] = '4'; import qwen36_resident.model as M; assert M.HUB_BFP8 and M.HUB_RES and M.HUB_SLOTS == 4"
+  # batch: O-1f's ring routing reaches the model (the profile also opens FABRIC_1D_RING)
+  - "import os; os.environ['RESIDENT_FABRIC_RING'] = '1'; import qwen36_resident.model as M; assert M.FABRIC_RING"
   # batch's chunk list reaches the adapter (ae776ee280c); without it the build keeps the 128 chunk and OOMs
   - "import os; os.environ['RESIDENT_PREFILL_CHUNKS'] = '256,512,1024'; from qwen36_resident.generator_vllm import PREFILL_CHUNKS; assert PREFILL_CHUNKS == (256, 512, 1024), PREFILL_CHUNKS"
