@@ -87,6 +87,7 @@ class Pair:
         bmax=BMAX,
         spec_sample=False,
         block_size=None,
+        ctx=CTX,
     ):
         stub_vllm_if_missing(monkeypatch)
         from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM, Qwen36MTPContractForCausalLM
@@ -98,16 +99,16 @@ class Pair:
         self.state_pcc = 0.999 if n_layers <= N_LAYERS else 0.99
         self.worst_state_pcc = 1.0
         build = lambda mtp: Qwen36Model.from_pretrained(
-            mesh_device, max_batch_size=bmax, max_seq_len=CTX, n_layers=n_layers, hf_model=model_path(), enable_mtp=mtp
+            mesh_device, max_batch_size=bmax, max_seq_len=ctx, n_layers=n_layers, hf_model=model_path(), enable_mtp=mtp
         )
         self.spec_model = build(True)
-        self.ref_model = build(False) if (n_layers, bmax) != (N_LAYERS, BMAX) else _build(mesh_device)
+        self.ref_model = build(False) if (n_layers, bmax, ctx) != (N_LAYERS, BMAX, CTX) else _build(mesh_device)
         self.spec = Qwen36MTPContractForCausalLM([self.spec_model], [self.spec_model.args], mesh_device)
         self.ref = Qwen36ForCausalLM([self.ref_model], [self.ref_model.args], mesh_device)
         probe = PluginLayout.for_model(self.spec_model, num_blocks=1, block_size=block_size)
         self.bs = probe.block_size
-        self.bpu = -(-(CTX + 2 * (K + 1)) // self.bs)  # attention blocks per row
-        state_blocks = probe.num_groups * (CTX // self.bs + 2 * (K + 1)) * pool_rows
+        self.bpu = -(-(ctx + 2 * (K + 1)) // self.bs)  # attention blocks per row
+        state_blocks = probe.num_groups * (ctx // self.bs + 2 * (K + 1)) * pool_rows
         layout = PluginLayout.for_model(
             self.spec_model, num_blocks=1 + self.bmax * self.bpu + state_blocks, block_size=block_size
         )
@@ -309,6 +310,7 @@ class Pair:
             acc[r] = a
         out = self.spec.propose_draft_tokens(self.K, toks, pos, acc)
         assert tuple(out.draft_token_ids.shape) == (self.bmax, self.K)
+        return out
 
     def narrow(self, rows):
         """One ordinary [B, 1] decode step of the MTP class (a verify without drafts) for ``rows``, whose last steps
@@ -455,6 +457,80 @@ def test_long_prompt_with_narrow_steps(mesh_device, monkeypatch, reset_seeds, en
             pair.verify({0: step, 2: step})
         pair.propose({r: 1 if step == "n" else step[1] for r in (0, 2)})
     logger.info(f"worst GDN state PCC against ordinary decode: {pair.worst_state_pcc:.6f}")
+
+
+def _drafter_kv(model, pages, n):
+    """Per device: the MTP drafter's K and V of positions [0, n) in the attention blocks ``pages`` (the drafter's page
+    table is the attention one), [heads, n, head_dim] each."""
+    out = []
+    for cache in (model.mtp.attention.paged_k, model.mtp.attention.paged_v):
+        for d in _device_tensors(cache):
+            x = d[pages.long()]  # [blocks, heads, block, head_dim]
+            out.append(x.permute(1, 0, 2, 3).reshape(x.shape[1], -1, x.shape[-1])[:, :n].float())
+    return out
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@_parametrize
+def test_a_big_chunk_prompt_matches_its_2048_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """K = 3, mode "none", 1024-token blocks: a prompt of two whole 8192-row blocks and 4000 tokens prefills in row 0
+    with the big chunk trace (Qwen36Model.big_chunk_rows) and the masked 4096-row trace for the 4000 rows after them
+    (_masked_big_plan), and in row 1 with the 2048-row chunk trace and masked tail only, on both classes, compiling no
+    program. The MTP class's logits, the drafter's prompt KV and its last-row feed of the two rows
+    agree; then both rows verify against ordinary decode and draft after every step."""
+    K, big = 3, Qwen36Model._PREFILL_BIG_CHUNK
+    pair = Pair(mesh_device, monkeypatch, K, "none", block_size=1024, ctx=3 * big)
+    assert pair.spec_model.big_chunk_rows() == big and pair.ref_model.big_chunk_rows() == big
+    T = 2 * big + 4000
+    prompt = _prompts(1, T, seed=41)[0].tolist()
+    first, spec_logits = {}, {}
+    orig_prefill = pair.spec.prefill_forward
+
+    def keep_logits(*a, **kw):
+        out = orig_prefill(*a, **kw)
+        spec_logits[row] = out[0][0, 0, : pair.vocab].float()
+        return out
+
+    monkeypatch.setattr(pair.spec, "prefill_forward", keep_logits)
+    for row in (0, 1):
+        if row == 1:
+            for m in (pair.spec_model, pair.ref_model):
+                monkeypatch.setattr(m, "big_chunk_rows", lambda: 0)
+                monkeypatch.setattr(m, "_masked_big_plan", lambda n, depth: None)
+        replays = pair.spec_model.prefill_big_chunk_replays
+        masked = getattr(pair.spec_model, "prefill_masked_big_replays", 0)
+        ttnn.synchronize_device(mesh_device)
+        before = mesh_device.num_program_cache_entries()
+        mesh_device.set_program_cache_misses_allowed(False)
+        try:
+            first[row] = int(pair.prefill(row, prompt).argmax())
+            ttnn.synchronize_device(mesh_device)
+        finally:
+            mesh_device.set_program_cache_misses_allowed(True)
+        assert mesh_device.num_program_cache_entries() == before, f"row {row}: the prefill compiled a program"
+        assert pair.spec_model.prefill_big_chunk_replays - replays == (2 if row == 0 else 0)
+        assert getattr(pair.spec_model, "prefill_masked_big_replays", 0) - masked == (1 if row == 0 else 0)
+    assert first[0] == first[1] or Pair._near_tie(spec_logits[1]), "the two prefills predict different tokens"
+    pcc = compute_pcc(spec_logits[0], spec_logits[1])
+    assert pcc > 0.999, f"MTP class prefill logits PCC {pcc:.6f}, big chunk against 2048-row chunks"
+    kv = [_drafter_kv(pair.spec_model, pair.pages(r), T - 1) for r in (0, 1)]
+    worst = min(compute_pcc(a, b) for a, b in zip(*kv))
+    assert worst > 0.999, f"drafter prompt K / V PCC {worst:.6f}, big chunk against 2048-row chunks"
+    eng = pair.spec._engine()
+    feeds = [torch.cat([t.float() for t in _device_tensors(eng._last_hidden[r])]) for r in (0, 1)]
+    assert compute_pcc(*feeds) > 0.999, "the drafter's last-row feed differs"
+    logger.info(f"big chunk against 2048-row chunks: logits PCC {pcc:.6f}, drafter K / V PCC {worst:.6f}")
+
+    for r in (0, 1):
+        pair.reference(r, first[r], 4 * (K + 1))
+    agree = total = 0
+    for v, a in [(K, K + 1), (K, 2), (2, 1), (K, 3)]:
+        pair.verify({0: (v, a), 1: (v, a)})
+        drafts = pair.propose({0: a, 1: a}).draft_token_ids
+        agree += int((drafts[0] == drafts[1]).sum())
+        total += K
+    logger.info(f"big chunk against 2048-row chunks: {agree} of {total} drafts equal")
 
 
 @torch.no_grad()
