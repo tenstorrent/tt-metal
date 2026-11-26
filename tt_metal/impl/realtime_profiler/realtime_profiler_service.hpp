@@ -32,7 +32,7 @@ public:
     RealtimeProfilerService(const RealtimeProfilerService&) = delete;
     RealtimeProfilerService& operator=(const RealtimeProfilerService&) = delete;
 
-    uint64_t register_consumer(experimental::ProgramRealtimeProfilerCallback callback);
+    uint64_t register_consumer(const experimental::ProgramRealtimeProfilerCallback& callback);
     void unregister_consumer(uint64_t handle);
 
     // `max_batch_records` is the most records a callback may be handed at a time from this ring.
@@ -89,7 +89,7 @@ private:
         std::jthread thread;
     };
 
-    void run_consumer(std::stop_token stop_token, ConsumerRegistration& registration);
+    void run_consumer(const std::stop_token& stop_token, ConsumerRegistration& registration);
     // Takes the readers to add and the rings to drain from the inbox. False once the consumer has retired.
     bool apply_control(ConsumerRegistration& registration);
     // Hands the callback one batch from each reader that has records, and releases drained readers. True if it did
@@ -118,7 +118,7 @@ private:
     ConsumerMap consumers_;
     uint64_t next_consumer_handle_ = 0;
     // The Tracy consumer's handle. Its thread also gets idle time, to place zones that new anchors have unblocked.
-    uint64_t tracy_handle_ = ~uint64_t{0};
+    uint64_t tracy_handle_;
 
     std::atomic<uint32_t> wake_generation_{0};
     std::atomic<size_t> num_live_consumers_{0};

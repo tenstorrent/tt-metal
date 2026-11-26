@@ -30,10 +30,23 @@ RealtimeProfilerService& realtime_profiler_service() {
     return service.get();
 }
 
-RealtimeProfilerService::RealtimeProfilerService() : tracy_(std::make_unique<RealtimeProfilerTracyConsumer>()) {
+namespace {
+
+#if defined(TRACY_ENABLE)
+constexpr bool kTracyEnabled = true;
+#else
+constexpr bool kTracyEnabled = false;
+#endif
+constexpr uint64_t kNoConsumerHandle = ~uint64_t{0};
+
+}  // namespace
+
+// The Tracy consumer, when Tracy is built in, is registered first, so it gets the first handle.
+RealtimeProfilerService::RealtimeProfilerService() :
+    tracy_handle_(kTracyEnabled ? next_consumer_handle_ : kNoConsumerHandle),
+    tracy_(std::make_unique<RealtimeProfilerTracyConsumer>()) {
 #if defined(TRACY_ENABLE)
     // The Tracy consumer unregisters itself once Tracy will take no more records.
-    tracy_handle_ = next_consumer_handle_;
     register_consumer([this](const experimental::ProgramRealtimeRecordBatch& batch) {
         if (!tracy_->on_records(batch)) {
             unregister_consumer(current_registration_->handle);
@@ -42,18 +55,18 @@ RealtimeProfilerService::RealtimeProfilerService() : tracy_(std::make_unique<Rea
 #endif
 }
 
-uint64_t RealtimeProfilerService::register_consumer(experimental::ProgramRealtimeProfilerCallback callback) {
+uint64_t RealtimeProfilerService::register_consumer(const experimental::ProgramRealtimeProfilerCallback& callback) {
     TT_FATAL(callback != nullptr, "Cannot register a null real-time profiler callback");
     reap_retired_consumers();
 
     std::lock_guard lock(topology_mutex_);
     const auto handle = next_consumer_handle_++;
-    auto& registration = consumers_.try_emplace(handle, handle, std::move(callback)).first->second;
+    auto& registration = consumers_.try_emplace(handle, handle, callback).first->second;
     for (const AttachedProducer& producer : attached_producers_) {
         registration.readers.emplace_back(producer.ring, producer.ring->make_reader(), producer.max_batch_records);
     }
-    registration.thread =
-        std::jthread([this, &registration](std::stop_token stop_token) { run_consumer(stop_token, registration); });
+    registration.thread = std::jthread(
+        [this, &registration](const std::stop_token& stop_token) { run_consumer(stop_token, registration); });
     num_live_consumers_.fetch_add(1, std::memory_order_relaxed);
     return handle;
 }
@@ -126,7 +139,7 @@ void RealtimeProfilerService::wake_consumers() noexcept {
     wake_generation_.notify_all();
 }
 
-void RealtimeProfilerService::run_consumer(std::stop_token stop_token, ConsumerRegistration& registration) {
+void RealtimeProfilerService::run_consumer(const std::stop_token& stop_token, ConsumerRegistration& registration) {
     current_registration_ = &registration;
     const std::string thread_name = fmt::format("RtProfilerConsumer{}", registration.handle);
     tracy::SetThreadName(thread_name.c_str());
