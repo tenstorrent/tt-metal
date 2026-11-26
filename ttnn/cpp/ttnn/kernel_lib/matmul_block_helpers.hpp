@@ -5,6 +5,7 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
