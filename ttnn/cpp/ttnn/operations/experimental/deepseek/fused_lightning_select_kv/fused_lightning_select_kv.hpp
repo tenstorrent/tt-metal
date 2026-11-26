@@ -98,6 +98,17 @@ namespace ttnn::experimental::deepseek {
 //                    may then be ``[num_sessions, max_blocks_per_user]`` and this row is read; with
 //                    ``row_table`` it selects the ``kv_page_table`` row. Read on device, so one traced
 //                    call serves whichever session the tensor names.
+//   query_row_tensor: optional ``[1]`` INT32, a row split (one query row per device, e.g. a batch step's
+//                    rows over the TP ranks): ``query`` / ``head_weights`` hold Sq rows (Sq sessions' rows),
+//                    this device selects only row ``query_row_tensor[0]``. ``cur_pos_tensor``,
+//                    ``num_keys_tensor`` and ``page_table_row_tensor`` hold Sq entries (row r's at r) or one
+//                    (this device's own). The op returns that row's candidates page ``[1, 1, 1, 2k + 16]``,
+//                    the num_parts > 1 page over the whole key range; gathering every device's page and
+//                    ``merge_select_kv`` with ``num_queries`` = Sq gives every device every row's rows. In
+//                    candidate source mode the row's candidate blocks and pool count are written here, to
+//                    ``candidate_blocks_output`` / ``pool_count_output`` (``[1, candidate_topk_blocks]`` /
+//                    ``[1]``). Not with ``num_parts`` > 1, ``output_tensor``, ``new_kv_row``,
+//                    ``row_mask_table`` or ``valid_length_tensor``.
 //   kv_page_table:   optional ``[num_sessions, max_blocks]`` INT32 ``kv_cache`` page table. With
 //                    ``row_table`` and ``new_kv_row``, ``new_kv_row_index`` is a logical row mapped
 //                    through its ``page_table_row_tensor`` row instead of a ``kv_cache`` row.
@@ -143,6 +154,7 @@ std::vector<Tensor> fused_lightning_select_kv(
     const std::optional<Tensor>& row_table = std::nullopt,
     const std::optional<Tensor>& page_table_row_tensor = std::nullopt,
     const std::optional<Tensor>& kv_page_table = std::nullopt,
-    const std::optional<Tensor>& row_mask_table = std::nullopt);
+    const std::optional<Tensor>& row_mask_table = std::nullopt,
+    const std::optional<Tensor>& query_row_tensor = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek

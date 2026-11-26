@@ -229,10 +229,11 @@ def _construct_model(
     moe_server=None,
     moe_requester: int = 0,
     drafter_on_stage: bool = False,
+    batch_block: bool = False,
 ):
     """Build ``DeepSeekV41Model`` + ``lm_head`` and attach the prefetcher session (``verify_rows``,
-    ``prefill_layer_submesh_ids``, ``persistent_moe``, ``moe_server``, ``moe_requester`` and ``drafter_on_stage``: see
-    the model)."""
+    ``prefill_layer_submesh_ids``, ``persistent_moe``, ``moe_server``, ``moe_requester``, ``drafter_on_stage`` and
+    ``batch_block``: see the model)."""
     if loader is None:
         loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
     if config is None:
@@ -265,6 +266,7 @@ def _construct_model(
         moe_server=moe_server,
         moe_requester=moe_requester,
         drafter_on_stage=drafter_on_stage,
+        batch_block=batch_block,
     )
     lm_head = DeepSeekV41LMHead(
         dequantized(loader, "lm_head.weight", translate=True),
@@ -679,7 +681,15 @@ class _InterruptFlag:
     [
         # TP4 opens the full Galaxy as (8, 4) so no reshape changes the per-device grid.
         # DEEPSEEK_V4_NUM_STAGES (default 8) submeshes are created; the other rows stay idle.
-        pytest.param((8, 4), 4, _NUM_STAGES, False, id=f"tp4_{_NUM_STAGES}stage"),
+        # Disabled: the persistent-MoE layout below is the one served; the multi-stage layout is not maintained.
+        pytest.param(
+            (8, 4),
+            4,
+            _NUM_STAGES,
+            False,
+            id=f"tp4_{_NUM_STAGES}stage",
+            marks=pytest.mark.skip(reason="multi-stage TP4 layout disabled; use tp4_1stage_persistent_moe12"),
+        ),
         # One TP4 stage (row 4) for every layer's attention and hyper-connections, every MoE on the persistent
         # TP12 3x4 mesh below it (rows 5-7).
         pytest.param((8, 4), 4, 1, True, id="tp4_1stage_persistent_moe12"),

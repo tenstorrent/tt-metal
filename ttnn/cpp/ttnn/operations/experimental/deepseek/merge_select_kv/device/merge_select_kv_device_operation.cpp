@@ -101,9 +101,10 @@ void MergeSelectKvDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(out.storage_type() == StorageType::DEVICE, "merge_select_kv: output_tensor must be on device");
         const auto& out_shape = out.logical_shape();
         TT_FATAL(
-            out.dtype() == kv_cache.dtype() && out.layout() == Layout::ROW_MAJOR &&
+            out.dtype() == kv_cache.dtype() && (out.layout() == Layout::ROW_MAJOR || out.layout() == Layout::TILE) &&
                 out.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "merge_select_kv: output_tensor must be row-major interleaved with kv_cache's dtype {}",
+            "merge_select_kv: output_tensor must be row-major (or, with one part per query row, TILE) interleaved with "
+            "kv_cache's dtype {}",
             kv_cache.dtype());
         TT_FATAL(
             out_shape.rank() == 4 && out_shape[0] == 1 && out_shape[1] == 1 && out_shape[-1] == kv_shape[-1],

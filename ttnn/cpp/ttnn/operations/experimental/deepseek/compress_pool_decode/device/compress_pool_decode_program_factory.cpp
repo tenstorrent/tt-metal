@@ -303,6 +303,7 @@ CompressPoolDecodeProgramFactory::cached_program_t CompressPoolDecodeProgramFact
         static_cast<uint32_t>(args.start_odd),
         kCpdCbKvBlock,
         args.cs_face1_bytes,
+        static_cast<uint32_t>(args.independent),
     };
     TensorAccessorArgs(kv_buf).append_to(reader_ct_args);
     TensorAccessorArgs(win_kv_buf).append_to(reader_ct_args);
@@ -364,6 +365,7 @@ CompressPoolDecodeProgramFactory::cached_program_t CompressPoolDecodeProgramFact
         G,
         static_cast<uint32_t>(args.start_odd),
         kCpdCbGateBlock,
+        static_cast<uint32_t>(args.independent),
     };
     TensorAccessorArgs(gate_buf).append_to(writer_ct_args);
     TensorAccessorArgs(win_gate_buf).append_to(writer_ct_args);

@@ -20,6 +20,12 @@
 // S-block b holds the indices g = b (mod num_s_blocks), as in the one-row mode, so a chunk shared by several rows
 // (ring, staging, dense) is read once into L1 and attended by every row from there; row j's tree runs over the
 // active S-blocks [0, min(len(j), num_s_blocks)).
+//
+// Independent rows (a B=4 batch step: row j is one token of its own session at position p_j): every row group holds
+// one row (row_groups == num_rows), row j's ring is the slot at ring_first_row_j of a shared kv, and row j attends its
+// ring's positions max(0, p_j - (W - 1)) .. p_j - 1, its own new kv row (key j of the staging chunk) and its n_j
+// selected rows. Each row's plan is built from its own p_j, as a block row 0 at p_j would be; nothing is shared
+// between row groups.
 namespace flash_mqa_decode_rows {
 
 using flash_mqa_decode::div_up;
@@ -36,7 +42,44 @@ struct Plan {
     std::uint32_t ring_chunks;  // chunks covering min(p, W) ring slots
     std::uint32_t shared_len;   // indices [0, shared_len) are shared by the rows
     std::uint32_t n[kMaxRows];  // selected rows per block row
+    bool independent;           // rows of independent sessions (see above): the plan is one row's, at its own p
 };
+
+// The lengths tensor's words a core reads: [p, ring_first_row, selected_first_row, 0, n_0 .. n_{R-1}] for a block,
+// [n_0 .. n_{R-1}, p_0 .. p_{R-1}, ring_first_row_0 .., selected_first_row_0 ..] for independent rows.
+constexpr std::uint32_t lengths_words(std::uint32_t num_rows, bool independent) {
+    return independent ? 4 * num_rows : 4 + num_rows;
+}
+
+// One core's view of the lengths: the p its plan uses (row j's own with independent rows), each row's n, and the
+// ring / selected first rows it reads from.
+struct RowLengths {
+    std::uint32_t p;
+    std::uint32_t ring_first_row;
+    std::uint32_t selected_first_row;
+    std::uint32_t n[kMaxRows];
+};
+
+template <typename Ptr>
+inline RowLengths parse_lengths(Ptr lengths, std::uint32_t num_rows, bool independent, std::uint32_t row) {
+    RowLengths out{};
+    if (independent) {
+        for (std::uint32_t j = 0; j < num_rows; ++j) {
+            out.n[j] = lengths[j];
+        }
+        out.p = lengths[num_rows + row];
+        out.ring_first_row = lengths[2 * num_rows + row];
+        out.selected_first_row = lengths[3 * num_rows + row];
+    } else {
+        for (std::uint32_t j = 0; j < num_rows; ++j) {
+            out.n[j] = lengths[4 + j];
+        }
+        out.p = lengths[0];
+        out.ring_first_row = lengths[1];
+        out.selected_first_row = lengths[2];
+    }
+    return out;
+}
 
 // A core attends the rows row_begin, row_begin + row_step, ... (its row group); shared_len covers those rows.
 inline Plan make_plan(
@@ -48,8 +91,10 @@ inline Plan make_plan(
     std::uint32_t p,
     const std::uint32_t* n,
     std::uint32_t row_begin = 0,
-    std::uint32_t row_step = 1) {
+    std::uint32_t row_step = 1,
+    bool independent = false) {
     Plan plan{};
+    plan.independent = independent;
     plan.num_rows = num_rows;
     plan.window = window;
     plan.k_chunk_size = k_chunk_size;
@@ -64,7 +109,8 @@ inline Plan make_plan(
         const std::uint32_t c = div_up(plan.n[j], k_chunk_size);
         max_sel_chunks = c > max_sel_chunks ? c : max_sel_chunks;
     }
-    plan.shared_len = plan.ring_chunks + 1 + (dense ? max_sel_chunks : 0);
+    // Independent rows share nothing (each row group reads its own ring, dense rows and staging key).
+    plan.shared_len = independent ? 0 : plan.ring_chunks + 1 + (dense ? max_sel_chunks : 0);
     return plan;
 }
 
@@ -77,9 +123,9 @@ inline std::uint32_t row_active(const Plan& plan, std::uint32_t j, std::uint32_t
 }
 
 // Row j's valid ring slots form the circular interval of the newest lim = min(p, W - 1 - j) slots ending at pm:
-// [a, pm] with a = pm + 1 - lim, wrapping to [a + W, W) when a < 0.
+// [a, pm] with a = pm + 1 - lim, wrapping to [a + W, W) when a < 0. An independent row is a block row 0 at its p.
 inline std::int32_t ring_interval_start(const Plan& plan, std::uint32_t j) {
-    const std::uint32_t lim = min_u32(plan.p, plan.window - 1 - j);
+    const std::uint32_t lim = min_u32(plan.p, plan.window - 1 - (plan.independent ? 0 : j));
     return static_cast<std::int32_t>(plan.pm + 1) - static_cast<std::int32_t>(lim);
 }
 
@@ -104,7 +150,8 @@ inline std::uint32_t valid_rows(const Plan& plan, std::uint32_t j, std::uint32_t
         return overlap(0, end, lo, hi) + overlap(a + w, w, lo, hi);
     }
     if (g == plan.ring_chunks) {
-        return j + 1;
+        // A block row attends the new rows 0 .. j; an independent row only its own (key j, see staging_key_valid).
+        return plan.independent ? 1 : j + 1;
     }
     const std::uint32_t first = (g - plan.ring_chunks - 1) * kc;
     return min_u32(kc, plan.n[j] - first);
@@ -117,6 +164,11 @@ inline bool ring_key_valid(const Plan& plan, std::int32_t a, std::uint32_t slot)
         return a < 0 && s >= a + static_cast<std::int32_t>(plan.window);
     }
     return s >= a;
+}
+
+// Whether key i of the staging chunk is one row j attends.
+inline bool staging_key_valid(const Plan& plan, std::uint32_t j, std::uint32_t i) {
+    return plan.independent ? i == j : i <= j;
 }
 
 // Pages (ms tiles) S-block c pushes into its receive CB for row j: the partials it merges plus the sink peer.

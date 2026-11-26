@@ -64,6 +64,11 @@ void kernel_main() {
     // head group, and of every row group for a chunk shared by rows) each read a slice of it from DRAM and write
     // the slice to the others, so DRAM serves each chunk once.
     constexpr bool share_reads = get_named_compile_time_arg_val("share_reads") == 1;
+    // Rows of independent sessions (a B=4 batch step, see flash_mqa_decode_rows_common.hpp): one row per row group,
+    // each with its own p, ring and dense rows, so no chunk is shared between row groups.
+    constexpr bool independent = get_named_compile_time_arg_val("independent_rows") == 1;
+    static_assert(!independent || (share_reads && group_rows == 1), "independent rows run one row per row group");
+    constexpr uint32_t num_lengths_words = flash_mqa_decode_rows::lengths_words(num_rows, independent);
 
     constexpr auto q_args = TensorAccessorArgs<0>();
     constexpr auto kv_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -92,12 +97,12 @@ void kernel_main() {
 
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
 
-    // lengths: [p, ring_first_row, selected_first_row, 0, n_0 .. n_{R-1}].
+    // lengths: [p, ring_first_row, selected_first_row, 0, n_0 .. n_{R-1}] (independent rows: see lengths_words).
     const auto lengths_reader = TensorAccessor(lengths_args, lengths_addr);
     const uint32_t lengths_l1 = get_write_ptr(cb_lengths_scratch);
     // Transaction id 1 for the lengths, so the early q / table reads below need not be waited for with them.
     noc_async_read_set_trid(1);
-    noc_async_read(lengths_reader.get_noc_addr(0), lengths_l1, (4 + num_rows) * sizeof(uint32_t));
+    noc_async_read(lengths_reader.get_noc_addr(0), lengths_l1, num_lengths_words * sizeof(uint32_t));
     // Sliding layers with one ring in kv (ring_first_row is always 0): once the window is full, S-block
     // b <= W / kc attends exactly one chunk, ring chunk b or (b == W / kc) the staging chunk. The leaders of the
     // column helping column b (S-block b + helper_offset; 0: column b itself) read their slice of the guessed chunk
@@ -106,8 +111,8 @@ void kernel_main() {
     constexpr uint32_t helper_offset = get_named_compile_time_arg_val("helper_offset");
     constexpr uint32_t spec_num_leaders = FMQA_LEADERS;
     constexpr uint32_t spec_peers = num_head_groups * row_groups;
-    constexpr bool speculate =
-        share_reads && selected_capacity == 0 && max_ring_first_tile_row == 0 && spec_peers % spec_num_leaders == 0;
+    constexpr bool speculate = share_reads && !independent && selected_capacity == 0 && max_ring_first_tile_row == 0 &&
+                               spec_peers % spec_num_leaders == 0;
     constexpr uint32_t spec_ring_chunks = ring_capacity / k_chunk_size;
     const uint32_t spec_me = head_group * row_groups + row_group;
     const bool spec_helper = speculate && s_block >= helper_offset && s_block <= helper_offset + spec_ring_chunks;
@@ -209,16 +214,25 @@ void kernel_main() {
     }
     noc_async_read_barrier_with_trid(1);
     volatile tt_l1_ptr uint32_t* lengths_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lengths_l1);
-    uint32_t n[num_rows];
-    for (uint32_t j = 0; j < num_rows; ++j) {
-        n[j] = lengths_ptr[4 + j];
-    }
-    const uint32_t p = lengths_ptr[0];
+    const flash_mqa_decode_rows::RowLengths lens_in =
+        flash_mqa_decode_rows::parse_lengths(lengths_ptr, num_rows, independent, row_group);
+    const uint32_t p = lens_in.p;
     const flash_mqa_decode_rows::Plan plan = flash_mqa_decode_rows::make_plan(
-        num_rows, ring_capacity, k_chunk_size, selected_capacity, dense, p, n, row_group, row_groups);
-    const uint32_t ring_first_tile_row = flash_mqa_decode::min_u32(lengths_ptr[1] / 32, max_ring_first_tile_row);
+        num_rows,
+        ring_capacity,
+        k_chunk_size,
+        selected_capacity,
+        dense,
+        p,
+        lens_in.n,
+        row_group,
+        row_groups,
+        independent);
+    const uint32_t ring_first_tile_row =
+        flash_mqa_decode::min_u32(lens_in.ring_first_row / 32, max_ring_first_tile_row);
     const uint32_t selected_base_tile_row =
-        selected_first_tile_row + flash_mqa_decode::min_u32(lengths_ptr[2] / 32, max_selected_first_tile_row);
+        selected_first_tile_row +
+        flash_mqa_decode::min_u32(lens_in.selected_first_row / 32, max_selected_first_tile_row);
     cb_reserve_back(cb_lengths, 1);
     volatile tt_l1_ptr uint32_t* compute_lengths =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_lengths));
@@ -453,12 +467,13 @@ void kernel_main() {
             }
         }
         for (uint32_t g = s_block; g < len; g += num_s_blocks) {
-            // Row r needs chunk g if g < len(r) and the chunk is shared by rows or r is this row.
-            const bool shared_index = g <= plan.ring_chunks || dense;
+            // Row r needs chunk g if g < len(r) and the chunk is shared by rows or r is this row. Independent rows read
+            // their own ring, dense rows and staging copy: only this row group's cores share a chunk.
+            const bool shared_index = !independent && (g <= plan.ring_chunks || dense);
             // Sliding layers (no selected rows): every core of the column needs every chunk, so one leader (head group
             // 0, row group 0) reads it from DRAM in pieces and multicasts each piece as it lands, then publishes the
             // chunk count on the column's kv semaphores; the others only wait.
-            constexpr bool leader_mode = selected_capacity == 0;
+            constexpr bool leader_mode = selected_capacity == 0 && !independent;
             constexpr uint32_t num_leaders = FMQA_LEADERS;
             constexpr uint32_t num_pieces = FMQA_PIECES;
             static_assert(k_chunk_tiles % (num_leaders * num_pieces) == 0 && num_peers_max % num_leaders == 0);
@@ -614,8 +629,13 @@ void kernel_main() {
                         mask_ptr[i] =
                             flash_mqa_decode_rows::ring_key_valid(plan, ring_a, g * k_chunk_size + i) ? 0 : 0xFF80;
                     }
+                } else if (g == plan.ring_chunks) {
+                    // The staging chunk: rows 0 .. j of a block, row j alone for independent rows.
+                    for (uint32_t i = 0; i < k_chunk_size; ++i) {
+                        mask_ptr[i] = flash_mqa_decode_rows::staging_key_valid(plan, j, i) ? 0 : 0xFF80;
+                    }
                 } else {
-                    // The staging and selected chunks attend a prefix of their keys.
+                    // The selected chunks attend a prefix of their keys.
                     for (uint32_t i = 0; i < k_chunk_size; ++i) {
                         mask_ptr[i] = i < valid ? 0 : 0xFF80;
                     }

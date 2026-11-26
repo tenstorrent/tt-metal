@@ -52,6 +52,13 @@ namespace ttnn::experimental::deepseek {
 // (h, 32) tiles with h >= G), ``entry[g]`` / ``dense_entry[g]`` (INT32 ``[G]``), ``key_row`` row g
 // (``[1, 1, G, Dk]``). Outputs are ``[1, 1, G, Dh]`` (latent TILE, roped rows ROW_MAJOR).
 // ``start_odd``: a block starts at an odd position (ratio 2, see above).
+//
+// ``independent_rows`` (R = 2 or 4 rows of independent sessions, a B=4 batch step: row j one token of its own session
+// at position p_j): every row is a group (G = R), in row order. At ratio 2 group g pools row g with the window's row at
+// ``prev_slot[g]`` (INT32 ``[R]``, required: its session's slot of p_j - 1; all read before any write), then row j
+// goes into the window at ``win_slot[j]``. ``entry[g]`` (INT32 ``[R]``) is -1 for a row that closes no group (its
+// comp_kv / index-key writes are skipped; ``dense_entry[g]`` -1 skips dense_kv as always), and ``page_row`` is INT32
+// ``[R]``, row g's page-table row. cos / sin row g is group g's.
 std::vector<Tensor> compress_pool_decode(
     const Tensor& kv,
     const Tensor& norm_weight,
@@ -75,6 +82,7 @@ std::vector<Tensor> compress_pool_decode(
     const std::optional<Tensor>& dense_entry = std::nullopt,
     const std::optional<Tensor>& key_row = std::nullopt,
     uint32_t kv_gate_interleave = 0,
-    bool start_odd = false);
+    bool start_odd = false,
+    bool independent_rows = false);
 
 }  // namespace ttnn::experimental::deepseek

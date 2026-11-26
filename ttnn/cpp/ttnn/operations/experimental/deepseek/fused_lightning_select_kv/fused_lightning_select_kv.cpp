@@ -34,7 +34,8 @@ std::vector<Tensor> fused_lightning_select_kv(
     const std::optional<Tensor>& row_table,
     const std::optional<Tensor>& page_table_row_tensor,
     const std::optional<Tensor>& kv_page_table,
-    const std::optional<Tensor>& row_mask_table) {
+    const std::optional<Tensor>& row_mask_table,
+    const std::optional<Tensor>& query_row_tensor) {
     return ttnn::prim::fused_lightning_select_kv(
         query,
         key_cache,
@@ -61,7 +62,8 @@ std::vector<Tensor> fused_lightning_select_kv(
         row_table,
         page_table_row_tensor,
         kv_page_table,
-        row_mask_table);
+        row_mask_table,
+        query_row_tensor);
 }
 
 }  // namespace ttnn::experimental::deepseek

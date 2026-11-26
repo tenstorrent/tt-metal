@@ -91,6 +91,17 @@ What V4.1 imposes on the serving side:
   any number of conversations parked in its device RAM).
   ``--instances 1`` serves the single stage on row 4 with the drafter on row 3. The rest of this docstring describes
   the stage pipeline.
+
+  ``--decode-batch 4`` (``DEEPSEEK_V41_DECODE_BATCH``) serves up to four replies per instance at once instead of DSpark:
+  each instance is ``DeepSeekV41Model(batch_block=True)`` with ``--num-users`` (default 4) session slots plus a scratch
+  one, and the shared MoE is launched for 4-row requests without the drafter. :class:`_BatchScheduler` steps the
+  seated replies (``--max-running``, the four rows) together, one token each per B=4 batch step
+  (``decode_batch_block``: row j is reply j's token at its own position, in its own session); replies join and leave
+  between steps, prompts (the remote KV load, the tail replayed in one-row steps) run between steps one session at a
+  time, and one or two replies decode a step at a time as without batches. :class:`_Instances` counts an instance as free
+  while it has a free batch row. Batch steps run on the Python host path (``--no-rust-host``, so no web monitor), and
+  sample on device at ``--temperature``. Nov 25, one instance, short context: 11.8 ms a batch step (~340 tok/s with four
+  replies) against ~6.5 ms a one-row step.
 * Speculative decode (``--dspark``, on by default; ``--no-dspark`` or ``DEEPSEEK_V41_DSPARK=0`` turns it off). The DSpark drafter takes the
   mesh's last row, so decode runs on the first seven, and a reply decodes in verify rounds
   (:class:`_SpecScheduler`, :class:`~..tt.spec.DSparkSpeculator`): ~81 tok/s at three drafts against ~56 a step at a
@@ -348,6 +359,13 @@ _VISION_BUILD_LOCK = threading.Lock()
 _PERSISTENT_SLOTS = 256
 # Default --num-users with --persistent-moe and no --dspark (one stage holds every user's pools).
 _NUM_USERS_PERSISTENT = 8
+# --decode-batch: the rows of a B=4 batch step (DeepSeekV41Model(batch_block=True), one session a row), and the seated
+# replies from which an instance takes batch steps rather than one-row steps. Nov 25 (GSM8K, perf_client): one instance
+# alone takes a 4-row batch step in 13.7 ms (rows padded by the scratch session cost the same) against ~6.8 ms for a
+# one-row step, so two replies break even; with five instances on the shared MoE (one-row steps: ~515 tok/s in all
+# at 1-4 replies an instance) batch steps gave 478 / 546 / 668 tok/s at 2 / 3 / 4 replies an instance.
+_DECODE_BATCH_ROWS = 4
+_BATCH_MIN_USERS = int(os.environ.get("DEEPSEEK_V41_BATCH_MIN_USERS", "3"))
 # _PrefillFirst._admit trims a remote prefill back to an uncached history boundary (so the decode-side prefix cache
 # captures it) only when the tokens it then leaves to decode replay in at most this long. It was a fixed 2048 tokens
 # (~10 s of 4-row block replay before the first token).
@@ -2662,6 +2680,185 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
         return True
 
 
+class _BatchScheduler(_SlotReuse, _PrefillFirst):
+    """:class:`_PrefillFirst` (with :class:`_SlotReuse`'s in-place rewinds) that decodes up to ``verify_rows`` (4)
+    seated replies together, one token each per B=4 batch step (``--decode-batch``,
+    :meth:`~..tt.model.DeepSeekV41Model.decode_batch_block`): row ``j`` of the step is reply ``j``'s next token at its
+    own position in its own session, and the step's per-row device picks are each reply's next token.
+
+    The seats are ``--max-running`` (the batch rows): the first decoding turns in admission order. A turn joins the
+    batch as soon as its prompt is in (its last prompt token's pick is its first reply token) and leaves it when its
+    reply ends, both between steps. Prompts stay one session at a time between steps, as :class:`_PrefillFirst` runs
+    them: the remote KV load, and the prompt's tail replayed through decode in one-row steps (a batch row cannot take
+    consecutive tokens of one session); decode waits meanwhile. While fewer than :data:`_BATCH_MIN_USERS` (3) replies
+    are seated they decode a step at a time as without batches (one-row steps posted ahead, ~6.8 ms against a batch
+    step's ~13.7 ms on a lone instance; under five instances' load two replies in batch steps lose to one-row steps),
+    and the next step after the third is seated is a batch step. The batch step is synchronous: every one-row step in
+    flight is read back first (:meth:`_settle`)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.rows = int(getattr(self.engine.model, "verify_rows", 1))
+        self._batching = False  # this round's seated replies take a batch step (_round_turns)
+        # Batch steps, the rows they carried and their seconds (host and device), for stats() and the periodic log.
+        self.batch_steps = self.batch_rows = 0
+        self.batch_seconds = 0.0
+        self._log_at = (time.perf_counter(), 0, 0, 0.0)
+
+    def _seated(self) -> list[_Turn]:
+        return [
+            turn
+            for turn in list(self._active)
+            if turn.phase == _Turn.DECODE
+            and turn.error is None
+            and not turn.cancelled.is_set()
+            and self._holds_decode_seat(turn)
+        ]
+
+    def decoding_users(self) -> int:
+        """Seated decoding replies (read from other threads too, unlocked, as the live console reads it)."""
+        return len(self._seated())
+
+    def batch_stats(self) -> dict:
+        steps = self.batch_steps
+        return {
+            "rows": self.rows,
+            "steps": steps,
+            "tokens": self.batch_rows,
+            "rows_per_step": self.batch_rows / steps if steps else 0.0,
+            "ms_per_step": 1e3 * self.batch_seconds / steps if steps else 0.0,
+        }
+
+    def _snapshots_waiting(self) -> list[_Turn]:
+        """The seated replies waiting to snapshot their prefix (:meth:`_capture_due`), which needs nothing in flight."""
+        waiting = []
+        for turn in self._seated():
+            pos = self.engine.users[turn.slot].pos
+            if not turn.pending and (pos in turn.prefix_cuts or turn.capture_at == pos):
+                waiting.append(turn)
+        return waiting
+
+    def _round_turns(self) -> None:
+        # Another reply decoding a row at a time always has a step in flight or posted ahead, so a snapshot waiting for
+        # nothing in flight would wait out that whole reply (and its own reply with it): read the pipeline back and
+        # take the snapshots now.
+        waiting = [] if self._prefill_waiting() else self._snapshots_waiting()
+        if waiting:
+            if (self._inflight or self._posted) and not self._settle():
+                return
+            for turn in waiting:
+                if turn in self._active:
+                    self._capture_due(turn, self.engine.users[turn.slot])
+        self._batching = self.decoding_users() >= _BATCH_MIN_USERS and not self._prefill_waiting()
+        super()._round_turns()
+        # A prompt that came in (or whose KV came back) this round goes first, as _PrefillFirst runs them.
+        if self._batching and self._broken is None and not self._prefill_waiting():
+            self._batch_round()
+
+    def _post_ahead(self) -> None:
+        if self._batching:
+            return  # a batch step reads back every one-row step first
+        super()._post_ahead()
+
+    def _plan(self, turn: _Turn) -> list[tuple[int, int, bool]]:
+        # A one-row step for a prompt, a reply while too few decode for batches, or a step posted before they started.
+        if turn.phase != _Turn.DECODE or not self._batching or self._flushing or turn.pending or turn in self._posted:
+            return super()._plan(turn)
+        # The batch step feeds it (_batch_round); here it only ends.
+        user = self.engine.users[turn.slot]
+        if not self._capture_due(turn, user):
+            self._end_if_done(turn, user)
+        return []
+
+    def _end_if_done(self, turn: _Turn, user: UserSession) -> bool:
+        """Finish ``turn`` if its reply is over (as :meth:`_Scheduler._plan` does before a step): stopped, its
+        ``next_id`` an EOS (unless ``ignore_eos``), ``max_tokens``, or the end of the context. True if it ended."""
+        engine = self.engine
+        if turn.cancelled.is_set() or (turn.next_id == engine.eos_id and not turn.ignore_eos):
+            self._finish(turn)
+            return True
+        if len(turn.generated) >= turn.max_tokens or user.pos >= engine.max_seq - 1:
+            turn.hit_cap = True
+            self._finish(turn)
+            return True
+        return False
+
+    def _batch_round(self) -> None:
+        """One batch step of every seated reply (up to :attr:`rows`; the model pads the rest with its scratch
+        session): each one's ``next_id`` fed at its session's position, its pick the reply's next token."""
+        if (self._inflight or self._posted) and not self._settle():
+            return
+        t_prep = time.perf_counter()
+        engine, model = self.engine, self.engine.model
+        engine._packets.join()  # every one-row packet written before the batch step's own
+        ready: list[_Turn] = []
+        for turn in self._seated():
+            if turn.pending or turn.next_id is None:
+                continue
+            user = engine.users[turn.slot]
+            self._capture_due(turn, user)  # nothing in flight: a due prefix snapshot is taken now
+            if not self._end_if_done(turn, user):
+                ready.append(turn)
+        ready = ready[: self.rows]
+        for turn in list(ready):
+            user = engine.users[turn.slot]
+            try:
+                model.ensure_session_capacity(user.pos, user.sid)
+            except PagedCacheFull as e:
+                if self._room_mid_step(1, turn):
+                    with contextlib.suppress(PagedCacheFull):
+                        model.ensure_session_capacity(user.pos, user.sid)
+                        continue
+                ready.remove(turn)
+                self._fail(turn, e)
+        if not ready:
+            return
+        users = [engine.users[turn.slot] for turn in ready]
+        ids = [int(turn.next_id) for turn in ready]
+        t0 = time.perf_counter()
+        OVERHEAD.add("sched.batch_prep", t0 - t_prep)
+        try:
+            picks = model.decode_batch_block(ids, [user.sid for user in users], [user.pos for user in users])
+        except Exception as e:  # noqa: BLE001 - see _abort_all: the step's rows are in an unknown state
+            self._abort_all(e)
+            return
+        t_read = time.perf_counter()
+        for turn, user, token, pick in zip(ready, users, ids, picks):
+            before = len(turn.generated)
+            turn.generated.append(token)
+            turn.mark_token()
+            user.tokens.append(token)
+            user.pos += 1
+            turn.next_id = int(pick)
+            turn.t_read = t_read
+            turn.events.put(("tokens",))  # detokenized on the request's HTTP thread (_relay)
+            if len(turn.generated) // 32 > before // 32:
+                logger.debug(
+                    f"user {turn.user_key!r}: {len(turn.generated)}/{turn.max_tokens} tokens "
+                    f"at {turn.decode_rate:.2f} tok/s over the last {DECODE_RATE_WINDOW} "
+                    f"({turn.mean_decode_rate:.2f} tok/s for the reply so far), "
+                    f"cache at {user.pos}/{engine.max_seq}, B={self.rows} steps of {len(ready)}"
+                )
+        OVERHEAD.add("sched.batch_tokens", time.perf_counter() - t_read)
+        self.steps += len(ready)
+        self.batch_steps += 1
+        self.batch_rows += len(ready)
+        self.batch_seconds += t_read - t0
+        self._log_batches(t_read)
+
+    def _log_batches(self, now: float) -> None:
+        t, steps, rows, seconds = self._log_at
+        if now - t < 10.0 or self.batch_steps == steps:
+            return
+        n, r, s = self.batch_steps - steps, self.batch_rows - rows, self.batch_seconds - seconds
+        logger.info(
+            f"B={self.rows} batch steps: {n} in {now - t:.1f}s, {r / n:.2f} rows a step, {1e3 * s / n:.1f} ms a step "
+            f"(host and device), {r / s:.1f} tok/s while stepping, {r / (now - t):.1f} over the {now - t:.1f}s "
+            f"({self.decoding_users()} seated)"
+        )
+        self._log_at = (now, self.batch_steps, self.batch_rows, self.batch_seconds)
+
+
 class V41GenerationServer(GenerationServer):
     """:class:`GenerationServer` that takes images in user messages (see the images section above): uploaded files
     or inline base64 parts, at most :data:`_MAX_IMAGES` per request, each expanded into its span of image rows when
@@ -2702,7 +2899,10 @@ class V41GenerationServer(GenerationServer):
             pool.idle_timeout,
             max_slots=max_slots,
         )
-        scheduler = _SpecScheduler if self.engine.dspark else _V41Scheduler
+        if getattr(self.engine, "decode_batch", 0) > 1:
+            scheduler = _BatchScheduler
+        else:
+            scheduler = _SpecScheduler if self.engine.dspark else _V41Scheduler
         self.scheduler = scheduler(self, self.scheduler.prefill_chunk, self.scheduler.decode_ahead)
         # serve() builds the server after the warmup and the prefill snapshot, and before the scheduler starts: the
         # point past every other device allocation of startup.
@@ -2952,6 +3152,8 @@ class V41GenerationServer(GenerationServer):
             stats["images"] = {**self.engine.images.stats(), "files": self.files.usage()}
         if self.prefill_ahead is not None:
             stats["prefill_ahead"] = self.prefill_ahead.snapshot()
+        if isinstance(self.scheduler, _BatchScheduler):
+            stats["batch"] = self.scheduler.batch_stats()
         return stats
 
     def upload_file(self, fields: dict) -> dict:
@@ -3170,15 +3372,19 @@ class _Instances:
             )
             counts = pool.counts()
             # Claimed slots, not running + queued: a turn between acquire and its seat is not counted in either, and
-            # an instance looking idle meanwhile takes a second conversation onto its one active slot.
+            # an instance looking idle meanwhile takes a second conversation onto its one active slot. An instance
+            # taking batch steps (--decode-batch) is free while it has a free batch row; among the free ones the
+            # fewest claimed go first, so replies spread over the instances and every instance's MoE requests are
+            # its own users' rows.
             busy = pool.claimed()
+            rows = max(getattr(server.engine, "decode_batch", 0) or 0, 1)
             # "empty" counts the device-parked capacity too, so an instance holding idle conversations still looks
             # free: without the parked count, new conversations pile onto the lowest j and then contend for its
             # one active session.
             return (
                 not holds,
                 not parked_hit,
-                busy > 0,
+                busy >= rows,
                 counts.get("empty", 0) == 0,
                 busy,
                 counts.get("parked", 0),
@@ -3329,6 +3535,7 @@ def _serve_instances(args) -> int:
                 dspark=args.dspark,
                 prefill=args.prefill,
                 image_bias=args.vision,
+                blocks=args.dspark or args.decode_batch > 1,
             )
             stack.callback(server.stop)
             logger.info(f"persistent MoE up in {time.perf_counter() - t0:.0f}s")
@@ -3524,14 +3731,24 @@ class V41ChatEngine(ChatEngine):
         self.prefill_ahead = int(getattr(args, "prefill_ahead", 0) or 0)
         self.instance = instance
         self.instances = 1 if moe_server is None else len(moe_server.request_meshes)
+        # --decode-batch: B=4 batch steps (_BatchScheduler), one session a row; the model's blocks are batch steps.
+        self.decode_batch = int(getattr(args, "decode_batch", 0) or 0) if self.persistent_moe else 0
+        if self.decode_batch > 1 and self.dspark:
+            raise ValueError("--decode-batch and --dspark both take the 4-row blocks: pick one")
         persistent = {}
         if self.persistent_moe:
             persistent = dict(
                 persistent_moe=True,
-                verify_rows=_PERSISTENT_VERIFY_ROWS if self.dspark else 1,
+                verify_rows=self.decode_batch
+                if self.decode_batch > 1
+                else _PERSISTENT_VERIFY_ROWS
+                if self.dspark
+                else 1,
                 balance_dram_banks=os.environ.get("DEEPSEEK_V4_BALANCE_DRAM_BANKS", "1")
                 not in ("0", "", "false", "False"),
             )
+            if self.decode_batch > 1:
+                persistent["batch_block"] = True
         if moe_server is not None:
             # One of several instances: requester `instance` of the shared server, on its row, drafter included.
             persistent.update(moe_server=moe_server, moe_requester=instance, drafter_on_stage=self.dspark)
@@ -3616,7 +3833,8 @@ class V41ChatEngine(ChatEngine):
             self.rope,
             self.max_seq,
             lm_head=self.lm_head,
-            num_sessions=args.num_users,
+            # A batch step pads its unused rows with a scratch session (prepare_batch_decode opens it).
+            num_sessions=args.num_users + (1 if self.decode_batch > 1 else 0),
             # max_seq may be rounded above --max-context; every session still has to fit the pools.
             total_tokens=max(args.total_context, self.max_seq),
             block_size=_PAGE_BLOCK_SIZE,
@@ -3641,6 +3859,16 @@ class V41ChatEngine(ChatEngine):
                 f"(temperature {self.temperature}, seed {self.seed}); requests cannot set their own"
             )
 
+        if self.decode_batch > 1:
+            # Before anything is compiled, and before the users open their sessions: the scratch session pads a step.
+            self.model.prepare_batch_decode()
+            if self.model.device_sampler is not None:
+                # The batch step's rows draw from the T-row sampler, at the one-row step's temperature.
+                self.model.verify_sampler.set_sampling(self.temperature, self.seed + 1)
+            logger.info(
+                f"B={self.decode_batch} batch decode: up to {self.decode_batch} replies a step, one session a row "
+                f"({args.num_users} session slots)"
+            )
         # Drafts per verify round with 1, 2, ... seated decoding users, the last entry for more (--dspark-drafts).
         self.dspark_drafts = tuple(getattr(args, "dspark_drafts", _DSPARK_DRAFTS))
         # The persistent stage's 4-row verify rounds (DSpark on --persistent-moe).
@@ -3683,7 +3911,16 @@ class V41ChatEngine(ChatEngine):
 
     def warmup(self) -> None:
         """:meth:`ChatEngine.warmup`; with DSpark, capture the speculative traces too (every stage's fixup and the
-        drafter's, :meth:`DeepSeekV41Model.capture_spec_traces`) along with the decode variants."""
+        drafter's, :meth:`DeepSeekV41Model.capture_spec_traces`) along with the decode variants; with
+        ``--decode-batch``, the one-row and batch step traces (:meth:`DeepSeekV41Model.capture_batch_traces`, on the
+        model's scratch session)."""
+        if self.decode_batch > 1:
+            print("[warming up: compiling kernels and capturing decode and batch traces...]", flush=True)
+            t0 = time.perf_counter()
+            self.users[0].activate()
+            self.model.capture_batch_traces(self.tokenizer.bos_token_id or 0)
+            print(f"[warmup done in {time.perf_counter() - t0:.1f}s]", flush=True)
+            return
         if not self.dspark:
             super().warmup()
             return
@@ -4852,6 +5089,16 @@ def parse_args(argv: list[str] | None = None):
         f"{_INSTANCES})",
     )
     p.add_argument(
+        "--decode-batch",
+        type=int,
+        default=int(os.environ.get("DEEPSEEK_V41_DECODE_BATCH", "0") or 0),
+        help=f"with --persistent-moe, decode up to {_DECODE_BATCH_ROWS} replies per instance together, one token each "
+        f"in one B={_DECODE_BATCH_ROWS} batch step (DeepSeekV41Model(batch_block=True)) once {_BATCH_MIN_USERS} decode "
+        "(DEEPSEEK_V41_BATCH_MIN_USERS); fewer decode a step at a time. Takes the 4-row blocks DSpark would (no --dspark), runs on Python host threads (no "
+        f"--rust-host), and seats {_DECODE_BATCH_ROWS} replies per instance (--max-running), --num-users then "
+        f"defaulting to {_DECODE_BATCH_ROWS}. 0 or 1 turns it off (default: DEEPSEEK_V41_DECODE_BATCH, else 0)",
+    )
+    p.add_argument(
         "--rust-host",
         action=argparse.BooleanOptionalAction,
         default=os.environ.get("DEEPSEEK_V41_RUST_HOST", "1") not in ("0", "", "false", "False"),
@@ -4911,6 +5158,21 @@ def parse_args(argv: list[str] | None = None):
         p.error(f"--dspark-drafts takes comma-separated integers, got {args.dspark_drafts!r}")
     if not args.dspark_drafts or not all(0 <= k <= _DSPARK_MAX_DRAFTS for k in args.dspark_drafts):
         p.error(f"--dspark-drafts takes 0 to {_DSPARK_MAX_DRAFTS} drafts per entry, got {args.dspark_drafts}")
+    if args.decode_batch in (0, 1):
+        args.decode_batch = 0
+    elif args.decode_batch != _DECODE_BATCH_ROWS:
+        p.error(f"--decode-batch takes {_DECODE_BATCH_ROWS} (or 0 / 1: off), got {args.decode_batch}")
+    else:
+        if not args.persistent_moe:
+            p.error("--decode-batch steps the persistent-MoE instances: it needs --persistent-moe")
+        # The batch step is the DSpark 4-row block step with every row its own session: the model has no drafter.
+        if args.dspark:
+            logger.info(f"--decode-batch {args.decode_batch}: DSpark off (its 4-row blocks are batch steps)")
+            args.dspark = False
+        # The Rust host runtime owns the Engram history; batch steps look each row's up on the Python path.
+        if args.rust_host:
+            logger.info(f"--decode-batch {args.decode_batch}: host work on Python threads (--no-rust-host)")
+            args.rust_host = False
     if args.dspark:
         # Speculative decode accepts against the steps' logits on the host. On the stage pipeline its drafter has no
         # image rows; the persistent stage's never sees an image token (see the images item of the docstring). Its
@@ -4953,6 +5215,11 @@ def parse_args(argv: list[str] | None = None):
                     f"--persistent-moe --dspark verifies 4-row blocks: --dspark-drafts entries are 0 (one-row steps) "
                     f"or {drafts}, got {args.dspark_drafts}"
                 )
+        elif args.decode_batch:
+            # One slot per batch row by default (more admit prompts while the rows are full); the seats are the rows.
+            if args.num_users is None:
+                args.num_users = args.decode_batch
+            args.max_running = min(args.max_running, args.decode_batch, args.num_users)
         elif args.num_users is None:
             args.num_users = _NUM_USERS_PERSISTENT
     else:

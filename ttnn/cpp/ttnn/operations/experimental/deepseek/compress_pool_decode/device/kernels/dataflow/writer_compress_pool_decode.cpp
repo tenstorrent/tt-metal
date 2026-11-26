@@ -201,8 +201,14 @@ void kernel_main() {
     constexpr uint32_t groups = get_compile_time_arg_val(46);
     constexpr uint32_t start_odd = get_compile_time_arg_val(47);
     constexpr uint32_t cb_block_id = get_compile_time_arg_val(48);
+    // Independent rows (a B=4 batch step, see the reader): group g is row g, with its own prev_slot, page_row and
+    // entry; a group whose entry is -1 closes nothing and writes no cache.
+    constexpr uint32_t independent = get_compile_time_arg_val(49);
+    static_assert(
+        independent == 0 || (groups == num_rows && (has_window == 0 || has_prev_slot != 0)),
+        "independent rows are one group each, pairing with their own prev_slot");
 
-    constexpr auto gate_args = TensorAccessorArgs<49>();
+    constexpr auto gate_args = TensorAccessorArgs<50>();
     constexpr auto win_gate_args = TensorAccessorArgs<gate_args.next_compile_time_args_offset()>();
     constexpr auto win_slot_args = TensorAccessorArgs<win_gate_args.next_compile_time_args_offset()>();
     constexpr auto prev_slot_args = TensorAccessorArgs<win_slot_args.next_compile_time_args_offset()>();
@@ -343,48 +349,87 @@ void kernel_main() {
             }
 
             const auto win_gate_acc = TensorAccessor(win_gate_args, win_gate_addr);
-            uint32_t tile_row = prev_slot_idx / tile_rows;
-            uint64_t tile_noc = win_gate_acc.get_noc_addr(tile_row * head_tiles + t);
-            noc_async_read(tile_noc, tile_l1, cache_tile_bytes);
-            noc_async_read_barrier();
-            for (uint32_t g = 0; g < G; ++g) {
-                const uint32_t c = first + 2u * g;
-                copy_l1_words(gate_l1 + g * row_tile_bytes, rows_l1 + c * row_tile_bytes, row_tile_bytes);
-                if (c == 0) {
-                    extract_tile_row(g0_l1 + g * row_tile_bytes, tile_l1, prev_slot_idx % tile_rows);
-                } else {
-                    copy_l1_words(g0_l1 + g * row_tile_bytes, rows_l1 + (c - 1u) * row_tile_bytes, row_tile_bytes);
+            if constexpr (independent != 0) {
+                volatile tt_l1_ptr uint32_t* prevs =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1 + pos_slot_bytes);
+                uint32_t tile_row = 0xFFFFFFFFu;
+                for (uint32_t g = 0; g < G; ++g) {
+                    copy_l1_words(gate_l1 + g * row_tile_bytes, rows_l1 + g * row_tile_bytes, row_tile_bytes);
+                    const uint32_t prev = prevs[g];
+                    if (prev / tile_rows != tile_row) {
+                        tile_row = prev / tile_rows;
+                        noc_async_read(win_gate_acc.get_noc_addr(tile_row * head_tiles + t), tile_l1, cache_tile_bytes);
+                        noc_async_read_barrier();
+                    }
+                    extract_tile_row(g0_l1 + g * row_tile_bytes, tile_l1, prev % tile_rows);
                 }
-            }
-            gate_cb.push_back(G);
-            g0_cb.push_back(G);
+                gate_cb.push_back(G);
+                g0_cb.push_back(G);
+                bool dirty = false;
+                for (uint32_t j = 0; j < R; ++j) {
+                    const uint32_t slot = slots[j];
+                    if (slot / tile_rows != tile_row) {
+                        if (dirty) {
+                            noc_async_write(
+                                tile_l1, win_gate_acc.get_noc_addr(tile_row * head_tiles + t), cache_tile_bytes);
+                            noc_async_write_barrier();
+                        }
+                        tile_row = slot / tile_rows;
+                        noc_async_read(win_gate_acc.get_noc_addr(tile_row * head_tiles + t), tile_l1, cache_tile_bytes);
+                        noc_async_read_barrier();
+                    }
+                    patch_tile_row(tile_l1, rows_l1 + j * row_tile_bytes, slot % tile_rows);
+                    dirty = true;
+                }
+                noc_async_write(tile_l1, win_gate_acc.get_noc_addr(tile_row * head_tiles + t), cache_tile_bytes);
+                noc_async_write_barrier();
+            } else {
+                uint32_t tile_row = prev_slot_idx / tile_rows;
+                uint64_t tile_noc = win_gate_acc.get_noc_addr(tile_row * head_tiles + t);
+                noc_async_read(tile_noc, tile_l1, cache_tile_bytes);
+                noc_async_read_barrier();
+                for (uint32_t g = 0; g < G; ++g) {
+                    const uint32_t c = first + 2u * g;
+                    copy_l1_words(gate_l1 + g * row_tile_bytes, rows_l1 + c * row_tile_bytes, row_tile_bytes);
+                    if (c == 0) {
+                        extract_tile_row(g0_l1 + g * row_tile_bytes, tile_l1, prev_slot_idx % tile_rows);
+                    } else {
+                        copy_l1_words(g0_l1 + g * row_tile_bytes, rows_l1 + (c - 1u) * row_tile_bytes, row_tile_bytes);
+                    }
+                }
+                gate_cb.push_back(G);
+                g0_cb.push_back(G);
 
-            for (uint32_t j = 0; j < R; ++j) {
-                const uint32_t slot = slots[j];
-                if (slot / tile_rows != tile_row) {
-                    noc_async_write(tile_l1, tile_noc, cache_tile_bytes);
-                    noc_async_write_barrier();
-                    tile_row = slot / tile_rows;
-                    tile_noc = win_gate_acc.get_noc_addr(tile_row * head_tiles + t);
-                    noc_async_read(tile_noc, tile_l1, cache_tile_bytes);
-                    noc_async_read_barrier();
+                for (uint32_t j = 0; j < R; ++j) {
+                    const uint32_t slot = slots[j];
+                    if (slot / tile_rows != tile_row) {
+                        noc_async_write(tile_l1, tile_noc, cache_tile_bytes);
+                        noc_async_write_barrier();
+                        tile_row = slot / tile_rows;
+                        tile_noc = win_gate_acc.get_noc_addr(tile_row * head_tiles + t);
+                        noc_async_read(tile_noc, tile_l1, cache_tile_bytes);
+                        noc_async_read_barrier();
+                    }
+                    patch_tile_row(tile_l1, rows_l1 + j * row_tile_bytes, slot % tile_rows);
                 }
-                patch_tile_row(tile_l1, rows_l1 + j * row_tile_bytes, slot % tile_rows);
+                noc_async_write(tile_l1, tile_noc, cache_tile_bytes);
+                noc_async_write_barrier();
             }
-            noc_async_write(tile_l1, tile_noc, cache_tile_bytes);
-            noc_async_write_barrier();
         } else {
             noc_async_read_barrier();
         }
 
         // Group g's entry: row in_block_row[g] of physical block phys_block[g], and dense_kv row dense_rows[g].
+        // An independent row's entry may be -1 (it closes nothing): has_entry[g] false, no comp_kv / key write.
         uint32_t phys_block[G];
         uint32_t in_block_row[G];
         int32_t dense_rows[G];
+        bool has_entry[G];
         for (uint32_t g = 0; g < G; ++g) {
             phys_block[g] = 0;
             in_block_row[g] = 0;
             dense_rows[g] = -1;
+            has_entry[g] = false;
         }
         if constexpr (reads_entry || has_dense != 0) {
             CircularBuffer idx_cb(cb_idx_id);
@@ -409,12 +454,19 @@ void kernel_main() {
             invalidate_l1_cache();
             if constexpr (reads_entry) {
                 volatile tt_l1_ptr uint32_t* entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
-                uint32_t table_row = 0;
-                if constexpr (has_page_row != 0) {
-                    table_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1 + idx_slot_bytes)[0];
-                }
+                volatile tt_l1_ptr uint32_t* page_rows =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1 + idx_slot_bytes);
                 const auto table_acc = TensorAccessor(page_table_args, page_table_addr);
                 for (uint32_t g = 0; g < G; ++g) {
+                    has_entry[g] = independent == 0 || static_cast<int32_t>(entries[g]) >= 0;
+                    if (!has_entry[g]) {
+                        continue;
+                    }
+                    // A block's groups are one session's (page row 0 of the tensor); independent rows each have theirs.
+                    uint32_t table_row = 0;
+                    if constexpr (has_page_row != 0) {
+                        table_row = page_rows[independent != 0 ? g : 0];
+                    }
                     const uint32_t block_byte = (entries[g] / block_rows) * sizeof(uint32_t);
                     const uint32_t chunk_byte = block_byte & ~(page_table_chunk_bytes - 1u);
                     noc_async_read(
@@ -425,6 +477,9 @@ void kernel_main() {
                 noc_async_read_barrier();
                 invalidate_l1_cache();
                 for (uint32_t g = 0; g < G; ++g) {
+                    if (!has_entry[g]) {
+                        continue;
+                    }
                     const uint32_t block_byte = (entries[g] / block_rows) * sizeof(uint32_t);
                     const uint32_t chunk_byte = block_byte & ~(page_table_chunk_bytes - 1u);
                     phys_block[g] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -451,11 +506,17 @@ void kernel_main() {
                 CircularBuffer key_tile_cb(cb_key_tile_id);
                 key_tile_cb.reserve_back(1);
                 key_tile_l1 = key_tile_cb.get_write_ptr();
-                key_tile_page = phys_block[0] * key_block_tiles + (in_block_row[0] / tile_rows) * key_tiles + key_idx;
-                noc_async_read(
-                    TensorAccessor(idx_key_cache_args, idx_key_cache_addr).get_noc_addr(key_tile_page),
-                    key_tile_l1,
-                    cache_tile_bytes);
+                for (uint32_t g = 0; g < G; ++g) {
+                    if (has_entry[g]) {
+                        key_tile_page =
+                            phys_block[g] * key_block_tiles + (in_block_row[g] / tile_rows) * key_tiles + key_idx;
+                        noc_async_read(
+                            TensorAccessor(idx_key_cache_args, idx_key_cache_addr).get_noc_addr(key_tile_page),
+                            key_tile_l1,
+                            cache_tile_bytes);
+                        break;
+                    }
+                }
             }
         }
         uint32_t dense_tile_l1 = 0;
@@ -523,11 +584,13 @@ void kernel_main() {
                     TensorAccessor(out_rope_args, out_rope_addr).get_noc_addr(g, t * row_tile_bytes),
                     row_tile_bytes);
                 if constexpr (has_comp_kv != 0) {
-                    noc_async_write(
-                        row_l1,
-                        TensorAccessor(comp_kv_args, comp_kv_addr)
-                            .get_noc_addr(phys_block[g] * block_rows + in_block_row[g], t * row_tile_bytes),
-                        row_tile_bytes);
+                    if (has_entry[g]) {
+                        noc_async_write(
+                            row_l1,
+                            TensorAccessor(comp_kv_args, comp_kv_addr)
+                                .get_noc_addr(phys_block[g] * block_rows + in_block_row[g], t * row_tile_bytes),
+                            row_tile_bytes);
+                    }
                 }
                 if constexpr (has_dense != 0) {
                     const int32_t dense_row = dense_rows[g];
@@ -597,18 +660,20 @@ void kernel_main() {
                 CircularBuffer key_out_cb(cb_key_out_id);
                 const auto key_acc = TensorAccessor(idx_key_cache_args, idx_key_cache_addr);
                 for (uint32_t g = 0; g < G; ++g) {
-                    const uint32_t page =
-                        phys_block[g] * key_block_tiles + (in_block_row[g] / tile_rows) * key_tiles + key_idx;
-                    if (page != key_tile_page) {
-                        noc_async_write(key_tile_l1, key_acc.get_noc_addr(key_tile_page), cache_tile_bytes);
-                        noc_async_write_barrier();
-                        key_tile_page = page;
-                        noc_async_read(key_acc.get_noc_addr(page), key_tile_l1, cache_tile_bytes);
-                        noc_async_read_barrier();
-                    }
                     key_out_cb.wait_front(g + 1);
                     const uint32_t key_l1 = key_out_cb.get_read_ptr() + g * row_tile_bytes;
-                    patch_tile_row(key_tile_l1, key_l1, in_block_row[g] % tile_rows);
+                    if (has_entry[g]) {
+                        const uint32_t page =
+                            phys_block[g] * key_block_tiles + (in_block_row[g] / tile_rows) * key_tiles + key_idx;
+                        if (page != key_tile_page) {
+                            noc_async_write(key_tile_l1, key_acc.get_noc_addr(key_tile_page), cache_tile_bytes);
+                            noc_async_write_barrier();
+                            key_tile_page = page;
+                            noc_async_read(key_acc.get_noc_addr(page), key_tile_l1, cache_tile_bytes);
+                            noc_async_read_barrier();
+                        }
+                        patch_tile_row(key_tile_l1, key_l1, in_block_row[g] % tile_rows);
+                    }
                     if constexpr (has_key_row != 0) {
                         noc_async_write(
                             key_l1,
@@ -616,7 +681,9 @@ void kernel_main() {
                             row_tile_bytes);
                     }
                 }
-                noc_async_write(key_tile_l1, key_acc.get_noc_addr(key_tile_page), cache_tile_bytes);
+                if (key_tile_page != 0xFFFFFFFFu) {
+                    noc_async_write(key_tile_l1, key_acc.get_noc_addr(key_tile_page), cache_tile_bytes);
+                }
                 noc_async_write_barrier();
                 key_out_cb.pop_front(G);
             }

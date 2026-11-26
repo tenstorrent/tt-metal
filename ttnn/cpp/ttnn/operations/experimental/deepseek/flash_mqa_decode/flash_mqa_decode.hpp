@@ -67,6 +67,17 @@ namespace ttnn::experimental::deepseek {
 //            and fits the grid's height.
 //   Returns TILE ``(R, 32)`` ``[1, 1, R, heads * head_dim]`` bfloat16; default memory: one L1 shard on q's first
 //   core when q is sharded, else q's memory config.
+//
+// Independent rows (``independent_rows``, num_rows 2 or 4: a B=4 batch step, row j one token of its own session at
+// position p_j), with everything else as in block mode:
+//   kv:      every session's ring in one tensor: row j's ring is ``kv[ring_first_row_j .. + ring_capacity]``,
+//            holding positions <= p_j - 1 at row ``ring_first_row_j + position % ring_capacity``.
+//   lengths: row-major int32 ``[1, 1, 1, 4 * R]``: ``[n_0 .. n_{R-1}, p_0 .. p_{R-1}, ring_first_row_0 ..,
+//            selected_first_row_0 ..]`` (first rows multiples of 32). Row j attends the ring slots of positions
+//            ``max(0, p_j - (ring_capacity - 1)) .. p_j - 1``, new kv row j only, and ``n_j`` selected rows from
+//            ``selected_row_offset + selected_first_row_j`` (``dense_selected``: e.g. row j's session's dense rows)
+//            or ``selected_row_offset + selected_first_row_j + j * selected_capacity``.
+//   row_groups is num_rows (one row per group of cores).
 Tensor flash_mqa_decode(
     const Tensor& q,
     const Tensor& kv,
@@ -86,6 +97,7 @@ Tensor flash_mqa_decode(
     const std::optional<Tensor>& new_kv = std::nullopt,
     uint32_t num_rows = 1,
     bool dense_selected = false,
-    uint32_t row_groups = 0);
+    uint32_t row_groups = 0,
+    bool independent_rows = false);
 
 }  // namespace ttnn::experimental::deepseek

@@ -1,7 +1,131 @@
 # B=4 batched decode per instance on the DSpark 4-row block
 
-Status: plan, Nov 25 2026. Nothing below is built or measured; the estimates are derived from measurements listed
-in "Where the numbers come from" and must be confirmed in phase 0 before the kernel work starts.
+Status: phases 1-2 built on branch `smanoj/ds_v4_b4` (Nov 25 2026) and verified on the Galaxy (one persistent instance,
+Python host path). The estimates further below predate this and still need phase 0's load runs.
+
+## Measured (Nov 25, Galaxy)
+
+* **Ops** (`tests/decode/test_batch_rows_ops.py`, 20 cases): `compress_pool_decode` independent rows is bit-exact
+  against four one-row calls (windows, `idx_key_cache`, `comp_kv`, `dense_kv`, roped rows); `flash_mqa_decode`
+  independent rows matches the fp32 torch reference at PCC >= 0.9992.
+* **Model** (`tests/decode/test_batch_decode.py`, teacher-forced against one-row decode of each session alone):
+
+  | Run | Variants hit | Picks matching | Differing picks |
+  |---|---|---|---|
+  | short prompts (positions 3-160) | dense | 193 / 201 | 8, all near-ties (0.25-0.75 logits) |
+  | `BATCH_LONG=2100` (to 2260) | scored, both ratios | 1245 / 1251 | 6, all near-ties (<= 0.5) |
+  | `BATCH_LONG=32000 BATCH_TAIL=400` (to 32160) | two-level, layer 20 key split | 516 / 521 | 5, all near-ties (<= 0.5); long row 400 / 400 |
+
+  The short rows of the long runs ran the scored / two-level variants (the furthest row picks the variant) with the
+  same near-tie positions as in the dense run. Eager reruns reproduce the traced picks exactly.
+* **Step time** (traced, Python host, device sampling): 11.8 ms a step at short context (4 rows: ~340 tok/s per
+  instance when all four are decoding, vs ~6.5 ms / 1 token for a one-row step); 12.6 ms at 2k and 13.4 ms at 32k
+  (one real row and three pads, whose selects still run).
+* **L1_SMALL**: the batch programs need more than the demo's 10 KB (the 4-row sampler's all_gather ran out last);
+  12 KB is enough, and `demo/server.py` already reserves 16 KB under `--persistent-moe`.
+* **Profile, one-row vs batch step** (`tests/decode/test_batch_decode_profile.py`, `tools/batch_profile_report.py`,
+  device 27, per step, without the one-row step's H2D receive, which waits for the host's packet):
+
+  | | 256 one-row | 256 batch | 2048 one-row | 2048 batch |
+  |---|---|---|---|---|
+  | host wall, no profiler | 7.15 ms | 10.72 ms | 7.93 ms | 13.50 ms |
+  | device kernel time | 6.84 ms | 10.20 ms | 7.55 ms | 12.78 ms |
+  | MoE requests (40) | 2727 us | 4133 (1.52x) | 2724 | 4119 (1.51x) |
+  | `fused_lightning_select_kv` | - (dense) | - | 283 (8 calls) | 1148 (32 calls, **4.05x**) |
+  | select's per-row setup (repeat, slice, reshard, norm) | 41 | 35 | 118 | 1135 (9.6x) |
+  | `flash_mqa_decode` (40) | 458 | 960 (2.09x) | 539 | 1132 (2.10x) |
+  | width-sharded all-reduce (42) | 589 | 1065 (1.81x) | 596 | 1063 (1.78x) |
+  | `fused_single_user` HC (80) | 1108 | 1487 (1.34x) | 1111 | 1492 (1.34x) |
+  | `attention_qkv_decode` (40) | 525 | 781 (1.49x) | 513 | 724 (1.41x) |
+  | ring commit (`paged_update_cache`) | 56 | 334 (40 calls) | 48 | 334 |
+  | `compress_pool_decode` | 12 | 110 (4 calls) | 12 | 104 |
+  | weight matmuls | 981 | 943 (0.96x) | 1209 | 1128 (0.93x) |
+
+  The one op that scales linearly with the rows is the select: one one-row `fused_lightning_select_kv` per row per
+  index layer, 35.5 us a call either way. It runs only once a ratio's select is scored (past position 512 / 1025),
+  and its key scan grows with the context, so it is the term that takes over the batch step at long context; its
+  per-row setup (head replication per row) costs as much again. Everything else is sublinear: the weight matmuls are
+  flat, the MoE 1.5x, attention and the all-reduces ~2x.
+* **Server, one instance** (`demo/server.py --instances 1 --decode-batch 4 --no-prefill --no-vision --temperature 0`,
+  `demo/perf_client.py --decode-tokens 256`, GSM8K prompts; prompts replayed through decode):
+
+  | Prompt | 1 user: total tok/s (one-row steps) | 4 users: total tok/s (batch steps) | 4 users: tok/s/user |
+  |---|---|---|---|
+  | 128 | 146.9 | 286.9 | 72.2 |
+  | 256 | 145.6 | 283.8 | 71.4 |
+  | 512 | 137.4 | 251.4 | 63.2 |
+  | 1K | 132.6 | 235.9 | 59.3 |
+
+  1.8-2.0x the instance's one-user throughput. A batch step is 13.7 ms at short context and 15.5-16.2 ms at ~1.2K
+  (device 11.5-12.1 / 14.5 ms, `compute.batch_step`; the 4 rows' Engram lookup 1.4 ms, `host.batch_engram`, before the
+  dispatch; the scheduler ~0.3 ms).
+* **Server equivalence** (`demo/test_server_users.py compare --users 8 --workers 4 --stagger 10 --max-tokens 200`,
+  greedy; 8 two-turn conversations alone, then 4 at a time joining and leaving mid-reply, over 4 slots so turns park
+  and reload): with the default policy (a lone reply on one-row steps) 0 / 16 replies are identical, all diverging
+  6-125 tokens in (one-row vs batch-step near-ties, ~1 in 50 tokens, as in the model test), every reply on its own
+  topic and tag. With `DEEPSEEK_V41_BATCH_MIN_USERS=1` (a lone reply in padded batch steps too) **16 / 16 are
+  identical**: a row's picks do not depend on the other rows, the joins and leaves, or a park and reload. The lone
+  replies then ran 25.9 s against 19.6 s on one-row steps.
+* **Server, five instances** (`--instances 5`, same flags; users spread evenly, so N users is N/5 an instance):
+
+  | Users (an instance) | One-row steps: total tok/s | Batch steps: total tok/s | Batch: tok/s/user | Batch step |
+  |---|---|---|---|---|
+  | 5 (1) | 515 | - | - | - |
+  | 10 (2) | 479-516 (48-55 tok/s/user, interleaved) | 477-480 | 48 | 20.4 ms, 2 rows |
+  | 15 (3) | ~510 | 541-550 | 37 | 26.6 ms, 3 rows |
+  | 20 (4) | ~515 | 649-682 | 34-35 | 28.5 ms, 4 rows |
+
+  The shared MoE is the limit, as estimated: a 4-row step's device part grows from ~12 ms alone to 22.4 ms with all
+  five instances stepping (5 x 40 layers x ~110 us of 4-row requests), and pad rows load it as real ones do. The 4 rows'
+  Engram lookup grows from 1.4 to 4.8 ms (five instances' Python host threads on one GIL). One-row steps cap at ~103
+  tok/s an instance whatever its users. So batch steps start at 3 seated replies (`DEEPSEEK_V41_BATCH_MIN_USERS`,
+  default 3): at 2 they lose under load and only break even alone (2 rows / 13.7 ms against ~147 tok/s). At 20
+  users B=4 serves 4x DSpark's 5 users at about its total (635 tok/s, GSM8K, Nov 17) and 1.3x one-row steps'.
+
+## What is built
+
+* **`flash_mqa_decode(..., independent_rows=True)`** (R = 2 or 4): one row per row group of cores, each with its own
+  plan from its own position. `lengths` is `[n_j .., p_j .., ring_first_row_j .., selected_first_row_j ..]` (16
+  words at R = 4, the step context's limit). Row j reads its session's ring slot, only its own new kv row (key j of
+  the staging chunk) and its own selected rows or its session's `dense_kv` rows; no chunk is shared between rows.
+* **`compress_pool_decode(..., independent_rows=True)`**: every row is a group. At ratio 2 row j pools with its own
+  window row `prev_slot[j]` (all read before any row is written); `entry[j] = -1` (a row that closes no group)
+  skips its comp_kv / index-key writes; `page_row` is `[R]`, one page-table row per row.
+* **Select**: `DeepSeekV41Indexer.select_kv_batch` runs the q_b / weights projections once for the four rows, then
+  one one-row select per row over its own session's keys (key split + merge and the two-level candidate pool per
+  row; `batch_candidates[j]` buffers). The fused multi-row select still scans one session's keys, so this is the
+  part with the most per-step overhead left (4 x (2 replications + select [+ all_gather + merge]) per index layer).
+* **Model** (`DeepSeekV41Model(batch_block=True, verify_rows=4)`, persistent stage): slotted caches
+  (`num_sessions >= 5`, one slot a scratch session that pads short steps), `prepare_batch_decode`,
+  `capture_batch_traces` (one-row and batch variants, all compiles before any capture) and
+  `decode_batch_block(token_ids, sids, positions=None)`. The packet carries each row's token, position and slot,
+  plus the entries / dense rows / select positions the step-context terms cannot derive. Variants are keyed by the
+  furthest row (dense while every row is, two-level and key split once any row is), with no parity variants.
+  Every batch step writes each new entry below `index_topk` into `dense_kv`, whatever the variant, so a short row's
+  dense rows stay complete while a long row keeps the step scored. Python host path only (the Rust host runtime
+  owns the Engram history); text tokens only.
+* **Tests**: `tests/decode/test_batch_rows_ops.py` (both ops against a torch reference / R one-row calls) and
+  `tests/decode/test_batch_decode.py` (B=4 picks vs one-row decode, teacher-forced, rows at different positions,
+  padded tail steps; `DEEPSEEK_V41_BATCH_LONG` / `DEEPSEEK_V41_BATCH_TAIL` for the scored, two-level and split
+  variants; differing picks are checked as near-ties in the batch step's logits, `debug_batch_logits`).
+
+* **Server** (phase 3, `demo/server.py --decode-batch 4`): each persistent instance is built with
+  `batch_block=True` and `--num-users` (default 4) slots plus the scratch one; the shared MoE is launched for 4-row
+  requests without the drafter (`launch_instances_server(blocks=True)`). `_BatchScheduler` seats `--max-running` (4)
+  replies and steps them together with `decode_batch_block`; replies join and leave between steps; prompts (remote KV
+  load, the tail in one-row steps) run between steps, one session at a time, as `_PrefillFirst` runs them. With one or
+  two seated replies the instance takes one-row steps (posted ahead), from three on batch steps
+  (`DEEPSEEK_V41_BATCH_MIN_USERS`, default 3). A reply's prefix snapshot (needs nothing in flight) is taken by reading
+  the pipeline back, not left waiting for a quiet moment that another reply's posted steps never leave (with
+  `--no-prefill` two replies on one-row steps otherwise decoded one after the other). `_Instances` routes a new conversation to the instance with the fewest claimed slots while any has a free
+  batch row. Forces `--no-dspark` and `--no-rust-host`. Host-only test: `tests/test_batch_scheduler.py` (a fake model
+  whose picks hash each session's history: every reply equals decoding it alone, through joins, leaves, a stop and
+  prompts between batch steps; two replies below the threshold interleave).
+
+Not built: the mode switch with DSpark by load (a `batch_block` model has no drafter), the Rust host runtime's batch
+packet (it would take the Engram lookup, 1.4-4.8 ms a step, off the GIL), and a multi-session fused select. Not run
+yet: `--decode-batch` with `--prefill-url` (remote KV load between steps), with the local traced prefill, with
+`--vision`, or past ~1.3K context.
 
 ## Goal
 

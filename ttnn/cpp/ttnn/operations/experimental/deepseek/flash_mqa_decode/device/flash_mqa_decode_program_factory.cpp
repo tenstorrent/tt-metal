@@ -517,6 +517,7 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
         {"kv_semaphore_id", kv_semaphore_id},
         {"num_head_groups", num_head_groups},
         {"share_reads", share_reads ? 1u : 0u},
+        {"independent_rows", args.independent_rows ? 1u : 0u},
     };
     TensorAccessorArgs(q.buffer()).append_to(reader_desc.compile_time_args);
     TensorAccessorArgs(kv.buffer()).append_to(reader_desc.compile_time_args);
@@ -559,6 +560,7 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
         {"cb_sink_scratch", cb_sink_scratch},
         {"cb_tile_rm", cb_tile_rm},
         {"cb_out_tiles", cb_out_tiles},
+        {"independent_rows", args.independent_rows ? 1u : 0u},
     };
     TensorAccessorArgs(output.buffer()).append_to(writer_desc.compile_time_args);
     TensorAccessorArgs(lengths.buffer()).append_to(writer_desc.compile_time_args);
@@ -609,6 +611,7 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
         {"cb_cs", cb_cs},
         {"cb_tile_rm", cb_tile_rm},
         {"cb_out_tiles", cb_out_tiles},
+        {"independent_rows", args.independent_rows ? 1u : 0u},
     };
 
     const auto buffer_or_zero = [](Buffer* b) {

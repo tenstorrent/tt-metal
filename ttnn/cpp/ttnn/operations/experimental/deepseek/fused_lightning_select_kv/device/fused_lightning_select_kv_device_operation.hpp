@@ -74,6 +74,11 @@ struct FusedLightningSelectKvDeviceOperation {
         // ``[1, n]`` INT32 mask of the query rows that may select each group of ``max_keys / n`` keys (bit j:
         // row j): a candidate pool several rows share, each seeing only its own blocks.
         std::optional<Tensor> row_mask_table;
+        // ``[1]`` INT32 query row this device selects (a row split: one row per device). ``query`` and
+        // ``head_weights`` then hold Sq rows, and ``cur_pos_tensor`` / ``num_keys_tensor`` /
+        // ``page_table_row_tensor`` hold Sq entries (row r's at r) or one (this device's own). The op runs
+        // as a one-row select of that row and returns its candidates page, as one part of a split.
+        std::optional<Tensor> query_row_tensor;
     };
 
     // [0] selected kv rows, ``[Sq, Hkv, k, Dh]`` (with num_parts > 1: the local candidates, one page per
@@ -128,6 +133,7 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     const std::optional<ttnn::Tensor>& row_table = std::nullopt,
     const std::optional<ttnn::Tensor>& page_table_row_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_page_table = std::nullopt,
-    const std::optional<ttnn::Tensor>& row_mask_table = std::nullopt);
+    const std::optional<ttnn::Tensor>& row_mask_table = std::nullopt,
+    const std::optional<ttnn::Tensor>& query_row_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

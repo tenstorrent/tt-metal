@@ -102,9 +102,26 @@ void FlashMqaDecodeDeviceOperation::validate_on_program_cache_miss(
             new_kv.logical_shape(),
             new_kv.dtype());
         TT_FATAL(tensor_args.cos.has_value(), "flash_mqa_decode: num_rows > 1 needs cos / sin (per-row inverse RoPE)");
+        if (args.independent_rows) {
+            TT_FATAL(
+                (rows == 2 || rows == 4) && args.row_groups == rows,
+                "flash_mqa_decode: independent rows run 2 or 4 rows, one per row group, got {} rows in {} groups",
+                rows,
+                args.row_groups);
+            TT_FATAL(
+                (lengths.dtype() == DataType::INT32 || lengths.dtype() == DataType::UINT32) &&
+                    lengths.layout() == Layout::ROW_MAJOR && lengths.logical_shape()[-1] >= 4 * rows,
+                "flash_mqa_decode: {} independent rows need row-major int32 lengths [n_0 .., p_0 .., ring_first_row_0 "
+                ".., selected_first_row_0 ..] of {} words, got {} {}",
+                rows,
+                4 * rows,
+                lengths.dtype(),
+                lengths.logical_shape());
+        }
         TT_FATAL(
             (lengths.dtype() == DataType::INT32 || lengths.dtype() == DataType::UINT32) &&
-                lengths.layout() == Layout::ROW_MAJOR && lengths.logical_shape()[-1] >= 4 + rows,
+                lengths.layout() == Layout::ROW_MAJOR &&
+                (args.independent_rows || lengths.logical_shape()[-1] >= 4 + rows),
             "flash_mqa_decode: num_rows {} needs row-major int32 lengths [p, ring_first_row, selected_first_row, 0, "
             "n_0 .. n_{}], got {} {}",
             rows,
@@ -113,6 +130,7 @@ void FlashMqaDecodeDeviceOperation::validate_on_program_cache_miss(
             lengths.logical_shape());
     } else {
         TT_FATAL(!tensor_args.new_kv.has_value(), "flash_mqa_decode: new_kv needs num_rows > 1");
+        TT_FATAL(!args.independent_rows, "flash_mqa_decode: independent_rows needs num_rows > 1");
         TT_FATAL(!args.dense_selected, "flash_mqa_decode: dense_selected needs num_rows > 1");
     }
     const bool per_row_selected = rows > 1 && !args.dense_selected;
@@ -274,7 +292,8 @@ ttnn::Tensor flash_mqa_decode(
     const std::optional<ttnn::Tensor>& new_kv,
     uint32_t num_rows,
     bool dense_selected,
-    uint32_t row_groups) {
+    uint32_t row_groups,
+    bool independent_rows) {
     using OperationType = ttnn::operations::experimental::deepseek::flash_mqa_decode::FlashMqaDecodeDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         q.device()->arch(),
@@ -294,6 +313,10 @@ ttnn::Tensor flash_mqa_decode(
             tt::tt_metal::BufferType::L1,
             tt::tt_metal::ShardSpec(
                 CoreRangeSet(CoreRange(first, first)), {num_rows, width}, tt::tt_metal::ShardOrientation::ROW_MAJOR));
+    }
+    if (num_rows > 1 && independent_rows) {
+        // One row per group of cores: each row reads its own session's ring and rows.
+        row_groups = num_rows;
     }
     if (num_rows > 1 && row_groups == 0) {
         // As many row groups as divide the rows and fit the grid's height under the head groups.
@@ -320,6 +343,7 @@ ttnn::Tensor flash_mqa_decode(
         .num_rows = num_rows,
         .dense_selected = dense_selected,
         .row_groups = num_rows > 1 ? row_groups : 1,
+        .independent_rows = num_rows > 1 && independent_rows,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = kernel_config_val,
     };

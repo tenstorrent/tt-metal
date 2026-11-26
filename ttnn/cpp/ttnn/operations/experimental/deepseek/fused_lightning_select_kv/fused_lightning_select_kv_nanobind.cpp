@@ -115,6 +115,13 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
                 i says whether query row j may select keys ``[i * g, (i + 1) * g)``, ``g = max_keys / n``
                 (``build_candidate_pool``'s ``pool_masks`` of a pool several rows share). A row's other
                 keys are not selectable (their scores read as 0xFFFFFFFF bits).
+            query_row_tensor (Optional[ttnn.Tensor]): ``[1]`` INT32 query row this device selects, a
+                row split (e.g. a ``[Sq]`` arange sharded over the mesh): ``query`` / ``head_weights``
+                hold Sq rows, ``cur_pos_tensor`` / ``num_keys_tensor`` / ``page_table_row_tensor`` Sq
+                entries (row r's at r) or one (this device's own). Returns that row's candidates page
+                ``[1, 1, 1, 2k + 16]`` over the whole key range (for ``merge_select_kv`` with
+                ``num_queries`` = Sq after an all-gather), and in candidate source mode writes the row's
+                ``candidate_blocks`` / ``pool_count`` locally.
 
         Returns:
             List[ttnn.Tensor]: ``[kv_rows, scores]``, plus ``[candidate_blocks, pool_count]`` in
@@ -158,7 +165,8 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
         nb::arg("row_table") = std::nullopt,
         nb::arg("page_table_row_tensor") = std::nullopt,
         nb::arg("kv_page_table") = std::nullopt,
-        nb::arg("row_mask_table") = std::nullopt);
+        nb::arg("row_mask_table") = std::nullopt,
+        nb::arg("query_row_tensor") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::fused_lightning_select_kv::detail
