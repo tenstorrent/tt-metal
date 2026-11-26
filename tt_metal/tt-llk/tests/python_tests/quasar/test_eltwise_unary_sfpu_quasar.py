@@ -68,6 +68,7 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
+    INP_FLOAT32,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
@@ -133,6 +134,61 @@ TAN_RTOL = {
     DataFormat.Float16_b: 2 * 2.0**-7,
 }
 
+# Max |result - golden| for erf / erfc on [-3, 3], about two bf16 steps near 1; the suite's 0.05 is
+# far looser. Float32 inputs build erf's fp32 table, as ttnn does, and are held to 2**-21.
+ERF_ERFC_ATOL = {
+    (MathOperation.Erf, ApproximationMode.No, DataFormat.Float16_b): 2.0**-7,
+    (MathOperation.Erf, ApproximationMode.No, DataFormat.Float32): 2.0**-7,
+    (MathOperation.Erf, ApproximationMode.Yes, DataFormat.Float16_b): 2.0**-6,
+    (MathOperation.Erf, ApproximationMode.Yes, DataFormat.Float32): 2.0**-6,
+    (MathOperation.Erfc, ApproximationMode.No, DataFormat.Float16_b): 2.0**-6,
+    (MathOperation.Erfc, ApproximationMode.No, DataFormat.Float32): 2.0**-7,
+}
+ERF_FP32_TABLE_ATOL = 2.0**-21
+
+
+def _erf_fp32_table(mathop, formats):
+    # ttnn defines INP_FLOAT32 for a float32 input, which selects erf's fp32 coefficient table.
+    return mathop == MathOperation.Erf and formats.input_format == DataFormat.Float32
+
+
+def _erf_erfc_atol(mathop, approx_mode, formats):
+    if (
+        _erf_fp32_table(mathop, formats)
+        and approx_mode == ApproximationMode.No
+        and formats.output_format == DataFormat.Float32
+    ):
+        return ERF_FP32_TABLE_ATOL
+    return ERF_ERFC_ATOL[(mathop, approx_mode, formats.output_format)]
+
+
+# Erf inputs around the |x| = 10 clamp, huge, infinite and ±0. NaN is left out (the simulators
+# disagree on erf(NaN)), and so is the sign of zero (erf(-0) returns +0).
+ERF_SPECIAL_VALUES = (
+    0.0,
+    -0.0,
+    9.99,
+    -9.99,
+    10.0,
+    -10.0,
+    10.01,
+    -10.01,
+    1.0e5,
+    -1.0e5,
+    3.0e38,
+    -3.0e38,
+    math.inf,
+    -math.inf,
+)
+
+
+def _plant_erf_special_values(src_A: torch.Tensor) -> torch.Tensor:
+    flat = src_A.flatten().clone()
+    n = len(ERF_SPECIAL_VALUES)
+    flat[:n] = torch.tensor(ERF_SPECIAL_VALUES, dtype=torch.float32).to(flat.dtype)
+    return flat.view(src_A.shape)
+
+
 # The six comparison-to-zero modes. These run integer formats too (and UInt16 via
 # the Int16 container), so the sweep adds them to the float formats above.
 COMP_OPS = [
@@ -146,7 +202,7 @@ COMP_OPS = [
 
 # Ops that sweep the comp format set (float + integer formats) and build on the comp stimuli.
 # Signbit is a pure sign-bit test: it differs from an IEEE `< 0` at -0.0 and negative NaN, and from
-# Quasar's less_than_zero (itself a bit-31 test with a magnitude-nonzero guard) only at -0.0. The
+# Quasar's less_than_zero (a sign test that excludes -0 via v > neg_zero) only at -0.0. The
 # comp stimuli seed +/-0.0 at a single datum and keep UInt16 below bit 15, so signbit adds its own
 # per-face seeds on top of them (see prepare_signbit_inputs).
 COMP_FORMAT_OPS = COMP_OPS + [MathOperation.Signbit]
@@ -510,14 +566,18 @@ def prepare_inputs_for_operation(
         MathOperation.Softplus,
         MathOperation.Softsign,
         MathOperation.I0,
+        MathOperation.Erf,
+        MathOperation.Erfc,
     ):
-        # for_op spans softplus' t < -5 tail and linear threshold, softsign's [-5, 5] and i0's
-        # |x| <= 3.75 fit.
+        # for_op spans softplus' t < -5 tail and linear threshold, softsign's [-5, 5], i0's
+        # |x| <= 3.75 fit and erf / erfc's [-3, 3].
         spec = for_op(mathop, input_format).spec_A
         min_val = spec.low
         max_val = spec.high
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+        if mathop == MathOperation.Erf:
+            src_A = _plant_erf_special_values(src_A)
     elif mathop in ROUNDING_OPS:
         # [-10, 10] spans both signs so floor/ceil differ from trunc. Overlay op_edge_points()
         # so ties and integer knees are exact; a uniform draw does not hit them.
@@ -759,6 +819,20 @@ _SIGNED_NAN_BITS = {
 # every consecutive FACE_ELEMS-element chunk of the flat input lands in its own face.
 FACE_ELEMS = MAX_FACE_R_DIM * FACE_C_DIM
 
+# Where a run of planted edge patterns starts in its face: lane _EDGE_RUN_FIRST_LANE of the first
+# row, then one row and one lane further in each following face.
+_EDGE_RUN_FIRST_LANE = 8
+_EDGE_RUN_FACE_STEP = FACE_C_DIM + 1
+
+
+def _edge_run_start(base: int, face: int) -> int:
+    """
+    Flat index at which face *face*, whose first element is *base*, gets its run of edge patterns.
+
+    The step repeats every four faces, which keeps the run inside its face for any tile count.
+    """
+    return base + _EDGE_RUN_FIRST_LANE + _EDGE_RUN_FACE_STEP * (face % 4)
+
 
 def prepare_signbit_inputs(
     src_A: torch.Tensor,
@@ -903,7 +977,7 @@ def prepare_heaviside_inputs(
         for i, pattern in enumerate(patterns):
             # Two's-complement spelling, so the write goes through the signed integer view.
             signed = pattern - (1 << width) if pattern >> (width - 1) else pattern
-            bits[base + 8 + 17 * (face % 4) + i] = signed
+            bits[_edge_run_start(base, face) + i] = signed
     return flat.reshape(values.shape)
 
 
@@ -1025,7 +1099,7 @@ def prepare_float_class_inputs(
     flat = values.flatten().clone()
     bits = flat.view(int_dtype)
     for face, base in enumerate(range(0, flat.numel(), FACE_ELEMS)):
-        _write_raw_bits(bits, base + 8 + 17 * (face % 4), patterns, width)
+        _write_raw_bits(bits, _edge_run_start(base, face), patterns, width)
         pass_start = base + _FLOAT_CLASS_NON_FINITE_PASS * _SFPU_PASS_ELEMS
         _write_raw_bits(bits, pass_start, (non_finite * 4)[:_SFPU_PASS_ELEMS], width)
     return flat.reshape(values.shape)
@@ -1043,6 +1117,74 @@ def float_class_expected(
     """
     holds = FLOAT_CLASS_PREDICATES[mathop](src.flatten().to(torch.float32))
     return torch.where(holds, 1.0, 0.0).to(format_dict[output_format])
+
+
+def _edge_patterns(*tables) -> tuple:
+    """The patterns of several edge tables as one run, each pattern once, in first-seen order."""
+    return tuple(dict.fromkeys(pattern for table in tables for pattern in table))
+
+
+# Comparison-to-zero edge inputs as raw bits, per float input format: (signed view dtype, bit width,
+# patterns). The heaviside and float-class runs together.
+_ZERO_COMP_EDGE_BITS = {
+    fmt: (
+        _HEAVISIDE_EDGE_BITS[fmt][0],
+        _HEAVISIDE_EDGE_BITS[fmt][1],
+        _edge_patterns(_HEAVISIDE_EDGE_BITS[fmt][2], _FLOAT_CLASS_EDGE_BITS[fmt][2]),
+    )
+    for fmt in _HEAVISIDE_EDGE_BITS
+}
+
+
+def prepare_zero_comp_edge_inputs(
+    src_A: torch.Tensor,
+    src_B: torch.Tensor,
+    input_format: DataFormat,
+    output_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Comp stimuli (finite values of both signs) with the edge patterns planted in every face.
+
+    As in prepare_heaviside_inputs, the run of patterns moves one row and one lane per face.
+    """
+    values = prepare_comp_inputs(src_A, src_B, input_format, output_format)
+    int_dtype, width, patterns = _ZERO_COMP_EDGE_BITS[input_format]
+    flat = values.flatten().clone()
+    bits = flat.view(int_dtype)
+    for face, base in enumerate(range(0, flat.numel(), FACE_ELEMS)):
+        _write_raw_bits(bits, _edge_run_start(base, face), patterns, width)
+    return flat.reshape(values.shape)
+
+
+def zero_comp_expected(
+    mathop: MathOperation, src: torch.Tensor, variant: QuasarSfpuVariant
+) -> torch.Tensor:
+    """calculate_zero_comp on the bits that reach the SFPU: 1.0 where the comparison holds, else 0.0.
+
+    A NaN is signed like any other element: that is what the kernel does today, not a contract;
+    tt-metal#55273 tracks returning 0 for it, and its fix changes the NaN lanes here.
+    """
+    int_dtype, width, _ = _ZERO_COMP_EDGE_BITS[variant.formats.input_format]
+    flat = src.flatten().contiguous()
+    bits = flat.view(int_dtype).to(torch.int64)
+    sign_set = bits < 0
+    is_zero = (bits & ((1 << (width - 1)) - 1)) == 0
+    if variant.uses_fpu:
+        # The 32-bit-Dest FPU datacopy is an ELWADD (see _drops_zero_and_nan_sign).
+        is_denormal = flat.to(torch.float32).abs() < torch.finfo(torch.float32).tiny
+        is_zero = is_zero | is_denormal
+        sign_set = sign_set & ~torch.isnan(flat)
+    negative = sign_set & ~is_zero
+    positive = ~sign_set & ~is_zero
+    holds = {
+        MathOperation.EqualZero: is_zero,
+        MathOperation.NotEqualZero: ~is_zero,
+        MathOperation.LessThanZero: negative,
+        MathOperation.GreaterThanZero: positive,
+        MathOperation.LessThanEqualZero: ~positive,
+        MathOperation.GreaterThanEqualZero: ~negative,
+    }[mathop]
+    return torch.where(holds, 1.0, 0.0).to(format_dict[variant.formats.output_format])
 
 
 # Inverse-trig edge inputs as raw bits of the positive value, per float input format: (signed view
@@ -1114,7 +1256,7 @@ def prepare_inverse_trig_edge_inputs(
     sign_bit = 1 << (width - 1)
     signed_patterns = [p | sign for p in patterns for sign in (0, sign_bit)]
     for face, base in enumerate(range(0, flat.numel(), FACE_ELEMS)):
-        _write_raw_bits(bits, base + 8 + 17 * (face % 4), signed_patterns, width)
+        _write_raw_bits(bits, _edge_run_start(base, face), signed_patterns, width)
     return flat.reshape(src_A.shape)
 
 
@@ -1433,6 +1575,7 @@ TENSOR_DIMS = ([32, 32], [64, 64])
 PERF_INPUT_DIMENSIONS_UNARY = [[64, 64]]
 DEST_SYNC_MODES = (DestSync.Half, DestSync.Full)
 _APPROX_MATHOPS = (
+    MathOperation.Erf,
     MathOperation.Exp,
     MathOperation.Gelu,
     MathOperation.Log,
@@ -1515,6 +1658,8 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Softsign, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Reaches calculate_i0 through SFPU_UNARY_INIT(i0), the Compute API's i0_tile_init.
     OpConfig(MathOperation.I0, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Erf, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Erfc, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
     # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
@@ -1688,11 +1833,13 @@ def run_eltwise_unary_sfpu_quasar(
     max_min_sign_magnitude=False,
     format_variant=None,
     inverse_trig_edges=False,
+    zero_comp_edges=False,
 ):
     """Shared unary SFPU runner for the functional and perf tests.
 
     *format_variant* overrides the resolved route, for routes the resolver never picks.
     *inverse_trig_edges* swaps the stimulus for prepare_inverse_trig_edge_inputs.
+    *zero_comp_edges* swaps it for prepare_zero_comp_edge_inputs and the golden for zero_comp_expected.
     """
     if format_variant is None:
         format_variant = resolve_quasar_sfpu_variant(mathop, formats, dest_acc)
@@ -1739,6 +1886,10 @@ def run_eltwise_unary_sfpu_quasar(
         )
     if inverse_trig_edges:
         src_A = prepare_inverse_trig_edge_inputs(src_A, mathop, formats.input_format)
+    if zero_comp_edges:
+        src_A = prepare_zero_comp_edge_inputs(
+            src_A, src_B, formats.input_format, formats.output_format
+        )
 
     num_faces = MAX_NUM_FACES
 
@@ -1760,6 +1911,8 @@ def run_eltwise_unary_sfpu_quasar(
             golden_tensor = float_class_expected(mathop, src_A, formats.output_format)
         elif inverse_trig_edges:
             golden_tensor = inverse_trig_expected(mathop, src_A, formats.output_format)
+        elif zero_comp_edges:
+            golden_tensor = zero_comp_expected(mathop, src_A, format_variant)
         elif format_dict[formats.input_format].is_floating_point:
             generate_golden = get_golden_generator(UnarySFPUGolden)
             golden_tensor = generate_golden(
@@ -1844,6 +1997,7 @@ def run_eltwise_unary_sfpu_quasar(
                 if is_max_min and max_min_sign_magnitude
                 else []
             ),
+            *([INP_FLOAT32()] if _erf_fp32_table(mathop, formats) else []),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -1923,6 +2077,13 @@ def run_eltwise_unary_sfpu_quasar(
             mismatch.any()
         ), f"heaviside differs from its bit-level model in {int(mismatch.sum())} lanes"
 
+    if zero_comp_edges:
+        # Two exact outputs, so nothing short of equality is a pass.
+        mismatch = res_tensor.to(torch.float32) != golden_tensor.to(torch.float32)
+        assert not bool(
+            mismatch.any()
+        ), f"{mathop.name} differs from its bit-level model in {int(mismatch.sum())} lanes"
+
     if mathop in FLOAT_CLASS_PREDICATES:
         # Two exact outputs, so nothing short of equality is a pass.
         mismatch = res_tensor.to(torch.float32) != golden_tensor.to(torch.float32)
@@ -1958,6 +2119,26 @@ def run_eltwise_unary_sfpu_quasar(
                 atol=0.0,
             )
         ), "tan is more than two output steps from the golden"
+
+    if mathop in (MathOperation.Erf, MathOperation.Erfc):
+        err = (
+            (res_tensor.to(torch.float64) - golden_tensor.to(torch.float64))
+            .abs()
+            .max()
+            .item()
+        )
+        assert err <= _erf_erfc_atol(
+            mathop, approx_mode, formats
+        ), f"{mathop.name} is {err} from the golden"
+
+    if mathop == MathOperation.Erf:
+        n = len(ERF_SPECIAL_VALUES)
+        got = res_tensor.flatten()[:n].to(torch.float64)
+        want = golden_tensor.flatten()[:n].to(torch.float64)
+        bad = ~((got - want).abs() <= _erf_erfc_atol(mathop, approx_mode, formats))
+        assert not bool(
+            bad.any()
+        ), f"Erf special inputs {[ERF_SPECIAL_VALUES[i] for i in torch.nonzero(bad).flatten().tolist()]}: got {got[bad].tolist()}, want {want[bad].tolist()}"
 
     if mathop == MathOperation.Softplus:
         # atol 0.05 lets a flush to 0 through. Require t < -5 to stay positive
@@ -2245,6 +2426,33 @@ def test_eltwise_unary_sfpu_float_class_quasar(
         input_dimensions,
         DestSync.Half,
         format_variant=format_variant,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=COMP_OPS,
+    format_variant=float_edge_variants,
+    input_dimensions=runtime(list(TENSOR_DIMS[:1])),
+)
+def test_eltwise_unary_sfpu_zero_comp_edges_quasar(
+    mathop,
+    format_variant,
+    input_dimensions,
+):
+    """The six comparisons to zero, exact, on both zeros, denormals, infinities and NaNs of either sign.
+
+    See prepare_zero_comp_edge_inputs for the stimulus and zero_comp_expected for the model.
+    """
+    run_eltwise_unary_sfpu_quasar(
+        format_variant.formats,
+        format_variant.dest_acc,
+        mathop,
+        ApproximationMode.No,
+        input_dimensions,
+        DestSync.Half,
+        format_variant=format_variant,
+        zero_comp_edges=True,
     )
 
 

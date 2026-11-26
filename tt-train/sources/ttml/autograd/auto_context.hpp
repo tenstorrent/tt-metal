@@ -21,10 +21,18 @@ namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
 
+// Context-parallel options; every CP rank must use the same values.
+struct ContextParallelConfig {
+    // Ring attention keeps the forward's K/V for backward instead of shifting them again, at the cost of
+    // 2 * (cp_size - 2) K-sized tensors per device (see ops::distributed::ring_attention_sdpa).
+    bool reuse_forward_kv = false;
+};
+
 struct DistributedConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
-    bool enable_cp = false;
+    // Set: context parallelism is on, with these options.
+    std::optional<ContextParallelConfig> cp = std::nullopt;
 };
 
 class ParallelismContext {
@@ -60,12 +68,16 @@ public:
     [[nodiscard]] const bool is_cp_enabled() const {
         return m_cp_axis.has_value();
     }
+    [[nodiscard]] const ContextParallelConfig& get_cp_config() const {
+        return m_cp_config;
+    }
 
 private:
     std::optional<uint32_t> m_ddp_axis = std::nullopt;
     std::optional<uint32_t> m_tp_axis = std::nullopt;
     std::optional<uint32_t> m_cp_axis = std::nullopt;
     uint32_t m_num_cp_devices = 1U;
+    ContextParallelConfig m_cp_config;
     uint32_t m_num_ddp_devices = 1U;
     uint32_t m_num_tp_devices = 1U;
 };

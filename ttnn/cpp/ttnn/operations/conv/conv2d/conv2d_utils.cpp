@@ -928,11 +928,14 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         } else {
             auto pad_tensor = [&]() {
                 if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
-                    input_tensor = ttnn::pad(
-                        input_tensor,
-                        ttnn::Array4D({input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
-                        ttnn::Array4D({0, 0, 0, 0}),
-                        0);
+                    const ttnn::Array4D padded_shape{
+                        input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]};
+                    if (ttnn::is_device_tensor(input_tensor)) {
+                        input_tensor = ttnn::pad(input_tensor, padded_shape, ttnn::Array4D({0, 0, 0, 0}), 0);
+                    } else {
+                        // Physical padding only on host: the activation keeps its logical [1, 1, NHW, C] shape.
+                        input_tensor = input_tensor.pad(ttnn::Shape(padded_shape), ttnn::Shape{0, 0, 0, 0}, 0);
+                    }
                 }
             };
 

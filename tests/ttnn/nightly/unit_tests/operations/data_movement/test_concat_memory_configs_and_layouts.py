@@ -1296,6 +1296,88 @@ class TestEdgeCases:
         out = ttnn.to_torch(ttnn.concat([a, b], dim=-1, memory_config=out_mem))
         assert_equal(torch.cat([ta, tb], dim=-1), out)
 
+    def test_sub_core_grids_mixed_layout_aligned_matches_torch_cat(self, device):
+        """Mixed TILE+RM with tile-aligned shapes must still work under sub_core_grids (concat_impl normalizes)."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = torch.randn(1, 2, 32, 64).bfloat16()
+        b = torch.randn(1, 2, 32, 64).bfloat16()
+        ta_tile = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
+        tb_rm = ttnn.from_torch(b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        out = ttnn.to_torch(ttnn.concat([ta_tile, tb_rm], dim=-1, sub_core_grids=grid))
+        assert_equal(torch.cat([a, b], dim=-1), out)
+
+    def test_sub_core_grids_rm_unaligned_rejected(self, device, expect_error):
+        """RM width-concat with sub_core_grids and unaligned last dim must reject (device op already asserted)."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = torch.randn(1, 2, 32, 50).bfloat16()
+        ta = ttnn.from_torch(a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        tb = ttnn.from_torch(a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with expect_error(RuntimeError, "multiple of the max buffer alignment"):
+            ttnn.concat([ta, tb], dim=-1, sub_core_grids=grid)
+
+    def test_sub_core_grids_rm_mixed_l1_dram_rejected(self, device, expect_error):
+        """RM width-concat with sub_core_grids and mixed L1/DRAM inputs must reject on max-alignment mismatch."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        ta = ttnn.from_torch(
+            torch.randn(1, 2, 32, 8).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        tb = ttnn.from_torch(
+            torch.randn(1, 2, 32, 32).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        with expect_error(RuntimeError, "multiple of the max buffer alignment"):
+            ttnn.concat([ta, tb], dim=-1, sub_core_grids=grid)
+
+    def test_sub_core_grids_tile_plus_rm_unaligned_two_input_repro_rejected(self, device, expect_error):
+        """Two-input #61535 repro: TILE[1,2,32,50] + RM[1,2,32,50]; post-RM width 50 bytes is unaligned."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = ttnn.from_torch(torch.randn(1, 2, 32, 50).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+        b = ttnn.from_torch(torch.randn(1, 2, 32, 50).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with expect_error(RuntimeError, "multiple of the max buffer alignment"):
+            ttnn.concat([a, b], dim=-1, sub_core_grids=grid)
+
+    def test_sub_core_grids_l1_inputs_dram_output_alignment_rejected(self, device, expect_error):
+        """L1 inputs (16B-aligned widths) with DRAM output (64B BH / 32B WH): check must fold in output alignment."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        ta = ttnn.from_torch(
+            torch.randn(1, 2, 32, 8).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        tb = ttnn.from_torch(
+            torch.randn(1, 2, 32, 8).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        with expect_error(RuntimeError, "multiple of the max buffer alignment"):
+            ttnn.concat([ta, tb], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=grid)
+
+    def test_sub_core_grids_tile_middle_unaligned_after_conversion_rejected(self, device, expect_error):
+        """Pattern from #61535: [RM 64, TILE logical=50 padded=64, RM 64] — TILE's post-RM width (50) is unaligned."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = ttnn.from_torch(torch.randn(1, 2, 32, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        b = ttnn.from_torch(torch.randn(1, 2, 32, 50).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+        c = ttnn.from_torch(torch.randn(1, 2, 32, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with expect_error(RuntimeError, "multiple of the max buffer alignment"):
+            ttnn.concat([a, b, c], dim=-1, sub_core_grids=grid)
+
+    def test_sub_core_grids_uniform_layout_still_works(self, device):
+        """Uniform-layout, aligned inputs must still take the sub_core_grids fast path."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = torch.randn(1, 2, 32, 64).bfloat16()
+        b = torch.randn(1, 2, 32, 64).bfloat16()
+        ta = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
+        tb = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device)
+        out = ttnn.to_torch(ttnn.concat([ta, tb], dim=-1, sub_core_grids=grid))
+        assert_equal(torch.cat([a, b], dim=-1), out)
+
 
 # ===========================================================================
 # 8. Groups parameter (height-sharded only)
