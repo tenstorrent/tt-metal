@@ -46,11 +46,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
-    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
-    {
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-    }
+    // llk_unpack_hw_configure configures both unpackers for every form (UNP_DEST shares UNP_A's register).
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
     if constexpr (unpack_to_dest)
     {
         // The to-dest placers carry no synchronization: in L1_TO_L1 a Dest loan from math brackets them and
@@ -68,17 +66,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
 
-        if constexpr (!(is_fp32_dest_acc_en && !unpack_to_dest))
-        {
-            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
-        }
         if constexpr (unpack_to_dest)
         {
             _llk_unpack_unary_operand_to_dest_init_(bfd_unpack, tensor_shape_A);
         }
         else
         {
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, tiles_in_block);
+            // copy_init: a one-tile MOP; copy_block unpacks the block tile by tile.
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, 1 /*num_tiles*/);
         }
         PROFILER_SYNC();
     }
@@ -119,7 +114,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else
                     {
-                        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block * tiles_in_block /*l1_tile_idx*/, tensor_shape_A);
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                        {
+                            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block * tiles_in_block + i /*l1_tile_idx*/, tensor_shape_A);
+                        }
                     }
                 }
             }
@@ -185,7 +183,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
-
+        }
+        // copy_init's math part: the ALU config always, the datacopy MOP unless unpacking to DEST.
+        _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+        if constexpr (!unpack_to_dest)
+        {
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
         }
@@ -329,8 +331,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint8_t bfd_pack           = ckernel::trisc::BFD_ID_PACK0;
     ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(bfd_pack, tensor_shape_A); // one-tile MOP, as metal's llk_pack_init programs
-    _llk_pack_init_(bfd_pack, tensor_shape_A, tiles_in_block);
+    _llk_pack_init_(bfd_pack, tensor_shape_A); // one-tile MOP, as metal's llk_pack_init programs; pack_block sets the count
     {
         START_PERF_MEASURE("INIT")
         // PACK_ISOLATE packs without a math↔pack handshake.
@@ -341,9 +342,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(RELU_CONFIG);
-#ifdef TEST_PACK_BLOCK
-#else
-#endif
         _llk_pack_relu_config_<p_pacr::PACK0, is_fp32_dest_acc_en>(relu_config);
         PROFILER_SYNC();
     }
@@ -360,7 +358,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_pack_(0 /*start_math_dest_tile_idx*/, block * tiles_in_block /*start_l1_tile_idx*/, tensor_shape_A);
+                    _llk_pack_(0 /*start_math_dest_tile_idx*/, block * tiles_in_block /*start_l1_tile_idx*/, tensor_shape_A, tiles_in_block);
                     // Stands in for the idle math's post, so the section done's SEMGET never underflows.
                     ckernel::trisc::t6_semaphore_post(ckernel::trisc::semaphore::MATH_PACK);
                     _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
@@ -391,7 +389,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_(0 /*start_math_dest_tile_idx*/, out, tensor_shape_A, tiles_in_block);
                     }
 #else
-                    _llk_pack_(0 /*start_math_dest_tile_idx*/, block * tiles_in_block /*start_l1_tile_idx*/, tensor_shape_A);
+                    _llk_pack_(0 /*start_math_dest_tile_idx*/, block * tiles_in_block /*start_l1_tile_idx*/, tensor_shape_A, tiles_in_block);
 #endif
                     _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
