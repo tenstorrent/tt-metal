@@ -278,7 +278,11 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["gate_up_weight_ring_blocks"] = p.gate_up_weight_ring_blocks;
     options["gate_up_block_bytes"] = p.weight_block_tiles * w_tile;
     options["gate_up_blocks_per_expert"] = p.gate_up_k_blocks;
-    options["gate_up_reads_in_flight"] = FlatRoutedExpertPlan::gate_up_reads_in_flight;
+    // gate/up weight reads in flight a core: 1 at 16+ experts a chip of whole-tile gate / up (GLM-5.3 4x4: the 8 cores
+    // of a bank then share it evenly - at 2 some waited 300-450 us at M 80, their slot-mates 6-30; M 80 / 160 / 240
+    // -3 .. -4%), else 2 (1 slows 8 experts a chip and the 16-column units, up to +7%).
+    const uint32_t gu_rif = E >= 16 && !p.half_width_gate_up ? 1 : FlatRoutedExpertPlan::gate_up_reads_in_flight;
+    options["gate_up_reads_in_flight"] = gu_rif;
     options["gate_up_read_pieces"] = p.gate_up_block_pieces;
     options["gate_up_mailbox_sem"] = 0;
     options["gate_up_grant_sem"] = GRANT;
