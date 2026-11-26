@@ -107,8 +107,8 @@ public:
     FORCE_INLINE void set(uint32_t v) { semaphore_detail::set<CORE_TYPE>(l1_addr_, SCOPE, v); }
 
     // Advanced: the semaphore's L1 address (the host's GlobalSemaphore::address()), the same on every core and chip.
-    // For kernels that use the address directly, for example to build fabric packet headers or to pass it to
-    // helpers. New code should use the methods of this class instead.
+    // An escape hatch, only for interop with fabric APIs that take the address (packet headers, CCL helpers) and for
+    // existing kernels ported to Metal 2.0 that use it directly. Avoid it otherwise: use the methods of this class.
     FORCE_INLINE uint32_t address() const { return l1_addr_; }
 
     // ---- Another core on the same chip (NoC) ----
