@@ -429,6 +429,56 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
     return py_buffer::borrow_py_buffer(contiguous_py_tensor, target_dtype, contiguous_py_tensor.size());
 }
 
+// Releasing the host memory of a dropped ttnn.Tensor without the GIL.
+//
+// nanobind runs the C++ destructor of a Python object with the GIL held. Freeing a large host buffer (hundreds of MB
+// unmapped page by page) takes tens of milliseconds, during which no other Python thread can run, so even dropping
+// the tensor on a worker thread stalls the main thread. `tensor_dealloc` wraps nanobind's deallocator for
+// ttnn.Tensor: when the object is the last owner of host storage of at least `kReleaseWithoutGilMinBytes`, it moves
+// the C++ Tensor out of the Python object, lets nanobind deallocate the (now empty) object, and destroys the moved
+// Tensor with the GIL released. Destruction itself is unchanged, so a HostBuffer still releases its PinnedMemoryCache
+// entries before its memory is freed, and a buffer borrowed from a Python object still drops that object with the
+// GIL (py_buffer::borrow_py_buffer's deleter acquires it). Device tensors, small host tensors, and objects destroyed
+// while the interpreter finalizes keep the default path.
+constexpr size_t kReleaseWithoutGilMinBytes = size_t{1} << 20;
+
+destructor nanobind_tensor_dealloc = nullptr;
+
+bool python_is_finalizing() {
+#if PY_VERSION_HEX >= 0x030D0000
+    return Py_IsFinalizing() != 0;
+#else
+    return _Py_IsFinalizing() != 0;
+#endif
+}
+
+// True when `tensor` is the last owner of its attributes, its storage is on host, and its host buffers hold at least
+// `kReleaseWithoutGilMinBytes` in total.
+bool releases_large_host_storage(const Tensor& tensor) {
+    if (tensor.tensor_attributes == nullptr || tensor.tensor_attributes.use_count() != 1 ||
+        tensor.storage_type() != StorageType::HOST) {
+        return false;
+    }
+    size_t bytes = 0;
+    tensor.host_storage().buffer().apply([&bytes](const HostBuffer& buffer) { bytes += buffer.view_bytes().size(); });
+    return bytes >= kReleaseWithoutGilMinBytes;
+}
+
+void tensor_dealloc(PyObject* self) {
+    std::optional<Tensor> released;
+    if (nb::inst_ready(self) && !python_is_finalizing()) {
+        Tensor& tensor = *nb::inst_ptr<Tensor>(self);
+        if (releases_large_host_storage(tensor)) {
+            released.emplace(std::move(tensor));
+        }
+    }
+    nanobind_tensor_dealloc(self);
+    if (released.has_value()) {
+        nb::gil_scoped_release release;
+        released.reset();
+    }
+}
+
 }  // namespace
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
@@ -470,6 +520,11 @@ void pytensor_module_types(nb::module_& mod) {
         +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
 
     )doc");
+
+    // Large host tensors release their memory without the GIL; see CMAKE_UNIQUE_NAMESPACE::tensor_dealloc.
+    auto* tensor_type = reinterpret_cast<PyTypeObject*>(pyTensor.ptr());
+    CMAKE_UNIQUE_NAMESPACE::nanobind_tensor_dealloc = tensor_type->tp_dealloc;
+    tensor_type->tp_dealloc = CMAKE_UNIQUE_NAMESPACE::tensor_dealloc;
 }
 
 void pytensor_module(nb::module_& mod) {
