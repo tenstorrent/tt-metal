@@ -21,6 +21,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "ring_sdpa_test_utils.hpp"
 #include "test_utils/mesh_utils.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/create_socket.hpp"
@@ -75,215 +76,6 @@ protected:
     }
 };
 
-// Reference SDPA forward and backward implementation in xtensor for comparison
-struct SDPARefResult {
-    xt::xarray<float> output;
-    xt::xarray<float> attention_weights;  // Saved for backward
-    float scale;
-};
-
-SDPARefResult reference_sdpa_forward(
-    const xt::xarray<float>& query,
-    const xt::xarray<float>& key,
-    const xt::xarray<float>& value,
-    const std::optional<xt::xarray<float>>& mask = std::nullopt) {
-    // query, key, value: (B, H, S, D)
-    auto shape = query.shape();
-    size_t B = shape[0];
-    size_t H = shape[1];
-    size_t S_q = shape[2];
-    size_t D = shape[3];
-    size_t S_k = key.shape()[2];
-
-    float scale = 1.0F / std::sqrt(static_cast<float>(D));
-
-    // Compute attention scores: Q @ K^T
-    // Result shape: (B, H, S_q, S_k)
-    xt::xarray<float> scores = xt::zeros<float>({B, H, S_q, S_k});
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t i = 0; i < S_q; ++i) {
-                for (size_t j = 0; j < S_k; ++j) {
-                    float dot = 0.0F;
-                    for (size_t d = 0; d < D; ++d) {
-                        dot += query(b, h, i, d) * key(b, h, j, d);
-                    }
-                    scores(b, h, i, j) = dot * scale;
-                }
-            }
-        }
-    }
-
-    // Apply mask if provided
-    if (mask.has_value()) {
-        for (size_t b = 0; b < B; ++b) {
-            for (size_t h = 0; h < H; ++h) {
-                for (size_t i = 0; i < S_q; ++i) {
-                    for (size_t j = 0; j < S_k; ++j) {
-                        if ((*mask)(0, 0, i, j) < 0.5F) {
-                            scores(b, h, i, j) = -1e9F;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Softmax over last dimension
-    xt::xarray<float> attention_weights = xt::zeros<float>({B, H, S_q, S_k});
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t i = 0; i < S_q; ++i) {
-                float max_val = scores(b, h, i, 0);
-                for (size_t j = 1; j < S_k; ++j) {
-                    max_val = std::max(max_val, scores(b, h, i, j));
-                }
-                float sum_exp = 0.0F;
-                for (size_t j = 0; j < S_k; ++j) {
-                    attention_weights(b, h, i, j) = std::exp(scores(b, h, i, j) - max_val);
-                    sum_exp += attention_weights(b, h, i, j);
-                }
-                for (size_t j = 0; j < S_k; ++j) {
-                    attention_weights(b, h, i, j) /= sum_exp;
-                }
-            }
-        }
-    }
-
-    // Compute output: attention_weights @ V
-    xt::xarray<float> output = xt::zeros<float>({B, H, S_q, D});
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t i = 0; i < S_q; ++i) {
-                for (size_t d = 0; d < D; ++d) {
-                    float sum = 0.0F;
-                    for (size_t j = 0; j < S_k; ++j) {
-                        sum += attention_weights(b, h, i, j) * value(b, h, j, d);
-                    }
-                    output(b, h, i, d) = sum;
-                }
-            }
-        }
-    }
-
-    return {output, attention_weights, scale};
-}
-
-struct SDPAGrads {
-    xt::xarray<float> dQ;
-    xt::xarray<float> dK;
-    xt::xarray<float> dV;
-};
-
-SDPAGrads reference_sdpa_backward(
-    const xt::xarray<float>& query,
-    const xt::xarray<float>& key,
-    const xt::xarray<float>& value,
-    const xt::xarray<float>& attention_weights,
-    const xt::xarray<float>& grad_output,
-    float scale) {
-    auto shape = query.shape();
-    size_t B = shape[0];
-    size_t H = shape[1];
-    size_t S_q = shape[2];
-    size_t D = shape[3];
-    size_t S_k = key.shape()[2];
-
-    // dL/dV = attention_weights^T @ grad_output
-    xt::xarray<float> dV = xt::zeros<float>({B, H, S_k, D});
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t j = 0; j < S_k; ++j) {
-                for (size_t d = 0; d < D; ++d) {
-                    float sum = 0.0F;
-                    for (size_t i = 0; i < S_q; ++i) {
-                        sum += attention_weights(b, h, i, j) * grad_output(b, h, i, d);
-                    }
-                    dV(b, h, j, d) = sum;
-                }
-            }
-        }
-    }
-
-    // dL/d(attention_weights) = grad_output @ V^T
-    xt::xarray<float> d_attn_weights = xt::zeros<float>({B, H, S_q, S_k});
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t i = 0; i < S_q; ++i) {
-                for (size_t j = 0; j < S_k; ++j) {
-                    float sum = 0.0F;
-                    for (size_t d = 0; d < D; ++d) {
-                        sum += grad_output(b, h, i, d) * value(b, h, j, d);
-                    }
-                    d_attn_weights(b, h, i, j) = sum;
-                }
-            }
-        }
-    }
-
-    // Softmax backward
-    xt::xarray<float> d_scores = xt::zeros<float>({B, H, S_q, S_k});
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t i = 0; i < S_q; ++i) {
-                float row_sum = 0.0F;
-                for (size_t j = 0; j < S_k; ++j) {
-                    row_sum += attention_weights(b, h, i, j) * d_attn_weights(b, h, i, j);
-                }
-                for (size_t j = 0; j < S_k; ++j) {
-                    d_scores(b, h, i, j) = attention_weights(b, h, i, j) * (d_attn_weights(b, h, i, j) - row_sum);
-                }
-            }
-        }
-    }
-
-    // dL/dQ = scale * d_scores @ K
-    xt::xarray<float> dQ = xt::zeros<float>({B, H, S_q, D});
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t i = 0; i < S_q; ++i) {
-                for (size_t d = 0; d < D; ++d) {
-                    float sum = 0.0F;
-                    for (size_t j = 0; j < S_k; ++j) {
-                        sum += d_scores(b, h, i, j) * key(b, h, j, d);
-                    }
-                    dQ(b, h, i, d) = sum * scale;
-                }
-            }
-        }
-    }
-
-    // dL/dK = scale * d_scores^T @ Q
-    xt::xarray<float> dK = xt::zeros<float>({B, H, S_k, D});
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t j = 0; j < S_k; ++j) {
-                for (size_t d = 0; d < D; ++d) {
-                    float sum = 0.0F;
-                    for (size_t i = 0; i < S_q; ++i) {
-                        sum += d_scores(b, h, i, j) * query(b, h, i, d);
-                    }
-                    dK(b, h, j, d) = sum * scale;
-                }
-            }
-        }
-    }
-
-    return {dQ, dK, dV};
-}
-
-// Create causal mask for full sequence
-// Shape: (1, 1, seq_len, seq_len) - lower triangular
-static xt::xarray<float> create_causal_mask(size_t seq_len) {
-    xt::xarray<float> mask = xt::zeros<float>({1UL, 1UL, seq_len, seq_len});
-    for (size_t i = 0; i < seq_len; ++i) {
-        for (size_t j = 0; j <= i; ++j) {
-            mask(0, 0, i, j) = 1.0F;
-        }
-    }
-    return mask;
-}
-
 static void TestRingAttention(
     const size_t batch,
     const size_t num_heads,
@@ -315,10 +107,7 @@ static void TestRingAttention(
     xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, key_seed);
     xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, value_seed);
 
-    // Reference mask (full causal): the op is exercised with AttentionMaskType::Causal,
-    // where the device generates the causal mask internally.
-    std::optional<xt::xarray<float>> ref_mask_xt = create_causal_mask(seq_len);
-    auto ref_result = reference_sdpa_forward(query_xt, key_xt, value_xt, ref_mask_xt);
+    const auto ref_result = ttml::test_utils::ring_sdpa::sdpa_forward(query_xt, key_xt, value_xt, /*causal=*/true);
 
     // Create sharded Q, K, V tensors for ring attention
     const auto query_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
@@ -369,8 +158,8 @@ static void TestRingAttention(
         xt::xarray<float> grad_output_xt =
             ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, grad_seed);
 
-        auto ref_grads = reference_sdpa_backward(
-            query_xt, key_xt, value_xt, ref_result.attention_weights, grad_output_xt, ref_result.scale);
+        const auto ref_grads = ttml::test_utils::ring_sdpa::sdpa_backward(
+            query_xt, key_xt, value_xt, ref_result.output, ref_result.probabilities, grad_output_xt);
 
         const auto grad_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
         auto grad_tt = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
@@ -420,7 +209,7 @@ static void TestRingAttention(
         // so its magnitude and its TF32-matmul noise grow with S while dQ/dV stay O(1).
         // Grade it relative to its own largest true value: 2% of amax(|ref dK|), with
         // the fixed floor for tiny-magnitude cases.
-        const float dk_atol = std::max(bw_atol, 2e-2F * xt::amax(xt::abs(ref_grads.dK))());
+        const float dk_atol = std::max(bw_atol, 2e-2F * xt::amax(xt::abs(ref_grads.dk))());
         const auto report = [](const xt::xarray<float>& ref, const xt::xarray<float>& got) {
             const float max_abs = xt::amax(xt::abs(got - ref))();
             const float max_rel = xt::amax(xt::abs(got - ref) / (xt::abs(ref) + 1e-6F))();
@@ -428,12 +217,12 @@ static void TestRingAttention(
             return "max_abs_diff=" + std::to_string(max_abs) + " max_rel_diff=" + std::to_string(max_rel) +
                    " ref_amax=" + std::to_string(ref_amax);
         };
-        EXPECT_TRUE(xt::allclose(ref_grads.dQ, gathered_dQ, bw_rtol, bw_atol))
-            << "Ring attention dQ gradient does not match reference: " << report(ref_grads.dQ, gathered_dQ);
-        EXPECT_TRUE(xt::allclose(ref_grads.dK, gathered_dK, bw_rtol, dk_atol))
-            << "Ring attention dK gradient does not match reference: " << report(ref_grads.dK, gathered_dK);
-        EXPECT_TRUE(xt::allclose(ref_grads.dV, gathered_dV, bw_rtol, bw_atol))
-            << "Ring attention dV gradient does not match reference: " << report(ref_grads.dV, gathered_dV);
+        EXPECT_TRUE(xt::allclose(ref_grads.dq, gathered_dQ, bw_rtol, bw_atol))
+            << "Ring attention dQ gradient does not match reference: " << report(ref_grads.dq, gathered_dQ);
+        EXPECT_TRUE(xt::allclose(ref_grads.dk, gathered_dK, bw_rtol, dk_atol))
+            << "Ring attention dK gradient does not match reference: " << report(ref_grads.dk, gathered_dK);
+        EXPECT_TRUE(xt::allclose(ref_grads.dv, gathered_dV, bw_rtol, bw_atol))
+            << "Ring attention dV gradient does not match reference: " << report(ref_grads.dv, gathered_dV);
     }
 }
 

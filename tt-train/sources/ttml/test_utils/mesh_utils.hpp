@@ -105,4 +105,30 @@ protected:
     }
 };
 
+// The system mesh (the cluster, or the submesh TT_MESH_GRAPH_DESC_PATH describes) opened once for the whole suite.
+// Each test starts on an empty program cache and is skipped on a single device.
+class SystemMeshSuiteFixture : public ::testing::Test {
+protected:
+    static void SetUpTestSuite() {
+        if (system_mesh_size() > 1U) {
+            const auto shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
+            ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(shape.mesh_size()));
+            ttml::autograd::ctx().open_device(shape);
+        }
+    }
+
+    static void TearDownTestSuite() {
+        if (system_mesh_size() > 1U) {
+            ttml::autograd::ctx().close_device();
+        }
+    }
+
+    void SetUp() override {
+        if (system_mesh_size() <= 1U) {
+            GTEST_SKIP() << "Skipping test: needs a multi-device system mesh";
+        }
+        ttml::autograd::ctx().get_device().clear_program_cache();
+    }
+};
+
 }  // namespace ttml::test_utils

@@ -216,17 +216,17 @@ autograd::TensorPtr ring_attention_sdpa(
             ttnn::copy(no_contrib_intermediate, intermediate_tensor);
         }
 
-        auto [out_tensor, inter_tensor] = ttml::metal::ring_sdpa_fw(
-            query_tensor,
-            k_current,
-            v_current,
+        ttml::metal::ring_sdpa_fw(
+            {{.query = query_tensor,
+              .key = k_current,
+              .value = v_current,
+              .output = output_tensor,
+              .intermediates = intermediate_tensor}},
             ring_size,
             cp_axis_value,
             step,
             mask_type,
-            ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward,
-            output_tensor,
-            intermediate_tensor);
+            ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward);
 
         // Fold this step's partial result into the FP32 accumulator and the running lse.
         detail::online_softmax_merge(output_accum, global_lse, output_tensor, intermediate_tensor);
@@ -300,27 +300,26 @@ autograd::TensorPtr ring_attention_sdpa(
             ttnn::copy(zero_V, grad_V_step);
 
             // Use Backward direction (same as forward) since src = (device + step) % ring_size
-            auto [grad_Q_result, grad_K_result, grad_V_result] = ttml::metal::ring_sdpa_bw(
-                grad_output,
-                attn_output,  // Global forward output saved by autograd
-                query_tensor,
-                k_current,             // K at current ring position
-                v_current,             // V at current ring position
-                global_intermediates,  // Global logsumexp in intermediates layout
+            ttml::metal::ring_sdpa_bw(
+                {{.grad_output = grad_output,
+                  .attn_output = attn_output,  // Global forward output saved by autograd
+                  .query = query_tensor,
+                  .key = k_current,                       // K at current ring position
+                  .value = v_current,                     // V at current ring position
+                  .intermediates = global_intermediates,  // Global logsumexp in intermediates layout
+                  .grad_query = grad_Q_step,
+                  .grad_key = grad_K_step,
+                  .grad_value = grad_V_step}},
                 ring_size,
                 cp_axis_value,
                 step_idx,
                 mask_type,
-                ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward,
-                grad_Q_step,
-                grad_K_step,
-                grad_V_step);
+                ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward);
 
-            // The results alias the preallocated step buffers; skipped devices keep the
-            // zeros written above. Upcast so the accumulation stays FP32.
-            grad_Q_accum = ttnn::add(grad_Q_accum, ttnn::typecast(grad_Q_result, ttnn::DataType::FLOAT32));
-            grad_K_accum = ttnn::add(grad_K_accum, ttnn::typecast(grad_K_result, ttnn::DataType::FLOAT32));
-            grad_V_accum = ttnn::add(grad_V_accum, ttnn::typecast(grad_V_result, ttnn::DataType::FLOAT32));
+            // Upcast so the accumulation stays FP32.
+            grad_Q_accum = ttnn::add(grad_Q_accum, ttnn::typecast(grad_Q_step, ttnn::DataType::FLOAT32));
+            grad_K_accum = ttnn::add(grad_K_accum, ttnn::typecast(grad_K_step, ttnn::DataType::FLOAT32));
+            grad_V_accum = ttnn::add(grad_V_accum, ttnn::typecast(grad_V_step, ttnn::DataType::FLOAT32));
 
             // Move to the previous ring step.
             // K/V: the forward's kept handles, or shifted in FORWARD direction when none were kept

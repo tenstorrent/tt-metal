@@ -23,9 +23,6 @@ struct RingSDPAFwDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static ttsl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
 }  // namespace ttml::metal::ops::ring_sdpa_fw
@@ -33,16 +30,13 @@ struct RingSDPAFwDeviceOperation {
 namespace ttnn::prim {
 
 ttml::metal::ops::ring_sdpa_fw::RingSDPAFwDeviceOperation::tensor_return_value_t ttml_ring_sdpa_fw(
-    const ttnn::Tensor& query,
-    const ttnn::Tensor& key,
-    const ttnn::Tensor& value,
+    std::vector<ttml::metal::ops::ring_sdpa_fw::RingSDPAFwChunk> chunks,
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::None,
+    ttml::metal::AttentionMaskType mask_type,
     ttml::metal::ops::ring_sdpa_fw::RingDirection ring_direction =
         ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward,
-    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_intermediates = std::nullopt);
+    ttml::metal::ops::RingLoadBalancing load_balancing = ttml::metal::ops::RingLoadBalancing::None);
 
 }  // namespace ttnn::prim
