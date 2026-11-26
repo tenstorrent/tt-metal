@@ -88,6 +88,7 @@ from helpers.tile_constants import (
     MAX_FACE_R_DIM,
     MAX_NUM_FACES,
 )
+from helpers.ulp import ulp_distance, ulp_dtype
 from helpers.utils import passed_test, result_tensor
 
 
@@ -396,7 +397,12 @@ def _plant_log_special_values(src_A: torch.Tensor) -> torch.Tensor:
     return flat.view(src_A.shape)
 
 
-# Large negative inputs, where accurate fp32 mish used to return NaN; mish is 0 there.
+# Largest ULP error of accurate mish on [-20, 10] (measured 1 and 5). Without its Newton steps the
+# reciprocal is the fast mode's, which is 2 ULP in bf16 and thousands in fp32.
+MISH_ACCURATE_MAX_ULP = {DataFormat.Float16_b: 1, DataFormat.Float32: 8}
+
+
+# Large negative inputs, where mish is 0; they reach accurate fp32's clamp of the exp argument.
 def _mish_large_negatives(torch_format) -> tuple:
     return (-1.0e7, -1.7e7, -1.0e30, torch.finfo(torch_format).min)
 
@@ -2245,6 +2251,15 @@ def run_eltwise_unary_sfpu_quasar(
         assert bool(
             (got == 0).all()
         ), f"mish of large negative inputs {list(values)} is {got.tolist()}, not 0"
+        if approx_mode == ApproximationMode.No:
+            dtype = ulp_dtype(formats.output_format)
+            worst = int(
+                ulp_distance(golden_tensor.to(dtype), res_tensor.to(dtype)).max()
+            )
+            budget = MISH_ACCURATE_MAX_ULP[formats.output_format]
+            assert (
+                worst <= budget
+            ), f"accurate mish is {worst} ULP from the golden (budget {budget})"
 
     if mathop == MathOperation.Softplus:
         # atol 0.05 lets a flush to 0 through. Require t < -5 to stay positive
