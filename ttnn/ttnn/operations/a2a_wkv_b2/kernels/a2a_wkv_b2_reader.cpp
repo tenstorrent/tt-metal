@@ -19,6 +19,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_weight = get_compile_time_arg_val(0);
@@ -38,10 +39,14 @@ void kernel_main() {
     constexpr uint32_t num_mt_blocks = (Mt + mt_block - 1) / mt_block;
     constexpr uint32_t w_block_tiles = Kt * Nt;
 
-    const uint32_t attn_addr = get_arg_val<uint32_t>(0);
-    const uint32_t w_addr = get_arg_val<uint32_t>(1);
-    const uint32_t head_start = get_arg_val<uint32_t>(2);
-    const uint32_t num_heads = get_arg_val<uint32_t>(3);
+    // Common runtime args only (no per-core args: launch gap, Perf 1):
+    //   [attn_addr, w_addr, grid_x, per logical core index y * grid_x + x: head_start | num_heads << 8]
+    const uint32_t attn_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t core_word = get_common_arg_val<uint32_t>(
+        3 + get_relative_logical_y() * get_common_arg_val<uint32_t>(2) + get_relative_logical_x());
+    const uint32_t head_start = core_word & 0xFF;
+    const uint32_t num_heads = (core_word >> 8) & 0xFF;
 
     const auto attn = TensorAccessor(attn_args, attn_addr, attn_page_bytes);
     const auto w = TensorAccessor(w_args, w_addr, w_tile_bytes);
@@ -50,19 +55,35 @@ void kernel_main() {
         const uint32_t h = head_start + head_idx;
 
         // load_weight_block: W[h] resident across all of the head's mt blocks.
-        cb_reserve_back(cb_weight, w_block_tiles);
-        uint32_t l1 = get_write_ptr(cb_weight);
-        const uint32_t w_tile0 = h * w_block_tiles;
-        for (uint32_t t = 0; t < w_block_tiles; ++t) {
-            noc_async_read(w.get_noc_addr(w_tile0 + t), l1, w_tile_bytes);
-            l1 += w_tile_bytes;
+        {
+            MaybeDeviceZoneScope("reader_w_issue");  // reserve (compute releases the previous W) + issue
+            cb_reserve_back(cb_weight, w_block_tiles);
+            uint32_t l1 = get_write_ptr(cb_weight);
+            const uint32_t w_tile0 = h * w_block_tiles;
+            for (uint32_t t = 0; t < w_block_tiles; ++t) {
+#ifndef A2A_ABL_NO_READ
+                noc_async_read(w.get_noc_addr(w_tile0 + t), l1, w_tile_bytes);
+#endif
+                l1 += w_tile_bytes;
+            }
         }
 
         // load_attn_block: mt_block tile rows of this head's tokens per block (ragged last block).
         for (uint32_t mb = 0; mb < num_mt_blocks; ++mb) {
             const uint32_t tok0 = mb * mt_block * tile_h;
             const uint32_t rows = (tokens - tok0) < mt_block * tile_h ? (tokens - tok0) : mt_block * tile_h;
-            dataflow_kernel_lib::read_sticks_for_tilize<cb_attn_rm>(attn, rows, stick_bytes, h * tokens + tok0);
+            {
+                // reserve (back-pressure from compute) + stick issue + barrier, per tile row (helper)
+                MaybeDeviceZoneScope("reader_attn_block");
+#ifdef A2A_ABL_NO_READ
+                for (uint32_t r = 0; r < rows; r += tile_h) {
+                    cb_reserve_back(cb_attn_rm, Kt);
+                    cb_push_back(cb_attn_rm, Kt);
+                }
+#else
+                dataflow_kernel_lib::read_sticks_for_tilize<cb_attn_rm>(attn, rows, stick_bytes, h * tokens + tok0);
+#endif
+            }
             if (mb == 0) {
                 cb_push_back(cb_weight, w_block_tiles);  // W landed under the first block's barrier
             }

@@ -30,6 +30,7 @@ once here and every dependent CB size / loop count derives from it.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import ttnn
@@ -65,6 +66,7 @@ READ_NOC_SPLIT = "halves"
 MAX_MATMUL_CORES = 110  # matmul di/dt cap
 SCATTER_MAX_CHUNKS = 4  # NOC_SCATTER_WRITE_MAX_CHUNKS
 DEST_TILES_HALF_SYNC_16B = 8  # DEST capacity (half sync, 16-bit)
+MAX_COMMON_RUNTIME_ARGS = 341  # per-kernel common runtime-arg cap
 
 # CB indices (any distinct values)
 CB_WEIGHT = 0
@@ -76,6 +78,9 @@ CB_TX_ADDRS = 5  # fabric_tx writer: per-packet destination NoC address table (s
 CB_TX_META = 6  # fabric_tx reader -> writer: per batch [k, packet code x tx_batch]
 
 TILE = 32
+
+# TEMP (Perf 1 ablation): comma list of NO_READ, NO_COMPUTE, NO_PULL, NO_SEND -> A2A_ABL_<x> defines on every kernel.
+_ABL_DEFINES = [(f"A2A_ABL_{x.strip()}", "1") for x in os.environ.get("A2A_ABLATE", "").split(",") if x.strip()]
 
 
 def _div_up(a, b):
@@ -246,6 +251,23 @@ def _place_heads(core_slots, order):
     return assign, owner
 
 
+def _merge_semaphores(pd):
+    """One SemaphoreDescriptor per (id, initial value, core type), its cores packed into rectangles (Perf 1,
+    launch gap). The fabric connection args add one single-core semaphore descriptor per tx core; dispatch
+    writes one transfer per descriptor range (~0.25-0.45 us each at a trace-replay boundary), and a
+    CoreRangeSet of single-core ranges is not merged by itself, so the ranges are re-packed here
+    (measured: 8 single-core semaphores cost ~1.9 us of launch gap)."""
+    by_key = {}
+    for sd in pd.semaphores:
+        by_key.setdefault((sd.id, sd.initial_value, sd.core_type), []).extend(
+            ttnn.corerange_to_cores(sd.core_ranges, None, True)
+        )
+    pd.semaphores = [
+        ttnn.SemaphoreDescriptor(id=i, core_type=ct, core_ranges=_core_ranges(cores), initial_value=v)
+        for (i, v, ct), cores in by_key.items()
+    ]
+
+
 def _coord_with(coord_tuple, axis, value):
     c = list(coord_tuple)
     c[axis] = value
@@ -402,22 +424,22 @@ def create_mesh_program_descriptor(
         w_reader_ct = [CB_WEIGHT, CB_ATTN_RM, Kt, Nt, Mt, mt_block, T, stick_bytes, attn_page_bytes, w_tile_bytes, TILE]
         w_reader_ct += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
         w_reader_ct += ttnn.TensorAccessorArgs(weight).get_compile_time_args()
-        w_reader_rt = {}  # (x, y) -> args; split per read-NoC set below
-        compute_rt = ttnn.RuntimeArgs()
-        w_writer_rt = {}
-        for core, start, cnt in worker_assign:
-            w_reader_rt[(core.x, core.y)] = [input_tensor.buffer_address(), weight.buffer_address(), start, cnt]
-            compute_rt[core.x][core.y] = [cnt]
-            w_writer_rt[(core.x, core.y)] = [output_tensor.buffer_address(), start, cnt, r] + counter_addrs[:cnt]
         w_writer_ct = [CB_OUT, Mt, Nt, mt_block, hpc, n, out_tile_bytes] + out_ct_accessor
         compute_ct = [CB_ATTN_RM, CB_ATTN_TILED, CB_WEIGHT, CB_OUT, Kt, Nt, Mt, mt_block]
 
-        # Worker kernels: one reader/writer descriptor pair per read-NoC set (same sources and args).
-        def _subset(rt, cores):
-            sub = ttnn.RuntimeArgs()
-            for c in cores:
-                sub[c.x][c.y] = rt[(c.x, c.y)]
-            return sub
+        # Worker args (Perf 1, launch gap): no per-core runtime args. Every per-core value sits in ONE common
+        # runtime-arg table per kernel, one word per logical core index y * grid.x + x (the kernel indexes it
+        # with get_relative_logical_x/y), so dispatch multicasts one copy per kernel group instead of
+        # writing every worker core (trace-replay launch gap 11.5 -> 9.5 us with the table alone).
+        core_table = [0] * (max(c.y * grid.x + c.x for c in worker_cores) + 1)
+        for core, start, cnt in worker_assign:
+            assert start < 256 and cnt < 256
+            core_table[core.y * grid.x + core.x] = start | (cnt << 8)
+        w_reader_common = [input_tensor.buffer_address(), weight.buffer_address(), grid.x] + core_table
+        w_writer_common = [output_tensor.buffer_address(), r, grid.x, 4 + heads_per_core]
+        w_writer_common += counter_addrs[:heads_per_core] + core_table
+        compute_common = [grid.x] + core_table
+        assert max(len(w_reader_common), len(w_writer_common)) <= MAX_COMMON_RUNTIME_ARGS
 
         worker_kernels = []
         for on_noc1 in (False, True):
@@ -440,7 +462,8 @@ def create_mesh_program_descriptor(
                     kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_reader.cpp"),
                     core_ranges=crs,
                     compile_time_args=w_reader_ct,
-                    runtime_args=_subset(w_reader_rt, cores),
+                    defines=_ABL_DEFINES,
+                    common_runtime_args=w_reader_common,
                     config=reader_cfg,
                 )
             )
@@ -449,7 +472,7 @@ def create_mesh_program_descriptor(
                     kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_writer.cpp"),
                     core_ranges=crs,
                     compile_time_args=w_writer_ct,
-                    runtime_args=_subset(w_writer_rt, cores),
+                    common_runtime_args=w_writer_common,
                     config=writer_cfg,
                 )
             )
@@ -457,7 +480,8 @@ def create_mesh_program_descriptor(
             kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_compute.cpp"),
             core_ranges=worker_set,
             compile_time_args=compute_ct,
-            runtime_args=compute_rt,
+            defines=_ABL_DEFINES,
+            common_runtime_args=compute_common,
             config=compute_kernel_config,
         )
 
@@ -506,6 +530,7 @@ def create_mesh_program_descriptor(
             kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_tx_reader.cpp"),
             core_ranges=tx_set,
             compile_time_args=tx_reader_ct,
+            defines=_ABL_DEFINES,
             runtime_args=tx_reader_rt,
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -526,7 +551,7 @@ def create_mesh_program_descriptor(
         tx_writers = {}  # True (mux client) / False (direct) -> kernel descriptor index
         tx_kernels = []
         if direct_tx:
-            tx_kernels.append(_tx_writer(direct_tx, tx_writer_ct, fabric_defines))
+            tx_kernels.append(_tx_writer(direct_tx, tx_writer_ct, fabric_defines + _ABL_DEFINES))
             tx_writers[False] = len(worker_kernels) + 2 + len(tx_kernels) - 1
         if muxed_tx:
             tx_kernels.append(
@@ -599,6 +624,7 @@ def create_mesh_program_descriptor(
             rt_ref.extend(list(conn_args))
             rt_ref.extend(writer_args)
 
+        _merge_semaphores(pd)
         mesh_pd[ttnn.MeshCoordinateRange(coord, coord)] = pd
 
     return mesh_pd

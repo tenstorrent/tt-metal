@@ -31,6 +31,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/ccl/ccl_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace {
 template <typename Stream, size_t... I>
@@ -158,60 +159,79 @@ void kernel_main() {
     // announce_ready / await_ready
     inc_ch.inc(peer_ready_noc);
 
-    while (filled < stream_packets) {
-        fill_next();  // the whole address table, before the first batch can arrive
+    {
+        MaybeDeviceZoneScope("tx_writer_addr_table");
+        while (filled < stream_packets) {
+            fill_next();  // the whole address table, before the first batch can arrive
+        }
     }
-    noc_semaphore_wait_min(sem_ready, 1);
-    noc_semaphore_set(sem_ready, 0);
+    {
+        MaybeDeviceZoneScope("tx_writer_await_ready");
+        noc_semaphore_wait_min(sem_ready, 1);
+        noc_semaphore_set(sem_ready, 0);
+    }
 
     auto unicast_ch = stream.arm_unicast_write(tile_bytes);  // single-tile tail packets
     [[maybe_unused]] auto scatter_ring = arm_scatter_ring(
         stream, tile_bytes, tiles_per_packet > 1 ? tiles_per_packet : 2, std::make_index_sequence<hdr_ring>{});
 
-    for (uint32_t sent = 0; sent < stream_packets;) {
-        cb_wait_front(cb_tx_meta, 1);
-        cb_wait_front(cb_tx_stage, batch_pages);
-        const uint32_t base = get_read_ptr(cb_tx_stage);
-        volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_tx_meta));
-        const uint32_t k = meta[0];
-        bool unicast_used = false;
-        for (uint32_t i = 0; i < k; ++i) {
-            const uint32_t code = meta[1 + i];
-            const uint32_t mb = code >> 16;
-            const uint32_t s = (code >> 8) & 0xFF;
-            const uint32_t pp = code & 0xFF;
-            const uint32_t block_tiles = mb + 1 == num_mt_blocks ? last_block_tiles : mt_block * Nt;
-            const uint32_t packets_per_block = (block_tiles + tiles_per_packet - 1) / tiles_per_packet;
-            const uint32_t p = pp * tiles_per_packet;
-            const uint32_t chunks = (block_tiles - p) < tiles_per_packet ? (block_tiles - p) : tiles_per_packet;
-            const uint32_t l1 = base + i * packet_bytes;
-            const uint32_t entry = mb * num_heads * full_block_packets + s * packets_per_block + pp;
-            const uint64_t* dst_addrs = addr_table + entry * tiles_per_packet;
-            if (chunks == 1) {
-                if (unicast_used) {
-                    stream.flush();  // the unicast header is still being read by the previous tail packet
+    // No per-batch zone (batches can be one packet: the marker budget would run out silently).
+    {
+        MaybeDeviceZoneScope("tx_writer_stream");  // waits on the tx reader + fabric sends + flushes
+        for (uint32_t sent = 0; sent < stream_packets;) {
+            cb_wait_front(cb_tx_meta, 1);
+            cb_wait_front(cb_tx_stage, batch_pages);
+            const uint32_t base = get_read_ptr(cb_tx_stage);
+            volatile tt_l1_ptr uint32_t* meta =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_tx_meta));
+            const uint32_t k = meta[0];
+            bool unicast_used = false;
+            for (uint32_t i = 0; i < k; ++i) {
+                const uint32_t code = meta[1 + i];
+                const uint32_t mb = code >> 16;
+                const uint32_t s = (code >> 8) & 0xFF;
+                const uint32_t pp = code & 0xFF;
+                const uint32_t block_tiles = mb + 1 == num_mt_blocks ? last_block_tiles : mt_block * Nt;
+                const uint32_t packets_per_block = (block_tiles + tiles_per_packet - 1) / tiles_per_packet;
+                const uint32_t p = pp * tiles_per_packet;
+                const uint32_t chunks = (block_tiles - p) < tiles_per_packet ? (block_tiles - p) : tiles_per_packet;
+                const uint32_t l1 = base + i * packet_bytes;
+                const uint32_t entry = mb * num_heads * full_block_packets + s * packets_per_block + pp;
+                const uint64_t* dst_addrs = addr_table + entry * tiles_per_packet;
+                if (chunks == 1) {
+                    if (unicast_used) {
+                        stream.flush();  // the unicast header is still being read by the previous tail packet
+                    }
+#ifndef A2A_ABL_NO_SEND
+                    unicast_ch.write(dst_addrs[0], l1);
+#endif
+                    unicast_used = true;
+                } else {
+                    const uint32_t r = i % hdr_ring;
+                    if (r == 0 && i != 0) {
+                        stream.flush();  // ring wraps inside the batch: its headers must have left L1
+                    }
+#ifndef A2A_ABL_NO_SEND
+                    scatter_ring[r].write_scatter(dst_addrs, chunks, l1);
+#endif
                 }
-                unicast_ch.write(dst_addrs[0], l1);
-                unicast_used = true;
-            } else {
-                const uint32_t r = i % hdr_ring;
-                if (r == 0 && i != 0) {
-                    stream.flush();  // ring wraps inside the batch: its headers must have left L1
-                }
-                scatter_ring[r].write_scatter(dst_addrs, chunks, l1);
             }
+            sent += k;
+            stream.flush();  // every payload of the batch has left its L1 slot before the reader reuses it
+            cb_pop_front(cb_tx_stage, batch_pages);
+            cb_pop_front(cb_tx_meta, 1);
         }
-        sent += k;
-        stream.flush();  // every payload of the batch has left its L1 slot before the reader reuses it
-        cb_pop_front(cb_tx_stage, batch_pages);
-        cb_pop_front(cb_tx_meta, 1);
     }
 
     // announce_done (flush: lands after every data packet of this stream)
-    inc_ch.inc(peer_done_noc);
-    stream.close();
+    {
+        MaybeDeviceZoneScope("tx_writer_close");
+        inc_ch.inc(peer_done_noc);
+        stream.close();
+    }
 
     // await_done
+    MaybeDeviceZoneScope("tx_writer_await_done");
     noc_semaphore_wait_min(sem_done, 1);
     noc_semaphore_set(sem_done, 0);
 }

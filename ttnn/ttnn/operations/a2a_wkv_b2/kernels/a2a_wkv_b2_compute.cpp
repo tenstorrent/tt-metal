@@ -12,9 +12,11 @@
 
 #include <cstdint>
 
+#include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_attn_rm = get_compile_time_arg_val(0);
@@ -28,7 +30,12 @@ void kernel_main() {
 
     constexpr uint32_t num_mt_blocks = (Mt + mt_block - 1) / mt_block;
 
-    const uint32_t num_heads = get_arg_val<uint32_t>(0);
+    // Common runtime args only (launch gap, Perf 1): [grid_x, per logical core index: head_start | num_heads << 8]
+    const uint32_t num_heads =
+        (get_common_arg_val<uint32_t>(
+             1 + get_relative_logical_y() * get_common_arg_val<uint32_t>(0) + get_relative_logical_x()) >>
+         8) &
+        0xFF;
 
     using namespace compute_kernel_lib;
 
@@ -40,29 +47,53 @@ void kernel_main() {
         for (uint32_t mb = 0; mb < num_mt_blocks; ++mb) {
             const uint32_t mt_rows = (Mt - mb * mt_block) < mt_block ? (Mt - mb * mt_block) : mt_block;
 
-            tilize<Kt, cb_attn_rm, cb_attn_tiled>(mt_rows);
+#ifdef A2A_ABL_NO_COMPUTE
+            {
+                MaybeDeviceZoneScope("compute_tilize");
+                cb_wait_front(cb_attn_rm, mt_rows * Kt);
+                cb_pop_front(cb_attn_rm, mt_rows * Kt);
+            }
+            {
+                MaybeDeviceZoneScope("compute_matmul");
+                if (mb == 0) {
+                    cb_wait_front(cb_weight, Kt * Nt);
+                }
+                cb_reserve_back(cb_out, mt_rows * Nt);
+                cb_push_back(cb_out, mt_rows * Nt);
+            }
+#else
+            {
+                // unpack: waits on the reader (cb_attn_rm); pack: on cb_attn_tiled space
+                MaybeDeviceZoneScope("compute_tilize");
+                tilize<Kt, cb_attn_rm, cb_attn_tiled>(mt_rows);
+            }
+            {
+                // unpack: waits on W (first block of a head) + the tiled block; pack: cb_out space
+                MaybeDeviceZoneScope("compute_matmul");
 
-            // One output subblock per tile row (1 x Nt <= DEST, checked on the host); with a single
-            // in1 subblock SubblockMajor is row-major, which the writer / fabric_tx rely on.
-            matmul_block<
-                /*transpose=*/false,
-                /*packer_l1_acc=*/false,
-                LastBlockTarget::Out,
-                OutputCBLayout::SubblockMajor,
-                matmul_config::InitMode::Short,
-                InputPolicy::WaitAndPopPerKBlock,
-                InputPolicy::WaitAndRetainOnLastBlock>(
-                in0,
-                in1,
-                out,
-                out,
-                MatmulBlockShape::of(
-                    /*in0_num_subblocks=*/mt_rows,
-                    /*in1_num_subblocks=*/1,
-                    /*out_subblock_h=*/1,
-                    /*out_subblock_w=*/Nt,
-                    /*in0_block_k=*/Kt,
-                    /*num_k_blocks=*/1));
+                // One output subblock per tile row (1 x Nt <= DEST, checked on the host); with a single
+                // in1 subblock SubblockMajor is row-major, which the writer / fabric_tx rely on.
+                matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/false,
+                    LastBlockTarget::Out,
+                    OutputCBLayout::SubblockMajor,
+                    matmul_config::InitMode::Short,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    InputPolicy::WaitAndRetainOnLastBlock>(
+                    in0,
+                    in1,
+                    out,
+                    out,
+                    MatmulBlockShape::of(
+                        /*in0_num_subblocks=*/mt_rows,
+                        /*in1_num_subblocks=*/1,
+                        /*out_subblock_h=*/1,
+                        /*out_subblock_w=*/Nt,
+                        /*in0_block_k=*/Kt,
+                        /*num_k_blocks=*/1));
+            }
+#endif
         }
         // release_weight_block
         cb_pop_front(cb_weight, Kt * Nt);
