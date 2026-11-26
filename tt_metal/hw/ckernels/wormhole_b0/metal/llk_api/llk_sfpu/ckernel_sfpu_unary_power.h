@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
@@ -210,7 +209,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
 }
 
 template <int ITERATIONS>
-inline void _sfpu_unary_power_bf16_(const std::uint32_t exponent) {
+inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
     // Convert exponent to float
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = pow_scalar;
@@ -233,7 +232,7 @@ inline void _sfpu_unary_power_bf16_(const std::uint32_t exponent) {
 }
 
 template <int ITERATIONS>
-inline void _sfpu_unary_power_fp32_(const std::uint32_t exponent) {
+inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
     // Convert exponent to float. An infinite exponent goes in as +-FLT_MAX (its bits minus one): every base gives
     // the same result with both, and the core then needs no per-row check for an infinite pow.
     const bool pow_is_inf = (exponent & 0x7fffffffu) == 0x7f800000u;
@@ -258,7 +257,14 @@ inline void _sfpu_unary_power_fp32_(const std::uint32_t exponent) {
 }
 
 inline void power_init() {
-    // calculate_unary_power_iterative sets and restores the paired store's ADDR_MOD_6 stride.
+#if !(defined(MM_THROTTLE) && MM_THROTTLE > 0)
+    // calculate_unary_power_iterative's paired store walks dest through physical addr_mod slot 6, advancing
+    // by the two rows the pair just wrote (one sfpi row is two dest counter steps), so the row loop needs no
+    // separate increment. Unary SFPU sets addr_mod_base, so the store names ADDR_MOD_2, which maps to
+    // physical slot 6. A throttled matmul (MM_THROTTLE > 0) programs ADDR_MOD_6 itself, so there the
+    // kernel increments dest explicitly and this init leaves the slot alone.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+#endif
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
@@ -268,7 +274,7 @@ inline void power_init() {
  * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_unary_power(const std::uint32_t exponent) {
+inline void calculate_unary_power(const uint32_t exponent) {
     if constexpr (is_fp32_dest_acc_en) {
         _sfpu_unary_power_fp32_<ITERATIONS>(exponent);
     } else {
@@ -282,16 +288,16 @@ inline void calculate_unary_power(const std::uint32_t exponent) {
  * Each row runs the same multiply sequence as a single-row walk; pairing them shares the walk's
  * branches and lets each row's multiply cover the other's MUL latency, so no NOPs are needed.
  * The last squaring is skipped since its result is never used. Advances dst_reg by two rows: the second
- * store does it through ADDR_MOD_6, set by the caller's loop entry (calculate_unary_power_iterative).
+ * store does it through ADDR_MOD_6 as programmed by @ref power_init (an explicit increment under MM_THROTTLE).
  *
  * @param exp_minus_one Exponent minus one (the first factor is the base itself)
  */
-sfpi_inline void _sfpu_unary_power_iterative_two_rows_(const std::uint32_t exp_minus_one) {
+sfpi_inline void _sfpu_unary_power_iterative_two_rows_(const uint32_t exp_minus_one) {
     sfpi::vFloat in0 = sfpi::dst_reg[0];
     sfpi::vFloat in1 = sfpi::dst_reg[1];
     sfpi::vFloat result0 = in0;
     sfpi::vFloat result1 = in1;
-    for (std::uint32_t exp = exp_minus_one; exp > 0;) {
+    for (uint32_t exp = exp_minus_one; exp > 0;) {
         if (exp & 1) {
             result0 *= in0;
             result1 *= in1;
@@ -304,7 +310,12 @@ sfpi_inline void _sfpu_unary_power_iterative_two_rows_(const std::uint32_t exp_m
         in1 *= in1;
     }
     sfpi::dst_reg[0] = result0;
+#if defined(MM_THROTTLE) && MM_THROTTLE > 0
+    sfpi::dst_reg[1] = result1;
+    sfpi::dst_reg += 2;
+#else
     sfpi::dst_reg[1].mode(ADDR_MOD_2) = result1;
+#endif
 }
 
 /**
@@ -313,12 +324,11 @@ sfpi_inline void _sfpu_unary_power_iterative_two_rows_(const std::uint32_t exp_m
  * @tparam APPROXIMATION_MODE Unused; the result is exact repeated multiplication in both modes.
  * @tparam ITERATIONS Number of Dest rows to process; must be even, since rows are processed in pairs.
  * @param exponent Non-negative integer exponent value
- * @note Call @ref power_init first. The paired store's ADDR_MOD_6 stride is set at entry and
- *       restored to the dest += 2 invariant at exit, as the throttled matmul does, so the two can
- *       be interleaved.
+ * @note Call @ref power_init after any other SFPU init that writes ADDR_MOD_6; the row pairs advance Dest
+ *       through it.
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_power_iterative(const std::uint32_t exponent) {
+inline void calculate_unary_power_iterative(const uint32_t exponent) {
     static_assert(ITERATIONS % 2 == 0, "rows are processed in pairs");
     // x^0 == 1 for every input
     if (exponent == 0) {
@@ -329,13 +339,8 @@ inline void calculate_unary_power_iterative(const std::uint32_t exponent) {
         }
         return;
     }
-    // The paired store walks dest through physical addr_mod slot 6, advancing by the two rows the
-    // pair just wrote (one sfpi row is two dest counter steps), so the row loop needs no separate
-    // increment. Unary SFPU sets addr_mod_base, so the store names ADDR_MOD_2, which maps to
-    // physical slot 6.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
     // Iterative approach for positive integer exponents
-    const std::uint32_t exp_minus_one = exponent - 1;
+    const uint32_t exp_minus_one = exponent - 1;
     if (__builtin_constant_p(exponent) || exponent == 1) {
         // A constant exponent folds the walk to straight-line multiplies, and x^1 has no walk at all, so
         // unrolling lets the compiler replay-roll the rows.
@@ -350,8 +355,6 @@ inline void calculate_unary_power_iterative(const std::uint32_t exponent) {
             _sfpu_unary_power_iterative_two_rows_(exp_minus_one);
         }
     }
-    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 inline void sfpu_unary_pow_init() {
