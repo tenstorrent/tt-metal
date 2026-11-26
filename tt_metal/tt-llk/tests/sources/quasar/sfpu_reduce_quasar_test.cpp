@@ -106,19 +106,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
             {
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
                 {
                     _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
                 }
                 _llk_unpack_unary_operand_to_dest_block_((pass % num_sections) * section_tiles /*l1_tile_idx*/, 0 /*dst_tile_idx*/, section_tiles);
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
                 {
                     _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
-                }
-                if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && dest_sync == ckernel::DstSync::SyncHalf)
-                {
-                    // Stands in for the loan's bank switch: production unpack takes each section's DEST bank from math.
-                    _llk_unpack_dest_section_advance_<is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -171,7 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
     {
         _llk_math_pack_sync_init_<dest_sync>();
     }
@@ -191,7 +186,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        // Skipped for UNPACK_ISOLATE (nothing to clear) and for PACK_ISOLATE.
+        // PACK_ISOLATE has no math; UNPACK_ISOLATE only lends DEST (below).
         if constexpr (PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
@@ -248,6 +243,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             wait_sfpu_idle();
             wait_fpu_idle();
             wait_mop_idle();
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            // Stand-in lender: unpack takes each section's DEST bank through the loan, as in production.
+            for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
+            {
+                _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                // Pack is idle, so math takes MATH_PACK back.
+                ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
+            }
         }
         PROFILER_SYNC();
     }
