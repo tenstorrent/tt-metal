@@ -125,7 +125,14 @@ void kernel_main() {
                 const uint32_t off = ((iss / xp) % x_slots) * x_bytes + (iss % xp) * piece;
                 for (uint32_t o = 0; o < piece; o += NOC_MAX_BURST_SIZE) {
                     const uint32_t n = piece - o < NOC_MAX_BURST_SIZE ? piece - o : NOC_MAX_BURST_SIZE;
-                    noc_async_write_one_packet_with_trid(x_ring + off + o, s_ring + off + o, n, 1 + iss % depth);
+                    noc_async_write_one_packet_with_trid(
+                        x_ring + off + o,
+                        s_ring + off + o,
+                        n,
+                        1 + iss % depth,
+                        write_cmd_buf,
+                        noc_index,
+                        flat_options::x_vc);
                 }
                 ++iss;
             }
