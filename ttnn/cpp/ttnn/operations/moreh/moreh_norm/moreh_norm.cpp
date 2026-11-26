@@ -7,7 +7,6 @@
 #include "device/moreh_norm_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow.hpp"
-#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn {
@@ -24,7 +23,7 @@ Tensor moreh_norm(
     // nullopt (Python dim=None) and an empty list both expand to the full dim range, a single
     // int becomes {d}, and a list is taken as-is. Single-dim cases are then handled by the
     // dims.size() == 1 branch below, so dim is never accessed via dim.value() directly.
-    // The norm kernels (moreh_abs_pow, moreh_sum, prim::moreh_norm) compute in BFLOAT16. An INT32 input is converted
+    // The norm kernels (moreh_abs_pow, prim::moreh_norm) compute in BFLOAT16. An INT32 input is converted
     // by value first, so the norm runs on its values (the result is BFLOAT16, like every moreh_norm output).
     const Tensor input =
         input_arg.dtype() == DataType::INT32 ? ttnn::typecast(input_arg, DataType::BFLOAT16) : input_arg;
@@ -36,7 +35,8 @@ Tensor moreh_norm(
             return ttnn::prim::moreh_norm(input, p, dims[0], keepdim, output, memory_config, compute_kernel_config);
         }
         auto tmp_output = ttnn::moreh_abs_pow(input, p, std::nullopt, memory_config, compute_kernel_config);
-        tmp_output = ttnn::moreh_sum(tmp_output, dims[0], keepdim, std::nullopt, memory_config, compute_kernel_config);
+        tmp_output = operations::sum_with_moreh_shape(
+            tmp_output, {dims[0]}, keepdim, std::nullopt, memory_config, compute_kernel_config);
         return ttnn::moreh_abs_pow(tmp_output, 1.0f / p, output, memory_config, compute_kernel_config);
     }
     std::sort(dims.begin(), dims.end(), std::greater<int64_t>());
@@ -45,7 +45,8 @@ Tensor moreh_norm(
         auto tmp_output =
             ttnn::prim::moreh_norm(input, p, dims.front(), keepdim, std::nullopt, memory_config, compute_kernel_config);
         dims.erase(dims.begin());
-        return ttnn::moreh_sum(tmp_output, dims, keepdim, output, memory_config, compute_kernel_config);
+        return operations::sum_with_moreh_shape(
+            tmp_output, dims, keepdim, output, memory_config, compute_kernel_config);
     }
     if (p == INF || p == -INF) {
         auto tmp_output =
@@ -59,7 +60,8 @@ Tensor moreh_norm(
             tmp_output, p, dims.back(), keepdim, output, memory_config, compute_kernel_config);
     }
     auto tmp_output = ttnn::moreh_abs_pow(input, p, std::nullopt, memory_config, compute_kernel_config);
-    tmp_output = ttnn::moreh_sum(tmp_output, dims, keepdim, std::nullopt, memory_config, compute_kernel_config);
+    tmp_output =
+        operations::sum_with_moreh_shape(tmp_output, dims, keepdim, std::nullopt, memory_config, compute_kernel_config);
     return ttnn::moreh_abs_pow(tmp_output, 1.0f / p, output, memory_config, compute_kernel_config);
 }
 

@@ -100,7 +100,7 @@ inline void generalized_moe_gate_eltwise_binary_configure_mop(const std::uint32_
     {
         // Record (without executing) the 5 instructions that move a whole face from DEST to SRCA, then
         // replay them as the mop's start op. The count below must match the 5 instructions recorded here.
-        lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 5);
+        TTI_REPLAY(ckernel::math::replay_buf_offset, 5, 0, 1);
         TTI_STALLWAIT(
             p_stall::STALL_MATH,
             p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCA_VLD); // MOVD2A for a whole face assumes unpacker will set a dummy
@@ -109,7 +109,7 @@ inline void generalized_moe_gate_eltwise_binary_configure_mop(const std::uint32_
         TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 4, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 4);
         TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 8, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 8);
         TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 12, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 12);
-        std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 5);
+        std::uint32_t replay_instr = TT_OP_REPLAY(math::replay_buf_offset, 5, 0, 0);
         ckernel_template tmp(outerloop, innerloop, math_op);
         tmp.set_start_op(replay_instr);
         tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));

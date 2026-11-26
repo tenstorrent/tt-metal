@@ -232,13 +232,16 @@ jobs:
           uv pip list
           uv pip install "gitpython==3.1.55" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
 
+      # Only schedule and workflow_dispatch runs on main get a token; other runs warn and
+      # continue without one.
       - name: 🤗 Get Hugging Face token (OIDC)
         id: hf-oidc
         if: ${{ inputs.hf-oidc && inputs.package-artifact-name == '' }}
         timeout-minutes: 5
-        uses: ./docker-job/.github/actions/hf-oidc-token
+        uses: tenstorrent/.github/actions/hf-oidc-token@hf-oidc-token-v1.0.0 # immutable release, commit d31c308a8c85847acb5c6f5f0a48d58ecf962d33
         with:
           resource: ${{ vars.HF_OIDC_RESOURCE }}
+          if-no-token: warn
 
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
