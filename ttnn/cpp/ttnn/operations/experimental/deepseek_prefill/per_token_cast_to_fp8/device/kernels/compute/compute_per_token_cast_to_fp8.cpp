@@ -11,6 +11,9 @@
 //            -> scale (col 0) -> cb_scale_tiles. recip(scale) -> 1/scale -> cb_inv_scale_tiles.
 //   Phase 3: divide (cb_tile * bcast_col(cb_inv_scale_tiles)) into DST, then pack_untilize_dest straight
 //            to cb_output_e4m3 (scaled, cast to e4m3) -- fused divide+untilize, no cb_out_tile round-trip.
+//            The e4m3 packer truncates the mantissa. With round_to_nearest, half an e4m3 step of each value's
+//            own binade is first added to its magnitude in DST, so the truncating pack rounds to nearest,
+//            ties away from zero (the same arithmetic as the Hy4 decode KV append's "nearest" mode).
 // The writer extracts column 0 of cb_scale_tiles into the scale output [..., M, H/128].
 //
 // fp32_dest_acc_en=True (required for e4m3 on Blackhole; also gives fp32 reduce/divide precision).
@@ -52,11 +55,36 @@ inline void calculate_ceil_power_of_two() {
     }
 }
 
+// Half an e4m3 step of the value's own binade, added to its magnitude, so the packer's mantissa cut rounds half
+// away from zero. e4m3 keeps 3 mantissa bits: a value with unbiased exponent e has step 2^(e - 3), so half a step
+// is 2^(e - 4). Below 2^-6 (biased fp32 exponent 121) e4m3 is subnormal with a fixed step of 2^-9: half is 2^-10.
+// Zero: exexp(0) clamps to 121, 2^-10 is added and the cut takes it back to +0 (a -0 input also becomes +0).
+// No saturation change: |x / scale| <= 448 and 448 + 16 = 464 still truncates to 448 (480 would be NaN).
+template <int ITERATIONS = 8>
+inline void calculate_e4m3_half_step() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat value = sfpi::dst_reg[0];
+        sfpi::vInt exponent = sfpi::exexp(value, sfpi::ExponentMode::Biased);
+        v_if(exponent < 121) { exponent = 121; }
+        v_endif;
+        sfpi::vFloat half = sfpi::setexp(sfpi::vFloat(1.0f), exponent - 4);
+        v_if(value < 0.0f) { half = -half; }
+        v_endif;
+        sfpi::dst_reg[0] = value + half;
+        sfpi::dst_reg++;
+    }
+}
+
 }  // namespace ckernel::sfpu
 
 inline void ceil_power_of_two_tile(uint32_t idst) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_ceil_power_of_two, (8 /* ITERATIONS */), idst, VectorMode::RC);
+}
+
+inline void e4m3_half_step_tile(uint32_t idst) {
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_e4m3_half_step, (8 /* ITERATIONS */), idst, VectorMode::RC);
 }
 #endif
 
@@ -83,6 +111,7 @@ void kernel_main() {
     constexpr uint32_t block_w = 128;  // BlockW
     constexpr uint32_t tile_w = get_compile_time_arg_val(10);
     constexpr bool round_scale_to_power_of_two = get_compile_time_arg_val(11) != 0;
+    constexpr bool round_to_nearest = get_compile_time_arg_val(12) != 0;
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
     constexpr uint32_t block_ht = 1;                 // BlockHt
     constexpr uint32_t tiles_per_block = block_ht * block_wt;
@@ -209,6 +238,11 @@ void kernel_main() {
                         block_h_idx * block_wt + k,
                         block_h_idx,
                         block_h_idx * block_wt + k);
+                }
+            }
+            if constexpr (round_to_nearest) {
+                for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                    MATH((e4m3_half_step_tile(k)));
                 }
             }
             tile_regs_commit();

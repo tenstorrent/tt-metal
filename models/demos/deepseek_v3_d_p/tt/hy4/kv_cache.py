@@ -31,7 +31,10 @@ On-device formats (unchanged from GLM-5.3, measured by ``test_hy4_kv_cache_devic
 
   * KVPE: ``MlaKvCacheFormat.SCALED_FP8``, ROW_MAJOR ``fp8_e4m3`` storage, one 656-byte packed row per token
     ``[512 FP8 latent | 4 FP32 scales, one per 128 latent values | 64 BF16 rope (interleaved pairs)]``, each row
-    padded to 704 bytes of DRAM (64-byte page alignment).
+    padded to 704 bytes of DRAM (64-byte page alignment). The FP8 latent is rounded to nearest, ties away from
+    zero (``Hy4Adapter.kvpe_fp8_rounding``; ``HY4_KV_FP8_ROUNDING=truncate`` gives GLM-5.3's truncation): the rows
+    decode's own append writes with ``append="nearest"``. A row does not record its rounding, so the cache object
+    does (``MlaKvCache.fp8_rounding``) and a hand-off record carries it (``KvStripe.descriptor(kvpe=...)``).
   * index keys: ``bfloat8_b`` TILE, 128 wide (``[rope 64 interleaved | nope 64]``, Hadamard-rotated), 136 bytes
     per token, one slot per full-indexer layer.
   * both ND-sharded in 32-token shards round-robin over the chip's DRAM banks (``init_kvpe_cache``), slot-major.
@@ -208,7 +211,9 @@ class KvStripe:
             raise ValueError(f"a prefill chunk must start at a multiple of {TILE} tokens, got {start}")
 
     def descriptor(self, **extra) -> dict:
-        """JSON-able layout record for decode and serving (vLLM plugin, KV handoff)."""
+        """JSON-able layout record for decode and serving (vLLM plugin, KV handoff). Pass the KVPE cache's row
+        encoding as ``kvpe=cache.descriptor()`` (format and FP8 rounding), so a reader expecting the other rounding
+        can refuse the rows instead of reading them silently."""
         return {
             "kind": "block_cyclic",
             "block": self.block,

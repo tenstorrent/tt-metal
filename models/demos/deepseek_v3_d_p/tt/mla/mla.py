@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import dataclasses
 import math
 import os
 from pathlib import Path
@@ -2458,7 +2459,7 @@ class ttMLA:
         )
         return self._finish_sparse_chunked_attn(
             tt_q=tt_q,
-            kvpe_dev=MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry),
+            kvpe_dev=dataclasses.replace(kvpe_cache, storage=compact),
             indices=plan.compact_indices,
             kvpe_cache=kvpe_cache,
             seq_len_local=seq_len_local,
@@ -3141,11 +3142,7 @@ class ttMLA:
                 data_valid_semaphore=overlap_resources.data_valid_semaphore,
             )
         gathered = ttnn.experimental.high_bw_all_gather(storage, **gather_kwargs)
-        return MlaKvCache(
-            format=kvpe_cache.format,
-            storage=gathered,
-            geometry=kvpe_cache.geometry,
-        )
+        return dataclasses.replace(kvpe_cache, storage=gathered)
 
     @staticmethod
     def _declared_seq_shard_factor(t) -> int:

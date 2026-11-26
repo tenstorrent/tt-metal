@@ -11,9 +11,13 @@ namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp
 std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
     const ttnn::Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    bool round_scale_to_power_of_two) {
+    bool round_scale_to_power_of_two,
+    bool round_to_nearest) {
     return ttnn::prim::per_token_cast_to_fp8(
-        input_tensor, memory_config.value_or(input_tensor.memory_config()), round_scale_to_power_of_two);
+        input_tensor,
+        memory_config.value_or(input_tensor.memory_config()),
+        round_scale_to_power_of_two,
+        round_to_nearest);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp8

@@ -7,7 +7,7 @@ Utilities for KVPE cache initialization and management.
 
 import math
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 import torch
@@ -79,6 +79,20 @@ class MlaKvCacheFormat(str, Enum):
             raise ValueError(f"{self} is not a sparse-SDPA cache format") from error
 
 
+class MlaKvFp8Rounding(str, Enum):
+    """How a scaled-FP8 cache rounds latent values to e4m3 (``per_token_cast_to_fp8(round_to_nearest=)``).
+
+    ``TRUNCATE``: the e4m3 packer cuts the mantissa (toward zero); every value loses up to one step of magnitude,
+    on average about half a step. ``NEAREST``: half a step of the value's own binade is added to its magnitude
+    before the cut, so values round to nearest, ties away from zero: the same rows the Hy4 decode KV append writes
+    with ``append="nearest"``. Rows written one way read back without any marker of it, so a cache must be
+    written with one rounding throughout; the cache object carries it (``MlaKvCache.fp8_rounding``).
+    """
+
+    TRUNCATE = "truncate"
+    NEAREST = "nearest"
+
+
 @dataclass(frozen=True)
 class MlaKvCacheGeometry:
     """Logical MLA dimensions and the packed scaled-FP8 row they imply."""
@@ -142,8 +156,11 @@ class MlaKvCache:
     format: MlaKvCacheFormat
     storage: ttnn.Tensor
     geometry: MlaKvCacheGeometry
+    # Scaled FP8 only: how every write of this cache rounds the latent to e4m3. Ignored by the other formats.
+    fp8_rounding: MlaKvFp8Rounding = field(default=MlaKvFp8Rounding.TRUNCATE)
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "fp8_rounding", MlaKvFp8Rounding(self.fp8_rounding))
         if self.format == MlaKvCacheFormat.SCALED_FP8:
             self.geometry.validate_scaled()
         dtype = self.format.storage_dtype
@@ -189,7 +206,9 @@ class MlaKvCache:
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Quantize latent directly and expose cache fields, optionally retaining tiled RoPE."""
         latent_fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
-            latent, round_scale_to_power_of_two=True
+            latent,
+            round_scale_to_power_of_two=True,
+            round_to_nearest=self.fp8_rounding == MlaKvFp8Rounding.NEAREST,
         )
         rope_rm = rope if keep_rope_tiled else ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
         return latent_fp8, scales, rope_rm
@@ -214,6 +233,30 @@ class MlaKvCache:
         if rope_rm is not rope:
             ttnn.deallocate(rope_rm)
         return packed
+
+    @property
+    def encoding(self) -> str:
+        """The physical row encoding, rounding included: ``scaled_fp8/nearest``, ``scaled_fp8/truncate``, or the
+        format's name for the homogeneous formats. Two caches with different encodings hold different bytes for the
+        same values; a KV hand-off record carries this (``descriptor``) so a reader can refuse a mismatch."""
+        if self.format == MlaKvCacheFormat.SCALED_FP8:
+            return f"{self.format.value}/{self.fp8_rounding.value}"
+        return self.format.value
+
+    def descriptor(self) -> dict:
+        """JSON-able record of the row encoding, for a KV hand-off (``KvStripe.descriptor(kvpe=...)``)."""
+        out = {"format": self.format.value, "encoding": self.encoding, "row_width": int(self.storage.shape[-1])}
+        if self.format == MlaKvCacheFormat.SCALED_FP8:
+            out.update(
+                fp8_rounding=self.fp8_rounding.value,
+                # the exact rule, for a reader's manifest to compare (decode's append="nearest" is the same rule)
+                fp8_rule="ties away from zero" if self.fp8_rounding == MlaKvFp8Rounding.NEAREST else "toward zero",
+                latent_dim=self.geometry.latent_dim,
+                rope_dim=self.geometry.rope_dim,
+                scale_block=self.geometry.SCALE_BLOCK_SIZE,
+                scale="fp32, power of two",
+            )
+        return out
 
     def unpack_host(self, physical: torch.Tensor) -> torch.Tensor:
         """Decode host physical rows into logical BF16 [latent || RoPE] values."""
@@ -255,6 +298,62 @@ def reconstruct_scaled_fp8_kv_cache(packed: torch.Tensor, geometry: MlaKvCacheGe
     latent, scales, rope = unpack_scaled_fp8_kv_cache(packed, geometry)
     scaled = latent * scales.repeat_interleave(geometry.SCALE_BLOCK_SIZE, dim=-1)
     return torch.cat((scaled.to(torch.bfloat16), rope), dim=-1)
+
+
+E4M3_MAX = 448.0
+E4M3_MIN_NORMAL_EXP = -6  # below 2**-6 e4m3 is subnormal, with a fixed step of 2**-9
+
+
+def _e4m3_binade(a: torch.Tensor) -> torch.Tensor:
+    """Unbiased exponent of each |value| for e4m3 stepping: floor(log2 a), clamped to the subnormal floor (also 0)."""
+    _, exp = torch.frexp(a)
+    return torch.where(a < 2.0**E4M3_MIN_NORMAL_EXP, torch.full_like(exp, E4M3_MIN_NORMAL_EXP), exp - 1)
+
+
+def e4m3_round_host(q: torch.Tensor, rounding: MlaKvFp8Rounding) -> torch.Tensor:
+    """The e4m3 values ``per_token_cast_to_fp8`` writes for ``q = x / scale`` (float32, ``|q| <= 448``), as float32.
+
+    The kernel's arithmetic: ``truncate`` cuts the mantissa to 3 bits toward zero (the packer). ``nearest`` first adds
+    half a step of the value's own binade, ``sign(q) * 2**(e - 4)`` with ``e`` clamped to -6 (``-0`` counts as
+    positive), in float32, then cuts: round to nearest, ties away from zero. Bit-exact host model of the device op.
+
+    Below 2**-6 (e4m3's subnormal range) the Blackhole packer does not write IEEE subnormals (measured on every BF16
+    value in [2**-12, 2**-5)): a float32 value in [2**-7, 2**-6) is written as exponent field 0 with its own top 3
+    mantissa bits (an IEEE e4m3fn reader decodes that as ``m * 2**-9``; ``per_token_cast_back`` reads it as 0), and
+    anything smaller as 0. This model returns what an IEEE reader decodes from those bytes. It only touches values
+    under 2**-6 / 448 of their block's maximum, and both rounding modes (and decode's append) share it.
+    """
+    rounding = MlaKvFp8Rounding(rounding)
+    q = q.float()
+    if rounding == MlaKvFp8Rounding.NEAREST:
+        half = torch.ldexp(torch.ones_like(q), _e4m3_binade(q.abs()) - 4)
+        q = q + torch.where(q < 0, -half, half)  # float32 add, as in DST
+    a = q.abs().double()
+    step = torch.ldexp(torch.ones_like(a), _e4m3_binade(a) - 3)
+    cut = torch.floor(a / step) * step
+    # the packer below the normal range: [2**-7, 2**-6) -> exponent field 0 with the value's top 3 mantissa bits
+    low = a < 2.0**E4M3_MIN_NORMAL_EXP
+    top3 = torch.floor((a * 128.0 - 1.0) * 8.0)  # for a in [2**-7, 2**-6): its 3 mantissa bits
+    cut = torch.where(low, torch.where(a >= 2.0**-7, top3 * 2.0**-9, torch.zeros_like(a)), cut)
+    if bool((cut > E4M3_MAX).any()):
+        raise ValueError("e4m3 magnitude above 448 (the scale bounds |x / scale| by 448)")
+    return torch.copysign(cut, q.double()).float()
+
+
+def quantize_scaled_fp8_host(
+    latent: torch.Tensor, rounding: MlaKvFp8Rounding, block: int = MlaKvCacheGeometry.SCALE_BLOCK_SIZE
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Host model of ``per_token_cast_to_fp8(latent, round_scale_to_power_of_two=True, round_to_nearest=...)`` for a
+    BF16 / FP32 latent ``[..., H]``: returns (e4m3 values as float32 ``[..., H]``, float32 scales ``[..., H / block]``).
+    The scale is the kernel's: ``clamp(amax, 1e-4) * float32(1 / 448)``, up to a power of two."""
+    x = latent.float()
+    blocks = x.reshape(*x.shape[:-1], x.shape[-1] // block, block)
+    amax = blocks.abs().amax(-1).clamp(min=1e-4)
+    raw = amax * torch.tensor(1.0 / E4M3_MAX, dtype=torch.float32)
+    mant, exp = torch.frexp(raw)  # raw = mant * 2**exp, mant in [0.5, 1): a power of two iff mant == 0.5
+    scale = torch.ldexp(torch.ones_like(raw), torch.where(mant == 0.5, exp - 1, exp))
+    codes = e4m3_round_host(blocks * (1.0 / scale)[..., None], rounding)
+    return codes.reshape(x.shape), scale
 
 
 def merged_num_layers(stage_layout):
@@ -1235,6 +1334,7 @@ def init_mla_kv_cache(
     full_mesh=False,
     tp_axis=None,
     bank_aligned=False,
+    fp8_rounding: MlaKvFp8Rounding = MlaKvFp8Rounding.TRUNCATE,
 ) -> MlaKvCache:
     """Allocate and zero a persistent MLA cache in the selected physical format.
 
@@ -1243,6 +1343,7 @@ def init_mla_kv_cache(
     aligned page size, not the logical row width.
 
     tp_axis: KV dedup, forwarded to init_kvpe_cache -- see its docstring.
+    fp8_rounding: scaled FP8 only, how every write rounds the latent to e4m3 (``MlaKvFp8Rounding``).
     """
     cache_format = MlaKvCacheFormat(cache_format)
     geometry = MlaKvCacheGeometry.from_config(hf_config)
@@ -1262,7 +1363,7 @@ def init_mla_kv_cache(
         tp_axis=tp_axis,
         bank_aligned=bank_aligned,
     )
-    return MlaKvCache(format=cache_format, storage=storage, geometry=geometry)
+    return MlaKvCache(format=cache_format, storage=storage, geometry=geometry, fp8_rounding=fp8_rounding)
 
 
 def allocate_mla_kvpe_cache(
