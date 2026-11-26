@@ -17,7 +17,7 @@ inputs:
   # Merge Gate run holds Release, ASan, and TSan packages). Each is an extended
   # regex for the whole artifact name. When a pattern is set, the artifact must
   # match exactly once, or the step fails. When it is empty, the step uses the
-  # first name that matches the old loose filter.
+  # first name that matches the name prefix (and the tracy setting) of each kind.
   build-artifact-pattern:
     required: false
     default: ""

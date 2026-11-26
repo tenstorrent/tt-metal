@@ -264,7 +264,7 @@ jobs:
       checkout-filter: tree:0
       use-artifacts-from-run: ${{ needs.find-queue-builds.outputs.asan }}
 
-  # Only a build check: no job takes its output. Skipped when find-queue-builds
+  # No job takes the output of build-sweeps. It skips when find-queue-builds
   # finds a queue run that passed it.
   build-sweeps:
     if: ${{ needs.find-queue-builds.outputs.sweeps == '' && (
