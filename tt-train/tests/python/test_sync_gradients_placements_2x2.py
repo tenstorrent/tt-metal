@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """test_sync_gradients_placements.py on a ``[2, 2]`` mesh: DP x TP, FSDP x TP and HSDP, where a parameter is
-replicated on one data axis and sharded on the other. Each class opens its ``[2, 2]`` through the conftest's
-``fresh_device_mesh`` with the bundled descriptor, like ``test_ccl_topology.py``, and skips on a host with fewer than
-four chips."""
+replicated on one data axis and sharded on the other. The Llama tests also cover DP x SP and FSDP x SP. Each class
+opens its ``[2, 2]`` through the conftest's ``fresh_device_mesh`` with the bundled descriptor, like
+``test_ccl_topology.py``, and skips on a host with fewer than four chips."""
 
 from __future__ import annotations
 
@@ -18,7 +18,10 @@ import ttnn
 import ttml
 from sync_gradients_placements_common import (
     DIM,
+    EVERY,
+    FSDP_REPLICATED_NORMS,
     NATIVE,
+    NORMS,
     TP_SHARDED_SUFFIXES,
     _assert_mean_over_axis,
     _assert_per_axis_labels,
@@ -29,7 +32,11 @@ from sync_gradients_placements_common import (
     _placements,
     _reduce_set,
     _shards,
+    assert_sync_reduces_exactly,
     is_sharded_on_axis,
+    llama_backward,
+    reductions_by_rule,
+    tiny_llama,
 )
 from gradient_sync_helpers import exact_mean, fpu_add_bound, make_gradients, sharded_linear, to_bf16, upload
 from tp_block import TPBlock, gather_like
@@ -53,6 +60,34 @@ def fsdp_tp_mesh(fresh_device_mesh):
     """``[2, 2]`` with axes ``("fsdp", "tp")``."""
     with fresh_device_mesh((2, 2), ("fsdp", "tp"), what="FSDP x TP placements tests", require_mgd=True) as mesh:
         yield mesh
+
+
+# (strategy, FSDP replicate= patterns or None, the batch's data axes, (axis, op, pattern) rules).
+# Every gradient is averaged over dp. Over fsdp, only the replicated parameters are averaged; FSDP reduce-scatters the
+# rest. Under SP, the norms are also summed over tp.
+LLAMA_2X2_CASES = {
+    "dp-tp": (TPStrategy.TENSOR, None, ("dp",), [("dp", "mean", EVERY)]),
+    "dp-sp": (TPStrategy.TENSOR_SEQUENCE, None, ("dp",), [("dp", "mean", EVERY), ("tp", "sum", NORMS)]),
+    "fsdp-tp-replicated-norms": (TPStrategy.TENSOR, FSDP_REPLICATED_NORMS, ("fsdp",), [("fsdp", "mean", NORMS)]),
+    "fsdp-sp": (TPStrategy.TENSOR_SEQUENCE, [], ("fsdp",), [("tp", "sum", NORMS)]),
+    "hsdp-replicated-norms": (
+        TPStrategy.NONE,
+        FSDP_REPLICATED_NORMS,
+        ("dp", "fsdp"),
+        [("dp", "mean", EVERY), ("fsdp", "mean", NORMS)],
+    ),
+}
+DP_TP_CASES = ["dp-tp", "dp-sp"]
+FSDP_TP_CASES = ["fsdp-tp-replicated-norms", "fsdp-sp"]
+HSDP_CASES = ["hsdp-replicated-norms"]
+
+
+def _assert_llama_sync_reduces_exactly(case: str) -> None:
+    strategy, replicate, data_axes, rules = LLAMA_2X2_CASES[case]
+    model = tiny_llama(strategy, fsdp_replicate=replicate)
+    params = model.parameters()
+    llama_backward(model, data_axes)
+    assert_sync_reduces_exactly(params, reductions_by_rule(params, rules))
 
 
 # --- DP x TP on [2, 2] ("dp", "tp") -----------------------------------------------------------------------------
@@ -82,6 +117,10 @@ class TestDPxTP:
             if name.endswith(TP_SHARDED_SUFFIXES):
                 assert is_sharded_on_axis(grad, tp), f"{name}: the TP shard did not survive the dp all_reduce"
             _assert_mean_over_axis(before[name], _shards(grad), dp_tp_mesh.shape, dp, name)
+
+    @pytest.mark.parametrize("case", DP_TP_CASES)
+    def test_sync_reduces_exactly(self, dp_tp_mesh, case):
+        _assert_llama_sync_reduces_exactly(case)
 
 
 # --- MoE experts on dp, [2, 2] ("dp", "tp") ----------------------------------------------------------------------
@@ -284,6 +323,10 @@ class TestFSDPxTP:
                 error = np.linalg.norm(actual[name] - e)
                 assert error <= tol * scale, f"{stage} of {name}: relative error {error / scale:.3g}"
 
+    @pytest.mark.parametrize("case", FSDP_TP_CASES)
+    def test_sync_reduces_exactly(self, fsdp_tp_mesh, case):
+        _assert_llama_sync_reduces_exactly(case)
+
 
 # --- HSDP on [2, 2] ("dp", "fsdp") ------------------------------------------------------------------------------
 
@@ -426,6 +469,10 @@ class TestHSDP:
                 [np.array(examples[first + j]["input_ids"], dtype=np.float32) for j in range(per_device)]
             )
             np.testing.assert_array_equal(shard[:, 0, 0, :], expected)
+
+    @pytest.mark.parametrize("case", HSDP_CASES)
+    def test_sync_reduces_exactly(self, hsdp_mesh, case):
+        _assert_llama_sync_reduces_exactly(case)
 
 
 if __name__ == "__main__":

@@ -222,6 +222,24 @@ if sequence_parallel:
     ttml.parallel.mark_partial(self.attention_norm, "tp")
 ```
 
+Marked parameters:
+
+- `lora_A` of the column-parallel LoRA;
+- under SP: the norms, the row-parallel bias and `lora_B` of the row-parallel LoRA;
+- in the Qwen3 example: the per-head QK norms.
+
+Only `ttml.sync_gradients` sums these gradients, so any training loop with a TP axis must call it every step, even
+without data parallelism:
+
+```python
+loss.backward(retain_graph=False)
+ttml.sync_gradients(model.parameters())
+optimizer.step()
+```
+
+Skip it and the copies of these parameters silently drift apart. The C++
+`ttml::core::distributed::synchronize_gradients` won't help: it only averages over the data-parallel axes.
+
 ---
 
 ### Context Parallelism (CP)

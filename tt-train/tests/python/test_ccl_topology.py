@@ -11,8 +11,8 @@ output tensor's placement matches the op's semantics:
   * **all_reduce** — output is replicated on the collective axis.
   * **reduce_scatter** — output is sharded on the collective axis.
   * **all_gather** — output is replicated on the collective axis.
-  * **mesh_partition**, reached through ``ttml.ops.distributed.all_gather``'s backward — output is sharded on the
-    collective axis (no collective runs).
+  * **mesh_partition**, reached through ``ttml.ops.distributed.scatter`` and ``ttml.ops.distributed.all_gather``'s
+    backward — output is sharded on the collective axis (no collective runs).
 
 In all cases, placements on mesh axes *other* than ``cluster_axis`` must
 be preserved unchanged.
@@ -476,14 +476,14 @@ class TestCollapsedInputs:
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# mesh_partition (the all_gather backward for a replicated output gradient)
+# mesh_partition (scatter, and the all_gather backward for a replicated output gradient)
 # ---------------------------------------------------------------------------------------------------------------------
 
 
 class TestMeshPartitionTopology:
-    """mesh_partition as the comm-ops backward runs it: ``ttml.ops.distributed.all_gather(..., REPLICATED)``'s backward
-    partitions the replicated output gradient. The input's gradient is sharded on `cluster_axis` and its label says so,
-    for the two layouts tt-train produces. The label rules themselves are pinned in
+    """mesh_partition as the comm ops use it: in ``ttml.ops.distributed.scatter`` and in the backward of
+    ``ttml.ops.distributed.all_gather(..., REPLICATED)``. The result is sharded on `cluster_axis`, and its label says
+    so, for the two layouts tt-train produces. The label rules themselves are pinned in
     tests/nightly/t3000/ccl/test_ccl_topology_labels.py and the CclTopologyUtils gtests."""
 
     ROWS, COLS = MESH_SHAPE_2X2
@@ -505,15 +505,15 @@ class TestMeshPartitionTopology:
         return x.get_grad()
 
     @pytest.mark.parametrize("shape,dim", [((1, 1, 64, 48), 3), ((1, 1, 48, 64), 2)], ids=["columns", "rows"])
-    def test_part_tile_shares_hold_their_own_elements(self, shape, dim):
-        """ttnn cuts a TILE share that ends inside a tile wrongly (#64626), so the wrapper cuts it in ROW_MAJOR."""
-        tensor = _replicated_tensor(shape, seed=43)
-        data = _compose_by_label(tensor)
+    def test_scatter_cuts_shares_that_end_inside_a_tile(self, shape, dim):
+        """Each rank gets 24 columns (or rows), so its share ends mid-tile, which ttnn gets wrong (#64626)."""
+        value = _replicated_tensor(shape, seed=44)
+        data = _compose_by_label(value)
 
-        result = ttml.core.distributed.mesh_partition(tensor, dim, cluster_axis=CLUSTER_AXIS)
+        result = ttml.ops.distributed.scatter(ttml.autograd.create_tensor(value, False), dim, CLUSTER_AXIS).get_value()
 
         assert result.layout == ttnn.Layout.TILE
-        _assert_shard(result, CLUSTER_AXIS, dim, "mesh_partition output")
+        _assert_shard(result, CLUSTER_AXIS, dim, "scatter output")
         assert np.array_equal(_compose_by_label(result), data)
 
     def test_replicated_input_becomes_sharded_on_the_axis(self):
