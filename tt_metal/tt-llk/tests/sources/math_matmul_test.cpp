@@ -290,11 +290,23 @@ constexpr bool matmul_dd_main_end = false;
 #include "llk_math_matmul_main_rm_lib.h"
 #endif
 #ifdef MATMUL_SFPU_AFTER
-// an SFPU op after the matmul block in one kernel (init once at the start, as Metal's full inits do): relu on every tile of the block
+// an SFPU op after the matmul block in one kernel (init once at the start, as Metal's full inits do): a negation of every tile of the block
 #include "ckernel_sfpu.h"
-#include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+
+// negation on the SFPU invariants: loads through ADDR_MOD_7 (zero advance), stores step DEST through ADDR_MOD_6 (dest += 2), so a form that
+// left either slot changed leaves rows unnegated or negates a row twice (the matmul data are mostly positive, so a relu would not show it)
+inline void negate_on_sfpu_invariants(const int iterations)
+{
+    sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
+    for (int d = 0; d < iterations; d++)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG0, 1 /* SFPMOV_MOD1_NEGATE */);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+    }
+}
 #endif
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORCE_FORM_CHAR)
 constexpr bool matmul_tile_mop = !(MATMUL_FORCE_FORM_CHAR == 'r' || MATMUL_FORCE_FORM_CHAR == 'R');
@@ -417,7 +429,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef MATMUL_SFPU_AFTER
                     for (std::uint32_t sfpu_tile = 0; sfpu_tile < NUM_TILES_IN_BLOCK; sfpu_tile++)
                     {
-                        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_lrelu_<false>, DST_INDEX + sfpu_tile, VectorMode::RC, 8, 0u);
+                        _llk_math_eltwise_unary_sfpu_params_(negate_on_sfpu_invariants, DST_INDEX + sfpu_tile, VectorMode::RC, 8);
                     }
 #endif
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && !defined(MATMUL_UNFUSED_POST)
