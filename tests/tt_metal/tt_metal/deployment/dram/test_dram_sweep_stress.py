@@ -44,7 +44,7 @@ CB_SCRATCH = (2, 3)
 REPO = Path(__file__).resolve().parents[5]
 OUT_DIR = Path(os.environ.get("STRESS_OUT_DIR", REPO / "repro_logs" / "sweep"))
 
-KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/diagnostics/dram_stress/kernels"
+KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/diagnostics/dram/kernels"
 DM_KERNEL = f"{KERNEL_DIR}/sweep_dm.cpp"
 COMPUTE_KERNEL = f"{KERNEL_DIR}/matmul_compute.cpp"
 # The kernels read these layout constants as defines, so host and device share one definition.
