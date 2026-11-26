@@ -28,7 +28,7 @@ constexpr uint16_t RISCV_PMC_EVENTS_UPPER_PROFILER_ID = 9096;  // (mhpmevent6 <<
 // Included directly by the entry TUs so the empty macros below exist on a profiler-off build.
 #if defined(PROFILE_RISCV_PMC) && defined(PROFILE_KERNEL) && !defined(PROFILE_STREAMING) && defined(RISCV_PMC_CORE)
 
-#include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/ts_data_marker.hpp"
 
 #if !defined(PROFILE_RISCV_PMC_EV3)
 #define PROFILE_RISCV_PMC_EV3 0
@@ -80,8 +80,7 @@ constexpr uint32_t marker_count = 5;
 #else
 constexpr uint32_t marker_count = 3;
 #endif
-constexpr uint32_t marker_words = PROFILER_L1_MARKER_UINT32_SIZE + 2;
-constexpr uint32_t reserved_words = marker_count * marker_words;
+constexpr uint32_t reserved_words = marker_count * TS_DATA_MARKER_WORDS;
 
 // Holds back room for the markers so a kernel that fills the buffer does not drop them.
 inline __attribute__((always_inline)) void begin() {
@@ -109,39 +108,18 @@ inline __attribute__((always_inline)) void end() {
     const uint32_t minstret = read_csr<CSR_MINSTRET>();
 
     stackSize -= reserved_words;
-    if (!bufferHasRoom(marker_count * marker_words - 1)) {
+    if (!bufferHasRoom(reserved_words - 1)) {
         return;
     }
 
-#if defined(ARCH_QUASAR)
-    const uint64_t now = quasar_read_wall_clock_64();
-    const uint32_t time_low = static_cast<uint32_t>(now);
-    const uint32_t time_high = static_cast<uint32_t>(now >> 32);
-#else
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    const uint32_t time_high = p_reg[WALL_CLOCK_HIGH_INDEX];
-    const uint32_t time_low = p_reg[WALL_CLOCK_LOW_INDEX];
-#endif
-
-    auto& data = profiler_data_buffer[myRiscID].data;
-    const uint32_t stamp_high = time_high & PROFILER_MARKER_TS_HIGH_MASK;
+    const TsDataStamp stamp = ts_data_stamp();
     uint32_t w = wIndex;
-    auto put = [&](uint32_t id, uint32_t value_high, uint32_t value_low) __attribute__((always_inline)) {
-        data[w] = PROFILER_MARKER_VALID |
-                  ((get_const_id(id, PacketTypes::TS_DATA) & PROFILER_MARKER_TIMER_ID_MASK)
-                   << PROFILER_MARKER_TIMER_ID_SHIFT) |
-                  stamp_high;
-        data[w + 1] = time_low;
-        data[w + 2] = value_high;
-        data[w + 3] = value_low;
-        w += marker_words;
-    };
-    put(RISCV_PMC_COUNTS_PROFILER_ID, pmc4, pmc3);
-    put(RISCV_PMC_CYCLES_PROFILER_ID, minstret - instret_begin, mcycle - cycle_begin);
-    put(RISCV_PMC_EVENTS_PROFILER_ID, RISCV_PMC_SEL4, RISCV_PMC_SEL3);
+    put_ts_data(w, stamp, RISCV_PMC_COUNTS_PROFILER_ID, pmc4, pmc3);
+    put_ts_data(w, stamp, RISCV_PMC_CYCLES_PROFILER_ID, minstret - instret_begin, mcycle - cycle_begin);
+    put_ts_data(w, stamp, RISCV_PMC_EVENTS_PROFILER_ID, RISCV_PMC_SEL4, RISCV_PMC_SEL3);
 #if defined(RISCV_PMC_UPPER)
-    put(RISCV_PMC_COUNTS_UPPER_PROFILER_ID, pmc6, pmc5);
-    put(RISCV_PMC_EVENTS_UPPER_PROFILER_ID, PROFILE_RISCV_PMC_DM_EV6, PROFILE_RISCV_PMC_DM_EV5);
+    put_ts_data(w, stamp, RISCV_PMC_COUNTS_UPPER_PROFILER_ID, pmc6, pmc5);
+    put_ts_data(w, stamp, RISCV_PMC_EVENTS_UPPER_PROFILER_ID, PROFILE_RISCV_PMC_DM_EV6, PROFILE_RISCV_PMC_DM_EV5);
 #endif
     wIndex = w;
 }
