@@ -144,9 +144,8 @@ void SetKernelTextOffsets(
     const uint32_t shift =
         GetKernelTextBase(hal, program, programmable_core_type_index, device_id, logical_core, kernel_config_buffer) -
         static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG));
-    auto kernel_text_offsets = launch_msg.view().kernel_config().kernel_text_offset();
-    for (uint32_t i = 0; i < kernel_text_offsets.size(); i++) {
-        kernel_text_offsets[i] = kernel_text_offsets[i] + shift;
+    for (uint32_t& kernel_text_offset : launch_msg.view().kernel_config().kernel_text_offset()) {
+        kernel_text_offset += shift;
     }
 }
 
