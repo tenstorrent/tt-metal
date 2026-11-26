@@ -108,11 +108,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Reduce-to-one folds every tile into DEST index 0 inside one section, the production REDUCE_ROW shape.
     const std::uint32_t tiles_per_section = IS_REDUCE_TO_ONE ? TILE_CNT : max_tiles_dest;
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
-        // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
+            // Math isolate keeps the FPU→PACK dest-dvalid producer setup.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
@@ -146,14 +151,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += tiles_per_section)
                 {
                     const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, tiles_per_section);
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_();
+                    }
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         const std::uint32_t dst_tile_idx = IS_REDUCE_TO_ONE ? 0 : block_tile;
                         _llk_math_reduce_<POOL_TYPE, REDUCE_DIM>(dst_tile_idx, tensor_shape_A);
                     }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
                     {
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+                    {
+                        // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                        ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                     }
                 }
             }
@@ -186,6 +200,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
     const std::uint32_t output_tile_cnt       = IS_REDUCE_TO_ONE ? 1 : TILE_CNT;
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
         // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
@@ -193,10 +212,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
@@ -218,13 +233,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block_start = 0; block_start < output_tile_cnt; block_start += max_tiles_dest)
                 {
                     const std::uint32_t block_tiles = std::min(output_tile_cnt - block_start, max_tiles_dest);
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                    }
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         _llk_pack_(block_tile, block_start + block_tile, tensor_shape_A);
                     }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
                     {
-                        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                        // Stands in for the idle math's post, so the section done's SEMGET never underflows.
+                        ckernel::trisc::t6_semaphore_post(ckernel::trisc::semaphore::MATH_PACK);
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+                    {
+                        _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
             }

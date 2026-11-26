@@ -55,7 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 set_up_zero_dest_dvalid_handshake_for_unpack();
             }
         }
-        else
+        else if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
         }
@@ -174,17 +174,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const DataFormat math_format            = static_cast<DataFormat>(formats.math);
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr ((PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE) && !unpack_to_dest)
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
+            // Unpack-to-dest broadcast has no production form (llk_unpack_A_api.h rejects it), and its unpack
+            // writes DEST tile 0 without the borrowed section base, so it keeps the dest-dvalid hand-over.
             if constexpr (unpack_to_dest)
             {
                 set_up_unpack_to_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
-            }
-            else
-            {
-                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && unpack_to_dest)
@@ -250,6 +253,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_eltwise_unary_broadcast_(tile);
                     }
+                    if constexpr (!unpack_to_dest)
+                    {
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                        // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                        ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
+                    }
                 }
             }
         }
@@ -259,11 +268,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
+                    if constexpr (!unpack_to_dest)
+                    {
+                        _llk_math_wait_for_dest_available_();
+                    }
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
                         _llk_math_eltwise_unary_broadcast_(tile);
                     }
-                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    if constexpr (unpack_to_dest)
+                    {
+                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    }
+                    else
+                    {
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }
@@ -294,6 +314,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
     const std::uint32_t output_tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr ((PERF_RUN_TYPE == PerfRunType::L1_TO_L1 && !unpack_to_dest) || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
         // PACK_ISOLATE packs without a math↔pack handshake.
@@ -307,10 +332,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             if constexpr (unpack_to_dest)
             {
                 set_up_unpack_to_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
-            else
-            {
-                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
             }
         }
 
@@ -331,7 +352,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t block = 0; block < output_num_blocks; block++)
@@ -341,6 +361,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         const std::uint32_t res_tile_idx = (block * output_tiles_in_block) + tile;
                         _llk_pack_(tile, res_tile_idx, tensor_shape);
                     }
+                    // Stands in for the idle math's post, so the section done's SEMGET never underflows.
+                    ckernel::trisc::t6_semaphore_post(ckernel::trisc::semaphore::MATH_PACK);
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -350,12 +373,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < output_num_blocks; block++)
                 {
+                    if constexpr (!unpack_to_dest)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                    }
                     for (std::uint32_t tile = 0; tile < output_tiles_in_block; tile++)
                     {
                         const std::uint32_t res_tile_idx = (block * output_tiles_in_block) + tile;
                         _llk_pack_(tile, res_tile_idx, tensor_shape);
                     }
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    if constexpr (unpack_to_dest)
+                    {
+                        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                    else
+                    {
+                        _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }

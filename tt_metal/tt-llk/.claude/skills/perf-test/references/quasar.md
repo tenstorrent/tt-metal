@@ -89,23 +89,49 @@ from `max_dest_tiles(dest_acc, dest_sync)`, which halves when `dest_acc=Yes`, so
 - Use the target Quasar correctness kernel for current LLK signatures and
   `TensorShape` APIs. Generic and older-architecture perf kernels use other
   APIs; do not copy their calls.
-- Quasar Dest dvalid handshakes are configured per thread, and CFG state can
-  persist between run types. `quasar_test_common.h` has the helpers:
-  - the chains `set_up_fpu_to_pack_dest_dvalid_chain<thread>()`,
-    `set_up_unpack_to_pack_...`, `set_up_unpack_to_fpu_to_pack_...`,
-    `set_up_fpu_to_sfpu_to_pack_...`, `set_up_unpack_to_sfpu_to_pack_...`;
-  - `set_up_zero_dest_dvalid_handshake_for_{unpack,math,sfpu,pack}()`, which
-    clear that thread's wait mask so it runs without a partner.
-- In `INIT`, set up a chain only when its producer and consumer are both
-  active in this run type (`L1_TO_L1`). A thread that runs alone in an
-  isolate clears its own wait mask instead (pack in `PACK_ISOLATE`, unpack
-  with unpack-to-dest in `UNPACK_ISOLATE`, math in `MATH_ISOLATE` when its
-  path waits on Dest). This handshake setup is the one allowed per-run-type
-  difference in `INIT` (see `perf-test`, "INIT").
-- `MATH_ISOLATE` runs math without `_llk_math_set_dvalid_` and without
-  setting up a chain to the idle pack.
-- Unpack-to-dest synchronizes through a semaphore. `L1_TO_L1` signals the
-  active pack; `UNPACK_ISOLATE` does not; `MATH_ISOLATE` must not emit source
+- `L1_TO_L1` hands Dest between threads with the semaphore scheme the compute
+  API uses on Quasar (`reg_api.h`), not the dest-dvalid scheme; the two must
+  not be mixed (`llk_math_common_api.h`, `llk_pack_common_api.h`):
+  - before the `INIT` zone: math `_llk_math_pack_sync_init_<dest_sync>()`,
+    pack `_llk_pack_dest_init_<p_pacr::PACK0, dest_sync>()`. Production runs
+    them in `compute_kernel_hw_startup`, not in the op's init, so `INIT`
+    leaves them out. Unpack-to-dest still calls `_llk_unpack_dest_init_()`
+    in `INIT`;
+  - per Dest section, math opens with `_llk_math_wait_for_dest_available_()`
+    and closes with `_llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>()`;
+    pack opens with `_llk_packer_wait_for_math_done_()` and closes with
+    `_llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>()`;
+  - unpack-to-dest writes Dest only on a loan: unpack and math (the section
+    owner) both call `_llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>()`
+    before the copy and `_llk_tile_regs_return_<...>()` after it, also when
+    math has no other work. The placers fold the borrowed section base into
+    the DEST tile index in tiles of the shape they are given, so pass the
+    tile's `TensorShape`. A TRISC3 SFPU borrows from PACK or MATH the same way.
+  The test boot (`device_setup`) seeds the semaphores and zeroes the dvalid
+  wait masks, so `L1_TO_L1` sets up no dvalid chain. The one exception is
+  unpack-to-dest unary broadcast: it has no production form and its unpack
+  ignores the section base, so it keeps the dest-dvalid chain.
+- Isolates keep the dest-dvalid helpers in `quasar_test_common.h`:
+  `set_up_zero_dest_dvalid_handshake_for_{unpack,math,sfpu,pack}()` clears a
+  thread's wait mask so it runs without a partner (pack in `PACK_ISOLATE`,
+  unpack with unpack-to-dest in `UNPACK_ISOLATE`, math in `MATH_ISOLATE` when
+  its path waits on Dest). This handshake setup is the one allowed
+  per-run-type difference in `INIT` (see `perf-test`, "INIT").
+- `PACK_ISOLATE` runs production's per-section release,
+  `_llk_pack_dest_semaphore_section_done_` (pack stall, `ZEROACC` of the
+  packed half, `SEMGET` on MATH_PACK, bank flip), with `_llk_pack_dest_init_`
+  before the `INIT` zone, but not the wait for math. With no math producer, pack posts
+  MATH_PACK itself before each section done (a stand-in for math's post), so
+  the `SEMGET` never underflows.
+- `MATH_ISOLATE` runs production's per-section math release,
+  `_llk_math_dest_section_done_` (`SEMPOST` on MATH_PACK, then in `SyncHalf`
+  the Dest bank flip), with `_llk_math_pack_sync_init_` before the `INIT`
+  zone, but not the wait for Dest. With no pack consumer, math gets MATH_PACK itself after
+  each section done (a stand-in for pack's release), so the semaphore never
+  fills up. Unpack-to-dest kernels whose math has no other work run only the
+  section done per section.
+- `MATH_ISOLATE` runs math without any other Dest hand-over. `UNPACK_ISOLATE`
+  unpacks to Dest without a loan, and `MATH_ISOLATE` must not emit source
   dvalids with no math consumer. When math is compiled out, `MATH_ISOLATE`
   measures an empty run: its metric is missing or is only zone overhead.
   Exclude it from analysis and say so; it is not a math cost.
