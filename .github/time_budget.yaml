@@ -433,7 +433,7 @@ models:
     bh_p150: 30
     bh_p150b_civ2: 8  # VibeVoice-1.5B (PR #51447)
     bh_p300: 30
-    bh_quietbox_2: 25
+    bh_quietbox_2: 30
   integration:
     wh_llmbox: 0
   device_perf:
