@@ -30,14 +30,16 @@
 //   standard ELWMUL path issues no ZEROACC; fidelity phases accumulate) and on DEST being zero at
 //   acquire (cleared by the packer on release) — the same precondition every mul_tiles has.
 //
-// RAW-LLK DEVIATION (SiLU body, 16-bit DEST): compute_kernel_lib::apply_activation_from_pack /
+// RAW-LLK DEVIATION (SiLU body): compute_kernel_lib::apply_activation_from_pack /
 //   ActivationApplyHelper<SILU> dispatch only the library's fixed calculate_silu body
 //   (ckernel_sfpu_silu.h: exp_21f + clamp + 3-op float->int + reciprocal with a masked Newton step,
-//   26 SFPU instructions per row). That body was ~68 of 109 us of conv1d-004's compute. The helper
-//   has no slot for another SFPU body, so silu_from_pack below mirrors apply_activation_from_pack
-//   (math->pack semaphore wait, packer DEST-offset flip, per-tile SFPU, SFPU-done stall) and, for a
-//   16-bit DEST, runs silu_pack::silu_bf16_rows (see there) — fewer instructions AND a more accurate
-//   exp. A 32-bit DEST keeps the library body (silu_tile_pack) unchanged. Gap closer: an
+//   26 SFPU instructions per row; one pass over conv1d-004's 96 tiles per core = 79.2 us of SFPU).
+//   The helper has no slot for another SFPU body, so silu_from_pack below mirrors
+//   apply_activation_from_pack (math->pack semaphore wait, packer DEST-offset flip, per-tile
+//   _llk_math_eltwise_unary_sfpu_params_ sequence, SFPU-done stall) and dispatches either the library
+//   body (byte-for-byte the helper's sequence) or, for a 16-bit DEST when the plan selects it
+//   (Plan.silu_body), silu_pack::silu_bf16_rows — 21% less SFPU time per pass AND correctly rounded
+//   for ~99.4% of inputs vs ~90%. A 32-bit DEST always runs the library body. Gap closer: an
 //   apply_activation_from_pack overload taking a caller SFPU functor.
 
 #include <cstdint>
@@ -88,8 +90,10 @@ inline void init() {
 }
 
 // Two rows per step with the statements interleaved, so each dependent SFPMAD's result latency is
-// covered by the other row's instruction (measured: one SiLU pass over conv1d-004's 96 tiles per
-// core, 58.8 us vs 66.4 us one row per step vs 78.8 us for the library body); x is re-read from DEST
+// covered by the other row's instruction (BH scoreboards dependent SFPU ops, so a one-row chain
+// stalls on every MAD: the same arithmetic one row per step cost more per pass despite fewer
+// instructions than the library body). Measured SFPU time of one pass over conv1d-004's 96 tiles
+// per core: 62.8 us vs 79.2 us for the library body (~27.5 vs ~34.7 cycles per row); x is re-read from DEST
 // for the final product, and each polynomial coefficient is loaded once per pair and shared by both
 // rows (peak 8 live LRegs: za, zb, ma, mb, ga, gb and two coefficients).
 template <int ITERATIONS>

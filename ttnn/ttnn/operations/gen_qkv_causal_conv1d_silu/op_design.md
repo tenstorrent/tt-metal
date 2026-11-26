@@ -178,6 +178,27 @@ Named boundary for "minimum": **DRAM/L1-bank traffic of the interleaved tensors 
 > Measured (device kernel µs, R1 → R2): 001 8.26 → 6.03, 002 9.75 → 6.83, 003 12.99 → 9.86, 020
 > 73.7 → 59.5, 004 128.2 → 127.4 (medians, noise).
 
+> **Refinement 3 as built (2026-11-26).** The SiLU block op (`conv_silu_block`) gained a second SFPU
+> body, selected per plan (`Plan.silu_body`, pinnable through `plan_limits(silu_body=...)`):
+> - `silu_pack::silu_bf16_rows` (16-bit DEST only): z = 2^floor(y)(1+frac(y)) for y = −x·log2(e)
+>   built by ONE shift of the clamped `y + 639` (exponent 9 binade), a quartic correction in
+>   m = setexp(z, 127) (relative error 1.1e-4 vs exp_21f's 1.7e-3), `approx_recip` + one unmasked
+>   Newton step (1 + z·g ≤ 2^127 stays finite), two rows interleaved per step so each dependent
+>   SFPMAD's latency is covered (BH scoreboards dependent SFPU ops). One pass over 004's 96 tiles /
+>   core: 62.8 vs 79.2 µs of SFPU; correctly rounded for ~99.4% of inputs vs ~90% (still "precise":
+>   `math_approx_mode` stays refused). The packer-thread dispatch mirrors
+>   `apply_activation_from_pack` (no slot for another body there).
+> - Default (`default_silu_body`): quartic when a core owns ONE tile-row (the activation is a tail on
+>   the critical path: 002 6.88 → 6.56, 003 9.84 → 9.30, 016 15.60 → 14.33 µs), library otherwise.
+>   On multi-row plans the cheaper body moves the median core of 004 from ~115 to ~100–106 µs but
+>   the call becomes DRAM-bound and NoC arbitration starves the cores with the longest routes from
+>   the DRAM endpoints (a grid corner that moves with the split ratio), whose tail sets the op time
+>   (~150 µs at split 24); the library body's pace keeps aggregate demand under DRAM capacity.
+> - Region (b) (`ROWS_DEPTH` / `OUT_DEPTH` 3) measured null on 004 (medians 129.6 / 128.8 / 130.7 µs);
+>   the per-tile `STALLWAIT(STALL_SFPU, MATH)` of the library SFPU start is redundant after the
+>   MATH_PACK semaphore wait but measured null (parked `SILU_TILE_STALL = True`).
+> - The next 004 lever is the dataflow side: NoC/DRAM fairness across the grid (see changelog).
+
 Regime selection function (exact, host): `regime = "rm_staged_window" if input.layout == ttnn.ROW_MAJOR_LAYOUT else "tile_untilize_staged_window"`. The intra-regime paths that only some grids/shapes trigger (multi-block cores → L1 halo copy; core-first block with `t0 > 0` → DRAM halo / extra untilized tile-row; ragged last block) are pinned by `plan_limits` tests in the acceptance test (both regimes).
 
 ### Traffic ranking

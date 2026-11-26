@@ -122,3 +122,90 @@
     - `out_group_tiles` bit-identity (ragged group at w = 3, multi-row, fp32-DEST clamp);
     - the default rules.
   - `test_perf_r2.py`: the measurement harness (skipped unless `GQKV_PERF_R2=1`), with plan pins, `block_ch_tiles` overrides, define injection and channel-paged cells.
+
+## Refinement 3 — Speed up the DRAM-bound prefill profile (conv1d-004)
+- **Date**: 2026-11-26
+- **What was done**:
+  - **(a) SiLU SFPU cost — new body `silu_pack::silu_bf16_rows`** (compute kernel, 16-bit DEST only; a 32-bit DEST keeps the library `calculate_silu`):
+    - exp(−x) = 2^y: the clamped `y + 639` lies in the exponent-9 binade, so ONE `SFPSHFT` by 9 yields the Schraudolph pattern z = 2^floor(y)(1+frac) (the library spends exexp/exman/shft on it).
+    - A quartic correction in m = setexp(z, 127), Remez on relative error (1.1e-4 vs exp_21f's 1.7e-3); `approx_recip` + one Newton step without the NaN mask (1 + z·g ≤ 2^127 stays finite); final bf16 RNE.
+    - Two rows interleaved per step, each polynomial coefficient loaded once per pair. Blackhole scoreboards dependent SFPU ops, so a serial one-row chain stalls on every SFPMAD: the same arithmetic one row per step cost 66.4 µs/pass despite fewer instructions than the library's 26.
+    - SFPU time of one pass over conv1d-004 (96 tiles/core; T(3 passes) − T(2 passes), define `GQKV_SILU_REPEAT`): **62.8 µs vs 79.2 µs** library (−21%).
+    - Precision: correctly rounded for 99.45% of inputs on device vs 90.6% for the library body (`test_silu_body.py`, isolated SiLU), always within 1 bf16 ULP, clamp extremes exact. `math_approx_mode=True` stays refused.
+    - Dispatch: the packer-thread loop mirrors `apply_activation_from_pack` (the helper has no slot for another body); raw-LLK deviation documented at the kernel head.
+  - **Selection = plan knob `Plan.silu_body`** (`default_silu_body`, pinnable via `plan_limits(silu_body=...)`, in the cache key, reported by `get_last_plan()`): quartic when a core owns one tile-row, library otherwise (and always with fp32 DEST). Reason, measured below: on multi-row plans the faster body exposes a DRAM/NoC fairness tail.
+  - **(b) buffer depths** `ROWS_DEPTH` / `OUT_DEPTH` (existing knobs): measured null on 004, left at 2.
+  - Parked live knobs (defaults reproduce the previous sequence exactly):
+    - `SILU_TILE_STALL = True`: the library SFPU start's per-tile `STALLWAIT(STALL_SFPU, MATH)`. It is redundant after the MATH_PACK semaphore wait (math posts only after `STALLWAIT(MATH | WAIT_SFPU)`), but removing it measured null (129.9 → 129.9 µs).
+    - `READER_NOC` / `WRITER_NOC`: single source for the data-movement kernels' NoCs (defaults NOC_0 / NOC_1). The swap measured 184 µs on 004.
+  - Measurement hooks (define-gated, compiled out by default): `GQKV_ABLATE_SILU`, `GQKV_SILU_REPEAT` (compute) and `GQKV_ZONES` (reader/writer DM-timeline zones R_RSV / R_RD / R_SPLW / W_SERVE / W_WOUT / W_WR).
+  - Reused: `conv_silu_block`, every CB, the plan / `plan_limits` / cache-key plumbing, the library init helper for the library body. Added: one SFPU body plus its init, the packer-thread dispatch, one `Plan` field, 2 compute CT args, `_dm_config`.
+- **Diagnosis of conv1d-004** (BH 11×10, device kernel µs; harness `test_perf_r3.py`):
+  - Library body 129.6 (median of 3; noise band 122.7–131.8); SiLU removed entirely 120.3; cheaper body ~150.
+  - Two-stage model fits every repeat count: T(k) = max(B, A + k·S), with A ≈ 47 and S = 79.2 (library) / 62.8 (quartic). The library sits at the knee (A + S ≈ 126 ≈ B). So 004 is **balanced between the packer's SiLU path and the dataflow path**.
+  - Padding the cheaper body with 8 SFPNOPs per row brought 004 back to 130.3, i.e. the cost is not SFPU work. DM zones show why: with the cheaper body the median core finishes at 105.9 µs (library: 115.1) and most of the grid ends at 99–112. But cores at physical x = 13–15, y = 4–10 straggle to 150: their first two-row read takes 34 µs (typical 17) and their first 8-tile output write 42.6 µs.
+  - Mechanism: once compute stops pacing it, the aggregate DRAM demand (~470 GB/s) exceeds capacity, and NoC arbitration starves the cores with the longest routes from the DRAM endpoints.
+  - The starved corner moves with the split-reader ratio:
+
+    | Split | Op µs | Starved region |
+    |---|---|---|
+    | 24 (NoC1 carries 24 rows + all writes) | ~150 | bottom-right |
+    | 16 | 138.7 | — |
+    | 8 | 125.0 | p50 103, p100 136 |
+    | 4 | 130.5 | — |
+    | 0 (all reads on NoC0) | 137.8 | top rows |
+
+  - Nulls on 004:
+
+    | Lever | Op µs |
+    |---|---|
+    | Bank stagger | 155 |
+    | NoC swap | 184 |
+    | Depths 3/3 (median of 3, alternating with the default) | 128.8 |
+    | Depth `ROWS_DEPTH = 3` (median of 3) | 130.7 |
+    | `OUT_DEPTH = 3` | 138.4 |
+    | Per-tile stall off | null |
+
+- **Perf** (device kernel µs, library → shipped default; single runs, small cells' noise ~1–2%):
+
+  | Group | Cell | Before → after |
+  |---|---|---|
+  | Target | 004 | 129.1 → 129.6 (median of 3), unchanged, library body |
+  | One-tile-row plans (quartic) | 001 | 5.89 → 5.80 |
+  | One-tile-row plans (quartic) | 002 | 6.88 → 6.56 (−4.7%) |
+  | One-tile-row plans (quartic) | 003 | 9.84 → 9.30 (−5.5%) |
+  | One-tile-row plans (quartic) | 005 TILE | 6.54 → 6.41 |
+  | One-tile-row plans (quartic) | 006 L1 in | 5.39 → 5.11 (−5.2%) |
+  | One-tile-row plans (quartic) | 010 L1 out | 7.23 → 6.85 (−5.3%) |
+  | One-tile-row plans (quartic) | 012 channel-paged | 15.48 → 14.36 (−7.2%) |
+  | One-tile-row plans (quartic) | 013 column-window | 6.10 → 5.80 (−4.9%) |
+  | One-tile-row plans (quartic) | 014 | 8.60 → 8.01 (−6.9%) |
+  | One-tile-row plans (quartic) | 016 | 15.60 → 14.33 (−8.1%) |
+  | Same kernel as before (library) | 020 | 59.4 → 59.6 |
+  | Same kernel as before (library) | 011 fp32 | 11.32 → 11.22 |
+  | Same kernel as before (library) | 018 | 3.59 → 3.65 |
+  | Same kernel as before (library) | 019 | 19.07 → 18.89 |
+
+  No regression.
+- **Accuracy achieved** (`test_gen_qkv_causal_conv1d_silu_precision_baseline.py`, HiFi4):
+
+  | Cell | Body | PCC | rel RMS (Phase 0) | ULP p99 |
+  |---|---|---|---|---|
+  | 001 | quartic | 0.999987 | 0.00555 (0.00556) | 18 |
+  | 003 | quartic | 0.999987 | 0.00559 (0.00560) | 17 |
+  | 020 | library | 0.999987 | 0.00558 (=) | 17 |
+  | 004 | library | 0.999987 | 0.00561 (=) | 18 |
+  | 011 fp32 DEST, cancelling | library | 0.999998 | 0.00177 (=) | 0 |
+
+  Everything is at or better than the Phase 0 baseline. A cubic correction (6.6e-4) measured +0.00001 rel RMS: its small positive bias no longer cancelled the 16-bit-DEST positive bias the way the library body's negative bias does. So the quartic, which carries exact rounding's bias, shipped.
+- **Golden test progress**: 21 / 21 passing (full file, one run).
+- **Remaining headroom (finding)**:
+  - 004 is bound by DRAM/NoC fairness, not compute: the median core can finish ~100–106 µs (stretch 117), the op is set by the starved-corner tail.
+  - Next lever is the dataflow side: per-core NoC load balancing (a per-core split ratio or a dynamic split where the reader and writer claim a tile-row's sticks from opposite ends), or demand shaping (bounded outstanding requests per core).
+  - Not done here: a static per-core split is topology-specific (the starved corner depends on DRAM-endpoint positions and harvesting), and the dynamic split needs a race-free cross-RISC claim protocol. Both are scheme changes for a dataflow phase. With that tail removed, the quartic body would lift multi-row plans too: flip `default_silu_body`.
+- **Issues encountered**:
+  - A cheaper SFPU body made 004 slower, which looked like an SFPU problem. Bisection (knock-outs, NOP padding, repeat counts) plus DM zones and per-core end-time maps located the DM tail instead.
+  - One transient JIT build failure on 018 under `--profile` did not reproduce.
+- **Tests added**:
+  - `test_silu_body.py` (7): the default-body rule, including fp32 DEST, and an isolated-SiLU accuracy test (taps 0,0,0,1, so y = x exactly) for both bodies on a one-row (001) and a multi-row (020) plan, with clamp extremes.
+  - `test_perf_r3.py`: the measurement harness (skipped unless `GQKV_PERF_R3=1`; `GQKV_ZONES=1` adds DM zones).

@@ -118,7 +118,7 @@ This moves conv1d-012, conv1d-013, conv1d-018 and conv1d-019 from `xfail_expecte
 - This comes after Refinement 1 because the reader addressing it adds sits on this same critical path; optimize the final reader.
 - Ablations must be **define-gated** (`KernelDescriptor.defines`). A source-edit ablation left stale kernel binaries in the JIT cache during verification (see `verification_report.md`).
 
-### [ ] Refinement 3 — Speed up the DRAM-bound prefill profile (conv1d-004)
+### [x] Refinement 3 — Speed up the DRAM-bound prefill profile (conv1d-004)
 
 **Type**: perf
 
@@ -140,6 +140,18 @@ This moves conv1d-012, conv1d-013, conv1d-018 and conv1d-019 from `xfail_expecte
 - Golden is green, including conv1d-011's FP32_DEST_BOUND (fp32 DEST, cancelling taps).
 - `test_gen_qkv_causal_conv1d_silu_precision_baseline.py` passes with ULP p99 and relative RMS no worse than the Phase 0 baseline in `verification_report.md`.
 - No regression across the guard set named in Refinement 2.
+
+**Outcome**:
+- **Measured** (BH 11×10, device kernel µs):
+  - conv1d-004: 129.1 → 129.6 (median of 3; noise band 123–132). Unchanged: it keeps the library SiLU body.
+  - (a) The new SiLU body `silu_pack::silu_bf16_rows` (shift-built exp, quartic correction, two rows interleaved) cuts one SFPU pass over 004 from 79.2 to 62.8 µs and is correctly rounded for 99.45% of inputs (library: 90.6%).
+  - It ships where it wins, via `Plan.silu_body` (one-tile-row plans): 002 6.88 → 6.56, 003 9.84 → 9.30, 012 15.48 → 14.36, 014 8.60 → 8.01, 016 15.60 → 14.33. No guard-set regression; precision baseline at or better than Phase 0.
+  - (b) `ROWS_DEPTH` / `OUT_DEPTH` 3: null (128.8 / 130.7).
+- **Bottleneck now**: 004 is DRAM/NoC-fairness bound.
+  - With SiLU removed the op is 120.3. With the cheaper body the median core finishes at ~100–106, but the call becomes DRAM-bound: cores with the longest NoC routes from the DRAM endpoints starve (physical x 13–15, y 4–10 at split 24; the top rows at split 0) and their tail sets the op at ~150 (125 at split 8).
+  - The library body's pace keeps demand just under capacity.
+- **Next**: a dataflow phase, per-core NoC load balancing — a dynamic split where reader and writer claim a tile-row's sticks from opposite ends, or bounded per-core outstanding requests. After that, flip `default_silu_body` for multi-row plans.
+- **Why not here**: a static per-core split is topology-specific, and a dynamic split is a cross-RISC scheme change. Both are outside this compute-side refinement.
 
 **Verifier notes**:
 - This is filed after Refinement 2 per the flagged-case order. It uses a different lever family, so it has its own phase.

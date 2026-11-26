@@ -92,8 +92,9 @@ STAGGER_ROW_WALK = False
 #   SILU_BF16_QUARTIC (1): silu_pack::silu_bf16_rows (compute kernel) — the same z = 2^floor(y)(1+f)
 #     built by one shift, a quartic mantissa correction (relative error 1.1e-4 vs 1.7e-3), an unmasked
 #     Newton step, two rows interleaved per step. Correctly rounded for ~99.4% of inputs vs 90-98%.
-#     Measured SFPU cost of one pass over conv1d-004 (96 tiles / core, device-time difference of 1 and
-#     3 passes): 58.8 us (cubic, two rows) vs 66.4 (cubic, one row) vs 78.8 us (library).
+#     Measured SFPU cost of one pass over conv1d-004 (96 tiles / core, device-time difference of 2 and
+#     3 passes, GQKV_SILU_REPEAT): 62.8 us (quartic, two rows) vs 79.2 us (library); a cubic one row
+#     per step measured 66.4 (dependent-MAD stalls), a cubic two rows per step 58.8.
 # default_silu_body picks the quartic body where it wins and the library body elsewhere (see there).
 # ---------------------------------------------------------------------------------------------
 SILU_LIBRARY = 0
@@ -322,11 +323,12 @@ def default_silu_body(core_seq_tiles_max: int) -> int:
     cores with the longest NoC routes from the DRAM endpoints (a corner of the grid that moves with the
     split-reader ratio: NoC1-heavy split 24 -> bottom-right, NoC0-only split 0 -> top rows), whose tail
     sets the op time. The library body's pace keeps demand under DRAM capacity.
-    Measured (BH 11x10, device kernel us, library vs quartic family):
-      one row:   001 5.99 vs 5.79   002 6.86 vs 6.47   003 10.00 vs 9.30   014 8.60 vs 8.07
-                 016 15.52 vs 14.24
-      several:   004 123-132 vs 150 (split 24; split 8: 126 vs 125-131, tail p100 136)
-                 020 59.3 vs 60.9
+    Measured (BH 11x10, device kernel us, library -> quartic):
+      one row:   001 5.89 -> 5.80   002 6.88 -> 6.56   003 9.84 -> 9.30   005 6.54 -> 6.41
+                 006 5.39 -> 5.11   010 7.23 -> 6.85   012 15.48 -> 14.36   013 6.10 -> 5.80
+                 014 8.60 -> 8.01   016 15.60 -> 14.33
+      several:   004 129.6 (median of 3) -> ~150 (split 24; split 8: ~125-131 with a p100 tail of
+                 136 us over a p50 of 103); 020 59.3 vs 60.9
     """
     return SILU_BF16_QUARTIC if core_seq_tiles_max == 1 else SILU_LIBRARY
 
