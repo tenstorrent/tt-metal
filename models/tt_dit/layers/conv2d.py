@@ -696,6 +696,27 @@ class Conv2d(Module):
         return x
 
 
+def warm_dram_slice_flatten(mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType = ttnn.bfloat16) -> None:
+    """Run, on a tiny tensor, the tiled reshape that ends conv2d's DRAM-sliced path.
+
+    With two or more slices conv2d writes a tiled [N, H, W, C] output and flattens it, which is a tiled reshape
+    whenever W is not whole tiles. Its kernels do not depend on the shape, but a model warmed at a size whose
+    widths are whole tiles never runs it, so they would compile at the first new size that does. Calling this
+    during warm-up compiles them there. One call per output dtype and buffer type: the binaries take the tile and
+    element size and the accessors' memory layout as compile-time args. This one covers bfloat16 in DRAM."""
+    x = ttnn.from_torch(
+        torch.zeros(1, 2, 40, ttnn.TILE_SIZE),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    y = ttnn.reshape(x, (1, 1, 80, ttnn.TILE_SIZE))
+    ttnn.deallocate(y)
+    ttnn.deallocate(x)
+
+
 def configure_conv2d(
     module: Module,
     *,

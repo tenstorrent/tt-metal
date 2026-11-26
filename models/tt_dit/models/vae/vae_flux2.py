@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import ttnn
 
-from ...layers.conv2d import configure_conv2d
+from ...layers.conv2d import configure_conv2d, warm_dram_slice_flatten
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import Flux2VaeParallelConfig
@@ -134,6 +134,9 @@ class Flux2VaeDecoder(Module):
         configure_conv2d(self.up_blocks[1].upsampler, dram_slice_area=128 * 256)
         configure_conv2d(self.up_blocks[2].resnets[0].conv1, dram_slice_area=128 * 256)
         configure_conv2d(self.conv_out, dram_slice_area=(512 + 64) * 256)
+        # The sliced convs end with a tiled reshape at every width per chip that is not whole tiles, which the
+        # warm size (1024x1024) does not have at any level.
+        warm_dram_slice_flatten(ctx.device)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # remove encoder state
