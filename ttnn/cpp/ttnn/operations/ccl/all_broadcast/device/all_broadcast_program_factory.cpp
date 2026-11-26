@@ -24,6 +24,44 @@ namespace ttnn::prim {
 
 namespace {
 
+constexpr tt::tt_metal::KernelHandle kReaderKernel = 0;
+constexpr tt::tt_metal::KernelHandle kWriterKernel = 1;
+
+// Width shards per row for a row-major width- or block-sharded input; 1 otherwise.
+uint32_t num_width_shards_of(const Tensor& input) {
+    const bool tilized = input.layout() == ttnn::TILE_LAYOUT;
+    const auto layout = input.memory_config().memory_layout();
+    if (!tilized && (layout == TensorMemoryLayout::WIDTH_SHARDED || layout == TensorMemoryLayout::BLOCK_SHARDED)) {
+        return input.padded_shape()[-1] / input.memory_config().shard_spec()->shape[1];
+    }
+    return 1;
+}
+
+// The page range [start, end) link `link` copies, before scaling by the width shards.
+std::pair<uint32_t, uint32_t> link_page_range(const Tensor& input, uint32_t num_links, uint32_t link) {
+    const uint32_t num_pages = input.mesh_buffer().num_pages();
+    uint32_t base_pages_per_worker = num_pages / num_links;
+    if (input.layout() != ttnn::TILE_LAYOUT) {
+        const auto& shape = input.logical_shape();
+        const uint32_t num_rows = std::accumulate(shape.cbegin(), shape.cend() - 1, 1u, std::multiplies<uint32_t>());
+        base_pages_per_worker = num_rows / num_links;
+    }
+    const uint32_t remainder = num_pages % num_links;
+    return {
+        (link * base_pages_per_worker) + std::min(link, remainder),
+        ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder)};
+}
+
+std::vector<CoreCoord> link_worker_cores(const AllBroadcastParams& operation_attributes, const Tensor& input) {
+    return std::get<1>(::ttnn::ccl::choose_worker_cores(
+        operation_attributes.num_links,
+        /*num_workers_per_link=*/1,
+        input.device(),
+        operation_attributes.sub_device_id,
+        CoreCoord(0, 0),
+        std::nullopt));
+}
+
 // Build a per-coord ProgramDescriptor.  The kernel args depend on the sender
 // coordinate (ring_index + forward/backward fabric neighbor lookups), so this
 // runs once per coord inside create_workload_descriptor().
@@ -61,11 +99,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     bool sharded = input_tensor.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
     bool tilized = input_tensor.layout() == ttnn::TILE_LAYOUT;
 
-    uint32_t num_width_shards = 1;
-    if (!tilized && (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-                     input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED)) {
-        num_width_shards = input_tensor.padded_shape()[-1] / input_tensor.memory_config().shard_spec()->shape[1];
-    }
+    const uint32_t num_width_shards = num_width_shards_of(input_tensor);
     // Get OP Config, topology config
     auto [num_targets_forward, num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
         ring_size, ring_index, operation_attributes.topology, true);
@@ -82,12 +116,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     // Info for RM tensors
     uint32_t row_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
     uint32_t page_size = input_tensor.mesh_buffer().aligned_page_size();
-
-    uint32_t num_rows = std::accumulate(
-        input_tensor.logical_shape().cbegin(),
-        input_tensor.logical_shape().cend() - 1,
-        1u,
-        std::multiplies<uint32_t>());
 
     // L1 Scratch CB Creation
     DataType dtype = input_tensor.dtype();
@@ -128,9 +156,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
             .page_size = cb_page_size,
         }}},
     });
-
-    // Tensor Info
-    const auto input_tensor_num_pages = input_tensor.mesh_buffer().num_pages();
 
     // KERNEL CREATION
     // Reader
@@ -226,8 +251,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
 
     desc.kernels.push_back(std::move(reader_kernel_desc));
     desc.kernels.push_back(std::move(writer_kernel_desc));
-    tt::tt_metal::KernelHandle worker_sender_reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle worker_sender_writer_kernel_id = 1;
+    tt::tt_metal::KernelHandle worker_sender_reader_kernel_id = kReaderKernel;
+    tt::tt_metal::KernelHandle worker_sender_writer_kernel_id = kWriterKernel;
 
     // Kernel Runtime Args
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
@@ -243,13 +268,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         barrier_core = mesh_device->worker_core_from_logical_core(core);
 
         // Set reader runtime args
-        uint32_t base_pages_per_worker = input_tensor_num_pages / operation_attributes.num_links;
-        if (!tilized) {
-            base_pages_per_worker = num_rows / operation_attributes.num_links;
-        }
-        uint32_t remainder = input_tensor_num_pages % operation_attributes.num_links;
-        uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
-        uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
+        const auto [input_tile_id_start, input_tile_id_end] =
+            link_page_range(input_tensor, operation_attributes.num_links, link);
 
         // Build reader RT args.  The first arg is the input tensor buffer
         // address; push it as Buffer* so the framework records a BufferBinding
@@ -387,6 +407,35 @@ tt::tt_metal::WorkloadDescriptor AllBroadcastProgramFactory::create_workload_des
     }
 
     return workload_descriptor;
+}
+
+bool all_broadcast_program_is_row_free(const Tensor& input) {
+    return input.layout() == ttnn::TILE_LAYOUT &&
+           input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+}
+
+void AllBroadcastProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const AllBroadcastParams& operation_attributes,
+    const Tensor& input,
+    std::vector<Tensor>& output_tensors,
+    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
+    TT_FATAL(mesh_coordinate.has_value(), "all_broadcast builds one program per mesh coordinate");
+    const uint32_t ring_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
+        input, *mesh_coordinate, operation_attributes.cluster_axis);
+    const uint32_t num_width_shards = num_width_shards_of(input);
+    const auto cores = link_worker_cores(operation_attributes, input);
+    for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
+        const auto [start, end] = link_page_range(input, operation_attributes.num_links, link);
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernel, cores[link]);
+        reader_args[0] = input.buffer()->address();
+        reader_args[1] = start * num_width_shards;
+        reader_args[2] = end * num_width_shards;
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernel, cores[link]);
+        writer_args[0] = output_tensors[ring_index].buffer()->address();
+        writer_args[2] = start * num_width_shards;
+        writer_args[3] = end * num_width_shards;
+    }
 }
 
 }  // namespace ttnn::prim

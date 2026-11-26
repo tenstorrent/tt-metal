@@ -625,3 +625,35 @@ def test_all_broadcast_output_mem_config(mesh_device, function_level_defaults, m
         mem_config=mem_config,
         output_mem_config=output_mem_config,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_all_broadcast_tile_rows_one_program(mesh_device):
+    """A tiled interleaved all_broadcast takes its row count at run time: one program for every row count, whole
+    tiles or not, as the composite all-gather of rows that are not whole tiles uses it."""
+    torch.manual_seed(0)
+    cluster_axis, ring_size = 1, mesh_device.shape[1]
+    first = True
+    for rows in [592, 37, 2048, 600, 1000]:
+        chunks = [torch.randn(1, 1, rows, 512).bfloat16() for _ in range(ring_size)]
+        x = ttnn.from_torch(
+            torch.cat(chunks, dim=2),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 2)),
+        )
+        before = mesh_device.num_program_cache_entries()
+        outs = ttnn.all_broadcast(
+            x, cluster_axis=cluster_axis, topology=ttnn.Topology.Linear, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.synchronize_device(mesh_device)
+        added = mesh_device.num_program_cache_entries() - before
+        assert len(outs) == ring_size
+        for k, out in enumerate(outs):
+            for t in ttnn.get_device_tensors(out):
+                assert torch.equal(ttnn.to_torch(t), chunks[k]), f"rows {rows}, source {k}"
+        assert added == (1 if first else 0), f"rows {rows}: all_broadcast added {added} programs"
+        first = False

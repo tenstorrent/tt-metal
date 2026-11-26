@@ -9,6 +9,10 @@
 #include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::prim {
+// A tiled interleaved input: the program copies its pages in per-link ranges that are runtime args, so one
+// program serves every row count, and the hash leaves the rows out.
+bool all_broadcast_program_is_row_free(const Tensor& input);
+
 struct AllBroadcastProgramFactory {
     // Declarative workload-scoped factory (Contract 2).
     //
@@ -25,14 +29,22 @@ struct AllBroadcastProgramFactory {
     //      fabric nodes), so we build one descriptor per coord rather than
     //      sharing one across the mesh.
     //
-    // Buffer base addresses are bound via emplace_runtime_args() so the
-    // framework patches them through the fast cache-hit path; no manual
-    // override_runtime_arguments() hook is required.
+    // override_runtime_arguments() re-applies the buffer addresses and the
+    // page ranges on a cache hit.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllBroadcastParams& operation_attributes,
         const Tensor& input,
         std::vector<Tensor>& output_tensors,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+    // On a cache hit: the buffer addresses, and each link's page range, which changes with the rows when the
+    // program is row free.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const AllBroadcastParams& operation_attributes,
+        const Tensor& input,
+        std::vector<Tensor>& output_tensors,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
 };
 
 }  // namespace ttnn::prim
