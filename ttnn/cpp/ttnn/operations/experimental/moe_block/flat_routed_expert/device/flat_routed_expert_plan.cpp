@@ -927,7 +927,9 @@ FlatRoutedExpertPlan make_plan(
         for (uint32_t d = 0; d < ND; ++d) {
             ids[d] = d;
         }
-        for (const auto& seg : chains(ids, p.down_cores, phys, p.down_chains, 1)) {
+        // (MEASUREMENT FLAT_DN_NOC_SWAP=1: the h chain on NOC0, its order by NOC0 hops)
+        for (const auto& seg :
+             chains(ids, p.down_cores, phys, p.down_chains, exp_env("FLAT_DN_NOC_SWAP") == 1 ? 0 : 1)) {
             p.down_chain_heads.push_back(seg.front());
             for (size_t i = 0; i + 1 < seg.size(); ++i) {
                 p.down_chain_successor[seg[i]] = seg[i + 1];

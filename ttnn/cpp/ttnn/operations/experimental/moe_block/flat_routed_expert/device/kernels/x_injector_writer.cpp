@@ -194,6 +194,9 @@ void kernel_main() {
                 constexpr uint32_t x_vc = get_named_compile_time_arg_val("x_vc")
                                               ? get_named_compile_time_arg_val("x_vc")
                                               : NOC_UNICAST_WRITE_VC;
+                if constexpr ((zz::iso & 16) != 0) {
+                    continue;
+                }
                 noc_async_write_one_packet_with_trid(
                     src + (m * sbt + k * kblk) * tb,
                     get_noc_addr(hxy >> 16, hxy & 0xFFFF, dst + m * piece),

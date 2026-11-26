@@ -106,7 +106,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* dw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_words);
     const bool head = pxy == 0;
     auto write_trid = [](uint32_t src, uint64_t dst, uint32_t bytes, uint32_t trid) {
-        for (uint32_t o = 0; o < bytes; o += NOC_MAX_BURST_SIZE) {
+        for (uint32_t o = 0; (zz::iso & 128) == 0 && o < bytes; o += NOC_MAX_BURST_SIZE) {
             const uint32_t n = bytes - o < NOC_MAX_BURST_SIZE ? bytes - o : NOC_MAX_BURST_SIZE;
             noc_async_write_one_packet_with_trid(src + o, dst + o, n, trid, write_cmd_buf, noc_index, h_vc);
         }
@@ -171,7 +171,7 @@ void kernel_main() {
                     continue;
                 }
                 const uint32_t trow = schedule.first_row[y_a] / kTileRows + y_s * mt + r;
-                for (uint32_t c = 0; c < pcd; ++c) {
+                for (uint32_t c = 0; (zz::iso & 256) == 0 && c < pcd; ++c) {
                     noc_async_write_page(trow * ht + col0 + c, y, src + (r * pcd + c) * out_page);
                 }
                 zz::hist_y.add(pcd * out_page);

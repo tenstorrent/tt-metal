@@ -78,7 +78,9 @@ void kernel_main() {
             while (NOC_STATUS_READ_REG(noc_index, NIU_MST_REQS_OUTSTANDING_ID(8)) > 128) {
             }
         }
-        noc_async_write(src, dst, bytes, noc_index, h_vc);
+        if constexpr ((zz::iso & 64) == 0) {
+            noc_async_write(src, dst, bytes, noc_index, h_vc);
+        }
     };
     constexpr uint32_t half_bytes = h_all_tiles * h_tile_bytes;
     static_assert(hbuf >= 1 && hbuf <= 3);

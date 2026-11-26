@@ -73,8 +73,10 @@ void kernel_main() {
         const uint32_t g = x2k + (place + b * round_) * x2s;
         const uint32_t bytes = sub_block_row_tiles(schedule, g / nsb) * sbt * tb;
         ASSERT(bytes <= sb_bytes);  // (within its landing slot: the schedule and mt are both the x path's)
-        noc_async_write(get_read_ptr(sb_cb), prim_land + (b % land_slots) * sb_bytes, bytes);
-        noc_async_write(get_read_ptr(sb_cb), prim2_land + (b % land_slots) * sb_bytes, bytes);
+        if constexpr ((zz::iso & 8) == 0) {
+            noc_async_write(get_read_ptr(sb_cb), prim_land + (b % land_slots) * sb_bytes, bytes);
+            noc_async_write(get_read_ptr(sb_cb), prim2_land + (b % land_slots) * sb_bytes, bytes);
+        }
         ZZ_WAIT(zz_wbar, noc_async_write_barrier());
         noc_semaphore_inc(prim_data, 1);
         noc_semaphore_inc(prim2_data, 1);

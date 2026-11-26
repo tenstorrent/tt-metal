@@ -14,7 +14,9 @@
 
 namespace zz {
 inline constexpr bool on = get_named_compile_time_arg_val("zz_flat_probes") != 0;
-// isolation (host FLAT_ISO): 1 no gate/up weight reads, 2 no down weight reads, 4 no x DRAM reads
+// isolation (host FLAT_ISO; the data movement skipped, every count and semaphore kept - the results are garbage): 1
+// gate/up weight reads, 2 down weight reads, 4 x DRAM reads, 8 x helper -> primary landing writes, 16 x primary ->
+// snake head writes, 32 x snake forwarding, 64 h gate/up -> down chain heads, 128 h along the down chains, 256 y writes
 inline constexpr uint32_t iso = get_named_compile_time_arg_val("zz_iso");
 }  // namespace zz
 

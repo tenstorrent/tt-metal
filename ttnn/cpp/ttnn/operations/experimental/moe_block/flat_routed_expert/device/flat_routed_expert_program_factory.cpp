@@ -742,11 +742,14 @@ FlatProgramHandles add_flat_routed_expert_program(
              {"down_columns", pw},
              {"down_k_block_tiles", kd},
              {"down_block_tiles", slot}});
+        // (MEASUREMENT ONLY, FLAT_DN_NOC_SWAP=1: the down-weight reads (NCRISC) on NOC1, the h chain / y writes (BRISC)
+        // on NOC0 - each RISC still owns one NOC (dedicated mode), only which)
+        const bool dn_swap = std::getenv("FLAT_DN_NOC_SWAP") != nullptr && std::getenv("FLAT_DN_NOC_SWAP")[0] == '1';
         const auto kr =
             dm("down_core_writer.cpp",
                cores,
                DataMovementProcessor::RISCV_0,
-               NOC::NOC_1,
+               dn_swap ? NOC::NOC_0 : NOC::NOC_1,
                with_added(
                    down_options,
                    {{"h_all_cb", 2},
@@ -758,7 +761,7 @@ FlatProgramHandles add_flat_routed_expert_program(
             dm("down_weight_reader.cpp",
                cores,
                DataMovementProcessor::RISCV_1,
-               NOC::NOC_0,
+               dn_swap ? NOC::NOC_1 : NOC::NOC_0,
                with_added(
                    writer_options(down_options, w_widx),
                    {{"down_weight_cb", 1},

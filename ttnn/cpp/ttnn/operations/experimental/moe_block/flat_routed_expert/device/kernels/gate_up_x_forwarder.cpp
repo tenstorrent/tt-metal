@@ -151,7 +151,7 @@ void kernel_main() {
                     continue;
                 }
                 const uint32_t off = ((iss / xp) % x_slots) * x_bytes + (iss % xp) * piece;
-                for (uint32_t o = 0; o < piece; o += NOC_MAX_BURST_SIZE) {
+                for (uint32_t o = 0; (zz::iso & 32) == 0 && o < piece; o += NOC_MAX_BURST_SIZE) {
                     const uint32_t n = piece - o < NOC_MAX_BURST_SIZE ? piece - o : NOC_MAX_BURST_SIZE;
                     if constexpr (x_stateful) {
                         noc_async_write_one_packet_with_trid_with_state(

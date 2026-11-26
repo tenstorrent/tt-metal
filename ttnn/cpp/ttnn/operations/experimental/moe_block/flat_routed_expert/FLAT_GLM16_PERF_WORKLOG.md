@@ -97,6 +97,41 @@ Full matrix (watcher + NoC sanitizer: 28 accuracy + 28 determinism pass), vs bef
 1055 (-3.5%), M 480 1498 -> 1376 (-8.2%), zipf -4.5%; GLM 8x4 hot -10.1%, DSV4.1-Flash hot -10.6%; worst +1.6%
 (DSV4.1-Flash 5120 uniform), +0.7% GLM-5.3-Flash.
 
+## Data movement ablation (FLAT_ISO bits: the transfer skipped, every count / semaphore kept)
+
+Bits: 1 gate/up weight reads, 2 down weight reads, 4 x DRAM reads, 8 x helper -> primary landing, 16 x primary ->
+snake head, 32 x snake forwarding, 64 h gate/up -> chain heads, 128 h along the chains, 256 y writes. All bits
+together and the on-chip ones (504) run hang-free under the watcher + NoC sanitizer. GLM 4x4 uniform, us:
+
+| removed | M 80 | M 320 | M 480 |
+|---|---|---|---|
+| nothing | 796.7 | 1054.0 | 1380.2 |
+| gate/up weights (1) | 357.9 | 942.6 | 1334.4 |
+| down weights (2) | 601.4 | 959.8 | 1345.1 |
+| x DRAM (4) | 770.3 | 1000.4 | 1352.8 |
+| x landing (8) | 793.6 | 1035.0 | 1362.3 |
+| x head (16) | 796.5 | 1038.2 | 1361.1 |
+| x snake (32) | 789.4 | 1024.6 | 1354.1 |
+| h send (64) | 797.1 | 1055.3 | 1380.3 |
+| h chain (128) | 791.2 | 1045.5 | 1351.7 |
+| y (256) | 769.2 | 1005.7 | 1357.1 |
+| all x (60) | 755.9 | 954.3 | 1342.6 |
+| both weights (3) | 334.2 | 935.9 | 1328.1 |
+| all h (192) | 789.9 | 1044.7 | 1353.0 |
+| all reads (7) | 333.3 | 934.2 | 1325.7 |
+| all on-chip (504) | 750.1 | 949.0 | 1337.6 |
+| everything (511) | 287.3 | 893.2 | 1280.8 |
+
+Only one movement left (511 minus its bit): gate/up weights 490.9 / 906.5 / 1293.6, x snake 317.1 / 914.4 / 1301.0,
+h chain 295.0 / 901.3 / 1287.9, every other one within ~6 us of the floor. Alone almost nothing costs at M 320 (the
+snake +21, gate/up weights +13): the 161 us over the floor there is the movements' interaction (gate/up + down weight
+reads together, ~110, and the x path beside them). M 80 is the weight bytes (DRAM).
+
+FLAT_DN_NOC_SWAP=1 (down weight reads on NOC1, the h chain / y on NOC0; each RISC still one NOC): M 80 / 320 / 480
+857.5 / 1521.9 / 2014.6 - the down weight wait does not move (96.5 vs 97.4 us), the h chain on NOC0 (in NOC1 order)
+stalls everything (gate/up h wait 818 us). With the chains ordered by NOC0 hops: 821.7 / 1084.3 / 1469.3, still worse
+than 796.6 / 1055.9 / 1364.2. Not kept.
+
 ## DRAM timeline (zz_hist.hpp: bytes landed a reader in 12 us bins, FLAT_ZZ_PROBES=1)
 
 Per bin: gate/up weights by bank, down weights, x reads (helpers), y writes (bfp8 tiles, down_core_writer). Bytes a
