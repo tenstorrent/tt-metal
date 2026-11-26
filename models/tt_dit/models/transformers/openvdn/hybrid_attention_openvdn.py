@@ -128,6 +128,7 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         self.gate_expand = tensor.from_torch(expand.reshape(1, 1, *expand.shape), device=mesh_device)
         self.gate_config = config
         self._windows: dict[HybridLayout, WindowSoftmax] = {}
+        self._cache: dict[tuple, ttnn.Tensor] = {}
 
     # ------------------------------------------------------------------ weights
 
@@ -226,10 +227,18 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
                 return t
             return ttnn.slice(t, [0, 0, 0, 0], [t.shape[0], t.shape[1], length, t.shape[3]])
 
+        # OPENVDN_LOCAL_OUT=1: the per-row tail (softmax gate, to_out, to_out_linear) runs on this device's rows only.
+        local_out = os.environ.get("OPENVDN_LOCAL_OUT") == "1" and self.sp_factor > 1
+        x_local = x_1BND
         x_1BND, q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE = (
             whole(t) for t in (x_1BND, q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE)
         )
         self._mark("projections and SP gather")
+
+        def to_local(t: ttnn.Tensor) -> ttnn.Tensor:  # whole logical rows -> this device's padded rows
+            if t.shape[2] < padded_len:
+                t = ttnn.pad(t, [(0, 0), (0, 0), (0, padded_len - t.shape[2]), (0, 0)], 0.0)
+            return ttnn.mesh_partition(t, dim=2, cluster_axis=self.sp_mesh_axis)
 
         if full_cover:
             softmax_BHNE = ttnn.transformer.scaled_dot_product_attention(
@@ -244,8 +253,10 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             softmax_BHNE = self._window(layout)(q_BHNE, k_BHNE, v_BHNE)
         self._mark("window softmax")
         softmax_1BND = ttnn.unsqueeze(ttnn.transformer.concatenate_heads(softmax_BHNE), 0)
+        if local_out:
+            softmax_1BND = to_local(softmax_1BND)
 
-        gate = ttnn.sigmoid(self.softmax_gate(x_1BND))  # [1, 1, N, local heads]
+        gate = ttnn.sigmoid(self.softmax_gate(x_local if local_out else x_1BND))  # [1, 1, N, local heads]
         gate = ttnn.matmul(gate, self.gate_expand, compute_kernel_config=self.gate_config)
         softmax_1BND = ttnn.multiply(softmax_1BND, gate)
 
@@ -270,6 +281,26 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
                 text=text,
             )
             self._mark("linear branch")
+            if local_out:
+                # The video rows' readout placed in the whole sequence (zero elsewhere), then this device's rows.
+                width = readout.shape[-1]
+                pieces = [self._zero_rows(vs, width)] if vs else []
+                pieces.append(readout)
+                if ve < padded_len:
+                    pieces.append(self._zero_rows(padded_len - ve, width))
+                readout = to_local(ttnn.concat(pieces, dim=2))
+                readout = self._gather(readout, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
+                out = ttnn.add(out, self.to_out_linear(readout))
+        if local_out:
+            self._mark("output rows assembled")
+            if length < padded_len:
+                out = ttnn.multiply(out, self._valid_rows(length, padded_len))  # pad rows zero, as `ttnn.pad` left them
+            if addcmul_residual is not None:
+                out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
+            self._mark("attention end")
+            return out
+
+        if not full_cover:
             readout = self._gather(readout, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
             video = ttnn.add(rows_slice(out, vs, ve), self.to_out_linear(readout))
             pieces = [rows_slice(out, 0, vs)] if vs else []
@@ -294,6 +325,24 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
 
     def _mark(self, name: str) -> None:
         ops.mark(self.mesh_device, name)
+
+    def _zero_rows(self, rows: int, width: int) -> ttnn.Tensor:
+        key = ("zeros", rows, width)
+        if key not in self._cache:
+            self._cache[key] = ttnn.zeros(
+                [1, 1, rows, width], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device
+            )
+        return self._cache[key]
+
+    def _valid_rows(self, length: int, padded_len: int) -> ttnn.Tensor:
+        """`[1, 1, padded / SP, 1]` per device: 1 on the logical rows, 0 on the pad tail."""
+        key = ("valid", length, padded_len)
+        if key not in self._cache:
+            valid = (torch.arange(padded_len) < length).to(torch.float32).reshape(1, 1, padded_len, 1)
+            self._cache[key] = tensor.from_torch(
+                valid, device=self.mesh_device, dtype=ttnn.bfloat16, mesh_axes=[None, None, self.sp_mesh_axis, None]
+            )
+        return self._cache[key]
 
     def _gather(self, t: ttnn.Tensor, *, dim: int, mesh_axis: int, factor: int) -> ttnn.Tensor:
         if factor == 1:
