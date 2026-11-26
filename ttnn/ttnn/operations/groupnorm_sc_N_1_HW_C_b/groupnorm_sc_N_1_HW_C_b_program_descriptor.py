@@ -77,13 +77,12 @@ CB_SUM_ACC = 7
 CB_SUMSQ_ACC = 8
 CB_CHAN_SCALE = 9
 CB_CHAN_WORK = 10
-CB_CHAN_SHIFT = 11
 CB_GROUP_MAP = 12
-CB_GAMMA_ROWS = 13
-CB_BETA_ROWS = 14
+CB_GAMMA_ROWS = 13  # expand in1: gamma map (W bf16 tiles), + beta map (W) when beta; reader-built
 CB_LOCAL_PARTIALS = 15
 CB_GATHERED_PARTIALS = 16
 CB_ONES_TILES = 17
+CB_MR_E = 18  # [mean*rstd, e] (Float32, 1-2 pages), the b' expand matmul's in0: a view on the local partials
 CB_STATS_OUT = 19
 CB_GROUP_STATS = 20
 CB_AFFINE_STAGING = 21  # reader-only staging: pilot row (step 0) / affine slices (step B), disjoint in time
@@ -166,12 +165,12 @@ def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta, map
         + (0 if tile_shard else input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm))
         + 1  # the constant -1 tile (pass 2)
         + R  # ones tiles
-        + W * (2 + hg + hb)  # map, pilot rows, gamma rows, beta rows
+        + W * (2 + hg + hb)  # map, pilot rows, gamma map, beta map
     )
     # Sharded: TILE packs into the output shard, RM pack-untilizes into it (no output tile ring).
     out_ring = 0 if sharded else output_ring_bytes(T)
-    # 2W: alias groups E (sum acc / chan scale) and C (sumsq acc / chan work / chan shift).
-    # 2R + 7: gathered partials, local partials (2), stats out (2), group stats (2), group shift (1).
+    # 2W: alias groups E (sum acc / chan scale) and C (sumsq acc / chan work).
+    # 2R + 7: gathered partials, local partials / [mean*rstd, e] (2), stats out (2), group stats (2), group shift (1).
     f32_bytes = out_ring + F32_TILE_BYTES * (2 * W + 2 * R + 7)
     staging = staging_bytes(W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb)
     return BF16_TILE_BYTES * bf16_pages + f32_bytes + staging
@@ -684,17 +683,12 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             [(CB_SUM_ACC, f32, F32_TILE_BYTES), (CB_CHAN_SCALE, f32, F32_TILE_BYTES)],
         )
     )
-    # Alias group C: the T2 spill accumulator / chan_work / chan_shift, in-place lockstep hand-offs (last pass-1 chunk,
-    # 5d/5e).
+    # Alias group C: the T2 accumulator (pass 1) / chan_work (b', expand -> pass 2), disjoint lifetimes.
     cbs.append(
         _cb(
             W * F32_TILE_BYTES,
             cores,
-            [
-                (CB_SUMSQ_ACC, f32, F32_TILE_BYTES),
-                (CB_CHAN_WORK, f32, F32_TILE_BYTES),
-                (CB_CHAN_SHIFT, f32, F32_TILE_BYTES),
-            ],
+            [(CB_SUMSQ_ACC, f32, F32_TILE_BYTES), (CB_CHAN_WORK, f32, F32_TILE_BYTES)],
         )
     )
     cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GROUP_MAP, bf16, BF16_TILE_BYTES)]))
@@ -702,11 +696,18 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     cbs.append(_cb(BF16_TILE_BYTES, cores, [(CB_NEG_ONE, bf16, BF16_TILE_BYTES)]))
     cbs.append(_cb(F32_TILE_BYTES, cores, [(CB_GROUP_SHIFT, f32, F32_TILE_BYTES)]))
     if hg:
-        cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GAMMA_ROWS, bf16, BF16_TILE_BYTES)]))
-    if hb:
-        cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_BETA_ROWS, bf16, BF16_TILE_BYTES)]))
-    # Local partials (collapse -> gather).
-    cbs.append(_cb(2 * F32_TILE_BYTES, cores, [(CB_LOCAL_PARTIALS, f32, F32_TILE_BYTES)]))
+        # The expand matmul's in1: the gamma map, + the beta map when beta (reader-built; beta-only is refused).
+        cbs.append(_cb((hg + hb) * W * BF16_TILE_BYTES, cores, [(CB_GAMMA_ROWS, bf16, BF16_TILE_BYTES)]))
+    # Alias group D: local partials (collapse -> gather) / [mean*rstd, e] (expand). The writer pops the partials
+    # after its gather write, before the stats multicast the expand waits for can arrive; the next collapse packs
+    # only after this block's pass 2.
+    cbs.append(
+        _cb(
+            2 * F32_TILE_BYTES,
+            cores,
+            [(CB_LOCAL_PARTIALS, f32, F32_TILE_BYTES), (CB_MR_E, f32, F32_TILE_BYTES)],
+        )
+    )
     # Remote-written landing zones (allocated on every used core so the base address is identical).
     cbs.append(_cb(2 * R * F32_TILE_BYTES, cores, [(CB_GATHERED_PARTIALS, f32, F32_TILE_BYTES)]))
     cbs.append(_cb(R * BF16_TILE_BYTES, cores, [(CB_ONES_TILES, bf16, BF16_TILE_BYTES)]))
@@ -737,9 +738,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         (ttnn.TensorAccessorArgs(beta) if beta is not None else ttnn.TensorAccessorArgs()).get_compile_time_args()
     )
 
-    exp_sbw = _largest_divisor_at_most(W, 4)  # expand matmul out_subblock_w (<= DEST_AUTO_LIMIT fp32 half-sync)
-
-    # Compute is built once per role too (IS_ROOT is compile-time, CT 8): a runtime role flag lets O3 unswitch the
+    # Compute is built once per role too (IS_ROOT is compile-time, CT 7): a runtime role flag lets O3 unswitch the
     # block loop on it, emitting the whole per-block body twice; the root binary must fit the kernel-config ring
     # (also under the watcher / assert build).
     def compute_ct(is_root):
@@ -750,7 +749,6 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
             hg,
             hb,
             R,
-            exp_sbw,
             int(sharded),
             int(is_root),
             chunk_zones,

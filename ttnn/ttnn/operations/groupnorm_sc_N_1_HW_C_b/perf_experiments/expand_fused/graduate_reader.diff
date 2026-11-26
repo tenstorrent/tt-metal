@@ -1,0 +1,82 @@
+--- kernels/groupnorm_sc_N_1_HW_C_b_reader.cpp	2026-11-26 08:48:12.484770491 +0000
++++ kernels/groupnorm_sc_N_1_HW_C_b_reader.cpp	2026-11-26 10:18:22.246032559 +0000
+@@ -187,44 +187,51 @@
+                     cb_push_back(cb_group_shift, 1);
+                 }
+
+-                // ---------------- Affine rows ----------------
+-                if constexpr (NUM_AFFINE > 0) {
+-                    // Slice bytes [c_start*2, (c_start+P)*2) from the 64 B-aligned start below them.
++                // ---------------- Affine expand map (expand_fused) ----------------
++                // cb_gamma_rows holds the expand matmul's in1 (transposed): W "gamma map" tiles, element
++                // (slice lane r, group lane l) = gamma[c(r)] at the plain map's one-hot position, followed (beta)
++                // by W "beta map" tiles with -beta[c(r)] in column 0. compute: a = rstd x gmap^T and
++                // b' = [mean*rstd, e] x [gmap; bmap]^T with e's column 0 = 1, so b' = mean*rstd*gamma - beta.
++                if constexpr (HAS_GAMMA) {
++                    constexpr uint32_t AMAP_TILES = (HAS_BETA ? 2 : 1) * W;
+                     const uint32_t lo = (c_start * 2) & ~(ALIGN - 1);
+                     const uint32_t skew_hw = (c_start * 2 - lo) / 2;
+                     const uint32_t len = ((c_start + P) * 2 - lo + ALIGN - 1) & ~(ALIGN - 1);
+-                    uint64_t src_noc[NUM_AFFINE];
+-                    if constexpr (HAS_GAMMA) {
+-                        src_noc[0] = gamma_acc.get_noc_addr(0, lo);
+-                    }
++                    noc_async_read(gamma_acc.get_noc_addr(0, lo), staging, len);
+                     if constexpr (HAS_BETA) {
+-                        src_noc[NUM_AFFINE - 1] = beta_acc.get_noc_addr(0, lo);
++                        noc_async_read(beta_acc.get_noc_addr(0, lo), staging + AFFINE_STAGE_BYTES, len);
+                     }
+-                    for (uint32_t k = 0; k < NUM_AFFINE; ++k) {
+-                        noc_async_read(src_noc[k], staging + k * AFFINE_STAGE_BYTES, len);
++                    cb_reserve_back(cb_gamma_rows, AMAP_TILES);
++                    if (blk == 0) {
++                        // Off-position elements stay zero across blocks: the one-hot positions are block-invariant
++                        // (every slice starts on a group boundary) and the ring returns to its base.
++                        DataflowBuffer amap_dfb(cb_gamma_rows);
++                        noc.async_write_zeros(amap_dfb, AMAP_TILES * BF16_TILE_BYTES);
++                        noc.write_zeros_l1_barrier();
+                     }
+                     noc_async_read_barrier();
+-
+-                    // Row 0 of faces 0/1 of each tile carries lane v = channel c_start + (v mod P), two lanes per
+-                    // word (P and the skew are even), consumed with BroadcastDim::Row.
+-                    for (uint32_t k = 0; k < NUM_AFFINE; ++k) {
+-                        const uint32_t cb = (HAS_GAMMA && k == 0) ? cb_gamma_rows : cb_beta_rows;
+-                        volatile tt_l1_ptr uint32_t* sv =
+-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging + k * AFFINE_STAGE_BYTES);
+-                        cb_reserve_back(cb, W);
+-                        const uint32_t dst = get_write_ptr(cb);
+-                        if (blk == 0) {
+-                            // Rows 1..31 stay zero across blocks (the W-page ring returns to its base).
+-                            DataflowBuffer rows_dfb(cb);
+-                            noc.async_write_zeros(rows_dfb, W * BF16_TILE_BYTES);
+-                            noc.write_zeros_l1_barrier();
++                    volatile tt_l1_ptr uint16_t* gs = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging);
++                    volatile tt_l1_ptr uint16_t* bs =
++                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(staging + AFFINE_STAGE_BYTES);
++                    volatile tt_l1_ptr uint16_t* am =
++                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_gamma_rows));
++                    uint32_t lane = 0, in_group = 0, in_period = 0;
++                    for (uint32_t v = 0; v < W * 32; ++v) {
++                        const uint32_t r = v & 31;
++                        const uint32_t row_off = (v >> 5) * 1024 + (r >> 4) * 512 + (r & 15) * 16;
++                        const uint32_t ch = skew_hw + in_period;  // in_period == v % P
++                        am[row_off + (lane >> 4) * 256 + (lane & 15)] = gs[ch];
++                        if constexpr (HAS_BETA) {
++                            am[W * 1024 + row_off] = bs[ch] ^ 0x8000;  // -beta, column 0 of the beta map
+                         }
+-                        volatile tt_l1_ptr uint32_t* dv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
+-                        for (uint32_t v = 0; v < W * 32; v += 2) {
+-                            dv[((v >> 5) * 1024 + row0_lane(v & 31)) >> 1] = sv[(skew_hw + v % P) >> 1];
++                        if (++in_period == P) {
++                            in_period = in_group = lane = 0;
++                        } else if (++in_group == CG) {
++                            in_group = 0;
++                            ++lane;
+                         }
+-                        cb_push_back(cb, W);
+                     }
++                    cb_push_back(cb_gamma_rows, AMAP_TILES);
+                 }
+                 continue;
+             }

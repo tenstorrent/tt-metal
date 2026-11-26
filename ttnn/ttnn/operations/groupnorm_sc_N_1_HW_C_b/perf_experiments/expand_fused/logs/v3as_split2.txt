@@ -1,0 +1,4 @@
+case                       variant    affine      kernel_ns    EXPAND_TRUE p50/max   pcc       rms
+unet_rm_ip_1024x1280       v3as       gamma_beta      26210       2094/      2106   0.999998 0.00183
+vae_tile_16384x512         v3as       gamma_beta      53901       1017/      1036   0.999998 0.00182
+unet_rm_ip_16384x960       v3as       gamma_beta     166952       2637/      2641   0.999998 0.00205

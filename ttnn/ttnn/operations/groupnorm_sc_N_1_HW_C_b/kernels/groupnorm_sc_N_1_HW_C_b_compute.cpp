@@ -11,8 +11,9 @@
 //   collapse            : matmul(chan row [1 x W], map [W x 1]) -> 2 local partial tiles (row 0 = group lanes)
 //   combine (root)      : matmul(ones [1 x R], gathered [R x 2]) -> [S1', T2] replicated rows, finalized in the
 //                         same DEST window (raw SFPU PostComputeFn, + the group shift k) -> [rstd, mean]
-//   expand              : matmul<transpose>(stats, map) -> per-channel rstd / mean (rows replicated);
-//                         a = rstd*gamma, m = mean*a, b' = m - beta
+//   expand              : two matmuls against the reader's gamma map (+ beta map), raw LLK (expand_matmul):
+//                         a = rstd x gmap, b' = [mean*rstd, e] x [gmap; bmap] = mean*rstd*gamma - beta, per
+//                         channel (rows replicated); no affine: the group map, transposed
 //   normalize           : per chunk y = (-1)*b' + x*a, two accumulating FPU multiplies into one DEST tile
 //                         (raw compute API), resident chunks first; sharded RM packs untilized straight into the
 //                         output shard (pack_untilize_dest)
@@ -51,13 +52,13 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #endif
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
 
 using namespace compute_kernel_lib;
 
@@ -75,10 +76,8 @@ constexpr uint32_t cb_sum_acc = 7;
 constexpr uint32_t cb_sumsq_acc = 8;
 constexpr uint32_t cb_chan_scale = 9;
 constexpr uint32_t cb_chan_work = 10;
-constexpr uint32_t cb_chan_shift = 11;
 constexpr uint32_t cb_group_map = 12;
-constexpr uint32_t cb_gamma_rows = 13;
-constexpr uint32_t cb_beta_rows = 14;
+constexpr uint32_t cb_gamma_rows = 13;  // expand in1: gamma map (W tiles) + beta map (W, with beta)
 constexpr uint32_t cb_local_partials = 15;
 constexpr uint32_t cb_gathered_partials = 16;
 constexpr uint32_t cb_ones_tiles = 17;
@@ -86,6 +85,10 @@ constexpr uint32_t cb_stats_out = 19;
 constexpr uint32_t cb_group_stats = 20;
 constexpr uint32_t cb_pilot_rows = 22;   // -k per channel (row 0), held for pass 1
 constexpr uint32_t cb_group_shift = 24;  // root: k per group lane, rows replicated
+// [mean*rstd, e] (Float32, K_B pages; e = 1.0 everywhere, column 0 is what counts), the b' expand matmul's in0. A view
+// on the local partials' bytes (alias group D): the writer popped those after its gather write, before the stats
+// multicast that the expand waits for could arrive, and the next collapse packs them only after this block's pass 2.
+constexpr uint32_t cb_mr_e = 18;
 
 constexpr uint32_t W = get_compile_time_arg_val(0);
 constexpr uint32_t CHUNK_HT = get_compile_time_arg_val(1);
@@ -93,24 +96,36 @@ constexpr bool IS_RM = get_compile_time_arg_val(2) != 0;
 constexpr bool HAS_GAMMA = get_compile_time_arg_val(3) != 0;
 constexpr bool HAS_BETA = get_compile_time_arg_val(4) != 0;
 constexpr uint32_t R = get_compile_time_arg_val(5);
-constexpr uint32_t EXP_SBW = get_compile_time_arg_val(6);  // expand matmul out_subblock_w
 // The input / output are L1 shards backing their CBs (TILE: the input ring and cb_output_tiles; RM: cb_input_rm
 // and cb_output_rm). Sharded RM untilizes each normalized chunk into the output shard.
-constexpr bool SHARDED = get_compile_time_arg_val(7) != 0;
+constexpr bool SHARDED = get_compile_time_arg_val(6) != 0;
 constexpr bool UNTILIZE_OUT = SHARDED && IS_RM;
 // One binary per role (the unit root combines and finalizes). Compile-time so the block loop is not unswitched on
 // it (two copies of the whole per-block body would not fit the kernel-config ring under the watcher build).
-constexpr bool IS_ROOT = get_compile_time_arg_val(8) != 0;
+constexpr bool IS_ROOT = get_compile_time_arg_val(7) != 0;
 // Per-chunk device zones (perf_instrumentation.hpp): the host enables them only when every core's chunk count keeps
 // the zone executions inside the per-RISC marker budget (a long DRAM block would silently exhaust it).
-constexpr bool CHUNK_ZONES = get_compile_time_arg_val(9) != 0;
+constexpr bool CHUNK_ZONES = get_compile_time_arg_val(8) != 0;
 constexpr uint32_t T = CHUNK_HT * W;
 // Tiles per DEST window of the pass-2 chain a*x - b': each element runs over the whole window, so its FPU init is paid
 // once per window, not per tile. The chain clamps it to DEST.
 constexpr uint32_t CHAIN_BLOCK = DEST_AUTO_LIMIT;
 
-// b' lives in cb_chan_work when beta is present (5e writes it back in place), else in cb_chan_shift.
-constexpr uint32_t cb_bprime = HAS_BETA ? cb_chan_work : cb_chan_shift;
+// b' lives in cb_chan_work (the expand's second matmul writes it there).
+constexpr uint32_t cb_bprime = cb_chan_work;
+// Expand matmul in1: the gamma map (+ beta map) from the reader, laid out [group lane x channel] (no transpose),
+// else the plain group map, [channel x group lane] (unpacked transposed).
+constexpr uint32_t cb_amap = HAS_GAMMA ? cb_gamma_rows : cb_group_map;
+constexpr bool EXP_TRANSPOSE = !HAS_GAMMA;
+constexpr uint32_t K_B = HAS_BETA ? 2 : 1;  // b' matmul inner tiles: [mean*rstd] (+ [e] against the beta map)
+static_assert(
+    !HAS_BETA || HAS_GAMMA, "the beta map rides in cb_gamma_rows behind the gamma map (beta-only is refused)");
+// Expand matmul subblocking: every subblock is EXP_SBW_E = min(W, 4) tiles wide (one short init per product, a full
+// fp32 half-sync DEST per subblock). W % 4 != 0: the last subblock is placed at column W - 4 (overlapping its
+// predecessor) and packs only its trailing EXP_LAST tiles. So W = 5 runs 2 subblocks, not W / EXP_SBW = 5.
+constexpr uint32_t EXP_SBW_E = W < 4 ? W : 4;
+constexpr uint32_t EXP_NSB = (W + EXP_SBW_E - 1) / EXP_SBW_E;
+constexpr uint32_t EXP_LAST = W - (EXP_NSB - 1) * EXP_SBW_E;  // tiles the last subblock publishes
 
 // RM tilize is called from three sites (pass 1 / pre-tilize / pass 2) with a runtime extent; it is emitted
 // once rather than inlined per site, so the five kernel binaries fit the kernel-config ring also under the
@@ -379,18 +394,16 @@ ALWI void normalize_untilize_chunk(uint32_t rows_valid) {
     cb_pop_front(x_cb, T);
 }
 
-// matmul_block with the map as in1 (resident, never popped): collapse (transpose=false) / expand (true).
-template <bool transpose>
-ALWI void matmul_with_map(
-    CircularBuffer& in0, CircularBuffer& map, CircularBuffer& out, const MatmulBlockShape& shape) {
+// Collapse: [1 x W] per-channel row x the map [W x 1] (in1, resident, never popped) -> one tile.
+ALWI void collapse_with_map(CircularBuffer& in0, CircularBuffer& map, CircularBuffer& out) {
     matmul_block<
-        transpose,
+        false,
         false,
         LastBlockTarget::Out,
         OutputCBLayout::SubblockMajor,
         matmul_config::InitMode::Short,
         InputPolicy::WaitAndPopPerKBlock,
-        InputPolicy::NoWaitNoPop>(in0, map, out, out, shape);
+        InputPolicy::NoWaitNoPop>(in0, map, out, out, MatmulBlockShape::of(1, 1, 1, 1, W, 1));
 }
 
 #ifdef TRISC_MATH
@@ -468,6 +481,36 @@ struct FinalizeStats {
     }
 };
 
+// RAW LLK (bypasses compute_kernel_lib::matmul_block for the two expand products only; measured, expand stage
+// unet_rm_ip_1024x1280 2.76 -> 1.29 us, whole op 27.1 -> 25.4 us; changelog Perf 1, Helper bypasses). Mechanism: (1)
+// the helper packs every subblock it computes, so a W = 5 / 7 / 10 / 15 row can only be tiled by the largest divisor of
+// W that fits DEST (1 / 1 / 2 / 3 tiles): one DEST handshake + pack per 1..3 tiles. Here the last subblock overlaps its
+// predecessor and packs only its new tiles (pack_block from a DEST offset), so every subblock is a full 4-tile
+// DEST half (W = 5: 2 subblocks instead of 5) with a single short init per product. (2) Under fp32_dest_acc_en
+// the helper re-issues pack_reconfig_data_format on every subblock; here once per product.
+template <uint32_t K>
+ALWI void expand_matmul(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
+    reconfig_data_format(in1_cb, in0_cb);  // srcA = in1 (the map), srcB = in0
+    PACK((pack_reconfig_data_format(out_cb)));
+    ckernel::matmul_block_init(in0_cb, in1_cb, EXP_TRANSPOSE, EXP_SBW_E, 1, K);
+    cb_wait_front(in0_cb, K);
+    for (uint32_t sb = 0; sb < EXP_NSB; ++sb) {
+        const bool last = sb == EXP_NSB - 1;
+        const uint32_t n0 = last ? W - EXP_SBW_E : sb * EXP_SBW_E;
+        const uint32_t n_out = last ? EXP_LAST : EXP_SBW_E;
+        tile_regs_acquire();
+        for (uint32_t k = 0; k < K; ++k) {
+            ckernel::matmul_block(in0_cb, in1_cb, k, k * W + n0, 0, EXP_TRANSPOSE, EXP_SBW_E, 1, K);
+        }
+        tile_regs_commit();
+        cb_reserve_back(out_cb, n_out);
+        tile_regs_wait();
+        pack_block(EXP_SBW_E - n_out, out_cb, n_out);
+        tile_regs_release();
+        cb_push_back(out_cb, n_out);
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -486,12 +529,6 @@ void kernel_main() {
     CircularBuffer gathered_cb(cb_gathered_partials);
     CircularBuffer group_stats_cb(cb_group_stats);
     CircularBuffer stats_out_cb(cb_stats_out);
-
-    DataflowBuffer chan_scale_dfb(cb_chan_scale);
-    DataflowBuffer chan_work_dfb(cb_chan_work);
-    DataflowBuffer chan_shift_dfb(cb_chan_shift);
-    DataflowBuffer gamma_dfb(cb_gamma_rows);
-    DataflowBuffer beta_dfb(cb_beta_rows);
 
     compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(cb_chan_scale, cb_group_map, cb_local_partials);
 
@@ -565,8 +602,8 @@ void kernel_main() {
             MaybeDeviceZoneScope("c_collapse");
             // ---------------- collapse_to_group_partials ----------------
             // [1 x W] per-channel row x [W x 1] map -> one tile; row 0 holds the G_core group lanes.
-            matmul_with_map<false>(chan_scale_cb, map_cb, local_partials_cb, MatmulBlockShape::of(1, 1, 1, 1, W, 1));
-            matmul_with_map<false>(chan_work_cb, map_cb, local_partials_cb, MatmulBlockShape::of(1, 1, 1, 1, W, 1));
+            collapse_with_map(chan_scale_cb, map_cb, local_partials_cb);
+            collapse_with_map(chan_work_cb, map_cb, local_partials_cb);
         }
 
         // RM stall shadow: tilize the first pass-2 re-read chunk before blocking on the combine.
@@ -611,42 +648,97 @@ void kernel_main() {
             MaybeDeviceZoneScope("c_wait_stats");
             cb_wait_front(cb_group_stats, 2);
         }
+        if constexpr (HAS_GAMMA) {
+            // The reader builds the gamma / beta maps in the combine's stall shadow.
+            MaybeDeviceZoneScope("c_wait_affine");
+            cb_wait_front(cb_gamma_rows, K_B * W);
+        }
         {
             MaybeDeviceZoneScope("c_expand");
-            // stats tile [32 x 32 lanes] x map^T [lanes x 32 channels] -> per-channel value, rows replicated.
-            const auto expand_shape = MatmulBlockShape::of(1, W / EXP_SBW, 1, EXP_SBW, 1, 1);
-            if constexpr (HAS_GAMMA) {
-                // Both expands land in cb_chan_work (rstd_ch, then mean_ch): one call site, two iterations.
-                for (uint32_t s = 0; s < 2; ++s) {
-                    matmul_with_map<true>(group_stats_cb, map_cb, chan_work_cb, expand_shape);
-                    if (s == 0) {
-                        eltwise_chain(
-                            IterationShape::tiles(W),
-                            BinaryFpu<BinaryFpuOp::Mul, input(cb_chan_work), input(cb_gamma_rows, BroadcastDim::Row)>{
-                                chan_work_dfb, gamma_dfb},
-                            PackTile<output(cb_chan_scale)>{chan_scale_dfb});  // a = rstd_ch * gamma
-                    }
-                }
-            } else {
-                matmul_with_map<true>(group_stats_cb, map_cb, chan_scale_cb, expand_shape);  // a = rstd_ch
-                matmul_with_map<true>(group_stats_cb, map_cb, chan_work_cb, expand_shape);   // mean_ch
-            }
-            // m = mean_ch * a -> cb_chan_shift (alias of cb_chan_work: tile i over tile i, in place).
-            eltwise_chain(
-                IterationShape::tiles(W),
-                BinaryFpu<
-                    BinaryFpuOp::Mul,
-                    input(cb_chan_work),
-                    input(cb_chan_scale, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block)>{
-                    chan_work_dfb, chan_scale_dfb},
-                PackTile<output(cb_chan_shift)>{chan_shift_dfb});
+            // Two matmuls emit a and b' directly (no W-tile chains):
+            //   a  = rstd x amap              amap = gamma map (gamma[c] at (g(c), c)) / the plain map, transposed
+            //   b' = [mr, e] x [amap; bmap]   mr = mean*rstd per group lane; bmap row 0 = -beta[c], e = 1
+            // so b' = mean*rstd*gamma - beta (no beta: K_B = 1, b' = mean*rstd*gamma). Rows replicated, as the
+            // stats rows are.
+            DataflowBuffer group_stats_dfb(cb_group_stats);
+            DataflowBuffer mr_e_dfb(cb_mr_e);
+            // mr = rstd * mean (srcA rstd, srcB mean), [e = 1.0] -> cb_mr_e.
+            cb_reserve_back(cb_mr_e, K_B);
             if constexpr (HAS_BETA) {
-                // b' = m - beta -> cb_chan_work (in place over cb_chan_shift's bytes).
                 eltwise_chain(
-                    IterationShape::tiles(W),
-                    BinaryFpu<BinaryFpuOp::Sub, input(cb_chan_shift), input(cb_beta_rows, BroadcastDim::Row)>{
-                        chan_shift_dfb, beta_dfb},
-                    PackTile<output(cb_chan_work)>{chan_work_dfb});
+                    IterationShape::one_tile(),
+                    BinaryFpu<
+                        BinaryFpuOp::Mul,
+                        input(
+                            cb_group_stats,
+                            WaitPolicy::None,
+                            PopPolicy::None,
+                            InputTileMapping::Scalar,
+                            DataFormatReconfig::Enabled,
+                            TileAddressing::Offset),
+                        input(
+                            cb_group_stats,
+                            WaitPolicy::None,
+                            PopPolicy::None,
+                            InputTileMapping::Scalar,
+                            DataFormatReconfig::Enabled,
+                            TileAddressing::Offset),
+                        Dst::D0>{group_stats_dfb, group_stats_dfb, 0, 1},
+                    FillScalar<Dst::D1>{1.0f},
+                    PackTile<
+                        output(
+                            cb_mr_e,
+                            ReservePolicy::None,
+                            PushPolicy::None,
+                            DataFormatReconfig::Enabled,
+                            TileAddressing::Offset),
+                        Dst::D0>{mr_e_dfb, 0},
+                    PackTile<
+                        output(
+                            cb_mr_e,
+                            ReservePolicy::None,
+                            PushPolicy::None,
+                            DataFormatReconfig::Enabled,
+                            TileAddressing::Offset),
+                        Dst::D1>{mr_e_dfb, 1});
+            } else {
+                eltwise_chain(
+                    IterationShape::one_tile(),
+                    BinaryFpu<
+                        BinaryFpuOp::Mul,
+                        input(
+                            cb_group_stats,
+                            WaitPolicy::None,
+                            PopPolicy::None,
+                            InputTileMapping::Scalar,
+                            DataFormatReconfig::Enabled,
+                            TileAddressing::Offset),
+                        input(
+                            cb_group_stats,
+                            WaitPolicy::None,
+                            PopPolicy::None,
+                            InputTileMapping::Scalar,
+                            DataFormatReconfig::Enabled,
+                            TileAddressing::Offset),
+                        Dst::D0>{group_stats_dfb, group_stats_dfb, 0, 1},
+                    PackTile<
+                        output(
+                            cb_mr_e,
+                            ReservePolicy::None,
+                            PushPolicy::None,
+                            DataFormatReconfig::Enabled,
+                            TileAddressing::Offset),
+                        Dst::D0>{mr_e_dfb, 0});
+            }
+            cb_push_back(cb_mr_e, K_B);
+            // a = rstd x amap^T -> cb_chan_scale, then drop rstd + mean.
+            expand_matmul<1>(cb_group_stats, cb_amap, cb_chan_scale);
+            cb_pop_front(cb_group_stats, 2);
+            // b' = [mr, e] x [amap; bmap]^T -> cb_chan_work, then drop [mr, e].
+            expand_matmul<K_B>(cb_mr_e, cb_amap, cb_chan_work);
+            cb_pop_front(cb_mr_e, K_B);
+            if constexpr (HAS_GAMMA) {
+                cb_pop_front(cb_gamma_rows, K_B * W);
             }
         }
 

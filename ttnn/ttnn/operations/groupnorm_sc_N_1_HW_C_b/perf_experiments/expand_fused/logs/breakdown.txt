@@ -1,0 +1,8 @@
+WARNING: 6 op rows vs 12 records
+case                       variant    affine      kernel_ns       c_expand p50/max           x_mm p50/max          x_chA p50/max          x_chM p50/max          x_chB p50/max   c_wait_stats p50/max  @c_wait_stats p50/max   pcc       rms
+unet_rm_ip_1024x1280       v0         gamma_beta      27090       6209/      6305                      -                      -                      -                      -         16/        17       3661/      3753   1.000000 0.00000
+unet_rm_ip_1024x1280       v0s        gamma_beta      27657       6509/      6604       4355/      4446        761/       781        921/       929        292/       293         15/        15       3698/      3793   1.000000 0.00000
+vae_tile_16384x512         v0         gamma_beta      54560       4934/      5004                      -                      -                      -                      -         15/        15       3654/      3724   1.000000 0.00000
+vae_tile_16384x512         v0s        gamma_beta      54138       5087/      5175        534/       558       3841/      3916        269/       287        275/       301         15/        15       3686/      3764   1.000000 0.00000
+unet_rm_ip_16384x960       v0         gamma_beta     167964      10180/     10373                      -                      -                      -                      -         17/        17       4566/      4759   1.000000 0.00000
+unet_rm_ip_16384x960       v0s        gamma_beta     170147      10583/     10670       6114/      6204       1536/      1570       1256/      1267       1490/      1510         17/        17       4770/      4857   1.000000 0.00000

@@ -1,0 +1,7 @@
+case                       variant    affine      kernel_ns       c_expand p50/max    EXPAND_TRUE p50/max  @c_wait_stats p50/max        c_pass2 p50/max   pcc       rms
+unet_rm_ip_1024x1280       v3a        gamma_beta      25909       5151/      5226       2017/      2019       3654/      3722       4287/      4307   0.999998 0.00183
+unet_rm_ip_1024x1280       v3b        gamma_beta      25611       5093/      5191       1351/      1360       3836/      3936       3874/      4109   0.999998 0.00183
+vae_tile_16384x512         v3a        gamma_beta      53545       4423/      4508        879/       926       3672/      3753      16439/     16450   0.999998 0.00182
+vae_tile_16384x512         v3b        gamma_beta      53615       4311/      4392        870/       915       3637/      3713      16626/     16640   0.999998 0.00182
+unet_rm_ip_16384x960       v3a        gamma_beta     164307       5918/      6024       2479/      2485       3884/      3984      36315/     37536   0.999998 0.00205
+unet_rm_ip_16384x960       v3b        gamma_beta     167820       7860/      7967       2439/      2447       5652/      5756      35708/     39692   0.999998 0.00205

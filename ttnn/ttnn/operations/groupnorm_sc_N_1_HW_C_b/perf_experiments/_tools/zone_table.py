@@ -13,18 +13,19 @@ from statistics import median
 
 COLS = [
     ("TRISC_0", "c_wait_map"),
+    ("TRISC_0", "c_wait_pilot"),
     ("TRISC_0", "c_p1_wait_x"),
     ("TRISC_1", "c_tilize"),
-    ("TRISC_1", "c_p1_xk_chain"),
-    ("TRISC_1", "c_p1_reduce"),
+    ("TRISC_1", "c_p1_moments"),
     ("TRISC_1", "c_pass1"),
     ("TRISC_1", "c_collapse"),
     ("TRISC_0", "c_wait_stats"),
+    ("TRISC_0", "c_wait_affine"),
     ("TRISC_1", "c_finalize"),
     ("TRISC_1", "c_expand"),
     ("TRISC_1", "c_p2_normalize"),
-    ("TRISC_1", "c_untilize"),
     ("TRISC_1", "c_pass2"),
+    ("NCRISC", "r_ones_shift_affine"),
     ("NCRISC", "r_block"),
 ]
 

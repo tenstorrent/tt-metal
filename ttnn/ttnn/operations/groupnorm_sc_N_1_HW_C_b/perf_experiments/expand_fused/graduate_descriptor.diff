@@ -1,0 +1,74 @@
+--- a/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/groupnorm_sc_N_1_HW_C_b_program_descriptor.py
++++ b/ttnn/ttnn/operations/groupnorm_sc_N_1_HW_C_b/groupnorm_sc_N_1_HW_C_b_program_descriptor.py
+@@ -74,8 +74,7 @@
+ CB_CHAN_WORK = 10
+ CB_CHAN_SHIFT = 11
+ CB_GROUP_MAP = 12
+-CB_GAMMA_ROWS = 13
+-CB_BETA_ROWS = 14
++CB_GAMMA_ROWS = 13  # expand in1: gamma map (W bf16 tiles) + beta map (W, when beta)
+ CB_LOCAL_PARTIALS = 15
+ CB_GATHERED_PARTIALS = 16
+ CB_ONES_TILES = 17
+@@ -86,6 +85,7 @@
+ CB_PILOT_ROWS = 22  # shift k per channel (row 0, bf16), one per block, held for pass 1
+ CB_SUM_SEED = 23  # -n*k per channel (row 0, Float32 unpacked to DEST): the Sigma x accumulator's start
+ CB_GROUP_SHIFT = 24  # unit root: k per group lane (Float32, rows replicated), read by the finalize
++CB_MR_E = 25  # [mean*rstd, e] (Float32, 2 pages), the b' expand matmul's in0: a view on alias group B
+
+ NUM_CB_SLOTS = 64  # unpack_to_dest_mode vector length (covers WH 32 / BH 64)
+
+@@ -173,7 +173,8 @@
+         + W * (1 + pilot_repeat(W, T // W) + hg + hb)  # map, pilot rows (m copies), gamma rows, beta rows
+     )
+     # Sharded TILE: x^2 alone (its group-B partner, the output tiles, is the output shard).
+-    group_b = F32_TILE_BYTES * T if tile_shard else group_b_bytes(T)
++    # + the [mean*rstd, e] view (2 Float32 pages, idle-time tenant between pass 1 and pass 2).
++    group_b = max(F32_TILE_BYTES * T if tile_shard else group_b_bytes(T), 2 * F32_TILE_BYTES)
+     # 3W: alias groups E (sum acc / chan scale) and C' (sumsq acc / chan work / chan shift), the sum seed.
+     # 2R + 7: gathered partials, group D (2), stats out (2), group stats (2), group shift (1).
+     f32_bytes = group_b + F32_TILE_BYTES * (3 * W + 2 * R + 7)
+@@ -660,7 +661,13 @@
+     if sharded and not is_rm:
+         cbs.append(shard_cb(input_tensor, ring_views))
+         # x^2 alone; the output tiles are the output shard.
+-        cbs.append(_cb(F32_TILE_BYTES * T, cores, [(CB_X_SQUARED, f32, F32_TILE_BYTES)]))
++        cbs.append(
++            _cb(
++                max(F32_TILE_BYTES * T, 2 * F32_TILE_BYTES),
++                cores,
++                [(CB_X_SQUARED, f32, F32_TILE_BYTES), (CB_MR_E, f32, F32_TILE_BYTES)],
++            )
++        )
+         cbs.append(shard_cb(output_tensor, [(CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)]))
+     else:
+         cbs.append(
+@@ -673,9 +680,13 @@
+         # Alias group B: x^2 (pass 1) / output (pass 2), disjoint lifetimes.
+         cbs.append(
+             _cb(
+-                group_b_bytes(T),
++                max(group_b_bytes(T), 2 * F32_TILE_BYTES),
+                 cores,
+-                [(CB_X_SQUARED, f32, F32_TILE_BYTES), (CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES)],
++                [
++                    (CB_X_SQUARED, f32, F32_TILE_BYTES),
++                    (CB_OUTPUT_TILES, bf16, BF16_TILE_BYTES),
++                    (CB_MR_E, f32, F32_TILE_BYTES),
++                ],
+             )
+         )
+     cbs.append(_cb(BF16_TILE_BYTES, cores, [(CB_REDUCE_SCALER, bf16, BF16_TILE_BYTES)]))
+@@ -707,9 +718,9 @@
+     cbs.append(_cb(W * F32_TILE_BYTES, cores, [(CB_SUM_SEED, f32, F32_TILE_BYTES)]))
+     cbs.append(_cb(F32_TILE_BYTES, cores, [(CB_GROUP_SHIFT, f32, F32_TILE_BYTES)]))
+     if hg:
+-        cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GAMMA_ROWS, bf16, BF16_TILE_BYTES)]))
+-    if hb:
+-        cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_BETA_ROWS, bf16, BF16_TILE_BYTES)]))
++        # The expand matmul's in1: gamma map, + beta map when beta (the reader builds both; same L1 as the old
++        # gamma rows + beta rows).
++        cbs.append(_cb((hg + hb) * W * BF16_TILE_BYTES, cores, [(CB_GAMMA_ROWS, bf16, BF16_TILE_BYTES)]))
+     # Alias group D: local partials (collapse -> gather) / group sums (root), disjoint lifetimes.
+     cbs.append(
+         _cb(
