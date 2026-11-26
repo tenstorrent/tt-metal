@@ -28,7 +28,7 @@ from ...models.vae.vae import flat_to_row_major
 from ...models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, Flux2VaeParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
 from ...utils.tensor import fast_device_to_host, float_to_uint8, from_torch
 from ...utils.tracing import StateTensor, Tracer
@@ -691,28 +691,11 @@ class Flux2Pipeline:
         with event_section(on_event, "vae"):
             self._prepare_vae()
 
-            # Latents arrive SP-sharded on dim=1 (patchified token dim). Redistribute to
-            # whatever spatial sharding the VAE conv pyramid expects before unpatchifying.
-            #
-            # H (token dim=1): if the VAE rows are on the SP axis, the SP shards are already bands of
-            #   rows. Otherwise gather SP, and preprocess_and_unpatchify re-splits over the H axis.
-            # W (spatial dim=2): can only be applied after unpatchify since H/W are interleaved
-            #   in patchified tokens; preprocess_and_unpatchify splits it.
-            rows_on_sp = (
-                self._vae_parallel.h_parallel is not None and self._vae_parallel.h_parallel.mesh_axis == sp_axis
-            )
-            if rows_on_sp:
-                tt_latents = state.latents.data
-            else:
-                tt_latents = self._ccl_manager.all_gather(
-                    state.latents.data,
-                    dim=1,
-                    mesh_axis=sp_axis,
-                    use_hyperparams=True,
-                )
-
+            # Latents arrive SP-sharded on dim=1 (patchified token dim). The decoder undoes the patchify on the host
+            # and uploads the result split over its H and W axes.
+            latents = tensor.to_torch(state.latents.data, mesh_axes=(None, sp_axis, None))
             tt_latents = self._vae_decoder.preprocess_and_unpatchify(
-                tt_latents, height=latents_height, width=latents_width, split_height=not rows_on_sp
+                latents, height=latents_height, width=latents_width
             )
 
             if self._keeps_size_state(traced):

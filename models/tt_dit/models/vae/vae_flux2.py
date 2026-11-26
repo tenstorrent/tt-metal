@@ -7,6 +7,8 @@ from __future__ import annotations
 import itertools
 from typing import TYPE_CHECKING
 
+import torch
+
 import ttnn
 
 from ...layers.conv2d import configure_conv2d, warm_dram_slice_flatten
@@ -14,6 +16,7 @@ from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
+from ...utils import tensor
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tracing import traced_function
 from .vae import (
@@ -107,6 +110,8 @@ class Flux2VaeDecoder(Module):
         self.bn_running_mean = Parameter(total_shape=[bn_size], device=ctx.device)
         self.bn_running_var = Parameter(total_shape=[bn_size], device=ctx.device)
         self.bn_eps = 1e-4
+        # The latent normalization's mean and standard deviation on the host, read once.
+        self._bn_host: tuple[torch.Tensor, torch.Tensor] | None = None
 
         self._ctx = ctx
 
@@ -154,42 +159,32 @@ class Flux2VaeDecoder(Module):
 
         rename_substate(state, "decoder", "")
 
-    def _inv_normalize(self, z: ttnn.Tensor) -> ttnn.Tensor:
-        s = ttnn.sqrt(self.bn_running_var.data + self.bn_eps)
-        m = self.bn_running_mean.data
-        return z * s + m
-
-    def preprocess_and_unpatchify(
-        self, z: ttnn.Tensor, *, height: int, width: int, split_height: bool = False
-    ) -> ttnn.Tensor:
-        # N, (H / P) * (W / P), C * P * P -> N, H/h_factor, W/w_factor, C
-        # The input is H-sharded in bands of whole token rows (H/h_factor latent rows per device), or
-        # replicated with split_height set, in which case H is split here. Splitting after
-        # unpatchifying needs only whole latent rows per device, not whole token rows. W is always
-        # split here, since H and W are interleaved in the patchified tokens, and before tilizing:
-        # W is a tiled dim, and a tiled split needs each device's share to be whole tiles.
+    def preprocess_and_unpatchify(self, z: torch.Tensor, *, height: int, width: int) -> ttnn.Tensor:
+        """Undoes the latent normalization and the patchify of all tokens, [N, (H / P) * (W / P), C * P * P], on
+        the host, and uploads the result split over the H and W mesh axes, [N, H / h_factor, W / w_factor, C] per
+        device, row major. On the device this was a layout conversion, a permute and a mesh partition per axis, a
+        program per image size each, for about 1 MB at 1024x1024; the transfers cost a few ms instead."""
         p = self._PATCH_SIZE
-        h_factor = self._ctx.h_factor
-        assert height % p == 0, f"height {height} must be divisible by patch {p}"
-        if split_height:
-            assert height % h_factor == 0, f"height {height} must be divisible by h_factor {h_factor}"
-            height_in = height
-        else:
-            assert height % (p * h_factor) == 0, f"height {height} must be divisible by patch {p} * h_factor {h_factor}"
-            height_in = height // h_factor
-        assert width % p == 0, f"width {width} must be divisible by patch {p}"
-        assert width % self._ctx.w_factor == 0, f"width {width} must be divisible by w_factor {self._ctx.w_factor}"
-        z = self._inv_normalize(z)
-        z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
-        z = z.reshape([z.shape[0], height_in // p, width // p, -1, p, p])
-        z = ttnn.permute(z, [0, 1, 4, 2, 5, 3], runtime_shapes=self._ctx.runtime_shapes)
-        z = z.reshape([z.shape[0], height_in, width, -1])
-        if split_height and h_factor > 1:
-            z = ttnn.mesh_partition(z, dim=1, cluster_axis=self._ctx.h_mesh_axis)
-        if self._ctx.w_factor > 1:
-            z = ttnn.mesh_partition(z, dim=2, cluster_axis=self._ctx.w_mesh_axis)
+        assert height % p == 0 and width % p == 0, f"{height}x{width} is not whole patches"
+        assert height % self._ctx.h_factor == 0, f"height {height} does not split over {self._ctx.h_factor} devices"
+        assert width % self._ctx.w_factor == 0, f"width {width} does not split over {self._ctx.w_factor} devices"
+        if self._bn_host is None:
+            replicated = (None,)
+            mean = tensor.to_torch(self.bn_running_mean.data, mesh_axes=replicated).float()
+            var = tensor.to_torch(self.bn_running_var.data, mesh_axes=replicated).float()
+            self._bn_host = (mean, torch.sqrt(var + self.bn_eps))
+        mean, std = self._bn_host
+        z = z.float() * std + mean
+        z = z.reshape(z.shape[0], height // p, width // p, -1, p, p).permute(0, 1, 4, 2, 5, 3)
+        # In bfloat16 already, since from_torch converts other dtypes on the device, at a program per shape.
+        z = z.reshape(z.shape[0], height, width, -1).to(torch.bfloat16)
         # Row major: the decoder flattens it before tilizing (see forward).
-        return z
+        return tensor.from_torch(
+            z,
+            device=self._ctx.device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_axes=(None, self._ctx.h_mesh_axis, self._ctx.w_mesh_axis, None),
+        )
 
     @traced_function(device=lambda self: self._ctx.device, clone_prep_inputs=False)
     def forward(self, z: ttnn.Tensor, /) -> ttnn.Tensor:

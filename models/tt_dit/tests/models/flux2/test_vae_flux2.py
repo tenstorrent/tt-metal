@@ -59,40 +59,12 @@ def _torch_decode_reference(torch_model: reference.AutoencoderKLFlux2, inp: torc
         return torch_model.decode(z).sample  # [B, 3, H, W]
 
 
-def prep_data(
-    vae_parallel_config: Flux2VaeParallelConfig,
-    inp: torch.Tensor,
-    mesh_device: ttnn.Device,
-    tt_model: Flux2VaeDecoder,
-    split_height: bool = False,
-) -> ttnn.Tensor:
-    # inp: [B, C*p^2, H_t, W_t] patchified latent in torch.
-    # Convert to patchified token format [B, H_t*W_t, C*p^2].
+def prep_data(inp: torch.Tensor, tt_model: Flux2VaeDecoder) -> ttnn.Tensor:
+    # inp: [B, C*p^2, H_t, W_t] patchified latent in torch, made the patchified tokens [B, H_t*W_t, C*p^2] that
+    # preprocess_and_unpatchify takes on the host.
     inp_flat = inp.permute(0, 2, 3, 1).flatten(1, 2)
-
-    # With split_height the tokens arrive replicated, as the pipeline passes them when the VAE rows
-    # are not on the SP axis, and preprocess_and_unpatchify splits them.
-    if vae_parallel_config.h_parallel is not None and not split_height:
-        tt_latents = tensor.from_torch(
-            inp_flat,
-            device=mesh_device,
-            mesh_axes=(None, vae_parallel_config.h_parallel.mesh_axis, None),
-        )
-    else:
-        tt_latents = tensor.from_torch(inp_flat, device=mesh_device)
-
     p = Flux2VaeDecoder._PATCH_SIZE
-    height_for_unp = inp.shape[2] * p
-    width_for_unp = inp.shape[3] * p
-
-    tt_latents = tt_model.preprocess_and_unpatchify(
-        tt_latents,
-        height=height_for_unp,
-        width=width_for_unp,
-        split_height=split_height,
-    )
-
-    return tt_latents
+    return tt_model.preprocess_and_unpatchify(inp_flat, height=inp.shape[2] * p, width=inp.shape[3] * p)
 
 
 @pytest.mark.parametrize(
@@ -115,8 +87,6 @@ def prep_data(
 )
 # Rows on mesh axis 1, and channels (tp_h) or columns (h_w) on axis 0.
 @pytest.mark.parametrize("split", ["tp_h", "h_w"])
-# Tokens H-sharded on the host, or replicated and split by the decoder.
-@pytest.mark.parametrize("split_height", [False, True], ids=["host_rows", "device_rows"])
 def test_vae_flux2_decoder(
     *,
     mesh_device: ttnn.Device,
@@ -124,7 +94,6 @@ def test_vae_flux2_decoder(
     height: int,
     width: int,
     split: str,
-    split_height: bool,
 ) -> None:
     torch.manual_seed(0)
 
@@ -140,13 +109,10 @@ def test_vae_flux2_decoder(
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = Flux2VaeParallelConfig.from_axes(mesh_device, tp_axis=tp_axis, h_axis=h_axis, w_axis=w_axis)
 
-    # Host-split tokens need whole token rows (2 latent rows) per device, the decoder's split only
-    # whole latent rows. 1056x1024 has 132 latent rows: 66 token rows split over 2 devices but not
-    # over 4, and 132 latent rows split over 4 but not over 8.
+    # The decoder splits whole latent rows. 1056x1024 has 132 latent rows, which split over 4 devices but not over 8.
     h_factor = vae_parallel_config.h_parallel.factor if vae_parallel_config.h_parallel is not None else 1
-    rows_per_device_unit = 1 if split_height else 2
-    if (height // 8) % (rows_per_device_unit * h_factor) != 0:
-        pytest.skip(f"{height // 8} latent rows do not split into whole {'latent' if split_height else 'token'} rows")
+    if (height // 8) % h_factor != 0:
+        pytest.skip(f"{height // 8} latent rows do not split into whole latent rows per device")
 
     z_channels = torch_model.config.latent_channels
     patch_size = 2
@@ -169,7 +135,7 @@ def test_vae_flux2_decoder(
 
     torch_output = _torch_decode_reference(torch_model, inp)  # [B, 3, H, W]
 
-    tt_inp = prep_data(vae_parallel_config, inp, mesh_device, tt_model=tt_model, split_height=split_height)
+    tt_inp = prep_data(inp, tt_model)
     tt_out = tt_model.forward(tt_inp)
     ttnn.synchronize_device(mesh_device)
 
