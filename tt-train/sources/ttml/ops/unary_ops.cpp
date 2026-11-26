@@ -60,14 +60,13 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, GeluVariant variant)
     return out;
 }
 
-autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw) {
+autograd::TensorPtr silu(const autograd::TensorPtr& tensor) {
     auto out = autograd::create_tensor(ttnn::silu(tensor->get_value()));
-    autograd::GradFunction grad = [tensor, out, use_composite_bw]() {
-        auto res = use_composite_bw ? ttnn::silu_bw(out->get_grad(), tensor->get_value())
-                                    : std::vector<std::optional<ttnn::Tensor>>(
-                                          {ttml::metal::silu_bw(tensor->get_value(), out->get_grad())});
-        assert(res.size() == 1U && "Silu backward should return only one gradient");
-        tensor->add_grad(res.front().value());
+    autograd::GradFunction grad = [tensor, out]() {
+        // An explicit output placement keeps ttnn on its BF16 SFPU kernel when the upstream gradient is placed
+        // differently from the input; without one it falls back to the composite.
+        auto res = ttnn::silu_bw(out->get_grad(), tensor->get_value(), tensor->get_value().memory_config());
+        tensor->add_grad(res[0].value());
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));

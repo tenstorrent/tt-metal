@@ -21,7 +21,6 @@
 #include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "ops/losses.hpp"
 #include "xtensor/core/xmath.hpp"
 
 namespace ttml::ops::tests {
@@ -62,6 +61,17 @@ void load_random_data_from_os(std::span<float> data) {
         const auto normalized = static_cast<float>(random_uint32) / static_cast<float>(max_uint32);
         return normalized * 2.0F - 1.0F;
     });
+}
+
+// SiLU: x * sigmoid(x)
+xt::xarray<float> silu_reference(const xt::xarray<float>& x) {
+    return x / (1.0F + xt::exp(-x));
+}
+
+// d/dx of SiLU: sigmoid(x) * (1 + x * sigmoid(-x))
+xt::xarray<float> silu_grad_reference(const xt::xarray<float>& x) {
+    xt::xarray<float> sigmoid = 1.0F / (1.0F + xt::exp(-x));
+    return sigmoid * (1.0F + x / (1.0F + xt::exp(x)));
 }
 
 // GELU-related constants (compare to the ones in sfpu kernels)
@@ -214,47 +224,23 @@ TEST_F(UnaryOpsTest, Clip) {
 }
 
 TEST_F(UnaryOpsTest, Silu) {
+    auto* device = &autograd::ctx().get_device();
+
     auto N = 4;
     auto C = 1;
     auto H = 20;
     auto W = 5;
 
     // Load random data from OS using getrandom and copy into tensor
-    xt::xarray<float> a = xt::empty<float>({N, C, H, W});
-    load_random_data_from_os(std::span{a.data(), a.size()});
+    xt::xarray<float> data = xt::empty<float>({N, C, H, W});
+    load_random_data_from_os(std::span{data.data(), data.size()});
 
-    // Create two input tensors - one for kernel implementation, one for composite
-    auto a_kernel =
-        autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()), /* requires_grad */ true);
-    auto a_composite =
-        autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+    auto result = silu(tensor_ptr);
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), silu_reference(data), 8e-3F, 2e-2F));
 
-    // Forward pass - both use same forward implementation (ttnn::silu)
-    // but will use different backward implementations
-    auto result_kernel = silu(a_kernel);                                   // Default: uses metal kernel backward
-    auto result_composite = silu(a_composite, /*use_composite_bw=*/true);  // Uses composite backward
-
-    // Compare forward results - should be identical since forward is the same
-    auto kernel_xtensor = core::to_xtensor(result_kernel->get_value());
-    auto composite_xtensor = core::to_xtensor(result_composite->get_value());
-    EXPECT_TRUE(xt::allclose(kernel_xtensor, composite_xtensor, 8e-3F, 4e-2F));
-
-    // Backward pass - create zero targets for MSE loss
-    auto target_kernel = autograd::create_tensor(core::zeros_like(result_kernel->get_value()));
-    auto target_composite = autograd::create_tensor(core::zeros_like(result_composite->get_value()));
-
-    // Compute MSE loss: mean((output - 0)^2) = mean(output^2)
-    auto loss_kernel = mse_loss(result_kernel, target_kernel);
-    auto loss_composite = mse_loss(result_composite, target_composite);
-
-    // Execute backward pass - this triggers different backward implementations
-    loss_kernel->backward();     // Uses metal::silu_bw()
-    loss_composite->backward();  // Uses ttnn::silu_bw()
-
-    // Compare backward gradients - both implementations should produce same gradients
-    auto grad_kernel = core::to_xtensor(a_kernel->get_grad());
-    auto grad_composite = core::to_xtensor(a_composite->get_grad());
-    EXPECT_TRUE(xt::allclose(grad_kernel, grad_composite, 8e-3F, 4e-2F));
+    result->backward();
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), silu_grad_reference(data), 8e-3F, 2e-2F));
 }
 
 TEST_F(UnaryOpsTest, Gelu) {

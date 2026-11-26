@@ -693,7 +693,7 @@ void py_module(nb::module_& m) {
             nb::arg("variant") = GeluVariant::ACCURATE,
             "GELU activation. `variant` takes a ttnn.GeluVariant. Unlike ttnn, the FastLut variant is\n"
             "not supported.");
-        py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
+        py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"));
         py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
         py_unary.def(
