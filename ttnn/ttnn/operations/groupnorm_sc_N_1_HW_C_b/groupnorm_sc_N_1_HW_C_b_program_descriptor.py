@@ -35,6 +35,10 @@ Formats (Refinement 4): every page / element size comes from one Formats record,
 input dtype), the reader-built gamma / beta maps follow the affine dtype, gamma / beta may be ROW_MAJOR or TILE. The
 statistics, partials and channel vectors stay Float32 (fp32 DEST); the group map, pilot rows and -1 tile stay bf16
 (exact 0 / 1 / bf16 values).
+
+bfloat8_b (Refinement 7, TILE, DRAM interleaved): the input ring, the output shares and the pass-2 re-reads carry
+bfloat8_b pages (1088 B: the packer forms each face row's shared exponent); bfloat8_b gamma / beta are decoded by the
+reader into bf16 affine maps. Statistics and channel vectors stay Float32.
 """
 
 from __future__ import annotations
@@ -135,12 +139,16 @@ def _f32_bits(x):
     return struct.unpack("<I", struct.pack("<f", float(x)))[0]
 
 
+# Element bytes of a ROW_MAJOR stick / a staged row-0 value. bfloat8_b (TILE only, Refinement 7) has no element of its
+# own: a tile is a 64 B exponent section (one shared exponent per 16-lane face row) + one sign / 7-bit mantissa byte per
+# element; the reader decodes its staged row-0 values to bf16, so its staged element is bf16's.
 _ELEM_BYTES = {ttnn.bfloat16: 2, ttnn.float32: 4}
+BFP8_EXP_BYTES = 64  # bfloat8_b tile: the exponent section ahead of the mantissas (face-major, one byte per face row)
 
 
 @dataclass(frozen=True)
 class Formats:
-    """Page formats of the op's tensors: the single source of every dtype-dependent size (Refinement 4)."""
+    """Page formats of the op's tensors: the single source of every dtype-dependent size (Refinements 4, 7)."""
 
     in_dtype: object = ttnn.bfloat16  # input = output dtype: input ring, RM sticks, output CBs
     aff_dtype: object = ttnn.bfloat16  # gamma / beta: the reader-built affine maps (bf16 when there is no affine)
@@ -151,16 +159,43 @@ class Formats:
         return ttnn.tile_size(self.in_dtype)
 
     @property
+    def in_bfp8(self):
+        return self.in_dtype == ttnn.bfloat8_b
+
+    @property
     def in_elem(self):
+        """Element bytes of an input stick (ROW_MAJOR / sharded; bfloat8_b is TILE-only and DRAM-only)."""
         return _ELEM_BYTES[self.in_dtype]
 
     @property
+    def aff_bfp8(self):
+        return self.aff_dtype == ttnn.bfloat8_b
+
+    @property
+    def amap_dtype(self):
+        """The affine maps' format: gamma / beta's, except bfloat8_b, whose row-0 values the reader decodes to bf16
+        (exact: a bfloat8_b value has at most 7 significant bits) - a map holds one value per column in a different
+        row per group, which a shared-exponent face row cannot carry."""
+        return ttnn.bfloat16 if self.aff_bfp8 else self.aff_dtype
+
+    @property
     def amap_tile(self):
-        return ttnn.tile_size(self.aff_dtype)
+        return ttnn.tile_size(self.amap_dtype)
 
     @property
     def aff_elem(self):
-        return _ELEM_BYTES[self.aff_dtype]
+        """Element bytes of a staged gamma / beta value as the map build reads it (the map's element)."""
+        return _ELEM_BYTES[self.amap_dtype]
+
+    @property
+    def pilot_tile_stage(self):
+        """Staging bytes per input tile of a TILE row-0 read: faces 0 / 1 (64 B each) + bfloat8_b's exponents."""
+        return (3 if self.in_bfp8 else 2) * FACE_ROW0_READ_BYTES
+
+    @property
+    def aff_tile_stage(self):
+        """Staging bytes per gamma / beta tile of a TILE row-0 read (as pilot_tile_stage, in gamma / beta's format)."""
+        return (3 if self.aff_bfp8 else 2) * FACE_ROW0_READ_BYTES
 
 
 def formats_of(input_tensor, gamma=None, beta=None):
@@ -209,9 +244,10 @@ def output_ring_bytes(T, fmt):
 
 def affine_stage_bytes(*, W, map_period, fmt):
     """Reader staging of one of gamma / beta: RM, the slice's P channels from a 64 B-aligned start; TILE, one 64 B
-    row-0 read of faces 0 / 1 per channel tile (the kernel's AFFINE_STAGE_BYTES)."""
+    row-0 read of faces 0 / 1 per channel tile, + the exponent section for bfloat8_b (the kernel's
+    AFFINE_STAGE_BYTES)."""
     if fmt.aff_tile:
-        return W * 2 * FACE_ROW0_READ_BYTES
+        return W * fmt.aff_tile_stage
     return _align_up(map_period * fmt.aff_elem, 64) + 64
 
 
@@ -219,14 +255,14 @@ def staging_bytes(*, W, map_period, is_rm, n_affine, fmt, sharded=False, pilot_c
     """Reader staging: the pilot (interleaved TILE: a 64 B row-0 read of faces 0/1 per tile; interleaved RM: the
     slice of stick 0; sharded TILE: one 16 B slot per group lane; sharded RM: one 16 B-aligned span of stick 0 per
     source column (pilot_cols of the unit), then the k stick built over it) or the n_affine gamma/beta slices,
-    whichever is larger. Disjoint in time."""
-    stick = map_period * fmt.in_elem
+    whichever is larger. Disjoint in time. Interleaved TILE bfloat8_b stages each tile's exponent section too."""
+    stick = map_period * fmt.in_elem if is_rm else 0
     if sharded and is_rm:
         pilot = max(stick, pilot_cols * (_align_up(stick, 16) + 16))
     elif sharded:
         pilot = MAX_GROUP_LANES * PILOT_SLOT_BYTES
     else:
-        pilot = stick if is_rm else W * 2 * FACE_ROW0_READ_BYTES
+        pilot = stick if is_rm else W * fmt.pilot_tile_stage
     affine = n_affine * affine_stage_bytes(W=W, map_period=map_period, fmt=fmt)
     return _align_up(max(pilot, affine), 64)
 
@@ -1014,10 +1050,10 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     cbs.append(_cb(BF16_TILE_BYTES, cores, [(CB_NEG_ONE, bf16, BF16_TILE_BYTES)]))
     cbs.append(_cb(F32_TILE_BYTES, cores, [(CB_GROUP_SHIFT, f32, F32_TILE_BYTES)]))
     if hg:
-        # The expand matmul's in1: the gamma map, + the beta map when beta (reader-built in gamma / beta's dtype;
-        # beta-only is refused).
+        # The expand matmul's in1: the gamma map, + the beta map when beta (reader-built in gamma / beta's dtype,
+        # bf16 for bfloat8_b - fmt.amap_dtype; beta-only is refused).
         amap_tile = fmt.amap_tile
-        cbs.append(_cb((hg + hb) * W * amap_tile, cores, [(CB_GAMMA_ROWS, fmt.aff_dtype, amap_tile)]))
+        cbs.append(_cb((hg + hb) * W * amap_tile, cores, [(CB_GAMMA_ROWS, fmt.amap_dtype, amap_tile)]))
     NU, NSEG = plan.NU, plan.NSEG
     # Two partial tiles per image segment of the core.
     cbs.append(_cb(2 * NSEG * F32_TILE_BYTES, cores, [(CB_LOCAL_PARTIALS, f32, F32_TILE_BYTES)]))
@@ -1059,8 +1095,8 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     )
     reader_ct.append(chunk_zones)
     reader_ct.extend([int(has_stage), int(plan.ops_path)])
-    # Formats (Refinement 4), CT 16-19: the input tile bytes (bf16 2048 / Float32 4096), gamma / beta's element bytes,
-    # gamma / beta TILE layout, gamma / beta's page bytes (RM: the C-channel stick; TILE: one tile).
+    # Formats (Refinement 4), CT 16-19: the input tile bytes (bf16 2048 / Float32 4096 / bfloat8_b 1088), the affine
+    # map's element bytes, gamma / beta TILE layout, gamma / beta's page bytes (RM: the C-channel stick; TILE: one tile).
     aff_ref = gamma if gamma is not None else beta
     reader_ct.extend(
         [in_tile, fmt.aff_elem, int(fmt.aff_tile), aff_ref.buffer_page_size() if aff_ref is not None else 0]
@@ -1070,6 +1106,9 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     reader_ct.append(plan.HW)
     # Refinement 6, CT 21: valid channels of the last column slice (interleaved; C % 32 != 0 makes it partial).
     reader_ct.append(plan.vc_last or map_period)
+    # Refinement 7, CT 22-23: the input / gamma / beta are bfloat8_b (TILE): the reader decodes their staged row-0
+    # values (pilot k, affine maps) from the shared-exponent format and k-fills pad rows in it.
+    reader_ct.extend([int(fmt.in_bfp8), int(fmt.aff_bfp8)])
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         (ttnn.TensorAccessorArgs(gamma) if gamma is not None else ttnn.TensorAccessorArgs()).get_compile_time_args()

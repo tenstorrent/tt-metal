@@ -317,7 +317,7 @@ The output is fp32 for fp32 input. Statistics and intermediates stay Float32 wit
   - 65536×100 G1 vs 65536×128 G1: 102.8 µs vs 102.6 µs on TILE, 151.3 µs vs 151.0 µs on RM.
   - Every delta is ≤ 1.2%, inside the spread between runs. Aligned DRAM cases are within noise of R5.
 
-### [ ] Refinement 7 — bfloat8_b input / gamma / beta (TILE)
+### [x] Refinement 7 — bfloat8_b input / gamma / beta (TILE)
 
 **Goal**:
 - Add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` (TILE only; bf8b+RM is INVALID) and to `SUPPORTED["affine_dtype"]` (TILE γ/β).
@@ -334,6 +334,17 @@ The output is fp32 for fp32 input. Statistics and intermediates stay Float32 wit
 **Done when**:
 - Every `dtype=BFLOAT8_B` and `affine_dtype=BFLOAT8_B` cell passes against `TOLERANCES[bf8b]` = (0.99, 0.10), or is in `EXCLUSIONS` with a reason.
 - Earlier cells stay green.
+
+**Outcome**: Done (2026-11-26).
+- `bfloat8_b` is in `SUPPORTED["dtype"]` (TILE, DRAM interleaved) and in `SUPPORTED["affine_dtype"]` (TILE γ/β). Only `BLOCK_SHARDED × bfloat8_b` is in EXCLUSIONS: it is scope-parked INVALID, and the exclusion guards direct callers. No `bf8b × non-aligned` exclusion was needed.
+- **Reader.** It decodes the staged row-0 values (pilot k, γ/β) from the shared-exponent format. bfloat8_b γ/β build **bf16** affine maps.
+- **k-fill.** For `hw_non_aligned`, the k-fill writes the pad face rows as mantissas plus a shared-exponent byte. Every k is first truncated to one common exponent, so a face row that spans several groups is exact.
+- **Compute and writer** are unchanged. Statistics stay Float32.
+- **Tests.**
+  - 1539/1539 bf8b golden cells pass: 891 with bf8b input, 648 with bf8b γ/β only.
+  - The unit directory passes 445/445; the new bf8b file also passes 104/104 under `--dev`.
+- **Accuracy.** PCC ≥ 0.99991, relative RMS 0.0125–0.0130. The op's own error against a quantized-input reference is 0.0086–0.0093.
+- **Speed.** bf8b runs at 0.50–0.70× its bf16 twin's device time: it moves half the bytes, and its `K_max` is about 1.9× larger.
 
 ### [ ] Refinement 8 — Speed up the SDXL U-Net / refiner resnet norms (block-sharded RM, in place, 8×8)
 

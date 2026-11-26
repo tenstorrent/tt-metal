@@ -95,15 +95,16 @@ INPUT_TAGGERS = {
 #    Refinement 3: ragged shards - padded last row / column, shards straddling images, groups straddling columns;
 #    Refinement 4: Float32 input (DRAM interleaved), Float32 gamma / beta, TILE-layout gamma / beta;
 #    Refinement 5: HW % 32 != 0 (DRAM interleaved): the reader k-fills each image's last tile row's pad rows;
-#    Refinement 6: C % 32 != 0 (DRAM interleaved): the last column slice is partial, its pad lanes are masked)
+#    Refinement 6: C % 32 != 0 (DRAM interleaved): the last column slice is partial, its pad lanes are masked;
+#    Refinement 7: bfloat8_b input (TILE, DRAM interleaved; output bfloat8_b) and bfloat8_b TILE gamma / beta)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16, ttnn.float32],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "hw_non_aligned", "c_non_aligned"],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
-    "affine_dtype": [ttnn.bfloat16, ttnn.float32, "none"],
+    "affine_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, "none"],
     "affine_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
     "shard_fit": ["none", "even", "ragged"],
@@ -124,6 +125,11 @@ EXCLUSIONS = [
     {"memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED, "dtype": ttnn.float32},
     {"memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED, "affine_dtype": ttnn.float32},
     {"memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED, "affine_layout": ttnn.TILE_LAYOUT},
+    # Refinement 7: bfloat8_b is DRAM interleaved only (sharded bfloat8_b is scope-parked INVALID in feature_spec; the
+    # sharded pilot / staging paths are bf16 byte math). A bfloat8_b tensor is TILE by construction (its RM cells are
+    # structural INVALID).
+    {"memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED, "dtype": ttnn.bfloat8_b},
+    {"memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED, "affine_dtype": ttnn.bfloat8_b},
     # Refinement 5 scope is DRAM interleaved (feature_spec INPUTS holds no block-sharded HW % 32 != 0 entry): the
     # sharded planner refuses TILE images that are not whole tile rows, and the RM shard path is not verified there.
     {"memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED, "alignment": "hw_non_aligned"},

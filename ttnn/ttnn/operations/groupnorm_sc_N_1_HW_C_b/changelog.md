@@ -1073,3 +1073,73 @@ Ragged shards (newly supported; the base op refuses them) vs the same tensor thr
     - Several units per core (`max_cores = 4`), with full and partial slices alternating on one core.
   - `_op_bench.py`: `test_bench_c_non_aligned`, covering 16384×300 g30 and 65536×100 g1 against their aligned twins on TILE and RM.
   - Probes 026–032: the R6 bring-up and precision investigation.
+
+## Refinement 7 — bfloat8_b input / gamma / beta (TILE)
+- Date: 2026-11-26
+- What was done:
+  - **SUPPORTED.** `ttnn.bfloat8_b` was added to `SUPPORTED["dtype"]` (TILE, DRAM interleaved; output dtype = bfloat8_b) and to `SUPPORTED["affine_dtype"]` (TILE γ/β, under bf16 / Float32 / bfloat8_b input).
+    - Two new EXCLUSIONS refuse a direct caller's BLOCK_SHARDED bfloat8_b input or γ/β. These cells are scope-parked INVALID in feature_spec, and the sharded pilot / staging paths do bf16 byte math.
+    - bfloat8_b + ROW_MAJOR is structural INVALID: a bfloat8_b tensor is TILE.
+    - No `bf8b × non-aligned` exclusion was needed, contrary to the skill's usual expectation. TILE pad rows and lanes reach the op as zeros (from_torch padding) or are k-filled, so they never raise a valid face row's shared exponent. The output's pad lanes are `x·0 − 0 = 0`.
+  - **Descriptor (`Formats`, still the single size source).**
+    - `in_bfp8` / `aff_bfp8` flags.
+    - `amap_dtype`: bf16 for bfloat8_b γ/β, else γ/β's own dtype. The maps are decoded to bf16, because a map tile carries one value per column in a different row per group, and a shared-exponent face row cannot hold those exactly. A bf8b value has ≤ 7 significant bits, so the decode is exact.
+    - `pilot_tile_stage` / `aff_tile_stage`: 192 B per tile for bfloat8_b (faces 0/1 row-0 runs + the 64 B exponent section), 128 B otherwise.
+    - `staging_bytes` / `affine_stage_bytes` / `cb_gamma_rows` derive from those properties.
+    - `in_tile = ttnn.tile_size(bfloat8_b) = 1 088 B` flows into the ring, output shares, `K_max` and the footprint unchanged.
+    - New reader CT args 22–23: `IN_BFP8`, `AFF_BFP8`. `TensorAccessorArgs` now start at 24.
+  - **Reader.** Two helpers: `bfp8_to_bf16` (tt-metal's host decode) and `bf16_to_bfp8` (truncating encode at a given shared exponent). Bfp8_b tile layout: a 64 B exponent section, one byte per face row, face-major, then 1 024 sign|7-bit-magnitude bytes, face-major.
+    - **Pilot (TILE).** Per tile it reads the faces 0/1 row-0 runs (64 B at `64 + f·256`) and the exponent section (64 B at 0). `extract_kv` decodes each group's first-channel sample with its face row's exponent.
+    - **k-fill (`hw_non_aligned`).** A pad face row's 16 lanes may span several groups (C/G < 16) but share one exponent. So `extract_kv` truncates every `k` to one common exponent `k_exp` (the largest). The quantized `k'` is then used everywhere (pilot rows, group shift, pad rows). `k` is only a shift, so the moments stay exact.
+    - Each pad face row is written as 16 mantissa bytes, a core-local NoC write as before, at the bf8b face offsets. Its shared-exponent byte is a reader byte store: two per pad row per tile, a run no NoC write can align to.
+    - **γ/β (TILE, bfloat8_b).** Three 64 B reads per channel tile, decoded in place to bf16 after the read barrier: each face's 16 mantissas are loaded, then stored as 16 bf16 values over the same run. The existing word-copy / halfword map build then runs unchanged with `AFF_ELEM = 2`.
+  - **Compute and writer: unchanged.** The moments' whole-tile srcA `UNPACR` and pass 2's `llk_unpack_AB<ROW>` unpack Bfp8_b x into bf16 srcA. The output pack forms Bfp8_b face rows from fp32 DEST. Every format reconfig is CB-driven.
+  - **No new CB, no CB resized** except by the format-derived page sizes.
+- Reused:
+  - R4's `Formats` record and dtype-derived page sizes.
+  - R5's `extract_kv` / `k_fill_last_row` structure and its face-row NoC writes.
+  - R6's `vc` / `w_blk` bounds.
+  - The `build_affine` word-copy / halfword paths (fed decoded bf16).
+  - The whole compute and writer.
+  - The golden helpers for the tests.
+- Added:
+  - The bfloat8_b decode/encode helpers.
+  - The `IN_BFP8` / `AFF_BFP8` CT args and branches: pilot exponent read, staged-γ/β decode, common-exponent k quantization, k-fill exponent stores.
+  - The `Formats` bf8b properties, the SUPPORTED values and the two EXCLUSIONS.
+- Accuracy achieved (Blackhole, HiFi3, fp32 DEST; golden-style `randn` input, γ+β bfloat8_b TILE):
+  - PCC ≥ 0.99991 and relative RMS 0.0125–0.0130 on (1,1,256,256) g8, (2,1,512,128) g4, (1,1,64,1280) g32, (2,1,100,128) g4 [hw_non_aligned], (1,1,64,100) g2 [c_non_aligned], Mochi (4,1,6360,768) g32 and (1,1,16384,512) g32. The tolerance is `TOLERANCES[bf8b]` = (0.99, 0.10).
+  - The remaining error is the input's and output's own bfloat8_b rounding: 7-bit magnitudes under a shared exponent.
+  - **The op's own error**: the reference is computed from the device's round-tripped bfloat8_b input, with group offsets from −12 to +12, so the k's have very different exponents. Relative RMS is 0.0086 – 0.0088 on hw_non_aligned shapes (2,1,40,256) g32 and (1,1,47,320) g32, against 0.0093 on the aligned (2,1,64,256) g16. That is the same band, so the common-exponent k-fill adds nothing.
+- Golden test progress:
+  - **1539/1539** runnable bfloat8_b cells pass:
+    - 891 with bfloat8_b input: 715 tile_aligned, 55 hw_non_aligned, 121 c_non_aligned.
+    - 648 with bfloat8_b γ/β under bf16 / Float32 input, TILE + RM.
+    - The rest of the 23 544 collected bf8b ids are INVALID-skipped: RM bf8b, BLOCK_SHARDED bf8b, `in_place=True` on interleaved input, and affine/none mismatches.
+    - The slice ran as node ids in three `--precompile --run-all` chunks: 515 + 512 + 512 passed, 0 failed, 0 XPASS.
+  - Prior cells: a random sample of 48 non-bf8b golden cells (seed 7) passes 48/48.
+  - Unit tests:
+    - The whole unit directory passes 445/445 plain: 341 prior + 104 new.
+    - The new bf8b file also passes 104/104 under `--dev`: the watcher NoC sanitizer is clean on the 1 088 B pages and the exponent-byte stores, and the kernel text fits.
+- Perf (Blackhole, DEVICE KERNEL DURATION [ns], `_op_bench_bf8b.py`). One fresh-cache profiled run; γ+β TILE in the input dtype; 108–110 cores both ways:
+
+  | Case | bf16 | bfloat8_b | ratio |
+  |---|---|---|---|
+  | vae_dram_65536x512 | 334 621 | 188 272 | 0.56 |
+  | vae_dram_262144x256 | 703 555 | 349 070 | 0.50 |
+  | refiner_dram_16384x1152 | 198 833 | 116 897 | 0.59 |
+  | mid_16384x320 | 65 888 | 44 466 | 0.67 |
+  | mochi 4×6360×768 (hw_non_aligned) | 223 705 | 155 722 | 0.70 |
+
+  - bfloat8_b moves 0.53× the input / output bytes. Its larger `K_max` also removes pass-2 re-reads: `vae_dram_262144x256` goes from K 16 / B 19 to fully resident, hence 0.50×.
+  - bf16 / Float32 paths are compile-time identical apart from the CT-arg shift, so the DRAM PERF FOCUS cases (bf16) are untouched.
+- Issues encountered: None. Every bf8b case passed on its first run, and the pilot/k-fill decode matched the host format on the first try.
+- Tests added:
+  - `tests/.../test_groupnorm_sc_N_1_HW_C_b_bf8b.py`, 104 cases:
+    - bfloat8_b input × 12 shapes (aligned, odd C/G, hw_non_aligned HR edges with C/G < 16, c_non_aligned) × 5 γ/β forms.
+    - bfloat8_b γ/β under bf16 / Float32 input × TILE / RM × gamma_beta / gamma_only.
+    - A tight op-error check against the quantized-input reference with offset groups: (0.9995, 0.03).
+    - Stream-only and partial residency, aligned and hw_non_aligned.
+    - Several units per core.
+    - Large shapes: 64×4096, 16384×512 and Mochi.
+  - `_op_bench_bf8b.py`: bfloat8_b vs bf16 device time on five DRAM shapes.
+  - Probes: the R7 bring-up (first-cut six-case smoke, accuracy metrics, residency plans).

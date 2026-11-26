@@ -73,6 +73,39 @@ constexpr uint32_t ALIGN = 64;               // DRAM read alignment (BH)
 constexpr uint32_t ROW0_READ_BYTES = 64;     // TILE pilot / gamma: one read of a face's row 0 (bf16: rows 0-1)
 constexpr uint32_t MAX_LANES = 32;           // group lanes in one tile row
 constexpr uint32_t PILOT_SLOT_BYTES = 16;    // sharded TILE pilot: one 16 B read per group lane
+// bfloat8_b tile (Refinement 7): a 64 B exponent section - one shared exponent byte per 16-lane face row, face-major
+// (face f row r at f * 16 + r) - then one sign | 7-bit magnitude byte per element (hidden bit at bit 6), face-major.
+constexpr uint32_t BFP8_EXP_BYTES = 64;
+constexpr uint32_t BFP8_FACE_BYTES = 256;
+
+// bfloat8_b element m (sign | magnitude) at shared exponent e -> bf16 bits, exact (<= 7 significant bits): the
+// magnitude is normalized to its leading one (tt-metal's host decode, convert_bfp_to_u32).
+FORCE_INLINE uint32_t bfp8_to_bf16(uint32_t m, uint32_t e) {
+    uint32_t mag = m & 0x7F;
+    if (mag == 0) {
+        return 0;
+    }
+    uint32_t sh = 0;
+    while ((mag & 0x40) == 0) {
+        mag <<= 1;
+        ++sh;
+    }
+    if (e <= sh) {
+        return 0;  // below bf16's normal range
+    }
+    return ((m & 0x80) << 8) | ((e - sh) << 7) | ((mag & 0x3F) << 1);
+}
+
+// bf16 bits b -> bfloat8_b element at shared exponent e (>= b's exponent), truncated: |value| = mag * 2^(e - 133).
+FORCE_INLINE uint32_t bf16_to_bfp8(uint32_t b, uint32_t e) {
+    const uint32_t be = (b >> 7) & 0xFF;
+    const uint32_t s = e - be + 1;
+    if (be == 0 || s >= 8) {
+        return 0;
+    }
+    const uint32_t mag = (0x80 | (b & 0x7F)) >> s;
+    return mag == 0 ? 0 : (((b >> 8) & 0x80) | mag);
+}
 
 // Element offset of tile-row-0 lane l (0..31) inside a tile: faces 0 / 1 hold lanes 0..15 / 16..31.
 FORCE_INLINE uint32_t row0_lane(uint32_t l) { return (l >> 4) * 256 + (l & 15); }
@@ -157,20 +190,34 @@ void kernel_main() {
     // slice is partial: VC_LAST channels (whole groups) in ceil(VC_LAST / 32) tiles. Only those are read and written;
     // its pad lanes (RM: never read; TILE: unspecified padding) are lane-masked by compute after the column collapse.
     constexpr uint32_t VC_LAST = get_compile_time_arg_val(21);
-    constexpr auto in_args = TensorAccessorArgs<22>();
+    // Refinement 7: bfloat8_b input (TILE, interleaved) / gamma / beta (TILE). Their staged row-0 values (the pilot k,
+    // the affine maps' source) are decoded to bf16; the k-fill writes the pad rows in the input's shared-exponent form.
+    constexpr bool IN_BFP8 = get_compile_time_arg_val(22) != 0;
+    constexpr bool AFF_BFP8 = get_compile_time_arg_val(23) != 0;
+    constexpr auto in_args = TensorAccessorArgs<24>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     // The output (written for this RISC's pass-2 share; DRAM interleaved only).
     constexpr uint32_t OUT_PAGE_BYTES = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
     constexpr auto out_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset() + 1>();
 
-    constexpr uint32_t IN_ELEM = IN_TILE_BYTES / 1024;  // input element bytes (bf16 2, Float32 4)
-    constexpr uint32_t IN_FACE_BYTES = IN_TILE_BYTES / 4;
+    // Input element bytes (bf16 2, Float32 4; bfloat8_b: its 1-byte mantissa, the exponents sit in the tile header).
+    constexpr uint32_t IN_ELEM = IN_BFP8 ? 1 : IN_TILE_BYTES / 1024;
+    constexpr uint32_t IN_HDR_BYTES = IN_BFP8 ? BFP8_EXP_BYTES : 0;  // ahead of face 0's elements
+    constexpr uint32_t IN_FACE_BYTES = IN_BFP8 ? BFP8_FACE_BYTES : IN_TILE_BYTES / 4;
     constexpr uint32_t TILE_SEGMENT_BYTES = 32 * IN_ELEM;  // 32 channels of one stick
-    constexpr uint32_t AMAP_TILE_BYTES = 1024 * AFF_ELEM;  // one affine map tile (gamma / beta's format)
-    constexpr uint32_t AFF_FACE_BYTES = 256 * AFF_ELEM;
-    static_assert(IN_ELEM == 2 || IN_ELEM == 4, "bf16 or Float32 input");
-    static_assert(AFF_ELEM == 2 || AFF_ELEM == 4, "bf16 or Float32 gamma / beta");
+    // Pilot staging per input tile (host: Formats.pilot_tile_stage): row-0 runs of faces 0 / 1, + bfloat8_b's
+    // exponent section.
+    constexpr uint32_t PILOT_TILE_STAGE = (IN_BFP8 ? 3 : 2) * ROW0_READ_BYTES;
+    constexpr uint32_t AMAP_TILE_BYTES = 1024 * AFF_ELEM;  // one affine map tile (the map's format, bf16 for bfp8)
+    constexpr uint32_t AFF_HDR_BYTES = AFF_BFP8 ? BFP8_EXP_BYTES : 0;
+    constexpr uint32_t AFF_FACE_BYTES = AFF_BFP8 ? BFP8_FACE_BYTES : 256 * AFF_ELEM;
+    constexpr uint32_t AFF_TILE_STAGE = (AFF_BFP8 ? 3 : 2) * ROW0_READ_BYTES;  // host: Formats.aff_tile_stage
+    static_assert(
+        IN_BFP8 ? (IN_TILE_BYTES == BFP8_EXP_BYTES + 1024 && !IS_RM && !SHARDED) : (IN_ELEM == 2 || IN_ELEM == 4),
+        "bf16 or Float32 input, or bfloat8_b TILE interleaved");
+    static_assert(AFF_ELEM == 2 || AFF_ELEM == 4, "bf16 or Float32 affine maps");
+    static_assert(!AFF_BFP8 || (AFF_TILE && AFF_ELEM == 2), "bfloat8_b gamma / beta: TILE, decoded into bf16 maps");
     static_assert(
         !SHARDED || (IN_ELEM == 2 && AFF_ELEM == 2 && !AFF_TILE),
         "sharded: bf16 input with bf16 ROW_MAJOR gamma / beta (the op's EXCLUSIONS)");
@@ -182,9 +229,9 @@ void kernel_main() {
     constexpr uint32_t FACE_ROW_BYTES = 16 * IN_ELEM;  // one face row of an input tile
     constexpr uint32_t SLICE_BYTES = W * TILE_SEGMENT_BYTES;
     // Per-tensor affine staging (host: affine_stage_bytes). RM: the slice's P channels from a 64 B-aligned start;
-    // TILE: row 0 of faces 0 / 1 of each of the slice's W channel tiles, 64 B each.
+    // TILE: row 0 of faces 0 / 1 of each of the slice's W channel tiles, 64 B each (+ bfloat8_b's exponents).
     constexpr uint32_t AFFINE_STAGE_BYTES =
-        AFF_TILE ? W * 2 * ROW0_READ_BYTES : ((P * AFF_ELEM + ALIGN - 1) / ALIGN) * ALIGN + ALIGN;
+        AFF_TILE ? W * AFF_TILE_STAGE : ((P * AFF_ELEM + ALIGN - 1) / ALIGN) * ALIGN + ALIGN;
 
     uint32_t arg = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(arg++);
@@ -357,17 +404,17 @@ void kernel_main() {
     auto issue_affine_reads = [&](uint32_t xs, uint32_t vc) {
         if constexpr (HAS_GAMMA) {
             if constexpr (AFF_TILE) {
+                // Per tile (AFF_TILE_STAGE): faces 0 / 1 at +0 / +64; bfloat8_b: the exponent section at +128.
                 const uint32_t t0 = xs >> 5;
                 const uint32_t nt = ((xs & 31) + vc + 31) >> 5;
                 for (uint32_t t = 0; t < nt; ++t) {
-                    for (uint32_t f = 0; f < 2; ++f) {
-                        const uint32_t dst = staging + t * 2 * ROW0_READ_BYTES + f * ROW0_READ_BYTES;
-                        noc_async_read(gamma_acc.get_noc_addr(t0 + t, f * AFF_FACE_BYTES), dst, ROW0_READ_BYTES);
+                    for (uint32_t f = 0; f < (AFF_BFP8 ? 3u : 2u); ++f) {
+                        const uint32_t dst = staging + t * AFF_TILE_STAGE + f * ROW0_READ_BYTES;
+                        const uint32_t off = f < 2 ? AFF_HDR_BYTES + f * AFF_FACE_BYTES : 0;
+                        noc_async_read(gamma_acc.get_noc_addr(t0 + t, off), dst, ROW0_READ_BYTES);
                         if constexpr (HAS_BETA) {
                             noc_async_read(
-                                beta_acc.get_noc_addr(t0 + t, f * AFF_FACE_BYTES),
-                                dst + AFFINE_STAGE_BYTES,
-                                ROW0_READ_BYTES);
+                                beta_acc.get_noc_addr(t0 + t, off), dst + AFFINE_STAGE_BYTES, ROW0_READ_BYTES);
                         }
                     }
                 }
@@ -386,7 +433,7 @@ void kernel_main() {
     auto aff_idx = [](uint32_t xs, uint32_t ch) -> uint32_t {
         if constexpr (AFF_TILE) {
             const uint32_t cl = (xs & 31) + ch;
-            return ((cl >> 5) * 2 * ROW0_READ_BYTES + ((cl >> 4) & 1) * ROW0_READ_BYTES) / AFF_ELEM + (cl & 15);
+            return ((cl >> 5) * AFF_TILE_STAGE + ((cl >> 4) & 1) * ROW0_READ_BYTES) / AFF_ELEM + (cl & 15);
         } else {
             return ((xs * AFF_ELEM) & (ALIGN - 1)) / AFF_ELEM + ch;
         }
@@ -404,6 +451,28 @@ void kernel_main() {
             constexpr uint32_t AMAP_TILES = (HAS_BETA ? 2 : 1) * W;
             cb_reserve_back(cb_gamma_rows, AMAP_TILES);
             noc_async_read_barrier();
+            if constexpr (AFF_BFP8) {
+                // bfloat8_b gamma / beta: each staged face's 16 row-0 mantissas -> 16 bf16 values over the same 64 B
+                // run (loaded before the stores), with the face row's shared exponent (+128); the map build below
+                // then reads bf16 (AFF_ELEM = 2).
+                const uint32_t nt = ((xs & 31) + vc + 31) >> 5;
+                for (uint32_t s = 0; s < (HAS_BETA ? 2u : 1u); ++s) {
+                    for (uint32_t t = 0; t < nt; ++t) {
+                        const uint32_t tb = staging + s * AFFINE_STAGE_BYTES + t * AFF_TILE_STAGE;
+                        for (uint32_t f = 0; f < 2; ++f) {
+                            const uint32_t e =
+                                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tb + 2 * ROW0_READ_BYTES)[f * 16];
+                            volatile tt_l1_ptr uint32_t* w =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tb + f * ROW0_READ_BYTES);
+                            const uint32_t m[4] = {w[0], w[1], w[2], w[3]};
+                            for (uint32_t i = 0; i < 8; ++i) {
+                                const uint32_t q = m[i >> 1] >> ((i & 1) * 16);
+                                w[i] = bfp8_to_bf16(q & 0xFF, e) | (bfp8_to_bf16((q >> 8) & 0xFF, e) << 16);
+                            }
+                        }
+                    }
+                }
+            }
             const uint32_t am = get_write_ptr(cb_gamma_rows);
             if constexpr (AFF_ELEM == 4 || CG % 2 == 0) {
                 // Runs of one group inside one half row (<= 16 lanes; bf16: 8 words - the run starts, the skew and
@@ -600,13 +669,35 @@ void kernel_main() {
     // its first channel, as bf16: a Float32 sample's upper halfword. TILE staging holds 64 B of row 0 of faces 0 / 1
     // per tile. Lanes >= g_blk are never read: the pilot / k rows walk only the slice's vc valid channels and the
     // group shift writes k = 0 there (a partial last slice's spare lanes see zero sums, so finite statistics).
+    // bfloat8_b: the sample decoded with its face row's shared exponent (exact in bf16). With HR != 0 every k is then
+    // truncated to one common exponent k_exp (the largest), so the k-fill can write any pad face row - whose 16 lanes
+    // may span several groups - with a single shared exponent and every k exactly; k is only a shift, so the
+    // quantized k' is used everywhere k is (pilot rows, group shift, pad rows) and the moments stay exact.
+    uint32_t k_exp = 0;
     auto extract_kv = [&](uint32_t g_blk) {
         for (uint32_t l = 0; l < g_blk; ++l) {
             const uint32_t c = l * CG;
-            const uint32_t byte =
-                IS_RM ? c * IN_ELEM
-                      : (c >> 5) * 2 * ROW0_READ_BYTES + ((c >> 4) & 1) * ROW0_READ_BYTES + (c & 15) * IN_ELEM;
-            kv[l] = sv[(byte + IN_ELEM - 2) >> 1];
+            if constexpr (IN_BFP8) {
+                const uint32_t tb = staging + (c >> 5) * PILOT_TILE_STAGE;
+                const uint32_t f = (c >> 4) & 1;
+                volatile tt_l1_ptr uint8_t* b8 = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tb);
+                kv[l] = bfp8_to_bf16(b8[f * ROW0_READ_BYTES + (c & 15)], b8[2 * ROW0_READ_BYTES + f * 16]);
+            } else {
+                const uint32_t byte =
+                    IS_RM ? c * IN_ELEM
+                          : (c >> 5) * PILOT_TILE_STAGE + ((c >> 4) & 1) * ROW0_READ_BYTES + (c & 15) * IN_ELEM;
+                kv[l] = sv[(byte + IN_ELEM - 2) >> 1];
+            }
+        }
+        if constexpr (IN_BFP8 && HR != 0) {
+            k_exp = 0;
+            for (uint32_t l = 0; l < g_blk; ++l) {
+                const uint32_t e = (kv[l] >> 7) & 0xFF;
+                k_exp = e > k_exp ? e : k_exp;
+            }
+            for (uint32_t l = 0; l < g_blk; ++l) {
+                kv[l] = bfp8_to_bf16(bf16_to_bfp8(kv[l], k_exp), k_exp);
+            }
         }
     };
 
@@ -620,7 +711,14 @@ void kernel_main() {
     [[maybe_unused]] auto k_fill_last_row = [&](uint32_t base, uint32_t lr, uint32_t vc, uint32_t w_blk) {
         MaybeDeviceZoneScope("r_k_fill");
         for_each_run(0, 0, vc, [&](uint32_t v, uint32_t ve, uint32_t lane, uint32_t) {
-            if constexpr (IN_ELEM == 4) {
+            if constexpr (IN_BFP8) {
+                // Mantissa bytes at the common exponent k_exp (exact: kv was truncated to it by extract_kv).
+                volatile tt_l1_ptr uint8_t* kr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(staging);
+                const uint8_t kb = static_cast<uint8_t>(bf16_to_bfp8(kv[lane], k_exp));
+                for (uint32_t i = v; i < ve; ++i) {
+                    kr[i] = kb;
+                }
+            } else if constexpr (IN_ELEM == 4) {
                 volatile tt_l1_ptr uint32_t* kr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging);
                 for (uint32_t i = v; i < ve; ++i) {
                     kr[i] = kv[lane] << 16;
@@ -640,9 +738,16 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < w_blk; ++wt) {
                 const uint32_t tile = base + (lr * W + wt) * IN_TILE_BYTES;
                 for (uint32_t r = HR; r < 32; ++r) {
-                    const uint32_t row = tile + (r >> 4) * 2 * IN_FACE_BYTES + (r & 15) * FACE_ROW_BYTES;
+                    const uint32_t row = tile + IN_HDR_BYTES + (r >> 4) * 2 * IN_FACE_BYTES + (r & 15) * FACE_ROW_BYTES;
                     noc_async_write_one_packet_with_state(staging + wt * 32 * IN_ELEM, row);
                     noc_async_write_one_packet_with_state(staging + (wt * 32 + 16) * IN_ELEM, row + IN_FACE_BYTES);
+                    if constexpr (IN_BFP8) {
+                        // The two pad face rows' shared exponents (bytes of the header: no NoC-aligned run).
+                        volatile tt_l1_ptr uint8_t* ex = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tile);
+                        const uint32_t f0 = (r >> 4) * 2;
+                        ex[f0 * 16 + (r & 15)] = static_cast<uint8_t>(k_exp);
+                        ex[(f0 + 1) * 16 + (r & 15)] = static_cast<uint8_t>(k_exp);
+                    }
                 }
             }
         }
@@ -706,11 +811,12 @@ void kernel_main() {
                 if constexpr (IS_RM) {
                     noc_async_read(in_acc.get_noc_addr(n * HW, wt0 * TILE_SEGMENT_BYTES), staging, vc * IN_ELEM);
                 } else {
+                    // Per tile (PILOT_TILE_STAGE): faces 0 / 1 at +0 / +64; bfloat8_b: the exponent section at +128.
                     for (uint32_t wt = 0; wt < w_blk; ++wt) {
-                        for (uint32_t f = 0; f < 2; ++f) {
-                            const uint64_t src = in_acc.get_noc_addr(n * HT * WT_TOTAL + wt0 + wt, f * IN_FACE_BYTES);
-                            noc_async_read(
-                                src, staging + wt * 2 * ROW0_READ_BYTES + f * ROW0_READ_BYTES, ROW0_READ_BYTES);
+                        for (uint32_t f = 0; f < (IN_BFP8 ? 3u : 2u); ++f) {
+                            const uint32_t off = f < 2 ? IN_HDR_BYTES + f * IN_FACE_BYTES : 0;
+                            const uint64_t src = in_acc.get_noc_addr(n * HT * WT_TOTAL + wt0 + wt, off);
+                            noc_async_read(src, staging + wt * PILOT_TILE_STAGE + f * ROW0_READ_BYTES, ROW0_READ_BYTES);
                         }
                     }
                 }
