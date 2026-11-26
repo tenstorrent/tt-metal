@@ -102,7 +102,7 @@ void MorehSoftmaxOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((input.layout() == Layout::TILE), "Inputs to softmax must be tilized");
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B ||
@@ -112,6 +112,7 @@ void MorehSoftmaxOperation::validate_inputs(
     const auto rank = input.logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
+    TT_FATAL(input.logical_volume() > 0, "Input to softmax must be non-empty, got shape {}", input.logical_shape());
 }
 
 void MorehSoftmaxOperation::validate_on_program_cache_miss(
@@ -213,13 +214,18 @@ ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOperation::tensor_return_val
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOperation;
     const bool is_fp32 = input.dtype() == DataType::FLOAT32;
+    const auto arch = input.device()->arch();
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto math_fidelity = (is_fp32 && arch == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
+                                                                          : tt::tt_metal::MathFidelity::HiFi4;
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     auto operation_attributes = OperationType::operation_attributes_t{
         dim,
         op,
         strategy,
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(
-            input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, is_fp32)};
+        init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, true, is_fp32)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

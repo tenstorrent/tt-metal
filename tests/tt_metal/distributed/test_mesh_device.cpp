@@ -4,34 +4,34 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <cstdlib>
 #include <unordered_map>
 #include <memory>
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_config.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_cache.hpp>
-#include <tt-metalium/shape_base.hpp>
-#include <tt-metalium/system_mesh.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/mesh_config.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/utils/program_cache.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/device.hpp>
@@ -103,7 +103,7 @@ std::shared_ptr<MeshDevice> create_unit_mesh_for_close_tests() {
 void compile_and_cache_dummy_workload(MeshDevice& mesh, const program_cache::detail::ProgramCacheKey& key) {
     mesh.enable_program_cache();
 
-    Program program;
+    Program program = CreateProgram(mesh);
     const CoreRangeSet cores(CoreRange({0, 0}, {0, 0}));
     CreateKernel(
         program,
@@ -279,8 +279,8 @@ TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) 
 
 TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
     const CoreCoord logical_core{0, 0};
-    auto& metal_context = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id());
-    const auto& control_plane = metal_context.get_control_plane();
+    auto& env = mesh_device_->impl().metal_env();
+    const auto& control_plane = env.get_control_plane();
 
     for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
         // Derive the expected coordinate from the chip's SoC descriptor rather than from the device
@@ -290,7 +290,7 @@ TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
         EXPECT_EQ(
             tt::tt_metal::experimental::Device::worker_core_from_logical_core(
                 *mesh_device_, mesh_coordinate, logical_core),
-            metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            env.get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 physical_chip_id, logical_core, CoreType::WORKER));
     }
 

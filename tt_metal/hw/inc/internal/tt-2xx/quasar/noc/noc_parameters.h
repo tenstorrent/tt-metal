@@ -394,6 +394,9 @@
 #define NOC_WORD_BYTES (NOC_PAYLOAD_WIDTH / 8)
 #define NOC_MAX_BURST_WORDS 256
 #define NOC_MAX_BURST_SIZE (NOC_MAX_BURST_WORDS * NOC_WORD_BYTES)
+// Per-cmd-buf packetization limit programmed at boot. 8KB; lower than the 64KB HW default to avoid NOC congestion.
+// The overlay splits larger transactions into packets of at most this size; the host reads it via the HAL.
+#define NOC_OVERLAY_MAX_BYTES_IN_PACKET (8 * 1024)
 // #define MEM_WORD_BYTES      16
 #define NOC_WORD_OFFSET_MASK (NOC_WORD_BYTES - 1)
 

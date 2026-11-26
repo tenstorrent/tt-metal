@@ -12,10 +12,11 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
@@ -84,7 +85,7 @@ StreamPlacements decide_device_placement(
     uint32_t num_links,
     const CoreRows& allowed_rows,
     std::size_t num_allowed) {
-    auto* dev = mesh->get_device(coord);
+    auto* dev = tt::tt_metal::internal::get_device(*mesh, coord);
     const auto self_node = mesh->get_fabric_node_id(coord);
 
     std::map<StreamId, WorkerCandidate> candidates;

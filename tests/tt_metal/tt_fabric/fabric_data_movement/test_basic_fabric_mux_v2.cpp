@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -17,15 +17,16 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "fabric_fixture.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 namespace tt::tt_fabric::fabric_router_tests::fabric_mux_v2_tests {
@@ -526,6 +527,7 @@ std::optional<MuxDeployment> create_mux_deployment(
     if (test_case.build_mux_from_descriptor) {
         tt::tt_metal::ProgramDescriptor desc;
         tt::tt_fabric::add_fabric_mux_v2_to_program(
+            *device,
             desc,
             *mux_config,
             mux_logical_core,
@@ -533,10 +535,11 @@ std::optional<MuxDeployment> create_mux_deployment(
             anchor_dst_fabric_node_id,
             link_indices.front(),
             test_case.forwarder_noc);
-        program = std::make_shared<tt::tt_metal::Program>(desc);
+        program = std::make_shared<tt::tt_metal::Program>(*device, desc);
     } else {
-        program = std::make_shared<tt::tt_metal::Program>(tt::tt_metal::CreateProgram());
+        program = std::make_shared<tt::tt_metal::Program>(tt::tt_metal::CreateProgram(*device));
         tt::tt_fabric::add_fabric_mux_v2_to_program(
+            *device,
             *program,
             *mux_config,
             mux_logical_core,

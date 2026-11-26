@@ -8,12 +8,12 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
@@ -41,7 +41,7 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
     auto l1_dst_noc_xy = this->device().virtual_core_from_logical_core(
         this->device().allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 1;

@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <chrono>
 
 #include "tests/tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
@@ -16,7 +16,7 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/context/context_types.hpp"
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "tt_metal/impl/host_api/temp_quasar_api.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
@@ -1188,7 +1188,7 @@ public:
         tt_metal::MetalContext::instance().get_cluster().write_core(
             raw.data(), raw.size(), tt_cxy_pair(this->device_->id(), phys_spoof), l1_buf_base);
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*this->mesh_device_);
 
         const uint32_t spoof_prefetch_sem_id =
             tt_metal::CreateSemaphore(program, {spoof_logical}, dispatch_buffer_pages, cq_core_type);

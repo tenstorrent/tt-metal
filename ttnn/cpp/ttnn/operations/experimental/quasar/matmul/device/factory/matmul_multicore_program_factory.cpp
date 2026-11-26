@@ -8,14 +8,14 @@
 #include <string>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt;
 using namespace tt::constants;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 

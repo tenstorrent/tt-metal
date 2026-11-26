@@ -5,6 +5,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
@@ -19,6 +20,8 @@
 #include "autograd/tensor.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
+#include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
+#include "metal/ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
 #include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
 #include "nb_export_enum.hpp"
@@ -71,6 +74,7 @@ void py_module_types(nb::module_& m) {
         auto py_rope = m.def_submodule("rope");
         nb::class_<ttml::ops::RopeScalingParams>(py_rope, "RopeScalingParams");
         nb::class_<ttml::ops::RotaryEmbeddingParams>(py_rope, "RotaryEmbeddingParams");
+        nb::class_<ttml::ops::RotaryEmbeddingPositions>(py_rope, "RotaryEmbeddingPositions");
     }
 
     m.def_submodule("matmul");
@@ -461,12 +465,29 @@ void py_module(nb::module_& m) {
             nb::arg("query"),
             nb::arg("key"),
             nb::arg("value"),
-            nb::arg("mask") = std::nullopt);
+            nb::arg("mask").none());
     }
 
     {
         auto py_rope = static_cast<nb::module_>(m.attr("rope"));
-        py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"), nb::arg("token_position") = 0);
+        py_rope.def(
+            "rope",
+            nb::overload_cast<const autograd::TensorPtr&, const ttml::ops::RotaryEmbeddingParams&, const uint32_t>(
+                &ttml::ops::rope),
+            nb::arg("input"),
+            nb::arg("rope_params"),
+            nb::arg("token_position") = 0);
+        py_rope.def(
+            "rope",
+            nb::overload_cast<
+                const autograd::TensorPtr&,
+                const ttml::ops::RotaryEmbeddingParams&,
+                const ttml::ops::RotaryEmbeddingPositions&>(&ttml::ops::rope),
+            nb::arg("input"),
+            nb::arg("rope_params"),
+            nb::arg("rope_positions"),
+            "RoPE with per-row positions. rope_positions: [B, S] UINT32 ROW_MAJOR. "
+            "Every id must be < rope_params.sequence_length; this is not checked on device.");
         py_rope.def(
             "mla_q_rope",
             &ttml::ops::mla_q_rope,
@@ -523,6 +544,13 @@ void py_module(nb::module_& m) {
             py_rotary_embedding_params.def_rw(
                 "rope_scaling_params", &ttml::ops::RotaryEmbeddingParams::rope_scaling_params);
         }
+        {
+            auto py_rope_positions =
+                static_cast<nb::class_<ttml::ops::RotaryEmbeddingPositions>>(py_rope.attr("RotaryEmbeddingPositions"));
+            py_rope_positions.def(nb::init<autograd::TensorPtr>(), nb::arg("ids"));
+            py_rope_positions.def("update", &ttml::ops::RotaryEmbeddingPositions::update, nb::arg("ids"));
+            py_rope_positions.def("get_ids", &ttml::ops::RotaryEmbeddingPositions::get_ids);
+        }
     }
 
     {
@@ -548,6 +576,16 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("gamma"),
             nb::arg("epsilon"));
+        py_rmsnorm.def(
+            "gated_rmsnorm",
+            &ttml::ops::gated_rmsnorm,
+            nb::arg("input"),
+            nb::arg("gate"),
+            nb::arg("gamma"),
+            nb::arg("epsilon") = 1e-6F,
+            "Per-head gated RMSNorm: input head-major [B*H,1,T,V] (bf16 or fp32), gate head-merged [B,1,T,H*V], "
+            "gamma [1,1,1,V] -> rmsnorm over V * gamma * silu(gate), [B,1,T,H*V]. Skips dL/dgamma when gamma is "
+            "frozen.");
     }
 
     m.def(
@@ -740,6 +778,26 @@ void py_module(nb::module_& m) {
             nb::arg("preallocated_dL_dpacked") = nb::none(),
             "Backward of swiglu_packed_fw: (packed [gate|up], dL_dh [.., R, I]) -> "
             "dL/dpacked [.., R, 2*I] = [dgate|dup].");
+        py_metal.def(
+            "rmsnorm_fw",
+            &ttml::metal::rmsnorm_fw,
+            nb::arg("input"),
+            nb::arg("gamma"),
+            nb::arg("return_intermediates") = true,
+            nb::arg("epsilon") = 1e-6F,
+            nb::arg("gate") = nb::none(),
+            "RMSNorm forward -> [output, rms or None]. With `gate`, output = rmsnorm(input) * gamma * silu(gate) for "
+            "a head-major input [B*H,1,T,V] and a head-merged gate [B,1,T,H*V], which the output takes.");
+        py_metal.def(
+            "rmsnorm_bw",
+            &ttml::metal::rmsnorm_bw,
+            nb::arg("input"),
+            nb::arg("gamma"),
+            nb::arg("rms"),
+            nb::arg("dL_dout"),
+            nb::arg("compute_dgamma") = true,
+            nb::arg("gate") = nb::none(),
+            "Backward of rmsnorm_fw -> [dL/dinput, dL/dgamma [1,1,1,V] or None, dL/dgate or None].");
     }
 }
 

@@ -5,7 +5,7 @@
 #include "topk_route_finish_device_operation.hpp"
 #include "topk_utils.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include <limits>
 
@@ -32,9 +32,9 @@ void validate_runtime_args(const operation_attributes_t& /*attrs*/, const tensor
     const auto& indices = tensor_args.indices_tensor;
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "topk_route_finish logits input must be on device");
-    TT_FATAL(input.buffer() != nullptr, "topk_route_finish logits input must have an allocated buffer");
+    TT_FATAL(input.is_allocated(), "topk_route_finish logits input must have an allocated buffer");
     TT_FATAL(indices.storage_type() == StorageType::DEVICE, "topk_route_finish indices input must be on device");
-    TT_FATAL(indices.buffer() != nullptr, "topk_route_finish indices input must have an allocated buffer");
+    TT_FATAL(indices.is_allocated(), "topk_route_finish indices input must have an allocated buffer");
 
     const auto& input_shape = input.logical_shape();
     const auto& indices_shape = indices.logical_shape();

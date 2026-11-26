@@ -29,22 +29,6 @@
   owner_id: U06US5C7M7X # Sean Nijjar
   upload_benchmarks: true
 
-- name: WH N300 fabric sanity
-  # Subset of run_cpp_fabric_tests.sh: Fabric1D/2D fixtures + control-plane
-  # topology validation + one YAML-driven sanity_common run. Kept lightweight
-  # for the sanity time budget.
-  cmd: |
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MeshGraphValidation*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
-  skus:
-    wh_n300_civ2:
-      timeout: 15
-  team: scaleout
-  budget_type: sanity
-  owner_id: U08RRAU5E15 # Ridvan Song
-
 - name: fabric fast unit tests (1D, 2D, single erisc)
   # Multi-card BH smoke: Fabric1D/2D fixtures, FabricMuxV2 smoke, and a
   # DISABLE_MULTI_AERISC repeat of the 1D pass.

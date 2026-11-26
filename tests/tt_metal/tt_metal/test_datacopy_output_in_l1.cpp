@@ -8,11 +8,11 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
@@ -22,7 +22,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(UnitMeshFixture, DatacopyOutputInL1) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     CoreCoord core = {0, 0};
 

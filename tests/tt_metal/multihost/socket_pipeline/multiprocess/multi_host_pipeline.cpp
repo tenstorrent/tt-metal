@@ -13,16 +13,17 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include <chrono>
 #include <filesystem>
 #include <numeric>
 #include <optional>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <internal/mesh_device.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
@@ -820,7 +821,7 @@ LogicalPipelineConfig build_automapped_single_galaxy_pipeline() {
     const std::vector<std::string> nodes = {"s0", "s1", "s2", "s3"};
     const std::vector<tt::tt_fabric::EdgeInputTuple> edges = {
         {"s0", "s1", false}, {"s1", "s2", false}, {"s2", "s3", false}, {"s3", "s0", true}};
-    const auto layout = tt::tt_fabric::resolve_graph_layout(nodes, edges, submesh_chips);
+    const auto layout = tt::tt_fabric::resolve_graph_layout(control_plane, nodes, edges, submesh_chips);
 
     LogicalPipelineConfig pipeline{
         .stages = std::vector<LogicalPipelineStageConfig>(
@@ -1113,7 +1114,7 @@ void run_single_galaxy_pipeline(
     barrier();
     if (is_pipeline_start) {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        auto start_device_id = mesh_device->get_device(start_coord)->id();
+        auto start_device_id = internal::get_device(*mesh_device, start_coord)->id();
         auto start_core_coord = mesh_device->worker_core_from_logical_core(logical_coord);
         std::vector<uint64_t> latencies = std::vector<uint64_t>(num_iterations, 0);
         uint32_t base_addr = latency_measurement_address;

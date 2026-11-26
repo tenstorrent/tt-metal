@@ -10,11 +10,11 @@
 #include <string>
 #include <utility>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
-#include "tt-metalium/circular_buffer_config.hpp"
-#include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/kernel_types.hpp"
-#include "tt-metalium/tt_backend_api_types.hpp"
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include "tt-metalium/workload/legacy/circular_buffer_config.hpp"
+#include "tt-metalium/vocabulary/core_coord.hpp"
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
+#include "tt-metalium/data_formats/data_format.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
@@ -24,14 +24,14 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 
@@ -414,7 +414,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         }
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
-        TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
+        TT_FATAL(bias.value().is_allocated(), "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -430,8 +430,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         a.storage_type() == StorageType::DEVICE && b.storage_type() == StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
-    TT_FATAL(
-        a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated() && b.is_allocated(), "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
         TT_FATAL(bias.value().storage_type() == StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");

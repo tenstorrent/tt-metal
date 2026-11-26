@@ -5,7 +5,8 @@
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim {
 using namespace tt;
@@ -27,8 +28,8 @@ void GridSampleOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device!");
     TT_FATAL(grid_tensor.storage_type() == StorageType::DEVICE, "Grid tensor must be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffer on device!");
-    TT_FATAL(grid_tensor.buffer() != nullptr, "Grid tensor must be allocated in buffer on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in buffer on device!");
+    TT_FATAL(grid_tensor.is_allocated(), "Grid tensor must be allocated in buffer on device!");
 
     // Shape validation
     TT_FATAL(
@@ -288,7 +289,7 @@ tt::tt_metal::TensorSpec GridSampleOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_data_type,
             PageConfig(output_layout),
             output_memory_config,
@@ -313,6 +314,7 @@ ttnn::Tensor grid_sample(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = GridSampleOperation;
+    ttnn::verify_numerical_configuration(input_tensor.device()->arch(), compute_kernel_config);
     const auto resolved_compute_kernel_config = ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,

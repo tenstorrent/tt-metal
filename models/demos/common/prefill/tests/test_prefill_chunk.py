@@ -4,6 +4,7 @@
 """Host-only: packed-forward metadata codec, the order contract and the packed H2D token layout."""
 
 import struct
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -14,15 +15,20 @@ from models.demos.common.prefill.prefill_chunk import (
     INVALID_SLOT,
     SHUTDOWN_WORD,
     WARMUP_WORD,
+    MediaRef,
     PrefillChunk,
     decode_forward_metadata,
+    decode_media_refs,
     forward_metadata_words,
+    media_refs_capacity,
     metadata_size_bytes,
     pack_forward_metadata,
+    packed_forward_capabilities,
     packed_forward_refusals,
     pad_chunks,
     sentinel_metadata,
     validate_chunks,
+    validate_media_refs,
 )
 
 C, SP = 1024, 8
@@ -228,15 +234,165 @@ def test_pack_forward_tokens(starts):
 def test_packed_forward_refusals():
     assert packed_forward_refusals(1, supports_packed_forward=False, mtp_levels=2, use_trace=True) == []
     assert packed_forward_refusals(4, supports_packed_forward=True) == []
+    assert packed_forward_refusals(4, supports_packed_forward=False, d2h_acks=True) == []
     reasons = packed_forward_refusals(
         4,
-        supports_packed_forward=False,
+        supports_packed_forward=True,
         mtp_levels=1,
         dflash=True,
         use_trace=True,
         d2h_acks=True,
         indexer_indices=True,
     )
-    assert len(reasons) == 6
-    for knob in ("supports_packed_forward", "MTP", "DFLASH", "USE_TRACE", "LAYER_ACK_D2H", "indexer indices"):
+    assert len(reasons) == 5
+    for knob in ("MTP", "DFLASH", "USE_TRACE", "LAYER_ACK_D2H", "indexer indices"):
         assert any(knob in r for r in reasons), knob
+    # An adapter's prefill_forward can lift the trace and D2H-ack refusals; MTP and DFlash stay refused.
+    lifted = {"supports_packed_forward": True, "traced_forward": True, "forward_d2h_acks": True}
+    assert packed_forward_refusals(4, use_trace=True, d2h_acks=True, **lifted) == []
+    assert len(packed_forward_refusals(4, use_trace=True, d2h_acks=True, mtp_levels=1, dflash=True, **lifted)) == 2
+    (reason,) = packed_forward_refusals(4, supports_packed_forward=True, use_trace=True, forward_d2h_acks=True)
+    assert "USE_TRACE" in reason
+    (reason,) = packed_forward_refusals(4, supports_packed_forward=True, d2h_acks=True, traced_forward=True)
+    assert "LAYER_ACK_D2H" in reason
+    # Without prefill_forward the runner runs chunks one by one, which is not traced.
+    (reason,) = packed_forward_refusals(4, supports_packed_forward=False, use_trace=True, traced_forward=True)
+    assert "USE_TRACE" in reason
+    # Indices between ranks: lifted only by a prefill_forward that carries every chunk's (GLM-5.3).
+    assert packed_forward_refusals(4, indexer_indices=True, forward_indexer_indices=True, **lifted) == []
+    (reason,) = packed_forward_refusals(4, supports_packed_forward=True, indexer_indices=True)
+    assert "indexer indices" in reason
+    (reason,) = packed_forward_refusals(
+        4, supports_packed_forward=False, indexer_indices=True, forward_indexer_indices=True
+    )
+    assert "indexer indices" in reason
+
+
+def test_packed_forward_mtp_refusal():
+    """MTP at F > 1 is lifted only by an adapter whose prefill_forward runs it (supports_packed_forward_mtp), eager or
+    traced; tracing still needs supports_packed_forward_trace."""
+    base = {"supports_packed_forward": True, "traced_forward": True, "forward_d2h_acks": True}
+    (reason,) = packed_forward_refusals(4, mtp_levels=1, **base)
+    assert "MTP" in reason
+    (reason,) = packed_forward_refusals(4, mtp_levels=1, supports_packed_forward=False, forward_mtp=True)
+    assert "MTP" in reason
+    assert packed_forward_refusals(4, mtp_levels=1, d2h_acks=True, forward_mtp=True, **base) == []
+    assert packed_forward_refusals(4, mtp_levels=1, use_trace=True, forward_mtp=True, **base) == []
+    (reason,) = packed_forward_refusals(
+        4, mtp_levels=1, use_trace=True, forward_mtp=True, **{**base, "traced_forward": False}
+    )
+    assert "USE_TRACE" in reason and "MTP" not in reason
+    # One chunk per forward: nothing to lift.
+    assert packed_forward_refusals(1, supports_packed_forward=False, mtp_levels=1, use_trace=True) == []
+
+
+def test_glm_adapter_runs_packed_mtp():
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
+
+    caps = packed_forward_capabilities(GLM53Adapter)
+    assert caps["forward_mtp"]
+    assert packed_forward_refusals(2, mtp_levels=1, d2h_acks=True, **caps) == []
+    assert packed_forward_refusals(2, mtp_levels=1, d2h_acks=True, use_trace=True, **caps) == []
+
+
+def test_packed_forward_capabilities_name_every_flag():
+    adapter = SimpleNamespace(
+        supports_packed_forward=True,
+        supports_packed_forward_trace=True,
+        supports_packed_forward_d2h_acks=False,
+        supports_packed_forward_indexer_indices=True,
+        supports_packed_forward_mtp=False,
+    )
+    caps = packed_forward_capabilities(adapter)
+    assert caps == {
+        "supports_packed_forward": True,
+        "traced_forward": True,
+        "forward_d2h_acks": False,
+        "forward_indexer_indices": True,
+        "forward_mtp": False,
+    }
+    (reason,) = packed_forward_refusals(4, use_trace=True, d2h_acks=True, indexer_indices=True, **caps)
+    assert "LAYER_ACK_D2H" in reason
+
+
+KEY = bytes(range(32))
+
+
+def test_media_refs_example_bytes():
+    ref = MediaRef(0, 100, 676, KEY)
+    expected = struct.pack("<3I", 3, 0, C) + struct.pack("<I", 1) + struct.pack("<3I", 0, 100, 676) + KEY + bytes(44)
+    raw = pack_forward_metadata([PrefillChunk(3, 0, C)], 1, [ref], max_media_refs=2)
+    assert raw == expected
+    assert len(raw) == metadata_size_bytes(1, max_refs=2) == 104
+    assert decode_forward_metadata(as_int32_words(raw), 1) == [PrefillChunk(3, 0, C)]
+    assert decode_media_refs(raw, 1, 2) == [ref]
+
+
+def test_media_refs_capacity_fills_the_socket_page():
+    assert media_refs_capacity(1, 512) == 11
+    assert metadata_size_bytes(1, max_refs=11) <= 512 < metadata_size_bytes(1, max_refs=12)
+    assert media_refs_capacity(8, 512) == 9
+    assert media_refs_capacity(8, 64) == 0
+
+
+def test_media_refs_off_keeps_the_bytes():
+    chunks = [PrefillChunk(0, 0, C), PrefillChunk(1, C, 2 * C)]
+    assert metadata_size_bytes(2, max_refs=0) == metadata_size_bytes(2)
+    assert pack_forward_metadata(chunks, 2, max_media_refs=0) == pack_forward_metadata(chunks, 2)
+    assert decode_media_refs(pack_forward_metadata(chunks, 2), 2, 0) == []
+
+
+def test_media_refs_in_a_packed_forward():
+    chunks = [PrefillChunk(0, C, 2 * C), PrefillChunk(1, 0, 500), EMPTY]
+    refs = [MediaRef(0, 900, 1200, KEY), MediaRef(1, 10, 60, KEY), MediaRef(1, 100, 150, KEY)]
+    raw = pack_forward_metadata(chunks, 3, refs, max_media_refs=4)
+    assert decode_forward_metadata(as_int32_words(raw), 3) == chunks
+    assert decode_media_refs(raw, 3, 4) == refs
+    validate_media_refs(refs, chunks)
+
+
+def test_media_refs_sentinel_fills_every_word():
+    raw = sentinel_metadata(SHUTDOWN_WORD, 2, max_refs=3)
+    assert raw == pack_forward_metadata(
+        [PrefillChunk(SHUTDOWN_WORD, SHUTDOWN_WORD, SHUTDOWN_WORD)], 2, max_media_refs=3
+    )
+    assert as_int32_words(raw) == [SHUTDOWN_WORD] * (metadata_size_bytes(2, max_refs=3) // 4)
+
+
+def test_media_refs_reject_bad_metadata(expect_error):
+    chunks = [PrefillChunk(0, C, 2 * C), EMPTY]
+    with expect_error(ValueError, "a sentinel carries no media refs"):
+        pack_forward_metadata(
+            [PrefillChunk(SHUTDOWN_WORD, SHUTDOWN_WORD, SHUTDOWN_WORD)], 2, [MediaRef(0, C, C + 1, KEY)], 1
+        )
+    with expect_error(ValueError, "2 media refs, the metadata holds 1"):
+        pack_forward_metadata(chunks, 2, [MediaRef(0, C, C + 1, KEY)] * 2, max_media_refs=1)
+    raw = bytearray(pack_forward_metadata(chunks, 2, max_media_refs=1))
+    raw[metadata_size_bytes(2)] = 2
+    with expect_error(ValueError, "n_refs=2"):
+        decode_media_refs(bytes(raw), 2, 1)
+    for ref, message in [
+        (MediaRef(1, 0, 10, KEY), "no non-empty chunk 1"),
+        (MediaRef(0, 0, C, KEY), "does not overlap"),
+        (MediaRef(0, 2 * C, 2 * C + 10, KEY), "does not overlap"),
+        (MediaRef(0, C + 10, C + 10, KEY), "does not overlap"),
+    ]:
+        with expect_error(ValueError, message):
+            validate_media_refs([ref], chunks)
+    with expect_error(ValueError, "overlaps"):
+        validate_media_refs([MediaRef(0, C, C + 20, KEY), MediaRef(0, C + 10, C + 30, KEY)], chunks)
+    with expect_error(ValueError, "overlaps or precedes"):
+        validate_media_refs([MediaRef(0, C + 50, C + 60, KEY), MediaRef(0, C, C + 20, KEY)], chunks)
+    packed = [PrefillChunk(0, C, 2 * C), PrefillChunk(1, 0, 500), EMPTY]
+    with expect_error(ValueError, "comes after a ref of chunk 1"):
+        validate_media_refs([MediaRef(1, 10, 60, KEY), MediaRef(0, 900 + C, 1200 + C, KEY)], packed)
+
+
+def test_glm_adapter_packs_on_a_pipeline():
+    """GLM-5.3 passes indexer indices between ranks, and its prefill_forward carries them, traced, with D2H acks:
+    the manifest's PREFILL_USE_TRACE=1 + PREFILL_LAYER_ACK_D2H=1 on a multi-rank split are not refused at F > 1."""
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
+
+    assert GLM53Adapter.passes_indexer_indices
+    caps = packed_forward_capabilities(GLM53Adapter)
+    assert packed_forward_refusals(4, use_trace=True, d2h_acks=True, indexer_indices=True, **caps) == []

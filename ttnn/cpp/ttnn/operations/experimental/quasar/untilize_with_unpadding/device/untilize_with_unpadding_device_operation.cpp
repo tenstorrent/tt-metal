@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 using namespace tt::tt_metal;
@@ -69,7 +69,7 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = input;
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     TT_FATAL(

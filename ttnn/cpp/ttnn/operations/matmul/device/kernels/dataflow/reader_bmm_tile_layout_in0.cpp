@@ -10,6 +10,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#ifdef BATCH_BROADCAST
+#include "ttnn/operations/matmul/device/kernels/dataflow/batch_broadcast_offset.hpp"
+#endif
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -46,6 +49,31 @@ void kernel_main() {
 #ifdef IN0_SHARDED
     const uint32_t in0_num_tiles = batch * num_blocks * in0_block_h * in0_block_w;
     dfb_in0.reserve_back(in0_num_tiles);
+    // The shard is the buffer, so the implicit K padding is zeroed in place, as the sharded mcast readers do.
+    constexpr uint32_t in0_tile_h = get_tile_hw(dfb::in0) / tt::constants::TILE_WIDTH;
+    constexpr bool pad_k_columns = last_ktile_w > 0 && in0_tile_h >= tt::constants::FACE_HEIGHT;
+    constexpr bool pad_k_rows = last_ktile_h > 0 && in0_tile_h == tt::constants::TILE_HEIGHT;
+    if constexpr (pad_k_columns || pad_k_rows) {
+        constexpr DataFormat in0_data_format = get_dataformat(dfb::in0);
+        constexpr uint32_t in0_tile_bytes = get_tile_size(dfb::in0);
+        const uint32_t in0_base = dfb_in0.get_write_ptr();
+        if constexpr (pad_k_columns) {
+            // kernel_main is not a template, so this branch is instantiated even when discarded, and
+            // pad_last_ktile only accepts face-high and tile-high tiles.
+            constexpr uint32_t pad_tile_h =
+                in0_tile_h >= tt::constants::FACE_HEIGHT ? in0_tile_h : tt::constants::TILE_HEIGHT;
+            constexpr uint32_t row_tiles = num_blocks * in0_block_w;
+            for (uint32_t row = 0; row < batch * in0_block_h; ++row) {
+                pad_last_ktile<in0_data_format, last_ktile_w, pad_tile_h>(
+                    in0_base + (row * row_tiles + row_tiles - 1) * in0_tile_bytes);
+            }
+        } else {
+            // transpose_a with a sharded in0 is validated to one tile per batch.
+            for (uint32_t b = 0; b < batch; ++b) {
+                pad_last_transposed_ktile<in0_data_format, last_ktile_h>(in0_base + b * in0_tile_bytes);
+            }
+        }
+    }
     dfb_in0.push_back(in0_num_tiles);
 #else
 
@@ -60,6 +88,12 @@ void kernel_main() {
     const auto s0 = TensorAccessor(tensor::in0);
 
     uint32_t m_block = start_m_block;
+#ifdef BATCH_BROADCAST
+    uint32_t out_batch = get_arg(args::start_batch);
+    constexpr auto batch_dims = get_arg(args::batch_dims);
+    constexpr auto in0_batch_strides = get_arg(args::in0_batch_strides);
+    in0_tensor_start_tile_id += batch_broadcast_offset(out_batch, batch_dims, in0_batch_strides);
+#endif
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -109,7 +143,11 @@ void kernel_main() {
         if (++m_block == m_blocks_per_batch) {
             // Next batch, first M block
             m_block = 0;
+#ifdef BATCH_BROADCAST
+            in0_tensor_start_tile_id = batch_broadcast_offset(++out_batch, batch_dims, in0_batch_strides);
+#else
             in0_tensor_start_tile_id += MtKt - (m_blocks_per_batch - 1) * in0_m_block_stride;
+#endif
         } else {
             in0_tensor_start_tile_id += in0_m_block_stride;
         }

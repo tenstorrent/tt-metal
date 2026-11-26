@@ -5,13 +5,14 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <cstdlib>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat4.hpp>
+#include <tt-metalium/data_formats/bfloat8.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -28,23 +29,23 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/xy_pair.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -124,7 +125,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     std::vector<CoreCoord> all_l1_writer_cores_ordered,
     uint32_t bank_start_id,
     const uint32_t& input_buffer_addr) {
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
 
     uint32_t start_tile_id = 0;
     uint32_t kt = k / 32;
@@ -362,7 +363,12 @@ void get_optimal_dram_bank_to_reader_assignment(
     std::vector<CoreCoord>& all_worker_cores_ordered,
     CoreRangeSet& all_worker_cores,
     tt_metal::NOC noc) {
-    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    const auto bank_to_core = device->get_optimal_dram_bank_to_logical_worker_assignment(
+        noc, tt_metal::distributed::MeshCoordinate::zero_coordinate(device->shape().dims()));
+    all_worker_cores_ordered.resize(bank_to_core.size());
+    for (const auto& [bank, core] : bank_to_core) {
+        all_worker_cores_ordered.at(bank) = core;
+    }
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
         all_cores_set.insert(CoreRange(worker_core));

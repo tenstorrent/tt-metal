@@ -14,7 +14,7 @@
 //
 #include <span>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -22,14 +22,5 @@ namespace tt::tt_metal::experimental {
 // Pin sender L1 on `dram_senders` (at most space.num_dram_senders() cores) before any DRISC
 // kernel runs on them.
 void set_dram_sender_cores(PrefetcherPipeSpace& space, std::span<const CoreCoord> dram_senders);
-
-// Carve a pipe whose sender is one of the cores passed to set_dram_sender_cores.
-PrefetcherPipe create_dram_sender_pipe(
-    PrefetcherPipeSpace& space,
-    CoreCoord dram_sender,
-    const CoreRangeSet& receivers,
-    uint32_t recv_index_base = 0,
-    uint64_t tensor_prefetcher_factory_id = 0,
-    uint32_t tensor_prefetcher_factory_num_pipes = 0);
 
 }  // namespace tt::tt_metal::experimental

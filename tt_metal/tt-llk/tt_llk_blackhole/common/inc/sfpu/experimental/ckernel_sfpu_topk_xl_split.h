@@ -25,14 +25,14 @@
 namespace topk_xl_split
 {
 
-constexpr std::uint8_t F2S                   = ckernel::semaphore::FPU_SFPU;
-constexpr std::uint8_t S2F                   = ckernel::semaphore::UNPACK_MATH_DONE;
+constexpr std::uint8_t F2S = ckernel::semaphore::FPU_SFPU;
+constexpr std::uint8_t S2F = ckernel::semaphore::UNPACK_MATH_DONE;
 // The schedule runs ahead of PACK, so the shared semaphores need more than their default depth of 1.
 constexpr std::uint8_t TOKEN_DEPTH             = 15;
 constexpr std::uint8_t DEFAULT_SEMAPHORE_DEPTH = 1;
-constexpr std::uint32_t STEPS_PER_CHUNK      = 9;
-constexpr std::uint32_t STAGES_FIRST_CHUNK   = 7;
-constexpr std::uint32_t STAGES_MERGING_CHUNK = 9;
+constexpr std::uint32_t STEPS_PER_CHUNK        = 9;
+constexpr std::uint32_t STAGES_FIRST_CHUNK     = 7;
+constexpr std::uint32_t STAGES_MERGING_CHUNK   = 9;
 
 inline bool decode_step(const std::uint32_t c1, const std::uint32_t r, const std::uint32_t num_chunks, std::uint32_t& chunk, std::uint32_t& stage)
 {
@@ -362,10 +362,11 @@ inline void release_dest_bank0()
     _llk_packer_set_math_semaphore_<ckernel::p_stall::NONE>();
 }
 
-// rebuild_dir: the direction of stages 7 and 8 (ascending for the last chunk of a mirrored segment).
+// rebuild_dir: the direction of stages 7 and 8 (ascending for the last chunk of a mirrored segment). take_next: a merge
+// takes the token of MATH's next step before it stores (see case 6).
 template <std::uint32_t K>
 inline __attribute__((always_inline)) void sfpu_stage_body(
-    const std::uint32_t chunk, const std::uint32_t stage, const std::uint32_t num_chunks, const bool rebuild_dir)
+    const std::uint32_t chunk, const std::uint32_t stage, const std::uint32_t num_chunks, const bool rebuild_dir, const bool take_next)
 {
     static_assert(supported_split<K>, "the split takes fused K = 512, 1024 and 2048 rows");
     namespace sfpu                  = ckernel::sfpu;
@@ -375,38 +376,33 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
     {
         case 0:
             sfpu::_topk_xl_split_stamp_<K>(tile_offset, chunk);
-            if constexpr (K == 2048)
-            {
-                sfpu::_topk_xl_split_sort_head_2048_(tile_offset, ascending);
-            }
-            else if constexpr (K == 1024)
-            {
-                sfpu::_topk_xl_split_sort_head_1024_(tile_offset, ascending);
-            }
-            else
-            {
-                sfpu::_topk_xl_split_sort_head_512_<true /*macros*/>(tile_offset, ascending);
-            }
+            sfpu::_topk_xl_split_sort_head_<K, true /*macros*/>(tile_offset, ascending);
             break;
         case 1:
-            sfpu::_topk_xl_split_stride2_<K, 4 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_column_pairs_<K, 4 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 2:
-            sfpu::_topk_xl_split_columns_<K, 0x5050 /*lane_mask*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::EVERY_2_LANES>(tile_offset, ascending);
             break;
         case 3:
-            sfpu::_topk_xl_split_stride2_<K, 8 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_column_pairs_<K, 8 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 4:
-            sfpu::_topk_xl_split_columns_<K, 0x5500 /*lane_mask*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::EVERY_4_LANES>(tile_offset, ascending);
             break;
         case 5:
-            sfpu::_topk_xl_split_stride2_<K, 16 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_column_pairs_<K, 16 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 6:
-            sfpu::_topk_xl_split_columns_<K, 0 /*lane_mask*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::NONE>(tile_offset, ascending);
             if (chunk > 0)
             {
+                // The merge also stores into the previous survivor, whose Dst bank MATH's next step works in, so that step
+                // must be done first: its token is taken here rather than by the next SFPU part.
+                if (take_next)
+                {
+                    take_math_token();
+                }
                 if constexpr (K == 512)
                 {
                     if (num_chunks == 2)
@@ -433,7 +429,7 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
             sfpu::_topk_xl_split_rebuild_build_<K>(survivor_tile<K>(chunk, num_chunks) << 6, rebuild_dir);
             break;
         default:
-            sfpu::_topk_xl_split_columns_<K, 0 /*lane_mask*/>(survivor_tile<K>(chunk, num_chunks) << 6, rebuild_dir);
+            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::NONE>(survivor_tile<K>(chunk, num_chunks) << 6, rebuild_dir);
             break;
     }
 }
@@ -443,33 +439,35 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
 // mirror_last is a parameter, not a template argument: sfpu_stage_body takes the direction as a value, so
 // templating on it duplicates every stage body in PACK instruction memory for identical code.
 template <std::uint32_t K, std::uint32_t stage>
-inline __attribute__((always_inline)) void sfpu_step_inline(const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take)
+inline __attribute__((always_inline)) void sfpu_step_inline(
+    const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take, const bool take_next)
 {
     if (take)
     {
         take_math_token();
     }
-    sfpu_stage_body<K>(chunk, stage, num_chunks, mirror_last && chunk + 1 == num_chunks);
+    sfpu_stage_body<K>(chunk, stage, num_chunks, mirror_last && chunk + 1 == num_chunks, take_next);
     ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
 }
 
 template <std::uint32_t K, std::uint32_t stage>
 inline __attribute__((noinline, noclone)) void sfpu_step_call(
-    const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take)
+    const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take, const bool take_next)
 {
-    sfpu_step_inline<K, stage>(chunk, num_chunks, mirror_last, take);
+    sfpu_step_inline<K, stage>(chunk, num_chunks, mirror_last, take, take_next);
 }
 
 template <std::uint32_t K, std::uint32_t stage>
-inline __attribute__((always_inline)) void sfpu_step(const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take = true)
+inline __attribute__((always_inline)) void sfpu_step(
+    const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take = true, const bool take_next = false)
 {
     if constexpr (K == 512)
     {
-        sfpu_step_inline<K, stage>(chunk, num_chunks, mirror_last, take);
+        sfpu_step_inline<K, stage>(chunk, num_chunks, mirror_last, take, take_next);
     }
     else
     {
-        sfpu_step_call<K, stage>(chunk, num_chunks, mirror_last, take);
+        sfpu_step_call<K, stage>(chunk, num_chunks, mirror_last, take, take_next);
     }
 }
 
@@ -479,6 +477,8 @@ template <std::uint32_t K>
 inline __attribute__((noinline)) void pack_slot(const std::uint32_t c1, const std::uint32_t num_chunks, const bool mirror_last)
 {
     const bool cur = c1 < num_chunks, prev = c1 > 0, prev_merged = c1 > 1;
+    // Chunk c1 - 1's merge takes the token of chunk c1's stage 2.
+    const bool merge_takes_next = cur && prev_merged;
     if (cur)
     {
         sfpu_step<K, 0>(c1, num_chunks, mirror_last, c1 > 0);
@@ -493,11 +493,11 @@ inline __attribute__((noinline)) void pack_slot(const std::uint32_t c1, const st
     }
     if (prev)
     {
-        sfpu_step<K, 6>(c1 - 1, num_chunks, mirror_last);
+        sfpu_step<K, 6>(c1 - 1, num_chunks, mirror_last, true /*take*/, merge_takes_next);
     }
     if (cur)
     {
-        sfpu_step<K, 2>(c1, num_chunks, mirror_last);
+        sfpu_step<K, 2>(c1, num_chunks, mirror_last, !merge_takes_next /*take*/);
     }
     if (prev_merged)
     {
@@ -532,12 +532,13 @@ inline __attribute__((noinline)) void pack_head(const std::uint32_t num_chunks, 
     sfpu_step<K, 4>(1, num_chunks, mirror_last);
     sfpu_step<K, 5>(0, num_chunks, mirror_last);
     sfpu_step<K, 5>(1, num_chunks, mirror_last);
-    sfpu_step<K, 6>(0, num_chunks, mirror_last);
-    sfpu_step<K, 6>(1, num_chunks, mirror_last);
+    // Chunk 1's merge takes the token of chunk 2's copy.
     const bool cur = num_chunks > 2;
+    sfpu_step<K, 6>(0, num_chunks, mirror_last);
+    sfpu_step<K, 6>(1, num_chunks, mirror_last, true /*take*/, cur /*take_next*/);
     if (cur)
     {
-        sfpu_step<K, 0>(2, num_chunks, mirror_last);
+        sfpu_step<K, 0>(2, num_chunks, mirror_last, false /*take*/);
     }
     sfpu_step<K, 7>(1, num_chunks, mirror_last);
     if (cur)
@@ -558,6 +559,9 @@ inline __attribute__((noinline)) void pack_head(const std::uint32_t num_chunks, 
 template <std::uint32_t K, typename Epilogue>
 inline void pack_row(const std::uint32_t num_chunks, const bool mirror_last, Epilogue&& epilogue)
 {
+    // The sort's alternate stores advance dest through ADDR_MOD_6 by one face row (+32).
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
+
     static_assert(supported_split<K>, "the split takes fused K = 512, 1024 and 2048 rows");
     LLK_ASSERT(num_chunks >= 1, "pack_row needs at least one chunk");
     // Only stages 7 and 8 read the rebuild direction, and a single-chunk row never reaches them, so it would
@@ -577,6 +581,11 @@ inline void pack_row(const std::uint32_t num_chunks, const bool mirror_last, Epi
         pack_slot<K>(c1, num_chunks, mirror_last);
     }
     epilogue();
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next PACK SFPU op. ADDR_MOD slots
+    // are per-thread config, so this restore is PACK-local -- it cannot land in MATH's section;
+    // MATH's own sections program their slot themselves.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
 }
 

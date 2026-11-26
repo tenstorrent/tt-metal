@@ -8,25 +8,26 @@
 #include <cstdlib>
 #include <string>
 #include <string_view>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "llrt/core_descriptor.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "internal/tt-2xx/quasar/noc/att/att_address.h"
 #include "internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h"
 #include "internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h"
+#include "internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_uncapped_att_config.h"
 
 using namespace tt::tt_metal;
 namespace unit_tests::test_l1_banking_allocator {
@@ -105,12 +106,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, L1BanksAreInRowMajorOrderWithAtt) {
     }
 
     // End to end against the map itself: the ATT selectors of the banks' cores are consecutive and ascending.
-    const std::string_view map_name = std::getenv("TT_METAL_NOC_ATT");
+    const std::string_view map_name =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_noc_att_map().value_or(std::string_view{});
     const noc_att::MapData* map = nullptr;
     if (map_name == "grendel_qsr1") {
         map = &grendel_qsr1_att_config::MAP;
     } else if (map_name == "quasar_aether_2x3") {
         map = &quasar_aether_2x3_att_config::MAP;
+    } else if (map_name == "quasar_aether_2x3_uncapped") {
+        map = &quasar_aether_2x3_uncapped_att_config::MAP;
     }
     ASSERT_NE(map, nullptr) << "unknown ATT map " << map_name;
     std::vector<uint32_t> selectors;

@@ -11,11 +11,11 @@
 #include <cstring>
 
 #include "device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "dm_common.hpp"
 #include <distributed/mesh_device_impl.hpp>
 
@@ -114,7 +114,7 @@ static void run_pcie_mid_cleanup(const std::shared_ptr<distributed::MeshDevice>&
     CoreCoord self_phys = mesh_device->worker_core_from_logical_core(logical_core);
     uint32_t packed_self_coords = (self_phys.x << 16) | (self_phys.y & 0xFFFF);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/data_movement/pcie_mid_cleanup/kernels/pcie_mid_cleanup.cpp",

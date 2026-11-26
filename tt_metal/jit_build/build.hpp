@@ -14,7 +14,7 @@
 #include <string_view>
 #include <vector>
 
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "jit_build/types.hpp"
 #include "jit_build_options.hpp"
 #include <tt-umd/types/arch.hpp>
@@ -136,6 +136,8 @@ protected:
     std::string extra_link_objs_;
     std::string weakened_firmware_name_;
 
+    // True for every TENSIX compute (TRISC) state; the replay opt-out applies to all three.
+    bool is_compute_{};
     // HAL-provided compile flags enabling RVV codegen on this state; empty when the arch or
     // processor does not support it. Appended to a kernel's recipe cflags only when that
     // kernel opted in (JitBuildSettings::get_rvv_enabled), so default builds are unchanged.

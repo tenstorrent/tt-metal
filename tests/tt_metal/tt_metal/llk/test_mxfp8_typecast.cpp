@@ -9,17 +9,17 @@
 #include <random>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mxfp8.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/mxfp8.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/program/program_impl.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -60,7 +60,7 @@ static vector<uint32_t> run_mxfp8_typecast(
          .output = {.format = output_fmt, .num_tiles = num_tiles, .accessor = "out", .num_entries = 2},
          .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
          .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
-         .hw_config = experimental::ComputeHardwareConfig{.enable_32_bit_dest = fp32_dest_acc_en}});
+         .hw_config = ComputeHardwareConfig{.enable_32_bit_dest = fp32_dest_acc_en}});
 }
 
 // Data generators follow the fp8_typecast tests' convention: generate

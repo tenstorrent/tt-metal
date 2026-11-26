@@ -4,7 +4,7 @@
 
 #include "ring_sdpa_fw_device_operation.hpp"
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 #include "metal/ops/common/ring_sdpa_utils.hpp"
 

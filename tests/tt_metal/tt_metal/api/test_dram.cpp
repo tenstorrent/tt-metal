@@ -5,8 +5,8 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <cstddef>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <cstdint>
 #include <map>
@@ -17,23 +17,23 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
@@ -76,7 +76,7 @@ bool dram_single_core_db(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -147,7 +147,7 @@ bool dram_single_core(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -199,7 +199,7 @@ bool dram_single_core_pre_allocated(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -373,7 +373,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixLoopDRAMReadSingleCoreBothProcessors)
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     CoreCoord core = {0, 0};

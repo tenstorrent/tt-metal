@@ -12,11 +12,12 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <internal/service/service_core_manager.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <internal/mesh_device.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -170,7 +171,7 @@ inline std::map<distributed::MeshCoordinate, CoreCoord> claim_service_cores(
     auto& svc = internal::service_core_manager(*mesh);
     std::map<distributed::MeshCoordinate, CoreCoord> service_cores;
     for (const auto& coord : coords) {
-        auto* d = mesh->get_device(coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto claimable = svc.get_claimable_cores(d);
         const auto already_claimed = svc.claimed_cores(d->id());
         std::optional<CoreCoord> chosen;

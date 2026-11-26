@@ -4,10 +4,10 @@
 
 #include <tt-metalium/experimental/udm/mesh_kernel.hpp>
 #include <tt-metalium/experimental/udm/mesh_builder.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 

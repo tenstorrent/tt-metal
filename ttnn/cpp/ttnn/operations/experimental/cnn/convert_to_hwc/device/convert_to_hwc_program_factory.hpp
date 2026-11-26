@@ -6,7 +6,7 @@
 
 #include "convert_to_hwc_device_operation_types.hpp"
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -28,6 +28,10 @@ struct ConvertToHwcConfig {
     uint32_t hw_total{};
     uint32_t element_size_bytes{};
     tt::DataFormat input_format{};
+
+    // Output tensor properties (the packer converts to the output format)
+    uint32_t output_element_size_bytes{};
+    tt::DataFormat output_format{};
 
     // Shard specifications
     uint32_t l1_input_shard_height{};
@@ -65,6 +69,6 @@ struct ConvertToHWCProgramFactory {
         Tensor& tensor_return_value);
 };
 
-uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor);
+uint32_t compute_alignment_requirement_in_elements(tt::tt_metal::DataType output_dtype);
 
 }  // namespace ttnn::experimental::prim

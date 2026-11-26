@@ -7,11 +7,11 @@
 #include <limits>
 #include <vector>
 #include <gtest/gtest.h>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "llk_device_fixture.hpp"
 
 namespace tt::tt_metal {
@@ -71,7 +71,7 @@ void run_block_max8(distributed::MeshDevice& mesh, bool fpu) {
     const auto golden = pack_bfloat16_vec_into_uint32_vec(expected);
     auto& cq = mesh.mesh_command_queue();
     const CoreCoord core{0, 0};
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     const uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t buffer_bytes = tiles * tile_bytes;
     auto src_buffer = distributed::MeshBuffer::create(

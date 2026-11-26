@@ -5,10 +5,12 @@
 
 #include <fmt/base.h>
 #include <cstdint>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
@@ -23,16 +25,16 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "df/float32.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/xy_pair.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -86,8 +88,8 @@ struct ChipSenderReceiverEthCore {
 };
 
 std::tuple<tt_metal::Program, tt_metal::Program> build(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device0*/,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device1*/,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device0,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device1,
     tt::tt_metal::CoreCoord eth_sender_core,
     tt::tt_metal::CoreCoord eth_receiver_core,
     std::size_t /*num_samples*/,
@@ -95,8 +97,8 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
     std::size_t /*max_channels_per_direction*/,
     tt_metal::KernelHandle& local_kernel,
     tt_metal::KernelHandle& remote_kernel) {
-    tt_metal::Program program0;
-    tt_metal::Program program1;
+    tt_metal::Program program0 = tt_metal::CreateProgram(*device0);
+    tt_metal::Program program1 = tt_metal::CreateProgram(*device1);
 
     const std::vector<uint32_t>& ct_args = {};
 

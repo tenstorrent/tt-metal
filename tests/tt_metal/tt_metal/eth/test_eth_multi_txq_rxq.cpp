@@ -6,17 +6,17 @@
 #include <gtest/gtest.h>
 #include <cstdlib>
 #include <tt-umd/types/arch.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <cstdint>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "eth_test_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
@@ -40,7 +40,7 @@ static void eth_direct_send_multi_txq_rxq(
     distributed::MeshWorkload sender_workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program sender_program = tt_metal::Program();
+    tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_mesh_device);
 
     constexpr size_t PAYLOAD_SIZE = 32;
     const size_t unreserved_l1_start = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
@@ -74,7 +74,7 @@ static void eth_direct_send_multi_txq_rxq(
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program = tt_metal::Program();
+    tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_mesh_device);
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,

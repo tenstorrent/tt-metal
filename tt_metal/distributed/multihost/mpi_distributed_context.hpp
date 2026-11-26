@@ -5,9 +5,8 @@
 #pragma once
 
 #include <mpi.h>
-#include <memory>
 #include <optional>
-#include "api/tt-metalium/distributed_context.hpp"
+#include "api/tt-metalium/mesh/multihost/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
 

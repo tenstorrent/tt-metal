@@ -4,8 +4,8 @@
 
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -14,7 +14,7 @@ namespace tt::tt_metal {
 
 // Test stream scratch register APIs on Tensix cores (both RISC0 and RISC1)
 TEST_F(UnitMeshFixture, StreamScratchRegisterTensixCores) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     // Use core (0,0) for testing
     CoreCoord test_core = {0, 0};
@@ -38,7 +38,7 @@ TEST_F(UnitMeshFixture, StreamScratchRegisterEriscCores) {
         GTEST_SKIP() << "No active ethernet cores available on this device";
     }
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     // Get first available ethernet core
     auto eth_core = *ethernet_cores.begin();

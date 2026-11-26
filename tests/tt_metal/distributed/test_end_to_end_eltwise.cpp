@@ -3,26 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <functional>
 
-
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
 
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <gmock/gmock-matchers.h>
 
-#include "host_api.hpp"
+#include "tt-metalium/workload/legacy/host_api.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 namespace tt::tt_metal {
 
 std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
-
+    distributed::MeshDevice& mesh_device,
     const std::shared_ptr<distributed::MeshBuffer>& src0_buf,
     const std::shared_ptr<distributed::MeshBuffer>& src1_buf,
     const std::shared_ptr<distributed::MeshBuffer>& output_buf,
@@ -46,7 +45,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
                                        ? sub_device_for_program->get().impl()->cores(HalProgrammableCoreType::TENSIX)
                                        : CoreRange(CoreCoord{0, 0}, CoreCoord(2, 2)); /* end_coord */
 
-    auto program = std::make_shared<Program>();
+    auto program = std::make_shared<Program>(CreateProgram(mesh_device));
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
@@ -131,7 +130,7 @@ TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
 
     EXPECT_GE(cq_id, 0);
 
-    auto example_program = CreateProgram();
+    auto example_program = CreateProgram(*this->mesh_device_);
 
     auto target_tensix_cores = CoreRange{
         CoreCoord{0, 0} /* start_coord */, CoreCoord{1, 1} /* end_coord */
@@ -229,7 +228,8 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
     EnqueueWriteMeshBuffer(cq, b_buffer, b_data, true /* blocking */);
 
-    auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
+    auto program = EltwiseBinaryProgramGenerator(
+        *this->mesh_device_, a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
 
     auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
@@ -287,7 +287,8 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
         create_random_vector_of_bfloat16(distributed_buffer_size_bytes, 1 /* rand_max_float */, 0 /* seed */);
     std::vector<uint32_t> b_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, kValToAdd);
 
-    auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
+    auto program = EltwiseBinaryProgramGenerator(
+        *this->mesh_device_, a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
 
     auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
@@ -351,7 +352,8 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
         create_random_vector_of_bfloat16(distributed_buffer_size_bytes, 1 /* rand_max_float */, 0 /* seed */);
     std::vector<uint32_t> b_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, kValToMul);
 
-    auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kMulOpId);
+    auto program = EltwiseBinaryProgramGenerator(
+        *this->mesh_device_, a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kMulOpId);
 
     auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
@@ -443,6 +445,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
         MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
     // Create three eltwise binary ops using a simple program generation function
     auto add_program = EltwiseBinaryProgramGenerator(
+        *this->mesh_device_,
         add_src0_buf,
         add_src1_buf,
         add_output_buf,
@@ -451,6 +454,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
         kAddOpId,
         sub_device_1);  // Addition runs on the first SubDevice
     auto multiply_program = EltwiseBinaryProgramGenerator(
+        *this->mesh_device_,
         mul_sub_src0_buf,
         mul_sub_src1_buf,
         mul_sub_output_buf,
@@ -459,6 +463,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
         kMulOpId,
         sub_device_2);  // Multiplication runs on the second SubDevice);
     auto subtract_program = EltwiseBinaryProgramGenerator(
+        *this->mesh_device_,
         mul_sub_src0_buf,
         mul_sub_src1_buf,
         mul_sub_output_buf,

@@ -21,24 +21,12 @@ The equality check is deliberately stricter / more tolerant than ``torch.equal``
 import torch
 import ttnn
 
+from tt_py_test_utils_common.determinism_report import assert_deterministic
 
-def _assert_outputs_equal(output1, output2):
-    if output1 is None or output2 is None:
-        assert output1 is None and output2 is None, "one run returned None, the other did not"
-        return
-    if isinstance(output1, (tuple, list)):
-        assert len(output1) == len(output2)
-        for a, b in zip(output1, output2):
-            _assert_outputs_equal(a, b)
-        return
-    a = output1 if isinstance(output1, torch.Tensor) else ttnn.to_torch(output1)
-    b = output2 if isinstance(output2, torch.Tensor) else ttnn.to_torch(output2)
-    assert a.shape == b.shape, f"shape mismatch between the two runs: {a.shape} vs {b.shape}"
-    if a.is_floating_point():
-        both_nan = a.isnan() & b.isnan()
-        assert bool(torch.all((a == b) | both_nan)), "the two runs produced different outputs"
-    else:
-        assert torch.equal(a, b), "the two runs produced different outputs"
+
+def _assert_outputs_equal(output1, output2, op=None, args=(), kwargs=None, rerun=None):
+    # ``op``/``args``/``kwargs``/``rerun`` only enrich the failure message (see determinism_report).
+    assert_deterministic(op, args, kwargs or {}, output1, output2, rerun=rerun, nan_equal=True)
 
 
 def _snapshot(output):
@@ -57,7 +45,7 @@ def _snapshot(output):
 def _run_twice(op, *args, **kwargs):
     output1 = op(*args, **kwargs)
     output2 = op(*args, **kwargs)
-    _assert_outputs_equal(output1, output2)
+    _assert_outputs_equal(output1, output2, op, args, kwargs, lambda: op(*args, **kwargs))
     return output1
 
 

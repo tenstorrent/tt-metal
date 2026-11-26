@@ -87,6 +87,28 @@ constexpr std::uint32_t tiny_face_stride(const TensorShape& tensor_shape)
     return tensor_shape.face_r_dim < MAX_FPU_ROWS ? MAX_FPU_ROWS / tensor_shape.face_r_dim : 1;
 }
 
+/**
+ * @brief Get the register-file rows one face occupies, including tiny-face padding.
+ *
+ * @param tensor_shape: Shape with a valid face row dimension (1, 2, 4, 8, or 16).
+ * @return MAX_FPU_ROWS for faces shorter than MAX_FPU_ROWS, face_r_dim otherwise.
+ */
+constexpr std::uint32_t padded_face_rows(const TensorShape& tensor_shape)
+{
+    return tensor_shape.face_r_dim * tiny_face_stride(tensor_shape);
+}
+
+/**
+ * @brief Get the register-file rows one tile occupies, including tiny-face padding.
+ *
+ * @param tensor_shape: Shape with a valid face row dimension (1, 2, 4, 8, or 16).
+ * @return total_num_faces() * @ref padded_face_rows.
+ */
+constexpr std::uint32_t padded_tile_rows(const TensorShape& tensor_shape)
+{
+    return tensor_shape.total_num_faces() * padded_face_rows(tensor_shape);
+}
+
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
 /// Build a TensorShape from explicit face dimensions and face-grid counts.
@@ -208,6 +230,17 @@ constexpr bool validate_tensor_shape_sub_bcast_col_custom_(const TensorShape& te
 {
     return tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
            (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1);
+}
+
+/**
+ * @brief Whether a tile has a 2x1 face grid (two face rows, one face column), e.g. a 32x16 tile.
+ *
+ * Shared by the row broadcast datacopy checks (WH/BH math datacopy init and unpack A init) that do not
+ * support this grid, so they stay in sync.
+ **/
+constexpr bool is_tensor_shape_2x1_face_grid(const TensorShape& tensor_shape)
+{
+    return tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.total_num_faces() == MAX_NUM_FACES_R_DIM;
 }
 
 } // namespace ckernel

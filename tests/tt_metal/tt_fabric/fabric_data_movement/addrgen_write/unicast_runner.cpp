@@ -11,18 +11,18 @@
 #include <numeric>
 #include <vector>
 
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 #include "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/test_common.hpp"
 #include "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/kernel_common.hpp"
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
 
 namespace tt::tt_fabric::test {
@@ -178,7 +178,7 @@ Notes:
 
     // Global semaphore so a remote chip can signal it.
     // Fabric guarantees payload is visible before the bump is seen.
-    tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram(*mesh);
     // Create the semaphore on the specific receiver logical core of the *mesh*.
     tt::tt_metal::CoreRangeSet rx_core_set(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
     static std::optional<tt::tt_metal::GlobalSemaphore> gsem;
@@ -250,7 +250,7 @@ Notes:
     tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem->address(), sem_wait_value});
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
-    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram(*mesh);
     const uint32_t CB_ID = tt::CBIndex::c_0;
     // CB holds 8 pages total so the reader can fill 4 while the writer drains 4.
     // Use source aligned page size (reader reads from DRAM buffer with DRAM alignment)
@@ -318,7 +318,7 @@ Notes:
     // This establishes the send path (routing/link identifiers) for fabric traffic.
     // The device kernel must unpack these in the same order via build_from_args(...).
     tt::tt_fabric::append_fabric_connection_rt_args(
-        src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
+        *mesh, src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
     // -------------------------- end PROGRAM FACTORY --------------------------
 

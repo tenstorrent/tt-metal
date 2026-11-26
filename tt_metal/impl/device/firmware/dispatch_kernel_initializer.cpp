@@ -7,7 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "common/executor.hpp"
 #include "device/firmware/firmware_initializer.hpp"
 #include "impl/context/context_descriptor.hpp"
@@ -105,10 +105,20 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
-    terminate_command_queues();
-    wait_for_dispatch_cores();
-
-    process_termination_signals();
+    // After an L1 ECC halt the dispatcher is stuck on the halted worker and never runs terminate; the RISC reset
+    // in RiscFirmwareInitializer::teardown stops the dispatch cores instead.
+    const bool dispatch_live = !descriptor_->metal_context().l1_ecc_halt_detected();
+    if (dispatch_live) {
+        terminate_command_queues();
+    }
+    // A dispatch core reports done only once every kernel on it has returned, so the dispatch kernels that exit on
+    // a termination signal get it before the wait. Routing kernels carry the CQ kernels' traffic until those exit,
+    // so theirs comes after.
+    process_termination_signals(FDKernelType::DISPATCH);
+    if (dispatch_live) {
+        wait_for_dispatch_cores();
+    }
+    process_termination_signals(FDKernelType::ROUTING);
 
     devices_.clear();
     initialized_ = false;
@@ -254,9 +264,9 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
     }
 }
 
-void DispatchKernelInitializer::process_termination_signals() const {
+void DispatchKernelInitializer::process_termination_signals(FDKernelType kernel_type) const {
     for (auto* dev : devices_) {
-        const auto& info = dispatch_topology_->get_registered_termination_cores(dev->id());
+        const auto& info = dispatch_topology_->get_registered_termination_cores(dev->id(), kernel_type);
         for (const auto& core_to_terminate : info) {
             std::vector<uint32_t> val{core_to_terminate.val};
             detail::WriteToDeviceL1(

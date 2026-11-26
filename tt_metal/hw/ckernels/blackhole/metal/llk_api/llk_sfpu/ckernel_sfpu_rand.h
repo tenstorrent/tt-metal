@@ -10,7 +10,6 @@
 #include "llk_math_eltwise_unary_sfpu.h"
 
 namespace ckernel::sfpu {
-
 constexpr std::uint32_t sfpshft_mod1_arg_imm = 1;
 constexpr std::uint32_t sfpshft_mod1_arg_imm_use_vc = sfpshft_mod1_arg_imm | 4;
 constexpr std::uint32_t sfpsetsgn_mod1_arg_imm = 1;
@@ -25,7 +24,6 @@ inline void rand_prng() {
 
 template <bool APPROXIMATION_MODE>
 inline void rand_init(std::uint32_t seed) {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     // The all-ones state is the lock-up state of the hardware XNOR LFSR.
     if (seed == 0xFFFFFFFF) {
@@ -139,6 +137,12 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     if (!normalize_per_row) {
         scale -= normalization_exponent << exponent_shift;
     }
+
+    // rand_row stores under ADDR_MOD_6, which every op leaves at its dest += 2 invariant. An init that changes
+    // SFPU control state (topk enables index tracking, which replaces this kernel's LREG4-7 results) must
+    // be followed by a control-register clear before rand, issued by the caller -- any generic SFPU
+    // *_tile_init or _init_sfpu_config_reg(); the topk ops leave tracking on at exit. rand_tile_init clears
+    // it too but reseeds the stream; rand_init alone does not touch it.
 
     // Load scale param to lreg1
     TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, scale & 0xFFFF);

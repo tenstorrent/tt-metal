@@ -5,8 +5,8 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <map>
@@ -19,21 +19,21 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -231,6 +231,15 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
     std::map<ChipId, tt_metal::Program> programs;
+    // Program has no default constructor semantics we want here (a Program must be bound to a MeshDevice),
+    // so create entries explicitly instead of relying on std::map::operator[].
+    auto get_program = [&programs](distributed::MeshDevice& mesh_device, ChipId chip_id) -> tt_metal::Program& {
+        auto it = programs.find(chip_id);
+        if (it == programs.end()) {
+            it = programs.emplace(chip_id, tt_metal::CreateProgram(mesh_device)).first;
+        }
+        return it->second;
+    };
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     std::map<ChipId, distributed::MeshWorkload> workloads;
@@ -249,8 +258,8 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             sender_receivers[i];
         auto* sender_device = sender_mesh_device->impl().get_devices()[0];
         auto* receiver_device = receiver_mesh_device->impl().get_devices()[0];
-        auto& sender_program = programs[sender_device->id()];
-        auto& receiver_program = programs[receiver_device->id()];
+        auto& sender_program = get_program(*sender_mesh_device, sender_device->id());
+        auto& receiver_program = get_program(*receiver_mesh_device, receiver_device->id());
         CoreCoord sender_receiver_core;
         for (const auto& sender_receiver : sender_receivers) {
             if (std::get<1>(sender_receiver)->get_device_ids()[0] == sender_device->id()) {
@@ -386,6 +395,15 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
     std::map<ChipId, tt_metal::Program> programs;
+    // Program has no default constructor semantics we want here (a Program must be bound to a MeshDevice),
+    // so create entries explicitly instead of relying on std::map::operator[].
+    auto get_program = [&programs](distributed::MeshDevice& mesh_device, ChipId chip_id) -> tt_metal::Program& {
+        auto it = programs.find(chip_id);
+        if (it == programs.end()) {
+            it = programs.emplace(chip_id, tt_metal::CreateProgram(mesh_device)).first;
+        }
+        return it->second;
+    };
     std::map<ChipId, distributed::MeshWorkload> workloads;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -411,7 +429,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             }
         }
 
-        auto& program = programs[device_id];
+        auto& program = get_program(*device, device_id);
 
         auto input_buffer = distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = cfg.size_bytes},

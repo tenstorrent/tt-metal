@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
@@ -16,8 +18,8 @@
 
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 namespace {
 
@@ -183,7 +185,7 @@ void queue_in1_tensor_prefetcher_request(const SparseMatmulParams& attributes, c
     // The calling thread's current queue is the one launch dispatches on, so a trace recording there
     // captures the request with the program and re-sends it on every replay.
     metal_exp::QueueTensorPrefetcherRequest(
-        *mesh_device, pipes, std::nullopt, request, &mesh_device->mesh_command_queue());
+        *mesh_device, pipes, std::nullopt, request, &ttnn::core::current_mesh_command_queue(*mesh_device));
 }
 
 }  // namespace
@@ -214,7 +216,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             sparsity.storage_type() == ttnn::StorageType::DEVICE,
         "All sparse matmul inputs must be on device");
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr && input_tensor_b.buffer() != nullptr && sparsity.buffer() != nullptr,
+        input_tensor_a.is_allocated() && input_tensor_b.is_allocated() && sparsity.is_allocated(),
         "All sparse matmul inputs must be allocated in buffers");
     TT_FATAL(
         input_tensor_a.device() == input_tensor_b.device() && input_tensor_a.device() == sparsity.device(),
@@ -330,6 +332,26 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.is_input_a_sparse,
         operation_attributes.is_input_b_sparse);
 
+    // The in0 sender reads the sparsity mask as one ROW_MAJOR page per outer batch (page_id = b) and
+    // indexes entry bB of that page for every B batch slot, so each page must hold exactly batch_length_B
+    // entries. A tensor of the right volume but another layout, e.g. [1, 1, 1, 32] or [32, 1, 1, 1] for an
+    // expected [1, 4, 1, 8], is otherwise read with the wrong stride. Indexed/gather mode never reads it.
+    if (!operation_attributes.use_indices) {
+        const auto& sparsity_shape = sparsity.logical_shape();
+        TT_FATAL(
+            sparsity_shape[-1] == batch_length_B,
+            "sparsity must hold one ROW_MAJOR page of batch_length_B ({}) entries per outer batch, so its last "
+            "dimension ({}) must equal {} and the other dimensions must multiply to {} "
+            "[sparsity_shape={}, is_input_a_sparse={}, is_input_b_sparse={}]",
+            batch_length_B,
+            sparsity_shape[-1],
+            batch_length_B,
+            batch_length / batch_length_B,
+            sparsity_shape,
+            operation_attributes.is_input_a_sparse,
+            operation_attributes.is_input_b_sparse);
+    }
+
     TT_FATAL(
         operation_attributes.nnz.value_or(1) <= batch_length,
         "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
@@ -360,7 +382,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         // a device tensor with a live buffer on that same device -- is_allocated() alone is also true
         // for a host tensor, and says nothing about device affinity.
         TT_FATAL(indices.storage_type() == ttnn::StorageType::DEVICE, "indices tensor must be on device");
-        TT_FATAL(indices.buffer() != nullptr, "indices tensor must be allocated in a buffer");
+        TT_FATAL(indices.is_allocated(), "indices tensor must be allocated in a buffer");
         TT_FATAL(
             indices.device() == input_tensor_a.device(),
             "indices tensor must be on the same device as the other sparse matmul inputs");
@@ -417,7 +439,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             "use_bias is set but no bias tensor was provided");
         const auto& bias = tensor_args.optional_input_tensors.at(1).value();
         TT_FATAL(bias.storage_type() == ttnn::StorageType::DEVICE, "bias tensor must be on device");
-        TT_FATAL(bias.buffer() != nullptr, "bias tensor must be allocated in a buffer");
+        TT_FATAL(bias.is_allocated(), "bias tensor must be allocated in a buffer");
         TT_FATAL(
             bias.device() == input_tensor_a.device(),
             "bias tensor must be on the same device as the other sparse matmul inputs");
@@ -526,6 +548,12 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
                 pc->out_block_w != 0 && pc->out_block_h != 0,
                 "sparse_matmul: out_block_w and out_block_h must be non-zero");
             TT_FATAL(
+                pc->in0_block_w != 0 && pc->per_core_M != 0 && pc->per_core_N != 0,
+                "sparse_matmul: in0_block_w ({}), per_core_M ({}) and per_core_N ({}) must be non-zero",
+                pc->in0_block_w,
+                pc->per_core_M,
+                pc->per_core_N);
+            TT_FATAL(
                 pc->out_block_w % pc->out_subblock_w == 0,
                 "sparse_matmul: out_block_w ({}) must be divisible by out_subblock_w ({}); otherwise "
                 "in1_num_subblocks becomes 0 and the mcast_in0 kernel deadlocks",
@@ -609,6 +637,42 @@ SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::co
             operation_attributes.output_mem_config))};
 }
 
+// Zero-fills `output` in place. The fill must run on the sub-device that holds the matmul's cores: the
+// command queue only orders programs against earlier work on their own sub-device, so a fill on the default
+// (first) sub-device would race with the matmul writing the same buffer when the matmul is on sub-device >= 1
+// (#66852). A program must also sit within a single sub-device, so the fill is restricted to exactly the cores
+// the matmul factory uses: the first num_blocks_x cores (row-major) of the configured rectangle anchored at
+// (0,0) -- not the whole configured grid, which can be larger and straddle a sub-device boundary.
+static Tensor zero_fill_on_matmul_cores(
+    const Tensor& output, const Tensor& in1, const SparseMatmulDeviceOperation::operation_attributes_t& attrs) {
+    if (attrs.program_config.has_value()) {
+        if (const auto* pc = std::get_if<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+                &attrs.program_config.value())) {
+            const bool fill_supported = output.layout() == Layout::TILE &&
+                                        output.storage_type() == StorageType::DEVICE &&
+                                        (output.dtype() == DataType::BFLOAT8_B ||
+                                         output.dtype() == DataType::BFLOAT16 || output.dtype() == DataType::FLOAT32);
+            // Same rectangle the factory derives (see sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp).
+            const CoreCoord grid = pc->allowed_worker_cores.has_value()
+                                       ? pc->allowed_worker_cores->bounding_box().grid_size()
+                                       : pc->compute_with_storage_grid_size;
+            const uint32_t tile_w = in1.tensor_spec().tile().get_width();
+            if (fill_supported && grid.x > 0 && grid.y > 0 && pc->per_core_N > 0 && tile_w > 0) {
+                const uint32_t nt = in1.padded_shape()[-1] / tile_w;
+                const uint32_t num_blocks = ((nt - 1) / pc->per_core_N) + 1;  // num_blocks_y == 1 for sparse 1D
+                const CoreRangeSet rect(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+                if (num_blocks <= rect.num_cores()) {
+                    const CoreRangeSet matmul_cores =
+                        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids({0, 0}, num_blocks, rect, true);
+                    return ttnn::fill(output, 0.0f, std::nullopt, std::optional<Tensor>(output), matmul_cores);
+                }
+            }
+        }
+    }
+    return ttnn::zeros_like(
+        output, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::optional<Tensor>(output));
+}
+
 SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     SparseMatmulDeviceOperation::tensor_return_value_t output_tensors;
@@ -632,13 +696,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
         }
         if (!compact_output) {
             for (auto& output_tensor : output_tensors) {
-                output_tensor = ttnn::zeros_like(
-                    output_tensor,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    std::optional<Tensor>(output_tensor));
+                output_tensor = zero_fill_on_matmul_cores(output_tensor, input_tensors.at(1), operation_attributes);
             }
         }
         return output_tensors;
@@ -651,13 +709,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     }
     // Compact output requires a caller-supplied tensor, so this path is never compact.
     for (auto& output_tensor : output_tensors) {
-        output_tensor = ttnn::zeros_like(
-            output_tensor,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            std::optional<Tensor>(output_tensor));
+        output_tensor = zero_fill_on_matmul_cores(output_tensor, input_tensors.at(1), operation_attributes);
     }
     return output_tensors;
 }

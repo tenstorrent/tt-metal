@@ -11,7 +11,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_constants.hpp"
 #include <llrt/tt_cluster.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 
 void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
     for (const auto& sync_config : config.sync_configs) {
@@ -324,7 +324,14 @@ void TestContext::setup_devices() {
     const auto& available_coords = this->fixture_->get_host_local_device_coordinates();
     for (const auto& coord : available_coords) {
         test_devices_.emplace(
-            coord, TestDevice(coord, this->fixture_, this->fixture_, &sender_memory_map_, &receiver_memory_map_));
+            coord,
+            TestDevice(
+                coord,
+                this->fixture_->get_mesh_device(),
+                this->fixture_,
+                this->fixture_,
+                &sender_memory_map_,
+                &receiver_memory_map_));
     }
 }
 

@@ -12,7 +12,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
-    DestSync,
     PerfRunType,
     UnpackerEngine,
     format_dict,
@@ -22,14 +21,20 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    generate_stimuli,
+    signed_cancelling_operands,
+)
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
+    ACC_TO_DEST,
     BROADCAST_TYPE,
     DEST_SYNC,
     LOOP_FACTOR,
@@ -44,7 +49,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 INPUT_DIMENSIONS = [[512, 32]]
 TILE_DIMENSIONS = [32, 32]
@@ -66,10 +71,6 @@ def _wide_range_spec(fmt: DataFormat):
     else:
         hi = _FLOAT32_WIDE_RANGE
     return StimuliSpec.uniform(low=-hi, high=hi)
-
-
-def unary_broadcast_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 UNARY_BROADCAST_FORMATS = input_output_formats(
@@ -105,7 +106,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
     broadcast_type=BROADCAST_TYPES,
-    dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -114,7 +115,7 @@ def test_unary_broadcast_quasar(
     formats,
     dest_acc,
     broadcast_type,
-    dest_sync_mode,
+    dest_sync,
     input_dimensions,
     run_types,
     loop_factor,
@@ -122,7 +123,11 @@ def test_unary_broadcast_quasar(
     *,
     is_perf=False,
     perf_report=None,
+    acc_to_dest=None,
 ):
+    """Unary broadcast of B, or with acc_to_dest set, a plain broadcast pass of A followed by an acc_to_dest
+    broadcast pass of B (sources/quasar/eltwise_unary_broadcast_acc_to_dest_quasar_test.cpp).
+    """
     unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     tile_rows, tile_cols = TILE_DIMENSIONS
@@ -136,7 +141,7 @@ def test_unary_broadcast_quasar(
     tile_cnt = (rows // tile_rows) * (cols // tile_cols)
 
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -154,33 +159,52 @@ def test_unary_broadcast_quasar(
         spec_B=spec,
         tile_dimensions=TILE_DIMENSIONS,
     )
+    if acc_to_dest is not None:
+        src_A, src_B = signed_cancelling_operands(src_A, src_B)
 
     if not is_perf:
         generate_broadcast_golden = get_golden_generator(BroadcastGolden)
-        golden_tensor = generate_broadcast_golden(
-            broadcast_type,
-            src_B,
-            formats.output_format,
-            num_faces=num_faces,
-            tile_cnt=tile_cnt,
-            face_r_dim=face_r_dim,
-        )
 
-    src_A = src_B
+        def broadcast_golden(src):
+            return generate_broadcast_golden(
+                broadcast_type,
+                src,
+                formats.output_format,
+                num_faces=num_faces,
+                tile_cnt=tile_cnt,
+                face_r_dim=face_r_dim,
+            )
+
+        golden_tensor = broadcast_golden(src_B)
+        if acc_to_dest:
+            golden_tensor = (
+                broadcast_golden(src_A).float() + golden_tensor.float()
+            ).to(format_dict[formats.output_format])
+
+    if acc_to_dest is None:
+        src_A = src_B
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
     unpacker_sel = UnpackerEngine.UnpA if unpack_to_dest else UnpackerEngine.UnpB
 
+    templates = [
+        UNPACKER_ENGINE_SEL(unpacker_sel),
+        BROADCAST_TYPE(broadcast_type),
+        DEST_SYNC(dest_sync),
+    ]
+    if acc_to_dest is not None:
+        templates.append(ACC_TO_DEST(acc_to_dest))
+
     test_config_kwargs = {
-        "test_name": "sources/quasar/eltwise_unary_broadcast_quasar_test.cpp",
+        "test_name": (
+            "sources/quasar/eltwise_unary_broadcast_quasar_test.cpp"
+            if acc_to_dest is None
+            else "sources/quasar/eltwise_unary_broadcast_acc_to_dest_quasar_test.cpp"
+        ),
         "formats": formats,
-        "templates": [
-            UNPACKER_ENGINE_SEL(unpacker_sel),
-            BROADCAST_TYPE(broadcast_type),
-            DEST_SYNC(dest_sync_mode),
-        ],
+        "templates": templates,
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
@@ -230,13 +254,47 @@ def test_unary_broadcast_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
+    # acc_to_dest: the Float16_b sum rounds once (1 step); the non-accumulating control copies exactly.
+    max_ulp = None if acc_to_dest is None else (1 if acc_to_dest else 0)
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
     ), "Result tensor and golden tensor do not match"
+
+
+# acc_to_dest broadcasts through ELWADD with dest accumulation; 32-bit inputs unpack straight to Dest instead.
+UNARY_BROADCAST_ACC_FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
+UNARY_BROADCAST_ACC_INPUT_DIMENSIONS = [256, 32]
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=UNARY_BROADCAST_ACC_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    broadcast_type=BROADCAST_TYPES,
+    acc_to_dest=[False, True],
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
+)
+def test_unary_broadcast_acc_to_dest_quasar(
+    formats,
+    dest_acc,
+    broadcast_type,
+    acc_to_dest,
+    dest_sync,
+):
+    """Seed Dest with a plain broadcast of A, then broadcast B with acc_to_dest.
+
+    Accumulating gives bcast(A) + bcast(B); acc_to_dest=False is the matched overwrite control, bcast(B).
+    Both operands carry signed and exactly cancelling lanes.
+    """
+    test_unary_broadcast_quasar(
+        formats,
+        dest_acc,
+        broadcast_type,
+        dest_sync,
+        UNARY_BROADCAST_ACC_INPUT_DIMENSIONS,
+        run_types=[PerfRunType.L1_TO_L1],
+        loop_factor=1,
+        acc_to_dest=acc_to_dest,
+    )

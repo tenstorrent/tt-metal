@@ -5,9 +5,8 @@
 #include "moe_gpt_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::operations::experimental::moe_gpt {
 

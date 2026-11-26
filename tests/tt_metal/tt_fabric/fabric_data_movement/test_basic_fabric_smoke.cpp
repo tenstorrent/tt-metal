@@ -14,21 +14,22 @@
 #include <vector>
 #include "tt_metal/fabric/fabric_context.hpp"
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include <tt-umd/types/core_coordinates.hpp>
+#include "impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -88,7 +89,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     }
 
     // Create sender program
-    auto sender_program = tt_metal::CreateProgram();
+    auto sender_program = tt_metal::CreateProgram(*sender_device);
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp",
@@ -119,7 +120,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Create receiver program
-    auto receiver_program = tt_metal::CreateProgram();
+    auto receiver_program = tt_metal::CreateProgram(*receiver_device);
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",

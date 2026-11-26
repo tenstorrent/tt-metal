@@ -5,7 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstdlib>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -21,18 +21,18 @@
 
 #include <tt_stl/assert.hpp>
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "llrt.hpp"
-#include "mesh_device.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
@@ -118,7 +118,7 @@ bool eth_direct_sender_receiver_kernels(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
-    tt_metal::Program sender_program = tt_metal::Program();
+    tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_mesh_device);
 
     auto ethernet_config = tt_metal::EthernetConfig{
         .noc = tt_metal::NOC::NOC_0,
@@ -146,7 +146,7 @@ bool eth_direct_sender_receiver_kernels(
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program = tt_metal::Program();
+    tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_mesh_device);
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -267,9 +267,11 @@ bool send_over_eth(
     // TODO: this should be updated to use kernel api
     uint32_t active_eth_index = tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    auto sender_firmware_path = tt_metal::BuildEnvManager::get_instance(extract_context_id(sender_device))
+    auto sender_firmware_path = tt_metal::MetalContext::instance(extract_context_id(sender_device))
+                                    .build_env_manager()
                                     .get_firmware_binary_path(sender_device->build_id(), active_eth_index, 0, 0);
-    auto receiver_firmware_path = tt_metal::BuildEnvManager::get_instance(extract_context_id(receiver_device))
+    auto receiver_firmware_path = tt_metal::MetalContext::instance(extract_context_id(receiver_device))
+                                      .build_env_manager()
                                       .get_firmware_binary_path(receiver_device->build_id(), active_eth_index, 0, 0);
     const ll_api::memory& binary_mem_send = llrt::get_risc_binary(sender_firmware_path);
     const ll_api::memory& binary_mem_receive = llrt::get_risc_binary(receiver_firmware_path);

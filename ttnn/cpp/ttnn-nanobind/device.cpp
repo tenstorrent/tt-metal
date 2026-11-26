@@ -4,7 +4,7 @@
 
 #include "ttnn-nanobind/device.hpp"
 
-#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -37,21 +37,24 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 // #include "ttnn/operations/experimental/auto_format/auto_format.hpp" // TODO_NANOBIND
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/memory_reporter.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/utils/runtime_config.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/observability/memory_reporter.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/operation_timeout.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_state.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 using namespace tt::tt_metal;
 namespace nb = nanobind;
@@ -115,7 +118,8 @@ void ttnn_device(nb::module_& mod) {
         [](ttnn::MeshDevice* device) { ttnn::deallocate_buffers(device); },
         nb::arg("device"),
         R"doc(
-        Deallocate all buffers associated with Device handle
+        Deallocate all buffers associated with Device handle. Also clears the program cache, since cached
+        programs keep their kernel binaries in device buffers.
     )doc");
 }
 
@@ -465,20 +469,29 @@ void device_module(nb::module_& m_device) {
     )doc");
     m_device.def(
         "GetOperationTimeoutSeconds",
-        [] { return tt::tt_metal::experimental::GetOperationTimeout().count(); },
+        [](const MeshDevice& mesh_device) {
+            return tt::tt_metal::experimental::GetOperationTimeout(mesh_device).count();
+        },
+        nb::arg("mesh_device").noconvert(),
         R"doc(
         Get the operation timeout in seconds (0 = off), initialized from TT_METAL_OPERATION_TIMEOUT_SECONDS.
 
         A command queue wait that sees no dispatch progress for this long runs
         TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE (if set) and raises.
 
+        Args:
+            mesh_device (ttnn.MeshDevice): Selects the environment; all mesh devices in it share one timeout.
+
         Example:
             >>> import ttnn
-            >>> timeout_s = ttnn.device.GetOperationTimeoutSeconds()
+            >>> timeout_s = ttnn.device.GetOperationTimeoutSeconds(mesh_device)
     )doc");
     m_device.def(
         "SetOperationTimeoutSeconds",
-        [](float seconds) { tt::tt_metal::experimental::SetOperationTimeout(std::chrono::duration<float>(seconds)); },
+        [](MeshDevice& mesh_device, float seconds) {
+            tt::tt_metal::experimental::SetOperationTimeout(mesh_device, std::chrono::duration<float>(seconds));
+        },
+        nb::arg("mesh_device").noconvert(),
         nb::arg("seconds"),
         R"doc(
         Set the operation timeout in seconds (0 = off), overriding TT_METAL_OPERATION_TIMEOUT_SECONDS.
@@ -486,11 +499,12 @@ void device_module(nb::module_& m_device) {
         Each wait reads the value when it starts, so a wait already in progress keeps its old value.
 
         Args:
+            mesh_device (ttnn.MeshDevice): Selects the environment; all mesh devices in it share one timeout.
             seconds (float): The new timeout; 0 turns it off.
 
         Example:
             >>> import ttnn
-            >>> ttnn.device.SetOperationTimeoutSeconds(300)
+            >>> ttnn.device.SetOperationTimeoutSeconds(mesh_device, 300)
     )doc");
     m_device.def(
         "get_dispatch_core_axis",

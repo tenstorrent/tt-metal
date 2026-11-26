@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <random>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include "tt-metalium/constants.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include "tt-metalium/data_formats/tile_constants.hpp"
+#include <tt-metalium/execution/distributed.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -41,7 +41,7 @@ int main() {
     // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
     // same kernel at a given time. Metalium allows you to run different kernels on different cores
     // simultaneously.
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
     // cores we can specify the core coordinates as (0, 0).
     constexpr CoreCoord core = {0, 0};

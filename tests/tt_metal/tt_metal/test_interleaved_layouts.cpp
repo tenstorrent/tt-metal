@@ -7,10 +7,10 @@
 #include <chrono>
 #include <cerrno>
 #include <cstdint>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -19,16 +19,16 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -90,7 +90,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
     bool pass = true;
 
     try {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
         CoreCoord core = {0, 0};
 
@@ -239,7 +239,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
     bool pass = true;
 
     try {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
         CoreCoord core = {0, 0};
 
@@ -266,12 +266,10 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
             .size = dram_buffer_size,
         };
 
-        auto src_dram_buffer =
-            distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+        auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
-        auto dst_dram_buffer =
-            distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+        auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input
@@ -388,7 +386,7 @@ bool test_interleaved_l1_datacopy(
 
     bool pass = true;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     CoreCoord core = {0, 0};
 
     tt_metal::CircularBufferConfig cb_src0_config =

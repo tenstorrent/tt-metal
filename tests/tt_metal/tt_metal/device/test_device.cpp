@@ -7,9 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <tt-umd/types/core_coordinates.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -20,26 +20,26 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
-#include "math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -243,7 +243,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
         std::string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core(0, 0);
@@ -308,7 +308,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -369,7 +369,7 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(this->device());
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -412,7 +412,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -539,7 +539,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
 
     // Create program and kernel for mesh workload
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto noc_addr = pinned_memory->get_noc_addr(device->id());
     ASSERT_TRUE(noc_addr.has_value());
@@ -601,7 +601,7 @@ TEST_F(MeshDeviceFixture, WriteWithStateAnyLenUpdatesRetAddrMidOnCarry) {
     constexpr uint64_t dst_base = 0x1FFFFC000ull;
     constexpr uint32_t total_bytes = 64 * 1024;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_mid_carry.cpp",
@@ -638,8 +638,8 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
     }
 
     const auto& cluster = MetalContext::instance().get_cluster();
-    if (cluster.arch() != tt::ARCH::BLACKHOLE || rt_options.get_simulator_enabled()) {
-        GTEST_SKIP() << "Grid expansion is only enabled on Blackhole real hardware.";
+    if (cluster.arch() != tt::ARCH::BLACKHOLE || rt_options.get_target_device() == tt::TargetDevice::Emule) {
+        GTEST_SKIP() << "Grid expansion is only enabled on Blackhole real hardware and the simulator.";
     }
 
     for (const auto& mesh_device : devices_) {

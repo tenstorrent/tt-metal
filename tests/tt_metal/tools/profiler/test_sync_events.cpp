@@ -23,8 +23,8 @@
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 #include "tt_metal/impl/kernels/kernel.hpp"
 
@@ -57,7 +57,7 @@ void RunApiTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     program.set_runtime_id(runtime_id);
 
     // Create CB

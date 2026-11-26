@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 #include "rotary_embedding_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/device_operation.hpp"
 
 using namespace tt::constants;
@@ -21,12 +22,11 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
 
     auto* ref_device = input_tensor.device();
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
-    TT_FATAL(
-        input_tensor.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to rotary embedding need to be allocated in buffers on device!");
     TT_FATAL(cos.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
-    TT_FATAL(cos.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
+    TT_FATAL(cos.is_allocated(), "Operands to rotary embedding need to be allocated in buffers on device!");
     TT_FATAL(sin.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
-    TT_FATAL(sin.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
+    TT_FATAL(sin.is_allocated(), "Operands to rotary embedding need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.device() == ref_device, "Operands to rotary embedding need to be on same device!");
     TT_FATAL(cos.device() == ref_device, "Operands to rotary embedding need to be on same device!");
     TT_FATAL(sin.device() == ref_device, "Operands to rotary embedding need to be on same device!");
@@ -100,10 +100,22 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
 tt::tt_metal::TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    auto shape = input_tensor.padded_shape();
+    // The output keeps the input's logical shape; only its padded shape is tile aligned.
+    const auto& logical_shape = input_tensor.logical_shape();
+    auto padded_shape = input_tensor.padded_shape();
     if (!args.token_idx.has_value()) {
-        shape[-2] = tt::round_up(args.seq_len, TILE_HEIGHT);
+        padded_shape[-2] = tt::round_up(args.seq_len, TILE_HEIGHT);
     }
+    auto output_spec = [&](const tt::tt_metal::MemoryConfig& mem_config) {
+        return tt::tt_metal::TensorSpec(
+            logical_shape,
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+                input_tensor.dtype(),
+                tt::tt_metal::PageConfig(input_tensor.layout()),
+                mem_config,
+                logical_shape,
+                padded_shape));
+    };
 
     if (args.output_mem_config.is_sharded()) {
         tt::tt_metal::ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
@@ -127,16 +139,10 @@ tt::tt_metal::TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
         }
         auto mem_config = tt::tt_metal::MemoryConfig(
             args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), shard_spec);
-        return tt::tt_metal::TensorSpec(
-            shape,
-            tt::tt_metal::TensorLayout(
-                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
+        return output_spec(mem_config);
     }
 
-    return tt::tt_metal::TensorSpec(
-        shape,
-        tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
+    return output_spec(args.output_mem_config);
 }
 
 Tensor RotaryEmbeddingDeviceOperation::create_output_tensors(

@@ -14,13 +14,13 @@
 
 #include <benchmark/benchmark.h>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "hd_socket_test_utils.hpp"
 #include "leg_benchmark_common.hpp"
@@ -249,7 +249,7 @@ protected:
     // Both kernels everywhere: the L1 map must be identical, and each side enables its half.
     Program build_program() const {
         const L1MapUVA& l1 = sock_->l1();
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_);
 
         const std::vector<uint32_t> send_cfg = sock_->d2h().config_addresses();
         auto sender = CreateKernel(

@@ -36,10 +36,18 @@ template <
     uint32_t input_wt,
     uint32_t input_ct_offset,
     uint32_t exchange,
-    uint32_t sp_rank,
+    uint32_t token_paged,
+    uint32_t page_channels,
     uint32_t sp_size,
-    uint32_t local_rows>
-TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
+    uint32_t local_rows,
+    uint32_t exchange_core_x,
+    uint32_t exchange_core_y,
+    uint32_t slab,
+    uint32_t slab_index_limit,
+    uint32_t slab_scale,
+    uint32_t slab_offset,
+    uint32_t entry_pages>
+TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t sp_rank) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
     const auto predecessor = TensorAccessor(tensor::predecessor_carry);
@@ -71,21 +79,37 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     };
     const auto offset_of = [&](uint32_t address) { return address - scratch_base; };
 
-    const auto topology = read_chronology<false, sp_rank, sp_size, local_rows>(noc, rows);
+    const auto topology = read_chronology<false, sp_size, local_rows>(noc, rows, sp_rank);
     const uint32_t local_split_row = topology.local_split ? topology.head_rows : 0;
     const bool initial_from_predecessor = topology.rank != topology.first_rank;
+    const auto carry = initial_from_predecessor
+                           ? SlabCarry{0, false, true}
+                           : read_slab_carry<slab, slab_index_limit, slab_scale, slab_offset, entry_pages>(noc, rows);
 
-    // Read history_rows rows of this channel block's columns into the rows staging area.
-    const auto read_rows = [&](const auto& source, uint32_t first_row, uint32_t ct_start) {
+    // A history slab (SP-sharded) holds only this rank's channels: the first rank reads the old tail from the exchange
+    // buffer's history rows, which its exchange core fills from every rank (history_ready), never from the slab.
+    // Read history_rows rows of this channel block's columns into the rows staging area, from the exchange buffer's
+    // full-row pages from `first_page`: the predecessor's rows, or (slab) the gathered old tail.
+    const auto read_exchange_rows = [&](uint32_t ct_start, uint32_t first_page = predecessor_page) {
         for (uint32_t row = 0; row < history_rows; ++row) {
             noc.async_read(
-                source,
+                predecessor,
                 scratch,
                 block_row_bytes,
-                {.page_id = first_row + row, .offset_bytes = ct_start * tile_row_bytes},
+                {.page_id = first_page + row, .offset_bytes = ct_start * tile_row_bytes},
                 {.offset_bytes = offset_of(rows) + row * block_row_bytes});
         }
     };
+    // The same, from a convolution tail (`history`, or the bare predecessor carry).
+    const auto read_tail = [&](const auto& source, uint32_t ct_start, uint32_t page_base) {
+        for (uint32_t row = 0; row < history_rows; ++row) {
+            read_tail_row<token_paged, page_channels>(
+                noc, source, scratch, row, ct_start, block_ct, offset_of(rows) + row * block_row_bytes, page_base);
+        }
+    };
+
+    Semaphore history_ready(sem::history_ready);
+    bool history_arrived = !slab;
 
     // With the fabric exchange, the exchange core releases this core once the predecessor's rows have landed.
     Semaphore predecessor_ready(sem::predecessor_ready);
@@ -148,11 +172,25 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                 predecessor_ready.wait_min(1);
                 predecessor_arrived = true;
             }
-            // Without the exchange, predecessor is the bare three-row carry, read at the same pages.
-            static_assert(predecessor_page == 0);
-            read_rows(predecessor, predecessor_page, ct_start);
+            if constexpr (exchange) {
+                read_exchange_rows(ct_start);
+            } else {
+                // Without the exchange, predecessor is a bare carry in the history's layout.
+                read_tail(predecessor, ct_start, 0);
+            }
         } else if (segment_start) {
-            read_rows(history, 0, ct_start);
+            if (carry.zeros) {
+                noc.async_write_zeros(scratch, history_rows * block_row_bytes, {.offset_bytes = offset_of(rows)});
+                noc.write_zeros_l1_barrier();
+            } else if constexpr (slab) {
+                if (!history_arrived) {
+                    history_ready.wait_min(1);
+                    history_arrived = true;
+                }
+                read_exchange_rows(ct_start, history_page);
+            } else {
+                read_tail(history, ct_start, carry.page_base);
+            }
         } else if (!from_previous_strip) {
             // The previous tile's bottom faces.
             for (uint32_t ct = 0; ct < block_ct; ++ct) {
@@ -230,5 +268,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         previous_work = work;
         parity ^= 1;
     };
-    for_each_work_item(wi_start, wi_count, Mt, exchange, process);
+    for_each_work_item(
+        wi_start, wi_count, Mt, exchange, process, exchange ? local_split_row / tt::constants::TILE_HEIGHT : 0);
 }

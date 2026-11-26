@@ -19,9 +19,9 @@
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/services/d2h_socket_service.hpp"
@@ -178,6 +178,12 @@ void py_module_types(nb::module_& mod) {
             "get_write_ack_counter_addr",
             &tt::tt_metal::D2HStreamService::get_write_ack_counter_addr,
             "Service-core L1 write-ack counter addr for coord (owner-only).")
+        .def(
+            "get_write_ack_counter",
+            &tt::tt_metal::D2HStreamService::get_write_ack_counter,
+            nb::arg("coord"),
+            "Write-ack counter for coord; step is every worker's inc for a transfer, or 1 without workers "
+            "(owner-only).")
         .def(
             "get_worker_metadata_addr",
             &tt::tt_metal::D2HStreamService::get_worker_metadata_addr,

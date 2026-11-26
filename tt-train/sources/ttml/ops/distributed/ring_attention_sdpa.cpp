@@ -8,8 +8,7 @@
 
 #include <cmath>
 #include <limits>
-#include <tt-metalium/distributed.hpp>
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
@@ -26,10 +25,10 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -53,12 +52,87 @@ ttnn::Tensor pad_lse_to_intermediates_layout(const ttnn::Tensor& lse) {
 
 }  // namespace
 
+namespace detail {
+
+// Merges one ring step's attention result into the running result (online softmax).
+// O_i, l_i: this step's normalized output and logsumexp; O, L: the running ones.
+//   L' = logaddexp(L, l_i)
+//   w  = exp(l_i - L')            this step's share of the softmax mass, in [0, 1]
+//   O' = O + w * (O_i - O)        a lerp, since the usual weight on O, exp(L - L'), is 1 - w
+//
+// A logsumexp of -inf means no contribution: the first merge (L = -inf) gives O' = O_i, and a
+// step the causal schedule skips (l_i = -inf) leaves O and L unchanged. Both -inf would make the
+// row NaN (w = exp(-inf - (-inf))); the ring caller never passes that, since every device
+// computes its diagonal block at step 0.
+// O_i must be finite even on skipped steps (0 * inf = NaN). In the ring caller, step 0 writes
+// every row of the reused output buffer on every device, so a skipped step re-merges an
+// earlier finite output with weight 0.
+void online_softmax_merge(
+    ttnn::Tensor& output_accum,
+    ttnn::Tensor& running_lse,
+    const ttnn::Tensor& step_output,
+    const ttnn::Tensor& step_intermediates) {
+    TT_FATAL(
+        output_accum.dtype() == ttnn::DataType::FLOAT32 && running_lse.dtype() == ttnn::DataType::FLOAT32 &&
+            step_intermediates.dtype() == ttnn::DataType::FLOAT32,
+        "online_softmax_merge: output_accum, running_lse and step_intermediates must be FLOAT32, got {}, {}, {}",
+        output_accum.dtype(),
+        running_lse.dtype(),
+        step_intermediates.dtype());
+    TT_FATAL(
+        step_output.dtype() == ttnn::DataType::BFLOAT16,
+        "online_softmax_merge: step_output must be BFLOAT16, got {}",
+        step_output.dtype());
+    TT_FATAL(
+        step_intermediates.logical_shape()[-1] == 32U,
+        "online_softmax_merge: step_intermediates must be (B, H, S, 32), got {}",
+        step_intermediates.logical_shape());
+
+    // 1. lse of this step: column 0 of the (B, H, S, 32) FP32 intermediates, as a (B, H, S, 1)
+    //    view of the same tiles. Columns 1..31 become tile padding. No copy and no dispatch: this
+    //    is the tensor ttnn::slice would return, without slice's copy of every tile.
+    const auto [batch, heads, seq_len, width] = step_intermediates.logical_shape().to_array_4D();
+    const ttnn::Tensor lse_chunk = ttnn::experimental::view(
+        step_intermediates, ttnn::Shape{batch, heads, seq_len, 1U}, step_intermediates.padded_shape());
+
+    // 2. L' = logaddexp(L, l_i). A single fused SFPU kernel evaluating the stable form
+    //    max(a, b) + log1p(exp(-|a - b|)) (no overflow for large lse), with
+    //    logaddexp(-inf, x) = x.
+    ttnn::Tensor new_lse = ttnn::logaddexp(running_lse, lse_chunk);
+
+    // 3. w = exp(l_i - L'): subtract with exp fused as a post-activation (one kernel; 0.0f
+    //    selects the accurate exp, ttnn::exp's default).
+    using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
+    const EltwiseUnary exp_act{ttnn::operations::unary::UnaryOpType::EXP, 0.0F};
+    const ttnn::Tensor new_weight = ttnn::subtract(
+        lse_chunk,
+        new_lse,
+        /*output_dtype=*/std::nullopt,
+        /*memory_config=*/std::nullopt,
+        /*output=*/std::nullopt,
+        /*post_activations=*/ttsl::Span<const EltwiseUnary>(&exp_act, 1));
+
+    // 4. O' = O + w * (O_i - O). The ternary lerp kernel broadcasts the (B, H, S, 1) weight
+    //    along the head dim and takes the bf16 step output as is: every operand is unpacked
+    //    into an FP32 Dest (bf16 -> FP32 is exact) and the output takes the accumulator's FP32
+    //    dtype, so the whole combine stays FP32 without a separate typecast. The FP32
+    //    accumulator matters: backward consumes the saved O in u = rowsum(dO * O).
+    //    lerp is not overflow-safe: it forms O_i - O, which overflows FP32 once |O| and |O_i|
+    //    approach FLT_MAX/2, even with both finite (NaN at w = 0). Tracked in
+    //    https://github.com/tenstorrent/tt-metal/issues/65873.
+    output_accum = ttnn::lerp(output_accum, step_output, new_weight);
+    running_lse = std::move(new_lse);
+}
+
+}  // namespace detail
+
 autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
-    const ttml::metal::AttentionMaskType mask_type) {
+    const ttml::metal::AttentionMaskType mask_type,
+    const std::optional<bool> reuse_forward_kv_requested) {
     if (!autograd::ctx().is_parallelism_context_initialized() ||
         !autograd::ctx().get_parallelism_context().is_cp_enabled()) {
         return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
@@ -67,6 +141,9 @@ autograd::TensorPtr ring_attention_sdpa(
     const auto& pctx = autograd::ctx().get_parallelism_context();
     const uint32_t cp_axis_value = pctx.get_cp_axis().value();
     const uint32_t ring_size = pctx.get_cp_size();
+    const bool reuse_forward_kv = reuse_forward_kv_requested.value_or(pctx.get_cp_config().reuse_forward_kv) &&
+                                  autograd::ctx().get_gradient_mode() == autograd::GradMode::ENABLED &&
+                                  autograd::any_requires_grad(query, key, value);
     const auto& query_tensor = query->get_value();
     auto* mesh_device = query_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Query tensor must be on a mesh device for ring attention");
@@ -76,13 +153,20 @@ autograd::TensorPtr ring_attention_sdpa(
     TT_FATAL(
         mask_type != ttml::metal::AttentionMaskType::Arbitrary,
         "Arbitrary attention mask is not supported in CP mode, use None or Causal");
-    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
 
     auto [batch_num, heads, seq_len_local, dim] = query_tensor.logical_shape().to_array_4D();
     // Initialize current K and V (will be ring-shifted each step)
     // Use raw ttnn::Tensor since we define backward manually
     ttnn::Tensor k_current = key->get_value();
     ttnn::Tensor v_current = value->get_value();
+
+    // Backward at ring step s needs exactly the K/V the forward used at step s. Keeping those handles saves
+    // backward its 2 * (ring_size - 1) K/V shifts, at the cost of 2 * (ring_size - 2) extra K-sized tensors
+    // per device staying alive until this node's backward has run, or until this op returns when no backward
+    // node is registered.
+    // k_steps[s] = K used at ring step s, for s < ring_size - 1; the last step's K/V stay in k_current/v_current
+    std::vector<ttnn::Tensor> k_steps(reuse_forward_kv ? ring_size - 1U : 0U);
+    std::vector<ttnn::Tensor> v_steps(reuse_forward_kv ? ring_size - 1U : 0U);
 
     // Initialize accumulators for online softmax.
     // output_accum: weighted sum of outputs from all steps. Kept FP32: the online-softmax
@@ -107,8 +191,6 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Layout::TILE,
         std::ref(*mesh_device));
 
-    // Allocate output and intermediate tensors (mesh tensors)
-    // These will be reused each step
     ttnn::Tensor output_tensor = ttnn::empty_like(query_tensor);
     ttnn::Tensor intermediate_tensor = ttnn::empty(
         ttnn::Shape{batch_num, heads, seq_len_local, 32U},
@@ -146,34 +228,14 @@ autograd::TensorPtr ring_attention_sdpa(
             output_tensor,
             intermediate_tensor);
 
-        // Extract logsumexp from column 0 of intermediate
-        // Intermediate shape: (B, H, S, 32) FP32, logsumexp in column 0
-        const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
-        const ttsl::SmallVector<uint32_t> lse_start = {0, 0, 0, 0};
-        const ttsl::SmallVector<uint32_t> lse_end = {batch_num, heads, seq_len_local, 1};
-        ttnn::Tensor lse_chunk = ttnn::slice(intermediate_tensor, lse_start, lse_end, slice_step);
-
-        // Combine via logaddexp: new_lse = log(exp(global_lse) + exp(lse_chunk))
-        // Numerically stable form: m = max(a,b); result = m + log(exp(a-m) + exp(b-m))
-        ttnn::Tensor m = ttnn::maximum(global_lse, lse_chunk);
-        ttnn::Tensor exp_global = ttnn::exp(ttnn::subtract(global_lse, m));
-        ttnn::Tensor exp_chunk = ttnn::exp(ttnn::subtract(lse_chunk, m));
-        ttnn::Tensor new_lse = ttnn::add(m, ttnn::log(ttnn::add(exp_global, exp_chunk)));
-
-        // Weights for combining outputs: w = exp(lse - new_lse) = Z_i / Z_combined
-        ttnn::Tensor old_weight = ttnn::exp(ttnn::subtract(global_lse, new_lse));
-        ttnn::Tensor new_weight = ttnn::exp(ttnn::subtract(lse_chunk, new_lse));
-
-        // Weighted combination of accumulated output and this step's output.
-        // The step output is upcast so the whole combine stays FP32; mixed-dtype
-        // binary ops would otherwise round the products back to bf16.
-        ttnn::Tensor step_output_fp32 = ttnn::typecast(output_tensor, ttnn::DataType::FLOAT32);
-        output_accum =
-            ttnn::add(ttnn::multiply(output_accum, old_weight), ttnn::multiply(step_output_fp32, new_weight));
-
-        global_lse = new_lse;
+        // Fold this step's partial result into the FP32 accumulator and the running lse.
+        detail::online_softmax_merge(output_accum, global_lse, output_tensor, intermediate_tensor);
 
         if (step < ring_size - 1) {
+            if (reuse_forward_kv) {
+                k_steps[step] = k_current;
+                v_steps[step] = v_current;
+            }
             k_current = ttnn_fixed::distributed::ring_shift(
                 k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Backward);
             v_current = ttnn_fixed::distributed::ring_shift(
@@ -193,11 +255,11 @@ autograd::TensorPtr ring_attention_sdpa(
                                       final_lse,
                                       k_current,  // K at end of forward (position k1)
                                       v_current,  // V at end of forward (position v1)
+                                      k_steps,
+                                      v_steps,
                                       ring_size,
                                       cp_axis_value,
-                                      mask_type,
-                                      mesh_device]() mutable {
-        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
+                                      mask_type]() mutable {
         const auto& grad_output = out->get_grad();
         const auto& attn_output = out->get_value();
         const auto& query_tensor = query->get_value();
@@ -260,15 +322,19 @@ autograd::TensorPtr ring_attention_sdpa(
             grad_K_accum = ttnn::add(grad_K_accum, ttnn::typecast(grad_K_result, ttnn::DataType::FLOAT32));
             grad_V_accum = ttnn::add(grad_V_accum, ttnn::typecast(grad_V_result, ttnn::DataType::FLOAT32));
 
-            // Ring shift K/V and grad accumulators in FORWARD direction
-            // K/V: replays the forward pass in reverse (gets K/V for previous step)
-            // grad_K/V: routes accumulated gradients back to correct device
+            // Move to the previous ring step.
+            // K/V: the forward's kept handles, or shifted in FORWARD direction when none were kept
+            // grad_K/V: always shifted in FORWARD direction, routes accumulated gradients back to correct device
             if (step > 0) {
-                // Shift K/V forward to get position for next backward iteration
-                k_current = ttnn_fixed::distributed::ring_shift(
-                    k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
-                v_current = ttnn_fixed::distributed::ring_shift(
-                    v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
+                if (k_steps.empty()) {
+                    k_current = ttnn_fixed::distributed::ring_shift(
+                        k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
+                    v_current = ttnn_fixed::distributed::ring_shift(
+                        v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
+                } else {
+                    k_current = k_steps[step - 1];
+                    v_current = v_steps[step - 1];
+                }
 
                 // Shift grad accumulators
                 grad_K_accum = ttnn_fixed::distributed::ring_shift(

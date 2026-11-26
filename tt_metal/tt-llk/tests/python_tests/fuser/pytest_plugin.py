@@ -24,7 +24,7 @@ def expand_fuser_selector(selector):
         return [selector]
 
     from .config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
-    from .sweep import expand_fuser_configs
+    from .sweep import validated_fuser_configs
 
     test_name = test[:-1]
     try:
@@ -40,8 +40,8 @@ def expand_fuser_selector(selector):
 
     return [
         f"{filename}::test_fuser[{case_name}]"
-        for case_name, _ in expand_fuser_configs(test_name, definition)
-    ]
+        for case_name, _ in validated_fuser_configs(test_name, definition)
+    ] or [selector]
 
 
 def expand_perf_selector(selector):

@@ -7,27 +7,27 @@
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <memory>
 #include <string>
 #include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/arch.hpp>
@@ -216,7 +216,7 @@ TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -280,7 +280,7 @@ TEST_F(MeshDeviceFixture, TensixIncrementStreamRegWrite) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -344,7 +344,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWrite4BAlignment) {
 
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -387,7 +387,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNoc) {
 
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -442,7 +442,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
 
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -497,7 +497,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
 
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -568,7 +568,7 @@ void run_local_noc_stream_reg_inc(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
+    Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -721,7 +721,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelTensixWritesDriscStreamReg) {
     CoreCoord drisc_virtual = mesh_device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
     uint32_t tensix_l1_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     CreateKernel(
         program,
@@ -767,7 +767,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDriscWritesTensixStreamReg) {
     CoreCoord drisc_virtual = mesh_device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
     uint32_t drisc_l1_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     auto kid = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/streams/stream_reg_read_write.cpp",

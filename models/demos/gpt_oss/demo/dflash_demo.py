@@ -8,7 +8,7 @@ the 8-row block [last token, 7 drafts] in one pass and keeps the drafts up to th
 token (tt/dflash/runner.py). Every round (draft, verify and context passes) runs on device as one trace; the host reads
 one small result per round.
 
-Prompt: a chat-template user turn with the book of models/tt_transformers/demo/sample_prompts/input_data_long_128k.json
+Prompt: a chat-template user turn with the book of models/ttt_compat/demo/sample_prompts/input_data_long_128k.json
 (Frankenstein, Gutenberg #84) and that file's question about it, the book cut to the requested prompt length; past its
 end (130,752 tokens) a second book follows (Pride and Prejudice, Gutenberg #1342). Both are downloaded on first use
 (without network access the demo skips; under CI it fails). The chat template's "Current date" line is pinned (PROMPT_DATE): the
@@ -18,12 +18,14 @@ answer, and with it the drafts accepted per round, would otherwise change from d
 """
 
 import datetime
+import hashlib
 import json
 import os
 import time
 from pathlib import Path
 
 import pytest
+import requests
 from loguru import logger
 
 import ttnn
@@ -31,11 +33,13 @@ from models.common.utility_functions import is_blackhole
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.tests.test_factory import L1_SMALL_SIZE
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
-from models.tt_transformers.demo.simple_text_demo import load_and_cache_context, load_inputs
+from models.ttt_compat.demo.simple_text_demo import load_and_cache_context, load_inputs
 
-PROMPT_FILE = Path(__file__).parents[3] / "tt_transformers" / "demo" / "sample_prompts" / "input_data_long_128k.json"
+PROMPT_FILE = Path(__file__).parents[3] / "ttt_compat" / "demo" / "sample_prompts" / "input_data_long_128k.json"
 SECOND_BOOK = "https://www.gutenberg.org/cache/epub/1342/pg1342.txt"
-PROMPT_CACHE = Path("models/tt_transformers/demo/context_cache")  # load_inputs' download cache
+PROMPT_CACHE = Path("models/ttt_compat/demo/context_cache")  # load_inputs' download cache
+GUTENBERG = "https://www.gutenberg.org/"
+GUTENBERG_MIRROR = "https://gutenberg.pglaf.org/"  # Project Gutenberg's own mirror: the same files, byte for byte
 DRAFT_WINDOW = 1024  # the drafter attends to the last 1024 positions (SGLang's --speculative-dflash-draft-window-size)
 PROMPT_DATE = datetime.date(2026, 10, 17)  # the chat template's "Current date" (it is part of the prompt)
 NEW_TOKENS = 256
@@ -76,7 +80,7 @@ def build_dflash(mesh_device, max_seq_len):
     import models.demos.gpt_oss.demo.text_demo as text_demo
     from models.demos.gpt_oss.tt.dflash.draft import DFlashDraft
     from models.demos.gpt_oss.tt.dflash.runner import DFlashRunner
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=1))
     model_args, model, page_table, kv_cache, tokenizer, processor, _ = text_demo.prepare_gpt_oss_generator_args(
@@ -103,8 +107,36 @@ def _no_book(reason):
     (pytest.fail if os.getenv("CI") == "true" else pytest.skip)(reason)
 
 
+def cache_book(url):
+    """Put `url` into the download cache load_inputs / load_and_cache_context read (PROMPT_CACHE / md5(url)), from
+    gutenberg.org or else from its mirror, so the prompt does not depend on gutenberg.org being up (it returned 503 for
+    hours on 2026-11-17 and failed CI). Written as load_and_cache_context writes it. True if the book is cached."""
+    PROMPT_CACHE.mkdir(parents=True, exist_ok=True)
+    cache_file = PROMPT_CACHE / hashlib.md5(url.encode()).hexdigest()
+    if cache_file.exists():
+        return True
+    for source in dict.fromkeys([url, url.replace(GUTENBERG, GUTENBERG_MIRROR)]):
+        try:
+            response = requests.get(source, timeout=120)
+        except requests.RequestException as e:
+            logger.warning(f"{source}: {e}")
+            continue
+        if response.status_code == 200 and response.text:
+            with open(cache_file, "w") as f:
+                f.write(response.text)
+            logger.info(f"Cached {url} from {source}")
+            return True
+        logger.warning(f"{source}: status {response.status_code}")
+    return False
+
+
 def fetch_books(isl):
     """Download (or find in the cache) the books an isl-token prompt needs, before the model is loaded."""
+    for entry in json.load(open(PROMPT_FILE)):
+        if "context" in entry:
+            cache_book(entry["context"])
+    if isl > 100_000:
+        cache_book(SECOND_BOOK)
     (text,), _ = load_inputs(str(PROMPT_FILE), 1, instruct=True)
     if not text[len("```") : text.rindex("```")]:
         _no_book("the prompt's book could not be downloaded (gutenberg.org)")

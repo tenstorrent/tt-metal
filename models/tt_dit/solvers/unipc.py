@@ -47,7 +47,10 @@ class UniPCSolver(Solver):
 
         self.order = order
         self.variant = variant
-        self._state = None
+        self._state: _State | None = None
+        # The buffers of each latent shape, so a pipeline serving several sizes keeps every size's,
+        # allocated before any trace capture, instead of reallocating them.
+        self._states: dict[tuple[int, ...], _State] = {}
         self._default_shift = scheduler.config.flow_shift
 
     def set_schedule(
@@ -65,13 +68,15 @@ class UniPCSolver(Solver):
         self._scheduler.register_to_config(flow_shift=self._default_shift if shift is None else shift)
         self._schedule = Schedule.from_scheduler(self._scheduler, num_inference_steps, **kwargs)
 
+        self._states = {shape: _State(s.clean_preds, s.corrected, 0) for shape, s in self._states.items()}
         if self._state is not None:
-            self._state = _State(self._state.clean_preds, self._state.corrected, 0)
+            self._state = self._states[tuple(self._state.corrected.shape)]
 
     def step(self, *, step: int, latent: ttnn.Tensor, velocity_pred: ttnn.Tensor) -> ttnn.Tensor:
         clean_pred = latent - self.sigmas[step] * velocity_pred
 
-        state = self._state or _State(
+        shape = tuple(latent.shape)
+        state = self._states.get(shape) or _State(
             tuple(ttnn.empty_like(latent) for _ in range(self.order)),
             ttnn.empty_like(latent),
         )
@@ -102,7 +107,7 @@ class UniPCSolver(Solver):
             clean_preds=clean_preds,
         )
 
-        self._state = _State(state.clean_preds, state.corrected, oldest_idx)
+        self._state = self._states[shape] = _State(state.clean_preds, state.corrected, oldest_idx)
         return predicted
 
     def _predict(

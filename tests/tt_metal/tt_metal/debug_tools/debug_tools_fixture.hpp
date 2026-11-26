@@ -8,7 +8,7 @@
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 
 #include "debug_tools_test_utils.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <impl/debug/dprint_server.hpp>
 #include <impl/debug/watcher_server.hpp>
 #include <sys/mman.h>
@@ -24,11 +24,12 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <filesystem>
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -255,7 +256,7 @@ protected:
             GTEST_SKIP() << "Tile counters are only used on Quasar";
         }
         // Must be set before parent SetUp: the TRISC HW fault ISR (handle_interrupt in
-        // risc_common.h, compiled as part of trisc.cc firmware) calls ASSERT on a
+        // trisc.cc firmware) calls ASSERT on a
         // TILE_COUNTERS fault, which writes to the watcher mailbox and hangs. Disabling
         // assert here makes ASSERT a no-op so the ISR clears the interrupt and returns,
         // allowing the test to verify that watcher logs the TC mismatch correctly.
@@ -311,6 +312,7 @@ protected:
 
         rtoptions.set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, true);
         rtoptions.set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
+        rtoptions.set_feature_tag_firmware(tt::llrt::RunTimeDebugFeatureDprint, true);
         rtoptions.set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassWorker);
         rtoptions.set_feature_all_cores(
@@ -444,13 +446,13 @@ public:
     std::string dprint_file_name;
 
     // Hardware config for a single-threaded data-movement kernel, portable across generations.
-    static experimental::DataMovementHardwareConfig SingleThreadDmConfig(tt::ARCH arch) {
+    static DataMovementHardwareConfig SingleThreadDmConfig(tt::ARCH arch) {
         if (arch == tt::ARCH::QUASAR) {
-            return experimental::DataMovementHardwareConfig{};
+            return DataMovementHardwareConfig{};
         }
-        return experimental::DataMovementHardwareConfig{
+        return DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = DataMovementProcessor::RISCV_0,
                     .noc = NOC::NOC_0,
                 },
@@ -462,10 +464,10 @@ public:
         // Get the first available mesh device
         auto mesh_device = this->devices_.at(0);
 
-        // MakeProgramFromSpec compiles eagerly, so the ELF exists on disk once it returns and a
+        // The Program constructor compiles eagerly, so the ELF exists on disk once it returns and a
         // build failure surfaces here as a throw (which the compilation-failure tests rely on).
         auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
-        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        Program program(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
 
         program.impl().compile(mesh_device.get());
@@ -477,9 +479,8 @@ public:
         const auto& kernel = program.impl().get_kernel_by_spec_name(kPrintKernelName.get());
         const int riscv_id = static_cast<int>(kernel->get_kernel_processor_type(0));
 
-        const auto& build_state =
-            tt::tt_metal::BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
-                .get_kernel_build_state(mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+        const auto& build_state = mesh_device->impl().metal_context().build_env_manager().get_kernel_build_state(
+            mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         return build_state.get_target_out_path(kernel->get_full_kernel_name());
     }
@@ -490,7 +491,7 @@ public:
         const std::string& kernel_path,
         ttsl::Span<const uint32_t> runtime_args = {}) {
         auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
-        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        Program program(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
 
         distributed::MeshWorkload workload;
@@ -520,15 +521,14 @@ public:
     }
 
 private:
-    static constexpr experimental::NodeCoord kPrintNode{0, 0};
-    static inline const experimental::KernelSpecName kPrintKernelName{"dprint"};
+    static constexpr NodeCoord kPrintNode{0, 0};
+    static inline const KernelSpecName kPrintKernelName{"dprint"};
 
     // A one-kernel data-movement ProgramSpec for the DPRINT tests.
-    static experimental::ProgramSpec MakeSingleDmPrintSpec(
-        tt::ARCH arch, const std::string& kernel_path, size_t num_args) {
-        return experimental::ProgramSpec{
+    static ProgramSpec MakeSingleDmPrintSpec(tt::ARCH arch, const std::string& kernel_path, size_t num_args) {
+        return ProgramSpec{
             .name = "dprint",
-            .kernels = {experimental::KernelSpec{
+            .kernels = {KernelSpec{
                 .unique_id = kPrintKernelName,
                 .source = std::filesystem::path{kernel_path},
                 .num_threads = 1,
@@ -536,31 +536,53 @@ private:
                 .advanced_options =
                     experimental::KernelAdvancedOptions{.num_runtime_varargs = static_cast<uint32_t>(num_args)},
             }},
-            .work_units = {experimental::WorkUnitSpec{
-                .name = "main", .kernels = {kPrintKernelName}, .target_nodes = kPrintNode}},
+            .work_units = {WorkUnitSpec{.name = "main", .kernels = {kPrintKernelName}, .target_nodes = kPrintNode}},
         };
     }
 
-    // SetProgramRunArgs requires an entry for every kernel that declares runtime args and rejects
+    // Program::set_program_run_args requires an entry for every kernel that declares runtime args and rejects
     // entries for kernels that declare none, so this is a no-op when the kernel takes no arguments.
     static void SetSingleDmPrintArgs(Program& program, ttsl::Span<const uint32_t> runtime_args) {
         if (runtime_args.empty()) {
             return;
         }
-        experimental::ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = kPrintKernelName};
+        ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = kPrintKernelName};
         kernel_run_args.advanced_options.runtime_varargs[kPrintNode] =
             std::vector<uint32_t>(runtime_args.begin(), runtime_args.end());
 
-        experimental::ProgramRunArgs run_args;
+        ProgramRunArgs run_args;
         run_args.kernel_run_args.push_back(std::move(kernel_run_args));
-        experimental::SetProgramRunArgs(program, run_args);
+        program.set_program_run_args(run_args);
     }
 };
 
 class DevicePrintSeparateFilesFixture : public DevicePrintFixture {
 public:
     static constexpr std::array<std::string_view, 5> suffixes = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
-    static void check_output(std::span<const std::string> expected) {
+
+    // The file that one-file-per-RISC mode writes for `risc` (BRISC, NCRISC, TRISC0, ...) of worker core (0,0).
+    static std::string output_file_name(ChipId device_id, std::string_view risc) {
+        return fmt::format(
+            "{}generated/dprint/device-{}_worker-core-0-0_{}.txt",
+            tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(),
+            device_id,
+            risc);
+    }
+
+    // Deletes the files check_output reads. A RISC's file is rewritten only when the RISC prints, so without this a
+    // RISC that prints nothing would be checked against a file left over from an earlier run. The print server keeps
+    // each RISC's file open once the RISC has printed, so it closes them first; otherwise a later run in the same test
+    // would write into the deleted files.
+    static void remove_output_files(ChipId device_id) {
+        if (const auto& dprint_server = MetalContext::instance().dprint_server()) {
+            dprint_server->reset_for_new_run();
+        }
+        for (const auto& suffix : suffixes) {
+            std::filesystem::remove(output_file_name(device_id, suffix));
+        }
+    }
+
+    static void check_output(ChipId device_id, std::span<const std::string> expected) {
         const auto& enabled_processors = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(
             tt::llrt::RunTimeDebugFeatureDprint);
         ASSERT_EQ(expected.size(), suffixes.size());
@@ -568,11 +590,7 @@ public:
             if (!enabled_processors.contains(HalProgrammableCoreType::TENSIX, i)) {
                 continue;
             }
-            auto filename = fmt::format(
-                "{}generated/dprint/device-0_worker-core-0-0_{}.txt",
-                tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(),
-                suffixes[i]);
-            EXPECT_TRUE(FilesMatchesString(filename, expected[i]));
+            EXPECT_TRUE(FilesMatchesString(output_file_name(device_id, suffixes[i]), expected[i]));
         }
     }
 

@@ -5,9 +5,9 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <cstdint>
 #include <iostream>
 #include <map>
@@ -20,23 +20,23 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "eth_test_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "hal.hpp"
+#include <tt-metalium/discovery/hal.hpp>
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-umd/types/arch.hpp>
@@ -126,7 +126,7 @@ bool chip_to_chip_dram_buffer_transfer(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
-    tt_metal::Program sender_program = tt_metal::Program();
+    tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_mesh_device);
 
     auto sender_eth_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .processor = processor};
     eth_test_common::set_arch_specific_eth_config(sender_eth_config);
@@ -153,7 +153,7 @@ bool chip_to_chip_dram_buffer_transfer(
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program = tt_metal::Program();
+    tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_mesh_device);
 
     auto receiver_eth_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .processor = processor};
     eth_test_common::set_arch_specific_eth_config(receiver_eth_config);
@@ -240,7 +240,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
-    tt_metal::Program sender_program = tt_metal::Program();
+    tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_mesh_device);
 
     auto input_packed = generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
     /*std::vector<uint32_t> input_packed =
@@ -297,7 +297,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program = tt_metal::Program();
+    tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_mesh_device);
 
     auto output_buffer =
         distributed::MeshBuffer::create(receiver_buffer_config, receiver_dram_config, receiver_mesh_device.get());

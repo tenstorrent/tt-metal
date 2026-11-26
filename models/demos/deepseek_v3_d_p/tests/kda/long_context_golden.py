@@ -33,7 +33,7 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import golden_floor
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 
 MANIFEST = "manifest.json"
 
@@ -176,6 +176,15 @@ def load_window(run_dir: Path, start: int, end: int) -> tuple[torch.Tensor, KDAR
             ]
         )
     return torch.cat(rows), state
+
+
+def state_after(run_dir: Path, end: int) -> KDAReferenceState:
+    """The golden state after token ``end``, which must be the end of a complete segment."""
+    run_dir = Path(run_dir)
+    ends = [segment["end"] for segment in json.loads((run_dir / MANIFEST).read_text(encoding="utf-8"))["segments"]]
+    if end not in ends:
+        raise ValueError(f"token {end} is not the end of a complete segment of the golden in {run_dir}")
+    return KDAReferenceState(**torch.load(_segment_path(run_dir, ends.index(end)), weights_only=True)["state"])
 
 
 def main() -> None:

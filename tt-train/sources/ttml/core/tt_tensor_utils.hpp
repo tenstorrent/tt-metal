@@ -6,6 +6,7 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <memory>
 #include <ttnn/distributed/distributed_tensor.hpp>
 #include <vector>
 
@@ -18,6 +19,10 @@ void print_tensor_stats(const ttnn::Tensor& tensor, const std::string& name);
 ttnn::Tensor zeros_like(const ttnn::Tensor& tensor);
 ttnn::Tensor ones_like(const ttnn::Tensor& tensor);
 
+// The tensor itself when it is fp32, else its fp32 typecast. ttnn adds two fp32 tensors on the SFPU in IEEE fp32; an
+// add with a bf16 operand runs on the FPU, which reads the fp32 one with 10 fraction bits.
+ttnn::Tensor as_fp32(const ttnn::Tensor& tensor);
+
 ttnn::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const ttnn::MemoryConfig& memory_config);
 ttnn::Tensor full(
@@ -29,6 +34,10 @@ ttnn::Tensor zeros(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype = ttnn::DataType::BFLOAT16);
 ttnn::Tensor ones(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype = ttnn::DataType::BFLOAT16);
+
+// Mapper that replicates a tensor over `device`'s mesh with one Replicate placement per mesh axis.
+[[nodiscard]] std::unique_ptr<ttnn::distributed::TensorToMesh> replicate_to_mesh_mapper(
+    ttnn::distributed::MeshDevice& device);
 
 template <class VectorType = float, ttnn::DataType TensorType = ttnn::DataType::BFLOAT16>
 [[nodiscard]] ttnn::Tensor from_vector(

@@ -7,11 +7,11 @@
 #include <map>
 #include <string>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -21,7 +21,7 @@
 
 using namespace tt;
 using namespace tt::constants;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 
@@ -63,6 +63,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     TT_FATAL(operation_attributes.output_dtype.has_value(), "Output dtype should have been provided");
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Bcast batch should have been provided");
+    TT_FATAL(
+        tensor_args.optional_input_tensors.empty() || !tensor_args.optional_input_tensors.at(0).has_value(),
+        "MatmulMultiCoreReuseProgramConfig has no fused bias; linear adds the bias after the matmul for this config");
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
@@ -134,9 +137,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
+        packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
 
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
@@ -151,16 +153,16 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     bool in1_is_sharded = in1_buffer.is_sharded();
     bool output_is_sharded = output.is_sharded();
 
-    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on Blackhole's
-    // 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at that padded
-    // stride, so the in0/in1 DFBs must hold pages at the aligned stride and the reader/unpacker walk
-    // tiles at the same stride. This is a no-op when the tile is already aligned. Sharded DFBs are
-    // backed by the tensor buffer and keep their natural page size.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    uint32_t in0_aligned_tile_size =
-        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size =
-        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        in1_is_sharded
+            ? in1_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
 
     // DFB sizes
     uint32_t in0_block_num_tiles = per_core_M_per_batch * in0_block_w;
@@ -475,6 +477,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
 
     ComputeHardwareConfig compute_hw_config =
         ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
+    // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode, and cb_intermed0 holds 32-bit
+    // partials under fp32 accumulation. UnpackToSrc, as in the 1D/2D factories: on Quasar UnpackToDest deadlocks
+    // (#62102). The reload between K blocks rounds the partials through SrcA (TF32).
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        compute_hw_config.unpack_modes.emplace(RO_INTERM0_DFB, UnpackMode::UnpackToSrc);
+    }
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group block-count CTA ----
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_blocks_per_core_group) {

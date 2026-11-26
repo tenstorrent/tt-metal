@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
 #include <nlohmann/json.hpp>
 #include <cstddef>
@@ -16,12 +15,12 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include "ttnn/graph/graph_operation_queries.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"

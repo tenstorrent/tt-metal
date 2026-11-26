@@ -5,26 +5,26 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <sys/types.h>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <map>
 #include <set>
 #include <utility>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 
 using std::vector;
@@ -160,7 +160,7 @@ TEST_F(MeshDeviceFixture, TensixInitializeLegalSemaphores) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(device, workload, core_range);
@@ -172,7 +172,7 @@ TEST_F(MeshDeviceFixture, TensixInitializeIllegalSemaphores) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::try_creating_semaphores_out_of_bounds(device, workload);
@@ -184,7 +184,7 @@ TEST_F(MeshDeviceFixture, TensixCreateMultipleSemaphoresOnSameCore) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*this->devices_[0]);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -220,7 +220,7 @@ TEST_F(MeshDeviceFixture, TensixCreateSemaphoreOnMultipleRanges) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*this->devices_[0]);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 

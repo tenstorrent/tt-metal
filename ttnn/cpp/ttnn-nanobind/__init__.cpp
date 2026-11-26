@@ -29,8 +29,10 @@
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
+#include "ttnn-nanobind/operations/command_list.hpp"
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
+#include "ttnn-nanobind/program_spec.hpp"
 #include "ttnn-nanobind/tensor_accessor_args.hpp"
 #include "ttnn-nanobind/mcast_host.hpp"
 #include "ttnn-nanobind/reports.hpp"
@@ -64,7 +66,6 @@
 #include "ttnn/operations/full_like/full_like_nanobind.hpp"
 #include "ttnn/operations/generic/generic_op_nanobind.hpp"
 #include "ttnn/operations/index_fill/index_fill_nanobind.hpp"
-#include "ttnn/operations/index_fill_new/index_fill_new_nanobind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_nanobind.hpp"
 #include "ttnn/operations/loss/loss_nanobind.hpp"
 #include "ttnn/operations/matmul/matmul_nanobind.hpp"
@@ -98,6 +99,10 @@ void py_module(nb::module_& mod) {
     auto m_trace = mod.def_submodule("trace", "trace operations");
     trace::py_module_types(m_trace);
     trace::py_module(m_trace);
+
+    auto m_command_list = mod.def_submodule("command_list", "command list operations (experimental)");
+    command_list::py_module_types(m_command_list);
+    command_list::py_module(m_command_list);
 
     auto m_examples = mod.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
@@ -209,10 +214,6 @@ void py_module(nb::module_& mod) {
     auto m_index_fill = mod.def_submodule("index_fill", "index_fill operation");
     index_fill::bind_index_fill_operation(m_index_fill);
 
-    // Phase-1 descriptor-migration scaffolding for index_fill (#42392); removed in Phase 3.
-    auto m_index_fill_new = mod.def_submodule("index_fill_new", "index_fill_new operation");
-    index_fill_new::bind_index_fill_new_operation(m_index_fill_new);
-
     auto m_bernoulli = mod.def_submodule("bernoulli", "bernoulli operations");
     bernoulli::bind_bernoulli_operation(m_bernoulli);
 
@@ -273,6 +274,8 @@ NB_MODULE(_ttnn, mod) {
     auto m_operations = mod.def_submodule("operations", "ttnn Operations");
     auto m_fabric = mod.def_submodule("fabric", "Fabric instantiation APIs");
     auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
+    auto m_program_spec = mod.def_submodule(
+        "program_spec", "Metal 2.0 ProgramSpec and ProgramRunArgs, and generic_op's mesh form (experimental)");
     auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
     auto m_mcast_host =
         mod.def_submodule("mcast_host", "Host-side mcast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe)");
@@ -352,6 +355,10 @@ NB_MODULE(_ttnn, mod) {
     // TODO: pull them out of the ttnn::operations::py_module.
     ttnn::operations::py_module(m_operations);
     // tt::operations::primary::py_module(m_primary_ops);
+
+    // After the operations: KernelSpec.CompilerOptions defaults to a KernelBuildOptLevel, which the fabric mux
+    // operation binds.
+    ttnn::program_spec::py_module_types(m_program_spec);
 
     // CONFIG is a shared mutable global: Python code reads and writes properties
     // via setattr (e.g. manage_config context manager).  We must bind by reference

@@ -4,6 +4,7 @@
 
 #include "tensor.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -59,7 +60,23 @@ void Tensor::add_grad(const ttnn::Tensor& grad) {
     // It is important to not use inline addition here
     // m_grad might share memory with other tensors
     constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+    const bool sum_in_fp32 = m_grad.dtype() == ttnn::DataType::FLOAT32 ||
+                             (m_is_parameter && autograd::ctx().get_gradient_reduce_dtype() == ttnn::DataType::FLOAT32);
+    if (sum_in_fp32) {
+        // Both operands in fp32 (see core::as_fp32); casting m_grad first frees a bf16 one before the add.
+        m_grad = core::as_fp32(m_grad);
+        m_grad = ttnn::add(m_grad, core::as_fp32(grad), std::nullopt, std::nullopt, std::nullopt, none, none, none);
+        return;
+    }
     m_grad = ttnn::add(m_grad, grad, std::nullopt, std::nullopt, std::nullopt, none, none, none);
+}
+
+void Tensor::mark_as_parameter() {
+    m_is_parameter = true;
+}
+
+bool Tensor::is_parameter() const {
+    return m_is_parameter;
 }
 
 void Tensor::backward(bool retain_graph) {

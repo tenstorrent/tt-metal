@@ -8,14 +8,13 @@
 #include <numeric>
 #include <string>
 #include <string_view>
-#include <tt-logger/tt-logger.hpp>
-#include <tt-umd/utils/semver.hpp>
 
 #include "blackhole/bh_hal.hpp"
 #include "rtoptions.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
+#include "hostdev/l1_ecc_halt_constants.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
@@ -176,6 +175,11 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_BLACKHOLE");
+        // ttsim does not model every config register (PACK_GLOBAL_CFG_CTL). UMD picks ttsim over RTL emulation by
+        // the same .so test.
+        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+            defines.push_back("TT_METAL_TTSIM");
+        }
         // Push back the physical erisc id
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             if (enable_2_erisc_mode_) {
@@ -250,11 +254,6 @@ public:
         if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
             return {};
         }
-        // -march is the exact ISA string -mcpu=tt-bh-tensix resolves to (per
-        // `riscv-tt-elf-g++ -mcpu=tt-bh-tensix -v`), plus _zve32f. Passed after -mcpu (recipe
-        // cflags are appended after common_flags), so it overrides the arch while keeping the
-        // tt-bh-tensix tuning.
-        //
         // -fno-lto: emit a plain (non-LTO) object for this TU. With -flto the RVV builtins are
         // streamed as GIMPLE and re-expanded by the link-stage LTRANS units, which do not carry
         // the vector -march, breaking code generation at link time (observed with sfpi 7.70.0).
@@ -265,7 +264,7 @@ public:
         //
         // -Wno-error=array-bounds: RVV intrinsic loads/stores through casted L1 pointers trip
         // -Warray-bounds false positives at -O3 under -Werror.
-        return "-march=rv32im_zmmul_zaamo_zba_zbb_xtttensixbh_zve32f -fno-lto "
+        return "-mcpu=tt-bh-vector-tensix -fno-lto "
                "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
     }
 
@@ -426,8 +425,14 @@ void Hal::initialize_bh(
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
+            (addr == RISCV_DEBUG_REG_ECC_CTRL || addr == RISCV_DEBUG_REG_ECC_STATUS ||
+             addr == reinterpret_cast<uintptr_t>(RISC_PIC_BRISC_INT_NO) ||
+             addr == RISCV_DEBUG_REG_WDT_CNTL) ||  // L1 ECC halt checks
+            // Releasing a latched BRISC at init
+            ((addr >= reinterpret_cast<uintptr_t>(RISC_PIC_INT_PCS)) &&
+             (addr < reinterpret_cast<uintptr_t>(RISC_PIC_INT_PCS + pic_num_sw_ints + pic_num_hw_ints))) ||
             (addr == RISCV_DEBUG_REG_WALL_CLOCK_L ||
-             addr == RISCV_DEBUG_REG_WALL_CLOCK_H) ||                // read by the streaming profiler's clock sync
+             addr == RISCV_DEBUG_REG_WALL_CLOCK_H) ||  // read by the streaming profiler's clock sync
             (addr == IERISC_RESET_PC ||
              addr == SUBORDINATE_IERISC_RESET_PC) ||                // used to program start addr for eth FW
             (addr == DRISC_RESET_PC) ||                             // used to program start addr for DRAM FW
@@ -478,8 +483,10 @@ void Hal::initialize_bh(
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
+    this->noc_addr_local_bits_ = NOC_ADDR_LOCAL_BITS;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
     this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
+    this->noc_max_bytes_in_packet_ = NOC_MAX_BURST_SIZE;  // no overlay packetization below the burst size
     this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;
@@ -514,6 +521,7 @@ void Hal::initialize_bh(
     this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = false;
+    this->num_dataflow_buffers_ = NUM_CIRCULAR_BUFFERS;
     this->supports_implicit_dfb_sync_ = false;
 
     this->eps_ = EPS_BH;

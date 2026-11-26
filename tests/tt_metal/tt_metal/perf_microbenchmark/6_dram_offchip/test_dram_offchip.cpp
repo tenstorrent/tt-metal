@@ -6,12 +6,12 @@
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdlib>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -29,22 +29,22 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-umd/types/arch.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
@@ -396,7 +396,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     const uint32_t& single_tile_size,
     const tt::DataFormat& tile_format,
     const uint32_t& access_type) {
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
 
     uint32_t cb_index = 0;
     uint32_t cb_tiles = num_reqs_at_a_time;

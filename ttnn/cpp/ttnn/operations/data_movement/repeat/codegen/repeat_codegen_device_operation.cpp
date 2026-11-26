@@ -45,7 +45,7 @@ void validate_output(const RepeatCodegenParams& operation_attributes, const Repe
     }
     const auto& out = tensor_args.optional_output_tensor.value();
     TT_FATAL(out.storage_type() == ttnn::StorageType::DEVICE, "Repeat codegen optional output must be on device");
-    TT_FATAL(out.buffer() != nullptr, "Repeat codegen optional output must be allocated in a buffer on device");
+    TT_FATAL(out.is_allocated(), "Repeat codegen optional output must be allocated in a buffer on device");
     TT_FATAL(out.logical_shape() == expected_shape, "Repeat codegen optional output shape mismatch");
     TT_FATAL(
         repeat_codegen::output_matches_input_page(input, out),
@@ -60,7 +60,7 @@ void RepeatCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input = tensor_args.input;
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to repeat need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(
         input.logical_shape().rank() == 4,
         "RepeatCodegen expects a 4D input, got rank {}",
@@ -85,7 +85,7 @@ void RepeatCodegenDeviceOperation::validate_on_program_cache_miss(
 
 void RepeatCodegenDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    TT_FATAL(tensor_args.input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(tensor_args.input.is_allocated(), "Operands need to be allocated in buffers on device!");
     validate_output(operation_attributes, tensor_args);
 }
 
@@ -94,16 +94,23 @@ ttsl::hash::hash_t RepeatCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     uint32_t cb_batch = 0;
     uint32_t cb_depth = 0;
+    bool cb_doubling = false;
     if (tensor_args.input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        const auto cb_plan =
-            rm_cb_plan_for_call(tensor_args.input, compute_output_specs(operation_attributes, tensor_args));
+        const auto cb_plan = rm_cb_plan_for_call(
+            tensor_args.input, compute_output_specs(operation_attributes, tensor_args), operation_attributes);
         if (cb_plan.has_value()) {
             cb_batch = cb_plan->batch;
             cb_depth = cb_plan->depth;
+            cb_doubling = cb_plan->doubling;
         }
     }
     return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<RepeatCodegenDeviceOperation>, operation_attributes, tensor_args, cb_batch, cb_depth);
+        ttsl::hash::type_hash<RepeatCodegenDeviceOperation>,
+        operation_attributes,
+        tensor_args,
+        cb_batch,
+        cb_depth,
+        cb_doubling);
 }
 
 RepeatCodegenDeviceOperation::spec_return_value_t RepeatCodegenDeviceOperation::compute_output_specs(

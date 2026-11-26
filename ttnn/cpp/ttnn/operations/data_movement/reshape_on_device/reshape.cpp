@@ -6,7 +6,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "reshape.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <ttnn/operations/functions.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -15,6 +15,7 @@
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -33,7 +34,7 @@ static Tensor manual_insertion(
     auto cpu_tensor = input_tensor.cpu();
     auto output_spec = tt::tt_metal::TensorSpec(
         logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape));
     auto output = Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
                              cpu_tensor.host_storage().buffer(), std::move(output_spec), cpu_tensor.tensor_topology()))

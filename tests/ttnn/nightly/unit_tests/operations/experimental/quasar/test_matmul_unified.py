@@ -45,6 +45,11 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 qsr = ttnn._ttnn.operations.experimental.quasar
 
 TILE = 32
@@ -1629,19 +1634,8 @@ def test_auto_config_batched_a_unbatched_b(device, sharded_out):
         ((1, 320, 32), (1, 32, 64), (320, 64), False),
         ((1, 128, 32), (1, 32, 128), (128, 128), False),
         ((16, 32, 32), (32, 512), (512, 512), False),
-        # fp32 accumulation exercises the fp32 branch of the subblock search (h * w <= 4). It cannot run until the
-        # Quasar 2D factory sets unpack_modes for the fp32 partials DFB (#61018); strict so it flags when fixed.
-        pytest.param(
-            (1, 128, 32),
-            (1, 32, 128),
-            (128, 128),
-            True,
-            marks=pytest.mark.xfail(
-                reason="#61018: fp32_dest_acc_en fails in the 2D factory (partials DFB has no unpack_modes entry)",
-                raises=RuntimeError,
-                strict=True,
-            ),
-        ),
+        # fp32 accumulation takes the fp32 branch of the subblock search (h * w <= 4).
+        ((1, 128, 32), (1, 32, 128), (128, 128), True),
     ],
     ids=[
         "400x400",

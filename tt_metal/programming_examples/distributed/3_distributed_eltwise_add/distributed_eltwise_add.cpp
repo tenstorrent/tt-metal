@@ -4,22 +4,23 @@
 
 #include <functional>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::distributed;
 
 Program CreateEltwiseAddProgram(
+    MeshDevice& mesh_device,
     const std::shared_ptr<MeshBuffer>& a,
     const std::shared_ptr<MeshBuffer>& b,
     const std::shared_ptr<MeshBuffer>& c,
     size_t tile_size_bytes,
     uint32_t num_tiles) {
-    auto program = CreateProgram();
+    auto program = CreateProgram(mesh_device);
     auto target_tensix_core = CoreRange(CoreCoord{0, 0});
 
     // Add circular buffers for data movement
@@ -134,7 +135,7 @@ int main() {
     EnqueueWriteMeshBuffer(cq, b, b_data, false /* blocking */);
 
     // Create program for distributed computation
-    auto program = CreateEltwiseAddProgram(a, b, c, tile_size_bytes, num_tiles);
+    auto program = CreateEltwiseAddProgram(*mesh_device, a, b, c, tile_size_bytes, num_tiles);
 
     // Create mesh workload and broadcast the program across all devices
     auto mesh_workload = MeshWorkload();

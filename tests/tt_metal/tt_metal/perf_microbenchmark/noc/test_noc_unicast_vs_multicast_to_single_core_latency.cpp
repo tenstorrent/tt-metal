@@ -5,19 +5,19 @@
 #include <fmt/base.h>
 #include <cstdint>
 #include <cstdlib>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/program/program_impl.hpp"
 #include <map>
 #include <string>
 #include <variant>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include "impl/profiler/tt_metal_profiler.hpp"
 #include "impl/context/metal_context.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -47,7 +47,7 @@ void measure_latency(const std::string& kernel_name) {
         {"WORKER_NOC_Y", std::to_string(first_worker_physical_core.y)},
     };
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/noc/kernels/" + kernel_name + ".cpp",

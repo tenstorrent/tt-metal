@@ -14,12 +14,13 @@
 #include <chrono>
 #include <vector>
 
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
 #include <tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp>
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <llrt/hal.hpp>
 #include <llrt/tt_cluster.hpp>

@@ -12,14 +12,14 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -653,7 +653,7 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
     const auto dummy_receiver_noc_xy_encoding =
         static_cast<uint32_t>(hal.noc_xy_encoding(drainer_virtual_core.x, drainer_virtual_core.y));
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
     const auto mux_downstream_rt_args =
         build_mux_downstream_sender_rt_args(device, program, mux_logical_core, drainer_virtual_core, drainer_layout);
     tt::tt_fabric::add_fabric_mux_v2_to_program(

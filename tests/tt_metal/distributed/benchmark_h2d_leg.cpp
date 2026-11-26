@@ -14,14 +14,14 @@
 
 #include <benchmark/benchmark.h>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "hd_socket_test_utils.hpp"
 #include "leg_benchmark_common.hpp"
@@ -227,7 +227,7 @@ BENCHMARK_DEFINE_F(H2DLegFixture, Bandwidth)(benchmark::State& state) {
     init_counters(state);
 
     for ([[maybe_unused]] auto _ : state) {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_);
         auto receiver = CreateKernel(
             program,
             TT_DIRECT_KERNEL_DIR "/kernels/test_kernel_signal.cpp",
