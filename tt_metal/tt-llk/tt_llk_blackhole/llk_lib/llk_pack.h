@@ -465,6 +465,8 @@ inline void _llk_pack_reconfig_data_format_(
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
  * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats
  * are unaffected by the issue).
+ * @note Establishes the ADDR_MOD_6/7 invariants (dest += 2 / zero advance) this thread's SFPU ops assume.
+ *       Any op that reprograms either slot must restore its invariant before returning.
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_(
@@ -481,6 +483,11 @@ inline void _llk_pack_hw_configure_(
 
     LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
+
+    // ADDR_MOD_7 is invariant state: zero advance, so it behaves like a NOOP. SFPU ops also run from this thread.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    // ADDR_MOD_6 is invariant state: dest += 2, so it behaves like dst_reg++.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 /**
