@@ -84,3 +84,46 @@ def test_split_multirow_blocks(device, limits, block_rows):
     reference, _, _, _ = _run_split(device, case, split_rows=0, **limits)
     for a, b in zip(reference, outputs):
         assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), "the split reader changed the result"
+
+
+# ---------------------------------------------------------------------------------------------
+# Output push quantum (out_group_tiles): compute pushes each tile-row in DEST groups of this many
+# tiles (the last group of a row may be short) and the writer waits the same quantum. It moves no
+# arithmetic, so every value must give bit-identical outputs.
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "case_id,limits,groups",
+    [
+        # One tile-row per core, block_ch_tiles 3: groups 1,1,1 / 2,1 (ragged) / 3.
+        pytest.param("conv1d-014", dict(), [1, 2, 3], id="single_row_w3_ragged_group"),
+        # Several tile-rows per core (block_ch_tiles 1 -> the quantum clamps to 1; 2 when pinned wider).
+        pytest.param("conv1d-010", dict(max_block_rows=1, max_cores_per_group=1), [1, 2], id="multi_row"),
+        # fp32 DEST: one acquire holds 4 tiles, so a wider pin clamps to 4.
+        pytest.param("conv1d-011", dict(), [1, 8], id="fp32_dest_clamp"),
+    ],
+)
+def test_out_group_tiles_bit_identical(device, case_id, limits, groups):
+    case = _CASES[case_id]
+    reference, plan_ref = None, None
+    for group in groups:
+        outputs, host, device_inputs, plan = _run_split(device, case, out_group_tiles=group, **limits)
+        assert plan.out_group_tiles == min(group, plan.block_ch_tiles, 4 if case["fp32"] else 8)
+        if reference is None:
+            _check_case(case, outputs, host, device_inputs)
+            reference, plan_ref = outputs, plan
+            continue
+        for a, b in zip(reference, outputs):
+            assert torch.equal(
+                ttnn.to_torch(a), ttnn.to_torch(b)
+            ), f"out_group_tiles {plan.out_group_tiles} vs {plan_ref.out_group_tiles} changed the result"
+
+
+def test_default_out_group_tiles(device):
+    """One tile-row per core -> per-tile pushes; several tile-rows per core -> a full DEST group."""
+    _, _, _, single = _run_split(device, _CASES["conv1d-003"])
+    assert single.core_seq_tiles_max == 1 and single.out_group_tiles == 1
+    _, _, _, multi = _run_split(device, _T256, max_cores_per_group=1)
+    assert multi.core_seq_tiles_max > 1
+    assert multi.out_group_tiles == min(multi.block_ch_tiles, 8)

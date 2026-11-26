@@ -5,9 +5,10 @@
 //
 // This core owns channel tiles [ch_group_tile_start, ch_group_tile_start + block_ch_tiles) of every
 // tile-row in its token range. Global channel tile cg routes to q if cg < Q_t, to k if
-// cg < Q_t + K_t, else to v (page r * X_t + (cg - base_X)). A channel group is at most three
-// contiguous segments (one per output), resolved once; per tile-row: wait block_ch_tiles, issue all
-// writes, flush (source L1 read out), pop. Final write barrier before return (BB-03).
+// cg < Q_t + K_t, else to v (page r * X_t + (cg - base_X)). Compute pushes each tile-row in groups
+// of out_group_tiles (the last may be short); per group: wait, issue its writes, flush (source L1
+// read out), pop — so group g is stored while compute activates group g+1. Final write barrier
+// before return (BB-03).
 //
 // Raw NoC writes rather than write_sticks_after_untilize: outputs are TILE pages routed to three
 // tensors; that helper writes RM sticks to one tensor.
@@ -34,32 +35,6 @@ constexpr uint32_t cb_split_done = 7;      // this kernel -> reader: one token p
 
 constexpr uint32_t TILE_DIM = 32;
 
-struct Segment {
-    uint32_t first_col;  // first tile column inside the destination tensor
-    uint32_t count;      // tiles of this core's group that go to the destination
-    uint32_t cb_offset;  // tile offset of the segment inside a tile-row of cb_output_tiles
-};
-
-// Intersection of [group_lo, group_hi) with the destination's channel-tile range [lo, hi).
-FORCE_INLINE Segment make_segment(uint32_t group_lo, uint32_t group_hi, uint32_t lo, uint32_t hi) {
-    const uint32_t a = group_lo > lo ? group_lo : lo;
-    const uint32_t b = group_hi < hi ? group_hi : hi;
-    if (a >= b) {
-        return Segment{0, 0, 0};
-    }
-    return Segment{a - lo, b - a, a - group_lo};
-}
-
-template <uint32_t tile_bytes, typename Accessor>
-FORCE_INLINE void write_segment(
-    const Accessor& acc, const Segment& seg, uint32_t dst_width_tiles, uint32_t tile_row, uint32_t l1_row_base) {
-    const uint32_t first_page = tile_row * dst_width_tiles + seg.first_col;
-    const uint32_t src = l1_row_base + seg.cb_offset * tile_bytes;
-    for (uint32_t i = 0; i < seg.count; ++i) {
-        noc_async_write(src + i * tile_bytes, acc.get_noc_addr(first_page + i), tile_bytes);
-    }
-}
-
 }  // namespace
 
 void kernel_main() {
@@ -71,7 +46,9 @@ void kernel_main() {
     constexpr uint32_t block_rows = get_compile_time_arg_val(5);
     constexpr uint32_t split_rows = get_compile_time_arg_val(6);   // 0: the reader reads every row
     constexpr uint32_t stick_bytes = get_compile_time_arg_val(7);  // one token row of this core's channels
-    constexpr auto q_args = TensorAccessorArgs<8>();
+    constexpr uint32_t out_group_tiles = get_compile_time_arg_val(8);    // compute's push quantum
+    constexpr bool stagger_row_walk = get_compile_time_arg_val(9) == 1;  // rotate each core's row order
+    constexpr auto q_args = TensorAccessorArgs<10>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -91,10 +68,16 @@ void kernel_main() {
     const auto k_acc = TensorAccessor(k_args, k_addr);
     const auto v_acc = TensorAccessor(v_args, v_addr);
 
-    const uint32_t group_hi = ch_group_tile_start + block_ch_tiles;
-    const Segment q_seg = make_segment(ch_group_tile_start, group_hi, 0, q_tiles);
-    const Segment k_seg = make_segment(ch_group_tile_start, group_hi, q_tiles, q_tiles + k_tiles);
-    const Segment v_seg = make_segment(ch_group_tile_start, group_hi, q_tiles + k_tiles, q_tiles + k_tiles + v_tiles);
+    // store_tile: global channel tile cg of tile-row r -> its q / k / v page.
+    auto store_tile = [&](uint32_t src, uint32_t r, uint32_t cg) {
+        if (cg < q_tiles) {
+            noc_async_write(src, q_acc.get_noc_addr(r * q_tiles + cg), tile_bytes);
+        } else if (cg < q_tiles + k_tiles) {
+            noc_async_write(src, k_acc.get_noc_addr(r * k_tiles + (cg - q_tiles)), tile_bytes);
+        } else {
+            noc_async_write(src, v_acc.get_noc_addr(r * v_tiles + (cg - q_tiles - k_tiles)), tile_bytes);
+        }
+    };
 
     // ---- split reader: serve tile-rows [0, rows_served) of this core's range ----
     [[maybe_unused]] uint32_t rows_served = 0;
@@ -109,7 +92,9 @@ void kernel_main() {
                 const uint32_t dst = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_split_requests));
                 cb_pop_front(cb_split_requests, 1);
                 const uint32_t token0 = (core_seq_start + rows_served) * TILE_DIM;
-                for (uint32_t i = TILE_DIM - split_rows; i < TILE_DIM; ++i) {
+                for (uint32_t j = 0; j < split_rows; ++j) {
+                    const uint32_t i = TILE_DIM - split_rows +
+                                       (stagger_row_walk ? (j + ch_group_tile_start + core_seq_start) % split_rows : j);
                     noc_async_read(
                         input_acc.get_noc_addr(token0 + i, input_byte_offset), dst + i * stick_bytes, stick_bytes);
                 }
@@ -126,13 +111,16 @@ void kernel_main() {
             const uint32_t next_block_end = (m / block_rows + 2) * block_rows;
             serve_split_rows_through(next_block_end < core_seq_tiles ? next_block_end : core_seq_tiles);
         }
-        cb_wait_front(cb_output_tiles, block_ch_tiles);
-        const uint32_t l1_row_base = get_read_ptr(cb_output_tiles);
-        write_segment<tile_bytes>(q_acc, q_seg, q_tiles, r, l1_row_base);
-        write_segment<tile_bytes>(k_acc, k_seg, k_tiles, r, l1_row_base);
-        write_segment<tile_bytes>(v_acc, v_seg, v_tiles, r, l1_row_base);
-        noc_async_writes_flushed();
-        cb_pop_front(cb_output_tiles, block_ch_tiles);
+        for (uint32_t c0 = 0; c0 < block_ch_tiles; c0 += out_group_tiles) {
+            const uint32_t group = (block_ch_tiles - c0 < out_group_tiles) ? (block_ch_tiles - c0) : out_group_tiles;
+            cb_wait_front(cb_output_tiles, group);
+            const uint32_t src = get_read_ptr(cb_output_tiles);
+            for (uint32_t i = 0; i < group; ++i) {
+                store_tile(src + i * tile_bytes, r, ch_group_tile_start + c0 + i);
+            }
+            noc_async_writes_flushed();
+            cb_pop_front(cb_output_tiles, group);
+        }
     }
     noc_async_write_barrier();
 }

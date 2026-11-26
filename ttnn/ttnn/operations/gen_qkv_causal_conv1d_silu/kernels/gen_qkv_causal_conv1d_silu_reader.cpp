@@ -125,7 +125,8 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t history_page_channels = get_compile_time_arg_val(6);  // 0: token-paged history
     constexpr uint32_t split_rows = get_compile_time_arg_val(7);             // body rows per tile-row the writer reads
-    constexpr auto input_args = TensorAccessorArgs<8>();
+    constexpr bool stagger_row_walk = get_compile_time_arg_val(8) == 1;      // rotate each core's row order
+    constexpr auto input_args = TensorAccessorArgs<9>();
     constexpr auto history_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto tap0_args = TensorAccessorArgs<history_args.next_compile_time_args_offset()>();
     constexpr auto tap1_args = TensorAccessorArgs<tap0_args.next_compile_time_args_offset()>();
@@ -238,7 +239,8 @@ void kernel_main() {
                     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_split_requests)) = dst;
                     cb_push_back(cb_split_requests, 1);
                 }
-                for (uint32_t i = 0; i < own_rows; ++i) {
+                for (uint32_t j = 0; j < own_rows; ++j) {
+                    const uint32_t i = stagger_row_walk ? (j + ch_group_tile_start + core_seq_start) % own_rows : j;
                     noc_async_read(
                         input_acc.get_noc_addr(token0 + i, input_byte_offset), dst + i * stick_bytes, stick_bytes);
                 }

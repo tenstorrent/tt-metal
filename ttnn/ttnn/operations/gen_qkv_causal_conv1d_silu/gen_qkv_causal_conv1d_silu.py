@@ -27,6 +27,7 @@ from .gen_qkv_causal_conv1d_silu_program_descriptor import (
     TILE_DIM,
     Plan,
     create_program_descriptor,
+    dest_capacity_tiles,
     output_l1_share,
     rewrite_addresses,
     select_plan,
@@ -128,7 +129,7 @@ def default_compute_kernel_config():
 # Plan reporting (BB-08) and plan pinning
 # ---------------------------------------------------------------------------
 
-_PLAN_LIMITS = {"max_block_rows": None, "max_cores_per_group": None, "split_rows": None}
+_PLAN_LIMITS = {"max_block_rows": None, "max_cores_per_group": None, "split_rows": None, "out_group_tiles": None}
 _LAST_PLAN: Optional[Plan] = None
 
 
@@ -142,13 +143,15 @@ def plan_limits(
     max_block_rows: Optional[int] = None,
     max_cores_per_group: Optional[int] = None,
     split_rows: Optional[int] = None,
+    out_group_tiles: Optional[int] = None,
 ):
-    """Cap block_rows / cores_per_group and pin the ROW_MAJOR split reader's split_rows inside the
-    block (they enter select_plan and the cache key)."""
+    """Cap block_rows / cores_per_group and pin the ROW_MAJOR split reader's split_rows and the
+    output push quantum out_group_tiles inside the block (they enter select_plan and the cache key)."""
     saved = dict(_PLAN_LIMITS)
     _PLAN_LIMITS["max_block_rows"] = max_block_rows
     _PLAN_LIMITS["max_cores_per_group"] = max_cores_per_group
     _PLAN_LIMITS["split_rows"] = split_rows
+    _PLAN_LIMITS["out_group_tiles"] = out_group_tiles
     try:
         yield
     finally:
@@ -463,7 +466,7 @@ def gen_qkv_causal_conv1d_silu(
     fp32_dest_acc_en = bool(getattr(config, "fp32_dest_acc_en", False))
     dst_full_sync_en = bool(getattr(config, "dst_full_sync_en", False))
     grid = device.compute_with_storage_grid_size()
-    limits = (_PLAN_LIMITS["max_block_rows"], _PLAN_LIMITS["max_cores_per_group"], _PLAN_LIMITS["split_rows"])
+    limits = tuple(_PLAN_LIMITS[k] for k in ("max_block_rows", "max_cores_per_group", "split_rows", "out_group_tiles"))
     key = (
         _device_key(device),
         (grid.x, grid.y),
@@ -500,6 +503,8 @@ def gen_qkv_causal_conv1d_silu(
             max_block_rows=limits[0],
             max_cores_per_group=limits[1],
             split_rows=limits[2],
+            out_group_tiles=limits[3],
+            dest_tiles=dest_capacity_tiles(fp32_dest_acc_en, dst_full_sync_en),
             elem_bytes=input.element_size(),
             tile_bytes=ttnn.tile_size(input.dtype),
         )

@@ -77,6 +77,19 @@ L1_BOUND_BYTES = 1_048_576  # BB-05: L1 the model leaves to the op on every core
 # ---------------------------------------------------------------------------------------------
 SPLIT_READER_ROWS = 24
 
+# bank_stagger (parked, measured null): rotate each core's body-row walk by its (channel group,
+# token range) so the grid's first requests do not all land on one bank. Measured on 001 / 002 /
+# 003: 5.87 / 6.81 / 10.02 -> 5.85 / 7.02 / 9.95 us (noise): every core queues its whole tile-row
+# within ~1 us and each port is request-rate-bound, so issue order does not change the per-port
+# totals. Kept as a live CT switch (reader + writer) for shapes where it may pay.
+STAGGER_ROW_WALK = False
+
+
+def dest_capacity_tiles(fp32_dest_acc_en: bool, dst_full_sync_en: bool) -> int:
+    """Tiles one DEST acquire can hold (dest_helpers.hpp capacity table)."""
+    return (16 if dst_full_sync_en else 8) // (2 if fp32_dest_acc_en else 1)
+
+
 # ---------------------------------------------------------------------------------------------
 # CB indices (semantic names; the numbers are only slots)
 # ---------------------------------------------------------------------------------------------
@@ -105,6 +118,7 @@ class Plan:
     num_cores: int
     core_seq_tiles_max: int
     split_rows: int  # RM: body rows per tile-row read by the writer RISC on NoC1 (0: reader reads all)
+    out_group_tiles: int  # output tiles per DEST acquire = per cb_output_tiles push = per writer wait
 
 
 def select_regime(layout) -> str:
@@ -174,6 +188,8 @@ def select_plan(
     max_block_rows: Optional[int] = None,
     max_cores_per_group: Optional[int] = None,
     split_rows: Optional[int] = None,
+    out_group_tiles: Optional[int] = None,
+    dest_tiles: int = 8,
     elem_bytes: int = 2,
     tile_bytes: int = 2048,
 ) -> Plan:
@@ -185,6 +201,8 @@ def select_plan(
     fewer cores. block_rows = the coarsest balanced block that fits the budget, up to
     max_block_rows (default OVERLAP_BLOCK_ROWS, the measured overlap optimum). split_rows = the
     writer's share of each tile-row's body reads (ROW_MAJOR only; default_split_rows), or the pin.
+    out_group_tiles = the output push quantum (default_out_group_tiles, or the pin), at most
+    min(block_ch_tiles, dest_tiles).
     """
     num_grid_cores = grid_x * grid_y
     cpg_cap = tensor_seq_tiles if max_cores_per_group is None else max(1, min(max_cores_per_group, tensor_seq_tiles))
@@ -229,6 +247,8 @@ def select_plan(
         split = max(0, min(TILE_DIM, split_rows))
     else:
         split = default_split_rows()
+    group = default_out_group_tiles(w, dest_tiles, core_seq_tiles_max) if out_group_tiles is None else out_group_tiles
+    group = max(1, min(group, w, dest_tiles))
 
     return Plan(
         regime=regime,
@@ -239,7 +259,26 @@ def select_plan(
         num_cores=groups * ranges,
         core_seq_tiles_max=core_seq_tiles_max,
         split_rows=split,
+        out_group_tiles=group,
     )
+
+
+def default_out_group_tiles(block_ch_tiles: int, dest_tiles: int, core_seq_tiles_max: int) -> int:
+    """Output tiles per DEST acquire / cb_output_tiles push / writer wait (Refinement 2).
+
+    One tile-row per core (decode-size calls): the whole output is a tail behind the last SiLU, so
+    push every tile on its own — the writer stores tile c while the packer activates tile c+1, and
+    the math thread's MACs for c+1 overlap SiLU(c) in the other DEST half. Several tile-rows per
+    core: a full DEST per push. There the writer's flush per push is the throughput limit under
+    DRAM write contention (one 2 KB write in flight per core at a 1-tile quantum).
+    Measured (BH 11x10, device kernel us, quantum 1 vs full DEST / block):
+      one row:   002 (w 2) 6.90 vs 7.32   003 (w 4) 9.89 vs 10.93   014 (w 3) 8.66 vs 9.82
+                 016 (w 8) 15.64 vs 19.29 (2: 15.67, 4: 16.75)
+      several:   004 (6 rows, w 16) 164.0 vs 123.4 (4: 149.4)     020 (5 rows, w 8) 69.1 vs 59.6
+    """
+    if core_seq_tiles_max == 1:
+        return 1
+    return min(block_ch_tiles, dest_tiles)
 
 
 def default_split_rows() -> int:
@@ -371,6 +410,7 @@ def create_program_descriptor(
         tile_bytes,
         history_page_channels,
         plan.split_rows,
+        int(STAGGER_ROW_WALK),
     ]
     for t in [input_tensor, history] + list(taps):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
@@ -385,11 +425,13 @@ def create_program_descriptor(
         block_rows,
         plan.split_rows,
         stick_bytes,
+        plan.out_group_tiles,
+        int(STAGGER_ROW_WALK),
     ]
     for t in list(outputs) + [input_tensor]:
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     # ---- compute ----
-    compute_ct = [w, block_rows, int(tile_input)]
+    compute_ct = [w, block_rows, int(tile_input), plan.out_group_tiles]
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()

@@ -11,7 +11,11 @@
 //                         slide-by-pop on the slot (pops 1,1,1,29; 1,1,1,32 on the block's last
 //                         tile-row) — exact data movement, fidelity-independent.
 //   conv_silu_block       y = silu(sum_p window_p * rowbcast(tap tile, row 2p)) in DEST, one pack;
-//                         the MACs run on the math thread, SiLU on the packer thread.
+//                         the MACs run on the math thread, SiLU on the packer thread. Output tiles
+//                         are acquired, packed and pushed in groups of out_group_tiles (the writer
+//                         waits the same quantum): the writer stores group g while the packer runs
+//                         SiLU on group g+1, and the math thread's MACs for group g+1 overlap the
+//                         SiLU of group g in the other DEST half.
 //
 // RAW-LLK DEVIATION (conv_silu_block): eltwise_chain cannot express it.
 //   (1) chain.inl:3397 — in a DEST-accumulating chain every DEST-only (SFPU) element runs on a
@@ -99,9 +103,14 @@ void windowed_tilize_block(DataflowBuffer& rows, DataflowBuffer& windows, uint32
 // conv_silu_block: rows_this_block x block_ch_tiles output tiles. Output tile (m, c) =
 // silu(sum_{p=0..3} window[m*4w + p*w + c] * rowbcast(tap_tile[c], row 2p)), the 4 products
 // accumulated in one DEST slot in fixed order p = 0..3, SiLU applied in DEST, packed once.
-template <uint32_t block_ch_tiles>
+// Each tile-row's tiles go out in groups of out_group_tiles (the last group of a row may be short);
+// a row's groups sum to block_ch_tiles, so no reservation straddles the end of cb_output_tiles.
+template <uint32_t block_ch_tiles, uint32_t out_group_tiles>
 void conv_silu_block(DataflowBuffer& windows, DataflowBuffer& outputs, uint32_t rows_this_block) {
-    constexpr uint32_t dest_group = compute_kernel_lib::DEST_AUTO_LIMIT;
+    static_assert(
+        out_group_tiles >= 1 && out_group_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT,
+        "an output group is one DEST acquire");
+    constexpr uint32_t dest_group = out_group_tiles;
     const uint32_t window_tiles = TAP_COUNT * block_ch_tiles * rows_this_block;
     windows.wait_front(window_tiles);
 
@@ -113,10 +122,10 @@ void conv_silu_block(DataflowBuffer& windows, DataflowBuffer& outputs, uint32_t 
     compute_kernel_lib::ActivationInitHelper<KernelActivation::SILU>::init();
 
     for (uint32_t m = 0; m < rows_this_block; ++m) {
-        outputs.reserve_back(block_ch_tiles);
         const uint32_t row_base = m * TAP_COUNT * block_ch_tiles;
         for (uint32_t c0 = 0; c0 < block_ch_tiles; c0 += dest_group) {
             const uint32_t group = (block_ch_tiles - c0 < dest_group) ? (block_ch_tiles - c0) : dest_group;
+            outputs.reserve_back(group);
             tile_regs_acquire();
             for (uint32_t i = 0; i < group; ++i) {
                 const uint32_t c = c0 + i;
@@ -133,8 +142,8 @@ void conv_silu_block(DataflowBuffer& windows, DataflowBuffer& outputs, uint32_t 
                 pack_tile(i, cb_output_tiles);
             }
             tile_regs_release();
+            outputs.push_back(group);
         }
-        outputs.push_back(block_ch_tiles);
     }
     windows.pop_front(window_tiles);
 }
@@ -154,6 +163,7 @@ void kernel_main() {
     constexpr uint32_t block_ch_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t block_rows = get_compile_time_arg_val(1);
     constexpr bool tile_input = get_compile_time_arg_val(2) == 1;
+    constexpr uint32_t out_group_tiles = get_compile_time_arg_val(3);  // output tiles per push
 
     const uint32_t core_seq_start = get_arg_val<uint32_t>(0);
     const uint32_t core_seq_tiles = get_arg_val<uint32_t>(1);
@@ -183,7 +193,7 @@ void kernel_main() {
         if (block_idx == 0) {
             taps.wait_front(block_ch_tiles);  // first use: the tap fetch hid behind the first tilize
         }
-        conv_silu_block<block_ch_tiles>(windows, outputs, rows_this_block);
+        conv_silu_block<block_ch_tiles, out_group_tiles>(windows, outputs, rows_this_block);
     }
     taps.pop_front(block_ch_tiles);
 }

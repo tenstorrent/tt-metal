@@ -32,21 +32,22 @@ CASES = {pc.id.split("_")[0]: pc.values[0] for pc in PHASE0_CASES}
 
 READER, WRITER, COMPUTE = desc_module.READER_KERNEL_INDEX, desc_module.WRITER_KERNEL_INDEX, 2
 
-# name -> (block_ch_tiles override or None, split_rows pin or None (plan default),
-#          {kernel index: [(define, value)]}, check correctness)
+# name -> (block_ch_tiles override or None, plan_limits pins, {kernel index: [(define, value)]}, check)
 VARIANTS = {
-    "base": (None, None, {}, True),
-    "s0": (None, 0, {}, True),
-    "s8": (None, 8, {}, True),
-    "s16": (None, 16, {}, True),
-    "s24": (None, 24, {}, True),
-    "s32": (None, 32, {}, True),
-    "w1s24": (1, 24, {}, True),
-    "w2": (2, None, {}, True),
-    "w2s0": (2, 0, {}, True),
-    "w2s16": (2, 16, {}, True),
-    "w2s24": (2, 24, {}, True),
-    "w4s24": (4, 24, {}, True),
+    "base": (None, {}, {}, True),
+    "s0": (None, dict(split_rows=0), {}, True),
+    "s24": (None, dict(split_rows=24), {}, True),
+    "g1": (None, dict(out_group_tiles=1), {}, True),
+    "g2": (None, dict(out_group_tiles=2), {}, True),
+    "g4": (None, dict(out_group_tiles=4), {}, True),
+    "g8": (None, dict(out_group_tiles=8), {}, True),
+    "w1": (1, {}, {}, True),
+    "w2": (2, {}, {}, True),
+    "w4": (4, {}, {}, True),
+    "w8": (8, {}, {}, True),
+    "g1s0": (None, dict(out_group_tiles=1, split_rows=0), {}, True),
+    "w2g1": (2, dict(out_group_tiles=1), {}, True),
+    "w8g1": (8, dict(out_group_tiles=1), {}, True),
 }
 
 
@@ -61,9 +62,6 @@ def _forced_plan(w):
         core_seq_tiles_max = -(-tensor_seq_tiles // ranges)
         ranges = -(-tensor_seq_tiles // core_seq_tiles_max)
         base = real(tensor_seq_tiles, tensor_ch_tiles, grid_x, grid_y, regime, **kw)
-        split = kw.get("split_rows")
-        if split is None:
-            split = desc_module.default_split_rows() if regime == desc_module.REGIME_RM else 0
         return desc_module.Plan(
             regime=regime,
             block_ch_tiles=w,
@@ -72,7 +70,16 @@ def _forced_plan(w):
             cores_per_group=ranges,
             num_cores=groups * ranges,
             core_seq_tiles_max=core_seq_tiles_max,
-            split_rows=split,
+            split_rows=base.split_rows,
+            out_group_tiles=max(
+                1,
+                min(
+                    kw.get("out_group_tiles")
+                    or desc_module.default_out_group_tiles(w, kw.get("dest_tiles", 8), core_seq_tiles_max),
+                    w,
+                    kw.get("dest_tiles", 8),
+                ),
+            ),
         )
 
     return select_plan
@@ -89,12 +96,14 @@ def _forced_plan(w):
         "conv1d-006",
         "conv1d-010",
         "conv1d-011",
+        "conv1d-014",
+        "conv1d-016",
         "conv1d-020",
     ],
 )
 @pytest.mark.parametrize("variant", list(VARIANTS))
 def test_variant(device, monkeypatch, case_id, variant):
-    w, split, defines, check = VARIANTS[variant]
+    w, limits, defines, check = VARIANTS[variant]
     op_module._PROGRAM_CACHE.clear()
     if w is not None:
         monkeypatch.setattr(op_module, "select_plan", _forced_plan(w))
@@ -111,7 +120,7 @@ def test_variant(device, monkeypatch, case_id, variant):
 
         monkeypatch.setattr(op_module, "create_program_descriptor", create)
     case = CASES[case_id]
-    with op_module.plan_limits(split_rows=split):
+    with op_module.plan_limits(**limits):
         outputs, host, device_inputs = _run(device, case)
     print(f"PLAN {case_id} {variant}: {op_module.get_last_plan()}")
     op_module._PROGRAM_CACHE.clear()
