@@ -23,17 +23,24 @@ constexpr uint32_t slab_offset = get_compile_time_arg_val(slab_ct + 3);
 constexpr uint32_t entry_tiles = get_compile_time_arg_val(slab_ct + 4);
 constexpr uint32_t slab_index_word = get_compile_time_arg_val(slab_ct + 5);
 constexpr uint32_t state_tiles = kt * kt;
+// The slab is SP-sharded: this rank's entry holds heads [sp_rank * stored_heads, +stored_heads).
+constexpr uint32_t stored_heads = entry_tiles / state_tiles;
 
 // A relay core hands each tile column of each of its heads' next entry states to the head's sender as compute packs
 // it (per-core args: the heads, then per head its index, its count semaphore on the senders, and its link's relay and
 // second carry senders' NoC x | y << 16). On the first rank it hands on and writes each head's final carry; on every
-// other rank it writes each head's carry once the first rank's senders have landed it in the head's final slot.
+// other rank it writes each head's carry once the first rank's senders have landed it in the head's final slot. With
+// the SP-sharded slab only the heads this rank holds are written, at their place in its entry, and only those land.
 void kernel_main() {
     const uint32_t heads = get_arg_val<uint32_t>(0);
     const auto head_arg = [](uint32_t s, uint32_t i) { return get_arg_val<uint32_t>(1 + 5 * s + i); };
     // The landing buffer's final slots, and the persistent count of the columns landed there.
     const uint32_t final_landing = get_common_arg_val<uint32_t>(1) + relay_heads * state_tiles * get_tile_size(cb_eout);
     const uint32_t final_semaphore = get_common_arg_val<uint32_t>(2);
+    const uint32_t sp_rank = get_common_arg_val<uint32_t>(3);
+    // Whether this rank holds head slot s's carry, and the head's place in this rank's carry output.
+    const auto owns = [&](uint32_t s) { return !slab || head_arg(s, 0) / stored_heads == sp_rank; };
+    const auto stored = [&](uint32_t s) { return slab ? head_arg(s, 0) % stored_heads : head_arg(s, 0); };
 
     // The reader's chronology: this rank's position, and the slab index.
     cb_wait_front(cb_chron, 1);
@@ -80,10 +87,12 @@ void kernel_main() {
     const uint32_t tile = get_tile_size(cb_eout);
     const auto write_carry = [&](uint32_t source) {
         for (uint32_t s = 0; s < heads && writes_carry; ++s) {
-            const uint32_t head = head_arg(s, 0);
+            if (!owns(s)) {
+                continue;
+            }
             for (uint32_t i = 0; i < state_tiles; ++i) {
                 noc_async_write_page(
-                    carry_base + head * state_tiles + (i % kt) * kt + i / kt,
+                    carry_base + stored(s) * state_tiles + (i % kt) * kt + i / kt,
                     carry,
                     source + (s * state_tiles + i) * tile);
             }
@@ -102,22 +111,25 @@ void kernel_main() {
         write_carry(get_read_ptr(cb_eout));
         cb_pop_front(cb_eout, relay_heads * state_tiles);
     } else {
-        // Each carry column out as it lands; the call ends once the whole carry has arrived, which separates
-        // consecutive calls across the SP line.
+        // Each carry column out as it lands, in slot order (one sender carries a relay core's heads to a rank); the
+        // call ends once the whole carry has arrived, which separates consecutive calls across the SP line.
+        uint32_t landed = 0;
         for (uint32_t s = 0; s < heads; ++s) {
-            const uint32_t head = head_arg(s, 0);
+            if (!owns(s)) {
+                continue;
+            }
             for (uint32_t j = 0; j < kt; ++j) {
-                kda_counter::wait(final_semaphore, s * kt + j + 1);
+                kda_counter::wait(final_semaphore, ++landed);
                 for (uint32_t r = 0; r < kt && writes_carry; ++r) {
                     noc_async_write_page(
-                        carry_base + head * state_tiles + r * kt + j,
+                        carry_base + stored(s) * state_tiles + r * kt + j,
                         carry,
                         final_landing + (s * state_tiles + j * kt + r) * tile);
                 }
             }
         }
         noc_async_write_barrier();
-        kda_counter::consume(final_semaphore, heads * kt);
+        kda_counter::consume(final_semaphore, landed);
     }
     noc_async_atomic_barrier();
 }

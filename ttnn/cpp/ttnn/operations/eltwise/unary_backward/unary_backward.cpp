@@ -671,8 +671,8 @@ std::vector<Tensor> sigmoid_bw(
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
 
-    // Sharded configurations run on the fused device operation too: it either aliases the
-    // circular buffers to the shards (when every operand and the output are L1-sharded on the
+    // Sharded configurations run on the fused device operation too: it either borrows the shards
+    // as its dataflow buffers (when every operand and the output are L1-sharded on the
     // same grid and shape) or addresses every operand by logical page through TensorAccessor,
     // which is transparent to sharding. See the factory for the rule.
     const auto& output_memory_config = output_mem_config.value_or(input.memory_config());
