@@ -64,6 +64,7 @@ Accuracy criteria (SNB = smallest normal bfloat16)
 |                  |          |                       | atol 1e-6                    |
 |                  | both     | x <= -87.5            | exactly 0                    |
 |                  | both     | x >= 89               | +inf (fast mode xfail: NaN)  |
+|                  | ClampBoth| 88.7..88.99, inf, NaN | +inf; 88.7 finite, NaN stays |
 | erf              | accurate | [-10, 10]             | ULP ≤ 3 (BH 4)               |
 |                  | fast     | [-10, 10]             | rtol 1.1e-4 (BH 5.4e-3)      |
 | gelu             | accurate | x >= 0                | ULP ≤ 2                      |
@@ -244,6 +245,45 @@ def test_exp_overflow(device, fast):
 
     result = ttnn.to_torch(ttnn.exp(tt_in, fast_and_approximate_mode=fast))
     assert torch.all(torch.isposinf(result)), "expected exp overflow region (x > 88.5) to be +inf"
+
+
+def test_exp_fast_overflow_edge(device):
+    values = torch.tensor(
+        [88.7, 88.76, 88.8, 88.9, 88.99, float("inf"), float("nan"), -100.0, float("-inf")], dtype=torch.float32
+    )
+    index = torch.arange(32 * 32) % len(values)
+    input_tensor = values[index].reshape(32, 32)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    clamp_both = [ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, 2.0)]
+    result = ttnn.to_torch(ttnn.unary_chain(tt_in, clamp_both)).to(torch.float32).reshape(-1)
+    expect_finite = index == 0
+    expect_nan = index == 6
+    expect_zero = index >= 7
+    expect_inf = ~expect_finite & ~expect_nan & ~expect_zero
+    assert torch.all(result[expect_zero] == 0.0), "exp(fast)(-100) and exp(fast)(-inf) should flush to 0"
+    assert torch.all(torch.isfinite(result[expect_finite])), "exp(fast)(88.7) should be finite"
+    assert torch.all(
+        torch.isposinf(result[expect_inf])
+    ), f"exp(fast) above its overflow point should be +inf; got {result[expect_inf & ~torch.isposinf(result)][:8]}"
+    assert torch.all(torch.isnan(result[expect_nan])), "exp(fast)(NaN) should be NaN"
+
+
+@pytest.mark.parametrize("inputs", ["bf16_finite", "fp32_finite", "underflow"])
+def test_exp_fast_clamp_both_matches_fast(device, inputs):
+    if inputs == "bf16_finite":
+        input_tensor = generate_float32_bits_in_range(-87.0, 88.5)
+    elif inputs == "fp32_finite":
+        torch.manual_seed(0)
+        input_tensor = torch.empty(64 * 32 * 32, dtype=torch.float32).uniform_(-88.5, 88.5)
+    else:
+        input_tensor = torch.cat([-bf16_binade_samples(87.5), torch.tensor([-0.0, float("-inf")])])
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    clamp_both = [ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, 2.0)]
+    fast = ttnn.to_torch(ttnn.exp(tt_in, fast_and_approximate_mode=True)).to(torch.float32)
+    result = ttnn.to_torch(ttnn.unary_chain(tt_in, clamp_both)).to(torch.float32)
+    assert torch.equal(result.view(torch.int32), fast.view(torch.int32))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
