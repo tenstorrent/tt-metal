@@ -334,13 +334,16 @@
     )
 
     k3_kda() (
-      timeout -k 2m 18m mpirun --bind-to none --pernode --tag-output bash -lc '
+      # 18.1 min with an empty kernel cache, 16.2 min warm (one Galaxy, outside CI); 24 min bound.
+      timeout -k 2m 24m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
         models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP4xTP4" -vvv --tb=short
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_chunk_scan.py -k "SP8xTP4 and not perf" -vvv --tb=short
         models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_chunk_scan.py -k "not perf" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_sharded_slab_matches_replicated -k "SP8xTP4" -vvv --tb=short
+        models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_sharded_slab_matches_replicated -k "galaxy4x4" -vvv --tb=short
         export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_kimi_k3_layer_1_real_weights_accuracy -k "SP8xTP4" -vvv --tb=short
         models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_kimi_k3_layer_1_real_weights_accuracy -k "SP4xTP4" -vvv --tb=short
@@ -409,8 +412,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (12 + 18 + 7 + 7 + 10).
-      timeout: 54
+      # Exactly the sum of the per-section bounds (12 + 24 + 7 + 7 + 10).
+      timeout: 60
       tier: 2
       release_ready: false
   owner_id: U085GDCAZTN # Pavle Josipovic

@@ -100,8 +100,21 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        sudo apt update && sudo apt-get install -y --no-install-recommends rsync
-        mpirun --pernode bash -c 'command -v rsync || sudo apt update && sudo apt-get install -y --no-install-recommends rsync'
+        # Install only when missing. A mirror mid-sync makes apt-get update exit 100, so a failed
+        # refresh still tries the install, retried with a growing pause; only a failed install fails.
+        ensure_cmd() {
+          local cmd=$1 pkg=$2 attempt
+          for attempt in 1 2 3 4 5; do
+            command -v "$cmd" >/dev/null 2>&1 && return 0
+            if ((attempt > 1)); then sleep $(((attempt - 1) * 30)); fi
+            sudo apt-get -o Acquire::Retries=3 update || echo "apt-get update failed; trying the install anyway" >&2
+            sudo apt-get install -y --no-install-recommends "$pkg" && return 0
+            echo "installing $pkg failed (attempt $attempt of 5) on $(hostname)" >&2
+          done
+          return 1
+        }
+        ensure_cmd rsync rsync
+        mpirun --pernode bash -c "$(declare -f ensure_cmd); ensure_cmd rsync rsync"
 
     - name: Create /home/user/tt-metal symlink on runner and workers
       shell: bash
