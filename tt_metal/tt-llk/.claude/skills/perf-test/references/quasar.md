@@ -89,6 +89,12 @@ from `max_dest_tiles(dest_acc, dest_sync)`, which halves when `dest_acc=Yes`, so
 - Use the target Quasar correctness kernel for current LLK signatures and
   `TensorShape` APIs. Generic and older-architecture perf kernels use other
   APIs; do not copy their calls.
+- `INIT` holds the op's init only. What production runs in
+  `compute_kernel_hw_startup` runs before the `INIT` zone: unpack
+  `_llk_unpack_configure_binary_` (and `_llk_unpack_dest_init_`), math
+  `_llk_math_srcAB_hw_configure_`, pack `_llk_pack_hw_configure_` and, unless
+  the op's own init reprograms the packer (`pack_untilize_init`,
+  `tilize_init`), the PACK0 `program_bfd` and `_llk_pack_init_`.
 - Quasar Dest dvalid handshakes are configured per thread, and CFG state can
   persist between run types. `quasar_test_common.h` has the helpers:
   - the chains `set_up_fpu_to_pack_dest_dvalid_chain<thread>()`,
