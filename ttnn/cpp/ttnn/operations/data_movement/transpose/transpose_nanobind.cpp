@@ -28,7 +28,7 @@ void bind_transpose(nb::module_& mod) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`: an interleaved input keeps its memory configuration, and an L1 sharded input gives an L1 output, sharded or interleaved depending on the input's shard spec and on the dimensions swapped. A given ``memory_config`` sets the output's memory configuration.
-                pad_value (float, optional): value that fills the tile padding that the transpose exposes on a ``BFLOAT16``, ``FLOAT32`` or ``UINT32`` TILE output when exactly one of ``dim1`` and ``dim2`` is among the last two dimensions. Must be `0.0` when ``dim1`` and ``dim2`` are both among the last two dimensions or both outside them. Defaults to `0.0`.
+                pad_value (float, optional): value that fills the tile padding that the transpose exposes on a ``BFLOAT16``, ``FLOAT32`` or ``UINT32`` TILE output when exactly one of ``dim1`` and ``dim2`` is among the last two dimensions. Must be `0.0` when ``dim1`` and ``dim2`` are both among the last two dimensions or both outside them. For an ``INT32`` TILE output it must be `0.0`. Defaults to `0.0`.
 
             Returns:
                 ttnn.Tensor: the output tensor, with the same dtype and layout as the input.
@@ -45,12 +45,12 @@ void bind_transpose(nb::module_& mod) {
                      - TILE, ROW_MAJOR
                    * - UINT8
                      - ROW_MAJOR
-                   * - BFLOAT8_B
+                   * - BFLOAT8_B, BFLOAT4_B
                      - TILE
 
-                ``BFLOAT8_B`` is supported for interleaved tensors of rank 4 or less.
+                ``BFLOAT8_B`` and ``BFLOAT4_B`` are supported for interleaved tensors of rank 4 or less.
 
-                ``BFLOAT16`` input values must not be NaN when ``dim1`` or ``dim2`` is the last dimension.
+                ``BFLOAT16`` input values must not be NaN or -0.0 when ``dim1`` or ``dim2`` is the last dimension.
 
             Memory Support:
                 - Interleaved: DRAM and L1

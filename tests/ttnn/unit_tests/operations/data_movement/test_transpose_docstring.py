@@ -127,15 +127,17 @@ def test_transpose_docstring_supported_inputs(dtype, layout, buffer_type, dims, 
 
     if (dims[0] >= 2) != (dims[1] >= 2):
         # The swapped dim of size 2 or 3 lands in the last two dims, so a TILE output has tile padding to fill.
-        output = ttnn.transpose(input_tensor, *dims, memory_config=memory_config, pad_value=7.0)
+        # The docstring asks for a pad_value of 0.0 for an INT32 TILE output.
+        pad_value = 0.0 if dtype == ttnn.int32 and layout == ttnn.TILE_LAYOUT else 7.0
+        output = ttnn.transpose(input_tensor, *dims, memory_config=memory_config, pad_value=pad_value)
         assert_exact(expected, ttnn.to_torch(output), signed_zeros=not last_dim_bfloat16)
         if layout == ttnn.ROW_MAJOR_LAYOUT:
             assert list(output.padded_shape) == list(output.shape)
-        elif dtype in pad_value_dtypes:
+        elif dtype in pad_value_dtypes or dtype == ttnn.int32:
             height, width = list(output.shape)[-2:]
             padded = ttnn.from_device(output).to_torch_with_padded_shape()
-            assert torch.all(padded[..., height:, :] == 7)
-            assert torch.all(padded[..., :, width:] == 7)
+            assert torch.all(padded[..., height:, :] == pad_value)
+            assert torch.all(padded[..., :, width:] == pad_value)
 
 
 # Input shape per pair of dims. The flattened height and the width of the input and of the output are multiples of 64,
