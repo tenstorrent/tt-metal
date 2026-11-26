@@ -567,14 +567,13 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     }
                     // All readers address the bank by allocator bank id on the same NOC and therefore target the same
                     // firmware-approved endpoint. Rank candidates by the route the bank's data takes to them: NOC0
-                    // delivers a read response from the endpoint east, then south. The primary reader is the first
-                    // worker on that route, so hops from the primary to a candidate rank candidates by the length
-                    // of the data's route to them. Counting hops the other way (candidate -> primary) favours the
-                    // core just north of the primary, which the data reaches only by wrapping south round the whole
-                    // column, through column links that carry other banks' readers too.
-                    // This factory shares one logical reader placement across the mesh, as it
-                    // already does for primary readers. Use a representative chip for the hop
-                    // heuristic; bank addressing still uses each executing chip's allocator table.
+                    // delivers a read response from the endpoint east, then south. No worker row or column lies
+                    // between the endpoint and the primary reader, so hops from the primary to a candidate equal the
+                    // endpoint -> candidate route length minus a fixed per-bank amount. Counting hops the other way
+                    // (candidate -> primary) favours the core just north of the primary, which the data reaches only
+                    // by wrapping south round the whole column, through column links other banks' readers use too.
+                    // Hops are measured on the chip at `coord`; differently harvested chips can get different extra
+                    // readers, and the program factory then builds one program per chip.
                     const uint32_t hops = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
                         &device, coord, primary, candidate, noc);
                     // Ties: prefer the primary's own row (fewest rows south of it), so the bank's stream stays on

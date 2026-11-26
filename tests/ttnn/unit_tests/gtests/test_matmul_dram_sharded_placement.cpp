@@ -6,8 +6,9 @@
 // bank is the first unharvested worker column east of the bank, and logical columns skip harvested ones, so on a mesh
 // of differently harvested chips the best reader's logical core differs per chip. The matmul's placement helpers take
 // the chip's mesh coordinate; these tests check, on real hardware, that each chip's readers are that chip's own
-// NOC-optimal workers (single chip, QuietBox 2, T3K, Galaxy alike), and, where the system's chips are harvested
-// differently, that the placements the helpers return do differ between chips.
+// NOC-optimal workers (single chip, QuietBox 2, T3K, Galaxy alike), that extra readers per bank sit downstream of
+// their bank's primary reader on NOC 0, and, where the system's chips are harvested differently, that the placements
+// the helpers return do differ between chips.
 
 #include <gtest/gtest.h>
 
@@ -18,6 +19,8 @@
 
 #include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/experimental/device.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -34,8 +37,7 @@ using ttnn::prim::dram_sharded_helpers::get_dram_bank_reader_assignments;
 
 using MatmulDramShardedPlacementTest = GenericMeshDeviceFixture;
 
-// Workers per bank the helpers support on this architecture: one everywhere; on Blackhole also two and three (NOC 0
-// only).
+// Workers per bank the helpers support on this architecture: one everywhere; Blackhole NOC 0 also two and three.
 std::vector<std::pair<NOC, uint32_t>> placement_cases(const MeshDevice& device) {
     std::vector<std::pair<NOC, uint32_t>> cases = {{NOC::NOC_0, 1}, {NOC::NOC_1, 1}};
     if (device.arch() == tt::ARCH::BLACKHOLE) {
@@ -47,30 +49,43 @@ std::vector<std::pair<NOC, uint32_t>> placement_cases(const MeshDevice& device) 
 
 TEST_F(MatmulDramShardedPlacementTest, ReadersAreEachChipsOwnOptimalWorkers) {
     auto& device = *mesh_device_;
+    // Extra readers skip the activation shard cores; besides none, exclude the first 8 cores in row-major order, as a
+    // decode matmul with its activation width-sharded over 8 L1 cores does.
+    const std::vector<CoreRangeSet> excluded_cases = {
+        CoreRangeSet{}, num_cores_to_corerangeset(8, device.compute_with_storage_grid_size(), /*row_wise=*/true)};
     for (const auto& coord : distributed::MeshCoordinateRange(device.shape())) {
         for (const auto& [noc, workers_per_bank] : placement_cases(device)) {
-            const auto optimal = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
-            const auto readers = get_dram_bank_reader_assignments(device, noc, workers_per_bank, CoreRangeSet{}, coord);
-            ASSERT_EQ(readers.size(), optimal.size() * workers_per_bank) << "chip " << coord;
-            std::set<CoreCoord> used;
-            for (const DramBankReaderAssignment& reader : readers) {
-                ASSERT_TRUE(optimal.contains(reader.bank_id)) << "chip " << coord << " bank " << reader.bank_id;
-                const CoreCoord& primary = optimal.at(reader.bank_id);
-                if (reader.worker_index == 0) {
-                    // the bank's primary reader is this chip's own NOC-optimal worker for it
-                    EXPECT_EQ(reader.worker_core, primary)
-                        << "chip " << coord << " bank " << reader.bank_id << " noc " << static_cast<int>(noc);
-                } else {
-                    // NOC 0 carries the bank's data east from its endpoint, then south, past the primary reader. An
-                    // extra reader north or west of the primary is reached only by wrapping round the whole column or
-                    // row, through links other banks' readers use too.
-                    EXPECT_TRUE(reader.worker_core.x >= primary.x && reader.worker_core.y >= primary.y)
-                        << "chip " << coord << " bank " << reader.bank_id << ": reader " << reader.worker_index
-                        << " at " << reader.worker_core.str() << " is north or west of the primary reader at "
-                        << primary.str();
+            for (const auto& excluded : excluded_cases) {
+                const auto optimal = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
+                const auto readers = get_dram_bank_reader_assignments(device, noc, workers_per_bank, excluded, coord);
+                ASSERT_EQ(readers.size(), optimal.size() * workers_per_bank) << "chip " << coord;
+                std::set<CoreCoord> used;
+                for (const DramBankReaderAssignment& reader : readers) {
+                    ASSERT_TRUE(optimal.contains(reader.bank_id)) << "chip " << coord << " bank " << reader.bank_id;
+                    const CoreCoord& primary = optimal.at(reader.bank_id);
+                    if (reader.worker_index == 0) {
+                        // the bank's primary reader is this chip's own NOC-optimal worker for it
+                        EXPECT_EQ(reader.worker_core, primary)
+                            << "chip " << coord << " bank " << reader.bank_id << " noc " << static_cast<int>(noc);
+                    } else {
+                        EXPECT_FALSE(excluded.contains(reader.worker_core))
+                            << "chip " << coord << ": extra reader on excluded core " << reader.worker_core.str();
+                        // NOC 0 carries the bank's data from its endpoint east, then south, so an extra reader should
+                        // be a short hop downstream of the primary. A core the primary reaches only the long way
+                        // round (e.g. the one just north of it, which the data reaches by wrapping south round the
+                        // whole column) loads links other banks' readers use too.
+                        const uint32_t downstream = experimental::Device::get_worker_noc_hop_distance(
+                            &device, coord, primary, reader.worker_core, NOC::NOC_0);
+                        const uint32_t upstream = experimental::Device::get_worker_noc_hop_distance(
+                            &device, coord, reader.worker_core, primary, NOC::NOC_0);
+                        EXPECT_LT(downstream, upstream)
+                            << "chip " << coord << " bank " << reader.bank_id << ": reader " << reader.worker_index
+                            << " at " << reader.worker_core.str() << " is " << downstream
+                            << " NOC 0 hops downstream of the primary reader at " << primary.str();
+                    }
+                    EXPECT_TRUE(used.insert(reader.worker_core).second)
+                        << "chip " << coord << ": core " << reader.worker_core.str() << " reads two banks";
                 }
-                EXPECT_TRUE(used.insert(reader.worker_core).second)
-                    << "chip " << coord << ": core " << reader.worker_core.str() << " reads two banks";
             }
         }
 
