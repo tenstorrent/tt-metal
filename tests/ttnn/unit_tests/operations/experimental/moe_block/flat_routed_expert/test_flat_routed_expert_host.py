@@ -174,8 +174,12 @@ def test_flat_layout_options():
     a = moe_block_utils.FlatLayoutOptions(arena_bytes=40960)
     assert a.arena_bytes == 40960
     assert a == weights_py.flat_layout(dict(arena_bytes=40960))
-    # (arena_bytes, x_bf16, h_bf16)
-    assert list(a.key()) == [40960, 0, 0]
+    # (arena_bytes, x_bf16, h_bf16, x_ring_fill)
+    assert a.x_ring_fill and list(a.key()) == [40960, 0, 0, 1]
     b = moe_block_utils.FlatLayoutOptions(arena_bytes=40960, x_bf16=True, h_bf16=True)
-    assert (b.x_bf16, b.h_bf16) == (True, True) and list(b.key()) == [40960, 1, 1]
+    assert (b.x_bf16, b.h_bf16) == (True, True) and list(b.key()) == [40960, 1, 1, 1]
     assert b != a and b == weights_py.flat_layout(a, x_bf16=True, h_bf16=True)
+    # (x ring growth off: its own key, kept when another field is overridden)
+    c = weights_py.flat_layout(dict(arena_bytes=40960, x_ring_fill=False))
+    assert not c.x_ring_fill and list(c.key()) == [40960, 0, 0, 0] and c != a
+    assert not weights_py.flat_layout(c, x_bf16=True).x_ring_fill
