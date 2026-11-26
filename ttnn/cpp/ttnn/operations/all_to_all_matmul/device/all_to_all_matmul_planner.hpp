@@ -18,9 +18,9 @@
 
 // The host plan of all_to_all_matmul (the snapshot's all_to_all_matmul_program_descriptor.py: _topology_plan,
 // run()'s geometry / send schedule / tail split, _resources). Three memoized layers, each returned by const&:
-//   mesh_topology   per (mesh id, mesh shape, fabric node ids, cluster_axis, num_links): routes, links, port cores
+//   mesh_topology   per (mesh id, mesh shape, cluster_axis, num_links): routes, links, port cores
 //   solve_plan      per (topology, PlanInputs): geometry, send lists, slot work of every core of every chip
-//   mesh_resources  per (mesh id, compute cells, port cells): global semaphores, grow-only
+//   mesh_resources  per mesh_topology entry: global semaphores, grow-only
 namespace ttnn::operations::all_to_all_matmul {
 
 // ---- Blocking / transport knobs: the only values the source ever selected ----

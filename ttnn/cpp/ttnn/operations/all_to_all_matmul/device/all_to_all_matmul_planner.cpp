@@ -749,23 +749,16 @@ Plan build_plan(const MeshTopology& topo, const PlanInputs& in) {
 }  // namespace
 
 const MeshTopology& mesh_topology(MeshDevice* mesh_device, uint32_t cluster_axis, uint32_t num_links) {
-    using Key =
-        std::tuple<int64_t, std::vector<uint32_t>, std::vector<std::pair<uint32_t, uint32_t>>, uint32_t, uint32_t>;
+    // Keyed by the mesh's id and shape (a reshape keeps the id), not by its fabric node ids: reading those walks
+    // every mesh coordinate, and this lookup runs on every call.
+    using Key = std::tuple<int64_t, std::vector<uint32_t>, uint32_t, uint32_t>;
     static ttsl::Indestructible<std::map<Key, MeshTopology>> cache;
 
     const std::vector<uint32_t> dims = planner_mesh_dims(mesh_device);
     TT_FATAL(dims.size() == 2, "all_to_all_matmul: expected a 2D mesh, got {} dims", dims.size());
     const uint32_t rows = dims[0];
     const uint32_t cols = dims[1];
-    std::vector<std::pair<uint32_t, uint32_t>> nodes;
-    nodes.reserve(static_cast<size_t>(rows) * cols);
-    for (uint32_t r = 0; r < rows; ++r) {
-        for (uint32_t c = 0; c < cols; ++c) {
-            const auto node = mesh_device->get_fabric_node_id(MeshCoordinate(r, c));
-            nodes.emplace_back(*node.mesh_id, node.chip_id);
-        }
-    }
-    Key key{static_cast<int64_t>(mesh_device->id()), dims, std::move(nodes), cluster_axis, num_links};
+    Key key{static_cast<int64_t>(mesh_device->id()), dims, cluster_axis, num_links};
     auto& map = cache.get();
     if (const auto it = map.find(key); it != map.end()) {
         return it->second;
@@ -881,14 +874,10 @@ tt::tt_metal::TensorSpec scratch_spec(const MeshTopology& topology, const Plan& 
 }
 
 const MeshResources& mesh_resources(MeshDevice* mesh_device, const MeshTopology& topology, const Plan& plan) {
-    using Key = std::tuple<int64_t, std::vector<uint32_t>, std::vector<CoreCoord>, std::vector<CoreCoord>>;
-    static ttsl::Indestructible<std::map<Key, MeshResources>> cache;
-    Key key{
-        static_cast<int64_t>(mesh_device->id()),
-        planner_mesh_dims(mesh_device),
-        topology.compute_cells,
-        topology.port_cells};
-    MeshResources& res = cache.get()[std::move(key)];
+    // Keyed by the memoized topology (one per mesh id, shape, cluster_axis and num_links; its entries are never
+    // erased), so a call copies no core list to look its semaphores up.
+    static ttsl::Indestructible<std::map<const MeshTopology*, MeshResources>> cache;
+    MeshResources& res = cache.get()[&topology];
     bool changed = false;
     while (res.ready.size() < plan.n_ready) {  // one ready counter per destination chip of a port
         res.ready.push_back(

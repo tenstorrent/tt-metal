@@ -16,6 +16,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "all_to_all_matmul_device_operation.hpp"
 #include "all_to_all_matmul_planner.hpp"
 #include "kernels/all_to_all_matmul_args.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -30,26 +31,6 @@ namespace {
 constexpr const char* kFactoryKernelDir = "ttnn/cpp/ttnn/operations/all_to_all_matmul/device/kernels/";
 
 std::string factory_kernel_path(const char* name) { return std::string(kFactoryKernelDir) + name; }
-
-using ArgList = std::vector<std::variant<uint32_t, Buffer*>>;
-
-PlanInputs factory_plan_inputs(const AllToAllMatmulParams& attrs, const AllToAllMatmulInputs& t) {
-    const auto& xs = t.input.logical_shape();
-    const auto& ws = t.weight.logical_shape();
-    return PlanInputs{
-        .B = xs[0],
-        .Hl = xs[1],
-        .S = xs[2],
-        .K = xs[3],
-        .H = ws[1],
-        .N = ws[3],
-        .in_tile_bytes = static_cast<uint32_t>(t.input.buffer()->page_size()),
-        .w_tile_bytes = static_cast<uint32_t>(t.weight.buffer()->page_size()),
-        .payload_bytes = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()),
-        .output_in_l1 = attrs.output_memory_config.buffer_type() == BufferType::L1,
-        .fp32_dest_acc_en = attrs.fp32_dest_acc_en,
-    };
-}
 
 CBDescriptor plain_cb(
     uint32_t id, uint32_t total_size, const CoreRangeSet& cores, DataType dtype, uint32_t page_size, const Tile& tile) {
@@ -95,7 +76,7 @@ ProgramDescriptor AllToAllMatmulProgramFactory::create_descriptor(
     const auto& coord = *mesh_dispatch_coordinate;
 
     const MeshTopology& topology = mesh_topology(mesh_device, attrs.cluster_axis, attrs.num_links);
-    const PlanInputs inputs = factory_plan_inputs(attrs, tensor_args);
+    const PlanInputs inputs = plan_inputs_of(attrs, input, weight);
     const Plan& plan = solve_plan(topology, inputs);
     const MeshResources& res = mesh_resources(mesh_device, topology, plan);
     const ChipPlan& chip = plan.chips.at(coord);
@@ -327,8 +308,7 @@ ProgramDescriptor AllToAllMatmulProgramFactory::create_descriptor(
     // Fabric connections are appended to the descriptor (they may add semaphores to it): collect the args first.
     std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> sender_args;
     sender_args.reserve(chip.ports.size());
-    for (uint32_t pi = 0; pi < chip.ports.size(); ++pi) {
-        const PortWork& pw = chip.ports[pi];
+    for (const PortWork& pw : chip.ports) {
         std::vector<uint32_t> rd(port_reader_rt::ENTRIES_BASE, 0u);
         rd[port_reader_rt::N_ENTRIES] = static_cast<uint32_t>(pw.entries.size());
         rd.insert(rd.end(), pw.entries.begin(), pw.entries.end());
