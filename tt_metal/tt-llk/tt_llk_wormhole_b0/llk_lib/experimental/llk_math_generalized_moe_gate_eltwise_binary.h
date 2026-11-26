@@ -139,5 +139,6 @@ inline void _llk_math_generalized_moe_gate_eltwise_binary_init_(const std::uint3
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
+    math::_configure_elw_zero_flag_state_(); // ELW* need the Src zero flag clear
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
