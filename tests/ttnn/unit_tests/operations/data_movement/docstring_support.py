@@ -153,17 +153,17 @@ def docstring_dtype_conversion_params(op, source, target):
         assert found, f"no 'a ``<DTYPE>`` {source} can give a ``<DTYPE>`` {target}' clause"
         pairs = {}
         for sources, targets in found:
-            for source_name in re.findall(r"``(\w+)``", sources):
-                for target_name in re.findall(r"``(\w+)``", targets):
+            source_names, target_names = re.findall(r"``(\w+)``", sources), re.findall(r"``(\w+)``", targets)
+            unknown = [
+                n for n in source_names + target_names if not isinstance(getattr(ttnn.DataType, n, None), ttnn.DataType)
+            ]
+            assert not unknown, f"not a ttnn.DataType: {unknown}"
+            for source_name in source_names:
+                for target_name in target_names:
                     if source_name != target_name:
                         pairs[(source_name, target_name)] = None
-        params = []
-        for source_name, target_name in pairs:
-            dtypes = [getattr(ttnn.DataType, name, None) for name in (source_name, target_name)]
-            unknown = [name for name, d in zip((source_name, target_name), dtypes) if not isinstance(d, ttnn.DataType)]
-            assert not unknown, f"not a ttnn.DataType: {unknown}"
-            params.append(pytest.param(*dtypes, id=f"{source_name}-to-{target_name}"))
-        return params
+        assert pairs, "the dtype-change clauses name no change of dtype"
+        return [pytest.param(getattr(ttnn.DataType, s), getattr(ttnn.DataType, t), id=f"{s}-to-{t}") for s, t in pairs]
     except Exception as error:
         return _unreadable_params(op, "dtype changes", error, arity=2)
 

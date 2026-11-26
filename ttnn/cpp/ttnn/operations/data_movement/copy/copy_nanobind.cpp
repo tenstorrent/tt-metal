@@ -45,7 +45,7 @@ void bind_copy(nb::module_& mod) {
 
                 `input_b` can have a dtype other than that of `input_a` when both are in TILE layout: a ``BFLOAT8_B`` or
                 ``BFLOAT4_B`` `input_a` can be copied into a ``FLOAT32`` or ``BFLOAT16`` `input_b`, and a ``BFLOAT16``
-                `input_a` into a ``FLOAT32`` `input_b` when its values are not NaN.
+                `input_a` into a ``FLOAT32`` `input_b` when its values are not NaN or -0.0.
 
                 On Blackhole, `input_a` and `input_b` can also be ``FP8_E4M3`` tensors in ROW_MAJOR layout.
 
@@ -103,7 +103,7 @@ void bind_assign(nb::module_& mod) {
 
                 An output dtype other than the input's needs a TILE input: a ``BFLOAT8_B`` or ``BFLOAT4_B`` input can
                 give a ``FLOAT32`` or ``BFLOAT16`` output, and a ``BFLOAT16`` input a ``FLOAT32`` output when its
-                values are not NaN.
+                values are not NaN or -0.0.
 
                 On Blackhole, the input and the output can also be ``FP8_E4M3`` tensors in ROW_MAJOR layout.
 
