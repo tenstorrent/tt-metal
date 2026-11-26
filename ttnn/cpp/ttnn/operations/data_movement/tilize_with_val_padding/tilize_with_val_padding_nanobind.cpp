@@ -33,7 +33,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output. Defaults to `None`, which uses the input tensor's memory configuration. A sharded output, including the default one for a sharded input, needs a shard shape that is a multiple of 32x32. When the input and the output are WIDTH_SHARDED in L1, only the second-to-last dimension is padded and ``sub_core_grids`` is `None`, the output keeps the input's core grid.
-                dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype, or gives ``FLOAT32`` for a ``FP8_E4M3`` input. A ``BFLOAT16`` or ``FLOAT32`` input can give a ``BFLOAT16``, ``FLOAT32``, ``BFLOAT8_B`` or ``BFLOAT4_B`` output. For an integer input it must be `None` or the input's dtype.
+                dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype, or gives ``FLOAT32`` for a ``FP8_E4M3`` input. A ``BFLOAT16`` or ``FLOAT32`` input can give a ``BFLOAT16``, ``FLOAT32``, ``BFLOAT8_B`` or ``BFLOAT4_B`` output, and a ``FLOAT32`` input converted to ``BFLOAT16`` must not hold -0.0. For an integer input it must be `None` or the input's dtype.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Cores to run the operation on. Defaults to `None`, which lets the operation choose its cores.
 
@@ -51,7 +51,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
                    * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16
                      - ROW_MAJOR
 
-                ``BFLOAT16`` input values must not be NaN. On Quasar, the input must be a ``BFLOAT16``, ``FLOAT32`` or
+                ``BFLOAT16`` input values must not be NaN or -0.0. On Quasar, the input must be a ``BFLOAT16``, ``FLOAT32`` or
                 ``INT32`` tensor, and the output must be ``BFLOAT16``, ``FLOAT32`` or ``INT32``.
 
                 On Blackhole, a ``FP8_E4M3`` ROW_MAJOR input is also supported. Its output defaults to ``FLOAT32``, and a
@@ -98,7 +98,7 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output. Defaults to `None`, which uses the input tensor's memory configuration. A sharded output, including the default one for a sharded input, needs a shard shape that is a multiple of 32x32. When the input and the output are WIDTH_SHARDED in L1, the input's last dimension is a multiple of 32 and ``sub_core_grids`` is `None`, the output keeps the input's core grid.
-                output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. A ``BFLOAT16`` or ``FLOAT32`` input can give a ``BFLOAT16``, ``FLOAT32``, ``BFLOAT8_B`` or ``BFLOAT4_B`` output. For an integer input it must be `None` or the input's dtype.
+                output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. A ``BFLOAT16`` or ``FLOAT32`` input can give a ``BFLOAT16``, ``FLOAT32``, ``BFLOAT8_B`` or ``BFLOAT4_B`` output, and a ``FLOAT32`` input converted to ``BFLOAT16`` must not hold -0.0. For an integer input it must be `None` or the input's dtype.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Cores to run the operation on. Defaults to `None`, which lets the operation choose its cores.
 
@@ -116,7 +116,7 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
                    * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16
                      - ROW_MAJOR
 
-                ``BFLOAT16`` input values must not be NaN. On Quasar, the input must be a ``BFLOAT16``, ``FLOAT32`` or
+                ``BFLOAT16`` input values must not be NaN or -0.0. On Quasar, the input must be a ``BFLOAT16``, ``FLOAT32`` or
                 ``INT32`` tensor, and the output must be ``BFLOAT16``, ``FLOAT32`` or ``INT32``.
 
             Memory Support:

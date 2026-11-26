@@ -1355,6 +1355,8 @@ def test_tilize_with_val_padding_docstring_dtype_conversions(input_dtype, output
     check_readable(input_dtype, output_dtype)
     if is_quasar() and output_dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
         pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 outputs on Quasar")
+    if is_quasar() and os.getenv("TT_METAL_SIMULATOR") and (input_dtype, output_dtype) == (ttnn.bfloat16, ttnn.float32):
+        pytest.skip("Quasar ttsim does not model the BFLOAT16 to FLOAT32 packer conversion")
     shape = (2, 3, 50, 70)
     input_tensor = ttnn.from_torch(
         convertible_input(shape, input_dtype, output_dtype),
