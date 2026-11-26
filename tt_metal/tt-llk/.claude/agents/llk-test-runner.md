@@ -80,7 +80,7 @@ Use `timeout: 1800000` (30 min) on the Bash tool call — synchronous, never `ru
 | `--compile-only`    | `compile`         | compile-producer only                                       |
 | `--rerun`           | `simulate`        | simulate-consumer only (assumes compile artifacts exist)    |
 | `--no-split`        | `run --no-split`  | combined compile+run in one pytest invocation               |
-| `--count`           | `count`           | outputs integer to stdout; collection log to stderr         |
+| `--count`           | `count`           | ELF integer to stdout; labeled ELF/runtime totals to stderr |
 
 ## Reading the Outcome (fast path)
 

@@ -166,14 +166,19 @@ its count command uses collection-only mode without opening a device:
 /run-test test_[op]_quasar.py --arch quasar --count
 ```
 
-The integer is the compile-producer-selected total used for build and PR-gate
-sizing, not an unfiltered simulator-suite grand total.
+Report both values from the labeled summary:
+
+- `elf` is the runtime-only-deduplicated compile-producer total used for build
+  and PR-gate sizing.
+- `runtime` is the full consumer/simulator total. Quasar simulator regression
+  runs every runtime ID, so this is the sweep execution cost (for example,
+  `test_eltwise_binary_quasar.py` can produce 92 ELFs but run 766 IDs).
 
 Count compares the whole functional module. A perf count can add `--perf` and
 `--op`; `--k` and `--test-id` do not narrow count. Do not invoke raw
 `pytest --collect-only`; the runner owns the environment and no-device mode.
 
-State the before/after counts in the PR description.
+State both before/after ELF and runtime counts in the PR description.
 
 ## Checklist
 

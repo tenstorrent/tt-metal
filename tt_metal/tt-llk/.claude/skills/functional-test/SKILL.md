@@ -192,8 +192,8 @@ named and record the rationale.
    logic, or harness code changes.
 7. If columns changed, update the schema/version through `perf-test`. If
    variant count changed materially, evaluate split costs.
-8. Report before/after variant counts for Quasar sweep changes and list all
-   intentionally unmatched functions.
+8. Report before/after ELF and runtime-variant counts for Quasar sweep changes
+   and list all intentionally unmatched functions.
 
 ## Review checklist
 

@@ -35,10 +35,12 @@ Examples:
 
 - `<test_file>` — required, e.g. `test_sfpu_square_quasar.py`
 - `--arch <arch>` — `quasar`, `blackhole`, `wormhole`. Required unless inferable (see below)
-- `--count` — collect the selected variants through the runner and report the
-  integer count without compiling or opening a device. Mutually exclusive with
-  `--compile-only`, `--rerun`, and `--no-split`. It counts the whole module;
-  `--perf` and `--op` apply, but `--k` and `--test-id` do not narrow count
+- `--count` — collect the selected variants through the runner without
+  compiling or opening a device. Reports both the deduplicated ELF count and
+  the full runtime-variant count; stdout remains the ELF integer for scripts.
+  Mutually exclusive with `--compile-only`, `--rerun`, and `--no-split`. It
+  counts the whole module; `--perf` and `--op` apply, but `--k` and `--test-id`
+  do not narrow count
 - `--k <expr>` — pytest `-k` filter (applied to both compile-producer and consumer so the two phases stay aligned)
 - `--test-id <id>` — single parametrize ID (single-quotes/brackets safe)
 - `--op <op>` — with `--perf`, keep only SFPU sweep variants for that `MathOperation` name (repeatable; applied to count, compile and consumer)
@@ -88,10 +90,10 @@ If `--arch` is not provided, infer in this order:
                    --perf-counters / --dump-perf-counters / --keep-asserts}
    ```
 
-4. **Relay** the integer for `--count`; no PASS verdict or device run is
-   expected. Otherwise relay the agent's verdict. For `--perf`, include the
-   report directory; a PASS says nothing about whether the numbers are
-   plausible, so hand off to `perf-report` validation. On FAIL or
+4. **Relay** both labeled ELF and runtime totals for `--count`; no PASS verdict
+   or device run is expected. Otherwise relay the agent's verdict. For `--perf`,
+   include the report directory; a PASS says nothing about whether the numbers
+   are plausible, so hand off to `perf-report` validation. On FAIL or
    COMPILE_FAIL, suggest `/debug-kernel`. On ENV_ERROR or HANG, surface the
    agent's diagnosis and stop — don't auto-retry (the same hang will reappear,
    and env errors need a human fix).
