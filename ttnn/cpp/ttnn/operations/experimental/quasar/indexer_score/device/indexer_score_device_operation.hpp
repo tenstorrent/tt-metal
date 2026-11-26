@@ -22,8 +22,9 @@ struct IndexerScoreDeviceOperation {
     using tensor_args_t = indexer_score::tensor_args_t;
     using spec_return_value_t = indexer_score::spec_return_value_t;
     using tensor_return_value_t = indexer_score::tensor_return_value_t;
-    // Classic factory for the unfused path (caller pre-gathers K); descriptor-based fused factory when the
-    // op subsumes the SP all-gather (attrs.fused_ring set). select_program_factory picks by has_fused_ring().
+    // Per-coordinate descriptor factory for the unfused path (caller pre-gathers K); workload-descriptor fused
+    // factory when the op subsumes the SP all-gather (attrs.fused_ring set). select_program_factory picks by
+    // has_fused_ring().
     using program_factory_t =
         std::variant<program::IndexerScoreProgramFactory, program::RingIndexerScoreDsaMeshWorkloadFactory>;
 

@@ -346,7 +346,8 @@ tests/tt_metal/tt_metal/test_kernels/device_print @tenstorrent/metalium-develope
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @kstevensTT
 
 # misc tests
-tests/didt/ @rtawfik01 @ttmtrajkovic @ctr-nradojevicTT @mbezuljTT @pavlepopovic
+tests/didt/ @rtawfik01 @ttmtrajkovic @ctr-nradojevicTT @mbezuljTT @pavlepopovic @smohammadiTT @tcolacoTT @ianastasijevicTT @nmilicevicTT
+tt_py_test_utils_common/op_test_base.py @mbezuljTT @pavlepopovic @smohammadiTT @tcolacoTT @ianastasijevicTT @nmilicevicTT @ctr-nradojevicTT @tenstorrent/metalium-developers-infra
 
 # Deployment tests
 tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT

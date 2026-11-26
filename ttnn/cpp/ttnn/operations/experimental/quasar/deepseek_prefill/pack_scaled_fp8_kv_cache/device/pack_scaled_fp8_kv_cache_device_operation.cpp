@@ -34,11 +34,6 @@ void validate_input(const Tensor& tensor, const char* name, tt::tt_metal::DataTy
 
 }  // namespace
 
-PackScaledFp8KvCacheDeviceOperation::program_factory_t PackScaledFp8KvCacheDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return PackScaledFp8KvCacheProgramFactory{};
-}
-
 void PackScaledFp8KvCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     validate_input(
@@ -93,17 +88,6 @@ PackScaledFp8KvCacheDeviceOperation::spec_return_value_t PackScaledFp8KvCacheDev
 PackScaledFp8KvCacheDeviceOperation::tensor_return_value_t PackScaledFp8KvCacheDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     return create_device_tensor(compute_output_specs(attrs, args), args.latent.device());
-}
-
-ttsl::hash::hash_t PackScaledFp8KvCacheDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& args) {
-    return tt::tt_metal::operation::hash_operation<PackScaledFp8KvCacheDeviceOperation>(
-        attrs,
-        // Whole specs: all three inputs are row-major, and each accessor bakes in an aligned page size that
-        // follows the padded width (untilize's output layout records extra padding as Alignment).
-        args.latent.tensor_spec(),
-        args.scales.tensor_spec(),
-        args.rope.tensor_spec());
 }
 
 }  // namespace ttnn::experimental::prim::qsr::pack_scaled_fp8_kv_cache
