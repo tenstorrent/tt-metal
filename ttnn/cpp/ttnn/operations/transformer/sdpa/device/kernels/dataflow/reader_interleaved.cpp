@@ -525,17 +525,26 @@ void kernel_main() {
     const auto attention_sink_reader = TensorAccessor(attention_sink_args, attention_sink_addr);
     const auto chunk_start_idx_reader = TensorAccessor(chunk_start_idx_args, chunk_start_idx_addr);
 
-    constexpr uint32_t skip_src_cols = (use_mla && mla_kv_overlap) ? DHt - vDHt : 0;
+    // SDPA_K_WT / SDPA_V_WT (program config k_head_col / v_head_col): K and V are SDPA_K_WT / SDPA_V_WT tiles wide and
+    // their head dims start at tile column SDPA_K_COL0 / SDPA_V_COL0, read in place
+#ifdef SDPA_K_WT
+    constexpr uint32_t k_wt = SDPA_K_WT, k_col0 = SDPA_K_COL0, v_wt = SDPA_V_WT, v_col0 = SDPA_V_COL0;
+    static_assert(!use_mla && k_col0 + DHt <= k_wt && v_col0 + vDHt <= v_wt);
+#else
+    constexpr uint32_t k_wt = DHt, k_col0 = 0, v_wt = use_mla && !mla_kv_overlap ? vDHt : DHt, v_col0 = 0;
+#endif
+    constexpr uint32_t skip_k_cols = k_wt - DHt;
+    constexpr uint32_t skip_src_cols = (use_mla && mla_kv_overlap) ? DHt - vDHt : v_wt - vDHt;
 
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
-    const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
+    const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, k_wt);
 
     // If we have MLA:
     // - if k and v tensors are overlapped, we want to read from the k tensor, but just a portion of it, hence setting
     // the v tile shape dim to DHt (and skip accordingly based on skip_src_cols)
     // - if k and v tensors are not overlapped, we want to read from the v tensor, hence setting the v tile shape dim to
     // vDHt Otherwise head dim of k and v are same
-    const auto v_tile_shape = TensorTileShape(B, NVH, valid_Skt, use_mla && !mla_kv_overlap ? vDHt : DHt);
+    const auto v_tile_shape = TensorTileShape(B, NVH, valid_Skt, v_wt);
     const auto attention_sink_tile_shape = TensorTileShape(B, NQH, 1, 1);
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
@@ -957,8 +966,8 @@ void kernel_main() {
                 const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
-                const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, k_head, kv_row_start_tile, 0);
-                const uint32_t v_start_tile_id = v_tile_shape.id_of(nb, v_head, kv_row_start_tile, 0);
+                const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, k_head, kv_row_start_tile, k_col0);
+                const uint32_t v_start_tile_id = v_tile_shape.id_of(nb, v_head, kv_row_start_tile, v_col0);
 
                 if constexpr (writer_forwards) {
                     if (k_slot_fwd_seq[k_slot] != 0) {
@@ -1012,7 +1021,8 @@ void kernel_main() {
                                 kv_row_tile_count,
                                 DHt,
                                 Sk_chunk_t,
-                                DHt);
+                                DHt,
+                                skip_k_cols);
                         } else {
 #ifdef SDPA_KV_CACHE_CB
                             kv_cache_read<k_tile_bytes>(
@@ -1026,7 +1036,7 @@ void kernel_main() {
                                 DHt,
                                 barrier_threshold,
                                 true,
-                                0,
+                                skip_k_cols,
                                 kv_row_tile_count == Sk_chunk_t,
                                 kv_cache_tag(nb, k_head, k_chunk),
                                 k_chunk,
@@ -1043,8 +1053,8 @@ void kernel_main() {
                                 Sk_chunk_t,
                                 DHt,
                                 barrier_threshold,
-                                true  // transpose=true for K reads
-                            );
+                                true,  // transpose=true for K reads
+                                skip_k_cols);
 #endif
                         }
                     }

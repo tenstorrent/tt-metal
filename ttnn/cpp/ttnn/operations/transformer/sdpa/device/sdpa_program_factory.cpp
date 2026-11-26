@@ -2081,6 +2081,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_desc.defines.emplace_back("SDPA_KV_CACHE_SLOTS", std::to_string(kv_cache_slots));
         reader_desc.defines.emplace_back("SDPA_KV_CACHE_SLOT_BYTES", std::to_string(kv_cache_slot_bytes));
     }
+    if (!use_mla && (k_shape[3] != DH || v_shape[3] != DH)) {  // K / V head dims read in place from wider tensors
+        reader_desc.defines.emplace_back("SDPA_K_WT", std::to_string(k_shape[3] / TILE_WIDTH));
+        reader_desc.defines.emplace_back("SDPA_V_WT", std::to_string(v_shape[3] / TILE_WIDTH));
+        reader_desc.defines.emplace_back(
+            "SDPA_K_COL0", std::to_string(program_config.has_value() ? program_config->k_head_col / TILE_WIDTH : 0));
+        reader_desc.defines.emplace_back(
+            "SDPA_V_COL0", std::to_string(program_config.has_value() ? program_config->v_head_col / TILE_WIDTH : 0));
+    }
     reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_desc;

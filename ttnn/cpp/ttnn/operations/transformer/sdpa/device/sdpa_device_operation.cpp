@@ -78,6 +78,10 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         }
 
         if (use_mla) {
+            TT_FATAL(
+                !attrs.program_config.has_value() ||
+                    (attrs.program_config->k_head_col == 0 && attrs.program_config->v_head_col == 0),
+                "k_head_col / v_head_col are not supported with MLA");
             // Head dim v validation
             TT_FATAL(
                 attrs.head_dim_v.value() <= q_shape[3],
@@ -107,11 +111,24 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 v_shape[0]);
             TT_FATAL(v_shape[1] == nkv, "K and V num_heads must match. Got K: {}, V: {}", k_shape[1], v_shape[1]);
             TT_FATAL(v_shape[2] == Sk, "K and V sequence length must match. Got K: {}, V: {}", k_shape[2], v_shape[2]);
+            // k_head_col / v_head_col: K / V may be wider than Q, their head dims read in place from those columns
+            const uint32_t kc = attrs.program_config.has_value() ? attrs.program_config->k_head_col : 0;
+            const uint32_t vc = attrs.program_config.has_value() ? attrs.program_config->v_head_col : 0;
             TT_FATAL(
-                k_shape[3] == DH && v_shape[3] == DH,
-                "K and V hidden dim must match. Got K: {}, V: {}",
+                kc % tt::constants::TILE_WIDTH == 0 && vc % tt::constants::TILE_WIDTH == 0 && kc + DH <= k_shape[3] &&
+                    vc + DH <= v_shape[3],
+                "K and V hidden dim must match Q's from k_head_col / v_head_col (multiples of 32). Got Q: {}, K: {} "
+                "from {}, V: {} from {}",
+                DH,
                 k_shape[3],
-                v_shape[3]);
+                kc,
+                v_shape[3],
+                vc);
+            TT_FATAL(
+                (k_shape[3] == DH && v_shape[3] == DH) ||
+                    (!tensors.page_table.has_value() && !attrs.chunk_start_idx.has_value() &&
+                     !tensors.chunk_start_idx_tensor.has_value()),
+                "K / V wider than Q (k_head_col / v_head_col) needs non-paged, non-chunked SDPA");
         }
         TT_FATAL(
             nkv > 0 && nqh >= nkv && nqh % nkv == 0,
@@ -723,10 +740,10 @@ SDPAOperation::create_op_performance_model(
 
     // Compute DV based on MLA mode
     // Note: For MLA without V, use K's head dimension; otherwise use V's head dimension
-    const uint32_t DV = (args.use_mla && !has_v) ? k_shape[3] : v_shape[3];
+    const uint32_t DV = (args.use_mla && !has_v) ? k_shape[3] : (args.use_mla ? v_shape[3] : DH);
 
     TT_ASSERT(q_shape[0] == k_shape[0], "ScaledDotProductAttention perf model: Q and K have unequal batch size!");
-    TT_ASSERT(q_shape[3] == k_shape[3], "ScaledDotProductAttention perf model: Q and K have unequal hidden dim!");
+    TT_ASSERT(q_shape[3] <= k_shape[3], "ScaledDotProductAttention perf model: K narrower than Q!");
 
     CoreCoord compute_grid_dims = args.program_config.has_value()
                                       ? args.program_config->compute_with_storage_grid_size

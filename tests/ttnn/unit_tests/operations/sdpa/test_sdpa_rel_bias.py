@@ -130,3 +130,43 @@ def test_sdpa_rel_q_offset(device, sq, sk, pad, window, skewed):
     for off in (sk - sq, sk - sq - 128):  # two offsets on the same padded K / V
         cut = run(k[:, :, : off + sq], v[:, :, : off + sq])
         assert torch.equal(cut, run(k, v, rel_q_offset=off)), off
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bfp8"])
+@pytest.mark.parametrize("skewed", [False, True], ids=["plain", "skewed"])
+def test_sdpa_kv_in_place(device, dtype, skewed):
+    """K and V read in place from one cache with rows [v | k] (program config k_head_col / v_head_col) equal K and V
+    copied out of it, bit for bit, with rel_q_offset and the cache longer than the keys the queries see."""
+    torch.manual_seed(2)
+    nh, nkh, dh, sq, off, rows = 4, 2, 128, 256, 1152, 4096
+    w = 1024 if skewed else 256
+    q = torch.randn(1, nh, sq, dh)
+    cache = torch.randn(1, nkh, rows, 2 * dh)  # [v | k]
+    rel = torch.randn(1, nh, sq, w + (32 if skewed else 0)) * 2
+    sink = torch.randn(1, nh, sq, 1)
+    tt = lambda t, layout=ttnn.TILE_LAYOUT, dt=ttnn.bfloat16: ttnn.from_torch(  # noqa: E731
+        t, dtype=dt, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    kv = tt(cache, dt=dtype)
+    ckc = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    qt, rt, st = tt(q), tt(rel, ttnn.ROW_MAJOR_LAYOUT), tt(sink)
+
+    def run(kk, vv, **pc):
+        cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+            **pc,
+        )
+        o = ttnn.transformer.scaled_dot_product_attention(
+            qt, kk, vv, is_causal=True, scale=1.0, rel_logits=rt, rel_skewed=skewed, attention_sink=st,
+            program_config=cfg, compute_kernel_config=ckc, rel_q_offset=off,
+        )  # fmt: skip
+        return ttnn.to_torch(o)
+
+    kc = ttnn.slice(kv, [0, 0, 0, dh], [1, nkh, rows, 2 * dh])
+    vc = ttnn.slice(kv, [0, 0, 0, 0], [1, nkh, rows, dh])
+    assert torch.equal(run(kc, vc), run(kv, kv, k_head_col=dh))

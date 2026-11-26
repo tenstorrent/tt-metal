@@ -55,6 +55,11 @@ struct SDPAProgramConfig {
     // Flash MLA decode with its own V tensor (non-paged K and V, which may differ in dtype): V's last tile column is
     // not stored. V is 32 columns narrower than head_dim_v and the reader writes the column, every row [1, 0 x 31].
     bool unit_v_tile_col = false;
+    // Plain SDPA (no MLA, no page table): K's and V's head_dim columns start at this column of their tensor (a
+    // multiple of 32), which may be wider than Q's head dim. The reader reads those columns in place, so K and V may
+    // be two views of one cache whose rows are [v | k]: no copy of the cache.
+    uint32_t k_head_col = 0;
+    uint32_t v_head_col = 0;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and
