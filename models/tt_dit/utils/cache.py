@@ -891,13 +891,16 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
         # A concurrent process may have finished publishing this key while we prepared weights (a
         # long, on-device window since load_model's completeness check). Its artifact is already
         # complete — for a content key its bytes are ours by construction — so adopt it rather than
-        # delete a valid cache out from under a concurrent reader mid-load.
-        if _cache_is_complete(cache_dir, tt_model, key):
-            logger.info(f"cache at '{cache_dir}' was published concurrently; adopting it.")
-            return
-        if cache_dir.exists():
+        # delete a valid cache out from under a concurrent reader mid-load. rename() refuses a
+        # non-empty target, so a leaf is deleted only when found incomplete after that refusal.
+        try:
+            os.rename(staging, cache_dir)
+        except OSError:
+            if _cache_is_complete(cache_dir, tt_model, key):
+                logger.info(f"cache at '{cache_dir}' was published concurrently; adopting it.")
+                return
             shutil.rmtree(cache_dir)
-        os.replace(staging, cache_dir)
+            os.replace(staging, cache_dir)
     except OSError:
         # A racing process may have published this exact key first. Its content key matches ours,
         # so its bytes are ours; adopt them rather than fight over the directory.
