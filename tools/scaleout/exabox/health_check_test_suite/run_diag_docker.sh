@@ -112,11 +112,12 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
       --dry-run              Print intended subprocess calls without executing
                              destructive steps
       --skip-reset           Skip the reset loop phase entirely
-      --skip-tests           Skip the gtest phase entirely
+      --skip-tests           Skip the tests phase entirely: gtests, pytests and
+                             the galaxy load
       --skip-triage          Skip the post-test reset and the triage phase
       --triage-gating        Let triage FAILs gate the run (default: held at WARN)
       --triage-dir PATH      Host triage scripts dir; mounted read-only
-      --skip-eth-status      Skip the ETH status read (flash)
+      --skip-eth-status      Skip the ETH status read (flash, full)
       --skip-qsfp-tests      Skip the QSFP tests
       --qsfp-gating          Report QSFP findings at their real severity and let
                              them gate the run
@@ -131,7 +132,8 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
       --snapshot-out PATH    In-container path for the raw tt-smi snapshot
                              (default: <output-dir>/diag_snapshot.json)
 
-  Anything after \`--\` is passed to run_diag.sh untouched.
+  Anything after \`--\` is passed to run_diag.sh untouched: the galaxy load's
+  overrides, for one (\`weekly -- --heavy-s 40\`).
 
   --output is not forwardable: it is the bind mount this script manages. Note
   that it also wants a *file* path, not a directory — \`--output output/\` is

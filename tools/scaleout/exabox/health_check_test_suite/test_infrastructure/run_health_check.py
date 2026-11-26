@@ -75,6 +75,13 @@ log = logging.getLogger(__name__)
 # key is loaded — dispatch on this. Default preserves the Slurm behavior.
 LAUNCH_MODES = ("slurm", "orchestration")
 
+# Whole-run timeout when --timeout-minutes is not given. daily, weekly and full
+# end their tests with the galaxy load at smoke, plain and full length, and a
+# fault in it adds the links sweep (300 s per round of pairs) on top. The
+# deprecated names map to daily (light, medium) and weekly (deploy).
+DEFAULT_TIMEOUT_MINUTES = 60
+TIER_TIMEOUT_MINUTES = {"daily": 90, "light": 90, "medium": 90, "weekly": 120, "deploy": 120, "full": 180}
+
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -114,6 +121,13 @@ def parse_args() -> argparse.Namespace:
         help="Diagnostic tier passed to the diag suite (light, medium, deploy and pre_reboot are deprecated)",
     )
     p.add_argument(
+        "--tests",
+        default=None,
+        metavar="LIST",
+        help="Run only these tests of the tier, comma-separated (e.g. links or busbar_heavy); "
+        "passed to the diag suite as its --tests",
+    )
+    p.add_argument(
         "--results-dir",
         default="",
         help=(
@@ -130,7 +144,15 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="tt-metal repo root (defaults to $TT_METAL_HOME / the diag suite's own default).",
     )
-    p.add_argument("--timeout-minutes", type=int, default=30, help="Timeout for the diag run")
+    p.add_argument(
+        "--timeout-minutes",
+        type=int,
+        default=None,
+        help=(
+            f"Timeout for the diag run. Default: daily {TIER_TIMEOUT_MINUTES['daily']}, weekly "
+            f"{TIER_TIMEOUT_MINUTES['weekly']}, full {TIER_TIMEOUT_MINUTES['full']}, else {DEFAULT_TIMEOUT_MINUTES}."
+        ),
+    )
     p.add_argument(
         "--telemetry-port",
         type=int,
@@ -334,7 +356,7 @@ def main() -> int:
     log_dir = args.log_dir
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "unknown")
     log_file = Path(log_dir) / f"{node}-{slurm_job_id}.log"
-    timeout_seconds = args.timeout_minutes * 60
+    timeout_seconds = (args.timeout_minutes or TIER_TIMEOUT_MINUTES.get(args.tier, DEFAULT_TIMEOUT_MINUTES)) * 60
 
     launch_mode = args.launch_mode
     jira_bearer_token = load_jira_secrets(log_dir, launch_mode)
@@ -391,6 +413,7 @@ def main() -> int:
         launch_mode=launch_mode,
         diag_runner=Path(args.diag_runner) if args.diag_runner else None,
         tt_metal_path=Path(args.tt_metal_path) if args.tt_metal_path else None,
+        extra_args=["--tests", args.tests] if args.tests else None,
     )
 
     full_output = version_header + prom_output + "\n" + test_output

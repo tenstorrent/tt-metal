@@ -84,6 +84,44 @@ class TestShellWrappersAgree(unittest.TestCase):
         self.assertEqual(set(kwargs["choices"]), ACCEPTED)
         self.assertIn(kwargs["default"], TIERS)
 
+    def test_run_health_check_times_out_each_load_tier_on_its_own(self):
+        # The galaxy load adds tens of minutes; a load tier left on the default
+        # timeout is killed mid-run and loses its report.
+        tree = ast.parse((SUITE_DIR / "test_infrastructure" / "run_health_check.py").read_text())
+        (node,) = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "TIER_TIMEOUT_MINUTES" for t in n.targets)
+        ]
+        timeouts = ast.literal_eval(node.value)
+        load = {n for n, t in TIERS.items() if t.galaxy_load}
+        load |= {old for old, new in DEPRECATED_TIER_ALIASES.items() if new in load}
+        self.assertEqual(set(timeouts), load)
+        for old, new in DEPRECATED_TIER_ALIASES.items():
+            if new in load:
+                self.assertEqual(timeouts[old], timeouts[new], old)
+
+    def test_run_health_check_passes_tests_on(self):
+        # --tests picks the tests in diag_runner; the entry point only forwards it.
+        tree = ast.parse((SUITE_DIR / "test_infrastructure" / "run_health_check.py").read_text())
+        flags = {
+            n.args[0].value
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and n.args and isinstance(n.args[0], ast.Constant)
+        }
+        self.assertIn("--tests", flags)
+        (call,) = [
+            n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "run_diag_subprocess"
+        ]
+        extra = [kw.value for kw in call.keywords if kw.arg == "extra_args"]
+        self.assertEqual(len(extra), 1)
+        self.assertIn(
+            '"--tests", args.tests',
+            ast.get_source_segment(
+                (SUITE_DIR / "test_infrastructure" / "run_health_check.py").read_text(), extra[0]
+            ).replace("'", '"'),
+        )
+
 
 class TestDiagRunnerCli(unittest.TestCase):
     def test_tier_choices_follow_tiers(self):

@@ -11,15 +11,21 @@
 # --help text in step with it):
 #   flash           quick ETH link health, the unit read as found: snapshot validate
 #                   + two tt-triage check_eth_status reads 30 s apart. No resets, no tests
-#   daily           snapshot validate + 2 resets (-r, -glx_reset) + GDDR fast-pattern stress
-#                   + eth link_up + eth bandwidth
-#                   + post-test -glx_reset + triage (host_side + device_side)
+#   daily           snapshot validate + 1 reset (-glx_reset) + GDDR fast-pattern stress
+#                   + eth link_up + eth bandwidth + the galaxy load at smoke length (bus-bar steps,
+#                   then the pair link test with a sweep on a fault and a fabric open/close)
+#                   + tray HSC input-voltage and chip recount around the tests
+#                   + post-test -glx_reset, end sequence + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
-#   weekly          3 resets (1x -r then 2x -glx_reset) + full GDDR patterns + eth link_up
-#                   + eth bandwidth + didt matmul stress (pytest, galaxy mesh)
-#                   + post-test -glx_reset + triage (host_side + device_side)
+#   weekly          2 resets (-glx_reset) + full GDDR patterns + eth link_up
+#                   + eth bandwidth + didt matmul stress (bf16 and bf8) + fabric all-gather under matmul (pytest, galaxy mesh)
+#                   + the galaxy load at plain length
+#                   + tray HSC input-voltage and chip recount around the tests
+#                   + post-test -glx_reset, end sequence + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
-#   full            weekly + sys-triage bundle, if the host has the package and BMC credentials:
+#   full            weekly with the galaxy load at full length
+#                   + AER errors over the run + ETH status read
+#                   + sys-triage bundle, if the host has the package and BMC credentials:
 #                   everything, for the logs on a DIIM ticket
 #   pre_bmc_reboot  data collection before a BMC reboot, no resets: snapshot
 #                   + triage (host_side + device_side)
@@ -44,10 +50,15 @@ Tiers:
   flash           Quick ETH link health, the unit read as found: snapshot validate + two
                   tt-triage check_eth_status reads 30 s apart. No resets, no tests.
   daily           2 resets + GDDR fast-pattern stress + eth link_up + eth bandwidth
+                  + the galaxy load at smoke length (bus-bar steps, pair link test, sweep
+                  on a fault, fabric open/close) + HSC and chip recount around the tests
                   + post-test reset + triage + QSFP tests
   weekly          3 resets + full GDDR pattern set + eth link_up + eth bandwidth
-                  + didt matmul stress (pytest) + post-test reset + triage + QSFP tests
-  full            weekly + sys-triage: everything, for the logs on a DIIM ticket
+                  + didt matmul stress + fabric all-gather under matmul (pytest)
+                  + the galaxy load at plain length
+                  + HSC and chip recount around the tests + post-test reset + triage + QSFP tests
+  full            weekly with the galaxy load at full length + AER errors over the run
+                  + ETH status + sys-triage: everything, for the logs on a DIIM ticket
   pre_bmc_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
                   + sys-triage. No resets, no tests.
   post_bmc_reboot The same as pre_bmc_reboot for now, run after the BMC reboot.
@@ -55,7 +66,7 @@ Tiers:
 The old names still work and print a deprecation warning: light and medium run daily,
 deploy runs weekly, pre_reboot runs pre_bmc_reboot.
 
-The ETH status read (flash) runs tools/triage/triage.py from this checkout under
+The ETH status read (flash, full) runs tools/triage/triage.py from this checkout under
 python_env/bin/python (create_venv.sh installs the triage requirements there), else
 the python running this script. It checks PCIe in sysfs first and does not open the
 chips if one has dropped off; the raw reads land in <output dir>/logs/eth_status_read_*.
@@ -78,6 +89,18 @@ Forwarded options (see diag_runner.py --help for details):
   --tt-metal-path PATH   Override tt-metal repo root (for unit_tests_deployment binary)
   --output PATH          Write JSON report to PATH (default: ./diag_report.json)
   --triage-dir PATH      Triage scripts dir (default: \$HC_TRIAGE_DIR, else tools/scaleout/kmd_triage)
+  --heavy-s N, --heavy-ops OPS, --heavy-x-s N, --heavy-x-ops OPS
+                         Galaxy load (daily, weekly, full): the heavy step's seconds, DIDT ops, seconds
+                         of extra ops and extra ops
+  --heavy-n N, --burst-gap-ms N, --trays LIST, --mm-throttle 1-5
+                         Galaxy load: heavy ops per launch, pause after each burst, load only these trays,
+                         matmul di/dt throttle. Not given: the tier's plan
+  --tests LIST           Run only these tests of the tier, comma-separated: a test name
+                         (links, busbar, a gtest) or one bus-bar step (busbar_qb, busbar_mix,
+                         busbar_step, busbar_heavy, busbar_code), e.g. --tests busbar_heavy
+                         --heavy-s 60 or --tests links --skip-reset
+  --skip-reset           Skip every reset; the links sweep still runs on a link fault, with
+                         no glx_reset first
   --skip-triage          Skip the post-test reset and the triage phase
   --triage-gating        Let triage FAILs gate the run (default: held at WARN)
   --skip-eth-status      Skip the ETH status read

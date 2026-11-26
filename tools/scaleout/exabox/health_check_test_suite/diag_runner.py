@@ -21,13 +21,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import signal
 import socket
+import subprocess
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 # Run as a script this directory is already sys.path[0], but run_diag() is also a
 # programmatic entry point, and a caller that loads this file by path need not
@@ -37,12 +40,23 @@ if _SUITE_DIR not in sys.path:
     sys.path.insert(0, _SUITE_DIR)
 
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
+from diag.galaxy import KNOWN_DROPPED  # noqa: E402
+from diag.aer import AerWindow  # noqa: E402
+from diag import captures  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
+from diag import events  # noqa: E402
+from diag.busbar import LOAD_TESTS, MODES, OVERRIDES, STEPS, link_fault, plan as busbar_plan, run_busbar  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
+from diag import links  # noqa: E402
+from diag.links import name_chips, run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
+from diag.firmware import firmware_check  # noqa: E402
+from diag.hsc import judge_hsc, read_hsc_status  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
-from diag.resets import fold_post_reset_snapshots, reset_loop, run_post_test_reset  # noqa: E402
+from diag import report  # noqa: E402
+from diag import resets  # noqa: E402
+from diag.resets import END_DELAY_S, fold_post_reset_snapshots, reset_loop, run_end, run_post_test_reset  # noqa: E402
 from diag.snapshot import (  # noqa: E402
     DEFAULT_TT_SMI_PROVISIONED,
     collect_fru_info,
@@ -50,10 +64,11 @@ from diag.snapshot import (  # noqa: E402
     resolve_tt_smi,
     take_snapshot,
 )
-from diag.snapshot_checks import validate_snapshot  # noqa: E402
+from diag.sel import history_check, new_check, read_sel  # noqa: E402
+from diag.snapshot_checks import pcie_enum_check, validate_snapshot  # noqa: E402
 from diag.sys_triage import SYS_TRIAGE_BIN, run_sys_triage  # noqa: E402
 from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_triage  # noqa: E402
-from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
+from tiers import DEPRECATED_TIER_ALIASES, TIERS, select_stages, select_tests  # noqa: E402
 
 
 def build_diag_arg_parser() -> argparse.ArgumentParser:
@@ -62,8 +77,27 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="SYS-4365 diag tool")
     ap.add_argument("--tier", choices=[*TIERS, *DEPRECATED_TIER_ALIASES], required=True)
     ap.add_argument("--dry-run", action="store_true", help="Print intended subprocess calls; skip destructive steps.")
-    ap.add_argument("--skip-reset", action="store_true", help="Skip phase 3 (reset loop) entirely.")
-    ap.add_argument("--skip-tests", action="store_true", help="Skip phase 4 (gtest deployment binary) entirely.")
+    ap.add_argument(
+        "--skip-reset",
+        action="store_true",
+        help=(
+            "Skip every reset: the reset loop, the post-test reset and the glx_reset before the links sweep. "
+            "The sweep itself still runs on a link fault, on the unit as it is."
+        ),
+    )
+    ap.add_argument(
+        "--tests",
+        metavar="LIST",
+        help=(
+            "Run only these of the tier's tests, comma-separated, in the tier's order; a bus-bar step by its check "
+            "name (busbar_qb, busbar_mix, busbar_step, busbar_heavy, busbar_code), busbar for all of them. "
+            "The other phases run as usual (their --skip-* flags skip them). Default: all of the tier's tests."
+        ),
+    )
+    ap.add_argument("--stage-order", metavar="LIST", help="Run only these stages in run order: reset, tests, end, eth")
+    ap.add_argument(
+        "--skip-tests", action="store_true", help="Skip the tests phase entirely: gtests, pytests and the galaxy load."
+    )
     ap.add_argument(
         "--skip-triage",
         action="store_true",
@@ -148,8 +182,20 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         default=default_tt_metal_path(),
         help="tt-metal repo root (contains build/test/tt_metal/unit_tests_deployment).",
     )
+    ap.add_argument(
+        "--load-mode", choices=MODES, help="Galaxy load: its length, in place of the tier's (with --tests pinned)."
+    )
+    for key, (flag, typ, what) in OVERRIDES.items():
+        ap.add_argument(
+            flag, dest=key, type=typ, default=None, help=f"Galaxy load: {what}. Not given: the tier's plan."
+        )
+    captures.add_args(ap)
+    resets.add_args(ap)
+    events.add_args(ap)
+    links.add_args(ap)
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
+    report.add_args(ap)
     return ap
 
 
@@ -166,6 +212,61 @@ def _guarded(phase: Phase, error_check: str, error_status: str, body: Callable[[
     except Exception as e:
         phase.error = repr(e)
         phase.add(Check(name=error_check, status=error_status, details=repr(e), ip="other"))
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_TRACE_LINE_RE = re.compile(r"^(\d+\.\s|Location:)")
+
+
+def _short_error(e: Exception, lines: int = 2) -> str:
+    """An error's first message lines on one line, without colour codes or the stack trace under them."""
+    text = [" ".join(ln.split()) for ln in _ANSI_RE.sub("", str(e)).splitlines()]
+    return "; ".join([ln for ln in text if ln and not _TRACE_LINE_RE.match(ln)][:lines])
+
+
+def recount_after_tests(snapshot: Callable[[], dict]) -> Check:
+    """The chip count from a fresh snapshot after the tests. A snapshot that
+    cannot be taken (tt-smi cannot read a chip, or is gone) is a FAIL with its reason."""
+    name = "pcie_enum_count_after_tests"
+    try:
+        snap = snapshot()
+    except Exception as e:
+        return Check(name=name, status=FAIL, details=f"no snapshot after the tests: {_short_error(e)}", ip="other")
+    return pcie_enum_check(snap.get("device_info") or [], name)
+
+
+def _hear(stage: str, out: Path, dry_run: bool) -> int:
+    """The caller's --hook hears a stage start (reset, links, end; the bus-bar stage says so itself); its rc."""
+    hook = events.hook and not dry_run
+    return subprocess.run([events.hook, "stage-start", stage, "-", str(out)], check=False).returncode if hook else 0
+
+
+def _run_galaxy_load(
+    tests: Sequence[str],
+    phase: Phase,
+    out: Path,
+    mode: str,
+    overrides: dict,
+    dry_run: bool,
+    sweep_reset: Callable[[], str],
+    steps: Sequence[str] = STEPS,
+    link_fault_before: bool = False,
+    **links_kw,
+) -> None:
+    """The LOAD_TESTS among *tests* into *phase* at *mode*'s length: the bus-bar *steps*, then the links test, which
+    sweeps after a hang or CCL failure in either (busbar.link_fault; never a numeric fault alone). One that raises is
+    its own FAIL and does not stop the other."""
+    held = len(phase.checks)
+    if "busbar" in tests and KNOWN_DROPPED:
+        why = f"known drop: tray {', '.join(map(str, sorted(KNOWN_DROPPED)))} is down and the load needs the 4x8 mesh"
+        phase.add(Check(name="busbar", status=SKIP, details=why, ip="other"))
+    elif "busbar" in tests:
+        _guarded(phase, "busbar", FAIL, lambda: run_busbar(phase, out, mode, dry_run, tuple(steps), **overrides))
+    fault = link_fault_before or any(link_fault(c) for c in phase.checks[held:] if c.name != "busbar")
+    if "links" in tests and (rc := _hear("links", out, dry_run)):
+        phase.add(Check(name="links", status=SKIP, details=f"held back by the hook (rc {rc})", ip="other"))
+    elif "links" in tests:
+        _guarded(phase, "links", FAIL, lambda: run_links(phase, out, fault, sweep_reset, dry_run, **links_kw))
 
 
 def _finish(report: dict, phase: Phase, t0: float, *, summary: bool, all_skip_stays_skip: bool = False) -> None:
@@ -258,8 +359,18 @@ def run_diag(
     bmc_password: str | None = None,
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
+    overrides: dict | None = None,
+    tests: str | None = None,
+    stage_order: str | None = None,
+    reset_gate: str | None = None,
+    end_delay_s: int = END_DELAY_S,
+    load_mode: str | None = None,
+    link_fault_before: bool = False,
+    pair_s: int = links.PAIR_S,
+    sweep_s: int = links.SWEEP_S,
+    bw_s: int = links.BW_S,
 ) -> tuple[int, dict]:
-    """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
+    """Run the full pipeline (snapshot → resets → tests → triage → ETH status → QSFP tests → sys-triage → AER).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -271,7 +382,15 @@ def run_diag(
         tier = DEPRECATED_TIER_ALIASES[tier]
     if tier not in TIERS:
         raise ValueError(f"unknown tier {tier!r}; expected one of: {', '.join(TIERS)}")
-    plan = TIERS[tier]
+    plan, steps = TIERS[tier], STEPS
+    if tests is not None:
+        plan, steps = select_tests(plan, tests)
+        log(f"--tests: running {', '.join(plan.tests) or 'no tests'}")
+    if stage_order is not None:
+        plan, steps = select_stages(plan, stage_order)
+        log(f"--stage-order: running {stage_order}")
+    if load_mode is not None:
+        plan = replace(plan, load_mode=load_mode)
     if tt_metal_path is None:
         tt_metal_path = default_tt_metal_path()
 
@@ -300,7 +419,11 @@ def run_diag(
             report["tt_smi_version"] = ".".join(str(x) for x in version) if version else None
             log(f"using tt-smi: {tt_smi} (version={report['tt_smi_version']})")
             snap = take_snapshot(tt_smi, snapshot_out)
-        report["detected_board_rev"] = validate_snapshot(snap, snap_phase)
+        if snap:
+            report["detected_board_rev"] = validate_snapshot(snap, snap_phase)
+        else:  # a caller that took its own snapshot (one stage at a time) passes an empty one: nothing to judge
+            why = f"not judged: input snapshot {input_snapshot} is empty"
+            snap_phase.add(Check(name="snapshot_capture", status=SKIP, details=why))
     except Exception as e:
         snap_phase.error = repr(e)
         snap_phase.add(Check(name="snapshot_capture", status=FAIL, details=repr(e)))
@@ -308,6 +431,16 @@ def run_diag(
     # store-only forensics alongside the chip-level snapshot checks; runs even
     # when the tt-smi snapshot itself failed.
     collect_fru_info(snap_phase, dry_run)
+    # With the galaxy load or --stage-order, the post-test reset is followed by the end sequence, and the firmware
+    # reads and the SEL are read first (the SEL again after it).
+    post_test_plan = () if skip_reset or (skip_triage and stage_order is None) else plan.post_test_resets
+    end_seq = bool(post_test_plan) and (plan.galaxy_load or stage_order is not None)
+    live = not (input_snapshot or dry_run)
+    sel_before, sel_why = read_sel() if end_seq and live else (None, "")
+    if end_seq and live:
+        snap_phase.add(history_check(sel_before, sel_why, time.time()))
+        fw_dir = output.resolve().parent / "logs" / "firmware"
+        _guarded(snap_phase, "firmware_reads", WARN, lambda: snap_phase.add(firmware_check(fw_dir)))
     _finish(report, snap_phase, t0, summary=True)
 
     # Where every phase drops its raw tool output. Derived once: the reset
@@ -329,6 +462,7 @@ def run_diag(
     elif not plan.resets:
         reset_phase.add(Check(name="reset_loop", status=SKIP, details=f"no pre-test resets for tier '{tier}'"))
     else:
+        _hear("reset", logs_dir, dry_run)
 
         def _resets() -> None:
             reset_loop(
@@ -339,6 +473,7 @@ def run_diag(
                 snapshot_out=snap_out_for_resets,
                 post_reset_phases=post_reset_phases,
                 logs_dir=logs_dir,
+                gate=reset_gate,
             )
 
         _guarded(reset_phase, "reset_loop", FAIL, _resets)
@@ -346,26 +481,92 @@ def run_diag(
     _finish(report, reset_phase, t0, summary=False)
     fold_post_reset_snapshots(report, post_reset_phases)
 
-    # Phase 3: gtest
+    # The AER errors over the run (pcie_aer_delta): counted from here, after the resets above, to the end of the
+    # run. Every reset below goes through aer_reset(), which counts up to it and from what it left.
+    aer = AerWindow() if plan.aer_diff and not dry_run else None
+
+    def aer_reset(reset: Callable[[], bool]) -> bool:
+        if aer:
+            aer.mark()
+        try:
+            return reset()
+        finally:
+            if aer:
+                aer.rebase()
+
+    # Phase 3: the tests, in the tier's order: gtests and pytests, then the
+    # galaxy load (the bus-bar steps, then the pair link test, its sweep on a
+    # fault and the fabric open/close) at the tier's load_mode. Inside the AER window.
     test_phase = Phase(name="tests")
+
+    def sweep_reset() -> str:
+        """The links sweep's tt-smi -glx_reset: "" when it ran clean or --skip-reset skips it (the sweep then runs on the
+        unit as it is), else why the sweep is skipped."""
+        if skip_reset:
+            log("links sweep: no glx_reset first (--skip-reset)")
+            return ""
+        ok = aer_reset(lambda: run_post_test_reset(tt_smi_path, ("-glx_reset",), test_phase, dry_run, reset_gate))
+        return "" if ok else "reset failed"
+
     t0 = time.time()
     if skip_tests:
         test_phase.add(Check(name="tests", status=SKIP, details="--skip-tests"))
     elif not plan.tests:
         test_phase.add(Check(name="tests", status=SKIP, details=f"no tests for tier '{tier}'", ip="other"))
     else:
-        _guarded(test_phase, "tests", FAIL, lambda: run_tests(tt_metal_path, plan.tests, test_phase, dry_run, logs_dir))
+        # Around the load: the tray HSCs' input-voltage flags are read before and
+        # after, and the chips are recounted after, with a fresh snapshot that
+        # runs even under --skip-reset (a weak bus bar often drops a chip or
+        # latches a flag without failing the test that sagged it). Not on an
+        # input snapshot or a dry run: no live hardware to read.
+        hsc_before = read_hsc_status() if live else None
+        device_tests = [t for t in plan.tests if t not in LOAD_TESTS]
+        if device_tests:  # none when --tests picks only the galaxy load
+            _guarded(
+                test_phase,
+                "tests",
+                FAIL,
+                lambda: run_tests(tt_metal_path, device_tests, test_phase, dry_run, logs_dir),
+            )
+        if plan.galaxy_load:
+            _run_galaxy_load(
+                plan.tests,
+                test_phase,
+                logs_dir / "galaxy",
+                plan.load_mode,
+                overrides or {},
+                dry_run,
+                sweep_reset,
+                steps,
+                link_fault_before,
+                pair_s=pair_s,
+                sweep_s=sweep_s,
+                bw_s=bw_s,
+            )
+        if live:
+            _guarded(test_phase, "hsc_input_status", WARN, lambda: judge_hsc(hsc_before, read_hsc_status(), test_phase))
+
+            after_out = snapshot_out.with_name(f"{snapshot_out.stem}_after_tests.json")
+            test_phase.add(recount_after_tests(lambda: take_snapshot(resolve_tt_smi(tt_smi_path), after_out)))
     # tests phase prints its own per-test lines as they run — no inline summary.
     _finish(report, test_phase, t0, summary=False)
 
     # Phase 4: post-test reset. Its job is to hand phase 5 a freshly reset unit
     # and to guarantee the triage probes, which open every chip read-write,
     # never run concurrently with the tests.
-    post_test_plan = () if (skip_triage or skip_reset) else plan.post_test_resets
     if post_test_plan:
         post_reset_phase = Phase(name="post_test_reset")
         t0 = time.time()
-        run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run)
+        output.write_text(json.dumps(report, indent=2))  # the tests' checks so far, for the hook's end stage start
+        _hear("end", logs_dir, dry_run)
+        aer_reset(lambda: run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run, reset_gate))
+        if end_seq:
+            end = lambda: run_end(tt_smi_path, post_reset_phase, logs_dir / "end", dry_run, end_delay_s, reset_gate)
+            _guarded(post_reset_phase, "end_sequence", FAIL, lambda: aer_reset(end))
+            events.capture("stage-end", "end")  # the final HSC read, judged against the run's start, and the bricks
+        if end_seq and live:
+            sel_after, why = read_sel()
+            post_reset_phase.add(new_check(sel_before, sel_after, sel_why or why))
         _finish(report, post_reset_phase, t0, summary=False)
 
     # Phase 5: triage tools, from tools/scaleout/kmd_triage in this repo.
@@ -474,6 +675,14 @@ def run_diag(
         )
     _finish(report, sys_triage_phase, t0, summary=True, all_skip_stays_skip=True)
 
+    # Phase 9: the AER errors over the run, on a tier with aer_diff. Last, so the window spans every phase that
+    # opens the chips, and whatever was skipped. Left out of the report when there is no window (dry run).
+    if aer:
+        aer_phase = Phase(name="pcie_aer")
+        t0 = time.time()
+        _guarded(aer_phase, "pcie_aer_delta", WARN, lambda: aer_phase.add(aer.check()))
+        _finish(report, aer_phase, t0, summary=True, all_skip_stays_skip=True)
+
     ended = datetime.now(timezone.utc)
     report["ended_utc"] = ended.isoformat()
     report["total_duration_s"] = (ended - started).total_seconds()
@@ -492,6 +701,8 @@ def run_diag(
     # Only the phases that write logs create this directory, and any of them can
     # be skipped — don't lose a completed run's report to a missing parent dir.
     output.parent.mkdir(parents=True, exist_ok=True)
+    name_chips(report)
+    events.check_findings(report)
     output.write_text(json.dumps(report, indent=2))
     log(f"wrote report: {output} (overall={report['overall_status']})")
 
@@ -502,8 +713,42 @@ def run_diag(
     return (0 if report["overall_status"] != FAIL else 1), report
 
 
+def _exit_on_sigterm(signum, frame) -> None:
+    """SIGTERM (the whole-run timeout, docker stop) as an exit, so the galaxy load stops the process groups of its
+    programs on the way out: they are out of reach of a signal to this process's group."""
+    raise SystemExit(128 + signum)
+
+
 def main() -> int:
-    args = build_diag_arg_parser().parse_args()
+    signal.signal(signal.SIGTERM, _exit_on_sigterm)
+    ap = build_diag_arg_parser()
+    args = ap.parse_args()
+    overrides = {k: getattr(args, k) for k in OVERRIDES}
+    tier = TIERS[DEPRECATED_TIER_ALIASES.get(args.tier, args.tier)]
+    if args.tests is not None and args.stage_order is not None:
+        ap.error("--tests and --stage-order both pick the tests: give one")
+    try:
+        tier = select_tests(tier, args.tests)[0] if args.tests is not None else tier
+        tier = select_stages(tier, args.stage_order)[0] if args.stage_order is not None else tier
+    except ValueError as e:
+        ap.error(str(e))
+    if args.pair_s < 1 or args.sweep_s < 0 or args.bw_s < 0:
+        ap.error("--pair-s: at least 1; --sweep-s, --bw-s: at least 0")
+    if args.load_mode and not tier.galaxy_load:
+        ap.error(f"--load-mode: tier {args.tier} with these --tests runs no galaxy load")
+    if any(v is not None for v in overrides.values()) and "busbar" not in tier.tests:
+        loaded = ", ".join(n for n, t in TIERS.items() if t.galaxy_load)
+        ap.error(
+            f"the bus-bar overrides set the galaxy load's bus-bar steps, which tier {args.tier}"
+            f"{' with --tests ' + args.tests if args.tests is not None else ''} does not run (tiers: {loaded})"
+        )
+    if tier.galaxy_load:
+        try:
+            busbar_plan(args.load_mode or tier.load_mode, **overrides)
+        except ValueError as e:
+            ap.error(str(e))
+    events.setup(args)
+    KNOWN_DROPPED.update([args.known_dropped_tray] if args.known_dropped_tray else [])
     rc, _report = run_diag(
         tier=args.tier,
         dry_run=args.dry_run,
@@ -527,7 +772,21 @@ def main() -> int:
         bmc_password=args.bmc_password,
         output=args.output,
         snapshot_out=args.snapshot_out,
+        overrides=overrides,
+        tests=args.tests,
+        stage_order=args.stage_order,
+        reset_gate=args.reset_gate,
+        end_delay_s=args.end_delay_s,
+        load_mode=args.load_mode,
+        link_fault_before=args.link_fault,
+        pair_s=args.pair_s,
+        sweep_s=args.sweep_s,
+        bw_s=args.bw_s,
     )
+    try:  # the run's report, last; a fault here costs the report, never the run's exit code
+        print("\n".join(report.lines(args.output.resolve().parent, args)), flush=True)
+    except Exception as e:
+        log(f"could not print the run report: {e!r}")
     return rc
 
 

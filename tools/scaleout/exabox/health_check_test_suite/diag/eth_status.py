@@ -39,6 +39,7 @@ from typing import Sequence
 
 from .common import emit_result, emit_running, log, run_with_timeout, write_command_log
 from .galaxy import EXPECTED_CHIP_COUNT, QSFP_PORT_IDS, UBB_ETH_PORT_OF, UBB_ETH_PORTS, format_bdf, parse_bdf_physical
+from .naming import blamed, link_end, port_name as _port_name
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 
 TRIAGE_SCRIPT = "tools/triage/triage.py"
@@ -177,8 +178,9 @@ def pcie_gate_check(functions: list[PcieFunction]) -> Check:
         "expected": EXPECTED_CHIP_COUNT,
         "dropped": [{"bdf": f.bdf, "vendor": f"0x{f.vendor:04x}", "command": f"0x{f.command:04x}"} for f in dropped],
         "unverified": [f.bdf for f in unverified],
+        "blamed_chips": blamed(f.bdf for f in dropped + unverified),
     }
-    unread = f"{len(unverified)} more could not be checked: {_listing([format_bdf(f.bdf) for f in unverified])}"
+    unread = f"{len(unverified)} more could not be checked: {listing([format_bdf(f.bdf) for f in unverified])}"
     if not functions:
         return Check(
             name="eth_status_pcie_gate",
@@ -188,17 +190,17 @@ def pcie_gate_check(functions: list[PcieFunction]) -> Check:
             ip="pcie",
         )
     if dropped:
-        listing = [
+        items = [
             f"{format_bdf(f.bdf)} "
             + ("not answering" if f.vendor == 0xFFFF else f"memory decoding off (Command=0x{f.command:04x})")
             for f in dropped
         ]
-        data["findings"] = _findings(FAIL, [f"{item} on PCIe: do NOT reset, report it" for item in listing])
+        data["findings"] = _findings(FAIL, [f"{item} on PCIe: do NOT reset, report it" for item in items])
         return Check(
             name="eth_status_pcie_gate",
             status=FAIL,
             details=(
-                f"{len(dropped)} of {len(functions)} chip(s) dropped off PCIe: {_listing(listing)}"
+                f"{len(dropped)} of {len(functions)} chip(s) dropped off PCIe: {listing(items)}"
                 + (f"; {unread}" if unverified else "")
                 + ". Links not read and the unit left as found: report it before resetting, a reset wipes the evidence"
             ),
@@ -206,17 +208,17 @@ def pcie_gate_check(functions: list[PcieFunction]) -> Check:
             ip="pcie",
         )
     if unverified:
-        listing = [format_bdf(f.bdf) for f in unverified]
+        items = [format_bdf(f.bdf) for f in unverified]
         data["findings"] = _findings(
             WARN,
-            [f"{item}: PCI config space unreadable, so whether it is safe to open is not known" for item in listing],
+            [f"{item}: PCI config space unreadable, so whether it is safe to open is not known" for item in items],
         )
         return Check(
             name="eth_status_pcie_gate",
             status=WARN,
             details=(
                 f"PCI config space of {len(unverified)} of {len(functions)} chip(s) could not be read: "
-                f"{_listing(listing)}. Whether they are safe to open is not known, so the links were not read"
+                f"{listing(items)}. Whether they are safe to open is not known, so the links were not read"
             ),
             data=data,
             ip="pcie",
@@ -366,7 +368,7 @@ def parse_chip_bdfs(tables: Tables) -> dict[int, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _listing(items: list[str], limit: int = 6) -> str:
+def listing(items: list[str], limit: int = 6) -> str:
     shown = "; ".join(items[:limit])
     return shown + (f"; ... and {len(items) - limit} more" if len(items) > limit else "")
 
@@ -387,64 +389,70 @@ def _ubbs(trays: Sequence[int]) -> str:
     return ", ".join(f"UBB{t}" for t in sorted(trays))
 
 
-def _port_name(ptype: str, pid: int) -> str:
-    return f"{'QSFP' if ptype == 'QSFP_DD' else ptype} P{pid}"
-
-
 def _where(dev: int, channel: int | None, chip_bdfs: dict[int, str]) -> str:
-    """'UBB2/U6 ch4 (TRACE P9, dev 13)', or 'dev 13 ch4' when the chip's place is not known."""
+    """'UBB2/U6 ch4 (QSFP P6, 0000:46:00.0, dev 13)': tray, ASIC, port and BDF; 'dev 13 ch4' when the chip's place is
+    not known."""
     ch = "" if channel is None else f" ch{channel}"
     pos = parse_bdf_physical(chip_bdfs.get(dev, ""))
     if pos is None:
         return f"dev {dev}{ch}"
     tray, asic = pos
     port = UBB_ETH_PORT_OF.get((asic, channel)) if channel is not None else None
-    return f"UBB{tray}/U{asic}{ch} ({f'{_port_name(*port)}, ' if port else ''}dev {dev})"
+    return f"UBB{tray}/U{asic}{ch} ({f'{_port_name(*port)}, ' if port else ''}{chip_bdfs[dev]}, dev {dev})"
 
 
 def _link_state_checks(
-    now: dict[tuple[int, str], EthLink], before: dict[tuple[int, str], EthLink] | None, where
+    now: dict[tuple[int, str], EthLink], before: dict[tuple[int, str], EthLink] | None, where, ends
 ) -> list[Check]:
+    """*where* names a link in words, *ends* gives the ``link_ends`` entries of a list of links."""
     live = [l for l in now.values() if not l.idle]
-    down: list[str] = []
+    down: list[tuple[EthLink, str]] = []
     if before is not None:
-        down += [f"{where(before[k])}: gone between the reads" for k in sorted(before.keys() - now.keys())]
+        down += [(before[k], f"{where(before[k])}: gone between the reads") for k in sorted(before.keys() - now.keys())]
     for k in sorted(now):
         l = now[k]
         if "unreadable" in (l.port.lower(), (l.link or "").lower()):
-            down.append(f"{where(l)}: eth core unreadable")
+            down.append((l, f"{where(l)}: eth core unreadable"))
         elif l.idle:
             continue
         elif l.link is not None:
             if l.link.lower() != "up":
-                down.append(f"{where(l)}: link down")
+                down.append((l, f"{where(l)}: link down"))
         else:
             reasons = (["port down"] if l.port.lower() == "down" else []) + (
                 ["RX link down"] if (l.rx or "up").lower() != "up" else []
             )
             if reasons:
-                down.append(f"{where(l)}: {', '.join(reasons)}")
+                down.append((l, f"{where(l)}: {', '.join(reasons)}"))
     chips = len({l.dev for l in live})
+    down_ends, down = ends([l for l, _ in down]), [t for _, t in down]
     links_down = Check(
         name="eth_status_links_down",
         status=FAIL if down else PASS,
         details=(
-            f"{len(down)} of {len(live)} link(s) down or unreadable: {_listing(down)}"
+            f"{len(down)} of {len(live)} link(s) down or unreadable: {listing(down)}"
             if down
             else f"{len(live)}/{len(live)} links up on {chips} chips"
             + (", none lost between the reads" if before is not None else "")
         ),
-        data={"links": len(live), "chips": chips, "down": down, "findings": _findings(FAIL, down)},
+        data={
+            "links": len(live),
+            "chips": chips,
+            "down": down,
+            "findings": _findings(FAIL, down),
+            "link_ends": down_ends,
+        },
         ip="eth",
     )
 
-    stopped = [where(l) for l in now.values() if (l.heartbeat or "").lower() == "down"]
+    dead = [l for l in now.values() if (l.heartbeat or "").lower() == "down"]
+    stopped = [where(l) for l in dead]
     beating = sum(1 for l in now.values() if l.heartbeat is not None)
     heartbeat = Check(
         name="eth_status_heartbeat",
         status=FAIL if stopped else PASS if beating else SKIP,
         details=(
-            f"{len(stopped)} eth core(s) stopped, heartbeat not moving: {_listing(stopped)}"
+            f"{len(stopped)} eth core(s) stopped, heartbeat not moving: {listing(stopped)}"
             if stopped
             else f"heartbeat moving (or core released to metal) on {beating} eth cores"
             if beating
@@ -453,20 +461,22 @@ def _link_state_checks(
         data={
             "stopped": stopped,
             "findings": _findings(FAIL, [f"{w}: heartbeat not moving, the eth core has stopped" for w in stopped]),
+            "link_ends": ends(dead),
         },
         ip="eth",
     )
 
-    odd = [f"{where(l)}: port {l.port}" for l in now.values() if l.port in ODD_PORT_STATES]
+    oddly = [l for l in now.values() if l.port in ODD_PORT_STATES]
+    odd = [f"{where(l)}: port {l.port}" for l in oddly]
     port_state = Check(
         name="eth_status_port_state",
         status=WARN if odd else PASS,
         details=(
-            f"{len(odd)} port(s) in a state that cannot be judged: {_listing(odd)}"
+            f"{len(odd)} port(s) in a state that cannot be judged: {listing(odd)}"
             if odd
             else f"no port {', '.join(sorted(ODD_PORT_STATES))}"
         ),
-        data={"odd": odd, "findings": _findings(WARN, odd)},
+        data={"odd": odd, "findings": _findings(WARN, odd), "link_ends": ends(oddly)},
         ip="eth",
     )
     return [links_down, heartbeat, port_state]
@@ -555,12 +565,12 @@ def _counter_checks(
         )
         if bad:
             status = FAIL
-            details = f"uncorrected FEC errors rising on {len(bad)} link(s), these links corrupt data: {_listing(bad)}"
+            details = f"uncorrected FEC errors rising on {len(bad)} link(s), these links corrupt data: {listing(bad)}"
             if high:
                 details += f"; {len(high)} more >= {UNCORR_WARN_PER_S:g}/s"
         elif high:
             status = WARN
-            details = f"uncorrected FEC errors rising on {len(high)} link(s): {_listing(high)}"
+            details = f"uncorrected FEC errors rising on {len(high)} link(s): {listing(high)}"
         else:
             worst_k, worst = ranked[0]
             status = PASS
@@ -581,7 +591,7 @@ def _counter_checks(
         status = WARN if many else PASS
         details = (
             f"{len(many)} link(s) with >= {UNCORR_WARN_TOTAL:,} uncorrected FEC errors since the last reset; "
-            f"one read only, so whether they are still rising is not known: {_listing(many)}"
+            f"one read only, so whether they are still rising is not known: {listing(many)}"
             if many
             else f"one read only, no rate: max {max(totals):,} since the last reset"
         ) + reset_note
@@ -598,7 +608,7 @@ def _counter_checks(
         ranked = sorted(crc.items(), key=lambda kv: -kv[1])
         status = WARN if high else PASS
         details = (
-            f"CRC errors (bad frames) rising on {len(high)} link(s): {_listing(high)}"
+            f"CRC errors (bad frames) rising on {len(high)} link(s): {listing(high)}"
             if high
             else f"max {ranked[0][1]:,.1f}/s {span} on {len(crc)} links"
         ) + reset_note
@@ -637,10 +647,10 @@ def _counter_checks(
         status, details = SKIP, "check_eth_status reported no retrain counts"
     elif flap:
         status = FAIL
-        details = f"{len(flap)} link(s) retrained during the check, they are flapping: {_listing(flap)}"
+        details = f"{len(flap)} link(s) retrained during the check, they are flapping: {listing(flap)}"
     elif many:
         status = WARN
-        details = f"{len(many)} link(s) with >= {RETRAIN_WARN_TOTAL} retrains since the last reset: {_listing(many)}"
+        details = f"{len(many)} link(s) with >= {RETRAIN_WARN_TOTAL} retrains since the last reset: {listing(many)}"
     else:
         status = PASS
         details = (
@@ -662,9 +672,7 @@ def _counter_checks(
         status, details = SKIP, "check_eth_status reported no ERR_STAT"
     else:
         status = WARN if latched else PASS
-        details = (
-            f"{len(latched)} link(s) with a latched link error: {_listing(latched)}" if latched else "none latched"
-        )
+        details = f"{len(latched)} link(s) with a latched link error: {listing(latched)}" if latched else "none latched"
     checks.append(
         Check(
             name="eth_status_err_stat",
@@ -756,7 +764,7 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
         shape = f"{found}: not a cabling with a name here, which says nothing about whether it is the intended one"
     counts = f"{len(live)} on-host links: {bi_have}/{bi_total} built-in + {on_cables} on cables"
     if unnamed:
-        counts += f" + {len(unnamed)} on channels with no port name ({_listing(unnamed, 4)})"
+        counts += f" + {len(unnamed)} on channels with no port name ({listing(unnamed, 4)})"
 
     return [
         Check(
@@ -764,7 +772,7 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
             status=FAIL if builtin_off else PASS,
             details=(
                 f"{bi_total - bi_have} of {bi_total} built-in links not linked, a fault on any Galaxy: "
-                f"{_listing(builtin_off)}"
+                f"{listing(builtin_off)}"
                 if builtin_off
                 else f"{bi_have}/{bi_total} built-in links linked (board traces and linking boards, 4 UBBs)"
             ),
@@ -781,7 +789,7 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
             status=FAIL if half else PASS,
             details=(
                 f"{len(half)} QSFP port(s) with only part of their lanes linked: the cable is there and "
-                f"part of it is dead: {_listing(half)}"
+                f"part of it is dead: {listing(half)}"
                 if half
                 else "no QSFP port linked in part"
             ),
@@ -796,7 +804,7 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
             status=WARN if uneven else PASS,
             details=(
                 f"{len(uneven)} QSFP port(s) linked on some UBBs and not on the others; UBBs are normally "
-                f"cabled alike, so a cable is probably dead or missing: {_listing(uneven)}"
+                f"cabled alike, so a cable is probably dead or missing: {listing(uneven)}"
                 if uneven
                 else "no QSFP port linked on some UBBs and not on the others"
             ),
@@ -845,8 +853,13 @@ def judge_eth_status(
     def where(l: EthLink) -> str:
         return _where(l.dev, l.channel, chip_bdfs)
 
+    def ends(links: list[EthLink]) -> list[dict]:
+        return [
+            {"a": link_end(chip_bdfs[l.dev], l.channel)} for l in links if l.dev in chip_bdfs and l.channel is not None
+        ]
+
     return (
-        _link_state_checks(now, before, where)
+        _link_state_checks(now, before, where, ends)
         + _counter_checks(now, before, interval_s, where)
         + _topology_checks(now, chip_bdfs, chips_on_pcie)
     )

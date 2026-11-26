@@ -7,19 +7,20 @@ add, move or drop a step in one.
 
 The phases always run in the same order, fixed in diag_runner.run_diag():
 
-    snapshot -> resets -> tests -> post_test_resets -> triage -> eth_status -> qsfp_tests -> sys_triage
+    snapshot -> resets -> tests -> post_test_resets -> triage -> eth_status -> qsfp_tests -> sys_triage -> pcie_aer
 
 The order is load-bearing (the triage probes, the ETH status read, the QSFP
 collector and sys-triage all open every chip, so they must not overlap the tests,
 and must come after a discrete reset; see the comments on each field below), so a tier does not
 reorder phases. It only picks what each one does. A phase a tier leaves empty is
-still in the report, as a SKIP that names the tier — except post_test_resets,
-whose phase is left out of the report when there is nothing to run.
+still in the report, as a SKIP that names the tier — except post_test_resets and
+pcie_aer, whose phases are left out of the report when there is nothing to run.
 
 Where the steps a tier can name are defined:
 
-    resets, post_test_resets  tt-smi flags: "-r" or "-glx_reset"
-    tests                     TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py
+    resets, post_test_resets  tt-smi flags: "-glx_reset" only
+    tests                     TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py, then
+                              LOAD_TESTS (the galaxy load) in diag/busbar.py
     triage                    TRIAGE_TOOLS in diag/triage.py
 
 A name that isn't defined there fails at import, so a typo stops
@@ -36,6 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from diag.busbar import LOAD_TESTS, MODES, STEPS
 from diag.device_tests import PYTESTS, TESTS
 from diag.resets import RESET_FLAGS
 from diag.triage import TRIAGE_TOOLS
@@ -43,12 +45,17 @@ from diag.triage import TRIAGE_TOOLS
 
 @dataclass(frozen=True)
 class Tier:
-    # Pre-test reset loop, in order. Per SYS-4365 the first reset is -r, then
-    # stick to -glx_reset. Each is followed by a fresh snapshot, revalidated.
+    # Pre-test reset loop, in order. Each is a glx_reset, a root-port rescan of
+    # the chips it left missing and a recount, then a fresh snapshot, revalidated.
     resets: tuple[str, ...] = ()
 
-    # Device tests, in order: names from TESTS / PYTESTS.
+    # Device tests, in order: names from TESTS / PYTESTS, then the galaxy load
+    # (LOAD_TESTS: the bus-bar steps, then the links test), which runs last.
     tests: tuple[str, ...] = ()
+
+    # The galaxy load's length, one of busbar.MODES: smoke, plain or full. Set
+    # exactly when the tests include the galaxy load.
+    load_mode: str | None = None
 
     # Reset run between the tests and the triage phase. Two reasons it sits
     # there: the triage probes open every chip read-write, so they must not
@@ -57,6 +64,7 @@ class Tier:
     # outright rather than being reported. A discrete reset that completes
     # first rules both out. Bare: no revalidation snapshot (see
     # diag.resets.run_post_test_reset). Skipped by --skip-reset and --skip-triage.
+    # With the galaxy load it is followed by the end sequence (diag.resets.run_end).
     post_test_resets: tuple[str, ...] = ()
 
     # First-step triage tools: names from TRIAGE_TOOLS.
@@ -78,15 +86,34 @@ class Tier:
     # ETH sweep; it sits in the same slot as triage, after the post-test reset.
     qsfp_tests: bool = False
 
+    # Judge the new PCIe AER errors per chip over the whole run (diag/aer.py
+    # AerWindow), from after the pre-test resets to the end, across each later
+    # reset, in a pcie_aer phase of its own after the last one. Left out of the
+    # report when there is no window to judge (a dry run).
+    aer_diff: bool = False
+
     # Collect the syseng sys-triage bundle. It is the record of a unit's state
     # taken before the BMC power cycles it, and its vuart and scratch reads are
     # worth most on a unit that has not been reset since it misbehaved.
     sys_triage: bool = False
 
+    @property
+    def galaxy_load(self) -> bool:
+        """Whether the tests include the galaxy load, the only tests the bus-bar overrides set."""
+        return any(t in LOAD_TESTS for t in self.tests)
+
 
 _WEEKLY = Tier(
-    resets=("-r", "-glx_reset", "-glx_reset"),
-    tests=("gddr_full", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
+    resets=("-glx_reset", "-glx_reset"),
+    tests=(
+        "gddr_full",
+        "eth_link_up",
+        "eth_bandwidth",
+        "didt_matmul_galaxy",
+        "fabric_all_gather_matmul_galaxy",
+        *LOAD_TESTS,
+    ),
+    load_mode="plain",
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
     qsfp_tests=True,
@@ -102,19 +129,29 @@ TIERS: dict[str, Tier] = {
         eth_status=True,
         eth_summary=True,
     ),
-    # The scheduled run.
+    # The scheduled run. The galaxy load at smoke length: every bus-bar step,
+    # each cut to a few seconds, and the links test.
     "daily": Tier(
-        resets=("-r", "-glx_reset"),
-        tests=("gddr_fast", "eth_link_up", "eth_bandwidth"),
+        resets=("-glx_reset",),
+        tests=("gddr_fast", "eth_link_up", "eth_bandwidth", *LOAD_TESTS),
+        load_mode="smoke",
         post_test_resets=("-glx_reset",),
         triage=("host_side", "device_side"),
         qsfp_tests=True,
     ),
-    # daily, with every test and the full GDDR pattern set.
+    # daily, with every test, the full GDDR pattern set and the galaxy load at
+    # plain length.
     "weekly": _WEEKLY,
-    # weekly plus the sys-triage bundle: everything, for a unit with an issue,
-    # so the run's logs can go straight on its DIIM ticket.
-    "full": replace(_WEEKLY, sys_triage=True),
+    # weekly with the galaxy load at full length, plus the AER errors over the
+    # run, the ETH status read and the sys-triage bundle: everything, for a
+    # unit with an issue, so the run's logs can go straight on its DIIM ticket.
+    "full": replace(
+        _WEEKLY,
+        load_mode="full",
+        aer_diff=True,
+        eth_status=True,
+        sys_triage=True,
+    ),
     # Data collection before a BMC reboot. No resets and no tests: a reset
     # would wipe the state the triage, QSFP and sys-triage phases are there to
     # record, and a stress test on a unit already headed for a power cycle only
@@ -144,6 +181,59 @@ DEPRECATED_TIER_ALIASES: dict[str, str] = {
 }
 
 
+def select_tests(tier: Tier, only: str) -> tuple[Tier, tuple[str, ...]]:
+    """*tier* cut down to the tests named in *only* (comma-separated; --tests), and the bus-bar steps to run.
+
+    A name is one of the tier's tests or, when the tier runs the bus-bar test, one bus-bar step as its check is named
+    (busbar_<step>, e.g. busbar_heavy); "busbar" is every step. The tier's order and load_mode stay. A name the tier
+    does not run is a ValueError that lists what it does run."""
+    names = [n for n in only.replace(" ", "").split(",") if n]
+    steps = (*(f"busbar_{s}" for s in STEPS),) if "busbar" in tier.tests else ()
+    bad = [n for n in names if n not in tier.tests and n not in steps]
+    if bad or not names:
+        raise ValueError(
+            f"--tests {only!r}: {', '.join(bad) or 'no test named'} not in this tier; "
+            f"it runs: {', '.join((*tier.tests, *steps)) or 'no tests'}"
+        )
+    picked = tuple(s for s in STEPS if "busbar" in names or f"busbar_{s}" in names)
+    tests = tuple(t for t in tier.tests if t in names or (t == "busbar" and picked))
+    return replace(tier, tests=tests), picked
+
+
+# The stages around the tests that --stage-order names, in run order: the pre-test resets before them; the post-test
+# reset with the end sequence, then the ETH status read, after them.
+STAGES = ("reset", "end", "eth")
+
+
+def select_stages(tier: Tier, order: str) -> tuple[Tier, tuple[str, ...]]:
+    """*tier* cut down to the stages named in *order* (comma-separated; --stage-order), and the bus-bar steps to run:
+    "reset" (its pre-test resets), its tests as --tests names them (see select_tests), "end" (its post-test reset and the
+    end sequence), "eth" (the ETH status read). A stage not named does not run. The order must be the one the stages run
+    in: reset, the tier's tests in its order, end, eth; any other is a ValueError that names it."""
+    names = [n for n in order.replace(" ", "").split(",") if n]
+    tests = [n for n in names if n not in STAGES]
+    cut, steps = select_tests(tier, ",".join(tests)) if tests else (replace(tier, tests=()), ())
+
+    def rank(n: str) -> tuple[int, ...]:
+        if n in STAGES:
+            return (0,) if n == "reset" else (2, STAGES.index(n))
+        step = n.removeprefix("busbar_")
+        return (1, cut.tests.index("busbar" if step in STEPS else n), STEPS.index(step) if step in STEPS else -1)
+
+    if [rank(n) for n in names] != sorted(map(rank, names)):
+        raise ValueError(f"--stage-order {order!r}: the stages run in the order {','.join(sorted(names, key=rank))}")
+    return (
+        replace(
+            cut,
+            resets=tier.resets if "reset" in names else (),
+            post_test_resets=(tier.post_test_resets or RESET_FLAGS[:1]) if "end" in names else (),
+            eth_status="eth" in names,
+            eth_summary=tier.eth_summary and "eth" in names,
+        ),
+        steps,
+    )
+
+
 def _validate() -> None:
     problems = []
     for name, tier in TIERS.items():
@@ -151,7 +241,18 @@ def _validate() -> None:
         problems += [
             f"{name}: unknown post-test reset flag {f!r}" for f in tier.post_test_resets if f not in RESET_FLAGS
         ]
-        problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
+        problems += [
+            f"{name}: unknown test {t!r}"
+            for t in tier.tests
+            if t not in TESTS and t not in PYTESTS and t not in LOAD_TESTS
+        ]
+        load = tuple(t for t in tier.tests if t in LOAD_TESTS)
+        if load and (tier.tests[-len(load) :] != load or load != tuple(t for t in LOAD_TESTS if t in load)):
+            problems.append(f"{name}: the galaxy load runs last, in the order {', '.join(LOAD_TESTS)}")
+        if load and tier.load_mode not in MODES:
+            problems.append(f"{name}: the galaxy load needs a load_mode, one of {', '.join(MODES)}")
+        if not load and tier.load_mode is not None:
+            problems.append(f"{name}: load_mode without the galaxy load")
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
         if tier.eth_summary and not tier.eth_status:
             problems.append(f"{name}: eth_summary needs eth_status")

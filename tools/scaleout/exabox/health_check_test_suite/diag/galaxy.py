@@ -43,6 +43,8 @@ def format_bdf(bdf: str) -> str:
 
 
 EXPECTED_CHIP_COUNT = 32
+# Trays known to be down (--known-dropped-tray): their chips are not counted as missing, and the 4x8 load is not run.
+KNOWN_DROPPED: set[int] = set()
 
 
 # Per-ASIC eth port classification on a BH Galaxy UBB.

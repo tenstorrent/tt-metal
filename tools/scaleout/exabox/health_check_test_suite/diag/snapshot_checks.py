@@ -17,6 +17,7 @@ from .galaxy import (
     ETH_EXAMAX_BY_ASIC,
     ETH_INTERNAL_BY_ASIC,
     EXPECTED_CHIP_COUNT,
+    KNOWN_DROPPED,
     TRAY_TO_UBB_NIBBLE,
     UBB_NIBBLE_TO_TRAY,
     expected_bdf,
@@ -24,6 +25,7 @@ from .galaxy import (
     parse_bdf_physical,
 )
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
+from .naming import blamed, chip
 
 # GDDR train+BIST bitmask layout — tt-system-firmware telemetry.h:103-118.
 # Exposed by tt-smi -s as smbus_telem.DDR_STATUS (legacy WH name; on BH this is
@@ -61,6 +63,123 @@ def detect_board_rev(devs: list[dict]) -> tuple[str | None, dict[str, list[str]]
     return None, dict(per_rev)
 
 
+def pcie_enum_check(devs: list[dict], name: str = "pcie_enum_count") -> Check:
+    """All 32 chips present in the snapshot's device list; on a short count, the
+    slots that did not show up (set diff against the full 32-BDF Galaxy 6U topology)."""
+    n = len(devs)
+    actual_bdfs = sorted((d.get("board_info") or {}).get("bus_id", "") for d in devs)
+    all_expected_bdfs = sorted(expected_bdf(t, a) for t in range(1, 5) if t not in KNOWN_DROPPED for a in range(1, 9))
+    missing_bdfs_enum = sorted(set(all_expected_bdfs) - set(actual_bdfs))
+    enum_details = f"{n}/{EXPECTED_CHIP_COUNT} chips enumerated" + "".join(
+        f"; tray {t}: known drop" for t in KNOWN_DROPPED
+    )
+    if missing_bdfs_enum:
+        enum_details += "; missing: " + ", ".join(format_bdf(b) for b in missing_bdfs_enum)
+    return Check(
+        name=name,
+        status=PASS if (not missing_bdfs_enum if KNOWN_DROPPED else n == EXPECTED_CHIP_COUNT) else FAIL,
+        details=enum_details,
+        data={
+            "actual": n,
+            "expected": EXPECTED_CHIP_COUNT,
+            "missing_bdfs": missing_bdfs_enum,
+            "missing": [chip(b) for b in missing_bdfs_enum],
+            "blamed_chips": blamed(missing_bdfs_enum),
+            "actual_bdfs": actual_bdfs,
+        },
+        ip="pcie",
+    )
+
+
+# Plausible range of each tt-smi telemetry reading; anything else (the 65535 and
+# 0xFFFF sentinels, 0, negative, text) is garbage and is never judged.
+PLAUSIBLE = {
+    "asic_temperature": (1.0, 150.0),
+    "power": (1.0, 1000.0),
+    "current": (1.0, 2000.0),
+    "voltage": (0.3, 1.5),
+}
+# C8 WARN thresholds: max temperature, power, current and min vcore.
+C8_TEMP_C, C8_POWER_W, C8_CURRENT_A, C8_VCORE_V = 75.0, 320.0, 400.0, 0.66
+
+
+def _reading(d: dict, key: str) -> float | None:
+    """The chip's telemetry value for ``key``, or None when missing or implausible."""
+    try:
+        v = float(d.get("telemetry", {}).get(key))
+    except (TypeError, ValueError):
+        return None
+    lo, hi = PLAUSIBLE[key]
+    return v if lo <= v <= hi else None
+
+
+def _thermal_and_telemetry(devs: list[dict], phase: Phase) -> None:
+    """``asic_thermal_precheck`` (FAIL at a chip's thermal limit, WARN within 20 C of it) and ``c8_telemetry`` (WARN)."""
+    rows, ignored = [], []
+    for d in devs:
+        c = chip(d["board_info"]["bus_id"])
+        row = {**c, **{k: _reading(d, k) for k in PLAUSIBLE}}
+        try:
+            row["thm_limit"] = float(d.get("limits", {}).get("thm_limit"))
+        except (TypeError, ValueError):
+            row["thm_limit"] = 110.0
+        rows.append(row)
+        ignored += [{**c, "reading": k} for k in PLAUSIBLE if row[k] is None]
+    hot = [r for r in rows if r["asic_temperature"] is not None]
+    over = [r for r in hot if r["asic_temperature"] >= r["thm_limit"]]
+    warm = [r for r in hot if r["asic_temperature"] >= r["thm_limit"] - 20 and r not in over]
+    top = max(hot, key=lambda r: r["asic_temperature"], default=None)
+    phase.add(
+        Check(
+            name="asic_thermal_precheck",
+            status=FAIL if over else WARN if warm else PASS,
+            details=(
+                "".join(
+                    f"{format_bdf(r['bdf'])} {r['asic_temperature']:.1f}C at limit {r['thm_limit']:.0f}C; "
+                    for r in over + warm
+                )
+                or (
+                    f"hottest {top['bdf']} {top['asic_temperature']:.1f}C"
+                    if top
+                    else "no plausible temperature reading"
+                )
+            ).rstrip("; ")
+            + (f"; {len(ignored)} implausible readings ignored" if ignored else ""),
+            data={
+                "hottest_chip": top["bdf"] if top else None,
+                "hottest_temp_c": top["asic_temperature"] if top else None,
+                "over": [r["bdf"] for r in over],
+                "warm": [r["bdf"] for r in warm],
+                "blamed_chips": blamed(r["bdf"] for r in over + warm),
+                "per_chip": rows,
+                "ignored": ignored,
+            },
+            ip="thermal",
+            console_visible=bool(over or warm),
+        )
+    )
+    flagged = [
+        {**{k: r[k] for k in ("bdf", "tray", "asic")}, "why": why}
+        for r in rows
+        for why in (
+            *(["temperature"] if (r["asic_temperature"] or 0) >= C8_TEMP_C else []),
+            *(["power"] if (r["power"] or 0) >= C8_POWER_W else []),
+            *(["current"] if (r["current"] or 0) >= C8_CURRENT_A else []),
+            *(["vcore"] if r["voltage"] is not None and r["voltage"] < C8_VCORE_V else []),
+        )
+    ]
+    phase.add(
+        Check(
+            name="c8_telemetry",
+            status=WARN if flagged else PASS,
+            details="; ".join(f"{format_bdf(f['bdf'])} {f['why']}" for f in flagged)
+            or f"temperature, power, current and vcore in range on {len(rows)} chips",
+            data={"flagged": flagged, "ignored": ignored, "blamed_chips": blamed(f["bdf"] for f in flagged)},
+            ip="asic",
+        )
+    )
+
+
 def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     """Run all snapshot checks. Returns the detected board revision
     ('RevA/B', 'RevC') or None if indeterminate, so the caller can record it
@@ -71,27 +190,9 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     # 1. Enumeration count — on short count, identify which physical slots didn't
     # show up (set diff against the full 32-BDF Galaxy 6U topology). Helps ops
     # localise the missing chip(s) without manual cross-referencing.
+    enum = pcie_enum_check(devs)
+    phase.add(enum)
     n = len(devs)
-    actual_bdfs = sorted((d.get("board_info") or {}).get("bus_id", "") for d in devs)
-    all_expected_bdfs = sorted(expected_bdf(t, a) for t in range(1, 5) for a in range(1, 9))
-    missing_bdfs_enum = sorted(set(all_expected_bdfs) - set(actual_bdfs))
-    enum_details = f"{n}/{EXPECTED_CHIP_COUNT} chips enumerated"
-    if missing_bdfs_enum:
-        enum_details += "; missing: " + ", ".join(format_bdf(b) for b in missing_bdfs_enum)
-    phase.add(
-        Check(
-            name="pcie_enum_count",
-            status=PASS if n == EXPECTED_CHIP_COUNT else FAIL,
-            details=enum_details,
-            data={
-                "actual": n,
-                "expected": EXPECTED_CHIP_COUNT,
-                "missing_bdfs": missing_bdfs_enum,
-                "actual_bdfs": actual_bdfs,
-            },
-            ip="pcie",
-        )
-    )
     if n == 0:
         return None  # nothing else we can check
 
@@ -165,7 +266,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             status=PASS if all(dram_ok) else FAIL,
             details=f"{sum(dram_ok)}/{n} dram_status=True"
             + (f"; failed: [{', '.join(format_bdf(b) for b in bad)}]" if bad else ""),
-            data={"failed_chips": bad},
+            data={"failed_chips": bad, "blamed_chips": blamed(bad)},
             ip="gddr",
         )
     )
@@ -179,7 +280,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             status=PASS if not gddr_bad else FAIL,
             details=f"{n - len(gddr_bad)}/{n} chips have ENABLED_GDDR=0xff"
             + (f"; partial: [{', '.join(f'{format_bdf(b)}={m}' for b, m in gddr_bad[:5])}]" if gddr_bad else ""),
-            data={"partial_chips": gddr_bad},
+            data={"partial_chips": gddr_bad, "blamed_chips": blamed(b for b, _ in gddr_bad)},
             ip="gddr",
         )
     )
@@ -194,7 +295,11 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             name="harvesting_state",
             status=PASS if not harv_bad else FAIL,
             details=f"{n - len(harv_bad)}/{n} chips have HARVESTING_STATE in {{0,1}}",
-            data={"harvested_chips": harv_bad, "distribution": dict(Counter(harv))},
+            data={
+                "harvested_chips": harv_bad,
+                "distribution": dict(Counter(harv)),
+                "blamed_chips": blamed(b for b, _ in harv_bad),
+            },
             ip="asic",
             console_visible=False,
         )
@@ -239,6 +344,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 "missing": missing,
                 "missing_trays": missing_trays,
                 "missing_bdfs": missing_bdfs,
+                "blamed_chips": blamed(missing_bdfs),
             },
             ip="asic",
         )
@@ -271,7 +377,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             status=PASS if not mismatches else FAIL,
             details=f"{n - len(mismatches)}/{n} chips match"
             + (f"; mismatches: [{'; '.join(_fmt_mismatch(m) for m in mismatches[:3])}]" if mismatches else ""),
-            data={"mismatches": mismatches},
+            data={"mismatches": mismatches, "blamed_chips": blamed(m["bdf"] for m in mismatches)},
             ip="asic",
         )
     )
@@ -378,7 +484,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 if train_failures
                 else ""
             ),
-            data={"failures": train_failures},
+            data={"failures": train_failures, "blamed_chips": blamed(f["bdf"] for f in train_failures)},
             ip="gddr",
         )
     )
@@ -392,7 +498,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 if bist_failures
                 else ""
             ),
-            data={"failures": bist_failures},
+            data={"failures": bist_failures, "blamed_chips": blamed(f["bdf"] for f in bist_failures)},
             ip="gddr",
         )
     )
@@ -444,7 +550,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                     else ""
                 )
             ),
-            data={"mismatches": lane_mismatches},
+            data={"mismatches": lane_mismatches, "blamed_chips": blamed(m["bdf"] for m in lane_mismatches)},
             ip="pcie",
         )
     )
@@ -659,7 +765,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                     f"first failure: {format_bdf(first['bdf'])} "
                     f"down_ports={first['down_ports']}"
                 ),
-                data={"failures": eth_link_failures},
+                data={"failures": eth_link_failures, "blamed_chips": blamed(f["bdf"] for f in eth_link_failures)},
                 ip="eth",
             )
         )
@@ -715,34 +821,8 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             )
         )
 
-    # 14. ASIC thermal pre-check — kept in JSON only.
-    temps = []
-    for d in devs:
-        t = d.get("telemetry", {}).get("asic_temperature")
-        if t is not None:
-            try:
-                temps.append((d["board_info"]["bus_id"], float(t)))
-            except (ValueError, TypeError):
-                pass
-    if temps:
-        hottest_bdf, hottest_t = max(temps, key=lambda x: x[1])
-        thm_limit = float(devs[0].get("limits", {}).get("thm_limit", 110))
-        threshold = thm_limit - 20  # idle should be well below throttle
-        status = PASS if hottest_t < threshold else WARN
-        phase.add(
-            Check(
-                name="asic_thermal_precheck",
-                status=status,
-                details=f"hottest chip {hottest_bdf} @ {hottest_t:.1f}°C (limit {thm_limit}°C)",
-                data={
-                    "hottest_chip": hottest_bdf,
-                    "hottest_temp_c": hottest_t,
-                    "thm_limit_c": thm_limit,
-                    "all_temps_c": dict(temps),
-                },
-                ip="thermal",
-                console_visible=False,
-            )
-        )
+    # 14. Thermal pre-fault and C8 telemetry, from tt-smi's own telemetry block (no device open).
+    # A reading that is not a plausible number is listed under "ignored" and never judged.
+    _thermal_and_telemetry(devs, phase)
 
     return rev

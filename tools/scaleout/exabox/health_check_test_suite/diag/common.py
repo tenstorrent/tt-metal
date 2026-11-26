@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from collections import defaultdict
@@ -58,6 +59,23 @@ def run_with_timeout(cmd: list[str], timeout_s: float, **kw) -> tuple[int, str, 
     return cp.returncode, cp.stdout or "", cp.stderr or "", False
 
 
+def start_group(argv: list[str], **kw) -> subprocess.Popen:
+    """Start argv in a process group of its own, so stop_group() takes its whole tree. A group of its own is out of
+    reach of a signal to this process's group (the whole-run timeout's), so every caller stops it on its way out,
+    an exception included; diag_runner turns SIGTERM into one."""
+    return subprocess.Popen(argv, start_new_session=True, **kw)
+
+
+def stop_group(p: subprocess.Popen) -> None:
+    """SIGKILL p's process group if p is still running, then reap p."""
+    if p.poll() is None:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    p.wait()
+
+
 def write_command_log(path: Path, cmdline: str, rc: int, duration_s: float, stdout: str, stderr: str) -> bool:
     """Write one command's full output to ``path``. False if it could not be
     written: a lost log is reported and costs nothing else."""
@@ -72,6 +90,17 @@ def write_command_log(path: Path, cmdline: str, rc: int, duration_s: float, stdo
         log(f"  could not write {path}: {e!r}")
         return False
     return True
+
+
+def root_cmd(cmd: list[str]) -> tuple[list[str] | None, str]:
+    """*cmd* run as root: as is for root, under sudo -n when sudo -n -l lists it exactly; else None and why not."""
+    if os.geteuid() == 0:
+        return cmd, ""
+    try:
+        listed = subprocess.run(["sudo", "-n", "-l", *cmd], capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        listed = False
+    return (["sudo", "-n", *cmd], "") if listed else (None, f"not root, and sudo -n -l does not list {' '.join(cmd)}")
 
 
 def resolve_optional_tool(override: str | None, binary: str, flag: str, absent: str) -> tuple[str | None, str]:

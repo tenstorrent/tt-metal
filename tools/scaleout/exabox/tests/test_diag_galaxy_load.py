@@ -1,0 +1,1519 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""The galaxy load without hardware: the bus-bar plan per mode, every planned flag exists in its program, a step
+is judged by its exit, its FAIL lines and its hang, the pair rounds never put a chip in two pairs, the UMD index
+follows the sorted BDFs of a fake sysfs, and daily, weekly and full run it in the tests phase after the device
+tests, each at its own length."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import io
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from dataclasses import asdict, replace
+from pathlib import Path
+from unittest import mock
+
+TESTS_DIR = Path(__file__).resolve().parent
+SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
+sys.path.insert(0, str(SUITE_DIR))
+
+import tiers  # noqa: E402
+from diag import busbar, events, links  # noqa: E402
+from diag.aer import aer_check, aer_new  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
+from diag.naming import chip, link_end  # noqa: E402
+
+
+def _steps(mode, **kw):
+    return {s.name: s for s in busbar.plan(mode, **kw)}
+
+
+# A galaxy/ program stand-in that never ends: it starts a child of its own that appends to the --beat file every
+# 50 ms, so the beat stops only when the whole process group is gone.
+TREE = """import subprocess, sys, time
+child = "import sys, time\\nwhile True:\\n    open(sys.argv[1], 'a').write('.')\\n    time.sleep(0.05)"
+subprocess.Popen([sys.executable, "-c", child, sys.argv[sys.argv.index("--beat") + 1]])
+time.sleep(60)
+"""
+
+
+def _beating(beat: Path) -> bool:
+    """Whether something still appends to *beat*."""
+    n = beat.stat().st_size
+    time.sleep(0.3)
+    return beat.stat().st_size != n
+
+
+class TestPlan(unittest.TestCase):
+    def test_order_is_the_same_in_every_mode(self):
+        for mode in busbar.MODES:
+            self.assertEqual([s.name for s in busbar.plan(mode)], ["qb", "mix", "step", "heavy", "code"])
+
+    def test_plain_lengths(self):
+        p = _steps("plain")
+        self.assertEqual(p["qb"].seconds, 180)
+        self.assertIn("1,2,3,4", p["mix"].argv)
+        self.assertEqual(p["step"].seconds, 100)
+        self.assertEqual(p["heavy"].seconds, 100)
+        self.assertNotIn("--l1-full", p["mix"].argv)
+
+    def test_full_is_plain_longer(self):
+        p, f = _steps("plain"), _steps("full")
+        self.assertIn("1,2,3,25", f["mix"].argv)
+        self.assertIn("--l1-full", f["mix"].argv)
+        self.assertIn("12.5", f["heavy"].argv)
+        for name in p:
+            self.assertGreaterEqual(f[name].seconds, p[name].seconds, name)
+
+    def test_smoke_caps_each_length(self):
+        s = _steps("smoke")
+        argv = s["qb"].argv
+        self.assertEqual(argv[argv.index("--idle-s") + 1], "2")
+        self.assertEqual(argv[argv.index("--burst-s") + 1], "2")
+        self.assertLess(sum(x.seconds for x in s.values()), 120)
+
+    def test_unknown_mode(self):
+        with self.assertRaises(ValueError):
+            busbar.plan("long")
+
+    def test_every_flag_exists_in_its_program(self):
+        for mode in busbar.MODES:
+            for step in busbar.plan(mode):
+                src = (busbar.GALAXY_DIR / step.argv[0]).read_text()
+                for flag in (a for a in step.argv[1:] if a.startswith("--")):
+                    self.assertIn(f'"{flag}"', src, f"{step.name}: {step.argv[0]} has no {flag}")
+
+    def test_no_override_changes_nothing(self):
+        for mode in busbar.MODES:
+            self.assertEqual(busbar.plan(mode, **{k: None for k in busbar.OVERRIDES}), busbar.plan(mode))
+            self.assertTrue(all(not s.env for s in busbar.plan(mode)))
+
+    def test_heavy_overrides(self):
+        h = _steps("plain", heavy_s=40, ops="16k_hifi4", x_s=15, x_ops="8k_fp32_hifi4")["heavy"]
+        argv = h.argv
+        self.assertEqual(argv[argv.index("--chunk-min") + 1], f"{40 / 60:g}")
+        self.assertEqual(argv[-argv[::-1].index("--heavy") :][0], "16k_hifi4")
+        self.assertEqual(argv[argv.index("--heavy-x") + 1], "8k_fp32_hifi4")
+        self.assertEqual(argv[argv.index("--heavy-x-s") + 1], "15")
+        self.assertEqual(h.seconds, 50)
+
+    def test_x_seconds_are_capped_at_the_heavy_seconds(self):
+        argv = _steps("full", heavy_s=20, x_s=300)["heavy"].argv
+        self.assertEqual(argv[argv.index("--heavy-x-s") + 1], "20")
+
+    def test_x_ops_may_be_none(self):
+        argv = _steps("plain", x_ops=",")["heavy"].argv
+        self.assertEqual(argv[argv.index("--heavy-x") + 1], "")
+
+    def test_heavy_seconds_override_wins_over_smoke(self):
+        self.assertEqual(_steps("smoke", heavy_s=30)["heavy"].seconds, 32)  # 30 s plus smoke's 2 s gap
+
+    def test_heavy_n_gap_and_trays(self):
+        s = _steps("plain", heavy_n=4, gap_ms=0, trays="3, 1")
+        for name in ("mix", "heavy"):
+            argv = s[name].argv
+            self.assertEqual(argv[argv.index("--heavy-n") + 1], "4", name)
+            self.assertEqual(argv[argv.index("--burst-gap-ms") + 1], "0", name)
+            self.assertEqual(argv[argv.index("--trays") + 1], "3,1", name)
+        for name in ("qb", "step"):
+            argv = s[name].argv
+            self.assertEqual(argv[argv.index("--burst-gap-ms") + 1], "0", name)
+            self.assertNotIn("--heavy-n", argv)
+            self.assertNotIn("--trays", argv)
+        self.assertEqual(s["code"], _steps("plain")["code"])
+
+    def test_matmul_throttle_is_an_environment_setting_of_the_load_steps(self):
+        s = _steps("plain", mm_throttle=3)
+        for name in ("qb", "mix", "step", "heavy"):
+            self.assertEqual(s[name].env, (("TT_MM_THROTTLE_PERF", "3"),), name)
+        self.assertEqual(s["code"].env, ())
+
+    def test_bad_overrides_are_loud(self):
+        for kw in (
+            {"mm_throttle": 0},
+            {"mm_throttle": 6},
+            {"trays": "5"},
+            {"trays": "1,x"},
+            {"trays": ","},
+            {"ops": ""},
+            {"ops": "16k_hifi2;reboot"},
+            {"x_ops": "16k_hifi4,$(id)"},
+            {"heavy_s": 0},
+            {"heavy_n": 0},
+            {"gap_ms": -1},
+            {"x_s": -1},
+            {"nope": 1},
+        ):
+            with self.assertRaises(ValueError, msg=str(kw)):
+                busbar.plan("plain", **kw)
+
+    def test_every_override_flag_exists_in_its_program(self):
+        s = busbar.plan(
+            "plain",
+            **{
+                "heavy_s": 9,
+                "ops": "16k_hifi4",
+                "x_s": 1,
+                "x_ops": "16k_hifi4",
+                "heavy_n": 2,
+                "gap_ms": 1,
+                "trays": "1",
+            },
+        )
+        for step in s:
+            src = (busbar.GALAXY_DIR / step.argv[0]).read_text()
+            for flag in (a for a in step.argv[1:] if a.startswith("--")):
+                self.assertIn(f'"{flag}"', src, f"{step.name}: {step.argv[0]} has no {flag}")
+
+    def _cli(self, tier, *args):
+        return subprocess.run(
+            [sys.executable, str(SUITE_DIR / "diag_runner.py"), "--tier", tier, *args],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_cli_bad_override_exits_2_before_the_run(self):
+        for tier in ("daily", "weekly", "full"):
+            for args in (("--mm-throttle", "9"), ("--trays", "7"), ("--heavy-n", "x"), ("--heavy-ops", "a;b")):
+                r = self._cli(tier, *args)
+                self.assertEqual(r.returncode, 2, (tier, args))
+                self.assertTrue(r.stderr.strip(), (tier, args))
+
+    def test_cli_overrides_on_a_tier_without_the_load_are_an_error(self):
+        for tier in ("flash", "pre_bmc_reboot", "pre_reboot"):
+            r = self._cli(tier, "--heavy-s", "40")
+            self.assertEqual(r.returncode, 2, tier)
+            self.assertIn("does not run (tiers: daily, weekly, full)", r.stderr, tier)
+
+    def test_cli_tests_filter_names_only_what_the_tier_runs(self):
+        for tier, args in (
+            ("weekly", ("--tests", "nope")),
+            ("flash", ("--tests", "busbar_heavy")),  # no bus-bar test in the tier, so no step names either
+            ("weekly", ("--tests", "busbar_x")),
+            ("weekly", ("--tests", ",")),
+            ("weekly", ("--tests", "links", "--heavy-s", "40")),  # an override without the bus-bar steps
+        ):
+            r = self._cli(tier, *args)
+            self.assertEqual(r.returncode, 2, (tier, args))
+            self.assertIn("--tests", r.stderr, (tier, args))
+        self.assertIn("it runs: ", self._cli("weekly", "--tests", "nope").stderr)
+
+    def test_select_tests(self):
+        weekly = tiers.TIERS["weekly"]
+        t, steps = tiers.select_tests(weekly, "links,busbar_mix")
+        self.assertEqual((t.tests, steps), (("busbar", "links"), ("mix",)))
+        self.assertEqual(t.load_mode, weekly.load_mode)
+        self.assertTrue(t.galaxy_load)
+        t, steps = tiers.select_tests(weekly, weekly.tests[0])
+        self.assertEqual((t.tests, steps, t.galaxy_load), ((weekly.tests[0],), (), False))
+        with self.assertRaisesRegex(ValueError, "busbar_heavy not in this tier"):
+            tiers.select_tests(tiers.TIERS["flash"], "busbar_heavy")
+
+    def test_cli_has_no_mode_plan_or_steps(self):
+        for args in (("--mode", "plain"), ("--plan",), ("--steps", "qb")):
+            r = self._cli("full", *args)
+            self.assertEqual(r.returncode, 2, args)
+            self.assertIn("unrecognized arguments", r.stderr, args)
+
+
+class TestRunStep(unittest.TestCase):
+    def _run(self, body, seconds=5):
+        with tempfile.TemporaryDirectory() as d:
+            prog = Path(d) / "prog.py"
+            prog.write_text(body)
+            with mock.patch.object(busbar, "GALAXY_DIR", Path(d)), mock.patch.object(busbar, "SETUP_S", 0):
+                return busbar.run_step(busbar.Step("x", "test", ("prog.py", "--out", "{out}"), seconds), Path(d))
+
+    def test_pass(self):
+        self.assertEqual(self._run("print('ok')").status, PASS)
+
+    def test_check_and_log_are_named_after_the_test_and_step(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "prog.py").write_text("print('ok')")
+            with mock.patch.object(busbar, "GALAXY_DIR", Path(d)):
+                c = busbar.run_step(busbar.Step("qb", "test", ("prog.py",), 5), Path(d))
+                f = busbar.run_step(busbar.Step("fabric", "test", ("prog.py",), 5), Path(d), test="links")
+        self.assertEqual((c.name, Path(c.data["log"]).name), ("busbar_qb", "busbar_qb.log"))
+        self.assertEqual((f.name, Path(f.data["log"]).name), ("links_fabric", "links_fabric.log"))
+
+    def test_rc(self):
+        c = self._run("import sys; print('lost'); sys.exit(3)")
+        self.assertEqual((c.status, c.data["rc"]), (FAIL, 3))
+
+    def test_fail_line(self):
+        c = self._run("print('chip 3: NUMERIC FAIL 0000:41:00.0')")
+        self.assertEqual(c.status, FAIL)
+        self.assertIn("NUMERIC FAIL", c.details)
+
+    def test_the_readback_report_names_the_chips_its_log_does_not(self):
+        line = "NUMERIC FAIL 41:00.0 (tray 2) chip 9 [heavy]: 3/8 outputs"
+        prog = "import pathlib, sys; pathlib.Path(sys.argv[2], 'rows.jsonl').write_text('{}\\n'); sys.exit(4)"
+        with mock.patch.object(busbar.chunk_sched, "report", return_value=["CHUNK 1/1: fine", line]):
+            c = self._run(prog)
+            self.assertEqual((c.status, c.data["fails"]), (FAIL, [line]))
+            self.assertNotIn(line, self._run("print('ok')").data.get("fails", []))  # no rows: no report
+
+    def test_hang(self):
+        c = self._run("import time; time.sleep(30)", seconds=1)
+        self.assertEqual(c.status, FAIL)
+        self.assertTrue(c.data["hung"])
+
+    def _tree_step(self, d, seconds, start=None):
+        (Path(d) / "prog.py").write_text(TREE)
+        step = busbar.Step("x", "test", ("prog.py", "--beat", "{out}/beat"), seconds)
+        with mock.patch.object(busbar, "GALAXY_DIR", Path(d)), mock.patch.object(
+            busbar, "SETUP_S", 0
+        ), mock.patch.object(busbar, "start_group", start or busbar.start_group), contextlib.redirect_stdout(
+            io.StringIO()
+        ):
+            return busbar.run_step(step, Path(d))
+
+    def test_a_hung_step_leaves_nothing_running(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(self._tree_step(d, 1).data["hung"])
+            self.assertFalse(_beating(Path(d, "x", "beat")))
+
+    def test_an_interrupted_step_leaves_nothing_running(self):
+        real = busbar.start_group
+
+        def start(argv, **kw):
+            p = real(argv, **kw)
+            wait = p.wait
+
+            def interrupted(timeout=None):
+                if timeout is None:
+                    return wait()
+                time.sleep(0.5)  # the program has started its child
+                raise KeyboardInterrupt
+
+            p.wait = interrupted
+            return p
+
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(KeyboardInterrupt):
+                self._tree_step(d, 30, start)
+            self.assertFalse(_beating(Path(d, "x", "beat")))
+
+    def test_step_env_reaches_the_program(self):
+        with tempfile.TemporaryDirectory() as d:
+            prog = Path(d) / "prog.py"
+            prog.write_text("import os; print(os.environ['TT_MM_THROTTLE_PERF'])")
+            step = busbar.Step("x", "test", ("prog.py",), 5, (("TT_MM_THROTTLE_PERF", "4"),))
+            with mock.patch.object(busbar, "GALAXY_DIR", Path(d)):
+                self.assertEqual(busbar.run_step(step, Path(d)).status, PASS)
+            self.assertEqual((Path(d) / "x" / "busbar_x.log").read_text().strip(), "4")
+
+    def test_dry_run_shows_the_env(self):
+        c = busbar.run_step(busbar.plan("smoke", mm_throttle=2)[0], Path("/nonexistent"), dry_run=True)
+        self.assertEqual(c.data["env"], {"TT_MM_THROTTLE_PERF": "2"})
+
+    def test_dry_run(self):
+        c = busbar.run_step(busbar.plan("smoke")[0], Path("/nonexistent"), dry_run=True)
+        self.assertEqual(c.status, SKIP)
+
+    def test_a_failed_part_does_not_end_the_phase(self):
+        calls = []
+
+        def fake(step, out, dry_run):
+            calls.append(step.name)
+            (out / step.name).mkdir(parents=True, exist_ok=True)
+            return busbar.Check(name=step.name, status=FAIL if step.name == "qb" else PASS, data=dict(data))
+
+        for data, want in (({}, False), ({"hung": True}, True)):  # a plain failure is no link fault, a hang is
+            calls.clear()
+            phase = Phase(name="busbar")
+            with tempfile.TemporaryDirectory() as d, mock.patch.object(busbar, "run_step", fake), mock.patch.object(
+                busbar, "quiet", lambda *a: None
+            ):
+                busbar.run_busbar(phase, Path(d), "smoke")
+                written = json.loads((Path(d) / "busbar" / "qb" / "check.json").read_text())
+            self.assertEqual(calls, ["qb", "mix", "step", "heavy", "code"])
+            self.assertEqual(any(map(busbar.link_fault, phase.checks)), want)
+            self.assertEqual(phase.checks[0].data.get("link_fault", False), want)  # the report says so for a caller
+            self.assertEqual(
+                (written["status"], written.get("link_fault", False)), (FAIL, want)
+            )  # and the hook's after
+
+    def test_run_busbar_runs_only_the_steps_named(self):
+        calls = []
+
+        def fake(step, out, dry_run):
+            calls.append(step.name)
+            return busbar.Check(name=step.name, status=PASS)
+
+        with mock.patch.object(busbar, "run_step", fake), mock.patch.object(busbar, "quiet", lambda *a: None):
+            busbar.run_busbar(Phase(name="busbar"), Path("/tmp"), "smoke", steps=("heavy",))
+        self.assertEqual(calls, ["heavy"])
+
+    def test_order_chunks_long_min_qb_n(self):
+        p = busbar.plan("full", order="heavy,qb,mix", chunks="1,2", long_min=10, qb_n=3)
+        self.assertEqual([s.name for s in p], ["heavy", "qb", "mix"])
+        self.assertIn("--cycles", p[1].argv)
+        self.assertEqual(p[1].argv[p[1].argv.index("--cycles") + 1], "3")
+        self.assertEqual(p[2].argv[p[2].argv.index("--chunk-min") + 1], "1,10")
+        smoke = busbar.plan("smoke", chunks="1,2,3")
+        self.assertEqual(smoke[1].argv[smoke[1].argv.index("--chunk-min") + 1], "0.0333333,0.0333333,0.0333333")
+        self.assertEqual(busbar.plan("plain", chunks="1,2,3,4"), busbar.plan("plain"))
+        self.assertEqual(busbar.plan("plain", order="qb,maxutil")[1].argv, ())  # a caller's part: run by the hook
+
+    def test_bad_order_and_chunks_refused(self):
+        for over in (
+            {"order": "qb,qb"},
+            {"order": "qb;rm"},
+            {"chunks": "1,x"},
+            {"chunks": "0"},
+            {"qb_n": 0},
+            {"long_min": 0},
+        ):
+            with self.assertRaises(ValueError, msg=over):
+                busbar.plan("plain", **over)
+
+    def _hooked(self, d, body, order, fails=("qb",), **kw):
+        """run_busbar with a hook script running *body* (after logging its args); the checks and the hook's calls."""
+        calls, hook = Path(d) / "calls", Path(d) / "hook.sh"
+        hook.write_text(f'#!/bin/bash\necho "$1 $2 $3 ${{4#{d}/}}" >> {calls}\n{body}\nexit 0\n')
+        hook.chmod(0o755)
+
+        def fake(step, out, dry_run):
+            return busbar.Check(name=f"busbar_{step.name}", status=FAIL if step.name in fails else PASS)
+
+        ph = Phase(name="busbar")
+        with mock.patch.object(busbar, "run_step", fake), mock.patch.object(
+            busbar, "quiet", lambda *a: None
+        ), mock.patch.object(events, "hook", str(hook)):
+            busbar.run_busbar(ph, Path(d), "smoke", order=order, **kw)
+        return [(c.name, c.status) for c in ph.checks], calls.read_text().splitlines()
+
+    def test_hook_events_and_caller_parts(self):
+        with tempfile.TemporaryDirectory() as d:
+            body = '[ "$1 $2" = "before mix" ] && exit 1\n[ "$1 $2" = "run pv" ] && exit 3\n[ "$1 $2" = "run h3" ] && exit 2'
+            checks, calls = self._hooked(d, body, "qb,mix,maxutil,pv,h3")
+        self.assertEqual(
+            calls,
+            [
+                "stage-start busbar - busbar",
+                "before qb - busbar/qb",
+                "after qb FAIL busbar/qb",
+                "before mix - busbar/mix",  # held back: no after
+                "before maxutil - busbar/maxutil",
+                "run maxutil - busbar/maxutil",
+                "after maxutil PASS busbar/maxutil",
+                "before pv - busbar/pv",
+                "run pv - busbar/pv",
+                "after pv SKIP busbar/pv",
+                "before h3 - busbar/h3",
+                "run h3 - busbar/h3",
+                "after h3 FAIL busbar/h3",
+                "stage-end busbar FAIL busbar",
+            ],
+        )
+        self.assertEqual(
+            checks,
+            [
+                ("busbar_qb", FAIL),
+                ("busbar_mix", SKIP),
+                ("busbar_maxutil", PASS),
+                ("busbar_pv", SKIP),
+                ("busbar_h3", FAIL),
+            ],
+        )
+
+    def test_stage_end_passes_when_nothing_failed(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, calls = self._hooked(d, "", "qb,step", fails=())
+        self.assertEqual(calls[-1], "stage-end busbar PASS busbar")
+
+    def test_the_hook_runs_synchronously_outside_the_timer(self):
+        with tempfile.TemporaryDirectory() as d:  # the part after the hook's run starts only once the hook is done
+            checks, _ = self._hooked(d, '[ "$1" = run ] && sleep 1 && touch ' + d + "/done", "maxutil", fails=())
+            self.assertTrue(Path(d, "done").exists())
+        self.assertEqual(checks, [("busbar_maxutil", PASS)])
+
+    def test_a_caller_part_with_no_hook_is_skipped(self):
+        ph = Phase(name="busbar")
+        with mock.patch.object(
+            busbar, "run_step", lambda st, o, dr: busbar.Check(name=st.name, status=PASS)
+        ), mock.patch.object(busbar, "quiet", lambda *a: None):
+            busbar.run_busbar(ph, Path("/tmp"), "smoke", order="qb,pv")
+        self.assertEqual(
+            (ph.checks[1].name, ph.checks[1].status, ph.checks[1].details), ("busbar_pv", SKIP, "no --hook to run it")
+        )
+
+    def test_emit_with_no_hook_or_in_a_dry_run(self):
+        with mock.patch.object(events, "hook", None):
+            self.assertEqual(events.emit("before", "qb", "-", Path("/nonexistent")), 0)
+        dry = argparse.Namespace(dry_run=True, output=Path("/nonexistent/r.json"))
+        with mock.patch.object(events, "hook", "/nonexistent/hook"), mock.patch.object(events, "args", dry):
+            self.assertEqual(events.emit("before", "qb", "-", Path("/nonexistent")), 0)
+
+    def test_the_stage_end_captures_judge_the_hsc_at_the_load_reached(self):
+        # mix: one 60 s chunk, then one a loss ended 30 s in (the file's last write); step: its 90 s burst. Planned
+        # 200 + 90 s: 180 s reached, 62%, under captures' LOAD_JUDGED_PCT
+        mix, step = busbar.Step("mix", "", ("p",), 0, (), 200), busbar.Step("step", "", ("p",), 0, (), 90)
+        with tempfile.TemporaryDirectory() as d:
+            for n in ("mix", "step"):
+                (Path(d) / n).mkdir()
+            rows = Path(d) / "mix" / "rows.jsonl"
+            rows.write_text(
+                "\n".join(
+                    json.dumps(r)
+                    for r in (
+                        {"event": "start", "k": 0, "start": 1000},
+                        {"event": "chunk", "k": 0, "start": 1000, "end": 1060},
+                        {"event": "start", "k": 1, "start": 1070},
+                    )
+                )
+            )
+            os.utime(rows, (1100, 1100))
+            (Path(d) / "step" / "result.json").write_text(json.dumps({"burst": {"t0": 2000, "seconds": 90}}))
+            self.assertAlmostEqual(busbar.load_pct(Path(d), [mix, step]), 100 * 180 / 290)
+            a = argparse.Namespace(dry_run=False, output=Path(d) / "r.json", load_pct=100.0)
+            with mock.patch.object(events, "args", a), mock.patch("diag.captures.run", return_value=[]) as cap:
+                events.emit("stage-end", "busbar", PASS, Path(d), load_pct=62.0)
+                events.emit("stage-end", "links", PASS, Path(d))
+        self.assertEqual([c.args[4].load_pct for c in cap.call_args_list], [62.0, 100.0])
+
+    def test_a_tray_drop_shape_goes_to_the_mix_with_its_trays(self):
+        mix = next(s for s in busbar.plan("plain", shape="h3-replay", trays="1,2,3,4", shape_tray=3) if s.name == "mix")
+        self.assertIn(
+            ("--trays", "1,2,3,4", "--shape", "h3-replay", "--shape-tray", "3"),
+            [mix.argv[i : i + 6] for i in range(len(mix.argv))],
+        )
+        for bad in ({"shape": "h3-replay"}, {"shape": "h3-replay", "trays": "2", "shape_tray": 5}):
+            with self.assertRaises(ValueError):
+                busbar.plan("plain", **bad)
+
+    def test_emit_runs_the_captures_and_after_a_lost_part_the_recovery(self):
+        with tempfile.TemporaryDirectory() as d:
+            sd = Path(d) / "busbar" / "mix"
+            sd.mkdir(parents=True)
+            (sd / "check.json").write_text(json.dumps({"status": FAIL, "hung": True}))
+            a = argparse.Namespace(dry_run=False, output=Path(d) / "diag_report.json")
+            with mock.patch.object(events, "args", a), mock.patch.object(events, "hook", None), mock.patch(
+                "diag.captures.run", return_value=["HSC FAIL tray 2 (41:00.0-48:00.0) HSC 0x40: OFF set during mix"]
+            ) as cap, mock.patch("diag.resets.recover", return_value=["FAIL recount_recover: 31/32"]) as rec:
+                events.emit("after", "mix", PASS, sd)
+                rec.assert_not_called()  # a part that passed: no reset
+                events.emit("after", "mix", FAIL, sd)
+            self.assertEqual(cap.call_args.args[:4], ("after", "mix", FAIL, Path(d).resolve()))
+            rec.assert_called_once_with(a, sd)
+            self.assertEqual(
+                (Path(d) / "finding_stage.tsv").read_text().splitlines()[-2:],
+                [
+                    "busbar\tHSC FAIL tray 2 (41:00.0-48:00.0) HSC 0x40: OFF set during mix",
+                    "busbar\tFAIL recount_recover: 31/32",
+                ],
+            )
+
+    def test_every_fail_or_warn_check_is_a_finding_line(self):
+        ends = [
+            {
+                "a": {"bdf": "0000:01:00.0", "tray": 1, "channel": 4},
+                "b": {"bdf": "0000:02:00.0", "tray": 1, "channel": 6},
+            }
+        ]
+        report = {
+            "phases": {
+                "tests": {
+                    "checks": [
+                        {
+                            "name": "links_pair",
+                            "status": FAIL,
+                            "details": "x",
+                            "data": {"failed": [{"why": "hung", "ends": ends}]},
+                        },
+                        {
+                            "name": "busbar_mix",
+                            "status": FAIL,
+                            "details": "x",
+                            "data": {"fails": ["NUMERIC FAIL 01:00.0 (tray 1) chip 0"]},
+                        },
+                        {"name": "busbar_qb", "status": PASS, "details": "", "data": {}},
+                    ]
+                },
+                "triage": {
+                    "checks": [
+                        {
+                            "name": "aer_x",
+                            "status": WARN,
+                            "details": "3 errors",
+                            "data": {},
+                            "bdf": ["0000:41:00.0"],
+                            "tray": [2],
+                        }
+                    ]
+                },
+                "qsfp": {"gates": False, "checks": [{"name": "q", "status": FAIL, "details": "", "data": {}}]},
+            }
+        }
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(
+            events, "args", argparse.Namespace(dry_run=False, output=Path(d) / "r.json")
+        ):
+            events.check_findings(report)
+            got = (Path(d) / "finding_stage.tsv").read_text().splitlines()
+        self.assertEqual(
+            got,
+            [
+                "C5\tLINK HANG 0000:01:00.0 (tray 1) e4 <-> 0000:02:00.0 (tray 1) e6: hung",
+                "busbar\tNUMERIC FAIL 01:00.0 (tray 1) chip 0",
+                "end\tAER-X WARN 0000:41:00.0 (tray 2): 3 errors",
+            ],
+        )
+
+    def test_a_vr_pg_fall_stops_the_running_part_and_holds_the_rest(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "prog.py").write_text("import time; time.sleep(60)")
+            with mock.patch.object(busbar, "GALAXY_DIR", Path(d)), mock.patch.object(
+                busbar, "PG_POLL_S", 0.1
+            ), mock.patch.object(events, "vr_pg", return_value="vr_pg 00 on tray 2"):
+                t0 = time.time()
+                c = busbar.run_step(busbar.Step("mix", "test", ("prog.py",), 30), Path(d))
+            self.assertLess(time.time() - t0, 10)
+        self.assertEqual((c.status, c.data["vr_pg"], c.data["hung"]), (FAIL, "vr_pg 00 on tray 2", False))
+        self.assertTrue(c.details.startswith("stopped: vr_pg 00 on tray 2"))
+        ph = Phase(name="t")
+        cut = Check(name="busbar_qb", status=FAIL, details="stopped", data={"vr_pg": "vr_pg 00 on tray 2"})
+        with mock.patch.object(busbar, "run_step", return_value=cut), mock.patch.object(
+            busbar, "quiet", return_value=None
+        ):
+            busbar.run_busbar(ph, Path("/tmp/nonexistent"), "smoke", order="qb,mix")
+        self.assertEqual([(c.name, c.status) for c in ph.checks], [("busbar_qb", FAIL), ("busbar_mix", SKIP)])
+        self.assertEqual(ph.checks[1].details, "not run: vr_pg 00 on tray 2 in an earlier part")
+        ph, ok = Phase(name="t"), Check(name="busbar_qb", status=PASS, details="qb")
+        with mock.patch.object(busbar, "run_step", return_value=ok), mock.patch.object(
+            busbar, "quiet", return_value=None
+        ), mock.patch.object(events, "gone", return_value=["0000:41:00.0"]):
+            busbar.run_busbar(ph, Path("/tmp/nonexistent"), "smoke", order="qb,mix")
+        self.assertEqual(
+            ph.checks[1].details, "not run: chips still off PCIe after the recovery: 0000:41:00.0 in an earlier part"
+        )
+
+    def test_quiet_names_the_stuck_chips(self):
+        with tempfile.TemporaryDirectory() as d:
+            prog = Path(d) / "quiet_clock.py"
+            step = busbar.plan("smoke")[0]
+            for body, want in (
+                ("print('QUIET CLOCK before busbar qb: 32/32 chips at <= 800 MHz after 1.0 s')", None),
+                ("print('QUIET FAIL before busbar qb: 0000:02:00.0 (tray 1) chip 0 at 1350 MHz')", FAIL),
+                ("raise SystemExit(2)", FAIL),
+            ):
+                prog.write_text(body)
+                with mock.patch.object(busbar, "GALAXY_DIR", Path(d)):
+                    c = busbar.quiet(step, Path(d))
+                self.assertEqual(c and c.status, want)
+                if c and "QUIET FAIL" in body:
+                    self.assertIn("0000:02:00.0 (tray 1)", c.details)
+                    self.assertEqual(c.name, "busbar_qb_quiet")
+
+    def test_quiet_runs_before_each_part_but_code(self):
+        seen = []
+        with mock.patch.object(
+            busbar, "run_step", lambda st, o, dr: busbar.Check(name=st.name, status=PASS)
+        ), mock.patch.object(busbar, "quiet", lambda st, o, dr: seen.append(st.name)):
+            busbar.run_busbar(Phase(name="busbar"), Path("/nonexistent"), "smoke", dry_run=True)
+        self.assertEqual(seen, ["qb", "mix", "step", "heavy"])
+
+    def test_one_part_alone_keeps_its_callers_quiet(self):
+        seen = []
+        with mock.patch.object(
+            busbar, "run_step", lambda st, o, dr: busbar.Check(name=st.name, status=PASS)
+        ), mock.patch.object(busbar, "quiet", lambda st, o, dr: seen.append(st.name)):
+            busbar.run_busbar(Phase(name="busbar"), Path("/nonexistent"), "smoke", dry_run=True, steps=("heavy",))
+        self.assertEqual(seen, [])
+
+    def test_quiet_stuck_read_times_out(self):
+        with tempfile.TemporaryDirectory() as d:
+            step = next(st for st in busbar.plan("smoke") if st.name == "qb")
+            with mock.patch.object(busbar.subprocess, "run", side_effect=busbar.subprocess.TimeoutExpired("q", 1)):
+                c = busbar.quiet(step, Path(d))
+            self.assertEqual((c.status, c.data["rc"]), (FAIL, 124))
+
+
+class TestLinks(unittest.TestCase):
+    def setUp(self):  # a 2x3 grid, two channels per link
+        self.links = {c: {} for c in range(6)}
+        for i, (a, b) in enumerate([(0, 1), (1, 2), (3, 4), (4, 5), (0, 3), (1, 4), (2, 5)]):
+            for ch in (2 * i, 2 * i + 1):
+                self.links[a][ch] = [b, ch + 20]
+                self.links[b][ch + 20] = [a, ch]
+
+    def test_rounds_cover_every_pair_once(self):
+        rounds = links.pairs(self.links)
+        got = sorted((a, b) for r in rounds for a, b, _ in r)
+        self.assertEqual(got, sorted([(0, 1), (1, 2), (3, 4), (4, 5), (0, 3), (1, 4), (2, 5)]))
+        for r in rounds:
+            chips = [c for a, b, _ in r for c in (a, b)]
+            self.assertEqual(len(chips), len(set(chips)))
+        self.assertLessEqual(len(rounds), 4)
+
+    def test_channels_are_the_low_chips(self):
+        rounds = links.pairs(self.links)
+        ch = {(a, b): c for r in rounds for a, b, c in r}
+        self.assertEqual(ch[(0, 1)], [0, 1])
+        self.assertEqual(ch[(1, 2)], [2, 3])
+        self.assertEqual(ch[(0, 3)], [8, 9])
+
+    def test_umd_index_is_the_sorted_rank(self):
+        with tempfile.TemporaryDirectory() as d:
+            for bdf, n in (("0000:c1:00.0", 16), ("0000:01:00.0", 0), ("0000:81:00.0", 24), ("0000:00:01.0", None)):
+                dev = Path(d, "bus/pci/devices", bdf)
+                dev.mkdir(parents=True)
+                if n is not None:
+                    (dev / "tenstorrent").mkdir()
+                    (dev / "tenstorrent" / f"tenstorrent!{n}").mkdir()
+            self.assertEqual(links.umd_index(["c1:00.0", "0000:81:00.0"], d), [2, 1])
+            self.assertIsNone(links.umd_index(["0000:41:00.0"], d))
+
+    def _run_links(self, fault, reset, hook=None, **kw):
+        phase = Phase(name="links")
+
+        def fake_pair_test(phase, out, name, *a, **k):
+            phase.add(Check(name=f"links_{name}", status=PASS))
+            return False
+
+        with mock.patch.object(links, "discover", return_value={"bdfs": {}, "links": {}}), mock.patch.object(
+            links, "pair_test", side_effect=fake_pair_test
+        ) as pt, mock.patch.object(events, "hook", hook):
+            links.run_links(phase, Path("/tmp"), fault, reset, **kw)
+        return phase, pt
+
+    def test_the_hook_runs_around_the_sweep_and_can_hold_it_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            calls, hook = Path(d) / "calls", Path(d) / "hook.sh"
+            hook.write_text(f'#!/bin/bash\necho "$1 $2 $3 $4" >> {calls}\n[ -e {d}/hold ] && exit 1\nexit 0\n')
+            hook.chmod(0o755)
+            phase, pt = self._run_links(True, lambda: "", hook=str(hook))
+            self.assertEqual(pt.call_count, 2)
+            self.assertEqual(
+                calls.read_text().splitlines(), ["before sweep - /tmp/links/sweep", "after sweep PASS /tmp/links/sweep"]
+            )
+            Path(d, "hold").touch()
+            resets = []
+            phase, pt = self._run_links(True, lambda: resets.append(1) or "", hook=str(hook))
+        self.assertEqual((pt.call_count, resets), (1, []))
+        self.assertEqual(
+            [(c.status, c.details) for c in phase.checks if c.name == "links_sweep"],
+            [(SKIP, "held back by the hook (rc 1)")],
+        )
+
+    def test_pair_and_sweep_lengths_reach_the_pair_test(self):
+        _, pt = self._run_links(True, lambda: "", pair_s=4, sweep_s=60)
+        self.assertEqual(
+            [(c.args[2], c.args[3], c.kwargs.get("cap_s")) for c in pt.call_args_list],
+            [("pair", links.BW_S, None), ("sweep", 4, 60)],  # the pair test runs at least BW_S for the bandwidth check
+        )
+
+    def test_sweep_only_after_a_fault(self):
+        for fault, want in ((False, 0), (True, 1)):
+            resets = []
+            _, pt = self._run_links(fault, lambda: resets.append(1) or "")
+            self.assertEqual(len(resets), want)
+            self.assertEqual(pt.call_count, 1 + want)
+
+    def test_no_sweep_when_no_reset_ran(self):
+        phase, pt = self._run_links(True, lambda: "reset failed")
+        self.assertEqual(pt.call_count, 1)
+        sweep = [c for c in phase.checks if c.name == "links_sweep"]
+        self.assertEqual([(c.status, c.details) for c in sweep], [(SKIP, "reset failed")])
+
+    def test_the_sweep_tests_the_links_found_after_the_reset(self):
+        before = {"bdfs": {0: "0000:01:00.0"}, "links": {}}
+        after = {"bdfs": {0: "0000:01:00.0", 1: "0000:41:00.0"}, "links": {}}
+        tested = []
+
+        def fake_pair_test(phase, out, name, seconds, disc, dry_run, cap_s=None, bw=False):
+            tested.append((name, seconds, cap_s, bw, disc))
+            phase.add(Check(name=f"links_{name}", status=PASS))
+            return False
+
+        with mock.patch.object(links, "discover", side_effect=[before, after]), mock.patch.object(
+            links, "pair_test", fake_pair_test
+        ):
+            links.run_links(Phase(name="links"), Path("/tmp"), True, lambda: "")
+        # the pair test runs BW_S per pair and is judged on bandwidth; the sweep: PAIR_S per pair, SWEEP_S in total, unjudged
+        self.assertEqual(
+            tested,
+            [("pair", links.BW_S, None, True, before), ("sweep", links.PAIR_S, links.SWEEP_S, False, after)],
+        )
+        tested.clear()
+        with mock.patch.object(links, "discover", side_effect=[before]), mock.patch.object(
+            links, "pair_test", fake_pair_test
+        ):
+            links.run_links(Phase(name="links"), Path("/tmp"), False, lambda: "", bw_s=0)
+        self.assertEqual(tested, [("pair", links.PAIR_S, None, False, before)])  # --bw-s 0: off
+
+    def test_a_failed_rediscovery_fails_the_sweep(self):
+        phase = Phase(name="links")
+        with mock.patch.object(
+            links, "discover", side_effect=[{"bdfs": {}, "links": {}}, RuntimeError("no chips")]
+        ), mock.patch.object(links, "pair_test", return_value=False) as pt:
+            links.run_links(phase, Path("/tmp"), True, lambda: "")
+        self.assertEqual(pt.call_count, 1)
+        sweep = [c for c in phase.checks if c.name == "links_sweep"]
+        self.assertEqual([c.status for c in sweep], [FAIL])
+        self.assertIn("UMD discovery failed", sweep[0].details)
+
+    def test_hung_probes_share_one_budget_and_leave_nothing_running(self):
+        bdfs = [f"0000:0{a}:00.0" for a in range(1, 7)]
+        disc = {"bdfs": dict(enumerate(bdfs)), "links": {c: {0: [c ^ 1, 0]} for c in range(6)}}  # 3 pairs, 1 round
+        with tempfile.TemporaryDirectory() as d:
+            for n, bdf in enumerate(bdfs):
+                Path(d, "bus/pci/devices", bdf, "tenstorrent", f"tenstorrent!{n}").mkdir(parents=True)
+            Path(d, "fabric_repro.py").write_text(TREE)
+            phase = Phase(name="links")
+            with mock.patch.object(links, "GALAXY_DIR", Path(d)), mock.patch.object(
+                links, "OP_TIMEOUT_S", 0
+            ), mock.patch.object(links, "COMPILE_S", 0), contextlib.redirect_stdout(io.StringIO()):
+                t0 = time.monotonic()
+                self.assertTrue(links.pair_test(phase, Path(d), "pair", 1, disc, sys_root=d))
+                took = time.monotonic() - t0
+            self.assertLess(took, 2.5)  # one 1 s budget for the round, not one per probe
+            self.assertEqual([f["why"] for f in phase.checks[0].data["failed"]], ["hung"] * 3)
+            beats = sorted(Path(d, "pair").glob("*.beat"))
+            self.assertEqual(len(beats), 3)
+            for beat in beats:
+                self.assertFalse(_beating(beat), beat.name)
+
+    def _sweep_reset(self, reset_fails=False, skip_reset=False, **kw):
+        return self._run_load(reset_fails=reset_fails, skip_reset=skip_reset, **kw)["why"]
+
+    def _run_load(
+        self,
+        tier="full",
+        reset_fails=False,
+        skip_reset=False,
+        busbar_fails=True,
+        skip_tests=False,
+        skip_triage=True,
+        live_aer=False,
+        tests=None,
+        busbar_stub=None,
+        stage_order=None,
+        load_mode=None,
+        link_fault_before=False,
+        snapshot=None,
+    ):
+        """run_diag on *tier* with its device tests, bus-bar and links tests stubbed: ``order`` is what ran, in
+        order, ``device`` the names run_tests got, ``mode`` the length the bus-bar test was given, ``fault`` whether
+        the links test was told of a bus-bar fault, ``why`` what its reset callback said after a failed pair test
+        (the real run_post_test_reset over a glx_reset that fails or not) and ``report`` the run's report.
+        *live_aer*: not a dry run, so the AER window opens (stubbed, its calls in ``aer``) and the resets, FRU read
+        and triage tools are stubbed too."""
+        import diag_runner
+        from diag import resets
+
+        got = {"order": [], "device": None, "mode": None, "steps": None, "fault": None, "why": None, "aer": []}
+
+        class FakeWindow:
+            def __init__(self):
+                got["aer"].append("open")
+
+            def mark(self):
+                got["aer"].append("mark")
+
+            def rebase(self):
+                got["aer"].append("rebase")
+
+            def check(self):
+                got["aer"].append("check")
+                return Check(name="pcie_aer_delta", status=PASS, ip="pcie")
+
+        def fake_tests(tt_metal, names, phase, dry_run, logs_dir):
+            got["order"].append("device")
+            got["device"] = list(names)
+
+        def fake_busbar(phase, out, mode, dry_run, steps=busbar.STEPS, **over):
+            got["order"].append("busbar")
+            got["mode"], got["steps"] = mode, steps
+            if busbar_stub:
+                return busbar_stub(phase)
+            phase.add(Check(name="busbar_qb", status=FAIL if busbar_fails else PASS, data={"hung": busbar_fails}))
+            return busbar_fails
+
+        def fake_loop(tt_smi, plan, phase, dry_run, gate=None):
+            phase.add(Check(name="reset_glx", status=FAIL if reset_fails else PASS, details=""))
+
+        def fake_end(tt_smi_path, phase, out, dry_run, delay_s, gate):
+            got["order"].append("end")
+
+        def fake_links(phase, out, fault, reset, dry_run, **kw):
+            got["order"].append("links")
+            phase.add(Check(name="links_pair", status=FAIL, details="pair 00-01 failed", ip="eth"))
+            got["fault"], got["why"] = fault, reset()
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            diag_runner, "run_tests", fake_tests
+        ), mock.patch.object(diag_runner, "run_links", fake_links), mock.patch.object(
+            diag_runner, "run_busbar", fake_busbar
+        ), mock.patch.object(
+            diag_runner, "resolve_tt_smi", return_value="tt-smi"
+        ), mock.patch.object(
+            resets, "resolve_tt_smi", return_value="tt-smi"
+        ), mock.patch.object(
+            resets, "reset_loop", fake_loop
+        ), mock.patch.object(
+            diag_runner, "reset_loop"
+        ), mock.patch.multiple(
+            diag_runner,
+            run_end=lambda *a: got["order"].append("end"),
+            read_sel=lambda: (None, "not read in tests"),
+            firmware_check=lambda _: Check(name="firmware_reads", status=SKIP),
+        ), mock.patch.object(
+            diag_runner, "collect_fru_info"
+        ), mock.patch.object(
+            diag_runner, "run_triage"
+        ), mock.patch.object(
+            diag_runner, "AerWindow", FakeWindow
+        ), contextlib.redirect_stdout(
+            io.StringIO()
+        ), contextlib.redirect_stderr(
+            io.StringIO()
+        ):
+            d = Path(tmp)
+            if snapshot is not None:
+                (d / "missing.json").write_text(json.dumps(snapshot))
+            _rc, got["report"] = diag_runner.run_diag(
+                tier,
+                dry_run=not live_aer,
+                input_snapshot=d / "missing.json",
+                skip_tests=skip_tests,
+                skip_triage=skip_triage,
+                skip_eth_status=True,
+                skip_qsfp_tests=True,
+                skip_sys_triage=True,
+                output=d / "report.json",
+                snapshot_out=d / "snapshot.json",
+                skip_reset=skip_reset,
+                tests=tests,
+                stage_order=stage_order,
+                load_mode=load_mode,
+                link_fault_before=link_fault_before,
+            )
+        return got
+
+    def test_load_runs_in_the_tests_phase_after_the_device_tests(self):
+        for tier in ("daily", "weekly", "full"):
+            with self.subTest(tier=tier):
+                got = self._run_load(tier)
+                self.assertEqual(got["order"], ["device", "busbar", "links"])
+                self.assertEqual(got["device"], [t for t in tiers.TIERS[tier].tests if t not in busbar.LOAD_TESTS])
+                names = [c["name"] for c in got["report"]["phases"]["tests"]["checks"]]
+                self.assertIn("busbar_qb", names)
+                self.assertIn("links_pair", names)
+                self.assertFalse({"busbar", "links"} & set(got["report"]["phases"]))
+
+    def test_each_tier_runs_the_load_at_its_own_length(self):
+        for tier, mode in (("daily", "smoke"), ("light", "smoke"), ("weekly", "plain"), ("full", "full")):
+            with self.subTest(tier=tier):
+                self.assertEqual(self._run_load(tier)["mode"], mode)
+
+    def test_load_mode_overrides_the_tiers_length(self):
+        for tier in ("daily", "weekly", "full"):
+            with self.subTest(tier=tier):
+                got = self._run_load(tier, tests="busbar,links", load_mode="full")
+                self.assertEqual((got["order"], got["mode"]), (["busbar", "links"], "full"))
+
+    def test_load_mode_needs_the_load(self):
+        import diag_runner
+
+        for argv in (
+            ["--tier", "flash", "--load-mode", "smoke"],
+            ["--tier", "daily", "--tests", "gddr_fast", "--load-mode", "full"],
+        ):
+            with self.subTest(argv=argv), mock.patch.object(sys, "argv", ["diag_runner.py", *argv]), mock.patch.object(
+                diag_runner, "run_diag"
+            ) as run, contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+                diag_runner.main()
+            run.assert_not_called()
+            self.assertIn("--load-mode", err.getvalue())
+
+    def test_main_passes_the_hook_and_load_mode_on(self):
+        import diag_runner
+
+        argv = ["--tier", "daily", "--tests", "busbar,links", "--load-mode", "full", "--hook", "/x/hook", "--dry-run"]
+        argv += ["--link-fault", "--pair-s", "5", "--sweep-s", "120"]
+        with mock.patch.object(sys, "argv", ["diag_runner.py", *argv]), mock.patch.object(
+            diag_runner, "run_diag", return_value=(0, {})
+        ) as run, mock.patch.object(events, "setup") as setup:
+            self.assertEqual(diag_runner.main(), 0)
+        self.assertEqual((setup.call_args.args[0].hook, setup.call_args.args[0].dry_run), ("/x/hook", True))
+        kw = run.call_args.kwargs
+        self.assertEqual(
+            (kw["load_mode"], kw["link_fault_before"], kw["pair_s"], kw["sweep_s"]), ("full", True, 5, 120)
+        )
+
+    def test_a_tier_without_the_load_runs_none_of_it(self):
+        for tier in ("flash", "pre_bmc_reboot", "post_bmc_reboot"):
+            with self.subTest(tier=tier):
+                self.assertEqual(self._run_load(tier)["order"], [])
+
+    def test_aer_counts_across_each_reset_and_is_judged_last(self):
+        for skip_triage, events in (
+            # the sweep's reset, the post-test reset, the end sequence
+            (False, ["open", "mark", "rebase", "mark", "rebase", "mark", "rebase", "check"]),
+            (True, ["open", "mark", "rebase", "check"]),  # no post-test reset, the verdict all the same
+        ):
+            with self.subTest(skip_triage=skip_triage):
+                got = self._run_load(live_aer=True, skip_triage=skip_triage)
+                self.assertEqual(got["aer"], events)
+                self.assertEqual(list(got["report"]["phases"])[-1], "pcie_aer")
+                triage = [c["name"] for c in got["report"]["phases"]["triage"]["checks"]]
+                self.assertNotIn("pcie_aer_delta", triage)
+
+    def test_no_aer_phase_without_a_window(self):
+        self.assertNotIn("pcie_aer", self._run_load("weekly", live_aer=True)["report"]["phases"])
+        self.assertNotIn("pcie_aer", self._run_load("full")["report"]["phases"])  # a dry run opens none
+
+    def test_sigterm_is_an_exit_that_runs_the_cleanups(self):
+        import diag_runner
+
+        with self.assertRaises(SystemExit) as e:
+            diag_runner._exit_on_sigterm(signal.SIGTERM, None)
+        self.assertEqual(e.exception.code, 128 + signal.SIGTERM)
+
+    def test_a_bus_bar_fault_makes_the_links_test_sweep(self):
+        self.assertTrue(self._run_load(busbar_fails=True)["fault"])
+        self.assertFalse(self._run_load(busbar_fails=False)["fault"])
+        # the caller's own earlier call had one (--link-fault): links alone sweeps too
+        self.assertTrue(self._run_load(busbar_fails=False, tests="links", link_fault_before=True)["fault"])
+
+    def test_the_end_sequence_follows_the_post_test_reset(self):
+        got = self._run_load(skip_triage=False)
+        self.assertEqual(got["order"], ["device", "busbar", "links", "end"])
+        self.assertIn("post_test_reset", got["report"]["phases"])
+
+    def test_stage_order_picks_the_stages(self):
+        for order, ran, resets, end in (
+            ("reset,busbar,links,end", ["busbar", "links", "end"], True, True),
+            ("reset,end", ["end"], True, True),  # no load: the resets and the end sequence alone
+            ("busbar_heavy", ["busbar"], False, False),  # one step, no reset before or after it
+        ):
+            with self.subTest(order=order):
+                got = self._run_load("weekly", stage_order=order)
+                self.assertEqual(got["order"], ran)
+                rl = got["report"]["phases"]["reset_loop"]["checks"]  # reset_loop is stubbed: a SKIP only when none ran
+                self.assertEqual(not any(c["status"] == SKIP for c in rl), resets, rl)
+                self.assertEqual("post_test_reset" in got["report"]["phases"], end)
+
+    def test_one_stage_on_an_empty_input_snapshot_judges_no_snapshot(self):
+        snap = self._run_load("weekly", stage_order="links", snapshot={})["report"]["phases"]["snapshot"]
+        self.assertEqual([(c["name"], c["status"]) for c in snap["checks"]], [("snapshot_capture", SKIP)])
+        self.assertNotEqual(snap["status"], FAIL)
+
+    def test_a_known_dropped_tray_skips_the_bus_bar_load_not_the_links(self):
+        import diag_runner
+
+        with mock.patch.object(diag_runner, "KNOWN_DROPPED", {3}):
+            got = self._run_load("weekly", stage_order="busbar,links")
+        self.assertEqual(got["order"], ["links"])
+        bb = next(c for c in got["report"]["phases"]["tests"]["checks"] if c["name"] == "busbar")
+        self.assertEqual(
+            (bb["status"], bb["details"]), (SKIP, "known drop: tray 3 is down and the load needs the 4x8 mesh")
+        )
+
+    def test_the_hook_hears_each_stage_start_can_hold_the_links_back_and_reads_the_tests_at_the_end(self):
+        import diag_runner
+
+        heard = []
+
+        def hear(stage, out, dry):  # at the end stage start, the tests' checks are in the report already
+            phases = json.loads((out.parent / "report.json").read_text())["phases"] if stage == "end" else {}
+            heard.append((stage, "tests" in phases))
+            return 7 if stage == "links" else 0
+
+        with mock.patch.object(diag_runner, "_hear", hear):
+            got = self._run_load("weekly", stage_order="reset,busbar,links,end")
+        self.assertEqual(heard, [("reset", False), ("links", False), ("end", True)])
+        self.assertNotIn("links", got["order"])
+        ln = next(c for c in got["report"]["phases"]["tests"]["checks"] if c["name"] == "links")
+        self.assertEqual((ln["status"], ln["details"]), (SKIP, "held back by the hook (rc 7)"))
+
+    def test_skip_tests_skips_the_load(self):
+        got = self._run_load(skip_tests=True)
+        self.assertEqual(got["order"], [])
+        self.assertEqual([c["name"] for c in got["report"]["phases"]["tests"]["checks"]], ["tests"])
+
+    def _disc(self):
+        bdfs = {0: "0000:01:00.0", 1: "0000:02:00.0", 2: "0000:c1:00.0"}  # tray 1 U1, tray 1 U2, tray 3 U1
+        return {"bdfs": bdfs, "links": {0: {0: [1, 4], 1: [1, 5]}, 1: {4: [0, 0], 5: [0, 1]}}}
+
+    def test_link_ends_are_named_by_tray_port_asic_and_bdf(self):
+        got = links.link_ends(self._disc(), 0, 1, [1])
+        self.assertEqual(
+            got,
+            [
+                {
+                    "a": {"bdf": "0000:01:00.0", "tray": 1, "asic": 1, "channel": 1, "port": got[0]["a"]["port"]},
+                    "b": {"bdf": "0000:02:00.0", "tray": 1, "asic": 2, "channel": 5, "port": got[0]["b"]["port"]},
+                }
+            ],
+        )
+
+    def test_eth_status_links_name_their_ends(self):
+        from diag.eth_status import EthLink, judge_eth_status
+        from diag.galaxy import UBB_ETH_PORT_OF, expected_bdf
+
+        asic, ch = next(iter(UBB_ETH_PORT_OF))
+        bdf = expected_bdf(2, asic)
+        row = dict(dev=0, noc="1-1", channel=ch, port="Up", link="Down", heartbeat="Down", rx="Up")
+        row.update(retrain=0, crc=0, uncorr=0, err_stat=0)
+        checks = {c.name: c for c in judge_eth_status({(0, "1-1"): EthLink(**row)}, None, None, {0: bdf}, 31)}
+        report = {
+            "phases": {
+                "eth": {"checks": [asdict(checks[n]) for n in ("eth_status_links_down", "eth_status_heartbeat")]}
+            }
+        }
+        links.name_chips(report)
+        want = [{"a": link_end(bdf, ch)}]
+        self.assertEqual(want[0]["a"]["tray"], 2)
+        self.assertRegex(want[0]["a"]["port"], r"^(QSFP|[A-Z_]+) P\d+$")
+        for c in report["phases"]["eth"]["checks"]:
+            self.assertEqual((c["bdf"], c["tray"], c["asic"], c["link_ends"]), ([bdf], [2], [asic], want), c["name"])
+
+    def test_count_fail_names_only_the_missing_chip(self):
+        from diag.galaxy import expected_bdf
+        from diag.snapshot_checks import pcie_enum_check
+
+        bdfs = [expected_bdf(t, a) for t in range(1, 5) for a in range(1, 9)]
+        c = pcie_enum_check([{"board_info": {"bus_id": b}} for b in bdfs[1:]])
+        report = {"phases": {"snapshot": {"checks": [asdict(c)]}}}
+        links.name_chips(report)
+        got = report["phases"]["snapshot"]["checks"][0]
+        self.assertEqual((got["status"], got["bdf"], got["tray"], got["asic"]), (FAIL, [bdfs[0]], [1], [1]))
+
+    def test_every_chip_blaming_check_names_exactly_the_bad_chip(self):
+        from diag.eth_status import PcieFunction, pcie_gate_check
+        from diag.galaxy import expected_bdf, parse_bdf_physical
+        from diag.snapshot_checks import validate_snapshot
+
+        bad = "0000:41:00.0"
+
+        def dev(bdf):
+            _, asic = parse_bdf_physical(bdf)
+            board = {"bus_id": bdf, "dram_status": True, "pcie_width": "8" if asic == 6 else "1"}
+            smbus = {"ENABLED_GDDR": "0xff", "HARVESTING_STATE": "0x0", "ASIC_LOCATION": hex(asic)}
+            telem = {"asic_temperature": "45.0", "power": "120.0", "current": "90.0", "voltage": "0.75"}
+            return {
+                "board_info": board,
+                "telemetry": telem,
+                "limits": {"thm_limit": "100"},
+                "smbus_telem": {**smbus, "DDR_STATUS": "0x55555555"},
+            }
+
+        devs = [dev(expected_bdf(t, a)) for t in range(1, 5) for a in range(1, 9)]
+        i = next(i for i, d in enumerate(devs) if d["board_info"]["bus_id"] == bad)
+        devs[i]["board_info"].update(dram_status=False, pcie_width="4")
+        devs[i]["telemetry"]["asic_temperature"] = "101.0"
+        devs[i]["smbus_telem"].update(
+            ENABLED_GDDR="0x7f", HARVESTING_STATE="0x5", ASIC_LOCATION="0x3", DDR_STATUS="0x0"
+        )
+        phase = Phase(name="snapshot")
+        validate_snapshot({"device_info": devs}, phase)
+        checks = [asdict(c) for c in phase.checks]
+        checks.append(asdict(pcie_gate_check([PcieFunction(bad, 0xFFFF, 0)])))
+        checks.append(asdict(pcie_gate_check([PcieFunction(bad, None, None)])))
+        checks.append(asdict(aer_check({bad: {"fatal": 1}, "0000:42:00.0": {"corr": 1}}, 1.0)))
+        report = {"phases": {"all": {"checks": checks}}}
+        links.name_chips(report)
+        named = {}
+        for c in checks:
+            self.assertIn((c["bdf"], c["tray"], c["asic"]), (([], [], []), ([bad], [2], [1])), c["name"])
+            if c["bdf"]:
+                named.setdefault(c["name"], []).append(c["status"])
+        self.assertEqual(
+            {n: sorted(set(v)) for n, v in named.items()},
+            {
+                "dram_status": [FAIL],
+                "enabled_gddr_full": [FAIL],
+                "harvesting_state": [FAIL],
+                "asic_location_per_ubb": [FAIL],
+                "physical_vs_fw_location": [FAIL],
+                "gddr_training_per_channel": [FAIL],
+                "gddr_bist_per_channel": [FAIL],
+                "pcie_lane_width": [FAIL],
+                "asic_thermal_precheck": [FAIL],
+                "c8_telemetry": ["WARN"],
+                "eth_status_pcie_gate": [FAIL, "WARN"],
+                "pcie_aer_delta": [FAIL],
+            },
+        )
+
+    def test_report_checks_name_their_chips_and_link_ends(self):
+        ends = links.link_ends(self._disc(), 0, 1, [0])
+        report = {
+            "phases": {
+                "links": {
+                    "checks": [
+                        {
+                            "name": "links_pair",
+                            "status": "FAIL",
+                            "details": "01:00.0-02:00.0 (channels 0): hung",
+                            "data": {"failed": [{"pair": "01:00.0-02:00.0", "ends": ends}], "link_ends": ends},
+                        },
+                        {"name": "x", "status": "PASS", "details": "at 04:00.0 on 0000:c1:00.0", "data": {}},
+                        {
+                            "name": "dram",
+                            "status": "FAIL",
+                            "details": "",
+                            "data": {"blamed_chips": [chip("0000:c1:00.0")]},
+                        },
+                        {"name": "old", "status": "FAIL", "details": "", "data": {"failed_chips": ["0000:c1:00.0"]}},
+                        {"name": "none", "status": "PASS", "details": "", "data": {}},
+                    ]
+                }
+            }
+        }
+        before = json.loads(json.dumps(report))
+        links.name_chips(report)
+        a, x, dram, old, none = report["phases"]["links"]["checks"]
+        self.assertEqual((a["bdf"], a["tray"], a["asic"]), (["0000:01:00.0", "0000:02:00.0"], [1, 1], [1, 2]))
+        self.assertEqual(a["link_ends"], ends)
+        self.assertEqual((x["bdf"], x["link_ends"]), ([], []))  # a BDF or time in the text names nothing
+        self.assertEqual((dram["bdf"], dram["tray"], dram["asic"]), (["0000:c1:00.0"], [3], [1]))
+        self.assertEqual(old["bdf"], [])  # only blamed_chips and link_ends name chips
+        self.assertEqual((none["bdf"], none["tray"], none["asic"], none["link_ends"]), ([], [], [], []))
+        for old, new in zip(before["phases"]["links"]["checks"], report["phases"]["links"]["checks"]):
+            self.assertEqual(old, {k: new[k] for k in old})  # only keys were added
+
+    def test_failed_pair_check_carries_the_link_ends(self):
+        phase = Phase(name="links")
+        with tempfile.TemporaryDirectory() as d:  # no tt-kmd nodes under d: every pair fails to open
+            self.assertTrue(links.pair_test(phase, Path(d), "pair", 1, self._disc(), sys_root=d))
+        data = phase.checks[0].data
+        self.assertEqual([e["a"]["tray"] for e in data["link_ends"]], [1, 1])
+        self.assertEqual(data["link_ends"], [e for f in data["failed"] for e in f["ends"]])
+
+    def test_not_opened_pair_names_only_the_chips_without_a_tt_kmd_node(self):
+        for live, gone in ((["0000:02:00.0"], "01:00.0"), ([], "01:00.0 and 02:00.0")):
+            with tempfile.TemporaryDirectory() as d:
+                for b in live:
+                    (Path(d) / "bus/pci/devices" / b / "tenstorrent/tenstorrent!0").mkdir(parents=True)
+                phase = Phase(name="links")
+                self.assertTrue(links.pair_test(phase, Path(d), "pair", 1, self._disc(), sys_root=d))
+            self.assertEqual(phase.checks[0].data["failed"][0]["why"], f"no tt-kmd node on {gone}: not opened")
+
+    def test_sweep_reset_says_why_it_skips(self):
+        self.assertEqual(self._sweep_reset(), "")
+        self.assertEqual(self._sweep_reset(reset_fails=True), "reset failed")
+
+    def test_skip_reset_skips_only_the_reset_never_the_sweep(self):
+        got = self._run_load(skip_reset=True, live_aer=True, skip_triage=False)
+        self.assertEqual(got["why"], "")  # the sweep runs, on the unit as it is
+        self.assertEqual(got["aer"], ["open", "check"])  # and no reset ran: not the sweep's, not the post-test one
+        resets = [c["name"] for c in got["report"]["phases"]["tests"]["checks"] if "reset" in c["name"]]
+        self.assertEqual(resets, [])
+
+    def test_a_hang_still_arms_the_sweep_when_a_later_bus_bar_step_raises(self):
+        def stub(phase):
+            phase.add(Check(name="busbar_qb", status=FAIL, ip="eth", data={"hung": True}))
+            raise RuntimeError("a later step blew up")
+
+        self.assertTrue(self._run_load(busbar_stub=stub)["fault"])
+
+    def test_a_numeric_fault_or_a_raised_step_does_not_arm_the_sweep(self):
+        def numeric(phase):
+            phase.add(Check(name="busbar_qb", status=FAIL, ip="eth", data={"log": "/nonexistent"}))
+
+        def raises(phase):
+            raise RuntimeError("blew up")
+
+        self.assertFalse(self._run_load(busbar_stub=numeric)["fault"])
+        self.assertFalse(self._run_load(busbar_stub=raises)["fault"])
+
+    def _grid_disc(self):
+        return {"bdfs": {i: f"0000:{i + 1:02x}:00.0" for i in range(6)}, "links": self.links}
+
+    def _pair_test(self, wait, tick=0, **kw):
+        """pair_test over the grid with the pair programs faked: *wait(timeout)* is each program's p.wait, and each wait
+        moves the clock *tick* s on; returns the failed flag, the phase's check and the timeouts wait got."""
+        now, timeouts = [0.0], []
+
+        class P:
+            pid = 1
+
+            def wait(self, timeout=None):
+                timeouts.append(timeout)
+                now[0] += tick
+                return wait(timeout)
+
+        phase = Phase(name="links")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(
+            links, "umd_index", return_value=[0, 1]
+        ), mock.patch.object(links, "_start_pair", return_value=P()), mock.patch.object(
+            links, "stop_group"
+        ), mock.patch.object(
+            links.time, "monotonic", lambda: now[0]
+        ), contextlib.redirect_stdout(
+            io.StringIO()
+        ):
+            failed = links.pair_test(phase, Path(d), "sweep", 10, self._grid_disc(), **kw)
+        return failed, phase.checks[0], timeouts
+
+    def test_pair_test_cap_reports_pairs_not_reached_never_a_pass(self):
+        rounds = links.pairs(self.links)
+        self.assertGreater(len(rounds), 1)
+        failed, c, _ = self._pair_test(lambda t: 0, cap_s=0)
+        self.assertFalse(failed)
+        self.assertEqual((c.status, len(c.data["not_reached"])), (SKIP, sum(len(r) for r in rounds)))
+        self.assertIn("not reached in the 0 s cap", c.details)
+        failed, c, _ = self._pair_test(lambda t: 0)  # no cap: every round runs
+        self.assertEqual((failed, c.status, c.data["not_reached"]), (False, PASS, []))
+        # the first round takes 400 s, past the 300 s cap: the rest are not reached
+        failed, c, _ = self._pair_test(lambda t: 0, tick=400, cap_s=300)
+        self.assertEqual((failed, c.status), (False, SKIP))
+        self.assertEqual(len(c.data["not_reached"]), sum(len(r) for r in rounds[1:]))
+
+    def test_pair_test_a_failed_pair_is_a_fail_even_when_the_cap_cut_rounds(self):
+        failed, c, _ = self._pair_test(lambda t: 4, tick=400, cap_s=300)
+        self.assertTrue(failed)
+        self.assertEqual((c.status, c.data["failed"][0]["why"]), (FAIL, "data mismatch"))
+        self.assertTrue(c.data["not_reached"])
+        self.assertIn("not reached in the 300 s cap", c.details)
+
+    def test_pair_test_waits_one_limit_per_round_and_calls_a_late_pair_hung(self):
+        def hang(t):
+            if t:
+                raise subprocess.TimeoutExpired("p", t)
+            return 0
+
+        failed, c, timeouts = self._pair_test(hang)
+        self.assertTrue(failed)
+        self.assertEqual({f["why"] for f in c.data["failed"]}, {"hung"})
+        self.assertEqual(max(t for t in timeouts if t is not None), links.PAIR_S + links.OP_TIMEOUT_S + links.COMPILE_S)
+
+    def _bw_test(self, runs, name="pair", bw=True, fail_on=lambda lab, n: False):
+        """pair_test over the grid with each pair program faked to write its rows: *runs(lab)* gives the GBps_total of
+        each launch of that pair's next run, launch 0 first; *fail_on(lab, n)* makes run n of that pair exit 1. Returns
+        the failed flag, the checks, the run dir and the pairs started."""
+        started = []
+
+        class P:
+            pid = 1
+
+            def __init__(self, rc):
+                self.rc = rc
+
+            def wait(self, timeout=None):
+                return self.rc
+
+        def start(d, lab, idx, seconds):
+            started.append(lab)
+            if fail_on(lab, started.count(lab)):
+                return P(1)
+            rows = [{"event": "iter", "i": i, "s": 1.0, "GBps_total": g} for i, g in enumerate(runs(lab))]
+            (d / f"{lab}.rows").write_text("".join(json.dumps(r) + "\n" for r in rows))
+            (d / f"{lab}.log").write_text("")
+            return P(0)
+
+        phase = Phase(name="links")
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        with mock.patch.object(links, "umd_index", return_value=[0, 1]), mock.patch.object(
+            links, "_start_pair", start
+        ), mock.patch.object(links, "stop_group"), contextlib.redirect_stdout(io.StringIO()):
+            failed = links.pair_test(phase, d, name, 20, self._grid_disc(), bw=bw)
+        return failed, {c.name: c for c in phase.checks}, d / name, started
+
+    def _labs(self):
+        return {links._label(self._grid_disc(), a, b): len(ch) for r in links.pairs(self.links) for a, b, ch in r}
+
+    @staticmethod
+    def _gbps(per_link, n_links):
+        return per_link * n_links * 2 / 8  # GBps_total, both ways over the pair's links
+
+    def test_bandwidth_judges_the_median_of_warm_launches_per_link_each_way(self):
+        labs = self._labs()
+        # launch 0 (open and compile) and one slow warm launch do not move the median
+        failed, checks, _, _ = self._bw_test(
+            lambda lab: [
+                self._gbps(5, labs[lab]),
+                self._gbps(177, labs[lab]),
+                self._gbps(60, labs[lab]),
+                self._gbps(178, labs[lab]),
+            ]
+        )
+        c = checks["links_bandwidth"]
+        self.assertEqual((failed, checks["links_pair"].status, c.status), (False, PASS, PASS))
+        self.assertEqual((c.data["judged"], c.data["low"], c.data["not_judged"]), (len(labs), [], []))
+        self.assertIn(f"{len(labs)} pairs judged, 177-177 Gbps per link each way, 0 below 140 Gbps", c.details)
+        self.assertEqual(list(checks), ["links_pair", "links_bandwidth"])
+        self.assertEqual(links.warm_gbps(Path("/nonexistent.rows"), 2), (None, 0))
+
+    def test_a_slow_pair_fails_bandwidth_by_its_ends_and_arms_no_sweep(self):
+        labs = self._labs()
+        slow = sorted(labs)[0]
+        failed, checks, _, _ = self._bw_test(lambda lab: [0] + [self._gbps(120 if lab == slow else 175, labs[lab])] * 3)
+        c = checks["links_bandwidth"]
+        self.assertFalse(failed)  # a slow link passes data: no sweep
+        self.assertEqual((checks["links_pair"].status, c.status), (PASS, FAIL))
+        self.assertEqual([(l["pair"], l["gbps"]) for l in c.data["low"]], [(slow, 120.0)])
+        self.assertTrue(c.data["link_ends"])
+        self.assertIn("1 below 140 Gbps", c.details)
+        self.assertIn(f"{slow} (channels", c.details)
+
+    def test_a_cold_pair_reruns_once_then_is_not_judged(self):
+        labs = self._labs()
+        cold, stuck = sorted(labs)[:2]
+        seen = {}
+
+        def runs(lab):
+            seen[lab] = seen.get(lab, 0) + 1
+            fast = self._gbps(176, labs[lab])
+            if lab == stuck or (lab == cold and seen[lab] == 1):
+                return [0, fast]  # one warm launch: the cold cache ate the window
+            return [0, fast, fast]
+
+        failed, checks, d, started = self._bw_test(runs)
+        c = checks["links_bandwidth"]
+        self.assertFalse(failed)
+        self.assertEqual(sorted(l for l in started if started.count(l) > 1), sorted([cold, cold, stuck, stuck]))
+        self.assertTrue((d / f"{cold}.cold.rows").exists())
+        self.assertEqual(
+            (c.status, c.data["judged"], c.data["not_judged"]), (WARN, len(labs) - 1, [f"{stuck} (1 warm)"])
+        )
+        self.assertIn("1 not judged (under 2 warm launches)", c.details)
+
+    def test_a_cold_pair_whose_rerun_fails_is_a_link_failure_not_a_bandwidth_one(self):
+        labs = self._labs()
+        cold = sorted(labs)[0]
+
+        def runs(lab):
+            return [0] + [self._gbps(176, labs[lab])] * (1 if lab == cold else 2)
+
+        failed, checks, _, started = self._bw_test(runs, fail_on=lambda lab, n: lab == cold and n == 2)
+        self.assertEqual(started.count(cold), 2)
+        self.assertTrue(failed)  # the rerun's failure is the pair test's: it arms the sweep
+        self.assertEqual([f["pair"] for f in checks["links_pair"].data["failed"]], [cold])
+        c = checks["links_bandwidth"]
+        self.assertEqual((c.status, c.data["judged"], c.data["not_judged"]), (PASS, len(labs) - 1, []))
+
+    def test_bandwidth_with_no_pair_measured_is_skip_not_pass(self):
+        ph = Phase(name="links")
+        with contextlib.redirect_stdout(io.StringIO()):
+            links.eth_bandwidth(ph, Path("/nonexistent"), [], {"bdfs": []}, [])
+        self.assertEqual((ph.checks[0].name, ph.checks[0].status), ("links_bandwidth", SKIP))
+
+    def test_the_sweep_is_not_judged_on_bandwidth(self):
+        failed, checks, _, started = self._bw_test(lambda lab: [0], name="sweep", bw=False)
+        self.assertNotIn("links_bandwidth", checks)
+        self.assertEqual(len(started), len(self._labs()))  # no rerun without bw
+
+    def test_link_fault_counts_ccl_errors_and_the_op_timeout_hang_line(self):
+        def fault(*lines, status=FAIL, **data):
+            with tempfile.TemporaryDirectory() as d:
+                log = Path(d) / "step.log"
+                log.write_text("\n".join(lines))
+                return busbar.link_fault(Check(name="b", status=status, ip="eth", data={"log": str(log), **data}))
+
+        hang = "TT_THROW TIMEOUT: device timeout, potential hang detected, the device is unrecoverable"
+        self.assertTrue(fault(hang))  # the step exited with an error after the op timeout: no 'hung' flag
+        self.assertFalse(fault("2026 | info | device timeout, potential hang detected"))  # a log line, not an error
+        self.assertFalse(fault(hang, status=PASS))
+        self.assertFalse(fault("a plain error"))
+        self.assertTrue(fault("fine", hung=True))
+        self.assertFalse(fault(*[hang] + ["x"] * 40))  # older than the last 40 lines
+        self.assertTrue(fault("RuntimeError: all_gather failed on erisc"))  # a CCL error in the tail
+        self.assertTrue(fault("x | critical | erisc 3 stuck"))
+        self.assertTrue(fault("Timed out while waiting for active ethernet core"))
+        self.assertFalse(fault("x | warning | fabric RuntimeError retried"))  # a warning line never counts
+
+    def test_link_fault_reads_the_verify_rows_but_not_a_numeric_fault_spread_by_the_all_gather(self):
+        def fault(*chips, later=()):
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d) / "step.log").write_text("fine")
+                rows = [
+                    {"event": "verify", "chips": {str(i): {"bad_parts": b} for i, b in enumerate(c)}}
+                    for c in (chips, later)
+                    if c
+                ]
+                (Path(d) / "rows.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+                return busbar.link_fault(
+                    Check(name="b", status=FAIL, ip="eth", data={"log": str(Path(d) / "step.log")})
+                )
+
+        self.assertTrue(fault(["h3"], [], []))  # a CCL mismatch alone
+        self.assertFalse(fault(["heavy", "h3"], ["h3"]))  # the chip with its own fault also has h3: numeric, not CCL
+        self.assertFalse(fault(["heavy", "h3"], []))
+        self.assertTrue(fault(["h3"], ["h3-ref"]))  # CCL parts only, no chip-local fault anywhere
+        self.assertFalse(fault(["heavy"], ["h3"], ["h3-ref"]))  # h3-only beside a local fault: its spread
+        self.assertFalse(fault(["heavy"], []))
+        self.assertFalse(
+            fault(["h3"], [], later=([], ["heavy"]))
+        )  # a chip-local fault in a later chunk spreads the earlier h3 too
+        self.assertFalse(
+            fault(["h3"], later=(["heavy"],))
+        )  # the same chip's h3 in one chunk, its own fault in the next
+        self.assertTrue(fault(["h3"], later=(["h3-ref"],)))
+
+    def test_tests_filter_runs_only_the_named_tests(self):
+        got = self._run_load("weekly", tests="links")
+        self.assertEqual(got["order"], ["links"])
+        got = self._run_load("weekly", tests="busbar_heavy")
+        self.assertEqual((got["order"], got["steps"]), (["busbar"], ("heavy",)))
+        got = self._run_load("full", tests="busbar_code, busbar_qb,links")  # spaces allowed, the tier's order kept
+        self.assertEqual((got["order"], got["steps"]), (["busbar", "links"], ("qb", "code")))
+        self.assertEqual(got["mode"], "full")  # the load length is still the tier's
+        got = self._run_load("daily", tests="busbar")
+        self.assertEqual((got["order"], got["steps"]), (["busbar"], busbar.STEPS))
+        device = next(t for t in tiers.TIERS["weekly"].tests if t not in busbar.LOAD_TESTS)
+        got = self._run_load("weekly", tests=device)
+        self.assertEqual((got["order"], got["device"]), (["device"], [device]))
+        self.assertEqual(self._run_load("weekly")["steps"], busbar.STEPS)  # no filter: every step
+
+
+class TestTierAndAer(unittest.TestCase):
+    def test_daily_weekly_and_full_end_with_the_load_at_their_own_length(self):
+        for name, mode in (("daily", "smoke"), ("weekly", "plain"), ("full", "full")):
+            t = tiers.TIERS[name]
+            self.assertEqual(t.tests[-len(busbar.LOAD_TESTS) :], busbar.LOAD_TESTS, name)
+            self.assertEqual(t.load_mode, mode, name)
+        self.assertEqual([n for n, t in tiers.TIERS.items() if t.galaxy_load], ["daily", "weekly", "full"])
+
+    def test_full_is_weekly_with_the_full_load_aer_eth_status_and_sys_triage(self):
+        full, weekly = tiers.TIERS["full"], tiers.TIERS["weekly"]
+        self.assertEqual(replace(full, load_mode="plain", aer_diff=False, eth_status=False, sys_triage=False), weekly)
+        self.assertTrue(full.aer_diff and full.eth_status and full.sys_triage)
+        self.assertEqual([n for n, t in tiers.TIERS.items() if t.aer_diff], ["full"])
+
+    def _validate_with(self, **changes):
+        changed = {**tiers.TIERS, "full": replace(tiers.TIERS["full"], **changes)}
+        with mock.patch.object(tiers, "TIERS", changed):
+            tiers._validate()
+
+    def test_the_load_runs_last_in_its_own_order(self):
+        device = tuple(t for t in tiers.TIERS["full"].tests if t not in busbar.LOAD_TESTS)
+        for tests in ((*busbar.LOAD_TESTS, *device), (*device, "links", "busbar"), ("busbar", "gddr_full", "links")):
+            with self.subTest(tests=tests):
+                with self.assertRaisesRegex(ValueError, "the galaxy load runs last"):
+                    self._validate_with(tests=tests)
+        for tests in ((*device, "links"), ("busbar",)):
+            with self.subTest(tests=tests):
+                self._validate_with(tests=tests)
+
+    def test_load_mode_goes_with_the_load(self):
+        for mode in (None, "long"):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "the galaxy load needs a load_mode"):
+                self._validate_with(load_mode=mode)
+        with self.assertRaisesRegex(ValueError, "load_mode without the galaxy load"):
+            self._validate_with(tests=("gddr_full",))
+
+    def test_aer_data_holds_only_the_diff(self):
+        c = aer_check(aer_new({"0000:01:00.0": {"corr": 0}}, {"0000:01:00.0": {"corr": 1}}), 1.0)
+        self.assertEqual(set(c.data), {"hours", "new", "flagged", "missing", "blamed_chips"})
+
+
+if __name__ == "__main__":
+    unittest.main()
