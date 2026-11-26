@@ -15,6 +15,9 @@
 
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
+#ifdef ARCH_QUASAR
+#include "llk_sfpu_common_api.h"
+#endif
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #endif
 
@@ -84,6 +87,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
 
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(src_a_cb, src_b_cb)));
+    MATH((llk_sfpu_hw_configure<DST_ACCUM_MODE>()));
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
