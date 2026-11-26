@@ -1,0 +1,3 @@
+{"event":"test_run","status":"fail","test":"test_g6_typecast.py","detail":"bf8b cases 4-228 values beyond 1 step; f32/int32 exact","ts":"2026-11-26T19:41:05+00:00"}
+{"event":"fix_applied","detail":"bfp8_pack_precise=True for bfloat8_b destination (pack src Float16_b)","ts":"2026-11-26T19:41:05+00:00"}
+{"event":"test_run","status":"pass","test":"test_g6_typecast.py (plain+dev) and golden suite 44 pass/27 xfail","perf_ns":{"Q2185":36204,"P39":24633,"Q2191":1527},"ts":"2026-11-26T19:41:05+00:00"}
