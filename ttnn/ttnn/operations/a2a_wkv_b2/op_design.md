@@ -364,6 +364,8 @@ Packet headers come from the helper's `PacketHeaderPool` (no CB).
 | host: fabric connection | helper (host) | `ttnn._ttnn.ccl_host.build_ccl_fabric_rt_args` | `ttnn/cpp/ttnn-nanobind/ccl_host.cpp:64-90` | first in fabric_tx writer RT args | — | — | — |
 | host: cross-chip semaphores | helper (host) | `ttnn._ttnn.ccl_host.make_ccl_semaphore(mesh_device, initial_value=0)` (or `ttnn.create_global_semaphore(mesh_device, tx_cores, 0)`), cached per mesh device | `ccl_host.cpp:54-63` | created on the first (eager) call only — it runs a host Synchronize, which a trace capture must not contain | — | — | — |
 
+> **Perf 1 (as built now):** `load_attn_block` / `load_weight_block` are raw `noc_async_read` on BOTH NoCs from NCRISC (per-bank NoC mask in the core's common-arg word, `NOC1_BANK_MASKS`; transaction-id barriers; worker reader + writer in `DM_DYNAMIC_NOC` mode), bypassing `read_sticks_for_tilize` (single NoC, plain barrier). `send_block` keeps the helper's `DirectConn` but issues packets with the tt_fabric linear `set_state` / adapter calls and destination addresses pre-encoded in `cb_tx_addrs`, bypassing `FabricStream::arm_*` / `write_scatter`. Worker kernels take only common runtime args (a per-core table indexed by logical core). Measurements and the helper-bypass table: `changelog.md` Perf 1.
+
 Helpers considered and rejected:
 
 | Raw entry | Helper considered | Mismatch (file:line) |

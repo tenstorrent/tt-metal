@@ -1,0 +1,210 @@
+### profiles/base_alone.csv
+replay 6: span max 52.5 mean 52.1 | reader end max 52.4 mean 36.0 min 14.0 (cores 768)
+reader end by physical y (mean/max): y2:40/50 y3:42/51 y4:40/51 y5:37/51 y6:36/52 y7:34/52 y8:31/52 y9:28/52
+reader end by physical x (mean/max): x1:33/45 x2:33/45 x3:33/45 x4:32/45 x5:32/45 x6:31/44 x7:23/26 x11:30/35 x12:37/42 x13:46/49 x14:51/52 x15:51/52
+reader end local-head rows (y2-3) max 51.0 mean 40.9 | remote rows max 52.4 mean 34.3
+### profiles/base_full.csv
+replay 6: span max 74.0 mean 71.1 | reader end max 59.3 mean 35.9 min 14.1 (cores 768)
+reader end by physical y (mean/max): y2:41/59 y3:41/59 y4:40/58 y5:37/58 y6:36/59 y7:34/58 y8:30/58 y9:28/57
+reader end by physical x (mean/max): x1:32/44 x2:33/44 x3:33/45 x4:32/44 x5:31/44 x6:30/43 x7:24/26 x11:30/33 x12:36/39 x13:42/45 x14:54/57 x15:55/59
+reader end local-head rows (y2-3) max 59.3 mean 41.0 | remote rows max 58.8 mean 34.2
+### profiles/bigreq_alone.csv
+replay 6: span max 51.6 mean 51.1 | reader end max 51.6 mean 43.6 min 29.7 (cores 768)
+reader end by physical y (mean/max): y2:46/51 y3:46/51 y4:46/52 y5:44/51 y6:43/51 y7:42/51 y8:42/51 y9:40/51
+reader end by physical x (mean/max): x1:42/49 x2:42/49 x3:41/49 x4:41/48 x5:41/48 x6:40/47 x7:35/40 x11:43/46 x12:49/50 x13:50/52 x14:50/51 x15:50/52
+reader end local-head rows (y2-3) max 51.0 mean 46.0 | remote rows max 51.6 mean 42.9
+### profiles/dual_geo_alone.csv
+replay 6: span max 72.4 mean 71.6 | reader end max 72.3 mean 60.9 min 42.0 (cores 768)
+reader end by physical y (mean/max): y2:60/72 y3:61/72 y4:60/72 y5:61/72 y6:61/72 y7:61/72 y8:61/72 y9:61/72
+reader end by physical x (mean/max): x1:45/46 x2:48/50 x3:52/53 x4:55/57 x5:58/59 x6:62/63 x7:64/64 x11:67/69 x12:69/71 x13:71/72 x14:71/72 x15:71/72
+reader end local-head rows (y2-3) max 72.3 mean 60.7 | remote rows max 72.3 mean 61.0
+### profiles/dual_geoinv_alone.csv
+replay 6: span max 60.5 mean 60.3 | reader end max 60.5 mean 42.9 min 23.3 (cores 768)
+reader end by physical y (mean/max): y2:43/60 y3:45/60 y4:43/60 y5:43/60 y6:42/60 y7:42/60 y8:42/60 y9:42/60
+reader end by physical x (mean/max): x1:28/34 x2:32/37 x3:42/45 x4:51/54 x5:58/59 x6:60/60 x7:60/60 x11:27/32 x12:31/36 x13:40/41 x14:44/45 x15:44/45
+reader end local-head rows (y2-3) max 60.5 mean 44.0 | remote rows max 60.4 mean 42.6
+### profiles/grad_alone.csv
+replay 6: span max 52.5 mean 51.3 | reader end max 52.5 mean 37.3 min 18.4 (cores 768)
+reader end by physical y (mean/max): y2:49/53 y3:49/51 y4:48/51 y5:44/49 y6:35/41 y7:29/31 y8:24/26 y9:20/23
+reader end by physical x (mean/max): x1:38/51 x2:39/52 x3:39/52 x4:39/52 x5:38/53 x6:38/52 x7:37/51 x11:37/49 x12:37/50 x13:36/50 x14:36/50 x15:35/50
+reader end local-head rows (y2-3) max 52.5 mean 49.1 | remote rows max 51.0 mean 33.4
+### profiles/grad_full.csv
+replay 6: span max 67.0 mean 65.8 | reader end max 51.1 mean 37.4 min 17.5 (cores 768)
+reader end by physical y (mean/max): y2:48/50 y3:49/51 y4:48/50 y5:45/48 y6:37/42 y7:29/33 y8:24/26 y9:20/23
+reader end by physical x (mean/max): x1:39/51 x2:39/51 x3:39/51 x4:39/51 x5:38/50 x6:38/50 x7:37/50 x11:37/50 x12:37/50 x13:36/49 x14:36/49 x15:35/49
+reader end local-head rows (y2-3) max 51.1 mean 48.3 | remote rows max 49.8 mean 33.7
+### profiles/lc91011_full.csv
+replay 6: span max 71.2 mean 69.8 | reader end max 58.1 mean 36.1 min 14.5 (cores 768)
+reader end by physical y (mean/max): y2:41/58 y3:42/58 y4:40/58 y5:37/58 y6:36/58 y7:34/58 y8:31/58 y9:29/56
+reader end by physical x (mean/max): x1:32/44 x2:33/45 x3:33/44 x4:32/44 x5:32/44 x6:31/43 x7:24/26 x11:30/33 x12:36/39 x13:42/45 x14:53/56 x15:55/58
+reader end local-head rows (y2-3) max 58.1 mean 41.2 | remote rows max 57.8 mean 34.4
+### profiles/m11_alone.csv
+replay 6: span max 56.9 mean 56.2 | reader end max 56.9 mean 40.5 min 22.9 (cores 768)
+reader end by physical y (mean/max): y2:54/57 y3:51/54 y4:48/51 y5:39/45 y6:36/42 y7:34/40 y8:31/40 y9:30/39
+reader end by physical x (mean/max): x1:40/56 x2:41/57 x3:41/57 x4:41/57 x5:41/56 x6:41/55 x7:41/54 x11:37/53 x12:39/53 x13:40/53 x14:43/52 x15:43/52
+reader end local-head rows (y2-3) max 56.9 mean 52.7 | remote rows max 51.3 mean 36.5
+### profiles/m_00_00.csv
+replay 6: span max 60.4 mean 60.1 | reader end max 60.4 mean 40.0 min 15.4 (cores 768)
+reader end by physical y (mean/max): y2:56/58 y3:58/60 y4:52/56 y5:44/48 y6:39/43 y7:31/34 y8:24/28 y9:18/20
+reader end by physical x (mean/max): x1:42/60 x2:43/60 x3:42/60 x4:42/60 x5:41/60 x6:41/59 x7:40/59 x11:40/59 x12:39/58 x13:38/57 x14:37/55 x15:36/53
+reader end local-head rows (y2-3) max 60.4 mean 56.8 | remote rows max 56.3 mean 34.4
+### profiles/m_0f_0f.csv
+replay 6: span max 100.9 mean 100.7 | reader end max 100.9 mean 72.8 min 25.3 (cores 768)
+reader end by physical y (mean/max): y2:72/101 y3:73/101 y4:72/100 y5:73/101 y6:73/101 y7:73/101 y8:73/101 y9:73/101
+reader end by physical x (mean/max): x1:28/31 x2:36/38 x3:46/48 x4:56/58 x5:65/68 x6:74/75 x7:80/82 x11:94/96 x12:97/98 x13:99/100 x14:100/101 x15:100/101
+reader end local-head rows (y2-3) max 100.8 mean 72.5 | remote rows max 100.9 mean 72.9
+### profiles/m_f0_f0.csv
+replay 6: span max 101.1 mean 101.0 | reader end max 101.1 mean 84.3 min 39.4 (cores 768)
+reader end by physical y (mean/max): y2:83/101 y3:84/101 y4:83/101 y5:85/101 y6:85/101 y7:85/101 y8:85/101 y9:84/101
+reader end by physical x (mean/max): x1:79/83 x2:88/90 x3:94/97 x4:97/100 x5:99/101 x6:100/101 x7:100/101 x11:43/46 x12:60/63 x13:78/82 x14:86/88 x15:86/88
+reader end local-head rows (y2-3) max 101.1 mean 83.6 | remote rows max 101.1 mean 84.5
+### profiles/m_ff_ff.csv
+replay 6: span max 103.5 mean 103.1 | reader end max 103.4 mean 77.4 min 22.9 (cores 768)
+reader end by physical y (mean/max): y2:75/101 y3:76/102 y4:75/102 y5:78/102 y6:78/103 y7:79/103 y8:79/103 y9:78/103
+reader end by physical x (mean/max): x1:26/29 x2:39/50 x3:62/75 x4:78/83 x5:86/88 x6:90/92 x7:91/92 x11:74/77 x12:84/87 x13:96/99 x14:102/103 x15:102/103
+reader end local-head rows (y2-3) max 101.6 mean 75.5 | remote rows max 103.4 mean 78.1
+### profiles/mask_s1_alone.csv
+replay 6: span max 52.4 mean 51.4 | reader end max 52.4 mean 37.3 min 18.6 (cores 768)
+reader end by physical y (mean/max): y2:49/52 y3:49/52 y4:48/51 y5:44/49 y6:35/40 y7:29/33 y8:24/27 y9:20/22
+reader end by physical x (mean/max): x1:39/51 x2:39/52 x3:39/52 x4:39/52 x5:38/52 x6:38/51 x7:37/51 x11:37/51 x12:37/51 x13:36/49 x14:36/49 x15:35/49
+reader end local-head rows (y2-3) max 52.4 mean 49.1 | remote rows max 50.8 mean 33.4
+### profiles/p29_alone.csv
+replay 6: span max 56.8 mean 55.9 | reader end max 56.7 mean 39.1 min 16.4 (cores 768)
+reader end by physical y (mean/max): y2:55/57 y3:51/55 y4:50/53 y5:42/47 y6:38/42 y7:32/36 y8:26/30 y9:19/22
+reader end by physical x (mean/max): x1:41/57 x2:41/55 x3:41/56 x4:40/57 x5:40/56 x6:39/55 x7:38/55 x11:39/55 x12:38/55 x13:38/55 x14:37/55 x15:36/55
+reader end local-head rows (y2-3) max 56.7 mean 53.0 | remote rows max 53.2 mean 34.4
+### profiles/parity_alone.csv
+replay 6: span max 61.4 mean 61.1 | reader end max 61.3 mean 46.2 min 20.0 (cores 768)
+reader end by physical y (mean/max): y2:59/61 y3:60/61 y4:54/59 y5:46/59 y6:41/59 y7:36/56 y8:37/59 y9:37/58
+reader end by physical x (mean/max): x1:41/60 x2:43/61 x3:44/61 x4:45/61 x5:46/61 x6:47/61 x7:47/61 x11:44/60 x12:45/60 x13:47/60 x14:52/60 x15:56/60
+reader end local-head rows (y2-3) max 61.3 mean 59.6 | remote rows max 59.5 mean 41.8
+### profiles/pipe_alone.csv
+replay 6: span max 52.7 mean 52.5 | reader end max 52.6 mean 34.1 min 12.2 (cores 768)
+reader end by physical y (mean/max): y2:38/47 y3:39/48 y4:37/49 y5:36/51 y6:34/52 y7:32/52 y8:29/53 y9:26/52
+reader end by physical x (mean/max): x1:32/45 x2:33/45 x3:32/45 x4:31/45 x5:30/45 x6:29/44 x7:19/21 x11:27/31 x12:34/39 x13:42/48 x14:49/53 x15:50/52
+reader end local-head rows (y2-3) max 47.5 mean 38.5 | remote rows max 52.6 mean 32.6
+### profiles/raw_alone.csv
+replay 6: span max 52.4 mean 52.1 | reader end max 52.3 mean 36.0 min 14.7 (cores 768)
+reader end by physical y (mean/max): y2:40/50 y3:41/51 y4:40/51 y5:37/51 y6:36/52 y7:35/52 y8:31/52 y9:28/52
+reader end by physical x (mean/max): x1:33/45 x2:34/45 x3:33/45 x4:33/45 x5:32/45 x6:31/44 x7:23/25 x11:30/32 x12:37/39 x13:45/48 x14:51/52 x15:51/52
+reader end local-head rows (y2-3) max 50.7 mean 40.8 | remote rows max 52.3 mean 34.4
+### profiles/s1_full.csv
+replay 6: span max 70.1 mean 66.4 | reader end max 51.1 mean 37.2 min 17.4 (cores 768)
+reader end by physical y (mean/max): y2:47/51 y3:49/51 y4:48/50 y5:45/49 y6:36/43 y7:29/32 y8:24/27 y9:20/22
+reader end by physical x (mean/max): x1:39/51 x2:39/51 x3:39/51 x4:38/51 x5:38/50 x6:38/50 x7:37/50 x11:37/50 x12:37/50 x13:36/49 x14:36/49 x15:34/49
+reader end local-head rows (y2-3) max 51.1 mean 48.1 | remote rows max 50.1 mean 33.6
+### profiles/s1win_g4_k2_alone.csv
+replay 6: span max 52.7 mean 50.7 | reader end max 52.6 mean 42.2 min 28.8 (cores 768)
+reader end by physical y (mean/max): y2:47/49 y3:47/50 y4:49/53 y5:47/49 y6:43/47 y7:39/44 y8:34/37 y9:31/34
+reader end by physical x (mean/max): x1:43/53 x2:42/52 x3:43/51 x4:43/50 x5:43/52 x6:42/52 x7:42/50 x11:41/51 x12:41/49 x13:42/49 x14:42/49 x15:42/50
+reader end local-head rows (y2-3) max 49.6 mean 47.3 | remote rows max 52.6 mean 40.5
+### profiles/s1win_g4_k4_alone.csv
+replay 6: span max 52.7 mean 51.9 | reader end max 52.6 mean 39.1 min 24.4 (cores 768)
+reader end by physical y (mean/max): y2:51/53 y3:50/52 y4:49/52 y5:44/45 y6:38/40 y7:30/32 y8:26/27 y9:25/26
+reader end by physical x (mean/max): x1:39/53 x2:39/52 x3:39/52 x4:39/52 x5:39/52 x6:39/52 x7:39/52 x11:39/52 x12:39/52 x13:39/52 x14:39/52 x15:39/52
+reader end local-head rows (y2-3) max 52.6 mean 50.6 | remote rows max 51.8 mean 35.3
+### profiles/u4_alone.csv
+replay 6: span max 53.0 mean 52.1 | reader end max 53.0 mean 36.1 min 17.7 (cores 768)
+reader end by physical y (mean/max): y2:50/53 y3:48/50 y4:44/46 y5:38/42 y6:34/38 y7:28/31 y8:24/27 y9:23/27
+reader end by physical x (mean/max): x1:37/52 x2:37/53 x3:37/53 x4:37/52 x5:36/52 x6:36/50 x7:36/50 x11:36/49 x12:36/49 x13:35/49 x14:35/49 x15:35/48
+reader end local-head rows (y2-3) max 53.0 mean 48.8 | remote rows max 46.2 mean 31.8
+### profiles/u6_alone.csv
+replay 6: span max 53.0 mean 52.3 | reader end max 53.0 mean 38.0 min 21.1 (cores 768)
+reader end by physical y (mean/max): y2:50/53 y3:48/51 y4:50/52 y5:46/51 y6:36/44 y7:28/30 y8:24/25 y9:22/24
+reader end by physical x (mean/max): x1:39/52 x2:40/53 x3:39/53 x4:39/53 x5:39/53 x6:38/51 x7:37/51 x11:38/51 x12:38/51 x13:37/51 x14:36/50 x15:36/50
+reader end local-head rows (y2-3) max 53.0 mean 48.9 | remote rows max 52.1 mean 34.3
+### profiles/win_g4_k2_alone.csv
+replay 6: span max 51.8 mean 51.4 | reader end max 51.8 mean 43.9 min 28.3 (cores 768)
+reader end by physical y (mean/max): y2:46/52 y3:46/51 y4:46/52 y5:45/52 y6:45/52 y7:43/52 y8:41/52 y9:40/52
+reader end by physical x (mean/max): x1:39/44 x2:39/44 x3:39/44 x4:38/44 x5:38/43 x6:38/43 x7:42/50 x11:50/51 x12:51/51 x13:51/52 x14:51/52 x15:51/52
+reader end local-head rows (y2-3) max 51.5 mean 45.6 | remote rows max 51.8 mean 43.4
+### profiles/win_g4_k4_alone.csv
+replay 6: span max 52.2 mean 51.9 | reader end max 52.1 mean 38.7 min 20.8 (cores 768)
+reader end by physical y (mean/max): y2:43/52 y3:44/52 y4:42/52 y5:40/52 y6:38/52 y7:36/52 y8:33/52 y9:33/52
+reader end by physical x (mean/max): x1:35/47 x2:35/47 x3:35/47 x4:34/47 x5:34/46 x6:34/46 x7:28/30 x11:36/39 x12:42/45 x13:48/49 x14:52/52 x15:51/52
+reader end local-head rows (y2-3) max 51.6 mean 43.7 | remote rows max 52.1 mean 37.1
+### profiles/win_g4_k8_alone.csv
+replay 6: span max 54.9 mean 54.5 | reader end max 54.9 mean 36.8 min 18.9 (cores 768)
+reader end by physical y (mean/max): y2:40/49 y3:42/50 y4:41/50 y5:38/52 y6:36/54 y7:35/54 y8:31/55 y9:30/55
+reader end by physical x (mean/max): x1:35/48 x2:34/48 x3:34/48 x4:34/48 x5:34/48 x6:33/47 x7:23/24 x11:30/31 x12:37/39 x13:45/48 x14:51/55 x15:50/51
+reader end local-head rows (y2-3) max 49.6 mean 41.3 | remote rows max 54.9 mean 35.2
+### stage_zones base_full
+span per chip (us): 0:74.0 1:70.6 2:74.0 3:71.1 4:71.7 5:69.5 6:69.0 7:68.9
+zone                     risc    cores    mean     max  end_max
+tx_writer_await_done     BRISC      32     2.6    11.4     74.0
+tx_writer_close          BRISC      32     0.8     1.0     73.9
+tx_writer_stream         BRISC      32    46.2    55.0     73.0
+tx_reader_reset          NCRISC     32     1.2     1.5     72.2
+tx_reader_stream         NCRISC     32    60.9    70.1     70.6
+writer_local_write       BRISC     192     4.9    24.4     63.1
+writer_wait_block        BRISC     768    37.2    61.7     62.7
+compute_matmul           TRISC_2   768     8.8     8.9     62.6
+compute_matmul           TRISC_1   768     9.1     9.5     62.3
+compute_matmul           TRISC_0   768     8.3     8.7     62.2
+compute_tilize           TRISC_2   768    29.1    53.0     60.8
+compute_tilize           TRISC_0   768    29.3    53.3     60.4
+compute_tilize           TRISC_1   768    28.6    52.6     60.3
+reader_attn_block        NCRISC    768    22.3    55.3     59.3
+reader_w_issue           NCRISC    768    13.2    40.8     41.2
+tx_writer_await_ready    BRISC      32     3.8    14.8     25.7
+tx_writer_addr_table     BRISC      32     7.1     9.4     16.4
+### stage_zones s1_full
+span per chip (us): 0:67.3 1:65.0 2:65.2 3:67.6 4:63.2 5:63.4 6:69.3 7:70.1
+zone                     risc    cores    mean     max  end_max
+tx_writer_await_done     BRISC      32     4.9    13.7     70.1
+tx_writer_close          BRISC      32     0.9     1.6     62.8
+tx_writer_stream         BRISC      32    45.3    53.2     62.0
+tx_reader_reset          NCRISC     32     1.2     1.5     61.2
+tx_reader_stream         NCRISC     32    53.8    59.2     59.6
+writer_local_write       BRISC     192     2.4     4.8     55.4
+writer_wait_block        BRISC     768    39.0    52.6     55.0
+compute_matmul           TRISC_2   768     8.9     8.9     54.9
+compute_matmul           TRISC_1   768     9.1     9.5     54.5
+compute_matmul           TRISC_0   768     8.3     8.7     54.5
+compute_tilize           TRISC_2   768    30.5    45.3     53.1
+compute_tilize           TRISC_0   768    30.7    45.3     52.7
+compute_tilize           TRISC_1   768    30.0    44.6     52.6
+reader_attn_block        NCRISC    768    25.1    48.3     51.1
+reader_w_issue           NCRISC    768    11.5    35.3     35.7
+tx_writer_await_ready    BRISC      32     1.4     9.6     15.5
+tx_writer_addr_table     BRISC      32     7.1     9.4     12.3
+### stage_zones grad_full
+span per chip (us): 0:66.0 1:67.0 2:66.4 3:63.7 4:65.9 5:65.1 6:66.6 7:65.5
+zone                     risc    cores    mean     max  end_max
+tx_writer_await_done     BRISC      32     4.4    11.5     67.0
+tx_writer_close          BRISC      32     0.9     1.3     62.5
+tx_writer_stream         BRISC      32    46.0    50.4     61.8
+tx_reader_reset          NCRISC     32     1.2     1.5     61.0
+tx_reader_stream         NCRISC     32    54.0    59.0     59.5
+writer_local_write       BRISC     192     2.5     5.6     55.9
+writer_wait_block        BRISC     768    39.0    53.2     55.5
+compute_matmul           TRISC_2   768     8.9     8.9     55.5
+compute_matmul           TRISC_1   768     9.0     9.5     55.1
+compute_matmul           TRISC_0   768     8.2     8.7     55.0
+compute_tilize           TRISC_2   768    30.5    45.9     53.7
+compute_tilize           TRISC_0   768    30.8    45.9     53.3
+compute_tilize           TRISC_1   768    30.1    45.2     53.2
+reader_attn_block        NCRISC    768    25.3    48.3     51.1
+reader_w_issue           NCRISC    768    11.6    35.4     35.8
+tx_writer_await_ready    BRISC      32     1.0     6.4     12.4
+tx_writer_addr_table     BRISC      32     7.1     9.4     12.1
+### stage_zones lc91011_full
+span per chip (us): 0:70.7 1:70.6 2:69.8 3:71.2 4:69.7 5:68.9 6:69.2 7:68.6
+zone                     risc    cores    mean     max  end_max
+tx_writer_await_done     BRISC      32     4.8    11.4     71.2
+tx_writer_close          BRISC      32     1.0     2.0     70.7
+tx_writer_stream         BRISC      32    42.9    55.8     69.8
+tx_reader_reset          NCRISC     32     1.2     1.5     67.9
+tx_reader_stream         NCRISC     32    56.1    65.8     66.3
+writer_local_write       BRISC     192     2.4     8.6     62.2
+writer_wait_block        BRISC     768    37.8    59.6     61.8
+compute_matmul           TRISC_2   768     8.8     8.9     61.7
+compute_matmul           TRISC_1   768     9.1     9.5     61.4
+compute_matmul           TRISC_0   768     8.3     8.7     61.3
+compute_tilize           TRISC_2   768    29.3    52.2     59.9
+compute_tilize           TRISC_0   768    29.5    52.3     59.5
+compute_tilize           TRISC_1   768    28.8    51.6     59.5
+reader_attn_block        NCRISC    768    22.8    54.2     58.1
+reader_w_issue           NCRISC    768    12.8    39.2     39.5
+tx_writer_await_ready    BRISC      32     3.9    15.9     25.9
+tx_writer_addr_table     BRISC      32     7.1     9.4     17.3

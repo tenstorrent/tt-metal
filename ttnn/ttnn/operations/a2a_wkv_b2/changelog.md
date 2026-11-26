@@ -167,3 +167,184 @@
 - **Tests added**:
   - `probes/probe_trace_profile.py`, run explicitly: device profile of 6 back-to-back trace replays;
   - parsers `perf/trace_gaps.py` (per-replay span and launch gap), `perf/timeline.py` (tx zone timeline) and `perf/pub_times.py` (worker publish times per block and core). They need temporary `DeviceZoneScopedN` zones: `TX_*` in the tx kernels, `WPUB` in the worker writer.
+
+## Perf 1 — perf tournament round 1 (perf-flagged focus case)
+- **Date**: 2026-11-26
+- **Focus case** (the only cell, LOOSE_CASES perf flag): per chip attn [1,96,160,512] bf16 ROW_MAJOR DRAM, W [1,96,512,128] bf8_b TILE DRAM → out [1,24,640,128] bf8_b L1; HiFi2, fp32_dest_acc_en=False, 2x4 LoudBox (FABRIC_2D_TORUS_X). Every case in INPUTS is in SUPPORTED, so there is no generality gap. SOL 43.8 µs; roofline (op_design Bounds) ≈ 49.5 µs.
+- **Result**: trace replay, `test_a2a_wkv_b2_trace_timing.py`, µs per call:
+  - **82.1 → 72.8 µs (−11.3%)**: 4 ideas WIN in isolation, 3 graduated, 1 NULL, 1 win that regressed once combined.
+  - Golden 7/7 after every step. Acceptance 10/10, also under `--dev` (watcher, NoC sanitizer).
+
+### Instrumentation (permanent)
+- `MaybeDeviceZoneScope` zones were added in every kernel, from `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` (the header was brought onto this branch). None sits in a per-tile or per-packet loop: at most 20 markers per RISC, against a cap of 250.
+  - worker reader: `reader_w_issue`, `reader_attn_block` (per tile row);
+  - compute: `compute_tilize`, `compute_matmul`;
+  - worker writer: `writer_wait_block`, `writer_local_write`;
+  - tx reader: `tx_reader_stream`, `tx_reader_reset`;
+  - tx writer: `tx_writer_addr_table`, `tx_writer_await_ready`, `tx_writer_stream`, `tx_writer_close`, `tx_writer_await_done`.
+- **Ablation hooks:** the env `A2A_ABLATE` = comma list of NO_READ, NO_COMPUTE, NO_PULL, NO_SEND sets `A2A_ABL_*` defines. Each stubs a payload and keeps every CB, barrier and handshake. Not for production.
+- **Parsers:**
+  - `perf/stage_zones.py`: per-zone occupancy and end time for one program instance of an eager or trace-replay profile, plus a marker-budget check;
+  - `perf/trace_gaps.py`: per-replay span and launch gap.
+
+### Measured breakdown (before)
+Trace replay with `probes/probe_trace_profile.py`, per-replay device span; launch gap = last kernel end → next replay's first kernel start.
+
+| Part (cumulative peel) | Measured µs | Part SOL µs | Part roofline µs | Gap |
+|---|---|---|---|---|
+| Full op | span 71, gap 11.5, per call 82.1 | 43.8 | 49.5 | — |
+| − fabric sends | 60 | | | |
+| − sends − compute = **worker DRAM reads alone** | **52.4** | 43.8 (DRAM, 512 GB/s) | 46.2 (estimate.py rank 1 = current schedule) to 49.5 | (52.4−43.8)/49.5 = 17% |
+| − all payloads = **fixed** (handshakes, address table) | **18.3** | — | ≈ 3.1 (launch + open + entry handshake) | 490%. Address table: 9.4 µs serial on the tx BRISC |
+| reads + compute stubbed = **tx path alone** | **49.7** (start-up ~10.6, 120 link-0 packets ~37.7 = 0.31 µs/pkt ≈ 14 GB/s, done ~1.6) | 10.4 (fabric, 50 GB/s/ch) | 13.5 | 290% |
+| compute (matmul zone) | 8.9 (hidden) | 7.6 | — | hidden under the reads |
+| **launch gap** (trace-replay boundary) | **11.5**, identical in every ablation | — | ≈ 1.4 | 10 µs |
+| Overlap loss | 71 − 52.4 = 18.6 | | | |
+
+- **Ranked bottlenecks:**
+  1. the tx send path's per-packet rate;
+  2. the fixed start-up;
+  3. the launch gap;
+  4. the worker read stream, 17% over its floor.
+- **Data-movement search (`estimate.py sweep`, `--phase "Perf 1"`):**
+  - attn sweep id ebb7ef37, W sweep id ceec378f;
+  - the current schedule (split NoC, attn batch 32, W batch 64) is tied for rank 1, 32.3 + 13.9 = 46.2 µs;
+  - so no schedule idea was fanned out, and the read lever had to be at the implementation level.
+
+### Portfolio and verdicts
+Each idea was run by its own `perf-part-optimizer` in `perf_experiments/<slug>/`. The isolation numbers were measured against the op as it stood after the breakdown (82.1–82.6 µs per call).
+
+| Idea | Stage | Verdict | Isolation (µs per call) | Domain |
+|---|---|---|---|---|
+| `launch_gap`: decompose the 11.5 µs trace-replay gap | dispatch / program structure | **WIN** | 82.2 → 77.9, gap 11.56 → 7.67 | everywhere |
+| `reader_issue`: read issue path, order, per-bank NoC | worker reader | **WIN** for the op, NULL for the read itself | 82.4 → 78.6; reader alone 52.4 → 52.4 | this board's placement; correct on any grid |
+| `tx_send_rate`: per-packet cost of the worker → router channel | tx writer | **WIN** | 82.6 → 79.8; tx loop alone 35.8 → 28.1 | everywhere |
+| `tx_rebalance_direct`: neighbour overflow heads on link 1 over the existing direct connection, no mux | tx topology | **WIN in isolation, REGRESSION combined** | x = 3: 82.3 → 79.0; combined: x = 0 73.0 / 72.7 / 73.2 vs x = 3 75.3 / 74.7 / 75.0 | — |
+| `tx_startup`: address table off the critical start-up, cheaper generation | tx writer / tx reader start | **NULL** | 82.5 → 82.4; all-stubbed span 18.3 → 12.3; tx alone 50.1 → 44.3 | — |
+
+**`launch_gap`.**
+- The 11.5 µs is a cost of the **trace-replay boundary**, not of each call. Within one trace holding 4 calls, the gap between calls is 0.45 µs. At each replay start the dispatcher waits for the workers, resets the launch ring, then writes the first program's config.
+- So the one-call-per-trace metric charges the op about 11 µs that a multi-op model trace mostly hides. With 4 calls per trace: 72.8 → 71.7 µs per call.
+- Decomposition (empty-kernel stub with the same structure, gap in µs):
+
+  | Change | Gap µs | Effect |
+  |---|---|---|
+  | Full structure | 11.53 | binary size does not matter |
+  | Worker per-core runtime args removed | 8.51 | −3.0 |
+  | Worker per-core runtime args as a common table | 9.5 | −2.0 |
+  | Fabric-connection args removed (with their 8 single-core semaphore descriptors) | 9.60 | −1.9 |
+  | Those semaphores merged into 2 rectangles | 9.61 | −1.9 |
+  | NoC-split kernel pairs merged | 10.6 | −0.9 |
+  | CBs removed | 10.5 | −1.0 |
+  | Compute kernel removed | 11.33 | −0.2 |
+
+- Cost scales with the number of dispatch destinations, about 0.25–0.45 µs each, not with bytes. The co-located-config variant measured −0.85 µs, inside the noise, so it was not kept.
+
+**`reader_issue`.**
+- The read stream is at a DRAM ceiling of about 430 GB/s: reader alone stays at 51.6–53 µs whatever the request size, the in-flight depth, trid pipelining or NoC relief.
+- R2's "halves" split leaves the NoC 1 northbound links of the two DRAM columns saturated, according to a link-load model (`ri_linkmodel.py`) that matched measurement within ~10%.
+- A searched per-core, per-bank NoC mask keeps the read time but frees those links for the fabric_tx pulls and sends. Full-run effects:
+  - the tx ready wait ends at 15.5 µs instead of 25.7;
+  - `tx_writer_stream` ends at 62 µs instead of 73;
+  - the slowest worker read lands at 51 µs instead of 59.
+- Searched masks s1 / u4 / u6 measured 78.2–79.4 µs, so the result does not depend on one seed.
+- Measured regressions (masks not to use): uniform masks, "geo", parity, and a throttled local-head window (92.9).
+
+**`tx_send_rate`.**
+- Per-step cycle timers on the link-0 sender, in cycles per packet:
+
+  | Step | Cycles per packet |
+  |---|---|
+  | Header fill (`populate_unicast_scatter_write_fields` re-encodes each chunk address) | 208 |
+  | Waiting for an EDM slot | 27 (the 17-slot channel never filled) |
+  | Payload write issue | 47 |
+  | Header write + credit | 79 |
+  | Batch flush | 2 |
+
+- Pre-encoding the addresses into the table, filled once, gives 79.8 µs per call. A raw mirror of the helper's steps gives 81.0, so ~1.6 µs of the win is helper overhead.
+- With the header cost gone, the router channel binds at about 0.17–0.21 µs per packet.
+- Measured not to help: per-batch flush removal (2 cycles), deeper buffering, header co-located with the payload (`pullhdr` 81.4, `colo` no better), and swapping the tx NoCs (REGRESSION, 82.9–87.8).
+
+**`tx_rebalance_direct`.**
+- **Why it helped in isolation.** The link-1 router also relays the 60 packets of the other side's antipode stream, at ~0.245 µs per packet, so the two links balance at x ≈ 3, not 6. In isolation (link-0 tail-bound op):
+
+  | x | 0 | 1 | 2 | 3 | 4 | 6 | 8 |
+  |---|---|---|---|---|---|---|---|
+  | µs per call | 83.4 | 81.0 | 79.6 | **79.0** | 80.9 | 84.3 | 88.1 |
+
+- **Why it did not graduate.** Built on top of the three graduated changes, with the multi-route writer merged with the pre-encoded headers (`perf_experiments/tx_rebalance_direct/kernels/a2a_wkv_b2_tx_writer_mr_prehdr_combined.cpp`):
+
+  | x | µs per call |
+  |---|---|
+  | 0 | 72.6–74.1 (alternating runs 73.0 / 72.7 / 73.2) |
+  | 1 | 74.5 |
+  | 2 | 74.6 |
+  | 3 | 75.3 / 74.7 / 75.0 |
+
+  Once the reads stopped crowding NoC 1 and the send rate improved, link 0 no longer sets the tail, and link 1 plus the 2-route handshake add ~2 µs. That is a measured regression, so it was not graduated.
+- **Helper gap it exposed** (no graduated bypass): `FabricStream` binds one route at `open()`, so one connection cannot serve two destinations. A fix would add route-taking overloads of `arm_*` (like the multicast `arm_inc(route, val)`).
+
+**`tx_startup`.**
+- Recommended variant: the tx reader fills half the table at its idle start, the writer the other half, with incremental L1-bank arithmetic instead of an accessor call per tile.
+- In the full op the link-0 stream starts ~8 µs earlier but ends at the same time, because it is publish- and send-bound.
+- Sending before the ready wait is not allowed by the synchronization contract: `sem_ready` is the only proof that the destination's previous call has ended.
+
+### What graduated (each one the op's only path; the code it replaced is deleted)
+
+| Step | Commit | µs per call (trace, runs) | Change |
+|---|---|---|---|
+| 0 | — | 82.1 | baseline with the zones (zones cost nothing: same as R3's 82.1–82.3) |
+| 1 | `launch_gap` | **78.1 / 77.9** | worker per-core runtime args removed → one common-arg table per kernel, one word per logical core (`head_start \| num_heads << 8`), indexed with `get_relative_logical_x/y`. `_merge_semaphores` re-packs the fabric connection's single-core semaphore descriptors into rectangles. |
+| 2 | `reader_issue` | **74.6 / 75.0 / 74.6 / 74.3 / 74.1** | worker reader issues each DRAM page on the NoC chosen by its per-bank mask (`NOC1_BANK_MASKS`, packed into the reader's table word bits 16–31), with transaction-id barriers on both NoCs. Worker reader and writer run in `DM_DYNAMIC_NOC` mode (see below). |
+| 3 | `tx_send_rate` | **72.9 / 72.7 / 72.9** | tx writer: the address table holds addresses pre-encoded for the receiving router, headers armed once per ring slot, per packet copy 8 words + count + size; connection still the helper's `DirectConn` / `MuxConn`. |
+
+- **Carve-out (one, feasibility).** `NOC1_BANK_MASKS` is meaningful only on the layout it was searched for: a 12-wide worker grid of 8 rows on this Blackhole p150b placement. On any other grid `_noc1_bank_mask` falls back to the "halves" equivalent (0xFFFF on the NoC 1 half, else 0). Any mask is correct on any grid: it only picks a NoC per page. Written as `if layout matches: table else: halves`. The table has meaning only on that layout, so this is a feasibility carve-out, not an allow-list of measured shapes.
+- **Correctness finding during graduation.** The `reader_issue` kernel as delivered (dedicated NoC mode) passed the normal acceptance test but **hung under `--dev`**:
+  - The worker BRISC's end-of-kernel NoC-idle ASSERT tripped. The NCRISC reads on BRISC's NoC advance that NoC's shared hardware counter, which BRISC's own software count does not include.
+  - Release builds compile the check out, and every kernel re-syncs its counters at launch.
+  - Fixed by running the worker reader and writer in `DM_DYNAMIC_NOC` mode, the supported mode for two RISCs sharing a NoC. Each kernel's default NoC is unchanged. Per call is unchanged (74.1–74.6), and `--dev` acceptance passes 10/10.
+- **Whole op:** 82.1 → **72.8 µs per call** (−9.3 µs, −11.3%), with 4 calls per trace not re-measured after graduation.
+
+### After (trace-replay profile of the graduated op)
+
+| Part | Before µs | After µs |
+|---|---|---|
+| Device span per replay | ~71 | 61–72 (median ~65; varies more between replays) |
+| Launch gap | 11.5 | **7.5** |
+| Reader alone | 52.4 | 51.5 |
+| Tx path alone | 49.7 | 43.8–46.5 |
+| Fixed (all stubbed) | 18.3 | 18.9 |
+
+- Full-run zones:
+  - the last worker read lands at ~53 µs and compute ends at ~56.5;
+  - `tx_writer_stream` ends at ~60;
+  - `tx_writer_await_done` waits up to 19 µs (ends at ~69) for the **peer chips'** data.
+- **Bottleneck now (round 2):**
+  - cross-chip skew in the done handshake, where the slowest chip's last sends set every chip's end;
+  - the fixed start-up (18.9 µs all-stubbed; `tx_startup`'s split fill cut it to 12.3 µs and becomes worth re-measuring now that the stream end is less send-bound);
+  - the read stream at ~430 GB/s against 512.
+
+### Guard set
+- The op has one cell (layout × placement × kernel path), and it is the focus case.
+- The per-step whole-op measurement above is the no-regression check: every step was flat or faster.
+- R3's parked knobs: the `tx_send_rate` agent ran `TX_ORDER="strict"` (94.3 → 89.7) and the mux (`MUX_OVERFLOW_HEADS=6`, 86.0 → 85.2, flat) with the new tx writer. Both are correct.
+- Golden 7/7 (`EVAL_CAPTURE_L1=0`) after each graduation. Acceptance 10/10, twice, plus `--dev` 10/10 on the final op.
+
+### Data-movement estimates (`estimate.py report`)
+- Perf 1 sweeps ebb7ef37 (attn) and ceec378f (W): 12 candidates each, 6 shortlisted, 0 built. The current schedule is rank 1–2 (tied), so nothing was fanned out from them.
+- No `estimate.py measure` was recorded. The estimates are per tensor, but the reader-alone measurement (52.4 µs before, 51.5 after) is the attn and W streams together.
+- Measured vs estimate: 52.4 µs vs 46.2 (the attn + W rank-1 sum), 13% slow. This matches the tool's split-NoC caveat; `reader_issue` found the stream DRAM-bound at ~430 GB/s.
+- Fabric and L1-to-L1 schedules are refused by the tool, so the tx ideas went out unranked.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `dataflow_kernel_lib::read_sticks_for_tilize` | capability | issues every stick on the kernel's one NoC and ends each tile row with `noc_async_read_barrier()`, which counts only this RISC's own-NoC reads. There is no way to spread one core's reads over both NoCs per page, and no transaction-id barrier option. (On one NoC the raw path ties the helper: 52.4 vs 52.3 µs reader alone.) | 82400 (op per call, helper, halves) | 78600 (op per call, per-bank dual NoC) | `kernels/a2a_wkv_b2_reader.cpp:111` (attn), `:96` (W) |
+| `dataflow_kernel_lib::ccl::FabricStream::arm_scatter_write` / `ScatterWriteChannel::write_scatter` (+ `FabricStreamSender::open`, `arm_inc`, `arm_unicast_write`, `flush`, `close`; the connection stays `DirectConn` / `MuxConn`) | capability | `write_scatter` runs `populate_unicast_scatter_write_fields` on every packet, which re-encodes each chunk address for the EDM-local NoC and re-stores the chunk sizes (208 of ~370 cycles per packet). There is no entry point for addresses encoded once ahead of time. Suggested: `write_scatter_encoded(const uint64_t* encoded, chunks, src)` plus an `encode_dst(noc_addr)`. | 82600 (op per call, helper) | 79800 (op per call, pre-encoded) | `kernels/a2a_wkv_b2_tx_writer.cpp:283` (send loop), `:240` (`send_scatter`) |
+| same `FabricStream` layers | ergonomics | a raw call sequence identical to the helper's (no pre-encoding) measured ~25 cycles per packet faster. Likely the command-header copies through the helper's channel layers and the pointer hop to the sender; not confirmed. Reported only as a measured overhead: it is not why the bypass was taken (the capability row is). | 82600 | 81000 | `kernels/a2a_wkv_b2_tx_writer.cpp:122` |
+
+- **Not graduated, so not in the table.** `tx_rebalance_direct` needs two routes on one connection, which `FabricStream` cannot express (it binds one route at `open()`). `tx_startup`'s address walk needs a step iterator over interleaved pages that `TensorAccessor` lacks (17.9 vs 12.9 ns per entry).
+
+### Tests and artifacts
+- `perf_experiments/{launch_gap,reader_issue,tx_send_rate,tx_rebalance_direct,tx_startup}/` hold each idea's variant op, kernels, tests, probes and parsers. Profile CSVs were deleted.
+- The experiment tests need `-o addopts= --import-mode=prepend`. Their `import torch` lines are function-local, as the ttnn torch-import hook requires.
