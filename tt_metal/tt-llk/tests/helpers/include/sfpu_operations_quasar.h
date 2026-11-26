@@ -89,6 +89,7 @@
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
+#include "llk_sfpu/llk_math_unary_max_min_sfpu_entry.h"
 
 // Binary SFPU op headers (consumed by the binary dispatchers below). The op is
 // selected via the LLK ckernel::BinaryOp enum (reused like Blackhole; the
@@ -852,7 +853,14 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, _calculate_sqrt_, (true /* APPROX */, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_sqrt,
+            (APPROX, ITERATIONS, is_fp32_dest_acc_en, false /* FAST_APPROX */),
+            dst_index,
+            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::tanh)
     {
@@ -962,12 +970,13 @@ void call_unary_sfpu_operation_quasar(
 #else
         constexpr std::uint32_t UNARY_MAX_MIN_FLOAT_SCALAR = 0x00000000; // 0.0 (fp32)
 #endif
+        static_assert(ITERATIONS == 8, "unary_max_tile / unary_min_tile run the kernel with its default ITERATIONS");
         SFPU_UNARY_CALL_TINY_TILE(
             DST_SYNC,
             is_fp32_dest_acc_en,
             TILE_SHAPE,
             calculate_unary_max_min,
-            (OPERATION == SfpuType::unary_max /* IS_MAX_OP */, DataFormat::Float32, APPROX, ITERATIONS),
+            (OPERATION == SfpuType::unary_max /* IS_MAX_OP */, APPROX),
             dst_index,
             vector_mode,
             UNARY_MAX_MIN_FLOAT_SCALAR);
@@ -981,19 +990,28 @@ void call_unary_sfpu_operation_quasar(
         constexpr std::uint32_t UNARY_MAX_MIN_INT32_SCALAR = 1000;
 #endif
 #ifdef SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE
-        constexpr bool UNARY_MAX_MIN_SIGN_MAGNITUDE = true;
-#else
-        constexpr bool UNARY_MAX_MIN_SIGN_MAGNITUDE = false;
-#endif
+        // A sign-magnitude Int32 Dest has no compute API route.
         SFPU_UNARY_CALL_TINY_TILE(
             DST_SYNC,
             is_fp32_dest_acc_en,
             TILE_SHAPE,
             calculate_unary_max_min,
-            (OPERATION == SfpuType::unary_max_int32 /* IS_MAX_OP */, DataFormat::Int32, APPROX, ITERATIONS, UNARY_MAX_MIN_SIGN_MAGNITUDE),
+            (OPERATION == SfpuType::unary_max_int32 /* IS_MAX_OP */, DataFormat::Int32, APPROX, ITERATIONS, true /* SIGN_MAGNITUDE_FORMAT */),
             dst_index,
             vector_mode,
             UNARY_MAX_MIN_INT32_SCALAR);
+#else
+        static_assert(ITERATIONS == 8, "unary_max_int32_tile / unary_min_int32_tile run the kernel with its default ITERATIONS");
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_unary_max_min_int32,
+            (OPERATION == SfpuType::unary_max_int32 /* IS_MAX_OP */, false /* IS_UINT */, APPROX),
+            dst_index,
+            vector_mode,
+            UNARY_MAX_MIN_INT32_SCALAR);
+#endif
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
