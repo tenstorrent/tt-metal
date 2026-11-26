@@ -764,6 +764,21 @@ jobs:
               pytest "${PLUGIN_DIR}/tests/tt" -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
             fi
 
+      - name: 🧪 Check the top-p certificate path served the top-k-off requests
+        if: ${{ matrix.test-group.sampling-tests && contains(matrix.test-group.model, 'Qwen3.8') }}
+        run: |
+          # tests/tt/test_top_p_without_top_k.py sends top_k -1 / 0, top_p 0.9,
+          # temperature 0.7. On the Qwen3.8 MTP model (supports_spec_device_top_p)
+          # the verify sampler draws them under a top-p certificate, and the
+          # engine logs its count. No such line means they sampled on the host.
+          LINES=$(grep -F "[spec_engine] top-p certificate:" "${FILE_SERVER_LOG}" || true)
+          if [ -z "$LINES" ]; then
+            echo "❌ server log has no '[spec_engine] top-p certificate:' line: the top-k-off requests did not take the certificate path"
+            exit 1
+          fi
+          echo "$LINES" | sed 's/^.*\[spec_engine\]/[spec_engine]/'
+          echo "✅ top-p certificate verifies ran on the device"
+
       - name: 🧪 Run chunked prefill tests
         if: ${{ matrix.test-group.chunked-prefill-budget }}
         timeout-minutes: ${{ matrix.test-group.chunked-prefill-test-timeout || 15 }}
