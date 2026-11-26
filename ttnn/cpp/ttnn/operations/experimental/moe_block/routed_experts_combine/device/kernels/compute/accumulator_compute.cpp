@@ -10,10 +10,11 @@
 //
 // The multiply is a broadcast multiply: srcA is the row, srcB the gate weight (element 0 of its tile, broadcast to
 // every element), the product lands in DEST. The add is done by the packer: packing with L1 accumulation on adds DEST
-// onto the token's sum already in cb_acc (a token's first row packs without it, so stale L1 is overwritten). A token
-// is finished as soon as its last row (token_rows: the router's top-k) is in: its sum goes out as bf16 (cb_out) and
-// its id to the writer (cb_done), so the output rows go out while rows still land, in the order tokens finish. Tokens
-// with fewer rows (padding: none, written as zeros) go out after the last row, in token order.
+// onto the token's sum already in cb_acc (a token's first row packs without it, so stale L1 is overwritten). Every
+// real token gets exactly top_k rows (the router's top-k). A token is finished as soon as its top_k-th row is in: its
+// sum goes out as bf16 (cb_out) and its id to the writer (cb_done), so output rows are written while other tokens'
+// rows still land, in the order tokens finish. Padding tokens get no rows; once the last row is in, each gets a zero
+// row, in token order.
 //
 // The rows are row-major data, but they are processed as if they were tiles: a W-wide bf16 row is W / 1024 "tiles".
 // That is fine because everything here is elementwise - the order of the elements inside a tile does not matter, and
@@ -119,13 +120,12 @@ void kernel_main() {
     constexpr bool snap = snap_step_bits != 0;
     // (1 / q, a power of two too: its exponent field is 254 less q's)
     constexpr uint32_t inverse_snap_step_bits = snap ? 0x7F000000u - snap_step_bits : 0u;
-    // routed rows a token (the router's top-k): a token is finished - its sums to bf16, out to the writer - as soon as
-    // its token_rows-th row is in; tokens with fewer (padding tokens: none) at the call's end
-    constexpr uint32_t token_rows = get_named_compile_time_arg_val(combine_names::kTokenRows);
+    // the router's top-k: a token is finished - its sums to bf16, out to the writer - as soon as its top_k-th row is in
+    constexpr uint32_t top_k = get_named_compile_time_arg_val(combine_names::kTopK);
     // the finished tokens' ids, in output order (to the writer), and the pack -> unpack hand-over of a token's sums
     constexpr uint32_t cb_done = get_named_compile_time_arg_val(combine_names::kDoneCb);
     constexpr uint32_t cb_sync = get_named_compile_time_arg_val(combine_names::kSyncCb);
-    static_assert(token_rows >= 1 && token_rows < 256, "rows a token count in a byte");
+    static_assert(top_k >= 1 && top_k < 256, "rows a token count in a byte");
     compute_kernel_hw_startup(cb_row, cb_w, cb_acc);
     // (no runtime args: whether this core accumulates differs by chip, and one program for the mesh needs them alike)
     cb_wait_front(cb_meta, 1);
@@ -142,9 +142,14 @@ void kernel_main() {
     }
     cb_reserve_back(cb_acc, n_tokens * tiles_per_row);
 
-    // From the sums (cb_acc) to the output: begin_output once (the unpacker on the sums, the packer on bf16 rows), then
-    // output(token) a finished token: its row (zeros if it got no rows - not the CB's stale L1) to cb_out, its id to
-    // cb_done
+    // The unpack -> math -> pack pipeline runs in one of two setups. Accumulating (the row loop below): the unpacker
+    // reads a row and its gate weight, the packer adds their product onto the token's sum in cb_acc (L1 accumulate
+    // on). Writing (output below): the unpacker reads a token's sum from cb_acc, the packer writes it to cb_out as
+    // bf16 (L1 accumulate off).
+    //
+    // begin_output() switches the pipeline from accumulating to writing. It writes nothing itself. Call it ONCE before
+    // a run of output() calls, not once per token: every output() after it uses the same setup. A token finished
+    // early is a run of one (switch, write it, switch back); the end of the call is one run for all the tokens left.
     auto begin_output = [&]() {
         pack_reconfig_l1_acc(0);
         reconfig_data_format_srca(cb_acc);
@@ -155,6 +160,9 @@ void kernel_main() {
             snap_sfpu_init();
         }
     };
+    // output(token) writes one finished token, with the pipeline already switched by begin_output(): its sum as a bf16
+    // row to cb_out (a zero row if the token got no rows - not the stale L1 of its cb_acc slot), then its id to
+    // cb_done, which tells the writer where the row goes.
     auto output = [&](uint32_t token) {
         cb_reserve_back(cb_out, tiles_per_row);
         if (rows_in[token] == 0) {
@@ -172,6 +180,7 @@ void kernel_main() {
                 }
                 tile_regs_release();
             }
+            // (fill_tile_init replaced begin_output()'s copy / SFPU setup: put it back for the next output())
             copy_init(cb_acc);
             if constexpr (snap) {
                 snap_sfpu_init();
@@ -236,28 +245,31 @@ void kernel_main() {
         }
         cb_pop_front(cb_row, tiles_per_row);
         cb_pop_front(cb_w, 1);
-        if (++rows_in[token] == token_rows) {
-            // the packer's sums of this token in L1 before the unpacker reads them (a CB push from the PACK thread
-            // waits for the packer), then the token out, then back to the rows
+        if (++rows_in[token] == top_k) {
+            // The token's last row is in: write it now. First the packer must have added that row into L1 before the
+            // unpacker reads the sum (a CB push from the PACK thread waits for the packer); then switch to writing,
+            // write the token, and switch back to accumulating for the next row.
             cb_reserve_back(cb_sync, 1);
             cb_push_back(cb_sync, 1);
             cb_wait_front(cb_sync, 1);
             begin_output();
             output(token);
             cb_pop_front(cb_sync, 1);
+            // back to accumulating (begin_output()'s reverse)
             reconfig_data_format_srca(cb_row);
             pack_reconfig_data_format(cb_acc);
             mul_bcast_scalar_init(cb_row, cb_w);
         }
     }
-    // the tokens not finished yet (fewer rows than token_rows: padding tokens have none), in token order, once all the
-    // packs are in L1
+    // The end of the call: every row is in. Once all the packs are in L1, switch to writing once and write every token
+    // that did not finish early - the padding tokens, which got no rows (a zero row each) - in token order. When every
+    // token finished early, nothing is written here.
     pack_reconfig_l1_acc(0);
     cb_push_back(cb_acc, n_tokens * tiles_per_row);
     cb_wait_front(cb_acc, n_tokens * tiles_per_row);
     begin_output();
     for (uint32_t token = 0; token < n_tokens; ++token) {
-        if (rows_in[token] < token_rows) {
+        if (rows_in[token] < top_k) {
             output(token);
         }
     }

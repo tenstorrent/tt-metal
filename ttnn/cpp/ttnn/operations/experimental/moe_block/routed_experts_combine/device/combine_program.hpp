@@ -87,7 +87,7 @@ struct CombinePlan {
     uint32_t snap_step_bits = 0;  // fp32 bits of the combine's snap step q (0: off)
     uint32_t home_tokens = 0;     // home tokens a chip (S)
     uint32_t row_elements = 0;    // row width, bf16 elements (W)
-    uint32_t token_rows = 0;      // routed rows a token (the router's top-k): a token is finished at its last row
+    uint32_t top_k = 0;           // the router's top-k: the rows every real token gets (finished at its top-k-th)
     RowSlot row_slot;
     StateLayout state;
     uint32_t accumulator_count = 0;              // accumulators a chip (A)

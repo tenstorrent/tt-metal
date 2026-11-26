@@ -201,11 +201,11 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->home_tokens = in.home_tokens;
     plan->row_elements = in.row_elements;
     // an accumulator finishes a token (its sums -> bf16 -> the output) as soon as its top-k-th row is in
-    plan->token_rows = resources.dims().top_k;
+    plan->top_k = resources.dims().top_k;
     TT_FATAL(
-        plan->token_rows >= 1 && plan->token_rows < 256,
+        plan->top_k >= 1 && plan->top_k < 256,
         "routed_experts_combine: top-k {} (a token's rows are counted in a byte)",
-        plan->token_rows);
+        plan->top_k);
     const uint32_t N = mesh.topo.num_chips();
     TT_FATAL(N <= kMaxChips, "routed_experts_combine: {} chips > {}", N, kMaxChips);
     plan->row_slot = row_slot(in.row_elements);
@@ -965,7 +965,7 @@ CombineHandles add_combine_program(
             {names::kMaxTokensPerAccumulator, plan.max_tokens_per_accumulator},
             {names::kWeightCb, kCbW},
             {names::kSnapStepBits, plan.snap_step_bits},
-            {names::kTokenRows, plan.token_rows},
+            {names::kTopK, plan.top_k},
             {names::kDoneCb, kCbDone},
             {names::kSyncCb, kCbSync}};
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O3;  // (ComputeConfig's default)

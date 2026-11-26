@@ -72,9 +72,9 @@ inline constexpr const char* kOutputCb = "output_cb";
 // ---- shapes ----
 inline constexpr const char* kRowBytes = "row_bytes";
 inline constexpr const char* kRowTiles = "row_tiles";
-// routed rows a token (the router's top-k: a token is finished at its last row), the finished-token id CB
+// the router's top-k (the rows every real token gets: a token is finished at its top-k-th), the finished-token id CB
 // (compute -> the output writer) and the compute's pack -> unpack sync CB
-inline constexpr const char* kTokenRows = "token_rows";
+inline constexpr const char* kTopK = "top_k";
 inline constexpr const char* kDoneCb = "done_cb";
 inline constexpr const char* kSyncCb = "sync_cb";
 inline constexpr const char* kLandingSlotBytes = "landing_slot_bytes";
