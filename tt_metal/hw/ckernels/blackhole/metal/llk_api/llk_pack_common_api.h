@@ -68,32 +68,32 @@ constexpr int llk_pack_first_valid_output() {
     return -1;
 }
 
-// An output with no CB here (hw_startup's default CB 0) configures as the first pack output: the skipping
-// reconfigures and live inits take what hw_configure wrote as every pack output's configuration.
-inline std::uint32_t llk_pack_config_output_id(const std::uint32_t output_id) {
-    constexpr int first = llk_pack_first_valid_output();
-    if constexpr (first >= 0) {
-        if (pack_src_format[output_id] == static_cast<std::uint8_t>(DataFormat::Invalid) ||
-            pack_dst_format[output_id] == static_cast<std::uint8_t>(DataFormat::Invalid)) {
-            return static_cast<std::uint32_t>(first);
+constexpr std::uint64_t llk_pack_absent_output_mask() {
+    static_assert(sizeof(pack_dst_format) <= 64, "one mask bit per pack output");
+    std::uint64_t mask = 0;
+    if (llk_pack_first_valid_output() >= 0) {
+        for (std::uint32_t i = 0; i < sizeof(pack_dst_format); i++) {
+            if (pack_src_format[i] == static_cast<std::uint8_t>(DataFormat::Invalid) ||
+                pack_dst_format[i] == static_cast<std::uint8_t>(DataFormat::Invalid)) {
+                mask |= std::uint64_t{1} << i;
+            }
         }
     }
-    return output_id;
+    return mask;
 }
 
-/**
- * Configure the packer hardware for the given output operand.
- *
- * Face geometry (face_r_dim, num_faces), tile column dimension, partial-face flag and tile
- * size are derived from the output CB metadata associated with the operand id. Relu is left
- * disabled here.
- *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @param  pack_output         Output circular buffer / operand index.
- */
+// An output with no CB on this core (hw_startup's default CB 0) is configured as the first pack output: the skipping
+// reconfigures and live inits take what hw_configure / pack init wrote as every pack output's configuration.
+// The mask is stored with its halves swapped and indexed by id ^ 32: ids below 32 take the short (shift >= 32) form of
+// the 64-bit shift on a 32-bit core.
+__attribute__((always_inline)) inline bool llk_pack_output_absent(const std::uint32_t output_id) {
+    constexpr std::uint64_t absent = llk_pack_absent_output_mask();
+    constexpr std::uint64_t swapped = (absent << 32) | (absent >> 32);
+    return ((swapped >> (output_id ^ 32)) & 1) != 0;
+}
+
 template <bool is_fp32_dest_acc_en>
-inline void llk_pack_hw_configure(std::uint32_t pack_output) {
-    const std::uint32_t output_id = llk_pack_config_output_id(get_output_id(pack_output));
+inline void llk_pack_hw_configure_of_output(const std::uint32_t output_id) {
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
@@ -120,6 +120,34 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
         partial_face,
         0 /*relu_config*/);
     llk_pack_hw_configure_live<is_fp32_dest_acc_en>(face_r_dim, tile_c_dim, num_faces);
+}
+
+// Out of line, so kernels whose outputs are all present keep mm2's inlining and register choices.
+template <bool is_fp32_dest_acc_en>
+__attribute__((noinline, cold)) void llk_pack_hw_configure_absent_output() {
+    if constexpr (llk_pack_first_valid_output() >= 0) {
+        llk_pack_hw_configure_of_output<is_fp32_dest_acc_en>(llk_pack_first_valid_output());
+    }
+}
+
+/**
+ * Configure the packer hardware for the given output operand.
+ *
+ * Face geometry (face_r_dim, num_faces), tile column dimension, partial-face flag and tile
+ * size are derived from the output CB metadata associated with the operand id. Relu is left
+ * disabled here.
+ *
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @param  pack_output         Output circular buffer / operand index.
+ */
+template <bool is_fp32_dest_acc_en>
+__attribute__((always_inline)) inline void llk_pack_hw_configure(std::uint32_t pack_output) {
+    const std::uint32_t output_id = get_output_id(pack_output);
+    if (llk_pack_output_absent(output_id)) {
+        llk_pack_hw_configure_absent_output<is_fp32_dest_acc_en>();
+        return;
+    }
+    llk_pack_hw_configure_of_output<is_fp32_dest_acc_en>(output_id);
 }
 
 /**
