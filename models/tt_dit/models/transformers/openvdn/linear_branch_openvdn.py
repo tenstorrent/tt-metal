@@ -169,6 +169,7 @@ class OpenVDNLinearBranch(Module):
         #: split too; `parallel_scan` takes the log-depth scan.
         self.frame_split: tuple[int, int, object] | None = None
         self.branch_split = ""  # "", "frames" or "heads"
+        self._local_weights: dict[str, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
         self.parallel_scan = False
 
     # ------------------------------------------------------------------ weights
@@ -207,9 +208,31 @@ class OpenVDNLinearBranch(Module):
             ]
         return self._shifts[frame_size]
 
-    def conv(self, tokens: ttnn.Tensor, proj: str, num_frames: int, frame_size: tuple[int, int]) -> ttnn.Tensor:
+    def _local_conv_weights(self, proj: str) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """`proj`'s spatial and temporal taps for this device's channels under the head split (cached)."""
+        key = f"{proj}_local"
+        if key not in self._local_weights:
+            axis, factor, _ = self.frame_split
+            width = (self.num_local_heads + (-self.num_local_heads % factor)) * self.head_dim
+            sp, tm = getattr(self, f"{proj}_sp").data, getattr(self, f"{proj}_tm").data
+            self._local_weights[key] = (
+                ttnn.mesh_partition(_pad_dim(sp, 2, width), dim=2, cluster_axis=axis),
+                ttnn.mesh_partition(_pad_dim(tm, 3, width), dim=3, cluster_axis=axis),
+            )
+        return self._local_weights[key]
+
+    def conv(
+        self,
+        tokens: ttnn.Tensor,
+        proj: str,
+        num_frames: int,
+        frame_size: tuple[int, int],
+        *,
+        channel_split: bool = False,
+    ) -> ttnn.Tensor:
         """`LinearAttentionSepConv`: `[1, 1, F*S, C]` bf16 -> fp32. The spatial taps are exact 0/1 shift matmuls
-        (one nonzero per output), scaled per channel and summed in fp32; the temporal taps are frame slices."""
+        (one nonzero per output), scaled per channel and summed in fp32; the temporal taps are frame slices.
+        `channel_split`: `tokens` hold this device's channels of the head split (`_head_split`); the taps follow."""
         channels = tokens.shape[-1]
         per_frame = frame_size[0] * frame_size[1]
         x = ttnn.to_layout(tokens, ttnn.ROW_MAJOR_LAYOUT)
@@ -218,13 +241,18 @@ class OpenVDNLinearBranch(Module):
 
         # The spatial conv is per frame: with `frame_split` (axis, factor, gather) the frames are split over those
         # devices (padded to a multiple of the factor), each convolves its share and the all-gather reassembles them.
-        split = self.frame_split
+        split = None if channel_split else self.frame_split
         if split is not None:
             axis, factor, gather = split
             x_t = _pad_dim(x_t, 1, num_frames + (-num_frames % factor))
             x_t = ttnn.mesh_partition(x_t, dim=1, cluster_axis=axis)
 
-        weight = getattr(self, f"{proj}_sp").data
+        sp_weight, tm_weight = (
+            self._local_conv_weights(proj)
+            if channel_split
+            else (getattr(self, f"{proj}_sp").data, getattr(self, f"{proj}_tm").data)
+        )
+        weight = sp_weight
         acc = None
         for t, shift in enumerate(self._shift_matrices(frame_size)):
             moved = ttnn.matmul(x_t, shift, dtype=ttnn.float32, compute_kernel_config=self.config)
@@ -240,7 +268,7 @@ class OpenVDNLinearBranch(Module):
         pad = self.KERNEL // 2
         zeros = ttnn.zeros_like(ttnn.slice(x, [0, 0, 0, 0], [1, 1, per_frame, channels]))
         padded = ttnn.concat([zeros] * pad + [x] + [zeros] * pad, dim=1)
-        weight = getattr(self, f"{proj}_tm").data
+        weight = tm_weight
         acc = None
         for dt in range(self.KERNEL):
             part = ttnn.slice(padded, [0, dt, 0, 0], [1, dt + num_frames, per_frame, channels])
@@ -256,15 +284,17 @@ class OpenVDNLinearBranch(Module):
         num_frames: int,
         frame_size: tuple[int, int] | None,
         partition=None,
+        channel_split: bool = False,
     ) -> ttnn.Tensor:
         """`prepare_linear_features`: `[1, 1, F*S, C]` raw bf16 -> `[F, H, S, d]` bf16. `frame_size=None` skips the
         conv (the text chunk). `partition` (frames on dim 0 -> this device's share) is applied in the tiled head
-        layout (a row-major split measured ~70 ms slower), giving `[f, H, S, d]` for the local frames."""
+        layout (a row-major split measured ~70 ms slower), giving `[f, H, S, d]` for the local frames.
+        `channel_split`: `tokens` are this device's channels of the head split, `H = C / d` of them."""
         if frame_size is not None and proj in self.short_conv:
-            x = self.conv(tokens, proj, num_frames, frame_size)
+            x = self.conv(tokens, proj, num_frames, frame_size, channel_split=channel_split)
         else:
             x = ttnn.typecast(tokens, ttnn.float32)
-        x = to_heads(ttnn.silu(x), num_frames, self.num_local_heads)
+        x = to_heads(ttnn.silu(x), num_frames, tokens.shape[-1] // self.head_dim)
         if partition is not None:
             x = partition(x)
         if proj != "v":
@@ -291,14 +321,16 @@ class OpenVDNLinearBranch(Module):
         return ttnn.exp(ttnn.neg(ttnn.multiply(softplus(delta), self.alpha_scale.data)))
 
     def text_state(
-        self, text_x: ttnn.Tensor, text_k_raw: ttnn.Tensor, text_v_raw: ttnn.Tensor, local=None
+        self, text_x: ttnn.Tensor, text_k_raw: ttnn.Tensor, text_v_raw: ttnn.Tensor, head_split: bool = False
     ) -> ttnn.Tensor:
         """`_text_state`: `TEXT_STATE_SCALE * (B (I + A)^-1)` over all prompt rows as one chunk, `[1, H, d_v, d_k]`
-        fp32 (`local` given: this device's heads only, see `_head_split`)."""
-        local = local or (lambda t: t)
+        fp32 (`head_split`: this device's heads only, see `_head_split`)."""
         length = text_x.shape[-2]
-        key = local(self.features(text_k_raw, "k", 1, None))
-        value = local(self.features(text_v_raw, "v", 1, None))
+        local = local_channels = lambda t: t  # noqa: E731
+        if head_split:
+            local, local_channels, _ = self._head_split()
+        key = self.features(local_channels(text_k_raw), "k", 1, None)
+        value = self.features(local_channels(text_v_raw), "v", 1, None)
         a, b = ops.frame_statistics(key, value, local(self.beta(text_x, 1)), config=self.config)
         _, injection = ops.vdn_factor_apply(None, a, b, max_eig=1.0 + length, config=self.config)
         return ttnn.multiply(injection, self.TEXT_STATE_SCALE)
@@ -412,20 +444,20 @@ class OpenVDNLinearBranch(Module):
         text_state: ttnn.Tensor | None,
     ) -> ttnn.Tensor:
         """`readout` with the delta-rule math split by head over the SP devices: statistics, inverse, scans, state
-        gather and q . state run on this device's heads (the text state comes in already split, see `forward`);
-        one gather at the end. The features (conv, layout) are computed whole, as without the split."""
+        gather and q . state run on this device's heads (the text state comes in already split, see `forward`),
+        from the conv and features on: everything but the small beta/alpha/gate projections; one gather at the end."""
         per_frame = frame_size[0] * frame_size[1]
         mark = lambda name: ops.mark(self.mesh_device, f"linear branch: {name}")  # noqa: E731
         local, local_channels, gather = self._head_split()
         factor = self.frame_split[1]
         local_heads = -(-self.num_local_heads // factor)
 
-        query = local(self.features(q_raw, "q", num_frames, frame_size))
-        mark("q features")
-        key = local(self.features(k_raw, "k", num_frames, frame_size))
-        mark("k features (conv)")
-        value = local(self.features(v_raw, "v", num_frames, frame_size))
-        mark("v features (conv)")
+        # The conv is depthwise and the features per head, so each device takes its channels from the raw rows.
+        query, key, value = (
+            self.features(local_channels(raw), proj, num_frames, frame_size, channel_split=True)
+            for raw, proj in ((q_raw, "q"), (k_raw, "k"), (v_raw, "v"))
+        )
+        mark("q, k, v features (conv)")
 
         a, b = ops.frame_statistics(key, value, local(self.beta(xv, num_frames)), config=self.config)
         alpha_rows = local_channels(self.alpha(xv, num_frames))
@@ -467,8 +499,7 @@ class OpenVDNLinearBranch(Module):
         readout `[1, 1, F*S, H*d]` bf16 (before `to_out_linear`), zero on frames 0 and F-1 when `skip_ends`."""
         per_frame = frame_size[0] * frame_size[1]
         head_split = self.branch_split == "heads" and self.frame_split is not None
-        local = self._head_split()[0] if head_split else None
-        text_state = None if text is None else self.text_state(*text, local=local)
+        text_state = None if text is None else self.text_state(*text, head_split=head_split)
         ops.mark(self.mesh_device, "linear branch: text state")
         if not skip_ends:
             return self.readout(
