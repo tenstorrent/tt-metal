@@ -68,10 +68,8 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
     // using hardware memory map constants: MEM_L1_BASE and MEM_L1_SIZE
 
     static constexpr std::uint32_t input_lreg[4] = {p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3};
-    // One SFPLOAD covers 4 consecutive rows, so rows 4g..4g+3 share one input block in LREG0-3. The
-    // input tile is never written (outputs go to tile 1) and the two SFPTRANSPs around each
-    // accumulation are an involution on LREG0-3 (only LREG4-7 change), so the block is loaded once
-    // per 4-row group and stays valid for every row of the group; a skipped row runs no SFPTRANSP.
+    // The 4-row input block is loaded once per group: the input tile is never written and each SFPTRANSP
+    // pair leaves LREG0-3 unchanged.
     for (std::uint32_t group = 0; group < 32; group += 4) {
         // Base address of the 4-row group within the tile faces
         // (group & 0x10): Extract bit 4 → 0 for rows 0-15, 16 for rows 16-31

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-reshuffle_rows SFPU test. Covers llk_sfpu/ckernel_sfpu_reshuffle_rows.h on Wormhole.
+reshuffle_rows SFPU test. Covers llk_sfpu/ckernel_sfpu_reshuffle_rows.h.
 
 Each (input, accumulator) tile pair gets accumulator[mask[r]] += input[r] for every input
 row r; mask entries >= 32 skip the row. The input tile must come back unchanged.
@@ -10,7 +10,7 @@ row r; mask entries >= 32 skip the row. The input tile must come back unchanged.
 from typing import List
 
 import torch
-from conftest import skip_for_blackhole, skip_for_quasar
+from conftest import skip_for_quasar
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -19,11 +19,17 @@ from helpers.golden_generators import (
     UntilizeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import ApproximationMode, format_dict
+from helpers.llk_params import ApproximationMode, PerfRunType, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import APPROX_MODE, TILE_COUNT
+from helpers.test_config import BuildMode, TestConfig
+from helpers.test_variant_parameters import (
+    APPROX_MODE,
+    LOOP_FACTOR,
+    RESHUFFLE_MASK,
+    TILE_COUNT,
+)
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
@@ -46,9 +52,8 @@ def _mixed_mask() -> List[int]:
     ]
 
 
-# The kernel loads each 4-row input group once and reuses it for all four rows of the group.
-# Many-to-one masks check that a row's store reaches Dest before the next row reloads the same
-# accumulator rows; the skip masks cover skipped rows inside a group and fully skipped groups.
+# Many-to-one masks check that a row's store lands before the next row reloads the same accumulator
+# rows; the skip masks cover skipped rows inside a 4-row group and fully skipped groups.
 MASKS = {
     "identity": list(range(ROWS)),
     "reverse": [ROWS - 1 - i for i in range(ROWS)],
@@ -59,6 +64,7 @@ MASKS = {
     ],
     "all_to_first": [0] * ROWS,
     "all_to_last": [ROWS - 1] * ROWS,
+    "skip_last_row_of_group": [SKIP if i % 4 == 3 else i for i in range(ROWS)],
     "skip_first_row_of_group": [
         SKIP if i % 4 == 0 else (i * 7) % ROWS for i in range(ROWS)
     ],
@@ -85,24 +91,44 @@ def _mask_buffer(mask: List[int]) -> torch.Tensor:
     return buffer
 
 
-@skip_for_blackhole
-@skip_for_quasar
-@parametrize(
+# Shared with perf_sfpu_reshuffle_rows.py so the two sweeps stay aligned.
+RESHUFFLE_ROWS_SWEEP = dict(
     formats=input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32], same=True
     ),
     dest_acc=get_valid_dest_accumulation_modes,
     mask_name=list(MASKS),
 )
-def test_sfpu_reshuffle_rows(formats, dest_acc, mask_name):
+
+
+def _run_sfpu_reshuffle_rows(
+    formats,
+    dest_acc,
+    mask_name,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
+    """Drive one reshuffle_rows variant; perf runs return after the measurement."""
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
     mask = MASKS[mask_name]
 
-    # Half-integers in [-2, 2]: every partial sum is exact in all formats, so the check is bit-exact.
+    # Values in [-2, 2] on a grid that keeps every partial sum exact, so the check is bit-exact. Float32
+    # uses a 2^-16 grid so a sum rounded to bf16 is caught; 16-bit formats use half-integers.
+    step = 2**16 if formats.input_format == DataFormat.Float32 else 2
     src_A = (
         torch.randint(
-            -4, 5, tuple(DIMENSIONS), generator=torch.Generator().manual_seed(0)
+            -2 * step,
+            2 * step + 1,
+            tuple(DIMENSIONS),
+            generator=torch.Generator().manual_seed(0),
         )
-        / 2
+        / step
     ).to(format_dict[formats.input_format])
     expected = get_golden_generator(ReshuffleRowsGolden)(
         src_A, mask, DIMENSIONS, formats.output_format
@@ -111,24 +137,39 @@ def test_sfpu_reshuffle_rows(formats, dest_acc, mask_name):
         src_A, DIMENSIONS, formats.input_format
     )
 
-    configuration = TestConfig(
-        "sources/sfpu_reshuffle_rows_test.cpp",
-        formats,
-        templates=[APPROX_MODE(ApproximationMode.No)],
-        runtimes=[TILE_COUNT(TILE_CNT)],
-        variant_stimuli=StimuliConfig(
-            device_src_A,
-            formats.input_format,
-            _mask_buffer(mask),
-            DataFormat.UInt8,
-            formats.output_format,
-            tile_count_A=TILE_CNT,
-            tile_count_B=1,
-            tile_count_res=TILE_CNT,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs={
+            "test_name": "sources/sfpu_reshuffle_rows_test.cpp",
+            "formats": formats,
+            "templates": [
+                APPROX_MODE(ApproximationMode.No),
+                TILE_COUNT(TILE_CNT),
+                LOOP_FACTOR(loop_factor),
+                RESHUFFLE_MASK(mask_name),
+            ],
+            "runtimes": [],
+            "variant_stimuli": StimuliConfig(
+                device_src_A,
+                formats.input_format,
+                _mask_buffer(mask),
+                DataFormat.UInt8,
+                formats.output_format,
+                tile_count_A=TILE_CNT,
+                tile_count_B=1,
+                tile_count_res=TILE_CNT,
+            ),
+            "dest_acc": dest_acc,
+            "unpack_to_dest": formats.input_format.is_32_bit(),
+        },
     )
+    if is_perf:
+        # Perf runs write only runtimes to L1; the cost depends on the mask, so write the stimuli too.
+        if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+            configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
     res_tensor = result_tensor(res_from_L1, formats.output_format)
@@ -145,3 +186,9 @@ def test_sfpu_reshuffle_rows(formats, dest_acc, mask_name):
         f"reshuffle_rows mismatch for mask {mask_name} {mask}: logical rows "
         f"{mismatched_rows} differ\ngot\n{result}\nexpected\n{expected}"
     )
+
+
+@skip_for_quasar
+@parametrize(**RESHUFFLE_ROWS_SWEEP)
+def test_sfpu_reshuffle_rows(formats, dest_acc, mask_name):
+    _run_sfpu_reshuffle_rows(formats, dest_acc, mask_name)
