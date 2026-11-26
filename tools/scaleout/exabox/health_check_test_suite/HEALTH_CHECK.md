@@ -82,7 +82,7 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | Tier | Resets | Tests | Triage | ETH status | QSFP tests | sys-triage | Duration | Use when |
 |---|---|---|---|---|---|---|---|---|
 | `flash` | none | — | — | 2 reads, 30 s apart | — | — | snapshot + 2 triage reads + 30 s | Quick ETH link health, the unit read as found |
-| `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1) + gddr_retention | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
+| `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1) | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
 | `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + gddr_retention + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | — | yes, if installed | — | ~18 min + triage + ~7 min | Every test, less often |
 | `full` | as `weekly` | as `weekly` | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
@@ -159,8 +159,9 @@ filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
 on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
 or fabric mesh mapping fails.
 
-`daily`, `weekly` and `full` also run `gddr_retention`
-([`gddr/test_gddr_retention.py`](gddr/test_gddr_retention.py)). It writes every
+`weekly` and `full` also run `gddr_retention`
+([`gddr/test_gddr_retention.py`](gddr/test_gddr_retention.py)), and so does the
+deployment runner; `daily` does not. It writes every
 DRAM address the allocator leaves free once (99.9999% of each 4080 MiB bank: all
 but the 64 B barrier word and the test's kernel binaries), then reads all of it
 back and compares it 5, 7 and 8 s later. `gddr_fast` and `gddr_full` read each
