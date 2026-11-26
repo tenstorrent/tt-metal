@@ -381,6 +381,8 @@ jobs:
             export OMP_NUM_THREADS=2
             export MKL_NUM_THREADS=2
             export OMP_WAIT_POLICY=passive
+            # MEASUREMENT ONLY: JIT build telemetry summary at process exit (roofline H and W).
+            export TT_METAL_LOG_JIT_TELEMETRY=1
             # Whether THIS matrix leg should be profiled: experiment on + this is the chosen HW group.
             # (Never true on sim legs — this step's `if` already excludes sim_* SKUs.)
             PERF_PROFILE_THIS="${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}"
