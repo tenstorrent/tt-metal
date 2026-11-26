@@ -4,8 +4,9 @@
 vllm-tt-plugin supports_spec_device_top_p).
 
 * The certificate rule: where q - top_p >= CERT_EPS, the nucleus cut inside the top-32 at 1 - top_p / q (the float32
-  arithmetic of the certificate trace, mirrored on the host) keeps exactly the tokens of vLLM's full-vocabulary nucleus,
-  with their probabilities; a row with a nucleus past the top-32 fails.
+  arithmetic of the certificate trace, mirrored on the host) keeps exactly the tokens of vLLM's full-vocabulary nucleus
+  in (value descending, id ascending) order, ties at the cut included, with their probabilities; a row with a nucleus
+  past the top-32 fails.
 * The host redo draws vLLM's distribution (chi-square over seeds) and repeats for a seed.
 * The engine: a step with a certificate row draws it with top-k 32 and top-p 1 under the certificate trace, runs no
   device acceptance and drafter, and its read redoes a failed row from the step's logits (with exact logprobs).
@@ -48,8 +49,8 @@ def _logits(g, V, kind):
 
 
 def _certificate_distribution(x, T, p, M=SAMPLER_TOP_K):
-    """The certificate trace's arithmetic on one row, float32: (ids [M], prob [M] float64 over the kept candidates,
-    q, fail, the margin to the nearest cut decision)."""
+    """The certificate trace's arithmetic on one row, float32: (ids [M] in (value desc, id asc) order, prob [M] float64
+    over the kept prefix, q, fail, the margin to the nearest cut decision)."""
     v = x.to(torch.float32)
     order = torch.sort(v, descending=True, stable=True).indices[:M]
     top = v[order]
@@ -60,12 +61,14 @@ def _certificate_distribution(x, T, p, M=SAMPLER_TOP_K):
     cum = (e / e.sum()).flip(0).cumsum(0).flip(0)
     drop = cum <= omp
     drop[0] = False
-    cut = top[~drop].min()
-    keep = top >= cut
-    prob = torch.where(keep, torch.exp((top.double() - top[0].double()) * t), torch.zeros(M, dtype=torch.float64))
-    # vLLM orders a tie group at the cut arbitrarily and may keep part of it; the trace keeps all of it.
-    tied = int((v == cut).sum()) > 1
-    return order, prob / prob.sum(), float(q), bool(fail), 0.0 if tied else float((cum - omp).abs().min())
+    prob = torch.where(~drop, torch.exp((top.double() - top[0].double()) * t), torch.zeros(M, dtype=torch.float64))
+    return order, prob / prob.sum(), float(q), bool(fail), float((cum - omp).abs().min())
+
+
+def _nucleus(x, T, p):
+    """vLLM's full-vocabulary nucleus in (value desc, id asc) order, dense [V] float64 (``row_distribution``)."""
+    ids, prob = row_distribution(x, T, 0, p)
+    return torch.zeros(x.numel(), dtype=torch.float64).index_put((ids,), prob)
 
 
 @pytest.mark.parametrize("kind", ["random", "peaked", "flat", "tied"])
@@ -78,13 +81,13 @@ def test_a_passing_certificate_keeps_vllms_full_vocabulary_nucleus(kind):
         for p in (0.5, 0.8, 0.9, 0.95, 0.99):
             for T in (0.3, 0.6, 1.0, 1.5):
                 order, prob, q, fail, margin = _certificate_distribution(x, T, p)
-                want = target_probs(x, T, 0, p)
+                want = _nucleus(x, T, p)
                 fits = float(want[order].sum()) > 1 - 1e-9
                 if fail:
                     failed += 1
                     continue
                 if margin < 1e-5:
-                    continue  # a cut decision within float32 error, or a tie at the cut
+                    continue  # a cut decision within float32 error
                 passed += 1
                 assert fits, f"{kind} T={T} p={p}: the certificate passed (q={q}) with a nucleus past the top-32"
                 got = torch.zeros(V, dtype=torch.float64)

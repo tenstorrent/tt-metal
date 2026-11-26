@@ -9,7 +9,8 @@ with a fresh sampling plan per verify (the plan of spec_top_p.sampler_params). B
 
 * users 0 to 3: peaked rows whose nucleus lies inside the top-32 at their (temperature, top_p): q equals the float64
   host value within 1e-4 and q >= top_p + CERT_EPS on every device, and over N replays each column's draws follow vLLM's full-vocabulary nucleus
-  (sampling_reference.target_probs with top-k off): Pearson chi-square p-value above P_MIN per column;
+  in (value descending, id ascending) order (spec_top_p.row_distribution, top-k off; a tie at the cut is split in
+  that order): Pearson chi-square p-value above P_MIN per column;
 * user 4: rows with a plateau of 200 tokens, whose nucleus reaches far past the top-32: q < top_p, so
   spec_top_p.failed_rows marks every column, and the redo from the logits read back from the devices (the reads the engine makes) follows vLLM's
   nucleus (chi-square over seeds);
@@ -35,6 +36,7 @@ from models.demos.blackhole.qwen36.tt.spec_top_p import (
     certificate_rows,
     failed_rows,
     redo_draws,
+    row_distribution,
     sampler_params,
 )
 
@@ -80,6 +82,12 @@ def _row_logits(r, g):
     elif u in (0, 1, 2, 3, 5):
         x[torch.randperm(VOCAB, generator=g)[:12]] += torch.linspace(30.0, 25.0, 12)
     return x.to(torch.bfloat16).float()
+
+
+def _nucleus(x, temperature, top_p):
+    """vLLM's full-vocabulary nucleus of a row in (value descending, id ascending) order, dense [V] float64."""
+    ids, prob = row_distribution(x, temperature, 0, top_p)
+    return torch.zeros(x.numel(), dtype=torch.float64).index_put((ids,), prob)
 
 
 def _host_q(x, temperature):
@@ -161,7 +169,7 @@ def test_certificate_rows_draw_vllms_nucleus_and_failed_rows_redo_from_the_devic
             assert bool((q[u * T : u * T + T] >= p + CERT_EPS).all())
             for j in range(T):
                 r = u * T + j
-                pv = chi_square_p(torch.bincount(draws[:, r], minlength=VOCAB), target_probs(logits[r], temp, 0, p))
+                pv = chi_square_p(torch.bincount(draws[:, r], minlength=VOCAB), _nucleus(logits[r], temp, p))
                 logger.info(f"user {u} column {j}: chi-square p {pv:.3g}")
                 assert pv > P_MIN, f"row {r}: the certificate draws do not follow the nucleus (p = {pv})"
         temp, k, p = USERS[5]
@@ -177,9 +185,7 @@ def test_certificate_rows_draw_vllms_nucleus_and_failed_rows_redo_from_the_devic
         assert torch.equal(full, logits), "the logits read back differ from the staged ones"
         temp, _, p = USERS[4]
         redone = [int(redo_draws(torch.zeros(B, T), full, fail, cert, [s] * (B * T), T)[4, 0]) for s in range(1, 1501)]
-        pv = chi_square_p(
-            torch.bincount(torch.tensor(redone), minlength=VOCAB), target_probs(logits[4 * T], temp, 0, p)
-        )
+        pv = chi_square_p(torch.bincount(torch.tensor(redone), minlength=VOCAB), _nucleus(logits[4 * T], temp, p))
         logger.info(f"failed user 4: redo chi-square p {pv:.3g}")
         assert pv > P_MIN, f"the redo does not follow the nucleus (p = {pv})"
     finally:

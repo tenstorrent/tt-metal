@@ -13,9 +13,11 @@ when the nucleus lies inside the row's top-32. On a verify with a certificate ro
 2. with the row's inverse temperature t (the sampler's own bfloat16 value): Z, the sum over the whole vocabulary of
    exp((x - v_0) t) (float32, spec_logprobs.vocab_exp_sum), Zc, the same sum over the top-32, and q = Zc / max(Z, Zc),
    the mass the top-32 hold;
-3. the nucleus cut inside the top-32: candidate i > 0 is dropped when the top-32's mass from i on, over Zc, is at most
-   1 - top_p / q, which is vLLM's rule over the whole vocabulary when q > top_p (``certificate_cut``). The candidates
-   below the last one kept are masked out of the sampler's input, and the row draws with top-k 32 and top-p 1;
+3. the nucleus cut inside the top-32, in (value descending, id ascending) order, the verify sampler's tie order:
+   candidate i > 0 is dropped when the top-32's mass from i on, over Zc, is at most 1 - top_p / q, which is vLLM's rule
+   over the whole vocabulary when q > top_p (``certificate_cut``). Every candidate after the last one kept in that order
+   is masked out of the sampler's input (in a group of equal values at the cut, the later ids), and the row draws with
+   top-k 32 and top-p 1;
 4. q is written for the host. A row with q - top_p < CERT_EPS fails the certificate: its nucleus may reach past the
    top-32, and its draw is redone on the host from the step's full logits (``redo_draws``), from vLLM's distribution
    in float64 (``row_distribution``), with the row's device seed.
@@ -175,7 +177,10 @@ class TopPCertificate:
         self.inv_t = persistent(torch.ones(1, 1, self.rows, 1))
         self.q = persistent(torch.ones(1, 1, self.rows, 1))
         self.floor = persistent(torch.full((1, 1, self.rows, 1), -_BIG))
-        self.pad = persistent(torch.full((1, 1, self.rows, sampler.candidates_per_row), PAD_LOGIT))
+        self.ceiling = persistent(torch.full((1, 1, self.rows, 1), _BIG))
+        cols = sampler.candidates_per_row
+        self.pad = persistent(torch.full((1, 1, self.rows, cols), PAD_LOGIT))
+        self.iota = persistent(torch.arange(cols, dtype=torch.float32).expand(1, 1, self.rows, cols).contiguous())
         self._staged = None
         self.compute = ttnn.init_device_compute_kernel_config(
             self.mesh.arch(),
@@ -211,10 +216,15 @@ class TopPCertificate:
         R = self.rows
         vals, gidx = self.sampler.candidates(logits)
         rows = int(logits.shape[2])
-        v32, i32 = ttnn.topk(vals, k=SAMPLER_TOP_K, dim=-1, largest=True, sorted=True)
-        ttnn.deallocate(i32)
+        # Stable: among equal values the earlier candidate first, which is the lower token id (the candidates sit in
+        # shard order, each shard's in (value descending, id ascending) order).
+        v32, i32 = ttnn.topk(vals, k=SAMPLER_TOP_K, dim=-1, largest=True, sorted=True, stable=True)
         top = ttnn.typecast(v32, ttnn.float32)
         ttnn.deallocate(v32)
+        idx = ttnn.typecast(i32, ttnn.int32)
+        ttnn.deallocate(i32)
+        pos = ttnn.typecast(idx, ttnn.float32)
+        ttnn.deallocate(idx)
         m = ttnn.slice(top, (0, 0, 0, 0), (1, 1, R, 1))
         diff = ttnn.subtract(top, m)
         d = ttnn.multiply(diff, self.inv_t)
@@ -251,24 +261,55 @@ class TopPCertificate:
             ttnn.deallocate(t)
         # The last value kept: dropped candidates are lifted out of the minimum, kept ones add exactly 0.
         lifted = ttnn.multiply(drop, _BIG)
-        ttnn.deallocate(drop)
         raised = ttnn.add(top, lifted)
         ttnn.deallocate(lifted)
-        ttnn.deallocate(top)
         cut = ttnn.min(raised, dim=-1, keepdim=True)
         ttnn.deallocate(raised)
+        # The kept prefix may end inside a group of equal values: of that group only the candidates up to the last
+        # one kept stay, the last one's position among the candidates (positions < 256 are exact in float32).
+        same = ttnn.eq(top, cut)
+        ttnn.deallocate(top)
+        kept_flag = ttnn.rsub(drop, 1.0)
+        kept_same = ttnn.multiply(same, kept_flag)
+        for t in (same, drop, kept_flag):
+            ttnn.deallocate(t)
+        pos1 = ttnn.add(pos, 1.0)
+        ttnn.deallocate(pos)
+        marked = ttnn.multiply(kept_same, pos1)
+        for t in (kept_same, pos1):
+            ttnn.deallocate(t)
+        last1 = ttnn.max(marked, dim=-1, keepdim=True)
+        ttnn.deallocate(marked)
+        last = ttnn.subtract(last1, 1.0)
+        ttnn.deallocate(last1)
         thr = ttnn.where(self.flag, cut, self.floor)
-        ttnn.deallocate(cut)
+        last_pos = ttnn.where(self.flag, last, self.ceiling)
+        for t in (cut, last):
+            ttnn.deallocate(t)
         x = ttnn.typecast(vals, ttnn.float32)
         ttnn.deallocate(vals)
-        inside = ttnn.ge(x, thr)
+        above = ttnn.gt(x, thr)
+        equal = ttnn.eq(x, thr)
+        early = ttnn.le(self.iota, last_pos)
+        tie = ttnn.multiply(equal, early)
+        inside = ttnn.add(above, tie)
         kept = ttnn.where(inside, x, self.pad)
-        for t in (x, thr, inside):
+        for t in (x, thr, last_pos, above, equal, early, tie, inside):
             ttnn.deallocate(t)
         masked = ttnn.typecast(kept, ttnn.bfloat16)
         ttnn.deallocate(kept)
         return self.sampler.draw(masked, gidx)
 
     def release(self):
-        for t in (self.notfirst, self.flag, self.top_p, self.inv_t, self.q, self.floor, self.pad):
+        for t in (
+            self.notfirst,
+            self.flag,
+            self.top_p,
+            self.inv_t,
+            self.q,
+            self.floor,
+            self.ceiling,
+            self.pad,
+            self.iota,
+        ):
             ttnn.deallocate(t)
