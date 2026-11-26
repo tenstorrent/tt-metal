@@ -395,6 +395,7 @@ class Runner:
                 self.save()
                 return
             self._pin_result(step, a, t, test, used)
+            self.note(f"{step.key} {fb.name} dev {t['dev']} result {a.status.value} {a.reason}")
             self.save()
 
     def _pin_result(self, step: StepCfg, a: Attempt, t: dict, test: str, used: dict) -> None:
