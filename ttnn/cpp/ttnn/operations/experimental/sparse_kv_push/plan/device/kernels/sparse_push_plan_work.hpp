@@ -12,6 +12,7 @@
 #else
 #include "api/dataflow/dataflow_api.h"
 #endif
+#include "ttnn/cpp/ttnn/kernel_lib/local_semaphore.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
 
 // The L1 loops of the plan's steps (see the overview in sparse_push_plan.cpp); the kWorkers RISC-Vs of a core each run
@@ -39,24 +40,9 @@ enum Progress : uint32_t {
     kRewritten,
 };
 
-inline void fence() { asm volatile("fence" ::: "memory"); }
-
 // The core's workers hand each other L1 data through local semaphores: plain L1 words, so the TRISCs can use them too.
-inline void wait_at_least(uint32_t sem_addr, uint32_t v) {
-    auto* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
-    WAYPOINT("SPPW");  // a worker stuck here shows in the watcher log
-    do {
-        invalidate_l1_cache();
-    } while (*sem < v);
-    WAYPOINT("SPPD");
-    fence();
-}
-
-inline void post(uint32_t sem_addr, uint32_t v) {
-    fence();  // the worker's L1 writes land before the semaphore says they did
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr) = v;
-    fence();
-}
+using local_semaphore::post;
+using local_semaphore::wait_at_least;
 
 // Barrier of the core's workers: report `progress`, then wait until every worker has reported it.
 template <typename DoneSem>

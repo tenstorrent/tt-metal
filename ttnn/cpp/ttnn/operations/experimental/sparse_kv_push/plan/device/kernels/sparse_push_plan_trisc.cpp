@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/cb_api.h"
 #include "api/compute/common.h"
 #include "sparse_push_plan_work.hpp"
 
@@ -24,30 +25,6 @@ constexpr uint32_t kWorker = kFirstTrisc + 2;
 #error "sparse_push_plan_trisc.cpp built for an unknown TRISC"
 #endif
 static_assert(kFirstTrisc + 3 == kWorkers, "the plan's workers are BRISC, NCRISC and the three TRISCs");
-
-namespace {
-
-// TRISC firmware exposes neither sem_l1_base nor the CB addresses as byte addresses, so read both from this launch's
-// kernel config. BRISC advances launch_msg_rd_ptr only after every RISC of the core finishes, so it names this launch.
-inline const volatile tt_l1_ptr kernel_config_msg_t* launch_config() {
-    const uint32_t rd = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
-    return &GET_MAILBOX_ADDRESS_DEV(launch[rd])->kernel_config;
-}
-
-inline uint32_t semaphore_addr(uint32_t id) {
-    const auto* cfg = launch_config();
-    return cfg->kernel_config_base[static_cast<int>(ProgrammableCoreType::TENSIX)] +
-           cfg->sem_offset[static_cast<int>(ProgrammableCoreType::TENSIX)] + id * L1_ALIGNMENT;
-}
-
-inline uint32_t cb_addr(uint32_t cb) {
-    const auto* cfg = launch_config();
-    const auto* cb_config = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
-        cfg->kernel_config_base[static_cast<int>(ProgrammableCoreType::TENSIX)] + cfg->local_cb_offset);
-    return cb_config[cb * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG];  // the CB's L1 byte address
-}
-
-}  // namespace
 
 void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(0);
@@ -69,25 +46,26 @@ void kernel_main() {
     const uint32_t core_idx = get_arg_val<uint32_t>(3);
     const uint32_t index_count = get_arg_val<uint32_t>(5);
 
-    auto* table_image = reinterpret_cast<uint32_t*>(cb_addr(kTableImage));
+    // The TRISCs never push or pop these CBs, so the read pointer get_tile_address returns is the CB's base.
+    auto* table_image = reinterpret_cast<uint32_t*>(get_tile_address(kTableImage, 0));
     uint32_t* bitmap = table_image + bitmap_off;
-    auto* idx = reinterpret_cast<uint32_t*>(cb_addr(kIdx));
-    auto* dirty_chunks = reinterpret_cast<uint8_t*>(cb_addr(kDirtyChunks));
-    auto* dirty_maps = reinterpret_cast<uint32_t*>(cb_addr(kDirtyMaps));
-    auto* scratch = reinterpret_cast<uint32_t*>(cb_addr(kScratch));
-    auto* partials = reinterpret_cast<uint32_t*>(cb_addr(kPartials));
-    auto* word_ranks = reinterpret_cast<uint16_t*>(cb_addr(kWordRanks));
-    auto* misc = reinterpret_cast<uint32_t*>(cb_addr(kMisc));
-    auto* buckets = reinterpret_cast<uint32_t*>(cb_addr(kBuckets));
+    auto* idx = reinterpret_cast<uint32_t*>(get_tile_address(kIdx, 0));
+    auto* dirty_chunks = reinterpret_cast<uint8_t*>(get_tile_address(kDirtyChunks, 0));
+    auto* dirty_maps = reinterpret_cast<uint32_t*>(get_tile_address(kDirtyMaps, 0));
+    auto* scratch = reinterpret_cast<uint32_t*>(get_tile_address(kScratch, 0));
+    auto* partials = reinterpret_cast<uint32_t*>(get_tile_address(kPartials, 0));
+    auto* word_ranks = reinterpret_cast<uint16_t*>(get_tile_address(kWordRanks, 0));
+    auto* misc = reinterpret_cast<uint32_t*>(get_tile_address(kMisc, 0));
+    auto* buckets = reinterpret_cast<uint32_t*>(get_tile_address(kBuckets, 0));
     auto* lists = reinterpret_cast<uint16_t*>(buckets);  // the buckets are spent by the OR
     uint32_t* copies = misc + kMiscCopies;
     uint32_t* my_dirty_map = dirty_maps + kMyDirtyMap * array_words;
 
-    const uint32_t sem_step = semaphore_addr(kSemStep);
-    const uint32_t sem_zeroed = semaphore_addr(kSemZeroed);
+    const uint32_t sem_step = local_semaphore::addr(kSemStep);
+    const uint32_t sem_zeroed = local_semaphore::addr(kSemZeroed);
     uint32_t sem_done_addr[kWorkers];
     for (uint32_t w = 0; w < kWorkers; ++w) {
-        sem_done_addr[w] = semaphore_addr(kSemDone + w);
+        sem_done_addr[w] = local_semaphore::addr(kSemDone + w);
     }
     auto sem_done = [&](uint32_t w) { return sem_done_addr[w]; };
 
