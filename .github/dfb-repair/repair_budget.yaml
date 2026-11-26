@@ -1,0 +1,241 @@
+# DFB repair loop configuration (see README.md). Each run reads it fresh, so edits take effect the next night. Times are
+# minutes unless a key says seconds.
+target:
+  base: main
+  # Branches with fixes that are not on main yet, applied on top of main before testing.
+  carry: []
+build:
+  dir: build_Release
+  target: unit_tests_api
+  timeout_minutes: 90
+  configure:
+  - cmake
+  - -S
+  - .
+  - -B
+  - build_Release
+  - -G
+  - Ninja
+  - -DCMAKE_BUILD_TYPE=Release
+  - -DCMAKE_TOOLCHAIN_FILE={checkout}/cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+  - -DTT_METAL_BUILD_TESTS=ON
+  - -DTTNN_BUILD_TESTS=OFF
+  - -DWITH_PYTHON_BINDINGS=OFF
+  - -DENABLE_TRACY=OFF
+  - -DTT_UMD_BUILD_SIMULATION=ON
+  - -DENABLE_CCACHE=TRUE
+  - -DTT_UNITY_BUILDS=ON
+  - -DBUILD_PROGRAMMING_EXAMPLES=OFF
+  - -DBUILD_TT_TRAIN=OFF
+  ccache_dir: ccache
+  ccache_maxsize: 20G
+  keep_ignored:
+  - build_Release
+  - build
+  - .cpmcache
+  - runtime
+  - tt_metal/llrt/hal/generated
+  generated_paths:
+  - runtime/hw
+  - tt_metal/llrt/hal/generated
+  watched_ignored:
+  - runtime/sfpi
+  - .cpmcache
+  - build_Release/_deps
+sim:
+  version_file: tt_metal/ttsim-version
+  lib: libttsim_qsr.so
+  url: https://github.com/tenstorrent/ttsim/releases/download/{version}/{lib}
+  soc_descriptor: tt_metal/soc_descriptors/quasar_32_arch_ttsim.yaml
+  env:
+    TT_METAL_SLOW_DISPATCH_MODE: '1'
+    TT_METAL_DISABLE_SFPLOADMACRO: '1'
+    TT_METAL_INSPECTOR_RPC: '0'
+    TT_METAL_SHM_TRACKING_DISABLED: '1'  # no tt-smi memory-stats file in /dev/shm, which a test that dies leaves behind
+suite:
+  name_regex: (DFB|Dataflow|dfb|PrefetcherPipe|[Pp]refetcher|A1Blocked|A1Fanout|A1_2_0|ImplicitSync)
+  extra_tests:
+  - UnitMeshFixture.BorrowedMemoryDMDM1Sx1S
+  - UnitMeshAnyDispatchFixture.BorrowedMemoryDMDM1Sx1S_UpdateAddress
+  - UnitMeshAnyDispatchFixture.BorrowedMemoryDMDM1Sx1S_UpdateAddressAndSize
+  - UnitMeshFixture.BorrowedMemoryDMDM1Sx1S_NumEntriesOverride
+  - UnitMeshFixture.BorrowedMemoryDMDM1Sx1S_SizeOverrideExceedsBackingFails
+  - UnitMeshFixture.BorrowedMemoryDMDM2Sx4S
+  - UnitMeshFixture.BorrowedMemoryDMDM4Sx2S
+  - UnitMeshFixture.BorrowedMemoryDMTensix2Sx4B
+  - UnitMeshFixture.DfbSerializeGlobalHeader1Sx1S
+  - UnitMeshFixture.DfbSerializeBlockedInitEntries
+  - UnitMeshFixture.B2_TxnIdAllocator_Boundaries_Config_2_0
+  - UnitMeshFixture.B4_CachedThreshold_Config_2_0
+  - UnitMeshFixture.B10_NumEntriesDivisibility_2_0
+  - UnitMeshFixture.B6_AllProducer_Rejected_2_0
+  - UnitMeshFixture.B8_FiveAllConsumers_Rejected_2_0
+  - UnitMeshFixture.B9_InterTensixScope_Rejected_2_0
+  - UnitMeshFixture.IntraPackerRemapperPairsTopDownConfig
+  - UnitMeshFixture.MaxEightIntraPerNeoConfig
+  - UnitMeshFixture.DfbSerializeGlobalHeaderGappedDeviceSlots
+  - UnitMeshFixture.DirectApi_BlockedAll_ImplicitBroadcastProducer_rejected
+  - UnitMeshFixture.B10_Blocked_Rejected_2_0
+  - UnitMeshAnyDispatchFixture.CoordinatorWorkerSlotReuseOnDevice
+  - UnitMeshAnyDispatchFixture.CoordinatorWorkerGappedSlotsOnDevice
+  - UnitMeshFixture.ImplicitReadPendingPostReservesFreeSlot
+  - UnitMeshFixture.ImplicitReadAvailability_1Producer2Consumer_2TC
+  - UnitMeshFixture.ImplicitWritePendingAckIsNotNewData
+  - UnitMeshFixture.ImplicitWriteAvailability_2Producer1Consumer_2TC
+  - UnitMeshFixture.D2_2_0_AllDMsConcurrent_6Sx2S_ImplicitOff
+  - UnitMeshFixture.D2_2_0_AllDMsConcurrent_6Sx2S_ImplicitOn
+  - UnitMeshFixture.TensixBlockedOut_DMTensixDM_1Bx2A_blk4
+  - UnitMeshFixture.TensixBlockedOut_DMTensixDM_1Bx4A_blk4
+  - UnitMeshFixture.TensixBlockedOut_DMTensixDM_2Bx2A_blk4
+  - UnitMeshFixture.TensixBlockedOut_DMTensixDM_2Bx1A_blk4
+  - UnitMeshFixture.C2_2_0_DMTriscSelfLoopDM_DoubleRelu
+  - UnitMeshFixture.TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0
+  - UnitMeshFixture.TensixIntraIsolatesOverlayTCs
+  - UnitMeshFixture.TensixIntraRemapperTeardownDoesNotAliasOverlay
+  - UnitMeshAnyDispatchFixture.IdleCoreStaleLaunchSlot_DMDM
+  - ProgramSpecHWTest.TensorAccessorBindingLoopback
+  - ProgramSpecHWTest.NamedArgsLoopback
+  - ProgramSpecHWTest.TtKernelNamedArgsLoopback
+  - ProgramSpecHWTest.CrtaAllFourSectionsSetAndPartialUpdate
+  - ProgramSpecHWTest.LLKOperandDfbMul
+  - ProgramSpecHWTest.LLKOperandScratchpadMul
+  - MeshWorkloadFactoryHWTest.MakeMeshWorkloadFromSpecSupportsDfbResizeBetweenEnqueues
+  - ProgramSpecHWTest.ScratchpadBaseReDeliveredAfterDfbResize
+  - LLKOperandInterop.TileGettersWithoutMetadataUseDefaults
+  - LLKOperandInterop.MetadataGettersDistinguishBindings
+  - QuasarAnyDispatchMeshDeviceSingleCardFixture.ScopedLockCacheFlushProducerStrided1Sx1S
+  - QuasarAnyDispatchMeshDeviceSingleCardFixture.ScopedLockCacheFlushProducerStrided1Sx1S_LockOne
+  - QuasarAnyDispatchMeshDeviceSingleCardFixture.ScopedLockCacheFlushProducerStrided2Sx1S
+  - QuasarAnyDispatchMeshDeviceSingleCardFixture.ScopedLockCacheFlushProducerAll
+  - QuasarAnyDispatchMeshDeviceSingleCardFixture.ScopedLockCacheFlushProducerWrap
+  - QuasarAnyDispatchMeshDeviceSingleCardFixture.ScopedLockCacheInvalidateProducerStrided1Sx1S
+  - QuasarAnyDispatchMeshDeviceSingleCardFixture.ScopedLockCacheInvalidateProducerStrided2Sx1S
+  - QuasarAnyDispatchMeshDeviceSingleCardFixture.ScopedLockCacheInvalidateConsumer
+  - QuasarAnyDispatchMeshDeviceSingleCardFixture.ScopedLockCacheInvalidateMultiConsumerAll
+  - QuasarAnyDispatchMeshDeviceSingleCardFixture.ScopedLockCacheHandshakeDmToDmWrap
+  - QuasarAnyDispatchMeshDeviceSingleCardFixture.ScopedLockCacheHandshakeNonSnoopingProducerWrap
+  - UnitMeshAnyDispatchFixture.ZeroMemoryApi
+  - UnitMeshAnyDispatchFixture.ZeroMemoryApiBatchedL1
+  exclude: []
+  host_tests: true
+  workers: 16
+  test_timeout_seconds: 300
+  host_timeout_seconds: 1800
+  infra_fraction: 0.6
+known_failures:
+- name: '#61940 implicit-sync BLOCKED DFB reads a whole block in one NoC transaction; ttsim has 2 interleaved DRAM banks'
+  issue: https://github.com/tenstorrent/tt-metal/issues/61940
+  note: fix in progress on ymoussa/dfb_blocked_bank_major (not merged yet)
+  tests:
+  - UnitMeshFixture.*_impl
+  - UnitMeshFixture.*_impl_2_0
+  signature: ^EXPECT dfb_test_common\.hpp
+repair:
+  # The program that runs each attempt: claude (Claude Code, below) or copilot (the GitHub Copilot CLI, see copilot:).
+  agent: copilot
+  claude: claude
+  model: claude-opus-5-5
+  max_turns: 150
+  attempt_minutes: 60
+  attempts_per_group: 3
+  attempts_per_run: 6
+  groups_per_run: 5
+  rehandoff_days: 7
+  effort: xhigh
+  # The agent's tools: only these exist in its session, and they run without asking.
+  tools:
+  - Bash
+  - Read
+  - Edit
+  - Write
+  - Grep
+  - Glob
+  allowed_tools:
+  - Bash
+  - Read
+  - Edit
+  - Write
+  - Grep
+  - Glob
+  setting_sources: project
+  disallowed_tools:
+  - Bash(git commit:*)
+  - Bash(git push:*)
+  - Bash(git reset:*)
+  - Bash(git rebase:*)
+  - Bash(git stash:*)
+  - Bash(git cherry-pick:*)
+  - Bash(git merge:*)
+  - Bash(git branch:*)
+  - Bash(gh:*)
+  - WebFetch
+  - WebSearch
+  - Bash(kill:*)
+  - Bash(pkill:*)
+  - Bash(killall:*)
+  copilot:
+    bin: copilot-cli/node_modules/@github/copilot-linux-x64/copilot
+    model: claude-opus-5.5
+    effort: xhigh
+    home: copilot-home
+    max_ai_credits: 1000
+    excluded_tools:
+    - task
+    - web_fetch
+    - web_search
+    - skill
+    - fetch_copilot_cli_documentation
+    - sql  # its local and cloud session stores: earlier sessions, not this one
+    - session_store_sql
+    disabled_mcp_servers:
+    - github-agentic-workflows
+budget:
+  deadline_minutes: 420
+  final_suite_reserve_minutes: 15
+guards:
+  max_files: 10
+  max_changed_lines: 400
+  forbidden_paths:
+  - .github/*
+  - tests/pipeline_reorg/*
+  - tests/scripts/*
+  - tt_metal/ttsim-version
+  - tt_metal/soc_descriptors/*
+  - '*skip*list*'
+  - tt_metal/third_party/*
+  - cmake/*
+  - CMakeLists.txt
+  - '*/CMakeLists.txt'
+  - '*.cmake'
+  - '*.yaml'
+  - '*.yml'
+  - CODEOWNERS
+  - .clang-format
+  - .pre-commit-config.yaml
+  - build*
+  - runtime/*
+  - NOTES.md
+  - '*/NOTES.md'
+  - HANDOFF.md
+  - '*/HANDOFF.md'
+  forbidden_added:
+  - \bGTEST_SKIP\b
+  - \bDISABLED_\w+
+  - ^\s*#\s*if\s+0\b
+  test_paths:
+  - tests/*
+  assertion_regex: \b(EXPECT|ASSERT)_[A-Z_]+\s*\(|\bTT_FATAL\s*\(|\bTT_ASSERT\s*\(
+  simulator_regex: '(?i)simulat|emulat|TargetDevice::'
+  new_file_roots:
+  - tt_metal/
+  - tests/
+pr:
+  push_url: git@github.com:tenstorrent/tt-metal.git
+  repo: tenstorrent/tt-metal
+  branch_prefix: dfb-repair-bot
+  max_per_run: 3
+  title_prefix: '[DFB repair bot]'
+summary:
+  # A verified fix whose patch has at most this many lines is also shown in the run's summary (and so in the CI job
+  # summary). 0 shows none.
+  diff_max_lines: 80
