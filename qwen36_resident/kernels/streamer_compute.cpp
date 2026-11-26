@@ -168,17 +168,25 @@ FORCE_INLINE void matmul_groups(
 // view rows' sums of squares on its diagonal; masked by the identity, times ones, and folded by F (ones
 // where R = R' mod batch) every element of row R holds the sum of squares of user R % batch; then
 // h = x * rsqrt(sum / hidden + eps).
+// O-1h (named arg norm_fidelity, RESIDENT_NORM_FIDELITY, default HiFi2): the sums of squares (x x^T) and h = x * r at
+// that fidelity instead of the kernel's HiFi4 — after every all-reduce each group's norm follows its multicast, and at
+// HiFi4 its 2 x 40 tile ops were the hub round's tail (32 rows: step -1.2 ms; acc_agree 8K NLL +0.014%). The
+// projections' matmuls keep HiFi4.
+constexpr auto kNormFid = static_cast<MathFidelity>(get_named_compile_time_arg_val("norm_fidelity"));
+
 // one group's rows (views o .. o + V of x and h): the sums of squares, 1 / rms and h = x * r
 __attribute__((noinline)) void rmsnorm_rows_body(uint32_t o) {
     constexpr uint32_t V = Hf * batch;  // 32x32 views of x
     cb_reserve_back(cb_sumsq, 2);
     reconfig_full_operand<SrcOrder::Reverse>(cb_x_full, cb_x_full);
-    matmul_init(cb_x_full, cb_x_full, 1 /* transpose */);
+    MATH((llk_math_matmul_init<kNormFid, MM_THROTTLE>(cb_x_full, cb_x_full, 1 /* transpose */)));
+    UNPACK((llk_unpack_AB_matmul_init(cb_x_full, cb_x_full, 1)));
     pack_reconfig_data_format(cb_sumsq);
     pack_init(cb_sumsq);
     tile_regs_acquire();
     for (uint32_t v = 0; v < V; v++) {
-        matmul_tiles(cb_x_full, cb_x_full, o + v, o + v, 0);
+        UNPACK((llk_unpack_AB_matmul(cb_x_full, cb_x_full, o + v, o + v)));
+        MATH((llk_math_matmul<kNormFid, MM_THROTTLE>(0)));
     }
     reconfig_full_operand_srca(cb_eye);
     copy_init(cb_eye);
@@ -227,14 +235,22 @@ __attribute__((noinline)) void rmsnorm_rows_body(uint32_t o) {
     // h = x * r, the same 1 / rms tile for every view
     cb_wait_front(cb_rinv, 1);
     reconfig_full_operand(cb_x_full, cb_rinv);
-    mul_init(cb_x_full, cb_rinv);
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, kNormFid>(
+        cb_x_full, cb_rinv, true)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(cb_x_full, cb_rinv, Transpose::None)));
     pack_reconfig_data_format<true>(cb_h_full);
     pack_init(cb_h_full);
     for (uint32_t v0 = 0; v0 < V; v0 += kDst) {
         const uint32_t n = v0 + kDst <= V ? kDst : V - v0;
         tile_regs_acquire();
         for (uint32_t i = 0; i < n; i++) {
-            mul_tiles(cb_x_full, cb_rinv, o + v0 + i, 0, i);
+            UNPACK((llk_unpack_AB(cb_x_full, cb_rinv, o + v0 + i, 0)));
+            MATH((llk_math_eltwise_binary<
+                  EltwiseBinaryType::ELWMUL,
+                  BroadcastType::NONE,
+                  DST_ACCUM_MODE,
+                  kNormFid,
+                  EltwiseBinaryReuseDestType::NONE>(cb_x_full, cb_rinv, i, true)));
         }
         tile_regs_commit();
         tile_regs_wait();
