@@ -467,6 +467,26 @@ TABLE = {
         "layer) stays pinned only when tt-metal's pinned-memory limit covers it: the upload raises it to "
         "pinned_limit_bytes() while it runs (bank_major.pinned_upload) and restores it after",
     ),
+    "LOAD_THREADS": Setting(
+        10,
+        None,
+        "Load time only (tt/load_ahead.py): worker threads that work ahead of the model build. A layer's device side "
+        "(uploads, programs, allocations) stays on the main thread in layer order (addresses follow the allocation "
+        "order); the pool reads the next layers' bytes into the page cache - the routed experts' weight cache files "
+        "(MOE_BLOCK_V2 .tensorbin, read during their upload) and the dense tensors' checkpoint ranges - in layer order, "
+        "at most LOAD_AHEAD_GB past the layer being built, and computes dense_dtype's bfp8 statistics (DENSE_WEIGHTS="
+        "bfp8: a host round trip a matrix, for its log line). Galaxy prefill host (u20-40), 2026-11-25: a layer was "
+        "3.4 s of dense host work then 8.6 s of expert files at the disk's 0.9 GB/s, one after the other; 10 readers "
+        "get no more from that disk than one, so the gain is the overlap (and a page cache that holds the files). "
+        "Device bytes identical; BFP8_STATS in the same order (its log lines may interleave). 0 = the serial build",
+    ),
+    "LOAD_AHEAD_GB": Setting(
+        32.0,
+        None,
+        "LOAD_THREADS: the most bytes (GB) the pool reads past the layer being built (the next layer is always read). "
+        "Read pages stay in the page cache until the build reads them, so this is page cache the host must have free; "
+        "a routed-experts layer is 7.6 GB on 8x4 (bfp4)",
+    ),
     "EXPERTS_PRECISION": Setting(
         "glm",
         ("full", "glm"),

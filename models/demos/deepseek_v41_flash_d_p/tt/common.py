@@ -151,22 +151,46 @@ def dense_dtype(w: torch.Tensor, label: str):
     and kept in BFP8_STATS."""
     if settings.get("DENSE_WEIGHTS") != "bfp8":
         return ttnn.bfloat16
-    wf = w.float()
-    d = bfp8_roundtrip(wf).reshape(wf.shape).sub_(wf)
     layer = _LOADING["layer"]
     label = label if layer is None else f"L{layer:02d} {label}"
-    st = {
-        "matrix": label,
-        "shape": tuple(wf.shape),
-        "changed_frac": float(torch.count_nonzero(d)) / max(1, d.numel()),
-        "rel": float(d.norm() / wf.norm().clamp_min(1e-30)),
-    }
-    BFP8_STATS.append(st)
+    st = {"matrix": label, "shape": tuple(w.shape)}
+    BFP8_STATS.append(st)  # (its place in load order; _bfp8_stats fills in the numbers)
+    pool = _STATS["pool"]
+    if pool is None:
+        _bfp8_stats(w, st)
+    else:  # LOAD_THREADS (tt/load_ahead.py): on the pool; the callers upload w and drop it, never write it
+        pending = _STATS["pending"]
+        while len(pending) >= _STATS_PENDING_MAX:  # (bounds the host memory the queued matrices hold)
+            pending.pop(0).result()
+        pending.append(pool.submit(_bfp8_stats, w, st))
+    return ttnn.bfloat8_b
+
+
+_STATS = {"pool": None, "pending": []}  # LOAD_THREADS: dense_dtype's statistics' pool and their futures
+_STATS_PENDING_MAX = 24
+
+
+def set_stats_pool(pool) -> None:
+    """LOAD_THREADS (tt/load_ahead.py): dense_dtype's statistics run on ``pool`` (None: inline, before the upload)."""
+    _STATS["pool"] = pool
+
+
+def drain_stats() -> None:
+    """Waits for the statistics still running on the pool (BFP8_STATS whole after)."""
+    pending = _STATS["pending"]
+    while pending:
+        pending.pop(0).result()
+
+
+def _bfp8_stats(w: torch.Tensor, st: dict) -> None:
+    wf = w.float()
+    d = bfp8_roundtrip(wf).reshape(wf.shape).sub_(wf)
+    st["changed_frac"] = float(torch.count_nonzero(d)) / max(1, d.numel())
+    st["rel"] = float(d.norm() / wf.norm().clamp_min(1e-30))
     logger.info(
-        f"DENSE_BFP8 {label} {st['shape']} values_changed={100 * st['changed_frac']:.2f} % "
+        f"DENSE_BFP8 {st['matrix']} {st['shape']} values_changed={100 * st['changed_frac']:.2f} % "
         f"||dW||/||W||={st['rel']:.4g}"
     )
-    return ttnn.bfloat8_b
 
 
 def fpu_weight(w: torch.Tensor) -> torch.Tensor:

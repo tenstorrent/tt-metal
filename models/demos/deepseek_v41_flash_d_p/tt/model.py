@@ -1356,9 +1356,20 @@ class TtDS41Model:
         # one pinned upload window over every layer's routed experts: the first layer's raises tt-metal's pinned-memory
         # limit, the staging is reused across layers, and leaving this (also on an error) unpins and frees it and
         # restores the limit (tt/experts.py pinned_upload)
-        with pinned_upload(mesh):
-            for i in self.layers:
-                self.blocks[i] = TtDS41Block(self, i)
+        # LOAD_THREADS (tt/load_ahead.py): a pool reads the next layers' weight files into the page cache and computes
+        # the dense bfp8 statistics while this thread builds each layer, in order (the decoder tail shares the weights)
+        from .load_ahead import LoadAhead
+
+        ahead = LoadAhead.start(self, self.layers) if tail_of is None else None
+        try:
+            with pinned_upload(mesh):
+                for i in self.layers:
+                    if ahead is not None:
+                        ahead.building(i)
+                    self.blocks[i] = TtDS41Block(self, i)
+        finally:
+            if ahead is not None:
+                ahead.close()
         # DEEP_LAYERS=tail (FIX.17): the layers above the last KV / candidate source (21-39: window attention over
         # the sources' state, no state of their own another layer reads) run only in tail_pass, on the rows the
         # prompt's last token needs: (n_deep + 1) x (window - 1) + 1 positions of the last full layer's output
