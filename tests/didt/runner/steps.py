@@ -11,6 +11,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -225,12 +226,16 @@ class Runner:
             cmd = "pytest " + _quote(step.ids + step.opts + extra_opts)
             env |= triage_env(self.cfg, csv)
         else:
-            # The script deletes its work dir at start, so it gets a dedicated subfolder, never the attempt dir.
+            # The script deletes its work and cache dirs at start, so both are dedicated, never the attempt dir.
+            # Kernel caches go to local disk: 32 concurrent JIT builds into one NFS tree fail.
             cmd = step.cmd + (" " + _quote(extra_opts) if extra_opts else "")
-            env["MCAST_ACK_WORK_DIR"] = str(chips_dir)
-        rc = self.shell(cmd, log, env, REPO, step.timeout)
-        for cache in chips_dir.glob("chip*/cache"):
-            shutil.rmtree(cache, ignore_errors=True)
+            cache_dir = self.local_root() / d.relative_to(self.run_dir)
+            env |= {"MCAST_ACK_WORK_DIR": str(chips_dir), "MCAST_ACK_CACHE_DIR": str(cache_dir)}
+        try:
+            rc = self.shell(cmd, log, env, REPO, step.timeout)
+        finally:
+            if step.runner == "script":
+                shutil.rmtree(self.local_root(), ignore_errors=True)
         snap = d / "tt-smi.json"
         self.shell(self.cfg.smi["cmd"], snap, base_env(), REPO, self.cfg.smi["timeout"])
 
@@ -239,6 +244,9 @@ class Runner:
         details += chip_warnings
         r = gddr_result(Result(r.status, r.reason, details), self.gddr(snap), {c.bdf: c.dev for c in chips.values()})
         a.status, a.reason, a.details, a.devices = r.status, r.reason, r.details, devices
+
+    def local_root(self) -> Path:
+        return Path(tempfile.gettempdir()) / f"didt_runner_{self.run_dir.name}"
 
     def chips_after_reset(self) -> tuple[dict[int, Chip], list[str]]:
         """A reset can leave a chip off the bus, shifting every later dev; this attempt joins on the chips it ran on."""
