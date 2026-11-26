@@ -44,6 +44,7 @@
 #include "flat_accessors.hpp"
 #include "flat_options.hpp"
 #include "expert_schedule.hpp"
+#include "zz_hist.hpp"
 
 // The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
 constexpr uint8_t h_vc = 0;
@@ -111,6 +112,7 @@ void kernel_main() {
         }
     };
 
+    zz::hist_y.start(0x300);
     uint32_t h_pub = 0, h_cons = 0, h_iss = 0, h_fwd = 0, h_rep = 0, h_done = 0;
     uint32_t out_done = 0, go_sent = 0, done_sent = 0;
     bool y_pending = false;
@@ -172,6 +174,7 @@ void kernel_main() {
                 for (uint32_t c = 0; c < pcd; ++c) {
                     noc_async_write_page(trow * ht + col0 + c, y, src + (r * pcd + c) * out_page);
                 }
+                zz::hist_y.add(pcd * out_page);
             }
             y_pending = true;
         }
@@ -215,6 +218,7 @@ void kernel_main() {
     // 0) would otherwise carry this kernel's last ID and their barriers / flush checks hang (watcher: "write-capable
     // NOC packet tags must be zero")
     noc_async_write_set_trid(0);
+    zz::hist_y.emit();
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
 }

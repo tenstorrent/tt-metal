@@ -32,6 +32,7 @@
 #include "flat_accessors.hpp"
 #include "flat_options.hpp"
 #include "zz_probes.hpp"
+#include "zz_hist.hpp"
 #include "expert_schedule.hpp"
 
 void kernel_main() {
@@ -69,8 +70,12 @@ void kernel_main() {
     ZZ_COUNTER(zz_read);
     ZZ_COUNTER(zz_reserve);
     [[maybe_unused]] const uint32_t zz_start = ZZ_NOW();
+    uint32_t zz_bytes = 0;
+    zz::hist.start(0x200);
     auto flush = [&]() {
         ZZ_WAIT(zz_read, noc_async_read_barrier());
+        zz::hist.add(zz_bytes);
+        zz_bytes = 0;
         cb_push_back(rm_cb, 32 * in_batch);
         in_batch = 0;
     };
@@ -118,6 +123,7 @@ void kernel_main() {
                     const uint32_t r0 = s * mt * 32 + m * 32;
                     for (uint32_t r = 0; r < 32 && r0 + r < count; ++r) {
                         read_seg(flat_options::x_indexed ? idx[m * 32 + r] : off + r0 + r, j, dst + r * seg);
+                        zz_bytes += seg;
                     }
                     if (++in_batch == batch) {
                         flush();
@@ -129,6 +135,7 @@ void kernel_main() {
     if (in_batch) {
         flush();
     }
+    zz::hist.emit();
     ZZ_EMIT("ZZ-XR-READ", zz_read);
     ZZ_EMIT("ZZ-XR-RESERVE", zz_reserve);
     ZZ_EMIT("ZZ-XR-SPAN", ZZ_NOW() - zz_start);

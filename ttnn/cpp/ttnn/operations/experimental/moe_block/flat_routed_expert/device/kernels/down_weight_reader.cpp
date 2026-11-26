@@ -33,6 +33,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
 #include "y_row_major.hpp"
 #include "zz_probes.hpp"
+#include "zz_hist.hpp"
 
 void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
@@ -114,6 +115,8 @@ void kernel_main() {
         }
     };
 
+    zz::hist.start(0x100);
+    [[maybe_unused]] uint32_t zz_bank_bytes[16] = {};
     for (uint32_t block = 0; block < total;) {
         uint32_t count = total - block < batch ? total - block : batch;
         if constexpr (reads_per_load) {
@@ -139,11 +142,15 @@ void kernel_main() {
             if constexpr ((zz::iso & 2) == 0) {
                 noc_async_read(block_source(expert_block(block + i)), landing[i], block_bytes);
             }
+            if constexpr (zz::on) {
+                zz_bank_bytes[pos_bank[expert_block(block + i) % banks]] += block_bytes >> 8;
+            }
         }
         while (!ncrisc_noc_reads_flushed(noc_index)) {
             poll_y();
         }
         noc_async_read_barrier();
+        zz::hist.add(count * block_bytes);
         cb_push_back(in1_cb, count * block_tiles);
         block += count;
     }
@@ -156,6 +163,12 @@ void kernel_main() {
         noc_async_write_barrier();
         combine_progress.report();    // the experts this core writes nothing of
         noc_async_write_set_trid(0);  // (the next program's plain writes carry ID 0)
+    }
+    zz::hist.emit();
+    if constexpr (zz::on) {
+        for (uint32_t b = 0; b < 8; ++b) {
+            DeviceTimestampedData("ZZ-DBK", (uint64_t(b) << 32) | zz_bank_bytes[b]);
+        }
     }
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();

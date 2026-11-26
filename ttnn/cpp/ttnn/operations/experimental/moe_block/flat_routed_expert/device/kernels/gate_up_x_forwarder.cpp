@@ -33,9 +33,11 @@
 #include "expert_schedule.hpp"
 #include "flat_options.hpp"
 #include "gate_up_weight_read.hpp"
+#include "zz_hist.hpp"
 
 void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
+    zz::hist.start(moe_block_args::arg(6 + 1));  // (MEASUREMENT: the bank id)
     // (MT: row tiles a block; NB: x blocks a sub-block)
     constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
     constexpr uint32_t x_slots = flat_options::x_ring_blocks;
@@ -187,6 +189,7 @@ void kernel_main() {
         }
     }
     gr.finish();
+    zz::hist.emit();
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     noc_async_write_set_trid(0);
