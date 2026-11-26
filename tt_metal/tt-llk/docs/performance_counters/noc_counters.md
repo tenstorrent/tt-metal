@@ -1,6 +1,6 @@
 # NoC interface counters
 
-Reference for the event counters of the NoC interface unit (NIU) of a tile and for `TT_METAL_PROFILE_NOC_COUNTERS`, the tt-metal runtime option that captures them per launch in the device profiler. [hardware_reference.md](hardware_reference.md) covers the Tensix MMIO counters and [riscv_pmc.md](riscv_pmc.md) the monitor inside the RISC-V cores; the NIU counters are a third, separate set.
+Reference for the event counters of the NoC interface unit (NIU) of a tile and for `TT_METAL_PROFILE_NOC_COUNTERS`, the tt-metal runtime option that captures them per launch in the device profiler. [hardware_reference.md](hardware_reference.md) covers the Tensix MMIO counters and [riscv_pmc.md](riscv_pmc.md) the monitor inside the RISC-V cores; the NIU counters are a third, separate set. The option reads hardware counter totals per launch; `TT_METAL_DEVICE_PROFILER_NOC_EVENTS` is a different tool that records each NoC call a kernel makes.
 
 ## 1. Support matrix
 
@@ -36,38 +36,25 @@ The register indices are the same on all three architectures; the register addre
 `NIU_STATUS_BASE + noc * NIU_NOC_STRIDE + index * 4` (`0xFFB20200` on Wormhole and Blackhole, `0x02000200` on Quasar,
 stride `0x10000`).
 
-One data word is a fixed number of bytes per architecture:
-
-| Architecture | Bytes per data word | Status |
-|---|---|---|
-| Blackhole | 64 | measured on a card: a 128 KiB read is 2048 data words |
-| Wormhole | 32 | measured on an n150 card: a known-count test gave host poll count = NoC 1 request count = data word count |
-| Quasar | 256 | measured on the Quasar emulator |
+When each counter moves is in the ISA documentation ([Blackhole](https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/Counters.md), [Wormhole](https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/NoC/Counters.md)). A data word is one
+flit at the destination: a transfer of `n` bytes to address `a` is `ceil(((a % F) + n) / F)` words, with `F` 64 bytes on
+Blackhole and 32 on Wormhole (256 on Quasar, checked on the Quasar emulator). Words times `F` is the byte count of an
+aligned transfer and an upper bound otherwise. The ISA documentation marks reading `MST_RD_DATA_WORD_RECEIVED` as
+unsupported; on a Blackhole p100a it followed the flit count exactly for aligned, unaligned and one-byte reads, eight reads
+in flight and reads from DRAM.
 
 The metal firmware reads only the barrier counters (`RD_RESP_RECEIVED`, `NONPOSTED_WR_REQ_SENT`,
 `WR_ACK_RECEIVED`, `ATOMIC_RESP_RECEIVED`, `REQS_OUTSTANDING_ID`); this capture adds the data word counters next to them.
 
 ## 3. Where the definitions live
 
-The hardware description is in tt-llk (`tools/include/perf_counters/`, namespace `llk::perf::noc`, self-contained):
-
-| Header | Holds |
-|---|---|
-| `noc_counters_types.h` | `NocCounter` (names, append only), `NocGroup`, the group masks, `Entry` = `{counter, status register index, group}` |
-| `noc_counters_blackhole.h`, `noc_counters_wormhole.h`, `noc_counters_quasar.h` | `noc_counters` table in capture order, `NIU_STATUS_BASE`, `NIU_NOC_STRIDE`, `NIU_NOCS`, `NIU_DATA_WORD_BYTES` |
-| `noc_counters_inventory.h` | Picks the arch header from `ARCH_*`; `selected_regs<GroupMask>()` is the compile-time list of registers of the selected groups |
-| `noc_counters_hw.h` | `read(noc, reg)` |
-
-The metal consumer is `tt_metal/hw/inc/internal/profiler/noc_counters.hpp`: marker ids, payload layout and emission.
-The hooks are in the BRISC kernel entry `tt_metal/hw/firmware/src/tt-1xx/brisck.cc` and the Quasar DM0 firmware `tt-2xx/dm.cc`; the option is parsed in
-`tt_metal/llrt/rtoptions.cpp` and becomes `-DPROFILE_NOC_COUNTERS=<mask>` in `tt_metal/jit_build/build.cpp`. The host
-side is `tools/python/tt_llk_perf/`: `headers.py` parses the tables, `noc_counters.py` decodes the markers and
-`noc_metrics.py` derives byte and request totals; `tools/tracy/perf_counter_analysis.py` has
-`decode_noc_counter_markers`.
+The headers are in tt-llk (`tools/include/perf_counters/noc_counters_*.h`, namespace `llk::perf::noc`) and the host
+side is `tools/python/tt_llk_perf/`; the two READMEs there list what each file holds. The metal side is
+`tt_metal/hw/inc/internal/profiler/noc_counters.hpp`: marker ids, payload layout and emission.
 
 Adding a counter: append the enumerator to `NocCounter`, add one `{NocCounter::NAME, index, NocGroup::GROUP}` entry to
-each arch table and bump the array size. Keep the counters of every group an even number per NoC (they are emitted in
-pairs). The host parsers read the headers, so nothing else changes.
+the `noc_counters` table and bump the array size. Keep the counters of every group an even number per NoC (they are
+emitted in pairs). The host parsers read the headers, so nothing else changes.
 
 ## 4. Using it in tt-metal
 
@@ -80,26 +67,18 @@ leaves the capture out entirely. Setting it forces the device profiler on. The m
 constant of the kernel and firmware builds and part of the build key, so changing it rebuilds both; the key is
 unchanged when the option is off.
 
-The counters belong to the tile, so one core captures once per launch: the BRISC kernel on Wormhole and Blackhole, DM0
-on Quasar. On Wormhole and Blackhole the window opens in the BRISC kernel before the go message that releases every
-core of the tile, and closes once NCRISC and the TRISCs have finished, so it covers the whole launch; a launch in which
-BRISC runs no kernel, or runs a dispatch kernel, publishes no capture. On Quasar the DM0 firmware opens it before the
-other cores are started and closes it after they have finished. The profiler's own writes to DRAM when its buffer fills, and the dispatch
-traffic around the launch, are not separated from the kernel's transfers.
+The counters belong to the tile, so one core captures once per launch. On Wormhole and Blackhole the BRISC firmware
+reads the start values before it starts the TRISCs and NCRISC, and the BRISC kernel entry closes the window once NCRISC
+and the TRISCs have finished, so it covers the whole launch; a launch in which BRISC runs no kernel, or runs a dispatch
+kernel, publishes no capture. On Quasar the DM0 firmware opens it before the other cores are started and closes it
+after they have finished. The launch message, run-time arguments and go signal arrive before the window opens; the
+profiler's own writes to DRAM when its buffer fills, and host reads of the tile during the launch, are not separated
+from the kernel's transfers.
 
 Each launch emits one header marker and one marker per pair of counters, all `TS_DATA` with the payload in the
-`data` column of `profile_log_device.csv`, all with the same timestamp:
-
-| Marker id | `data` |
-|---|---|
-| 9100 | `(noc count << 32) \| group mask` |
-| 9101 + k | `(counter[2k + 1] << 32) \| counter[2k]` |
-
-`counter[]` holds the per-NoC deltas, NoC 0 first, each NoC in the table order of the selected groups, so a mask of 3
-on Blackhole is 24 counters in 12 pair markers (ids 9101 to 9112) behind the header. The most any mask gives is 16
-pairs (9101 to 9116). The host keeps one marker per timestamp, core, RISC and id, which is why every pair has an id of
-its own. At mask 3 on a two-NoC tile the 13 markers take 52 of the 512 words of the BRISC profiler buffer, and are dropped as
-a whole when the buffer has no room.
+`data` column of `profile_log_device.csv` and the same timestamp; `tools/python/tt_llk_perf/noc_counters.py` has the
+layout. The room for them is held back from the kernel's own zones, so a kernel that fills the profiler buffer still
+gets them.
 
 ## 5. Reading the markers on the host
 
@@ -112,27 +91,15 @@ noc_counters.decode_noc_launch("blackhole", launch)   # counts per NoC, bytes an
 
 `noc_metrics.compute_noc_metrics(counts, word_bytes)` gives, per NoC: `noc_issued_read_bytes`,
 `noc_issued_write_bytes` (this tile's own transfers), `noc_served_read_bytes`, `noc_served_write_bytes` (other
-tiles' transfers with this tile), `noc_read_bytes` and `noc_write_bytes` (both sides), `noc_bytes_in`
-(data arriving: issued reads plus served writes), `noc_bytes_out` (data leaving: issued writes plus served reads),
+tiles' transfers with this tile), `noc_bytes_in` (data arriving: issued reads plus served writes), `noc_bytes_out` (data leaving: issued writes plus served reads),
 the issued request counts and bytes per issued request. A metric whose group was off reads `None`.
 `perf_counter_analysis.decode_noc_counter_markers(rows, arch)` returns one row per launch and NoC.
 
-## 6. Measured on Blackhole
+For example, `metal_example_eltwise_binary` (64 tiles of 2 KiB per buffer, core 0,0) reads 2 x 128 KiB on NoC 0,
+`MST_RD_REQ_SENT` 128 and `MST_RD_DATA_WORD_RECEIVED` 4096, and writes 128 KiB on NoC 1, `MST_NONPOSTED_WR_REQ_SENT` 64
+and `MST_NONPOSTED_WR_DATA_WORD_SENT` 2048.
 
-`metal_example_eltwise_binary` (64 tiles of 2 KiB per buffer, two read buffers, one write buffer, core 0,0) read from
-the counters directly: NoC 0 `MST_RD_REQ_SENT` +128 and `MST_RD_DATA_WORD_RECEIVED` +4096 (2 x 128 KiB / 64 B), NoC 1
-`MST_NONPOSTED_WR_REQ_SENT` +64 and `MST_NONPOSTED_WR_DATA_WORD_SENT` +2048.
+## 6. Open questions
 
-## 7. Size
-
-On Wormhole and Blackhole the capture is part of the BRISC kernel image, so the BRISC firmware region and the L1
-layout do not change. It is a read loop at the start of the launch, the wait for the other cores and one emission
-routine at the end, so its size does not depend on the group mask: 396 B on Blackhole and 420 B on Wormhole
-(the reader kernel of `metal_example_eltwise_binary`, mask 3). On Quasar it is in the DM0 firmware, 444 B over a 7308 B
-image, which still links with the RISC-V monitor and the Tensix counter groups (9868 to 10308 B of 12288 B). With the
-option off the hooks compile to nothing.
-
-## 8. Open questions
-
-- How multicast and broadcast writes are counted on the issuing side.
 - Capturing Ethernet tiles.
+- Wiring `decode_noc_counter_markers` into the ops report.
