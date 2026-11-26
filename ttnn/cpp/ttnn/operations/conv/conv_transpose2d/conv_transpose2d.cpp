@@ -16,6 +16,7 @@
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -76,6 +77,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
     DeviceComputeKernelConfig compute_config =
         compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor.dtype(), weight_dtype));
+    verify_numerical_configuration(device->arch(), compute_config_);
 
     // Compute all transposed conv2d dimension transformations using the consolidated helper
     // This is the single source of truth for dimension calculations
@@ -916,6 +918,7 @@ Result conv_transpose2d_DRAM(
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
     DeviceComputeKernelConfig compute_config =
         compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor.dtype(), weight_dtype));
+    verify_numerical_configuration(device->arch(), compute_config_);
 
     // Compute all transposed conv2d dimension transformations using the consolidated helper
     // This is the single source of truth for dimension calculations
