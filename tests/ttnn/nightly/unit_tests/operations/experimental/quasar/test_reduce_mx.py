@@ -5,17 +5,17 @@
 """ttnn.sum / mean / max over MX (OCP microscaling) inputs on Quasar (issue #62742).
 
 The tiled H / W reduce kernels unpack MX to Float16_b, reduce on the FPU and pack the result back to the input's
-MX format (the reductions have no output dtype argument). Not wired for MX: implicit tile padding and the N / C
-axes (transpose / permute of MX tiles), both rejected by the op.
+MX format (the reductions have no output dtype argument). Calls the native kernels do not cover (implicit tile
+padding, the N / C axes, keepdim=False, ttnn.min, a full reduction) reduce in bfloat16 and are packed back to MX; see
+the "outside the native kernels" tests.
 
 MXFP4 column (H) sums: the LLK moves an MxFp4 data operand to the 2x-packed src format only when the scaler is
 MXFP4 too (#59597); these factories keep a Float16_b scaler, so MXFP4 column sums take the plain path like every
 other MX format.
 
-Known gaps (see issue #62742): ttnn.min is rejected by the op (the fused -MAX(-x) kernels copy a tile back out of
-a scratch ring, and that copy returns zeros with an MX input even when the scratch ring is bf16); reductions over
-both H and W in one call (wrong on Quasar for bf16 too, skipped below); std / var (the welford op rejects Quasar
-for every dtype); keepdim=False (the squeezing reshape is not wired for MX tiles, rejected by the op).
+Known gaps (see issue #62742): reductions over both H and W in one call (wrong on Quasar for bf16 too, skipped
+below); std / var (the welford op rejects Quasar for every dtype). ttnn.min cannot use the fused -MAX(-x) kernels
+with MX (their copy out of a scratch ring returns zeros), so it takes the bfloat16 route too.
 """
 
 import pytest
@@ -60,16 +60,42 @@ def test_reduce_mx(device, dtype, dim, op):
     check(golden, ttnn.to_torch(out), pcc_floor(dtype))
 
 
-def test_reduce_mx_rejects_nc_axis(device, expect_error):
-    x = to_device(device, torch.randn(1, 2, 32, 32), ttnn.mxint8)
-    with expect_error(RuntimeError, "H and W axes only"):
-        ttnn.sum(x, dim=1, keepdim=True)
+def _fallback_golden(x, dtype, torch_op, **kwargs):
+    """The reduction of the MX values of `x`, packed back to the input's MX format (the bfloat16 route's result)."""
+    return mx_round_trip(torch_op(mx_round_trip(x, dtype), **kwargs), dtype)
 
 
-def test_reduce_mx_rejects_implicit_padding(device, expect_error):
-    x = to_device(device, torch.randn(1, 1, 40, 32), ttnn.mxint8)
-    with expect_error(RuntimeError, "tile-aligned H and W"):
-        ttnn.sum(x, dim=-1, keepdim=True)
+def _check_fallback(out, golden, dtype):
+    assert out.dtype == dtype, f"output dtype {out.dtype}, expected {dtype}"
+    assert out.layout == ttnn.TILE_LAYOUT, f"output layout {out.layout}"
+    assert tuple(out.shape) == tuple(golden.shape), f"output shape {tuple(out.shape)}, expected {tuple(golden.shape)}"
+    check(golden, ttnn.to_torch(out), pcc_floor(dtype))
+
+
+# Outside the native kernels: the op reduces these in bfloat16 and packs the result back to MX.
+@pytest.mark.parametrize("dtype", TWO_DTYPES)
+@pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim", "squeeze"])
+@pytest.mark.parametrize("dim", [0, 1], ids=["N", "C"])
+@pytest.mark.parametrize("op", ["sum", "max"])
+def test_reduce_mx_nc_axis(device, dtype, dim, keepdim, op):
+    torch.manual_seed(4)
+    x = torch.randn(2, 2, 32, 32)
+    tt_op, _ = _OPS[op]
+    torch_fn = torch.sum if op == "sum" else (lambda t, dim, keepdim: t.amax(dim, keepdim))
+    out = tt_op(to_device(device, x, dtype), dim=dim, keepdim=keepdim)
+    _check_fallback(out, _fallback_golden(x, dtype, torch_fn, dim=dim, keepdim=keepdim), dtype)
+
+
+@pytest.mark.parametrize("dtype", TWO_DTYPES)
+@pytest.mark.parametrize("dim", [-1, -2], ids=["W", "H"])
+@pytest.mark.parametrize("op", ["sum", "max"])
+def test_reduce_mx_implicit_padding(device, dtype, dim, op):
+    # H = 40 is not a tile multiple: the fill kernel for the padding does not know the MX layout.
+    torch.manual_seed(5)
+    x = torch.randn(1, 1, 40, 32)
+    tt_op, torch_op = _OPS[op]
+    out = tt_op(to_device(device, x, dtype), dim=dim, keepdim=True)
+    _check_fallback(out, _fallback_golden(x, dtype, lambda t, dim: torch_op(t, dim), dim=dim), dtype)
 
 
 @pytest.mark.parametrize("dtype", TWO_DTYPES)
@@ -108,27 +134,38 @@ def test_reduce_mx_tall_h(device, dtype, op):
     check(golden, ttnn.to_torch(out), pcc_floor(dtype))
 
 
+@pytest.mark.parametrize("dtype", TWO_DTYPES)
 @pytest.mark.parametrize("dim", [-1, -2], ids=["W", "H"])
-def test_min_mx_rejected(device, expect_error, dim):
-    # ttnn.min lowers to -MAX(-x) through the fused-negate kernels (reduce_w_neg / reduce_h_neg), whose copy out of
-    # the scratch ring packs zeros for an MX input on Quasar (issue #62742). The op rejects it rather than return zeros.
-    x = to_device(device, torch.randn(SHAPE), ttnn.mxint8)
-    with expect_error(RuntimeError, "not supported for MX"):
-        ttnn.min(x, dim=dim, keepdim=True)
+def test_min_mx(device, dtype, dim):
+    # ttnn.min lowers to -MAX(-x) through the fused-negate kernels, whose copy out of the scratch ring packs zeros for
+    # an MX input on Quasar (issue #62742), so MX takes the bfloat16 route.
+    torch.manual_seed(6)
+    x = torch.randn(SHAPE)
+    out = ttnn.min(to_device(device, x, dtype), dim=dim, keepdim=True)
+    _check_fallback(out, _fallback_golden(x, dtype, lambda t, dim: t.amin(dim, keepdim=True), dim=dim), dtype)
 
 
 def test_reduce_mx_hw_skipped(device):
     pytest.skip("sum / mean over H and W in one call is wrong on Quasar for bf16 as well (pre-existing, #62742)")
 
 
-def test_reduce_mx_rejects_keepdim_false(device, expect_error):
-    x = to_device(device, torch.randn(1, 1, 32, 32), ttnn.mxint8)
-    with expect_error(RuntimeError, "keepdim=True"):
-        ttnn.sum(x, dim=-1, keepdim=False)
+@pytest.mark.parametrize("dtype", TWO_DTYPES)
+@pytest.mark.parametrize("dim", [-1, -2], ids=["W", "H"])
+def test_reduce_mx_keepdim_false(device, dtype, dim):
+    # The squeezing reshape takes bfloat16 / uint32 only, so the squeezed result comes from the bfloat16 route.
+    torch.manual_seed(7)
+    x = torch.randn(1, 1, 32, 64)
+    out = ttnn.sum(to_device(device, x, dtype), dim=dim, keepdim=False)
+    _check_fallback(out, _fallback_golden(x, dtype, torch.sum, dim=dim, keepdim=False), dtype)
 
 
-def test_reduce_mx_rejects_full_reduce(device, expect_error):
-    # dim=None reduces every axis, and the N / C axes are not supported for MX.
-    x = to_device(device, torch.randn(1, 1, 32, 32), ttnn.mxint8)
-    with expect_error(RuntimeError, "H and W axes only"):
-        ttnn.sum(x)
+@pytest.mark.parametrize("dtype", TWO_DTYPES)
+def test_reduce_mx_full_reduce(device, dtype):
+    # dim=None reduces every axis, N and C included. Compare the values: the squeezed shape of a full reduction
+    # is not what this test is about.
+    torch.manual_seed(8)
+    x = torch.randn(1, 2, 32, 32)
+    out = ttnn.sum(to_device(device, x, dtype))
+    assert out.dtype == dtype, f"output dtype {out.dtype}, expected {dtype}"
+    golden = _fallback_golden(x, dtype, lambda t: t.sum(dim=(0, 1, 2, 3), keepdim=True)).reshape(-1)
+    check(golden, ttnn.to_torch(out).reshape(-1)[: golden.numel()], pcc_floor(dtype))

@@ -93,7 +93,13 @@ ttnn::Tensor permute_impl(
         const auto dram = ttnn::DRAM_MEMORY_CONFIG;
         auto as_bf16 = ttnn::typecast(a, DataType::BFLOAT16, dram);
         auto permuted = permute_impl(as_bf16, dims, dram, pad_value);
-        return ttnn::typecast(permuted, a.dtype(), output_mem_config.value_or(a.memory_config()));
+        // typecast requires matching memory layouts: pack straight into an interleaved target, otherwise pack in
+        // DRAM and move the MX result to the (sharded) target.
+        const MemoryConfig target = output_mem_config.value_or(a.memory_config());
+        if (target.memory_layout() == permuted.memory_config().memory_layout()) {
+            return ttnn::typecast(permuted, a.dtype(), target);
+        }
+        return ttnn::to_memory_config(ttnn::typecast(permuted, a.dtype(), dram), target);
     }
 
     auto formatted_input_tensor = a;

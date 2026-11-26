@@ -355,9 +355,14 @@ ttnn::Tensor transpose_impl(
     const bool mx_via_bf16 = typecast && tt::tt_metal::is_mx(input_dtype);
     const std::optional<MemoryConfig> work_memory_config =
         mx_via_bf16 ? std::optional<MemoryConfig>(ttnn::DRAM_MEMORY_CONFIG) : memory_config_arg;
+    // typecast requires its input and output memory layouts to match, so a sharded MX input is moved to the
+    // interleaved staging layout first (the original tensor's metadata still decides the output placement below).
+    const Tensor input_for_typecast = mx_via_bf16 && input_unsqueezed.is_sharded()
+                                          ? ttnn::to_memory_config(input_unsqueezed, ttnn::DRAM_MEMORY_CONFIG)
+                                          : input_unsqueezed;
     Tensor input_typecasted = typecast
                                   ? ttnn::typecast(
-                                        input_unsqueezed,
+                                        input_for_typecast,
                                         DataType::BFLOAT16,
                                         mx_via_bf16 ? work_memory_config : std::optional<MemoryConfig>(std::nullopt))
                                   : input_unsqueezed;
@@ -393,7 +398,14 @@ ttnn::Tensor transpose_impl(
     }
     output = initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
     if (mx_via_bf16) {
-        return ttnn::typecast(output, input_dtype, memory_config_arg.value_or(input_tensor.memory_config()));
+        // output is interleaved (DRAM staging) and typecast requires matching memory layouts: pack straight into an
+        // interleaved target, otherwise pack in DRAM and move the MX result to the (sharded) target.
+        const MemoryConfig target_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+        if (target_memory_config.memory_layout() == output.memory_config().memory_layout()) {
+            return ttnn::typecast(output, input_dtype, target_memory_config);
+        }
+        return ttnn::to_memory_config(
+            ttnn::typecast(output, input_dtype, ttnn::DRAM_MEMORY_CONFIG), target_memory_config);
     }
     return typecast ? ttnn::typecast(output, input_dtype) : output;
 }
