@@ -583,15 +583,23 @@ std::vector<uint32_t> get_activation_scalar_values(
     const Tensor& c) {
     const auto op_type = operation_attributes.binary_op_type;
     const auto a_dtype = a.dtype();
+    const auto takes_runtime_scalars = [](const unary::EltwiseUnaryWithParam& op) {
+        return unary::utils::takes_runtime_scalars(op.type());
+    };
+    // Runs on every dispatch. Of the activations get_compute_activations adds, only the int8 sub wrap takes runtime
+    // scalars; create_descriptor checks this against the defines it generates.
+    if (!CMAKE_UNIQUE_NAMESPACE::is_int8_sub(op_type, a_dtype) &&
+        std::ranges::none_of(operation_attributes.lhs_activations, takes_runtime_scalars) &&
+        std::ranges::none_of(operation_attributes.rhs_activations, takes_runtime_scalars) &&
+        std::ranges::none_of(operation_attributes.post_activations, takes_runtime_scalars)) {
+        return {};
+    }
     const auto b_dtype = compute_b_dtype(operation_attributes, a, b);
     const auto op_config =
         operation_attributes.is_sfpu
             ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype, operation_attributes.op_params)
             : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype, operation_attributes.op_params);
     const auto activations = get_compute_activations(operation_attributes, op_config, a_dtype, b_dtype, c.dtype());
-    const auto takes_runtime_scalars = [](const unary::EltwiseUnaryWithParam& op) {
-        return unary::utils::takes_runtime_scalars(op.type());
-    };
     if (std::ranges::none_of(activations.lhs, takes_runtime_scalars) &&
         std::ranges::none_of(activations.rhs, takes_runtime_scalars) &&
         std::ranges::none_of(activations.post, takes_runtime_scalars)) {
@@ -1282,6 +1290,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             add_activation_defines(
                 compute_kernel_defines, post_activations, "POST", activations.post_dtype, &runtime_scalars);
         }
+        TT_FATAL(
+            runtime_scalars.values == get_activation_scalar_values(operation_attributes, a, b, c),
+            "binary_ng {}: compute runtime args do not match the activation scalars the kernel defines read",
+            op_type);
     }
 
     // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise

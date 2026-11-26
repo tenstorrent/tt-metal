@@ -130,7 +130,16 @@ def test_sharded_relu_max_packer_threshold_stays_in_cache_key(device):
         assert torch.equal(ttnn.to_torch(tt_out), expected), f"threshold {threshold}"
 
 
-@pytest.mark.parametrize("ttnn_op", ["clamp", "fill"])
+# Each maps an all -1.0 input to the scalar.
+SIGNED_ZERO_OPS = {
+    "clamp": lambda x, s: ttnn.clamp(x, s, 1.0),
+    "hardtanh": lambda x, s: ttnn.hardtanh(x, min_val=s, max_val=1.0),
+    "threshold": lambda x, s: ttnn.threshold(x, 0.0, s),
+    "fill": lambda x, s: ttnn.fill(x, s),
+}
+
+
+@pytest.mark.parametrize("ttnn_op", list(SIGNED_ZERO_OPS))
 def test_signed_zero_scalar_shares_program(device, ttnn_op):
     """+0.0 and -0.0 run on one program, each returning its own sign of zero."""
     tt_in = ttnn.from_torch(
@@ -139,7 +148,7 @@ def test_signed_zero_scalar_shares_program(device, ttnn_op):
     device.clear_program_cache()
     entries_after_first = None
     for scalar in (0.0, -0.0, 0.0, -0.0):
-        tt_out = ttnn.clamp(tt_in, scalar, 1.0) if ttnn_op == "clamp" else ttnn.fill(tt_in, scalar)
+        tt_out = SIGNED_ZERO_OPS[ttnn_op](tt_in, scalar)
         if entries_after_first is None:
             entries_after_first = device.num_program_cache_entries()
         assert device.num_program_cache_entries() == entries_after_first, f"scalar {scalar} compiled a new program"
