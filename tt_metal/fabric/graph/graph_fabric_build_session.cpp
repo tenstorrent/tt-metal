@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <set>
 
+#include <enchantum/enchantum.hpp>
+
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
@@ -96,6 +98,10 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
     auto ports = with_live_planes(mgd_ports, control_plane);
     std::vector<ChannelPort> domain_ports;
     if (inter_domain) {
+        TT_FATAL(
+            is_2D_topology(topology),
+            "fabric graph: inter-domain needs a 2D fabric, got {}",
+            enchantum::to_string(topology));
         auto taken = mgd_ports;
         if (fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards) {
             domain_ports = ports_from_domain_links(
