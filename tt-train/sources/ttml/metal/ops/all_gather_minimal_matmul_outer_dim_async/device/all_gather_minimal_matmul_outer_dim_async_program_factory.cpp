@@ -712,12 +712,16 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
             send_rt.insert(
                 send_rt.end(),
                 {static_cast<uint32_t>(peer_virtual_core.x), static_cast<uint32_t>(peer_virtual_core.y)});
-            // Router connection for this link; the kernel opens it with open_connections.
+            // Router connection for this link, the one sender_cores_at placed this sender for (it checked that the
+            // link exists); the kernel opens it with open_connections.
+            const auto neighbour_node_id = device->get_fabric_node_id(neighbour.value());
+            const uint32_t forwarding_link =
+                tt::tt_fabric::get_forwarding_link_indices(*device, src_node_id, neighbour_node_id)[link];
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                 *device,
                 src_node_id,
-                {device->get_fabric_node_id(neighbour.value())},
-                {link},
+                {neighbour_node_id},
+                {forwarding_link},
                 program,
                 send_id,
                 send_core,
