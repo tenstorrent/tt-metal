@@ -7,18 +7,22 @@
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
 
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
-ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ReshapeRMProgramFactory::create_program_artifacts(
     const ttnn::prim::ReshapeOnDeviceParams& /*operation_attributes*/,
     const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
     ttnn::Tensor& output_tensor) {
@@ -32,10 +36,10 @@ ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
     MeshDevice* device = input_tensor.device();
 
     auto output_shape = output_tensor.padded_shape();
-    Buffer* src0_buffer = input_tensor.buffer();
-    Buffer* dst_buffer = output_tensor.buffer();
+    const MeshTensor& input_mesh_tensor = input_tensor.mesh_tensor();
+    const MeshTensor& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t num_old_sticks =
         input_tensor.padded_shape()[0] * input_tensor.padded_shape()[1] * input_tensor.padded_shape()[2];
@@ -64,51 +68,87 @@ ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
         tt::tt_metal::split_work_to_cores(
             compute_with_storage_grid_size, split_work_by_old_sticks ? num_old_sticks : num_new_sticks);
 
-    constexpr uint32_t src0_cb_index = 0;
     auto num_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                : num_sticks_per_core_group_2;
     auto max_page_size = old_stick_size > new_stick_size ? old_stick_size : new_stick_size;
     auto page_size = new_stick_size;
 
-    ProgramDescriptor desc;
+    const DFBSpecName SRC0{"src0"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
 
-    // CB sized for the largest page across the whole grid; page_size set to new_stick_size
+    // DFB sized for the largest page across the whole grid; entry_size set to new_stick_size
     // so the writer drains output-sized chunks.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_pages * max_page_size,
-        .core_ranges = total_core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = cb_data_format,
-            .page_size = page_size,
-        }}},
-    });
+    // The check above guarantees that the larger stick size is a multiple of the smaller one.
+    // That makes the entry count below a whole number.
+    DataflowBufferSpec src0_dfb{
+        .unique_id = SRC0,
+        .entry_size = page_size,
+        .num_entries = (num_pages * max_page_size) / page_size,
+        .data_format_metadata = dfb_data_format,
+    };
 
-    // Reader compile-time args
-    std::vector<uint32_t> reader_ct_args = {old_stick_size};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/"
+            "reader_unary_reshape_stick_layout_interleaved_multi_core.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = SRC0,
+                    .accessor_name = "in0",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"},
+            },
+        .compile_time_args = {{"old_stick_size", old_stick_size}},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {"num_sticks_per_core_read", "num_read_per_barrier", "num_sticks_per_dfb_push", "start_id"},
+            },
+        // The implicit-sync opt-out is left at its default. On Quasar this reader may need it, because it writes
+        // sticks at running offsets into the DFB between one reserve_back and one push_back. Each stick is part of
+        // an entry or spans several entries, depending on the old and new stick sizes. The Quasar uplift decides.
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
 
-    // Writer compile-time args
-    std::vector<uint32_t> writer_ct_args = {src0_cb_index, new_stick_size};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/"
+            "writer_unary_reshape_stick_layout_interleaved_multi_core.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = SRC0,
+                    .accessor_name = "out0",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
+            },
+        .compile_time_args = {{"new_stick_size", new_stick_size}},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {"num_sticks_per_core_read", "num_read_per_barrier", "num_sticks_per_dfb_push", "start_id"},
+            },
+        // The implicit-sync opt-out is left at its default here too. This writer issues one NoC write per DFB entry
+        // between one wait_front and one pop_front. The Quasar uplift decides whether it needs the opt-out.
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/"
-        "reader_unary_reshape_stick_layout_interleaved_multi_core.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = total_core_ranges;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/"
-        "writer_unary_reshape_stick_layout_interleaved_multi_core.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = total_core_ranges;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     constexpr uint32_t max_read_size = 2048;
     uint32_t curr_sticks_read = 0;
@@ -142,19 +182,19 @@ ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
         // issue more reads before calling barrier
         uint32_t num_old_sticks_per_core_read = 0;
         uint32_t num_old_sticks_read_per_barrier = 0;
-        uint32_t num_old_sticks_per_cb_push = 0;
+        uint32_t num_old_sticks_per_dfb_push = 0;
         uint32_t num_new_sticks_per_core_read = 0;
         uint32_t num_new_sticks_read_per_barrier = 0;
-        uint32_t num_new_sticks_per_cb_push = 0;
+        uint32_t num_new_sticks_per_dfb_push = 0;
         if (old_stick_size > new_stick_size) {
             if (num_old_sticks_per_core != 0) {
                 num_old_sticks_per_core_read =
                     tt::tt_metal::merge_num_sticks_to_read(num_old_sticks_per_core, old_stick_size, max_read_size);
                 num_old_sticks_read_per_barrier = num_old_sticks_per_core / num_old_sticks_per_core_read;
-                num_old_sticks_per_cb_push = num_old_sticks_read_per_barrier * old_new_stick_size_ratio;
+                num_old_sticks_per_dfb_push = num_old_sticks_read_per_barrier * old_new_stick_size_ratio;
 
-                num_new_sticks_per_cb_push = num_old_sticks_per_cb_push;
-                num_new_sticks_read_per_barrier = num_old_sticks_per_cb_push;
+                num_new_sticks_per_dfb_push = num_old_sticks_per_dfb_push;
+                num_new_sticks_read_per_barrier = num_old_sticks_per_dfb_push;
                 num_new_sticks_per_core_read = num_new_sticks_per_core / num_new_sticks_read_per_barrier;
             }
         } else {
@@ -162,63 +202,76 @@ ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
                 num_new_sticks_per_core_read =
                     tt::tt_metal::merge_num_sticks_to_read(num_new_sticks_per_core, new_stick_size, max_read_size);
                 num_new_sticks_read_per_barrier = num_new_sticks_per_core / num_new_sticks_per_core_read;
-                num_new_sticks_per_cb_push = num_new_sticks_read_per_barrier;
+                num_new_sticks_per_dfb_push = num_new_sticks_read_per_barrier;
 
-                num_old_sticks_per_cb_push = num_new_sticks_per_cb_push;
-                num_old_sticks_read_per_barrier = num_new_sticks_per_cb_push * old_new_stick_size_ratio;
+                num_old_sticks_per_dfb_push = num_new_sticks_per_dfb_push;
+                num_old_sticks_read_per_barrier = num_new_sticks_per_dfb_push * old_new_stick_size_ratio;
                 num_old_sticks_per_core_read = num_old_sticks_per_core / num_old_sticks_read_per_barrier;
             }
         }
 
-        // Per-core runtime args. Slot 0 holds the buffer address; idle cores (no sticks
-        // scheduled) get 0u so we skip BufferBinding registration — the kernel short-circuits
-        // when its sticks-to-read count is zero and never dereferences the address.
-        const bool reader_idle = num_old_sticks_per_core == 0;
-        if (reader_idle) {
-            reader_desc.emplace_runtime_args(
-                core,
-                {0u,
-                 num_old_sticks_per_core_read,
-                 num_old_sticks_read_per_barrier,
-                 num_old_sticks_per_cb_push,
-                 curr_sticks_read});
-        } else {
-            reader_desc.emplace_runtime_args(
-                core,
-                {src0_buffer,
-                 num_old_sticks_per_core_read,
-                 num_old_sticks_read_per_barrier,
-                 num_old_sticks_per_cb_push,
-                 curr_sticks_read});
-        }
-
-        const bool writer_idle = num_new_sticks_per_core == 0;
-        if (writer_idle) {
-            writer_desc.emplace_runtime_args(
-                core,
-                {0u,
-                 num_new_sticks_per_core_read,
-                 num_new_sticks_read_per_barrier,
-                 num_new_sticks_per_cb_push,
-                 curr_sticks_write});
-        } else {
-            writer_desc.emplace_runtime_args(
-                core,
-                {dst_buffer,
-                 num_new_sticks_per_core_read,
-                 num_new_sticks_read_per_barrier,
-                 num_new_sticks_per_cb_push,
-                 curr_sticks_write});
-        }
+        // Per-core runtime args. Every core of the grid gets an entry. Cores with no sticks scheduled
+        // get zero counts, and their kernels never enter the read or write loops.
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"num_sticks_per_core_read", num_old_sticks_per_core_read},
+             {"num_read_per_barrier", num_old_sticks_read_per_barrier},
+             {"num_sticks_per_dfb_push", num_old_sticks_per_dfb_push},
+             {"start_id", curr_sticks_read}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"num_sticks_per_core_read", num_new_sticks_per_core_read},
+             {"num_read_per_barrier", num_new_sticks_read_per_barrier},
+             {"num_sticks_per_dfb_push", num_new_sticks_per_dfb_push},
+             {"start_id", curr_sticks_write}});
 
         curr_sticks_read += num_old_sticks_per_core;
         curr_sticks_write += num_new_sticks_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    ProgramSpec spec{
+        .name = "reshape_on_device_rm",
+        .kernels = {std::move(reader), std::move(writer)},
+        .dataflow_buffers = {std::move(src0_dfb)},
+        .tensor_parameters =
+            {
+                // The program cache key (compute_program_hash in reshape_op.cpp) pins the input's padded
+                // shape, dtype, page config and memory config. It does not pin the input's logical shape or
+                // its alignment. One cached program can therefore serve inputs that differ only in those two.
+                // This factory reads only the padded shape. That makes the sharing safe.
+                // Both relaxations are needed. Freeing the logical shape alone would still require equal
+                // alignment, and the key does not pin that.
+                // The output spec is computed from attributes that the key already hashes. It stays an exact
+                // match.
+                TensorParameter{
+                    .unique_id = INPUT,
+                    .spec = input_tensor.tensor_spec(),
+                    .relaxations = {.match_padded_shape_only = true, .relax_tensor_layout_alignment = true},
+                },
+                TensorParameter{.unique_id = OUTPUT, .spec = output_tensor.tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER, WRITER},
+                    .target_nodes = total_core_ranges,
+                },
+            },
+    };
 
-    return desc;
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args.push_back(std::move(reader_run_args));
+    run_params.kernel_run_args.push_back(std::move(writer_run_args));
+    run_params.tensor_args.emplace(INPUT, TensorArgument{input_mesh_tensor});
+    run_params.tensor_args.emplace(OUTPUT, TensorArgument{output_mesh_tensor});
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_params),
+    };
 }
 
 }  // namespace ttnn::prim

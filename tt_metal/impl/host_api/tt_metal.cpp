@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/mesh/allocator.hpp>
+#include "impl/allocator/allocator.hpp"
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt-metalium/workload/legacy/circular_buffer.hpp>
 #include <tt_stl/assert.hpp>
@@ -290,9 +291,10 @@ std::string get_platform_architecture_name() { return tt::get_string_lowercase(g
 
 }  // namespace detail
 
-namespace experimental {
+namespace slow_dispatch {
 
-void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
+void ConfigureProgramWithoutLaunch(
+    IDevice* device, Program& program, const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
     ZoneScoped;
     // Debug breadcrumbs, one per step: a hang in this path has no Python frame below it, and the
     // step name is what says where it stopped.
@@ -307,9 +309,9 @@ void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
         program.impl().finalize_offsets(device);
     }
     log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] finalized", device->id());
-    slow_dispatch::ConfigureDeviceWithProgram(*device, program, /*force_slow_dispatch=*/false);
+    ConfigureDeviceWithProgram(*device, program, /*force_slow_dispatch=*/false, kernel_config_buffer);
     log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] configured", device->id());
-    slow_dispatch::WriteRuntimeArgsToDevice(*device, program, /*force_slow_dispatch=*/false);
+    WriteRuntimeArgsToDevice(*device, program, /*force_slow_dispatch=*/false, kernel_config_buffer);
     log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] rtargs written", device->id());
 
     auto device_id = device->id();
@@ -329,6 +331,14 @@ void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
             auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
             dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
             local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
+            SetKernelTextOffsets(
+                local_launch_msg,
+                hal,
+                program,
+                programmable_core_type_index,
+                device_id,
+                logical_core,
+                kernel_config_buffer);
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             slow_dispatch::WriteLaunchMsgToCore(
                 *device, physical_core, local_launch_msg.view(), kg->go_msg.view(), /*send_go=*/false);
@@ -337,7 +347,8 @@ void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
     log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] launch msgs written, done", device_id);
 }
 
-void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
+void DispatchCompiledProgram(
+    IDevice* device, Program& program, const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
     ZoneScoped;
 
     auto device_id = device->id();
@@ -350,8 +361,8 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
         // Configure before writing runtime args: ConfigureDeviceWithProgram allocates the ephemeral
         // scratchpad buffers whose addresses are passed as common runtime args, so the write must see
         // them (matches LaunchProgram and the non-emule path below).
-        slow_dispatch::ConfigureDeviceWithProgram(*device, program, /*force_slow_dispatch=*/false);
-        slow_dispatch::WriteRuntimeArgsToDevice(*device, program, /*force_slow_dispatch=*/false);
+        ConfigureDeviceWithProgram(*device, program, /*force_slow_dispatch=*/false, kernel_config_buffer);
+        WriteRuntimeArgsToDevice(*device, program, /*force_slow_dispatch=*/false, kernel_config_buffer);
         emule::execute_program_emulated(device, program);
         return;
     }
@@ -379,8 +390,8 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
 
     // First configure (allocate buffers + write configs/binaries), then write runtime args.
     // This allows us to allocate ephemeral scratchpad buffers, and pass their locations as implicit CRTAs.
-    slow_dispatch::ConfigureDeviceWithProgram(*device, program, /*force_slow_dispatch=*/false);
-    slow_dispatch::WriteRuntimeArgsToDevice(*device, program, /*force_slow_dispatch=*/false);
+    ConfigureDeviceWithProgram(*device, program, /*force_slow_dispatch=*/false, kernel_config_buffer);
+    WriteRuntimeArgsToDevice(*device, program, /*force_slow_dispatch=*/false, kernel_config_buffer);
 
     metal_ctx.get_cluster().dram_barrier(device_id);
     metal_ctx.get_cluster().l1_barrier(device_id);
@@ -395,6 +406,14 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
             // Use a thread-local copy of launch_msg to avoid racing on the shared KernelGroup state
             dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
             local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
+            SetKernelTextOffsets(
+                local_launch_msg,
+                hal,
+                program,
+                programmable_core_type_index,
+                device_id,
+                logical_core,
+                kernel_config_buffer);
 
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             slow_dispatch::WriteLaunchMsgToCore(
@@ -405,6 +424,18 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
                 hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
         }
     }
+}
+
+}  // namespace slow_dispatch
+
+namespace experimental {
+
+void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
+    slow_dispatch::ConfigureProgramWithoutLaunch(device, program, /*kernel_config_buffer=*/nullptr);
+}
+
+void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
+    slow_dispatch::DispatchCompiledProgram(device, program, /*kernel_config_buffer=*/nullptr);
 }
 
 struct CapturedKernelConfig::Impl {
@@ -444,6 +475,12 @@ CapturedKernelConfig CaptureKernelConfig(IDevice* device, const CoreCoord& logic
     for (uint32_t i = 0; i < kc.kernel_text_offset().size(); i++) {
         kernel_config_size = std::max(kernel_config_size, kc.kernel_text_offset()[i] + kc.kernel_text_size()[i]);
     }
+    // Binaries run from a kernel config buffer (experimental::EnqueueMeshWorkload) sit past the window, and stay
+    // there: capture only the window, which holds the rest of the kernel config.
+    const uint32_t window_size = static_cast<uint32_t>(
+        device->allocator_impl()->get_config().l1_unreserved_base -
+        hal.get_dev_addr(core_type, HalL1MemAddrType::KERNEL_CONFIG));
+    kernel_config_size = std::min(kernel_config_size, window_size);
 
     std::vector<uint8_t> launch_kernel_config(kc.size());
     std::memcpy(launch_kernel_config.data(), kc.data(), kc.size());
