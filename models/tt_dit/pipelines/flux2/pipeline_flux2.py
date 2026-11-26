@@ -726,7 +726,7 @@ class Flux2Pipeline:
             # The decoder's output is flat, [N, 1, H * W, 3] tiled. float_to_uint8 maps it in tiles and
             # untilizes the flat tensor, and the uint8 image is then made [N, H, W, 3] as a view.
             image_hw = self._vae_decoder.output_hw((tt_latents.shape[1], tt_latents.shape[2]))
-            tt_image = float_to_uint8(tt_decoded_output)
+            tt_image = float_to_uint8(tt_decoded_output, runtime_shapes=self._vae_decoder.runtime_shapes)
             tt_image = ttnn.reshape(tt_image, (tt_image.shape[0], *image_hw, tt_image.shape[-1]))
             decoded_output = fast_device_to_host(
                 tt_image,

@@ -524,14 +524,15 @@ def float_to_unit_range(t: ttnn.Tensor) -> ttnn.Tensor:
     return t
 
 
-def float_to_uint8(t: ttnn.Tensor) -> ttnn.Tensor:
-    """On-device float-to-uint8: map from [-1.0, 1.0] to [0, 255]"""
-    t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+def float_to_uint8(t: ttnn.Tensor, *, runtime_shapes: bool = False) -> ttnn.Tensor:
+    """On-device float-to-uint8: map from [-1.0, 1.0] to [0, 255]. `runtime_shapes` goes to its layout conversions
+    and typecast."""
+    t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, runtime_shapes=runtime_shapes)
     t = ttnn.add(t, 1.0)  # shift to [0, 2.0]
     t = ttnn.multiply(t, 0.5 * 255.0)  # scale to [0, 1.0] then [0, 255]
     t = ttnn.clamp(t, min=0.0, max=255.0)
-    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
-    return ttnn.typecast(t, ttnn.uint8)
+    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=runtime_shapes)
+    return ttnn.typecast(t, ttnn.uint8, runtime_shapes=runtime_shapes)
 
 
 def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[int, ...]) -> int:
@@ -845,17 +846,19 @@ def upsample(
     *,
     scale_factor: int | Sequence[int],
     memory_config: ttnn.MemoryConfig | None = None,
+    runtime_shapes: bool = False,
 ) -> ttnn.Tensor:
-    """Wrapper around ttnn.upsample that allows for padded tensors."""
+    """Wrapper around ttnn.upsample that allows for padded tensors. `runtime_shapes` goes to its layout conversions
+    and upsample."""
     change_layout = x.layout == ttnn.TILE_LAYOUT and x.shape != x.padded_shape
 
     if change_layout:
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=runtime_shapes)
 
-    x = ttnn.upsample(x, scale_factor=scale_factor, memory_config=memory_config)
+    x = ttnn.upsample(x, scale_factor=scale_factor, memory_config=memory_config, runtime_shapes=runtime_shapes)
 
     if change_layout:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, runtime_shapes=runtime_shapes)
 
     return x
 

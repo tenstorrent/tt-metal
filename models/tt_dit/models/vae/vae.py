@@ -43,6 +43,11 @@ class VaeContext:
     w_mesh_axis: int | None = None
     w_factor: int = 1
     use_conv3d: bool = False
+    # Layout conversions of interleaved bfloat16 and float32 activations, row-major upsamples and the convs' halo
+    # exchange use one program for every image size (`runtime_shapes=True` of `ttnn.to_layout`, `ttnn.upsample` and
+    # `ttnn.experimental.neighbor_pad_async`), at more host time per call. Sharded and other activations keep a
+    # program per size.
+    runtime_shapes: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,7 +78,7 @@ def _all_gather_hw(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
         return x
     assert ctx.ccl_manager is not None
     if x.layout != ttnn.TILE_LAYOUT:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, runtime_shapes=ctx.runtime_shapes)
     if ctx.h_factor > 1:
         x = ctx.ccl_manager.all_gather(x, dim=1, mesh_axis=ctx.h_mesh_axis, use_hyperparams=True)
     if ctx.w_factor > 1:
@@ -252,7 +257,7 @@ class _VaeConv2dConv3d(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
 
         if self._input_padding is not None:
             x = ttnn.pad(x, self._input_padding, value=0.0)
@@ -287,7 +292,7 @@ class _VaeConv2dConv3d(Module):
         else:
             x = x[:, 0, :, :, :]
 
-        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        return ttnn.to_layout(x, ttnn.TILE_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
 
 
 class VaeConv2d(Module):
@@ -369,7 +374,7 @@ class VaeConv2d(Module):
         is not whole tiles."""
         if hw is not None:
             if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
             x = ttnn.reshape(x, (x.shape[0], hw[0], hw[1], x.shape[-1]))
 
         if self._needs_neighbor_pad:
@@ -377,7 +382,7 @@ class VaeConv2d(Module):
             assert ccl is not None
             # neighbor_pad_async requires ROW_MAJOR; conv handles either layout.
             if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
             # Unsqueeze to matches the neighbor_pad kernel's expected rank for HW exchange. dims
             # shift up by 1.
             x = ttnn.unsqueeze(x, 0)  # [1, N, H_local, W_local, C]
@@ -405,6 +410,7 @@ class VaeConv2d(Module):
                 axes=axes,
                 neighbor_sems=sems,
                 num_links=links,
+                runtime_shapes=self._ctx.runtime_shapes,
             )
             x = ttnn.squeeze(x, 0)  # back to [N, H_local+pad, W_local+pad, C]
 
@@ -434,17 +440,18 @@ class VaeUpsampler(Module):
     def __init__(self, *, in_channels: int, out_channels: int, ctx: VaeContext) -> None:
         super().__init__()
         self.conv = VaeConv2d(in_channels, out_channels, kernel_size=3, padding=1, ctx=ctx)
+        self._runtime_shapes = ctx.runtime_shapes
 
     def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
         """With `hw` (see VaeConv2d.forward), `x` is flat, and the upsampled image stays in row major
         for the conv, which wants row major anyway."""
         if hw is None:
-            x = tensor.upsample(x, scale_factor=2)
+            x = tensor.upsample(x, scale_factor=2, runtime_shapes=self._runtime_shapes)
             return self.conv.forward(x)
         if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=self._runtime_shapes)
         x = ttnn.reshape(x, (x.shape[0], hw[0], hw[1], x.shape[-1]))
-        x = ttnn.upsample(x, scale_factor=2)
+        x = ttnn.upsample(x, scale_factor=2, runtime_shapes=self._runtime_shapes)
         return self.conv.forward(x, (2 * hw[0], 2 * hw[1]))
 
 
@@ -811,6 +818,7 @@ class _VaeSpatialGroupNorm(Module):
         activation_fn: str | None = None,
     ) -> None:
         super().__init__()
+        self._runtime_shapes = ctx.runtime_shapes
         h_sp = ctx.h_factor > 1
         w_sp = ctx.w_factor > 1
         cluster_axis = ctx.h_mesh_axis if h_sp else ctx.w_mesh_axis
@@ -838,7 +846,7 @@ class _VaeSpatialGroupNorm(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, runtime_shapes=self._runtime_shapes)
 
         return self.inner.forward(x, compute_kernel_config=self._compute_kernel_config)
 

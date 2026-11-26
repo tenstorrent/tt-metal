@@ -60,6 +60,9 @@ class Flux2VaeDecoder(Module):
             w_mesh_axis=parallel_config.w_parallel.mesh_axis if parallel_config.w_parallel is not None else None,
             w_factor=parallel_config.w_parallel.factor if parallel_config.w_parallel is not None else 1,
             use_conv3d=use_conv3d,
+            # Layout conversions, the unpatchify permute and row-major upsamples serve every image size after
+            # warming one.
+            runtime_shapes=True,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -174,9 +177,9 @@ class Flux2VaeDecoder(Module):
         assert width % p == 0, f"width {width} must be divisible by patch {p}"
         assert width % self._ctx.w_factor == 0, f"width {width} must be divisible by w_factor {self._ctx.w_factor}"
         z = self._inv_normalize(z)
-        z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
+        z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
         z = z.reshape([z.shape[0], height_in // p, width // p, -1, p, p])
-        z = ttnn.permute(z, [0, 1, 4, 2, 5, 3])
+        z = ttnn.permute(z, [0, 1, 4, 2, 5, 3], runtime_shapes=self._ctx.runtime_shapes)
         z = z.reshape([z.shape[0], height_in, width, -1])
         if split_height and h_factor > 1:
             z = ttnn.mesh_partition(z, dim=1, cluster_axis=self._ctx.h_mesh_axis)
@@ -194,7 +197,7 @@ class Flux2VaeDecoder(Module):
         n, h, w, c = z.shape
         hw = (h, w)
         # Tilizing the flat tensor pads only at its end, not per row of latents.
-        z = ttnn.to_layout(ttnn.reshape(z, (n, 1, h * w, c)), ttnn.TILE_LAYOUT)
+        z = ttnn.to_layout(ttnn.reshape(z, (n, 1, h * w, c)), ttnn.TILE_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
         # post_quant_conv is a per-position Linear, and the conv pyramid below exchanges halos.
         z = self.post_quant_conv.forward(z)
 
@@ -214,6 +217,12 @@ class Flux2VaeDecoder(Module):
         # which saves gathering it on the device, at a program per image size. It stays flat too, as
         # [N, 1, H * W, C] tiled; flat_to_row_major with output_hw makes it [N, H, W, C].
         return self.conv_out.forward(z, hw)
+
+    @property
+    def runtime_shapes(self) -> bool:
+        """Whether the decoder's layout conversions, unpatchify permute and row-major upsamples use one program for
+        every image size; the pipeline's float_to_uint8 follows it."""
+        return self._ctx.runtime_shapes
 
     def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
         """The local (H, W) of the image decoded from latents of local size `hw`."""

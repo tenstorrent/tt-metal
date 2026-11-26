@@ -846,6 +846,7 @@ class CCLManager:
         use_persistent_buffer: bool = False,
         logical_h: int = 0,
         t_front_pad: int = 0,
+        runtime_shapes: bool = False,
     ) -> ttnn.Tensor:
         barrier_sem = self.get_barrier_semaphore(axes[0])
 
@@ -871,6 +872,7 @@ class CCLManager:
             persistent_output_buffer=persistent_buf,
             logical_h=logical_h,
             t_front_pad=t_front_pad,
+            runtime_shapes=runtime_shapes,
         )
 
     def reset_global_semaphores(self):
