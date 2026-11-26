@@ -65,6 +65,7 @@
 #include <map>
 #include <memory>
 #include <numeric>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1752,6 +1753,8 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalCableMuxCorrectnessAndTear
         // Section 2.2 creation order: boundaries b = 0 .. P-2, activation pair then gradient pair.
         // Uses BOTH cable_mux = true AND instage_mux = true with 2 cable lanes + 2 in-mesh lanes!
         for (int b = 0; b + 1 < world_size; ++b) {
+            const std::string act_group = "d2d-act-" + std::to_string(b);
+            const std::string grad_group = "d2d-grad-" + std::to_string(b);
             const D2DEndpointConfig act_ep{
                 .sender_rank = Rank{b}, .receiver_rank = Rank{b + 1}, .distributed_context = ctx};
             if (rank == b) {
@@ -1761,7 +1764,7 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalCableMuxCorrectnessAndTear
                         mesh_device_,
                         shape,
                         kStressWorkerCores,
-                        "d2d-outbound",
+                        act_group,
                         /*cable_mux=*/true,
                         2,
                         2,
@@ -1776,7 +1779,7 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalCableMuxCorrectnessAndTear
                         mesh_device_,
                         shape,
                         kStressWorkerCores,
-                        "d2d-inbound",
+                        act_group,
                         /*cable_mux=*/true,
                         2,
                         2,
@@ -1795,7 +1798,7 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalCableMuxCorrectnessAndTear
                         mesh_device_,
                         shape,
                         kStressWorkerCores,
-                        "d2d-outbound",
+                        grad_group,
                         /*cable_mux=*/true,
                         2,
                         2,
@@ -1811,7 +1814,7 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalCableMuxCorrectnessAndTear
                         mesh_device_,
                         shape,
                         kStressWorkerCores,
-                        "d2d-inbound",
+                        grad_group,
                         /*cable_mux=*/true,
                         2,
                         2,
@@ -1861,13 +1864,17 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalCableMuxCorrectnessAndTear
         }
 
         for (uint32_t iter = 0; iter < kIters; ++iter) {
-            // Receive before wait (Section 2.1).
+            // Release all inbound leases before enqueuing blocking worker spin kernels on (0,0).
             if (act_in) {
                 act_in->release_fabric_links();
-                EnqueueMeshWorkload(cq, act_recv_wl, /*blocking=*/false);
             }
             if (grad_in) {
                 grad_in->release_fabric_links();
+            }
+            if (act_in) {
+                EnqueueMeshWorkload(cq, act_recv_wl, /*blocking=*/false);
+            }
+            if (grad_in) {
                 EnqueueMeshWorkload(cq, grad_recv_wl, /*blocking=*/false);
             }
 
@@ -2018,20 +2025,38 @@ struct BenchResult {
     double ms_per_iter = 0.0;
     double gbps_per_dir = 0.0;
     double gbps_total_bidir = 0.0;
+    double gbps_pipeline_agg = 0.0;
     double on_device_recv_wait_ms = 0.0;
     double on_device_lease_wait_ms = 0.0;
     double on_device_total_compute_wait_ms = 0.0;
+    std::string per_rank_wait_summary;
 };
 
 TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchmark) {
     const auto& ctx = DistributedContext::get_current_world();
     const int world_size = *ctx->size();
     const int rank = *ctx->rank();
-    if (world_size != 2) {
-        GTEST_SKIP() << "2-stage benchmark requires world_size == 2; got " << world_size;
+    if (world_size < 2) {
+        GTEST_SKIP() << "Pipeline benchmark requires world_size >= 2; got " << world_size;
     }
 
     const size_t chips_per_stage = mesh_device_->num_devices();
+    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+    bool has_instage_relay = false;
+    size_t min_cables_per_boundary = chips_per_stage;
+    for (int b = 0; b + 1 < world_size; ++b) {
+        const auto exits = cp.get_exit_fabric_node_ids_between_meshes(
+            tt::tt_fabric::MeshId{static_cast<uint32_t>(b)}, tt::tt_fabric::MeshId{static_cast<uint32_t>(b + 1)});
+        const std::set<tt::tt_fabric::FabricNodeId> unique_exit_chips(exits.begin(), exits.end());
+        min_cables_per_boundary = std::min(min_cables_per_boundary, unique_exit_chips.size());
+        if (unique_exit_chips.size() < chips_per_stage) {
+            has_instage_relay = true;
+        }
+    }
+    // On >= 3 stages with in-stage relay, middle stages carry 4 simultaneous streams across 2 physical
+    // intra-stage links per hop, which physically requires `instage_mux = true` (`AllMux`).
+    const bool can_run_unmuxed_bidir = (world_size == 2) || !has_instage_relay;
+
     uint32_t default_mb = 8u;  // 8 MB/chip = Llama-70B TP4xCP4 boundary shard ([1,1,2048,2048] bf16)
     if (const char* env_mb = std::getenv("BIDIR_SHARD_MB")) {
         default_mb = static_cast<uint32_t>(std::stoul(env_mb));
@@ -2112,52 +2137,19 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
         std::unique_ptr<D2DStreamServiceSender> grad_out;
         std::unique_ptr<D2DStreamServiceReceiver> grad_in;
 
-        const D2DEndpointConfig act_ep{.sender_rank = Rank{0}, .receiver_rank = Rank{1}, .distributed_context = ctx};
-        if (rank == 0) {
-            act_out = D2DStreamService::create_sender(
-                mesh_device_,
-                make_bidir_relay_cfg(
-                    mesh_device_,
-                    shape,
-                    workers,
-                    "d2d-outbound",
-                    cable_mux,
-                    cable_lanes,
-                    in_mesh_lanes,
-                    true,
-                    0,
-                    instage_mux,
-                    relay_slices),
-                act_ep);
-        } else {
-            act_in = D2DStreamService::create_receiver(
-                mesh_device_,
-                make_bidir_relay_cfg(
-                    mesh_device_,
-                    shape,
-                    workers,
-                    "d2d-inbound",
-                    cable_mux,
-                    cable_lanes,
-                    in_mesh_lanes,
-                    /*reserve=*/bidirectional,
-                    0,
-                    instage_mux,
-                    relay_slices),
-                act_ep);
-        }
-
-        if (bidirectional) {
-            const D2DEndpointConfig grad_ep{
-                .sender_rank = Rank{1}, .receiver_rank = Rank{0}, .distributed_context = ctx};
-            if (rank == 1) {
-                grad_out = D2DStreamService::create_sender(
+        for (int b = 0; b + 1 < world_size; ++b) {
+            const std::string act_group = "d2d-act-" + std::to_string(b);
+            const std::string grad_group = "d2d-grad-" + std::to_string(b);
+            const D2DEndpointConfig act_ep{
+                .sender_rank = Rank{b}, .receiver_rank = Rank{b + 1}, .distributed_context = ctx};
+            if (rank == b) {
+                act_out = D2DStreamService::create_sender(
                     mesh_device_,
                     make_bidir_relay_cfg(
                         mesh_device_,
                         shape,
                         workers,
-                        "d2d-outbound",
+                        act_group,
                         cable_mux,
                         cable_lanes,
                         in_mesh_lanes,
@@ -2165,25 +2157,70 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
                         0,
                         instage_mux,
                         relay_slices),
-                    grad_ep);
-            } else {
-                grad_in = D2DStreamService::create_receiver(
+                    act_ep);
+            } else if (rank == b + 1) {
+                const bool more_after_act_in = bidirectional || (b + 1 < world_size - 1);
+                act_in = D2DStreamService::create_receiver(
                     mesh_device_,
                     make_bidir_relay_cfg(
                         mesh_device_,
                         shape,
                         workers,
-                        "d2d-inbound",
+                        act_group,
                         cable_mux,
                         cable_lanes,
                         in_mesh_lanes,
-                        /*reserve=*/false,
+                        /*reserve=*/more_after_act_in,
                         0,
                         instage_mux,
                         relay_slices),
-                    grad_ep);
+                    act_ep);
+            }
+
+            if (bidirectional) {
+                const D2DEndpointConfig grad_ep{
+                    .sender_rank = Rank{b + 1}, .receiver_rank = Rank{b}, .distributed_context = ctx};
+                if (rank == b + 1) {
+                    grad_out = D2DStreamService::create_sender(
+                        mesh_device_,
+                        make_bidir_relay_cfg(
+                            mesh_device_,
+                            shape,
+                            workers,
+                            grad_group,
+                            cable_mux,
+                            cable_lanes,
+                            in_mesh_lanes,
+                            true,
+                            0,
+                            instage_mux,
+                            relay_slices),
+                        grad_ep);
+                } else if (rank == b) {
+                    const bool more_after_grad_in = (b + 1 < world_size - 1);
+                    grad_in = D2DStreamService::create_receiver(
+                        mesh_device_,
+                        make_bidir_relay_cfg(
+                            mesh_device_,
+                            shape,
+                            workers,
+                            grad_group,
+                            cable_mux,
+                            cable_lanes,
+                            in_mesh_lanes,
+                            /*reserve=*/more_after_grad_in,
+                            0,
+                            instage_mux,
+                            relay_slices),
+                        grad_ep);
+                }
             }
         }
+
+        const uint32_t act_out_base = 0x100u + shard_mb + static_cast<uint32_t>(rank) * 0x10u;
+        const uint32_t act_in_expected = 0x100u + shard_mb + static_cast<uint32_t>(rank - 1) * 0x10u;
+        const uint32_t grad_out_base = 0x900u + shard_mb + static_cast<uint32_t>(rank) * 0x10u;
+        const uint32_t grad_in_expected = 0x900u + shard_mb + static_cast<uint32_t>(rank + 1) * 0x10u;
 
         std::optional<ttnn::Tensor> act_send_src, grad_send_src, act_recv_dst, grad_recv_dst;
         if (use_ttnn_runtime_ops) {
@@ -2192,14 +2229,14 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
                     act_out->get_backing_tensor().tensor_spec(),
                     mesh_device_.get(),
                     act_out->get_backing_tensor().tensor_topology());
-                fill_backing_iota(*act_send_src, mesh_device_, 0x100u + shard_mb);
+                fill_backing_iota(*act_send_src, mesh_device_, act_out_base);
             }
             if (grad_out) {
                 grad_send_src = ttnn::create_device_tensor(
                     grad_out->get_backing_tensor().tensor_spec(),
                     mesh_device_.get(),
                     grad_out->get_backing_tensor().tensor_topology());
-                fill_backing_iota(*grad_send_src, mesh_device_, 0x900u + shard_mb);
+                fill_backing_iota(*grad_send_src, mesh_device_, grad_out_base);
             }
             if (act_in) {
                 act_recv_dst = ttnn::create_device_tensor(
@@ -2215,10 +2252,10 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
             }
         } else {
             if (act_out) {
-                fill_backing_iota(act_out->get_backing_tensor(), mesh_device_, 0x100u + shard_mb);
+                fill_backing_iota(act_out->get_backing_tensor(), mesh_device_, act_out_base);
             }
             if (grad_out) {
-                fill_backing_iota(grad_out->get_backing_tensor(), mesh_device_, 0x900u + shard_mb);
+                fill_backing_iota(grad_out->get_backing_tensor(), mesh_device_, grad_out_base);
             }
         }
 
@@ -2255,7 +2292,6 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
             if (!r) {
                 return;
             }
-            r->release_fabric_links();
             if (use_ttnn_runtime_ops) {
                 (void)ttnn::experimental::inbound_socket_service_sync(*r, 0u, 0u, dst);
             } else {
@@ -2272,6 +2308,12 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
                     EnqueueMeshWorkload(cq, ts_wl, /*blocking=*/false);  // t0: before Recv
                 }
 
+                if (act_in) {
+                    act_in->release_fabric_links();
+                }
+                if (grad_in) {
+                    grad_in->release_fabric_links();
+                }
                 do_recv(act_in.get(), act_recv_dst, act_recv_wl);
                 do_recv(grad_in.get(), grad_recv_dst, grad_recv_wl);
 
@@ -2332,7 +2374,7 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
         };
 
         ctx->barrier();
-        run_loop(kWarmupIters, /*record_timestamps=*/false);
+        run_loop(kWarmupIters, /*record_timestamps=*/true);
         reset_ts_buffers();
         Synchronize(*mesh_device_, std::nullopt);
         ctx->barrier();
@@ -2345,11 +2387,11 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
 
         if (act_in) {
             const auto& check_t = use_ttnn_runtime_ops ? *act_recv_dst : act_in->get_backing_tensor();
-            verify_backing_iota(check_t, mesh_device_, 0x100u + shard_mb, label.c_str());
+            verify_backing_iota(check_t, mesh_device_, act_in_expected, label.c_str());
         }
         if (grad_in) {
             const auto& check_t = use_ttnn_runtime_ops ? *grad_recv_dst : grad_in->get_backing_tensor();
-            verify_backing_iota(check_t, mesh_device_, 0x900u + shard_mb, label.c_str());
+            verify_backing_iota(check_t, mesh_device_, grad_in_expected, label.c_str());
         }
 
         // Read back on-device Tensix cycle timestamps across all chips of this stage and
@@ -2390,17 +2432,30 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
         }
         double avg_recv_wait_ms = sum_recv_ms / static_cast<double>(steady_iters);
         double avg_lease_wait_ms = sum_lease_ms / static_cast<double>(steady_iters);
-        // For OneWay cells, rank 0 only sends while rank 1 receives; report the receiver rank's wait on rank 0.
-        if (!bidirectional) {
+
+        // Gather every stage's on-device compute wait onto rank 0 and report the bottleneck stage
+        // (on >= 3 stages, middle ranks carry all 4 streams simultaneously) plus a per-rank summary.
+        std::string per_rank_summary;
+        if (rank != 0) {
             std::array<double, 2> waits{avg_recv_wait_ms, avg_lease_wait_ms};
             auto span = ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(waits.data()), sizeof(waits));
-            if (rank == 1) {
-                ctx->send(span, Rank{0}, tt::tt_metal::distributed::multihost::Tag{0x4257});
-            } else if (rank == 0) {
-                ctx->recv(span, Rank{1}, tt::tt_metal::distributed::multihost::Tag{0x4257});
-                avg_recv_wait_ms = waits[0];
-                avg_lease_wait_ms = waits[1];
+            ctx->send(span, Rank{0}, tt::tt_metal::distributed::multihost::Tag{0x4257});
+        } else {
+            double worst_recv_ms = (bidirectional || world_size == 1) ? avg_recv_wait_ms : 0.0;
+            double worst_lease_ms = (bidirectional || world_size == 1) ? avg_lease_wait_ms : 0.0;
+            per_rank_summary = fmt::format("r0={:.3f}", avg_recv_wait_ms + avg_lease_wait_ms);
+            for (int r = 1; r < world_size; ++r) {
+                std::array<double, 2> waits{0.0, 0.0};
+                auto span = ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(waits.data()), sizeof(waits));
+                ctx->recv(span, Rank{r}, tt::tt_metal::distributed::multihost::Tag{0x4257});
+                per_rank_summary += fmt::format(",r{}={:.3f}", r, waits[0] + waits[1]);
+                if (waits[0] + waits[1] > worst_recv_ms + worst_lease_ms) {
+                    worst_recv_ms = waits[0];
+                    worst_lease_ms = waits[1];
+                }
             }
+            avg_recv_wait_ms = worst_recv_ms;
+            avg_lease_wait_ms = worst_lease_ms;
         }
 
         act_in.reset();
@@ -2412,16 +2467,19 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
         const double ms_per_iter = (total_sec * 1000.0) / static_cast<double>(kTimedIters);
         const double gbps_per_dir =
             (static_cast<double>(stage_bytes) * static_cast<double>(kTimedIters)) / (total_sec * 1e9);
+        const double gbps_per_boundary = bidirectional ? (2.0 * gbps_per_dir) : gbps_per_dir;
         return BenchResult{
             .name = label,
             .shard_bytes = shard_bytes,
             .stage_bytes_per_dir = stage_bytes,
             .ms_per_iter = ms_per_iter,
             .gbps_per_dir = gbps_per_dir,
-            .gbps_total_bidir = bidirectional ? (2.0 * gbps_per_dir) : gbps_per_dir,
+            .gbps_total_bidir = gbps_per_boundary,
+            .gbps_pipeline_agg = gbps_per_boundary * static_cast<double>(world_size - 1),
             .on_device_recv_wait_ms = avg_recv_wait_ms,
             .on_device_lease_wait_ms = avg_lease_wait_ms,
             .on_device_total_compute_wait_ms = avg_recv_wait_ms + avg_lease_wait_ms,
+            .per_rank_wait_summary = std::move(per_rank_summary),
         };
     };
 
@@ -2489,51 +2547,53 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
             nullptr,
             nullptr,
             16u));
-        results.push_back(run_socket_cell(
-            "Bidir_1Lane_Plain_S1_" + tag,
-            mb,
-            true,
-            false,
-            false,
-            1,
-            1,
-            false,
-            0,
-            nullptr,
-            nullptr,
-            nullptr,
-            nullptr,
-            1u));
-        results.push_back(run_socket_cell(
-            "Bidir_1Lane_Plain_S16_" + tag,
-            mb,
-            true,
-            false,
-            false,
-            1,
-            1,
-            false,
-            0,
-            nullptr,
-            nullptr,
-            nullptr,
-            nullptr,
-            16u));
-        results.push_back(run_socket_cell(
-            "Bidir_2Lane_CableMux_S16_" + tag,
-            mb,
-            true,
-            true,
-            false,
-            2,
-            1,
-            false,
-            0,
-            nullptr,
-            nullptr,
-            nullptr,
-            nullptr,
-            16u));
+        if (can_run_unmuxed_bidir) {
+            results.push_back(run_socket_cell(
+                "Bidir_1Lane_Plain_S1_" + tag,
+                mb,
+                true,
+                false,
+                false,
+                1,
+                1,
+                false,
+                0,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                1u));
+            results.push_back(run_socket_cell(
+                "Bidir_1Lane_Plain_S16_" + tag,
+                mb,
+                true,
+                false,
+                false,
+                1,
+                1,
+                false,
+                0,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                16u));
+            results.push_back(run_socket_cell(
+                "Bidir_2Lane_CableMux_S16_" + tag,
+                mb,
+                true,
+                true,
+                false,
+                2,
+                1,
+                false,
+                0,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                16u));
+        }
         results.push_back(run_socket_cell(
             "Bidir_2Lane_AllMux_S1_" + tag,
             mb,
@@ -2647,21 +2707,24 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
 
     for (int nm : {4, 16}) {
         const double compute_only_ms = run_compute_only(nm);
-        const auto with_1lane_s1 = run_socket_cell(
-            "Compute" + std::to_string(nm) + "MM_Bidir_1Lane_S1",
-            default_mb,
-            true,
-            false,
-            false,
-            1,
-            1,
-            false,
-            nm,
-            &mm_a,
-            &mm_b,
-            &mm_out,
-            &intra_fabric_wl,
-            1u);
+        std::optional<BenchResult> with_1lane_s1;
+        if (can_run_unmuxed_bidir) {
+            with_1lane_s1 = run_socket_cell(
+                "Compute" + std::to_string(nm) + "MM_Bidir_1Lane_S1",
+                default_mb,
+                true,
+                false,
+                false,
+                1,
+                1,
+                false,
+                nm,
+                &mm_a,
+                &mm_b,
+                &mm_out,
+                &intra_fabric_wl,
+                1u);
+        }
         const auto with_all_mux_s1 = run_socket_cell(
             "Compute" + std::to_string(nm) + "MM_Bidir_AllMux_S1",
             default_mb,
@@ -2711,24 +2774,29 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
         if (rank == 0) {
             auto fmt_cell = [&](const BenchResult& b) {
                 return fmt::format(
-                    "step={:.3f}ms (+{:.3f}ms) [on-dev wait={:.3f}ms: recv={:.3f}ms, lease={:.3f}ms]",
+                    "step={:.3f}ms (+{:.3f}ms) [worst-stage wait={:.3f}ms: recv={:.3f}ms, lease={:.3f}ms | {}]",
                     b.ms_per_iter,
                     b.ms_per_iter - compute_only_ms,
                     b.on_device_total_compute_wait_ms,
                     b.on_device_recv_wait_ms,
-                    b.on_device_lease_wait_ms);
+                    b.on_device_lease_wait_ms,
+                    b.per_rank_wait_summary);
             };
             log_info(
                 tt::LogMetal,
-                "[bidir-compute-wait] mesh={} ({}x matmul + intra-mesh fabric): compute_only={:.3f}ms\n"
+                "[bidir-compute-wait] stages={} mesh={} cables/boundary={} ({}x matmul + intra-mesh fabric): "
+                "compute_only={:.3f}ms\n"
                 "  1-lane plain (S=1)   : {}\n"
                 "  2-lane AllMux (S=1)  : {}\n"
                 "  2-lane AllMux (S=16) : {}\n"
                 "  2-lane AllMux+TTNN16 : {}",
+                world_size,
                 mesh_device_->shape(),
+                min_cables_per_boundary,
                 nm,
                 compute_only_ms,
-                fmt_cell(with_1lane_s1),
+                with_1lane_s1 ? fmt_cell(*with_1lane_s1)
+                              : "N/A (middle stage requires instage_mux for 4 streams/2 links)",
                 fmt_cell(with_all_mux_s1),
                 fmt_cell(with_all_mux_s16),
                 fmt_cell(with_all_mux_ttnn_s16));
@@ -2738,21 +2806,26 @@ TEST_F(BidirectionalStageSocketsFixture, BidirectionalBandwidthAndComputeBenchma
     if (rank == 0) {
         log_info(
             tt::LogMetal,
-            "==================== BIDIRECTIONAL SOCKET BENCHMARK ({}) ====================",
-            mesh_device_->shape());
+            "==================== BIDIRECTIONAL PIPELINE BENCHMARK (stages={}, mesh={}, cables/boundary={}) "
+            "====================",
+            world_size,
+            mesh_device_->shape(),
+            min_cables_per_boundary);
         for (const auto& r : results) {
             log_info(
                 tt::LogMetal,
-                "[bidir-bench] {:<36s} | {:6.1f} MiB/dir | {:7.3f} ms/iter | {:6.2f} GB/s/dir | {:6.2f} GB/s total | "
-                "wait={:.3f}ms (recv={:.3f}, lease={:.3f})",
+                "[bidir-bench] {:<36s} | {:6.1f} MiB/dir | {:7.3f} ms/iter | {:6.2f} GB/s/dir | {:6.2f} GB/s/bdry | "
+                "{:6.2f} GB/s agg | wait={:.3f}ms (recv={:.3f}, lease={:.3f}) [{}]",
                 r.name,
                 static_cast<double>(r.stage_bytes_per_dir) / (1024.0 * 1024.0),
                 r.ms_per_iter,
                 r.gbps_per_dir,
                 r.gbps_total_bidir,
+                r.gbps_pipeline_agg,
                 r.on_device_total_compute_wait_ms,
                 r.on_device_recv_wait_ms,
-                r.on_device_lease_wait_ms);
+                r.on_device_lease_wait_ms,
+                r.per_rank_wait_summary);
         }
         log_info(tt::LogMetal, "====================================================================================");
     }
