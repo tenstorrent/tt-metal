@@ -130,7 +130,7 @@ def _spans_from_logs(root, real_chunks):
     return spans[-real_chunks:] if real_chunks > 0 else spans
 
 
-def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None):
+def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None, chunks_per_forward=1):
     n = len(spans)
     if n == 0 or chunk_size <= 0:
         return [], {}
@@ -143,6 +143,7 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None):
         "num_chunks": n,
         "max_seq": max_seq,
         "pipeline_ranks": pipeline_ranks,
+        "chunks_per_forward": chunks_per_forward,
         "chunk_index": {},
         "chunk_time_ms": {},
         "ttft_s": {},
@@ -164,7 +165,9 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None):
         return list(zip(labels, picked))
 
     out = ["==================== perf metrics (measured request, warmup excluded) ===================="]
-    out.append(f"max_seq={max_seq} tok ({n} chunks x {chunk_size})")
+    cpf = max(1, chunks_per_forward)
+    packing = f"packed, {cpf} chunks per forward" if cpf > 1 else "unpacked, one chunk per forward"
+    out.append(f"max_seq={max_seq} tok ({n} chunks x {chunk_size}; {packing})")
     out.append("labels are tokens prefilled through that chunk, in units of 1024 (M past 1Mi); probes snap to chunks")
     out.append("all times are the producer's clock: first layer ack -> last layer ack of a chunk")
     if whole_chunk_acks:
@@ -183,12 +186,27 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None):
             out.append(f"  ttft       {lbl:>14} (chunk {d:>3}): {rec['ttft_s'][lbl]:>12.3f} s")
 
     out.append(f"throughput = tokens / wall time across up to {_TPUT_WINDOW} chunk retires centred on the probe")
+    if cpf > 1:
+        out.append("  (a packed forward's chunks retire together: windows span whole forwards)")
+    # A packed forward retires all its chunks at once, so only the last chunk of a forward (or the
+    # request's last chunk, which closes a short final forward) marks a point where the rate is known.
+    # A short final forward counts: whatever it costs beyond its share is time the request really spends.
+    forward_ends = [i for i in range(n) if (i + 1) % cpf == 0 or i == n - 1]
     for lbl, d in probes((0, 50000, max_seq // 2, max_seq)):
         # The rate is the retire cadence. A chunk's own latency covers every stage at once and so
         # carries no information about how many chunks are in flight; only the interval between
         # retires does. The window absorbs one slow chunk while staying short enough that the
         # attention cost, which grows with depth, barely drifts across it.
         lo, hi = max(0, d - _TPUT_WINDOW // 2), min(n - 1, d + _TPUT_WINDOW // 2)
+        # Snap to forward ends: credit exactly the chunks retired in (end[lo], end[hi]]. Otherwise a
+        # window edge inside a forward counts chunks that retired at the window's start, e.g. 4 chunks
+        # against the time of a 2-chunk tail forward. One chunk per forward leaves lo and hi as they are.
+        lo = max((i for i in forward_ends if i <= lo), default=forward_ends[0])
+        hi = min((i for i in forward_ends if i >= hi), default=forward_ends[-1])
+        if hi <= lo:  # both ends on one forward end (the first probe, cpf > window): take a neighbour
+            later = [i for i in forward_ends if i > lo]
+            earlier = [i for i in forward_ends if i < lo]
+            lo, hi = (lo, later[0]) if later else ((earlier[-1], lo) if earlier else (lo, hi))
         if hi - lo < 1 or end[hi] <= end[lo]:
             out.append(f"  throughput {lbl:>14} (chunk {d:>3}): {'-':>12}")
             continue
@@ -204,6 +222,12 @@ def main():
     ap.add_argument("--real-chunks", type=int, default=0, help="chunks in the measured request (0 => all)")
     ap.add_argument("--chunk-size", type=int, default=0, help="tokens per chunk (0 => skip perf)")
     ap.add_argument("--pipeline-ranks", type=int, default=1, help="runner pipeline ranks (scaling ideal)")
+    ap.add_argument(
+        "--chunks-per-forward",
+        type=int,
+        default=1,
+        help="chunks packed into one forward (PREFILL_FORWARD_TOKENS_BUDGET // chunk size); they retire together",
+    )
     ap.add_argument(
         "--probe-chunks",
         default=None,
@@ -224,7 +248,7 @@ def main():
     if not spans:
         print("no producer CHUNK_RETIRE lines found (the producer's completion drain did not run)")
         return
-    lines, rec = _perf_metrics(spans, args.chunk_size, args.pipeline_ranks, probe_chunks)
+    lines, rec = _perf_metrics(spans, args.chunk_size, args.pipeline_ranks, probe_chunks, args.chunks_per_forward)
     if lines:
         _publish(lines, args.summary_name)
     _publish_json(rec, args.summary_name)

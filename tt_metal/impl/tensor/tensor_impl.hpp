@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/float8.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>

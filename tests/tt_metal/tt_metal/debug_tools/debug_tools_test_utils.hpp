@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <impl/debug/dprint_server.hpp>
 #include "llrt.hpp"
 #include <fmt/format.h>

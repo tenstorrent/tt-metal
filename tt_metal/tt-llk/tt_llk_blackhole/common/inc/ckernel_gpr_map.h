@@ -30,8 +30,7 @@ struct p_gpr_unpack
     constexpr static std::uint32_t ZERO_3                  = 11; // Zero data
     constexpr static std::uint32_t TMP0                    = 12; // Temp data
     constexpr static std::uint32_t TMP1                    = 13; // Temp data
-    // Slots 14 and 15 are free.
-    constexpr static std::uint32_t L1_BUFFER_ADDR          = 17; // Holds address of fixed l1 buffer used for reduce in1
+    // Slots 14, 15 and 17 are free.
     constexpr static std::uint32_t TMP_LO                  = 18; // Temp data. Upper 16-bits always 0
     constexpr static std::uint32_t TMP_HI                  = 19; // Temp data. Lower 16-bits always 0
     constexpr static std::uint32_t PERF_FIRST_UNP_LO       = 32; // timestamp for first-unpack-instruction (low 32b)

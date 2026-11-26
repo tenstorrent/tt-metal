@@ -10,12 +10,12 @@
 #include <optional>
 #include <unordered_set>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/face_geometry.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <tt-metalium/data_formats/face_geometry.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;

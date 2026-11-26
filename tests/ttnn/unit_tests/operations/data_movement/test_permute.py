@@ -895,6 +895,24 @@ def _docstring_pad_value_dtypes():
     return {getattr(ttnn.DataType, name) for name in re.findall(r"``(\w+)``", line)}
 
 
+@pytest.mark.parametrize("dims", [(2, 1, 0, 3), (0, 2, 3, 1)])
+def test_permute_bfloat4_round_trip(device, dims):
+    """bfloat4_b permutes that reach the primitive go through bfloat16 and come back as bfloat4_b."""
+    input_tensor = ttnn.from_torch(
+        _one_exponent_input((2, 3, 32, 64)),
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    expected = ttnn.to_torch(input_tensor).permute(dims).contiguous()
+    output_tensor = ttnn.permute(input_tensor, dims, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert output_tensor.dtype == ttnn.bfloat4_b, f"Unexpected dtype: {output_tensor.dtype}"
+    output = ttnn.to_torch(output_tensor)
+    assert output.shape == expected.shape, f"Expected {expected.shape}, got {output.shape}"
+    assert_equal(expected, output)
+
+
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.permute))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.permute))
 def test_permute_docstring_supported_inputs(dtype, layout, buffer_type, device):

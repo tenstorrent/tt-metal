@@ -4,16 +4,16 @@
 
 #include "upsample.hpp"
 #include <algorithm>
-#include "tt-metalium/shape.hpp"
+#include "tt-metalium/vocabulary/shape.hpp"
 #include "ttnn/operations/experimental/quasar/upsample/device/upsample_device_operation.hpp"
-#include "tt-metalium/buffer_types.hpp"
-#include "tt-metalium/work_split.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include "tt-metalium/utils/work_split.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/experimental/quasar/halo/halo.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::operations::experimental::quasar::upsample {
 

@@ -13,8 +13,8 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
 #include "ttnn/operations/experimental/quasar/upsample/device/upsample_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <utility>

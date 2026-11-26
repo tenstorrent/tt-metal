@@ -38,12 +38,12 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
@@ -51,7 +51,7 @@
 #include <tt-metalium/workload/specification/semaphore_spec.hpp>
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -379,6 +379,12 @@ static void populate_reader_runtime_args(
     }
 }
 
+// Block-sharded: a core outside the output grid's last column (transposed: last row) skips the matmul.
+static bool is_skip_compute_core(const CoreCoord& core, bool transpose_mcast, const CoreRangeSet& output_cores) {
+    const CoreCoord out_end = output_cores.bounding_box().end_coord;
+    return transpose_mcast ? core.y > out_end.y : core.x > out_end.x;
+}
+
 static void populate_writer_sender_runtime_args(
     m2::KernelRunArgs& writer_sender_run_args,
     const CoreRangeSet& mcast_sender_cores,
@@ -575,12 +581,9 @@ static void populate_compute_runtime_args(
     const CoreRangeSet& all_cores,
     const CoreRangeSet& output_cores) {
     if (check_skip_compute && !is_conv_1d_depthwise_conv) {
-        CoreCoord bottom_right_core_out = output_cores.bounding_box().end_coord;
-        uint32_t end_coord_x = bottom_right_core_out.x;
-        uint32_t end_coord_y = bottom_right_core_out.y;
         for (const CoreRange& range : all_cores.ranges()) {
             for (const CoreCoord& core : range) {
-                bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
+                const bool skip_compute = is_skip_compute_core(core, transpose_mcast, output_cores);
                 compute_run_args.runtime_arg_values["skip_compute"][core] = (uint32_t)skip_compute;
             }
         }
@@ -1306,8 +1309,24 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
 
     const bool check_skip_compute = input_cores != output_cores;
-    // populate_skipped_work_cores is only reachable with split reader (deferred), so it is always false.
-    const bool populate_skipped_work_cores = false;
+    // Block-sharded with input-only cores (input grid wider than output, e.g. 320 -> 128 channels on 8x4): their
+    // compute still runs (it tilizes the act block the reader mcasts) with skip_compute, so it is bound to the
+    // local weights/bias DFBs, and a local DFB needs a producer on every node it lives on. Give those cores the
+    // sender writer with skip_work=1 (returns before touching any DFB) instead of no writer as on WH/BH.
+    const CoreRangeSet input_only_cores = input_cores.subtract(output_cores);
+    const bool populate_skipped_work_cores = block_sharded && input_only_cores.num_cores() > 0;
+    if (populate_skipped_work_cores) {
+        // A skip_work writer never pushes weights/bias, so compute on that core must skip the matmul, or it waits on
+        // them forever.
+        for (const CoreRange& range : input_only_cores.ranges()) {
+            for (const CoreCoord& core : range) {
+                TT_FATAL(
+                    !is_conv_1d_depthwise_conv && is_skip_compute_core(core, transpose_mcast, output_cores),
+                    "Conv2d: input-only core {} gets a skip_work weights writer but does not skip compute",
+                    core.str());
+            }
+        }
+    }
 
     // ============================================================================
     //  Mcast geometry (mirrors the legacy build_program_descriptor_sharded)

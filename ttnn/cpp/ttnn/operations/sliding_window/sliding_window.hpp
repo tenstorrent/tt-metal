@@ -10,7 +10,7 @@
 #include <fmt/core.h>
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "tt-metalium/hal.hpp"
+#include "tt-metalium/discovery/hal.hpp"
 
 namespace ttnn::operations::sliding_window {
 

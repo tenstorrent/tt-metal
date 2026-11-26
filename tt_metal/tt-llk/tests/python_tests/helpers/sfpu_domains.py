@@ -461,7 +461,7 @@ class SingularitySide(Enum):
 
 _BOTH, _ABOVE, _BELOW = SingularitySide
 
-# Ops with a pole at every non-positive integer; `ulp_sweep.claimed_lanes` excludes the
+# Ops with a pole at every non-positive integer; `ulp_sweep.Swept.claimed` excludes the
 # lattice, and every fp32 value of magnitude 2**23 or more is an integer.
 _NONPOSITIVE_INTEGER_POLES = frozenset(
     {MathOperation.Digamma, MathOperation.Lgamma, MathOperation.Polygamma}

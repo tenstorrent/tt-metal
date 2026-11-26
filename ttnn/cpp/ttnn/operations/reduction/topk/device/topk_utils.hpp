@@ -6,7 +6,7 @@
 
 #include <limits>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 #include <cstdint>
