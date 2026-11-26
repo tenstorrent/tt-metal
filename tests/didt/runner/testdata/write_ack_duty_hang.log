@@ -1,0 +1,35 @@
+2026-11-21 14:51:22.889 | INFO     | __main__:scan_all_chips:356 - scanning 32 chips, workload duty, dispatch watchdog=30s, logs under /tmp/mm_mcast_write_ack_failure
+2026-11-21 14:53:06.515 | SUCCESS  | __main__:scan_all_chips:371 - chip 10 PASS
+2026-11-21 14:53:07.016 | SUCCESS  | __main__:scan_all_chips:371 - chip 9 PASS
+2026-11-21 14:53:08.018 | SUCCESS  | __main__:scan_all_chips:371 - chip 3 PASS
+2026-11-21 14:53:08.519 | SUCCESS  | __main__:scan_all_chips:371 - chip 31 PASS
+2026-11-21 14:53:09.520 | SUCCESS  | __main__:scan_all_chips:371 - chip 2 PASS
+2026-11-21 14:53:09.520 | SUCCESS  | __main__:scan_all_chips:371 - chip 11 PASS
+2026-11-21 14:53:10.021 | SUCCESS  | __main__:scan_all_chips:371 - chip 1 PASS
+2026-11-21 14:53:10.021 | SUCCESS  | __main__:scan_all_chips:371 - chip 7 PASS
+2026-11-21 14:53:10.022 | SUCCESS  | __main__:scan_all_chips:371 - chip 20 PASS
+2026-11-21 14:53:10.022 | SUCCESS  | __main__:scan_all_chips:371 - chip 24 PASS
+2026-11-21 14:53:10.022 | SUCCESS  | __main__:scan_all_chips:371 - chip 25 PASS
+2026-11-21 14:53:10.523 | SUCCESS  | __main__:scan_all_chips:371 - chip 23 PASS
+2026-11-21 14:53:10.523 | SUCCESS  | __main__:scan_all_chips:371 - chip 29 PASS
+2026-11-21 14:53:11.024 | SUCCESS  | __main__:scan_all_chips:371 - chip 13 PASS
+2026-11-21 14:53:11.025 | SUCCESS  | __main__:scan_all_chips:371 - chip 26 PASS
+2026-11-21 14:53:11.526 | SUCCESS  | __main__:scan_all_chips:371 - chip 12 PASS
+2026-11-21 14:53:11.526 | SUCCESS  | __main__:scan_all_chips:371 - chip 14 PASS
+2026-11-21 14:53:11.526 | SUCCESS  | __main__:scan_all_chips:371 - chip 22 PASS
+2026-11-21 14:53:12.027 | SUCCESS  | __main__:scan_all_chips:371 - chip 4 PASS
+2026-11-21 14:53:12.028 | SUCCESS  | __main__:scan_all_chips:371 - chip 5 PASS
+2026-11-21 14:53:12.028 | SUCCESS  | __main__:scan_all_chips:371 - chip 6 PASS
+2026-11-21 14:53:12.028 | SUCCESS  | __main__:scan_all_chips:371 - chip 30 PASS
+2026-11-21 14:53:13.030 | SUCCESS  | __main__:scan_all_chips:371 - chip 15 PASS
+2026-11-21 14:53:13.531 | SUCCESS  | __main__:scan_all_chips:371 - chip 0 PASS
+2026-11-21 14:53:13.531 | SUCCESS  | __main__:scan_all_chips:371 - chip 8 PASS
+2026-11-21 14:53:13.531 | SUCCESS  | __main__:scan_all_chips:371 - chip 18 PASS
+2026-11-21 14:53:13.531 | SUCCESS  | __main__:scan_all_chips:371 - chip 28 PASS
+2026-11-21 14:53:14.032 | SUCCESS  | __main__:scan_all_chips:371 - chip 16 PASS
+2026-11-21 14:53:17.036 | SUCCESS  | __main__:scan_all_chips:371 - chip 17 PASS
+2026-11-21 14:53:17.036 | SUCCESS  | __main__:scan_all_chips:371 - chip 19 PASS
+2026-11-21 14:53:17.537 | SUCCESS  | __main__:scan_all_chips:371 - chip 21 PASS
+2026-11-21 14:53:46.571 | ERROR    | __main__:scan_all_chips:388 - chip 27 FAIL: HUNG chip 27 (runtime id 0): BusDeviceFunction=0000:c4:00.0 /dev/tenstorrent/19 T3:N4
+2026-11-21 14:53:46.571 | ERROR    | __main__:scan_all_chips:389 -   cat /tmp/mm_mcast_write_ack_failure/chip27/pytest.log
+2026-11-21 14:53:46.571 | ERROR    | __main__:scan_all_chips:396 - hung chips: [27] -- reset before re-running: tt-smi -glx_reset_auto
