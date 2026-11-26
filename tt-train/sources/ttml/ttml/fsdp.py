@@ -194,8 +194,8 @@ class FSDPState:
         gathered shape. We restore the sharded m_value and free the gathered
         weight first, then reduce-scatter each grad into a shard-shaped grad,
         free the gathered grad, and install the shard (``set_grad``'s shape
-        check then sees the shard-shaped m_value). A managed parameter with no
-        grad (frozen, like LoRA's base weights, or unused) is resharded too.
+        check then sees the shard-shaped m_value). A sum in fp32 installs an
+        fp32 shard.
 
         Without a ``reduce_dtype`` from ``fully_shard``, the sum takes the one
         ``create_optimizer`` stored from the training config, read here as the
@@ -203,18 +203,22 @@ class FSDPState:
         optimizer exists.
         """
         reduce_dtype = ttml.core.distributed.resolve_reduce_dtype(self.reduce_dtype)
-        gathered = self.sharded_state == _ShardedState.UNSHARDED
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
-            if not param_tensor.is_grad_initialized():
-                if gathered:
-                    self._reshard_param(param_tensor)
-                continue
             # Swap m_value back to the cached shard and free the gathered
             # weight before the grad's reduce-scatter, the peak of this hook:
             # nothing reads the weight from here on, and set_value doesn't
-            # check shapes.
-            self._reshard_param(param_tensor)
+            # check shapes. Freed explicitly, since Python GC may keep the
+            # full-size buffer around for too long. Every managed parameter
+            # was gathered in backward_pre, so one this backward didn't reach
+            # is swapped back too.
+            gathered_value = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+            shard = self._cached_shards.get(id(param_tensor))
+            if shard is not None:
+                param_tensor.set_value(shard)
+            ttnn.deallocate(gathered_value)
+            if not param_tensor.is_grad_initialized():
+                continue
 
             # The gathered grad is still installed until set_grad below, but
             # nothing reads it after the reduce-scatter's input is made: the
@@ -230,11 +234,9 @@ class FSDPState:
                 ttnn.deallocate(gathered_grad)
             summed = ttml.core.distributed.reduce_scatter(to_reduce, shard_dim, self.axis_index)
             ttnn.deallocate(to_reduce)
-            # Mean-reduction: reduce_scatter sums one shard's contribution
-            # per DP rank; divide by axis_size to get the per-shard average,
-            # matching the implicit averaging a DDP all-reduce would do. The
-            # multiply writes the grad's own dtype.
-            reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=grad_dtype)
+            # Mean-reduction: divide by axis_size for the per-shard average, as a
+            # DDP all-reduce would. The mean keeps the sum's dtype.
+            reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=summed.dtype)
             ttnn.deallocate(summed)
             param_tensor.set_grad(reduced)
 
@@ -574,7 +576,7 @@ def fully_shard(
             Raises if a matched parameter is already sharded on
             ``mesh_axis``.
         reduce_dtype: The dtype the gradients are reduce-scattered in, as ``ttml.sync_gradients`` takes it:
-            ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and casts the shard back to the gradient's dtype.
+            ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and keeps the mean shard in fp32.
             During backward it holds an fp32 copy of each gathered gradient plus the reduce-scatter's working buffer,
             allocated in that fp32 dtype at the input's size (twice that on a line): about 12 bytes per gathered
             element on a line, against 6 for the bf16 sum. ``None``

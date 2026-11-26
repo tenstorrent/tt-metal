@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Callable
+from typing import Callable, Sequence
 import math
 
 import ttnn
@@ -144,6 +144,14 @@ class ColumnParallelLinear(AbstractModuleBase):
             all-gather over the sequence dim reconstructs the full sequence before
             the matmul. Otherwise the input must be replicated.
         axis_name: Mesh axis used for tensor parallelism.
+        fused_segments: When the layer fuses several projections into one weight
+            (``[Q | K | V]``, ``[gate | up]``), the global output size of each
+            segment in order. Each segment is split evenly across the TP shards and
+            shard ``d`` holds piece ``d`` of every segment, so the full weight's row
+            order ``[Q_0 | K_0 | V_0 | Q_1 | ...]`` depends on the TP size. The
+            declaration is recorded on the parameters so ``ttml.distributed_checkpointing``
+            can reshard the weight across TP sizes; without it a checkpoint of a
+            fused weight loads correctly only onto the same TP size.
     """
 
     def __init__(
@@ -156,6 +164,7 @@ class ColumnParallelLinear(AbstractModuleBase):
         gather_output: bool = False,
         sequence_parallel: bool = False,
         axis_name: str = "tp",
+        fused_segments: Sequence[int] | None = None,
     ) -> None:
         super().__init__()
 
@@ -165,6 +174,8 @@ class ColumnParallelLinear(AbstractModuleBase):
         self.sequence_parallel = sequence_parallel
         self.axis_name = axis_name
         self.cluster_axis = ttml.mesh().axis_index(axis_name)
+        # The declaration is only recorded here; ttml.distributed_checkpointing checks it when a checkpoint is planned.
+        fused_segments = tuple(int(s) for s in fused_segments) if fused_segments is not None else None
 
         if weight_init is None:
             k = math.sqrt(1.0 / in_features)
@@ -177,11 +188,15 @@ class ColumnParallelLinear(AbstractModuleBase):
         mesh = ttml.mesh()
         weight_mapper = mesh.axis_mapper(axis_name, tdim=2)
         self.weight = Parameter(weight_init(weight_shape, mapper=weight_mapper))
+        if fused_segments is not None:
+            self.weight.checkpoint_layout = {"fused": (2, fused_segments)}
 
         if has_bias:
             bias_shape = (1, 1, 1, out_features)
             bias_mapper = mesh.axis_mapper(axis_name, tdim=3)
             self.bias = Parameter(bias_init(bias_shape, mapper=bias_mapper))
+            if fused_segments is not None:
+                self.bias.checkpoint_layout = {"fused": (3, fused_segments)}
         else:
             self.bias = None
 

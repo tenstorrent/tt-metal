@@ -191,7 +191,7 @@ os.chdir(os.path.join(os.environ.get("TT_METAL_HOME", "."), "tt-train"))
 # ============================================================
 # 2. Load Model Configuration
 # ============================================================
-model_config_path = "configs/model_configs/tinyllama.yaml"
+model_config_path = "configs/model_configs/tinyllama_bpe.yaml"
 model_yaml = load_config(model_config_path)
 print(f"Loaded model config: {model_config_path}")
 

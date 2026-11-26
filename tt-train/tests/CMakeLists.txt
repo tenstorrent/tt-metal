@@ -10,12 +10,14 @@ set(SOURCES
     core/synchronize_tensor_test.cpp
     core/random_tests.cpp
     core/program_utils_test.cpp
+    core/two_command_queues_test.cpp
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
     model/gpt2s_test.cpp
     model/linear_regression_full_test.cpp
     model/weight_tying_test.cpp
+    model/base_transformer_test.cpp
     ttnn_fixed/concat_op_test.cpp
     ttnn_fixed/distributed/distributed_ttnn_ops_test.cpp
     ttnn_fixed/trivial_ttnn_ops_test.cpp
