@@ -9,16 +9,16 @@
 
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <ttnn/tensor/storage.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/host_buffer/functions.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
 #include <ttnn/tensor/topology_check.hpp>
 #include <ttnn/distributed/host_ccl.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 #include <ttnn/distributed/types.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 

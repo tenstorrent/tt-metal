@@ -10,7 +10,7 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include "combine_host.hpp"
 #include "combine_program.hpp"

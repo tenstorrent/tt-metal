@@ -5,13 +5,13 @@
 #include "common/device_fixture.hpp"
 #include "context/metal_context.hpp"
 
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_event.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/mesh_event.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include <cstdint>
 #include <vector>

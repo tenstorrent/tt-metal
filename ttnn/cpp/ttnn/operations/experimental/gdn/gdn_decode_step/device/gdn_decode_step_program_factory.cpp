@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -308,7 +308,7 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         .unique_id = COMPUTE,
         .source = std::string(kDir) +
                   (a.fast_mode ? "compute/gdn_decode_step_conv_fast.cpp" : "compute/gdn_decode_step_conv.cpp"),
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O2},
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .compile_time_args =
             {{"Kt", Kt},
              {"Vt", Vt},

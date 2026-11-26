@@ -1,0 +1,20 @@
+# GLM-5.3-Flash, homelab-1: all 8 chips (UMD logical 0-7 = BDFs 01,02,1d,1e,55,56,8c,8d; 4x p300a) as one 1x8 LINE.
+# Since the 2026-10-17 re-cabling (doc/hardware.md §3) the 8 chips form a 2x4 Ethernet mesh and an 8-chip line embeds
+# along the Hamiltonian path 0-2-5-6-7-4-3-1 (the runtime picks the embedding; read mesh.get_device_ids()), so this
+# descriptor is usable WITH fabric (FABRIC_1D): the dsv4-style 1x8 pipeline line (Stage 04a logs/window8/hopsline.log).
+# The line does not carry the closing hop 1-0 as one fabric hop: for the wrap-around pipeline use
+# glm8_1x8_ring_mesh_graph_descriptor.textproto (FABRIC_1D_RING) or glm8_2x4_mesh_graph_descriptor.textproto (FABRIC_1D).
+# History: with the 2026-10-15 cabling no 8-chip line existed and this descriptor only opened fabric-less through
+# pcie_p2p.use_isolated_mesh (Stage 0b); PCIe P2P stays forbidden on homelab-1.
+#   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/models/autoports/zai_org_glm_5_3_flash/mesh/glm8_1x8_line_mesh_graph_descriptor.textproto
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 8 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

@@ -7,8 +7,8 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstdint>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <functional>
 #include <random>
 #include <map>
@@ -18,17 +18,17 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
 #include "single_node_dfb_program.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
@@ -281,8 +281,7 @@ bool single_tile_matmul_int8_quasar(
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP()
-            << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+        GTEST_SKIP() << "Quasar runs QuasarMatmulInt8/LLKQuasarMatmulInt8Fixture instead";
     }
     ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8(this->devices_.at(0)));
 }

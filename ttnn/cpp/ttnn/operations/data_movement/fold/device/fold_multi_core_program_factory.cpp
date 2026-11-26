@@ -4,9 +4,9 @@
 
 #include "fold_device_op.hpp"
 
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"

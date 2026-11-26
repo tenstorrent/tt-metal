@@ -12,8 +12,8 @@
 #include <gtest/gtest.h>
 
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"

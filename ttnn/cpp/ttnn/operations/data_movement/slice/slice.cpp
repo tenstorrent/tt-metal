@@ -13,7 +13,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
 namespace ttnn {

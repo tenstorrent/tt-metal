@@ -10,7 +10,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 
 #include "device/dispatch_fabric2d_types.hpp"
 

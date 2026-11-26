@@ -9,10 +9,10 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include "program/program_impl.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 
@@ -196,6 +196,21 @@ private:
     std::optional<FinalizedMetadata> finalized_metadata_;
     // Per-device runtime args per program range (see PerDeviceRuntimeArgs); empty for almost every workload.
     std::unordered_map<MeshCoordinateRange, PerDeviceRuntimeArgs> per_device_runtime_args_;
+    using DeviceSpecificRuntimeArgs = tt::tt_metal::detail::ProgramImpl::DeviceSpecificRuntimeArgs;
+    // The runtime args of each installed program range's Program that differ per device.
+    std::unordered_map<MeshCoordinateRange, std::vector<DeviceSpecificRuntimeArgs>> device_specific_runtime_args_;
+    // Sets the runtime args of `program` that differ per device on each device of `program_range`.
+    // precondition: `program` is compiled.
+    void install_device_specific_runtime_args(
+        const MeshCoordinateRange& program_range, Program& program, MeshDevice& mesh_device);
+    // Sets the words of `run` on each device of `program_range`.
+    void set_device_specific_runtime_args(
+        const MeshCoordinateRange& program_range, const DeviceSpecificRuntimeArgs& run);
+    // Applies `program`'s pending drops (Metal 2.0 Program::set_program_run_args / Program::update_program_run_args) to
+    // `per_device`, then sets the Program's runtime args that differ per device again.
+    // Every place that applies drops calls this, so a drop never removes the runtime args that differ per device.
+    void apply_run_arg_drops(
+        const MeshCoordinateRange& program_range, PerDeviceRuntimeArgs& per_device, Program& program);
     PerDeviceRuntimeArgsField& per_device_runtime_args_field(
         const MeshCoordinateRange& program_range,
         KernelHandle kernel,

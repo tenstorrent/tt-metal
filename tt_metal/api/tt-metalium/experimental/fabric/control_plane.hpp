@@ -15,12 +15,12 @@
 // UMD: EthCoord is a UMD type alias used in the private method
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/link_health.hpp>
 #include <hostdevcommon/fabric_common.h>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_stl/span.hpp>
 
@@ -276,6 +276,14 @@ public:
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
         FabricNodeId fabric_node_id) const;
 
+    struct EthLink {
+        chan_id_t chan = 0;
+        tt::tt_metal::AsicID peer_asic{0};
+        chan_id_t peer_chan = 0;
+    };
+    // includes cables to chips outside the job
+    std::vector<EthLink> get_unused_eth_links(FabricNodeId fabric_node_id) const;
+
     // Peer fabric node (and its Ethernet channel) connected to `fabric_node_id` on `chan_id` via one physical hop
     // (intra-mesh or inter-mesh).
     std::optional<std::pair<FabricNodeId, chan_id_t>> try_get_connected_mesh_chip_chan_ids(
@@ -293,6 +301,9 @@ public:
 
     tt::tt_fabric::fabric_connection_info_t get_host_rdma_connection_info(
         FabricNodeId fabric_node_id, chan_id_t eth_chan) const;
+    // edm_direction left unset
+    tt::tt_fabric::fabric_connection_info_t get_router_connection_info(
+        FabricNodeId fabric_node_id, chan_id_t eth_chan, uint32_t sender_channel) const;
 
     // Return ethernet channels on a chip that face external meshes (inter-mesh exit nodes)
     std::vector<chan_id_t> get_intermesh_facing_eth_chans(FabricNodeId fabric_node_id) const;

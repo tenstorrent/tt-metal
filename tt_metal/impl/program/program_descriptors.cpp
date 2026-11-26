@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
@@ -14,7 +14,7 @@
 #include "tt_stl/overloaded.hpp"
 #include <tt_stl/reflection.hpp>
 
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include <bitset>
 
 namespace tt::tt_metal {

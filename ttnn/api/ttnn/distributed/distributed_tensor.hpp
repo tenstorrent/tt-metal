@@ -7,7 +7,7 @@
 #include <memory>
 
 #include <tt_stl/small_vector.hpp>
-#include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/memory/utils/memory_pin.hpp>
 
 #include "tt_stl/span.hpp"
 #include "ttnn/tensor/tensor.hpp"

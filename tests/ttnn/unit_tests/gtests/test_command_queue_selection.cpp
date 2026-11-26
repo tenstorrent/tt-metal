@@ -9,8 +9,8 @@
 
 #include <thread>
 
-#include <tt-metalium/mesh_command_queue.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"

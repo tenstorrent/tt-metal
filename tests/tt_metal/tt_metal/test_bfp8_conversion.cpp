@@ -7,11 +7,11 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat8.hpp>
+#include <tt-metalium/data_formats/tilize_utils.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 using namespace tt;
 

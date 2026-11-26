@@ -4,12 +4,12 @@
 
 #include "reshape_tile_program_factory.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/math.hpp"

@@ -6,24 +6,24 @@
 
 #include "program_command_sequence.hpp"
 
-#include "tt-metalium/buffer.hpp"
-#include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_constants.h"
-#include "tt-metalium/circular_buffer_config.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer_constants.h"
+#include "tt-metalium/workload/legacy/circular_buffer_config.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt_stl/optional_reference.hpp>
-#include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
-#include "tt-metalium/kernel_types.hpp"  // KernelHandle
-#include "tt-metalium/program.hpp"       // KernelGroup
-#include "tt-metalium/mesh_workload.hpp"
+#include "tt-metalium/vocabulary/core_coord.hpp"
+#include "tt-metalium/vocabulary/hal_types.hpp"          // HalProgrammableCoreType
+#include "tt-metalium/workload/legacy/kernel_types.hpp"  // KernelHandle
+#include "tt-metalium/workload/program.hpp"              // KernelGroup
+#include "tt-metalium/workload/mesh_workload.hpp"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/metal2_host_api/sram_arena_support.hpp"
-#include "tt-metalium/sub_device_types.hpp"
-#include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
+#include "tt-metalium/mesh/sub_device_types.hpp"
+#include "tt-metalium/memory/tensor/spec/tensor_spec.hpp"                  // Metal 2.0 TensorParameter registry
 #include "tt-metalium/workload/specification/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt-metalium/experimental/sram_arena/sram_arena_properties.hpp"
 #include "tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp"
@@ -778,6 +778,21 @@ public:
     // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
     // finalize_offsets can compute dispatch sizes before Program::set_program_run_args fills values.
     void reserve_runtime_arg_buffers();
+
+    // Metal 2.0: a run of a kernel's runtime args words on one core whose values differ per device of the MeshDevice
+    // that the Program was built on (for example the args of a fabric connection).
+    struct DeviceSpecificRuntimeArgs {
+        KernelHandle kernel = 0;
+        CoreCoord core;
+        uint32_t first_word = 0;
+        uint32_t num_words = 0;
+        std::vector<uint32_t> values_in_range_order;  // [device index in the range][num_words]
+    };
+    // Metal 2.0: the runs of runtime args words whose values on some device of `range` differ from the Program's own
+    // runtime args, with the values of each device of `range`.
+    // precondition: the Program was built to run on each device of `range`.
+    std::vector<DeviceSpecificRuntimeArgs> device_specific_runtime_args(
+        const distributed::MeshCoordinateRange& range) const;
 
     bool program_run_args_initialized() const { return program_run_args_initialized_; }
     void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
