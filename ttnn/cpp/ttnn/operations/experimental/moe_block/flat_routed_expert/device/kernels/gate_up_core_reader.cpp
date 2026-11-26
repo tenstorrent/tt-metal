@@ -44,6 +44,7 @@ constexpr uint8_t h_vc = 0;
 
 void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
+    [[maybe_unused]] const uint32_t zz_t0r = ZZ_NOW();
     constexpr uint32_t x_cb = get_named_compile_time_arg_val("x_cb");
     constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
     // (x blocks: flat_options::x_row_tiles row tiles - a row pass's with row passes, to_x_schedule)
@@ -234,8 +235,18 @@ void kernel_main() {
     constexpr uint32_t w_cap_all = get_named_compile_time_arg_val("gate_up_w_cap");
     constexpr uint32_t w_steady = w_cap_all && w_cap_all < w_slots ? w_cap_all : w_slots;
     auto w_cap = [&]() { return w_start == 0 || x_pub >= nk_gu ? w_steady : w_first; };
-    grant(w_first);  // every landing slot starts free
-    uint32_t granted = w_first, pushed = 0;
+    // (preload emulation: the first pre_w loads' blocks are in the ring - granted and pushed at once)
+    constexpr uint32_t pre_blocks = (zz::pre_w < 2 ? zz::pre_w : 2) * nk_gu;
+    static_assert(pre_blocks <= w_slots);
+    uint32_t pre_now = pre_blocks < total_w ? pre_blocks : total_w;
+    const uint32_t first_grant = w_first < w_slots - pre_now ? w_first : w_slots - pre_now;  // (the free slots)
+    grant(pre_now + first_grant);  // every landing slot starts free (but the preloaded ones')
+    uint32_t granted = pre_now + first_grant, pushed = pre_now;
+    if (pre_now) {
+        cb_push_back(in1_cb, pre_now * slot);
+        *data_sem = pre_now;
+    }
+    ZZ_EMIT("ZZ-T-PRE", (zz::pre_w << 24) | (zz::pre_x << 16) | pre_now);
     uint32_t h_sent = 0, h_pending = 0;
 
     const uint32_t x_total = x_num_v * nk_gu;
@@ -305,6 +316,14 @@ void kernel_main() {
         }
         while (*data_sem > pushed) {
             cb_push_back(in1_cb, slot);
+            if constexpr (zz::on) {  // (startup timeline)
+                if (pushed == 0) {
+                    ZZ_EMIT("ZZ-T-RPUSH0", ZZ_NOW() - zz_t0r);
+                }
+                if (pushed + 1 == nk_gu) {
+                    ZZ_EMIT("ZZ-T-RPUSHL", ZZ_NOW() - zz_t0r);
+                }
+            }
             ++pushed;
         }
         const uint32_t arrived_p = *xarr_sem;     // pieces

@@ -342,6 +342,7 @@ FORCE_INLINE void k_split_fold(uint32_t row, uint32_t n) {
 // between re-read them from their ring slots (stepped, not recomputed: the unpack thread's work per block is on the
 // matmul's critical path). PPX 1: each pass waits for and frees its own blocks.
 uint32_t x_blocks_freed = 0;  // (the x ring's read slot: x_blocks_freed % x_ring_blocks)
+[[maybe_unused]] uint32_t zz_t_start = 0;  // (startup timeline: the kernel's start)
 FORCE_INLINE void compute_sub_block_in_row_passes(
     uint32_t first_block, uint32_t first_slot, bool frees_weights, uint32_t rows) {
     constexpr uint32_t xr = flat_options::x_row_tiles, ppx = xr / pass_row_tiles;
@@ -384,6 +385,14 @@ FORCE_INLINE void compute_sub_block_in_row_passes(
                 WAYPOINT("KWWT");
                 ZZ_WAIT(zz_w_wait, cb_wait_front(weight_cb, (wb + 1 - weight_blocks_freed) * weight_block_tiles));
                 WAYPOINT("KWGO");
+                if constexpr (zz::on) {  // (startup timeline: the first weight block / the first load's last block)
+                    if (wb == 0) {
+                        UNPACK((ZZ_EMIT("ZZ-T-W0", ZZ_NOW() - zz_t_start)));
+                    }
+                    if (wb + 1 == blocks_per_load) {
+                        UNPACK((ZZ_EMIT("ZZ-T-WL", ZZ_NOW() - zz_t_start)));
+                    }
+                }
                 weight_blocks_landed = wb + 1;
             }
             const uint32_t w_offset =
@@ -463,6 +472,7 @@ void kernel_main() {
     } else {
         expert_activation::init<activation>();
     }
+    zz_t_start = ZZ_NOW();
     // The schedule page (schedule_meta.hpp, from gate_up_core_reader.cpp)
     cb_wait_front(schedule_cb, 1);
     [[maybe_unused]] const uint32_t zz_start = ZZ_NOW();

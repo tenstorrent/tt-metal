@@ -135,22 +135,27 @@ than 796.6 / 1055.9 / 1364.2. Not kept.
 ## Preload upper bounds (emulated: FLAT_PRE_W / FLAT_PRE_X, timing only)
 
 Idea: the block's arena persists from moe_head to routed_experts_combine and sparse_dispatch_2d does not use it, so
-something running during dispatch could fill the flat expert's rings. Emulation: FLAT_PRE_W=n - the first n loads'
-gate/up chunks and down blocks count as landed (not read; still granted / published); FLAT_PRE_X=n - the first n x
-sub-blocks count as in every gate/up ring (the relays skip them entirely - not read, tilized, landed or sent - the
-forwarders count them arrived and forwarded, the primaries' ring slots start past them). GLM 4x4 uniform, us:
+something running during dispatch could fill the flat expert's rings. Emulation: FLAT_PRE_W=n - the first n (<= 2:
+the ring) loads' gate/up blocks are in the ring at the start (the receiver publishes them at once, the reader starts
+past them), and their down blocks are not read; FLAT_PRE_X=n - the first n x sub-blocks are in every gate/up ring
+(the relays skip them entirely - not read, tilized, landed or sent - the forwarders count them arrived and forwarded,
+the primaries' ring slots start past them). GLM 4x4 uniform, us (clean):
 
 | | M 80 | M 160 | M 320 | M 480 |
 |---|---|---|---|---|
-| baseline | 797.3 | 885.1 | 1057.5 | 1374.7 |
-| PRE_W 2 (the rings' 2 loads, ~42 MB) | 730.8 | 836.1 | 1017.8 | 1329.3 |
-| PRE_X 1 / 2 | 795.1 / 793.9 | 895.0 / 895.9 | 1053.2 / 1055.9 | 1378.8 / 1366.2 |
-| PRE_X 2 + PRE_W 2 | 792.0 | 894.3 | 1052.6 | 1386.8 |
+| baseline | 798.8 | 883.3 | 1053.4 | 1375.2 |
+| PRE_W 2 (the rings' 2 loads, ~42 MB) | 728.4 | 831.4 | 1008.2 | 1322.5 |
+| PRE_X 2 (the first 4-row sub-block) | 791.3 | 896.0 | 1057.9 | 1365.7 |
+| PRE_X 2 + PRE_W 2 | 710.2 | 831.8 | 994.7 | 1315.5 |
 
-Weights: -8.3 / -5.5 / -3.8 / -3.3% - worth a dispatch-time prefetch (needs a fixed first-loads order in the
-schedule and an arena contract with whatever runs during dispatch). x: nothing, and with the weights preloaded it
-takes their gain back (expert 0 then waits ~46 us on weights through the grant / publish handshakes - an emulation
-artifact or not, the x path's start is not just the snake's fill: even preloaded, expert 0 waits ~15-18 us for x).
+Both: -11.1 / -5.8 / -5.6 / -4.3%. x alone gains nothing: expert 0 then waits for its weights instead (x wait gone on
+most cores, weight wait 33 -> 44 us; the cores that do get their weights early finish the preloaded sub-block in ~19
+us and wait for sub-block 1, which still takes the pipeline's 35-50 us to reach the snake's tail). With the weights
+there too it adds 1 - 2.5% on top of them. A first emulation published the preloaded weights through the grant /
+land / publish loop (paced by the startup grant cap of 8 until x is in): ~36 us to get the first load to the compute
+even with no reads; the receiver now publishes them at its start.
+(CORRECTION: earlier "PRE_X + PRE_W" and two NoC combinations below were run through `env $e` under zsh, which does
+not word-split - only the first variable was set. Re-run with `env ${=e}`: the table above.)
 
 ## K split (WIP): gate/up K over partner cores
 
@@ -201,8 +206,8 @@ GLM 4x4 uniform, us (baseline 796.6 / 1055.9 / 1364.2 at M 80 / 320 / 480):
 - FLAT_GU_W_NOC1=1 (gate/up weights on the receiver BRISC, NOC1): 1200.6 / 1576.5 / 1899.5 - the helpers' x DRAM reads
   (NOC1) collapse.
 - FLAT_XH_SWAP=1 (helper x DRAM reads on NOC0, landing writes on NOC1): 804.0 / 1109.0 / 1457.6; + FLAT_GU_W_NOC1=1:
-  805.7 / 1111.6 / 1457.9. The helpers' x reads on NOC0 wait 507 us (165 on NOC1): x supply-limited (primaries wait
-  336-370 us for data), whichever NOC the gate/up weights use. Not kept.
+  (CORRECTED - the combination was mis-run, see Preload): 1116.3 / 1174.5 / 1453.0 at M 80 / 320 / 480. The helpers'
+  x reads on NOC0 wait 507 us (165 on NOC1): x supply-limited (primaries wait 336-370 us for data). Not kept.
 The x source (helper DRAM reads) and the x snake each lose to whatever weight stream shares their NOC; no placement
 of the existing streams separates them.
 

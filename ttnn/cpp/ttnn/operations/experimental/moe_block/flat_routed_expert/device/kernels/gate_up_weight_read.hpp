@@ -86,6 +86,10 @@ struct GateUpWeightReads {
         loads = loads_;
         grant = grant_;
         data = data_;
+        // (preload emulation: the first pre_w loads are in the ring already - published by the receiver at its start)
+        const uint32_t pre = (zz::pre_w < n_load ? zz::pre_w : n_load);
+        iss = done = pre * per_e * pieces;
+        l = pre;
     }
 
     // Issues the granted reads, publishes the landed ones; true once every chunk has landed (call with the L1 cache
