@@ -1,5 +1,7 @@
 # Post-Port Fix — Convert sync-free DFBs to their proper shapes
 
+> **STALE in part — read before running.** The device `Scratchpad` has no `get_base_address()` (#61229): pass the handle itself as a `Noc` operand, use `operator[]` / `local_mem()`, or `&scratch[i]` where an API wants a `T*`. `ScratchpadSpec` also carries `data_format_metadata` / `tile_format_metadata` (#53727), and `ScratchpadAdvancedOptions::allow_instance_multi_binding` (#60969) expresses a scratchpad shared by kernels on one node, so the stops below for a consulted format and for a shared buffer may no longer apply. Where the text below and this note disagree, stop and report rather than choosing.
+
 > **Procedure:** [`pass_procedure.md`](../pass_procedure.md). Read it first; it is the *how*. This
 > file is the *what*, and it uses the procedure's steps unchanged.
 >

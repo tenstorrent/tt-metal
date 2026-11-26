@@ -1,5 +1,7 @@
 # Post-Port Fix — Add the Gen2 hardware configs
 
+> **STALE — do not run this pass until it is rewritten.** It describes the hardware-config API before #55007: `ComputeHardwareConfig` and `DataMovementHardwareConfig` are no longer `std::variant<Gen1, Gen2>` but one struct each with optional `config_1xx` / `config_12x` / `config_2xx`, so `ComputeGen1Config`, `ComputeGen2Config`, `DataMovementGen2Config` and the `std::get<…>` survey below match nothing. The TTNN helpers take no `arch` argument and already fill `config_2xx`, and an unset `config_2xx` is defaulted. If you were sent here, stop and report that this pass is stale.
+
 > **Procedure:** [`pass_procedure.md`](../pass_procedure.md). Read it first; it is the *how*. This
 > file is the *what*, and it **overrides Step 4** — see [What your verification can and cannot
 > see](#what-your-verification-can-and-cannot-see).
