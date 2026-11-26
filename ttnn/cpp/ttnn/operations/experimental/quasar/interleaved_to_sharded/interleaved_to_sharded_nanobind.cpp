@@ -31,6 +31,10 @@ void bind_interleaved_to_sharded(nb::module_& mod) {
             keep_l1_aligned (bool, optional): keep the shard L1-aligned. Defaults to `False`.
             preallocated_output (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
+        Note:
+            MX tensors (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) are TILE layout only and keep their format, or convert
+            to or from BFLOAT16 through ``output_dtype``. A ROW_MAJOR input cannot produce an MX output.
+
         Returns:
             ttnn.Tensor: the sharded output tensor.
         )doc";

@@ -22,6 +22,7 @@ void bind_upsample(nb::module_& mod) {
     const auto* const doc = R"doc(
         Upsamples a given multi-channel 2D (spatial) data.
         The input data is assumed to be of the form [N, H, W, C].
+        MX tensors (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) are not supported: typecast to BFLOAT16 first.
 
         Supports both integer and floating-point scale factors with automatic routing
         to optimized implementations:

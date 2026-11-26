@@ -35,6 +35,11 @@ void bind_transpose(nb::module_& mod) {
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor
+
+            Note:
+                MX tensors (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) support only the N<->C swap (dims 0 and 1 of a
+                rank-4 tensor), which moves whole tiles. Transposes that involve H or W reorder elements inside tiles and
+                are rejected.
         )doc";
 
     ttnn::bind_function<"transpose", "ttnn.experimental.quasar.">(

@@ -27,6 +27,10 @@ void bind_sharded_to_interleaved(nb::module_& mod) {
         Keyword Args:
             output_dtype (ttnn.DataType, optional): data type of the output tensor. Defaults to the input dtype.
 
+        Note:
+            MX tensors (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) are TILE layout only and keep their format, or convert
+            to or from BFLOAT16 through ``output_dtype``.
+
         Returns:
             ttnn.Tensor: the interleaved output tensor.
         )doc";

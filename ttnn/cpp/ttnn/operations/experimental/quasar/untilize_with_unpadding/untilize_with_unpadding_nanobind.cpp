@@ -19,9 +19,10 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
         R"doc(
         Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
 
-        Input tensor must be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
+        Input tensor must be on TT accelerator device, in TILE layout, and have BFLOAT16 or an MX format (MXFP8R, MXFP8P, MXFP6, MXFP4 or MXINT8/4/2) data type.
 
-        Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+        Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type
+        (ROW_MAJOR has no MX layout, so an MX input comes out as BFLOAT16).
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor

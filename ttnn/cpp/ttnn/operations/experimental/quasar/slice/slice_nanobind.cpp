@@ -64,6 +64,10 @@ void bind_slice(nb::module_& mod) {
         Note:
             Strided slicing (``slice_step != 1``) is not supported for ``bfloat8_b`` tensors.
 
+            MX tensors (MXFP8R, MXFP8P, MXFP6, MXFP4, MXINT8/4/2) support only whole-tile slices: TILE layout, rank >= 2,
+            unit steps and tile-aligned starts in the last two dimensions. Strided, 1D and sub-tile slices, and a
+            ``pad_value`` fill of implicit tile padding, are rejected.
+
         Returns:
             ttnn.Tensor: the output tensor.
     )doc";
