@@ -4,8 +4,9 @@
 vllm-tt-plugin supports_spec_device_top_p).
 
 * The certificate rule: where q - top_p >= CERT_EPS, the nucleus cut inside the top-32 at 1 - top_p / q (the float32
-  arithmetic of the certificate trace, mirrored on the host) keeps exactly the tokens of vLLM's full-vocabulary nucleus,
-  with their probabilities; a row with a nucleus past the top-32 fails.
+  arithmetic of the certificate trace, mirrored on the host) keeps exactly the tokens of vLLM's full-vocabulary nucleus
+  in (value descending, id ascending) order, ties at the cut included, with their probabilities; a row with a nucleus
+  past the top-32 fails.
 * The host redo draws vLLM's distribution (chi-square over seeds) and repeats for a seed.
 * The engine: a step with a certificate row draws it with top-k 32 and top-p 1 under the certificate trace, runs no
   device acceptance and drafter, and its read redoes a failed row from the step's logits (with exact logprobs).
@@ -48,8 +49,8 @@ def _logits(g, V, kind):
 
 
 def _certificate_distribution(x, T, p, M=SAMPLER_TOP_K):
-    """The certificate trace's arithmetic on one row, float32: (ids [M], prob [M] float64 over the kept candidates,
-    q, fail, the margin to the nearest cut decision)."""
+    """The certificate trace's arithmetic on one row, float32: (ids [M] in (value desc, id asc) order, prob [M] float64
+    over the kept prefix, q, fail, the margin to the nearest cut decision)."""
     v = x.to(torch.float32)
     order = torch.sort(v, descending=True, stable=True).indices[:M]
     top = v[order]
@@ -60,12 +61,14 @@ def _certificate_distribution(x, T, p, M=SAMPLER_TOP_K):
     cum = (e / e.sum()).flip(0).cumsum(0).flip(0)
     drop = cum <= omp
     drop[0] = False
-    cut = top[~drop].min()
-    keep = top >= cut
-    prob = torch.where(keep, torch.exp((top.double() - top[0].double()) * t), torch.zeros(M, dtype=torch.float64))
-    # vLLM orders a tie group at the cut arbitrarily and may keep part of it; the trace keeps all of it.
-    tied = int((v == cut).sum()) > 1
-    return order, prob / prob.sum(), float(q), bool(fail), 0.0 if tied else float((cum - omp).abs().min())
+    prob = torch.where(~drop, torch.exp((top.double() - top[0].double()) * t), torch.zeros(M, dtype=torch.float64))
+    return order, prob / prob.sum(), float(q), bool(fail), float((cum - omp).abs().min())
+
+
+def _nucleus(x, T, p):
+    """vLLM's full-vocabulary nucleus in (value desc, id asc) order, dense [V] float64 (``row_distribution``)."""
+    ids, prob = row_distribution(x, T, 0, p)
+    return torch.zeros(x.numel(), dtype=torch.float64).index_put((ids,), prob)
 
 
 @pytest.mark.parametrize("kind", ["random", "peaked", "flat", "tied"])
@@ -78,13 +81,13 @@ def test_a_passing_certificate_keeps_vllms_full_vocabulary_nucleus(kind):
         for p in (0.5, 0.8, 0.9, 0.95, 0.99):
             for T in (0.3, 0.6, 1.0, 1.5):
                 order, prob, q, fail, margin = _certificate_distribution(x, T, p)
-                want = target_probs(x, T, 0, p)
+                want = _nucleus(x, T, p)
                 fits = float(want[order].sum()) > 1 - 1e-9
                 if fail:
                     failed += 1
                     continue
                 if margin < 1e-5:
-                    continue  # a cut decision within float32 error, or a tie at the cut
+                    continue  # a cut decision within float32 error
                 passed += 1
                 assert fits, f"{kind} T={T} p={p}: the certificate passed (q={q}) with a nucleus past the top-32"
                 got = torch.zeros(V, dtype=torch.float64)
@@ -108,7 +111,7 @@ def test_certificate_rows_and_the_sampler_parameters_of_their_step():
     assert cert.rows == [True, False, False, True, False] and cert.top_p[0] == 0.9 and cert.temperature[3] == 0.8
     sp = sampler_params(params, cert)
     assert sp.top_k == [32, 20, 1, 32, V] and sp.top_p == [1.0, 0.9, 1.0, 1.0, 1.0]
-    assert sp.temperature is params.temperature and sp.seed is params.seed
+    assert sp.temperature == [1.0, 0.7, 0.0, 1.0, 0.9] and sp.seed is params.seed
     plan = sampling_plan(sp, [10, 20, 30, 40, -1], 2)
     assert plan.sampled == [True] * 4 + [False] * 2 + [True] * 2 + [False] * 2
     assert certificate_rows(SimpleNamespace(temperature=[1.0], top_k=[20], top_p=[0.9], seed=[None]), 1, V) is None
@@ -183,6 +186,7 @@ def test_a_failed_certificate_row_is_drawn_again_from_the_steps_logits(engine):
     eng, log, full = engine
     T, V = eng.T, full.shape[1]
     params = SimpleNamespace(temperature=[0.9, 1.0], top_k=[V, V], top_p=[0.9, 0.8], seed=[11, None])
+    counts = dict(spec_engine._CERTIFICATE_COUNTS)
     res = eng.decode_forward(
         torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]], dtype=torch.int32),
         torch.tensor([[10 + j for j in range(T)], [20 + j for j in range(T)]]),
@@ -199,10 +203,14 @@ def test_a_failed_certificate_row_is_drawn_again_from_the_steps_logits(engine):
     assert "accept_rows" not in kw, "a certificate step runs no device acceptance and drafter"
     assert kw["top_p"].rows == [True, True] and kw["sample_plan"].k[: 2 * T] == [SAMPLER_TOP_K] * (2 * T)
     assert kw["sample_plan"].p[: 2 * T] == [1.0] * (2 * T)
+    assert kw["sample_plan"].temp[: 2 * T] == [1.0] * (2 * T), "certificate rows draw at temperature 1"
     ids = pending.result()
     # user 0 passes (q = 0.99 > 0.9): the device draws; user 1 fails (q = 0.5 < 0.8): each column drawn again.
     assert ids[0].tolist() == [3, 3, 3, 3]
     assert pending.redone.tolist() == [False] * T + [True] * T
+    # the counts the server log reports: one certificate verify of 2 x T columns, T of them drawn again on the host
+    now = spec_engine._CERTIFICATE_COUNTS
+    assert [now[k] - counts.get(k, 0) for k in ("verifies", "columns", "redone")] == [1, 2 * T, T]
     seeds = kw["sample_plan"].seeds
     want = redo_draws(torch.full((2, T), 3), full, pending.redone, kw["top_p"], seeds, T)
     assert torch.equal(ids.to(torch.int64), want)
@@ -249,7 +257,7 @@ def test_a_redone_rows_logprobs_come_from_the_full_logits(engine):
     )
 
 
-def test_no_prefill_runs_behind_an_unread_certificate_verify(engine):
+def test_no_prefill_runs_behind_an_unread_certificate_verify(engine, expect_error):
     eng, log, full = engine
     T, V = eng.T, full.shape[1]
     params = SimpleNamespace(temperature=[0.9, 1.0], top_k=[V, V], top_p=[0.9, 0.8], seed=[11, None])
@@ -264,7 +272,7 @@ def test_no_prefill_runs_behind_an_unread_certificate_verify(engine):
         sampling=params,
         defer=True,
     )
-    with pytest.raises(ValueError, match="certificate rows"):
+    with expect_error(ValueError, "certificate rows"):
         eng.prefill_over_pending([5])
 
 
