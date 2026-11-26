@@ -78,6 +78,7 @@ from helpers.test_variant_parameters import (
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
     SFPU_SOFTPLUS_PARAMS,
+    SFPU_UNARY_COMP_INT_SCALAR,
     STABLE_SORT,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -1381,6 +1382,65 @@ def test_eltwise_unary_sfpu_identity_int32():
     )
 
 
+# Unary eq/ne on Int32 against an integer scalar; INT_MIN is the edge a sign-magnitude load loses.
+_UNARY_COMP_INT_SCALARS = [5, 0, -(2**31), -1, 2**31 - 1]
+
+
+def _unary_comp_int_values(scalar: int) -> torch.Tensor:
+    lo, hi = -(2**31), 2**31 - 1
+    candidates = [lo, lo + 1, -100, -5, -1, 0, 1, 5, 100, hi - 1, hi] + [
+        scalar + d for d in (-1, 0, 1)
+    ]
+    values = sorted({v for v in candidates if lo <= v <= hi})
+    return torch.tensor(values, dtype=torch.int32)
+
+
+@parametrize(
+    mathop=[MathOperation.UnaryEq, MathOperation.UnaryNe],
+    scalar=_UNARY_COMP_INT_SCALARS,
+)
+def test_eltwise_unary_sfpu_comp_int32_scalar(mathop: MathOperation, scalar: int):
+    """unary_eq / unary_ne on Int32 against *scalar*, including INT_MIN on both sides.
+
+    Built like test_eltwise_unary_sfpu_signbit_int32: the words go in as two's complement
+    (StimuliSpec would clamp INT_MIN to INT_MIN + 1), and the golden is the exact integer
+    compare, so every lane must be the 0 or 1 torch gives.
+    """
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    input_dimensions = [64, 64]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    values = _unary_comp_int_values(scalar)
+    src_A = values.repeat(num_elements // values.numel() + 1)[:num_elements]
+
+    res_from_L1 = eltwise_unary_sfpu(
+        formats=formats,
+        dest_acc=DestAccumulation.Yes,
+        approx_mode=ApproximationMode.No,
+        mathop=mathop,
+        fast_mode=FastMode.No,
+        input_dimensions=input_dimensions,
+        src_A=src_A,
+        src_B=src_A.clone(),
+        unary_comp_int_scalar=scalar,
+        twos_complement=True,
+        unpack_to_dest=True,
+        check_golden=False,
+    )
+
+    compare = torch.eq if mathop == MathOperation.UnaryEq else torch.ne
+    golden = compare(src_A, torch.tensor(scalar, dtype=torch.int32)).to(torch.int64)
+    res_tensor = torch.tensor(res_from_L1, dtype=torch.int64)
+    assert res_tensor.shape == golden.shape, "Result and golden differ in length"
+    mismatch = torch.nonzero(res_tensor != golden).flatten()
+    assert mismatch.numel() == 0, (
+        f"{mismatch.numel()} of {golden.numel()} words differ from {mathop.name} against {scalar}; first: "
+        + ", ".join(
+            f"[{i}] in {int(src_A[i])} got {int(res_tensor[i]) & UINT32_MASK:#x} want {int(golden[i])}"
+            for i in mismatch[:MAX_REPORTED_MISMATCHES].tolist()
+        )
+    )
+
+
 # Predicate ops (write 1.0/0.0). Finite-only stimuli give constant output (PCC
 # undefined), so drive them with a spec interleaving +inf / -inf / nan and finite values.
 ISINF_ISNAN_MATHOPS = [
@@ -1692,6 +1752,7 @@ def eltwise_unary_sfpu(
     spec_A=None,
     shift_amount=None,
     relu_min_int_threshold=None,
+    unary_comp_int_scalar=None,
     relu_max_threshold=None,
     polygamma_order=None,
     softplus_beta=None,
@@ -1834,6 +1895,7 @@ def eltwise_unary_sfpu(
         dest_sync=dest_sync,
         shift_amount=shift_amount,
         relu_min_int_threshold=relu_min_int_threshold,
+        unary_comp_int_scalar=unary_comp_int_scalar,
         relu_max_threshold=relu_max_threshold,
         polygamma_order=polygamma_order,
         softplus_beta=softplus_beta,
@@ -1912,6 +1974,7 @@ def build_eltwise_unary_sfpu_config(
     dest_sync=DestSync.Half,
     shift_amount=None,
     relu_min_int_threshold=None,
+    unary_comp_int_scalar=None,
     relu_max_threshold=None,
     polygamma_order=None,
     softplus_beta=None,
@@ -1959,6 +2022,11 @@ def build_eltwise_unary_sfpu_config(
                 []
                 if relu_min_int_threshold is None
                 else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
+            ),
+            *(
+                []
+                if unary_comp_int_scalar is None
+                else [SFPU_UNARY_COMP_INT_SCALAR(unary_comp_int_scalar)]
             ),
             *(
                 []

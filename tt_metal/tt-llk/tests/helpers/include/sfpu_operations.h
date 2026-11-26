@@ -820,10 +820,12 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
 #else
     constexpr std::uint32_t RELU_MIN_INT_THRESHOLD = 5u;
 #endif
-    // Integer scalar that unary_eq/unary_ne (Int32) compare against via metal
-    // calculate_comp_unary_int. Shared with the golden (golden_generators.py:
-    // _unary_comp_int_scalar); the two sides must move together.
+    // Int32 scalar for unary_eq/unary_ne; overridable via SFPU_UNARY_COMP_INT_SCALAR.
+#ifdef SFPU_UNARY_COMP_INT_SCALAR
+    constexpr int UNARY_COMP_INT_SCALAR = static_cast<int>(SFPU_UNARY_COMP_INT_SCALAR);
+#else
     constexpr int UNARY_COMP_INT_SCALAR = 5;
+#endif
     // Clamp/Hardtanh fp32-encoded bounds. Shared with the golden
     // (sfpu_dispatch_constants.py: CLAMP_MIN / CLAMP_MAX); the two sides must move together.
     constexpr std::uint32_t CLAMP_MIN_FP32 = 0xBF800000u; // -1.0f
@@ -1513,8 +1515,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         // Int32 input compares against the integer scalar via metal calculate_comp_unary_int
         // (== production unary_ne_tile_int32); float input keeps the fp32 0.5 threshold path.
-        // UNARY_COMP_INT_SCALAR is shared with the golden (golden_generators.py:
-        // _unary_comp_int_scalar) — keep the two in sync.
+        // The int32 compare test computes its golden from the same UNARY_COMP_INT_SCALAR override.
         if (math_format == ckernel::to_underlying(DataFormat::Int32))
         {
             SFPU_UNARY_CALL(

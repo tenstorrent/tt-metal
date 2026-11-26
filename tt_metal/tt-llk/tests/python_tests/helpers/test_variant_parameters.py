@@ -468,6 +468,19 @@ class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class SFPU_UNARY_COMP_INT_SCALAR(TemplateParameter):
+    """Signed scalar for Int32 unary_eq / unary_ne, emitted as its two's-complement pattern.
+
+    Unset keeps sfpu_operations.h's fixed 5, as with :class:`SFPU_RELU_MIN_INT_THRESHOLD`.
+    """
+
+    scalar: int = 5
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_UNARY_COMP_INT_SCALAR {self.scalar & 0xFFFFFFFF}u"
+
+
+@dataclass
 class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
     """Float threshold for relu_max, emitted as its fp32 bit pattern.
 
