@@ -125,6 +125,7 @@ on:
         description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 5 * * *" # Run at 5:00 AM UTC every day
+    - cron: "0 20 * * 6" # Saturday 20:00 UTC, test_group "weekly" only; matched in validate-test-type
 
 jobs:
   validate-test-type:
@@ -159,7 +160,8 @@ jobs:
       - name: Validate test-type selection
         id: validate
         env:
-          TEST_TYPE: ${{ steps.collect.outputs.selection }}
+          # Weekly cron (keep in sync with on.schedule) -> test_group "weekly".
+          TEST_TYPE: ${{ github.event.schedule == '0 20 * * 6' && 'weekly' || steps.collect.outputs.selection }}
         run: |
           python3 .github/scripts/utils/validate_test_type_selection.py \
             "${{ env.TESTS_YAML_PATH }}" \
@@ -287,6 +289,29 @@ jobs:
       sp-config: sc4
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       resource-prefix: sc4
+      exclude-test-group: weekly
+      hang-detection-timeout: 120
+
+  Galaxy-Blaze-models-prefill-weekly-sc4:
+    needs: [validate-test-type, check-harbor, build-artifact]
+    # test_group "weekly" on SC4: never on "all".
+    if: ${{ needs.validate-test-type.outputs.test-type != 'all' }}
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+      checks: read
+    secrets: inherit
+    uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: bh_sc4,bh_sc4_high_power
+      sp-config: sc4
+      test-type: ${{ needs.validate-test-type.outputs.test-type }}
+      include-test-group: weekly
+      resource-prefix: sc4-weekly
       hang-detection-timeout: 120
 
   Galaxy-Blaze-models-prefill-sc1-runner:
@@ -388,7 +413,8 @@ jobs:
     # reconciled as infra failures rather than silently dropped.
     needs: [Galaxy-Blaze-models-prefill, Galaxy-Blaze-models-prefill-SDPA-Perf-tests,
       Galaxy-Blaze-models-prefill-layer-perf,
-      Galaxy-Blaze-models-prefill-sc4, Galaxy-Blaze-models-prefill-sc1-runner]
+      Galaxy-Blaze-models-prefill-sc4, Galaxy-Blaze-models-prefill-sc1-runner,
+      Galaxy-Blaze-models-prefill-weekly-sc4]
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and
     # asking for one spends an LLM call to say it stopped early.
