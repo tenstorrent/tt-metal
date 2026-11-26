@@ -23,7 +23,7 @@
 #include "api/compute/experimental/mul_reduce_scalar.h"
 #include "api/compute/experimental/pack_block.h"
 #include "api/compute/experimental/add_rsqrt.h"
-#include "api/compute/experimental/rmsnorm.h"
+#include "api/compute/experimental/bcast_dest_reuse.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -142,8 +142,10 @@ struct RMSNorm {
             }
             {
                 // Multiply input by 1/RMS
-                rmsnorm_mul_bcast_scalar_reuse_tiles_init<num_tiles>(CTArgs::input_cb);
-                rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles, true>(CTArgs::input_cb, 0, 0, 0);
+                bcast_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, num_tiles>(
+                    CTArgs::input_cb);
+                bcast_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, num_tiles, true>(
+                    CTArgs::input_cb, 0, 0, 0);
             }
             {
                 // Multiply by the weight
@@ -151,8 +153,7 @@ struct RMSNorm {
                 if constexpr (CTArgs::do_gamma) {
                     mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
                     for (uint32_t i = 0; i < num_tiles; i++) {
-                        mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                            CTArgs::gamma_cb, i, i);
+                        mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb, i, i);
                     }
                 }
                 tile_regs_commit();

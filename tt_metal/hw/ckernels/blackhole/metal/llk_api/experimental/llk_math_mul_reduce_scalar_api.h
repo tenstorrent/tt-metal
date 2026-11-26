@@ -73,3 +73,9 @@ inline void llk_math_mul_reduce_scalar_move_dest_to_src(std::uint32_t idst = 0) 
     SAN_HOOK(unsupported());
     _llk_math_mul_reduce_scalar_move_dest_to_src_<binary_reuse_dest>(idst);
 }
+
+template <std::uint32_t dst_capacity, bool is_fp32_dest_acc_en>
+inline void llk_math_mul_reduce_scalar_clear_product_tile(const std::uint32_t dst_index) {
+    SAN_HOOK(unsupported());
+    _llk_math_mul_reduce_scalar_clear_product_tile_<dst_capacity, is_fp32_dest_acc_en>(dst_index);
+}

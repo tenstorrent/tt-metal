@@ -6,8 +6,8 @@ from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.llk_params import DestAccumulation, DestSync
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_rmsnorm_clear_product_tile import (
-    test_rmsnorm_clear_product_tile as _test_rmsnorm_clear_product_tile,
+from test_mul_reduce_scalar_clear_product_tile import (
+    test_mul_reduce_scalar_clear_product_tile as _test_mul_reduce_scalar_clear_product_tile,
 )
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -19,10 +19,10 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
     dest_sync=[DestSync.Half, DestSync.Full],
     **PERF_MEASUREMENT_AXES,
 )
-def test_perf_rmsnorm_clear_product_tile(
+def test_perf_mul_reduce_scalar_clear_product_tile(
     perf_report, dest_acc, dest_sync, run_types, loop_factor, is_perf
 ):
-    _test_rmsnorm_clear_product_tile(
+    _test_mul_reduce_scalar_clear_product_tile(
         dest_acc,
         dest_sync,
         is_perf=is_perf,

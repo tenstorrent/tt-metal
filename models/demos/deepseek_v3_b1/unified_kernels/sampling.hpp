@@ -127,7 +127,7 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_unary/rand.h"
-#include "api/compute/experimental/rmsnorm.h"
+#include "api/compute/experimental/bcast_dest_reuse.h"
 
 #if defined(TRISC_UNPACK)
 #include "experimental/llk_unpack_A_top32_rm_api.h"
@@ -289,13 +289,15 @@ void trisc_fused_softmax_top_p_sampling_block() {
     // max(x_i, dim=0) comes from DST in Step 1.
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-2");
-        rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<
+        bcast_dest_reuse_tiles_init<
             EltwiseBinaryType::ELWSUB,
+            BroadcastType::SCALAR,
             /*num_tiles=*/1,
             MathFidelity::LoFi,
             /*unpack_full_transpose=*/true>(in_cb);
-        rmsnorm_bcast_scalar_reuse_tiles_fidelity<
+        bcast_dest_reuse_tiles<
             EltwiseBinaryType::ELWSUB,
+            BroadcastType::SCALAR,
             /*num_tiles=*/1,
             MathFidelity::LoFi,
             /*clear_dest=*/true>(in_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/0);
@@ -338,12 +340,14 @@ void trisc_fused_softmax_top_p_sampling_block() {
     }
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-6");
-        rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<
+        bcast_dest_reuse_tiles_init<
             EltwiseBinaryType::ELWMUL,
+            BroadcastType::SCALAR,
             /*num_tiles=*/1,
             MathFidelity::HiFi4>(exp_cb);
-        rmsnorm_bcast_scalar_reuse_tiles_fidelity<
+        bcast_dest_reuse_tiles<
             EltwiseBinaryType::ELWMUL,
+            BroadcastType::SCALAR,
             /*num_tiles=*/1,
             MathFidelity::HiFi4,
             /*clear_dest=*/true>(exp_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/0);
@@ -438,12 +442,14 @@ void trisc_fused_softmax_top_p_sampling_block() {
 
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-13b");
-        rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<
+        bcast_dest_reuse_tiles_init<
             EltwiseBinaryType::ELWMUL,
+            BroadcastType::SCALAR,
             /*num_tiles=*/1,
             MathFidelity::HiFi4>(probs_cb);
-        rmsnorm_bcast_scalar_reuse_tiles_fidelity<
+        bcast_dest_reuse_tiles<
             EltwiseBinaryType::ELWMUL,
+            BroadcastType::SCALAR,
             /*num_tiles=*/1,
             MathFidelity::HiFi4,
             /*clear_dest=*/true>(probs_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/3);
@@ -467,12 +473,14 @@ void trisc_fused_softmax_top_p_sampling_block() {
     // NOTE: rescaled_cumsum_i = cumsum(softmax_out_i, dim=0) * 1/cum_kept
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-14");
-        rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<
+        bcast_dest_reuse_tiles_init<
             EltwiseBinaryType::ELWMUL,
+            BroadcastType::SCALAR,
             /*num_tiles=*/1,
             MathFidelity::HiFi4>(out_cb);
-        rmsnorm_bcast_scalar_reuse_tiles_fidelity<
+        bcast_dest_reuse_tiles<
             EltwiseBinaryType::ELWMUL,
+            BroadcastType::SCALAR,
             /*num_tiles=*/1,
             MathFidelity::HiFi4,
             /*clear_dest=*/false>(out_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/2);

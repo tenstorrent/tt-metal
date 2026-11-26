@@ -900,61 +900,52 @@ class SDPA_BCAST_NUM_TILES(TemplateParameter):
 
 
 @dataclass
-class RMSNORM_DEST_REUSE(TemplateParameter):
-    """Compile-time knobs for ``rmsnorm_bcast_scalar_dest_reuse_test.cpp``.
+class BCAST_DEST_REUSE(TemplateParameter):
+    """Compile-time knobs for ``bcast_dest_reuse_test.cpp``.
 
-    The first four are template arguments (or a template-fixed runtime argument) on the
-    LLK pair, so none of them can be a runtime parameter; the last two are driver hooks
-    that perturb the state the inits must re-establish:
-
-    ``rmsnorm_num_tiles``
+    ``bcast_dest_reuse_type``
+        Broadcast mode (``BroadcastType.Scalar`` or ``BroadcastType.Column``).
+    ``bcast_dest_reuse_num_tiles``
         Outer-loop count of the math MOP *and* the unpack MOP -- one
-        ``_llk_unpack_A_`` call walks this many tiles. Bounded by DEST half-sync capacity.
-    ``rmsnorm_num_faces``
-        Runtime argument to both ``_init_``s, but it sizes the MOP loops, so a variant
-        must be built per value. Only 1, 2 and 4 are accepted (``LLK_ASSERT``).
+        ``_llk_unpack_A_`` call walks this many tiles.
+    ``bcast_dest_reuse_num_faces``
+        Runtime argument to both ``_init_``s sizing the MOP loops (1, 2, or 4 for SCALAR;
+        2 or 4 for COL).
     ``clear_dest``
         Template argument on the math execute; gates the ``ZEROACC`` between the MOVD2B
         and the MOP.
     ``unpack_full_transpose``
         Drives both ``transpose_of_faces`` and ``within_face_16x16_transpose`` on the
-        unpack init. This axis exists only because blaze's version of the header won the
-        reconciliation, so it is new reachable surface. Its replay-buffer path is
-        restricted to one tile and four faces by ``LLK_ASSERT``.
-    ``rmsnorm_clobber_unpa_x_end``
-        Before the rmsnorm unpack init, the unpack thread leaves unpacker A's X span at one
-        row (as ``_llk_unpack_A_top32_rm_init_`` does). The init must re-program it: its
-        MOP issues every real UNPACR on SrcA.
-    ``rmsnorm_preserve_src_zero_flag``
-        Math sets the Src zero flag to keep before the seed datacopy, as ``copy_init``
-        does. The rmsnorm math init must restore the operand-driven value.
-
-    The ``rmsnorm_`` prefixed fields match the constants they emit and stay globally
-    unique: ``test_perf_header_gate.py`` requires that no two parameter classes declare the
-    same field name, because a test passing both would produce two perf-CSV columns with
-    the same header. Bare ``num_tiles`` belongs to ``PACK_NUM_TILES`` and bare
-    ``num_faces`` to ``NUM_FACES``.
+        unpack init (restricted to num_tiles == 1 and num_faces == 4).
+    ``bcast_clobber_unpa_x_end``
+        Before the bcast_dest_reuse unpack init, leave unpacker A's X span at one row to
+        verify the init re-programs x_end on unpacker A.
+    ``bcast_preserve_src_zero_flag``
+        Leave the Src zero flag at keep before the seed datacopy to verify the math init
+        restores the operand-driven value.
     """
 
-    rmsnorm_num_tiles: int = 1
-    rmsnorm_num_faces: int = 4
+    bcast_dest_reuse_type: BroadcastType = BroadcastType.Scalar
+    bcast_dest_reuse_num_tiles: int = 1
+    bcast_dest_reuse_num_faces: int = 4
     clear_dest: bool = False
     unpack_full_transpose: bool = False
-    rmsnorm_clobber_unpa_x_end: bool = False
-    rmsnorm_preserve_src_zero_flag: bool = False
+    bcast_clobber_unpa_x_end: bool = False
+    bcast_preserve_src_zero_flag: bool = False
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
             [
-                f"constexpr std::uint32_t RMSNORM_NUM_TILES = {self.rmsnorm_num_tiles}u;",
-                f"constexpr std::uint32_t RMSNORM_NUM_FACES = {self.rmsnorm_num_faces}u;",
-                f"constexpr bool RMSNORM_CLEAR_DEST = {str(self.clear_dest).lower()};",
-                "constexpr bool RMSNORM_UNPACK_FULL_TRANSPOSE = "
+                f"constexpr ckernel::BroadcastType BCAST_TYPE = ckernel::{self.bcast_dest_reuse_type.cpp_enum_value};",
+                f"constexpr std::uint32_t BCAST_NUM_TILES = {self.bcast_dest_reuse_num_tiles}u;",
+                f"constexpr std::uint32_t BCAST_NUM_FACES = {self.bcast_dest_reuse_num_faces}u;",
+                f"constexpr bool BCAST_CLEAR_DEST = {str(self.clear_dest).lower()};",
+                "constexpr bool BCAST_UNPACK_FULL_TRANSPOSE = "
                 f"{str(self.unpack_full_transpose).lower()};",
-                "constexpr bool RMSNORM_CLOBBER_UNPA_X_END = "
-                f"{str(self.rmsnorm_clobber_unpa_x_end).lower()};",
-                "constexpr bool RMSNORM_PRESERVE_SRC_ZERO_FLAG = "
-                f"{str(self.rmsnorm_preserve_src_zero_flag).lower()};",
+                "constexpr bool BCAST_CLOBBER_UNPA_X_END = "
+                f"{str(self.bcast_clobber_unpa_x_end).lower()};",
+                "constexpr bool BCAST_PRESERVE_SRC_ZERO_FLAG = "
+                f"{str(self.bcast_preserve_src_zero_flag).lower()};",
             ]
         )
 
@@ -1537,16 +1528,21 @@ class SFPU_SCALE_EN(TemplateParameter):
 
 @dataclass
 class SOFTMAX_K(TemplateParameter):
-    """Number of valid lanes ``k`` for the softmax_k SFPU entry (``_softmax_k_<k>``).
+    """Configuration for the softmax_k SFPU entry (``_calculate_softmax_k_``).
 
-    ``k`` counts values per row inside face 0's 16 columns; columns >= k must be
-    exactly 0.0 in DEST (the kernel's predication treats 0.0 as padding).
+    ``softmax_k`` counts active columns per row inside face 0 (``1 <= k <= 16``);
+    columns ``>= k`` are masked out before max and written as ``0.0``.
+    ``softmax_num_rows`` selects how many independent rows are normalized (1, 2, 4, or 8).
     """
 
     softmax_k: int = 16
+    softmax_num_rows: int = 4
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int SOFTMAX_K = {self.softmax_k};"
+        return (
+            f"constexpr std::uint32_t SOFTMAX_K = {self.softmax_k};\n"
+            f"constexpr std::uint32_t SOFTMAX_NUM_ROWS = {self.softmax_num_rows};"
+        )
 
 
 @dataclass

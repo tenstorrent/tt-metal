@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
 // SPDX-License-Identifier: Apache-2.0
 
 // Seed every DEST slot, clear each product slot independently, and pack the whole
@@ -49,17 +50,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(
-                LOOP_FACTOR * RMSNORM_CLEAR_CYCLES * (RMSNORM_CAPACITY - 1) * RMSNORM_DEST_TILES * TILE_NUM_FACES);
+                LOOP_FACTOR * CLEAR_PRODUCT_CYCLES * (CLEAR_PRODUCT_CAPACITY - 1) * CLEAR_PRODUCT_DEST_TILES * TILE_NUM_FACES);
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t cycle = 0; cycle < RMSNORM_CLEAR_CYCLES; ++cycle)
+                for (std::uint32_t cycle = 0; cycle < CLEAR_PRODUCT_CYCLES; ++cycle)
                 {
-                    for (std::uint32_t target = 0; target < RMSNORM_CAPACITY - 1; ++target)
+                    for (std::uint32_t target = 0; target < CLEAR_PRODUCT_CAPACITY - 1; ++target)
                     {
-                        for (std::uint32_t tile = 0; tile < RMSNORM_DEST_TILES; ++tile)
+                        for (std::uint32_t tile = 0; tile < CLEAR_PRODUCT_DEST_TILES; ++tile)
                         {
                             _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                                 L1_ADDRESS(buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
@@ -76,13 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-// Existing experimental broadcast definitions have unused parameters; keep their
-// warning suppression local to the header, as in its broadcast-reuse driver.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-variable"
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-#include "experimental/llk_math_rmsnorm_bcast_scalar_dest_reuse.h"
-#pragma GCC diagnostic pop
+#include "experimental/llk_math_mul_reduce_scalar.h"
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_binary.h"
 #include "llk_math_eltwise_unary_datacopy.h"
@@ -97,7 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 #endif
-    static_assert(RMSNORM_DEST_TILES == get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>());
+    static_assert(CLEAR_PRODUCT_DEST_TILES == get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>());
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -113,15 +108,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(
-                LOOP_FACTOR * RMSNORM_CLEAR_CYCLES * (RMSNORM_CAPACITY - 1) * RMSNORM_DEST_TILES * TILE_NUM_FACES);
+                LOOP_FACTOR * CLEAR_PRODUCT_CYCLES * (CLEAR_PRODUCT_CAPACITY - 1) * CLEAR_PRODUCT_DEST_TILES * TILE_NUM_FACES);
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t cycle = 0; cycle < RMSNORM_CLEAR_CYCLES; ++cycle)
+                for (std::uint32_t cycle = 0; cycle < CLEAR_PRODUCT_CYCLES; ++cycle)
                 {
-                    for (std::uint32_t target = 0; target < RMSNORM_CAPACITY - 1; ++target)
+                    for (std::uint32_t target = 0; target < CLEAR_PRODUCT_CAPACITY - 1; ++target)
                     {
                         _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
                             ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
@@ -129,7 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             _llk_math_wait_for_dest_available_<dest_sync>();
                         }
-                        for (std::uint32_t tile = 0; tile < RMSNORM_DEST_TILES; ++tile)
+                        for (std::uint32_t tile = 0; tile < CLEAR_PRODUCT_DEST_TILES; ++tile)
                         {
                             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                                 tile, formats.math, formats.math);
@@ -143,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // Leave a nonuniform SFPU write immediately before the clear, so its
                         // WAIT_SFPU transition is exercised as well as ZEROACC addressing.
                         SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_negative_, (false, 8), target, VectorMode::RC);
-                        _llk_math_rmsnorm_clear_product_tile_<RMSNORM_CAPACITY, is_fp32_dest_acc_en>(target);
+                        _llk_math_mul_reduce_scalar_clear_product_tile_<CLEAR_PRODUCT_CAPACITY, is_fp32_dest_acc_en>(target);
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
                             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
@@ -189,15 +184,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 std::uint32_t output = 0;
-                for (std::uint32_t cycle = 0; cycle < RMSNORM_CLEAR_CYCLES; ++cycle)
+                for (std::uint32_t cycle = 0; cycle < CLEAR_PRODUCT_CYCLES; ++cycle)
                 {
-                    for (std::uint32_t target = 0; target < RMSNORM_CAPACITY - 1; ++target)
+                    for (std::uint32_t target = 0; target < CLEAR_PRODUCT_CAPACITY - 1; ++target)
                     {
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
                             _llk_packer_wait_for_math_done_();
                         }
-                        for (std::uint32_t tile = 0; tile < RMSNORM_DEST_TILES; ++tile)
+                        for (std::uint32_t tile = 0; tile < CLEAR_PRODUCT_DEST_TILES; ++tile)
                         {
                             _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tile, L1_ADDRESS(buffer_Res[output++]));
                         }

@@ -289,3 +289,34 @@ inline void _llk_math_mul_reduce_scalar_clear_dvalid_()
     TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
 }
+
+/**
+ * @brief Clear one reused product slot without touching the cross-chunk accumulator.
+ *
+ * `mul_reduce_scalar_init` must have configured the non-incrementing `ADDR_MOD_1`.
+ *
+ * @tparam dst_capacity Logical DEST tile capacity (2..8); the final slot `dst_capacity - 1` is reserved.
+ * @tparam is_fp32_dest_acc_en Whether FP32 DEST accumulation is enabled.
+ * @param dst_index Product tile slot to clear (`< dst_capacity - 1`).
+ */
+template <std::uint32_t dst_capacity, bool is_fp32_dest_acc_en>
+inline void _llk_math_mul_reduce_scalar_clear_product_tile_(const std::uint32_t dst_index)
+{
+    static_assert(dst_capacity >= 2 && dst_capacity <= 8);
+    LLK_ASSERT(dst_index < dst_capacity - 1, "product clear must preserve the accumulator");
+
+    // Finish the preceding chunk's SFPU read before clearing its product slots.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    constexpr std::uint32_t tiles_per_bank = is_fp32_dest_acc_en ? 4 : 8;
+    const std::uint32_t local_tile         = dst_index & (tiles_per_bank - 1);
+    // ZEROACC selects the bank from the destination offset. Face indices must
+    // stay bank-relative, including slots 4..6 with FP32/full-dest sync.
+    // Keep the offset at the tile start: advancing it face-by-face can trigger
+    // Blackhole's CLR_16 bank-selection issue (tt-metal#53693).
+#pragma GCC unroll 4
+    for (std::uint32_t face = 0; face < 4; ++face)
+    {
+        TT_ZEROACC(p_zeroacc::CLR_16, is_fp32_dest_acc_en, 0, ADDR_MOD_1, get_dest_index_in_faces(local_tile, face));
+    }
+}

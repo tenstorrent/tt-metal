@@ -248,12 +248,12 @@ gate — the credit quartet is now recalled via `_CB_RECV_TYPES`; this is the No
 ### L11 — dummy-publication scope is a function-NAME predicate, so MOP-config publishers are missed
 `_dummy_publication_guard` only visits functions whose name marks them as dest-reuse publishers
 (`*dummy_valid*`, `*dummy_unpack*`, `*switch_to_reduce*`, `*reuse_dest*`, `*dest_reuse*`). A
-publisher named otherwise is never visited — the live example is
-`_llk_unpack_A_rmsnorm_mop_config_`, which builds its publications as `static constexpr`
-`TT_OP_UNPACR_NOP` words for a MOP `set_start_op`.
+publisher named otherwise is never visited — for example, a `*_mop_config_` function without
+`*dest_reuse*` in its name that builds its publications as `static constexpr` `TT_OP_UNPACR_NOP`
+words for a MOP `set_start_op`.
 - **Risk:** CAP-REDUCTION — a real serializing publication (and, in principle, a both-banks or
   wrong-arch encoding defect) in such a function is not reported.
-- **Live today:** the two rmsnorm sites, plus any future `*_mop_config_` publisher.
+- **Live today:** any future `*_mop_config_` publisher whose name lacks a dest-reuse token.
 - **Fix hazard:** widening to `*mop_config*` pulls in every MOP-config function in the tree, and
   the overwhelming majority of their publications are ordinary unpack setup with no Dest->Src
   consumer — a large FALSE-FLAG bucket that would bury the real ones. The scope predicate is the

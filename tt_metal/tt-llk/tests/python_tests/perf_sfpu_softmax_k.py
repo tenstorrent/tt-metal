@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from conftest import skip_for_wormhole
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_sfpu_softmax_k import ALL_K, DEST_SYNCS, FORMATS
+from test_sfpu_softmax_k import ALL_K, DEST_SYNCS, FORMATS, NUM_ROWS
 from test_sfpu_softmax_k import test_sfpu_softmax_k as _test_sfpu_softmax_k
 
 
@@ -21,20 +21,31 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
 
 @pytest.mark.perf
 @skip_for_wormhole
+@skip_for_quasar
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dest_sync=DEST_SYNCS,
+    num_rows=NUM_ROWS,
     k=ALL_K,
 )
 @parametrize(**PERF_MEASUREMENT_AXES)
 def test_perf_sfpu_softmax_k(
-    perf_report, formats, dest_acc, dest_sync, k, run_types, loop_factor, is_perf
+    perf_report,
+    formats,
+    dest_acc,
+    dest_sync,
+    num_rows,
+    k,
+    run_types,
+    loop_factor,
+    is_perf,
 ):
     _test_sfpu_softmax_k(
         formats,
         dest_acc,
         dest_sync,
+        num_rows,
         k,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )

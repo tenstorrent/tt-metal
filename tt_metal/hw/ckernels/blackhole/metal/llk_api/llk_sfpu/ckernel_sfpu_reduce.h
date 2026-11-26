@@ -321,10 +321,10 @@ inline void perform_reduce_col_sum_avg() {
 // the next cycle (only SFPNOP issues), so this hides no latency, but it keeps every consumer two
 // instructions behind its producer and the sequences need no explicit SFPNOPs.
 //
-// The row SUM/AVG/MAX/MIN tiles no longer use these two: they reduce four accumulators at once with the merged
-// butterfly further down (perform_reduce_row_face_pair). horizontal_reduce stays for _softmax_k_
-// (experimental/ckernel_sfpu_softmax_k.h); horizontal_reduce_max for perform_reduce_row_max_int32_tile, which only
-// UInt16 in a 32-bit Dest reaches (Int32 and UInt32 row MAX/MIN take perform_reduce_row_max_min_int32).
+// The row SUM/AVG/MAX/MIN tiles no longer use this helper: they reduce four accumulators at once with the merged
+// butterfly further down (perform_reduce_row_face_pair). horizontal_reduce_max stays for
+// perform_reduce_row_max_int32_tile, which only UInt16 in a 32-bit Dest reaches (Int32 and UInt32 row MAX/MIN
+// take perform_reduce_row_max_min_int32).
 //
 // All horizontal reduces are issued inline; none is recorded. Replaying them gives the same TILE_LOOP (the
 // row bodies are SFPU-bound, not issue-bound) while recording costs ~25-28 cycles per init, and ttnn re-inits
@@ -378,14 +378,6 @@ inline void horizontal_reduce_rotate() {
 }
 
 /**
- * @brief Fold the rotated copies into the accumulators: LREG0 += LREG1, LREG4 += LREG5 (float SFPADD).
- */
-inline void horizontal_reduce_add() {
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // lreg0 = lreg0 * 1.0 + lreg1
-    TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);  // lreg4 = lreg4 * 1.0 + lreg5
-}
-
-/**
  * @brief Fold the rotated copies into the accumulators by compare-and-swap: LREG0 and LREG4 keep the
  *        extreme (MAX by default, MIN with SFPCONFIG bit 8 set) of each column pair.
  */
@@ -395,29 +387,9 @@ inline void horizontal_reduce_swap() {
 }
 
 /**
- * @brief Horizontal float SUM of the two accumulators: 20 instructions (14 SFPSHFT2 + 6 SFPADD), inline, once
- *        per 8-row group. Caller: _softmax_k_ (experimental/ckernel_sfpu_softmax_k.h).
- *
- * In: LREG0 / LREG4 = per-column partials of the two 4-row groups. Out: LREG0 / LREG4 = the 8-column sum in
- * every column. Clobbers LREG1 / LREG5 only.
- *
- *   Stage 1: rotate by 4, add -> 4 duplicated pair sums.
- *   Stage 2: rotate by 2, add -> 2 duplicated quad sums.
- *   Stage 3: rotate by 1, add -> the full sum in every column.
- */
-inline void horizontal_reduce() {
-    horizontal_reduce_rotate<4 /*shift*/>();
-    horizontal_reduce_add();
-    horizontal_reduce_rotate<2 /*shift*/>();
-    horizontal_reduce_add();
-    horizontal_reduce_rotate<1 /*shift*/>();
-    horizontal_reduce_add();
-}
-
-/**
  * @brief Horizontal MAX/MIN of the two accumulators: 20 instructions (14 SFPSHFT2 + 6 SFPSWAP), inline, once
- *        per 8-row group, for perform_reduce_row_max_int32_tile (UInt16 in a 32-bit Dest). horizontal_reduce with
- *        compare-and-swap in place of add; the direction is whatever SFPCONFIG bit 8 says at issue time.
+ *        per 8-row group, for perform_reduce_row_max_int32_tile (UInt16 in a 32-bit Dest).
+ *        The direction is whatever SFPCONFIG bit 8 says at issue time.
  *
  * In: LREG0 / LREG4 = per-column extremes of the two 4-row groups. Out: LREG0 / LREG4 = the 8-column extreme
  * in every column. Clobbers LREG1 / LREG5 only. Writes no replay slot.
