@@ -3175,6 +3175,24 @@ constexpr bool matmul_lofi_row8_row_mop_off(
     return fidelity == MathFidelity::LoFi && half_sync && !fp32_dest && throttle == 0 && kt == 1 && rt == 1 && ct == 8 && narrow_in1 && out_8_16;
 }
 
+// HiFi4 half sync 32-bit DEST single tiles over 4 K tiles of Float16_b or Bfp8_b into Float32: the row MOP's ADDR_MOD_6 write and restore
+// around each call read 3.7 cycles per block behind the tile MOP
+constexpr bool matmul_hifi4_tile_k4_row_mop_off(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_dest,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle)
+{
+    return fidelity == MathFidelity::HiFi4 && half_sync && fp32_dest && throttle == 0 && kt == 4 && rt == 1 && ct == 1 && out == DataFormat::Float32 &&
+           in0 == in1 && (in1 == DataFormat::Float16_b || in1 == DataFormat::Bfp8_b);
+}
+
 // HiFi2 half sync 32-bit DEST blocks of one K tile into Float32 where the row MOP reads 0.6 to 2.3 cycles per block behind the tile MOP
 struct matmul_row_mop_off_cell
 {
@@ -3208,7 +3226,8 @@ constexpr bool matmul_row_mop_off(
     const std::uint32_t kt,
     const std::uint32_t throttle)
 {
-    if (matmul_lofi_row8_row_mop_off(fidelity, half_sync, fp32_dest, in1, out, rt, ct, kt, throttle))
+    if (matmul_lofi_row8_row_mop_off(fidelity, half_sync, fp32_dest, in1, out, rt, ct, kt, throttle) ||
+        matmul_hifi4_tile_k4_row_mop_off(fidelity, half_sync, fp32_dest, in1, in0, out, rt, ct, kt, throttle))
     {
         return true;
     }

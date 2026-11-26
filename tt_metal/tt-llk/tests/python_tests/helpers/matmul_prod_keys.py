@@ -367,6 +367,24 @@ def custom_main_unpack(fidelity, half_sync, in0, in1, out) -> bool:
     )
 
 
+def hifi4_tile_k4_row_mop_off(
+    fidelity, half_sync, fp32_dest, in1, in0, out, rt, ct, kb, throttle=0
+) -> bool:
+    """llk_matmul_forms.h matmul_hifi4_tile_k4_row_mop_off."""
+    return (
+        fidelity.name == "HiFi4"
+        and half_sync
+        and fp32_dest
+        and throttle == 0
+        and kb == 4
+        and rt == 1
+        and ct == 1
+        and out == DataFormat.Float32
+        and in0 == in1
+        and in1 in (DataFormat.Float16_b, DataFormat.Bfp8_b)
+    )
+
+
 # matmul_row_mop_off_cells of llk_matmul_forms.h: (fidelity, half sync, 32-bit DEST, in1, in0, output, rt, ct)
 _ROW_MOP_OFF_CELLS = {
     (
@@ -428,6 +446,8 @@ def row_mop_off(
     """llk_matmul_forms.h matmul_row_mop_off."""
     if lofi_row8_row_mop_off(
         fidelity, half_sync, fp32_dest, in1, out, rt, ct, kb, throttle
+    ) or hifi4_tile_k4_row_mop_off(
+        fidelity, half_sync, fp32_dest, in1, in0, out, rt, ct, kb, throttle
     ):
         return True
     return (
