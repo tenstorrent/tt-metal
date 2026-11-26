@@ -651,7 +651,7 @@ FlatProgramHandles add_flat_routed_expert_program(
             Args w;
             w.a(FlatAddr::Down)
                 .lit(p.down_bank_pattern[d])
-                .lit(p.down_weight_slot[d] * p.down_weight_region_bytes)
+                .lit(p.down_weight_region_base[d] * p.down_weight_region_bytes)
                 .cat(dyn);
             if (y_nc) {
                 w.a(FlatAddr::Y).lit(p.down_first_columns[d]);

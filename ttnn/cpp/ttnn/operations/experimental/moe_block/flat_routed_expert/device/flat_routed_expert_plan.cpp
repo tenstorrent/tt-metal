@@ -484,10 +484,11 @@ FlatRoutedExpertPlan make_plan(
         }
         return c;
     };
-    // The down cores stay the free cores in raster order, the bank anchors and their east neighbours last (above); each
-    // then reads from the bank(s) nearest it (the bank patterns below). Picking the down cores by their distance to the
-    // banks instead would take exactly those anchor-side cores and leave the combine's ports - on the cores the flat
-    // expert leaves free - one or two columns to share.
+    // The down cores are the free cores in row-major order (row by row, left to right), the bank anchors and their east
+    // neighbours last (above). They are not picked by distance to the DRAM banks: that would take exactly those
+    // anchor-side cores, and the combine puts its ports on the cores the flat expert leaves free - with those gone the
+    // ports share one or two columns. Distance to DRAM is handled instead by which bank(s) each down core reads from
+    // (the bank patterns below).
     uint32_t ND = p.down_cores.size();
     const uint32_t n_slots = p.dram_banks;  // (weight slot r: bank r)
     p.gate_up_weight_slots = n_slots;
@@ -566,61 +567,63 @@ FlatRoutedExpertPlan make_plan(
                 placed[ci] = true;
             }
         }
-        // Then min-max: swap a core of the worst slot (the highest mean hops) with one of another slot while that
-        // lowers the higher of the two slots' means below the worst's. Each bank serves 1/banks of every expert and
-        // every core waits for the whole expert, so the slowest bank paces the call, and nearest-first leaves the last
-        // bank all the far cores the other banks did not take; min-max shares them out. The slots keep their cores'
-        // count, so the weight layout does not change - only which core reads which slot.
-        std::vector<std::vector<uint32_t>> H(n_slots, std::vector<uint32_t>(gu_all.size()));
+        // Then min-max: every core waits for the whole expert and each bank serves 1/banks of it, so the cost to cut is
+        // the highest mean reader distance of a slot (bank) - and nearest-first leaves the last slot the far cores no
+        // other slot took. Repeatedly: take the worst slot, find the swap of one of its cores with a core of another
+        // slot that most lowers the higher of the two slots' means below the worst's; stop when there is none (or after
+        // 4096 swaps). Swaps keep every slot's core count, so only which core reads which slot changes, not the
+        // weights' layout.
+        std::vector<std::vector<uint32_t>> hops(n_slots, std::vector<uint32_t>(gu_all.size()));  // [slot][core]
         for (uint32_t r = 0; r < n_slots; ++r) {
             for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
-                H[r][ci] = bank_hops(r, gu_all[ci]);
+                hops[r][ci] = bank_hops(r, gu_all[ci]);
             }
         }
-        auto sum = [&](uint32_t r) {
+        auto slot_hops = [&](uint32_t r) {  // (total hops of slot r's cores)
             uint32_t s = 0;
             for (uint32_t ci : per_slot[r]) {
-                s += H[r][ci];
+                s += hops[r][ci];
             }
             return s;
         };
         for (uint32_t it = 0; it < 4096; ++it) {
-            uint32_t w = 0;
-            double wm = -1;
+            uint32_t worst = 0;
+            double worst_mean = -1;
             for (uint32_t r = 0; r < n_slots; ++r) {
-                const double m = per_slot[r].empty() ? 0.0 : double(sum(r)) / per_slot[r].size();
-                if (m > wm) {
-                    wm = m;
-                    w = r;
+                const double m = per_slot[r].empty() ? 0.0 : double(slot_hops(r)) / per_slot[r].size();
+                if (m > worst_mean) {
+                    worst_mean = m;
+                    worst = r;
                 }
             }
-            double best = wm;
-            int bi = -1, bs = -1, bj = -1;
-            const uint32_t sw = sum(w);
-            for (uint32_t i = 0; i < per_slot[w].size(); ++i) {
-                const uint32_t a = per_slot[w][i];
+            double best = worst_mean;
+            int swap_i = -1, swap_slot = -1, swap_j = -1;  // (worst slot's i-th core <-> swap_slot's j-th)
+            const uint32_t worst_total = slot_hops(worst);
+            for (uint32_t i = 0; i < per_slot[worst].size(); ++i) {
+                const uint32_t a = per_slot[worst][i];
                 for (uint32_t s = 0; s < n_slots; ++s) {
-                    if (s == w) {
+                    if (s == worst) {
                         continue;
                     }
-                    const uint32_t ss = sum(s);
+                    const uint32_t other_total = slot_hops(s);
                     for (uint32_t j = 0; j < per_slot[s].size(); ++j) {
                         const uint32_t b = per_slot[s][j];
-                        const double mw = double(sw - H[w][a] + H[w][b]) / per_slot[w].size();
-                        const double ms = double(ss - H[s][b] + H[s][a]) / per_slot[s].size();
-                        if (std::max(mw, ms) + 1e-9 < best) {
-                            best = std::max(mw, ms);
-                            bi = i;
-                            bs = s;
-                            bj = j;
+                        const double mean_worst =
+                            double(worst_total - hops[worst][a] + hops[worst][b]) / per_slot[worst].size();
+                        const double mean_other = double(other_total - hops[s][b] + hops[s][a]) / per_slot[s].size();
+                        if (std::max(mean_worst, mean_other) + 1e-9 < best) {
+                            best = std::max(mean_worst, mean_other);
+                            swap_i = i;
+                            swap_slot = s;
+                            swap_j = j;
                         }
                     }
                 }
             }
-            if (bi < 0) {
+            if (swap_i < 0) {
                 break;
             }
-            std::swap(per_slot[w][bi], per_slot[bs][bj]);
+            std::swap(per_slot[worst][swap_i], per_slot[swap_slot][swap_j]);
         }
     }
     for (uint32_t r = 0; r < n_slots; ++r) {
@@ -713,13 +716,12 @@ FlatRoutedExpertPlan make_plan(
     p.relay_stride = 1 + p.helper_relays_per_primary;
     p.gate_up_weight_region_bytes = p.experts_per_chip * p.gate_up_k_blocks * p.column_groups_per_weight_slot *
                                     p.weight_block_tiles * p.weight_tile_bytes;
-    // The down cores' weight blocks: each core's dram_banks positions (block k at position k % banks) in the bank(s)
-    // nearest it, every bank the same down bytes (columns x positions). The down reads' rate is set by their NOC0
-    // distance to the bank, not by how many cores share a bank. Two passes over the (hops, bank, core) pairs, nearest
-    // first. 1: whole cores, at most ND / banks a bank; 2: the cores left, a pair giving the core's next positions to
-    // the bank while the bank has room (each bank: the columns x positions of an even share). Positions left (uneven
-    // columns) go to the least loaded banks. Every bank then holds its whole cores' regions from slot 0 and the split
-    // cores' at one level: the DRAM footprint is that of every core rotating over all banks.
+    // The down cores' bank patterns (the layout: FlatRoutedExpertPlan::down_bank_pattern). Each core reads from the
+    // bank(s) nearest it rather than rotating over all banks, aiming at an even column load a bank (a target of
+    // columns x entries a bank). Over the (hops, bank, core) pairs, nearest first:
+    //   1. a whole core (all its entries) to a bank, at most ND / banks cores a bank, while the bank is under target;
+    //   2. the cores left: their next entries to the bank while it is under target;
+    //   3. entries still left (uneven column counts): to the bank furthest below its target, which may then pass it.
     {
         const uint32_t banks = p.dram_banks;
         TT_FATAL(banks >= 1 && banks <= 8 && banks == nbanks, "flat_routed_expert: down bank patterns hold 8 banks");
@@ -766,11 +768,11 @@ FlatRoutedExpertPlan make_plan(
                 load[b] += p.down_columns_per_core[d];
             }
         }
-        // Regions of one position's blocks (a core's ceil(blocks / banks) blocks, the widest core's): a core with c
-        // positions in a bank takes c consecutive regions (slots) there, from one slot u in all of its banks.
-        // Single-bank cores first, each bank filled from slot 0.
+        // Region bases: a core naming bank b in c entries takes c consecutive regions in b, from one base for all of
+        // its banks (the first region free in every one of them). One-bank cores go first, filling each bank from
+        // region 0; a split core can leave a gap in its less-used bank.
         p.down_bank_pattern.assign(ND, 0);
-        p.down_weight_slot.assign(ND, 0);
+        p.down_weight_region_base.assign(ND, 0);
         uint32_t region_tiles = 0;
         for (uint32_t d = 0; d < ND; ++d) {
             const uint32_t kd = FlatRoutedExpertPlan::down_k_block_tiles(
@@ -801,8 +803,9 @@ FlatRoutedExpertPlan make_plan(
             for (const auto& [b, c] : count) {
                 fill[b] = std::max(fill[b], u + c);
             }
-            p.down_weight_slot[d] = u;
-            p.down_weight_slot_count = std::max(p.down_weight_slot_count, *std::max_element(fill.begin(), fill.end()));
+            p.down_weight_region_base[d] = u;
+            p.down_weight_regions_per_bank =
+                std::max(p.down_weight_regions_per_bank, *std::max_element(fill.begin(), fill.end()));
         }
         p.down_weight_region_bytes = region_tiles * p.weight_tile_bytes;
     }

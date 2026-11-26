@@ -319,11 +319,11 @@ class TtMoEBlockFfn:
         "down_columns_per_core",
         "down_first_columns",
         "down_weight_region_tiles",
-        # (each down core's DRAM banks and slot: the plan picks them by the chip's bank anchors - its DRAM endpoints and
-        # harvesting - so the layout is a function of these, not of the layout options alone)
+        # (each down core's DRAM banks and region base: the plan picks them by the chip's bank anchors - its DRAM
+        # endpoints and harvesting - so the layout is a function of these, not of the layout options alone)
         "down_bank_patterns",
-        "down_weight_slots",
-        "down_weight_slot_count",
+        "down_weight_region_bases",
+        "down_weight_regions_per_bank",
     )
 
     @classmethod

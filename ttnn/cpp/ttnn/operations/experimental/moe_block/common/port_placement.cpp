@@ -65,12 +65,13 @@ private:
     tt::tt_metal::NOC noc_;
 };
 
-// A chip's ports on the allowed cores, each near its Ethernet core and the ports spread over the core columns. A port
-// sends its rows to its Ethernet core on NOC1, which routes north first: ports in one column share that column's
-// links. So the ports go heaviest first - a port's load is the destination chips the fabric's first hop sends its way -
-// each to the free core with the fewest NOC1 hops to its Ethernet core plus kColumnLoadHops for every unit of load
-// already placed in the core's column (a port counts its load + 1). Nearest alone stacks ports in the few columns next
-// to the Ethernet cores the flat expert leaves free.
+// One chip's ports on the allowed cores. A port sends its rows to its Ethernet core over NOC1, which goes north (up the
+// port core's column) first, so ports in the same column share that column's links. To spread them:
+//  - a port's load is the number of destination chips the fabric routes through it (its first hop);
+//  - ports are placed heaviest first, each on the free core with the lowest cost: NOC1 hops to its Ethernet core plus
+//    kColumnLoadHops for each unit of load already placed in that core's column;
+//  - a placed port adds its load + 1 to its column (the + 1: a port with no load still counts against its column).
+// Placing each port on its nearest core instead stacks them in the few columns next to the Ethernet cores.
 constexpr uint32_t kColumnLoadHops = 2;
 
 PortCores place_spread(
