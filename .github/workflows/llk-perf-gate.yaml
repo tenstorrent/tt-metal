@@ -183,7 +183,9 @@ jobs:
       threshold: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].threshold }}
       module_thresholds: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].module_thresholds }}
       min_cycles: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].min_cycles }}
-      fail_on_regression: ${{ matrix.arch == 'blackhole' }}
+      fail_on_regression: >-
+        ${{ matrix.arch == 'blackhole'
+            && !contains(github.event.pull_request.labels.*.name, 'llk-perf-accept-regression') }}
       measure_result: >-
         ${{ needs.measure.result }},${{ needs.measure-branch-point.result }}
       current_artifact_pattern: >-
