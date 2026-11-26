@@ -14,13 +14,14 @@ The reference outputs are fp32 (`goldens.py`): the bf16 reference's own
 rounding is larger than the device's error in deeper layers. The CPU reference is slow at this
 length, so it is not recomputed here: generate it once per size with
 `python -m models.experimental.kimi_k3_moonvit_v2.tests.goldens --grid <H>x<W>`.
-The tests skip when `$MOONVIT_GOLDEN_DIR` is unset, or the saved outputs or the checkpoint are missing.
+The tests that check outputs skip when `$MOONVIT_GOLDEN_DIR` is unset, or the saved outputs or the
+checkpoint are missing; `test_full_size_model_trace_perf` needs neither.
 
 Every chip holds real rows (16,896 on chips 0-2; on chip 3, 14,848 at 256x256 and 16,632 at 510x132),
 so besides the PCC over the whole image each chip's real rows (in window order, as the device splits
 it) are checked on their own; a wrong chip cannot hide behind three right ones.
 
-The `_trace` variants are the traced perf tests: they capture the same forward in a trace, check its
+The other `_trace` variants are the traced perf tests: they capture the same forward in a trace, check its
 first replay (it must equal the untraced run exactly and pass the same checks), then time back-to-back
 replays on the saved input. The layer one runs TRACE_LAYER only, twice per replay, so that back-to-back
 replays alternate CCL slots (`layer_forward(twice=True)`).
@@ -313,8 +314,8 @@ def test_full_size_encoder_trace(mesh_device, sp_axis, num_links, config, refere
 
 
 def model_inputs(mesh_device, sp_axis, num_links, config, reference, size):
-    """`(model, pixels, grid_thws)`: the full model with the checkpoint's weights, and the pixels
-    `goldens.py` used."""
+    """`(model, pixels, grid_thws)`: the full model with `reference`'s weights (the checkpoint's, or random
+    ones for the perf test), and the pixels `goldens.py` used."""
     sequence_parallel, ccl = ring_parallel(mesh_device, sp_axis, num_links)
     tt = TT_MoonViT_Vision_Model(config, mesh_device=mesh_device, sequence_parallel=sequence_parallel, ccl=ccl)
     tt.load_torch_state_dict(reference.state_dict())

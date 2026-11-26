@@ -460,7 +460,8 @@ class Trace(_Trace):
     def time_replays(self, label: str, iterations: int = TRACE_ITERATIONS, warmup: int = TRACE_WARMUP) -> float:
         """Milliseconds per replay on the current inputs: `warmup` untimed replays, then `iterations` back to
         back with one wait for the device at the end, so that wait is spread over all of them (as the
-        CCL perf tests time their traces). Nothing is written or read in between. Logged, not asserted."""
+        CCL perf tests time their traces). Nothing is written or read in between. Logged and returned;
+        `test_full_size_model_trace_perf` asserts on the returned time."""
         for _ in range(warmup):
             self._execute()
         ttnn.synchronize_device(self.mesh_device)
