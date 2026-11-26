@@ -4,9 +4,6 @@ jobs:
   - id: llk-hardware-free
     name: LLK hardware-free tests
     description: Run PR Gate's host-only LLK hardware-free tests (no card)
-    # The tests read no submodule.
-    checkout:
-      submodules: false
     timeout: 20m
     runs-on:
       kubernetes:
