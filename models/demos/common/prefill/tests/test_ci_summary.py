@@ -70,6 +70,7 @@ def test_perf_summary_and_gate_name_what_ran(tmp_path, monkeypatch):
 
     summaries = tmp_path / "summaries"
     monkeypatch.setenv("PREFILL_SUMMARIES", str(summaries))
+    monkeypatch.delenv("CI_FAILURE_RECORDS", raising=False)
     perf_json = tmp_path / "kimi_k3_1_packed_sc4.json"
     perf_json.write_text(json.dumps(rec))
     label = next(iter(rec["throughput_tok_s"]))
@@ -78,15 +79,53 @@ def test_perf_summary_and_gate_name_what_ran(tmp_path, monkeypatch):
         json.dumps(
             {
                 "margin": {"throughput_tok_s": 0.05},
-                "baselines": {"kimi_k3_1": {"sc4_packed": {"probe": label, "8kw": {"throughput_tok_s": 1}}}},
+                "baselines": {
+                    "kimi_k3_1": {
+                        "sc4_packed": {"probe": label, "8kw": {"throughput_tok_s": rec["throughput_tok_s"][label]}}
+                    }
+                },
             }
         )
     )
     args = [str(perf_json), "--table", str(table), "--model", "kimi_k3_1", "--config", "sc4_packed", "--power", "8kw"]
     monkeypatch.setattr(sys, "argv", ["perf_gate.py", *args])
-    perf_gate.main()
+    assert perf_gate.main() == 0
     gate = (summaries / "perf" / "kimi_k3_1_packed_sc4_gate.md").read_text().splitlines()
     assert gate[2] == f"run: {setup}; baseline kimi_k3_1/sc4_packed on the 8kw power class"
+
+
+# Without a baseline the gate only reports, so it must check that the whole request retired: a run cut short reports a
+# shallow rate that would otherwise pass.
+@pytest.mark.parametrize("retired, rc", [(40, 0), (12, 1)])
+def test_unbaselined_gate_fails_a_run_cut_short(tmp_path, monkeypatch, retired, rc):
+    import json
+    import sys
+
+    from models.demos.common.prefill.runners.ci import perf_gate
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import _perf_metrics
+
+    monkeypatch.delenv("CI_FAILURE_RECORDS", raising=False)
+    _, rec = _perf_metrics(_packed_spans(retired, 4, 0.2, tail_s=0.2), 2560, 8, chunks_per_forward=4)
+    rec["expected_chunks"] = 40
+    perf_json = tmp_path / "run_sc4.json"
+    perf_json.write_text(json.dumps(rec))
+    table = tmp_path / "baselines.json"
+    table.write_text(json.dumps({"margin": {}, "baselines": {}}))
+    args = [
+        str(perf_json),
+        "--table",
+        str(table),
+        "--model",
+        "m",
+        "--config",
+        "sc4",
+        "--power",
+        "8kw",
+        "--require",
+        "1",
+    ]
+    monkeypatch.setattr(sys, "argv", ["perf_gate.py", *args])
+    assert perf_gate.main() == rc
 
 
 def _packed_spans(num_chunks, chunks_per_forward, forward_s, tail_s):

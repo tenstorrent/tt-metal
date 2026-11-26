@@ -294,6 +294,8 @@ def main():
     )
     if lines:
         _publish(lines, args.summary_name)
+    if rec and args.real_chunks > 0:
+        rec["expected_chunks"] = args.real_chunks
     _publish_json(rec, args.summary_name)
 
 
