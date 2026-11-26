@@ -169,7 +169,7 @@ def test_unsqueeze_docstring_blackhole_inputs(dtype, layout, buffer_type, device
 
     memory_config = interleaved_memory_config(buffer_type)
     torch.manual_seed(0)
-    x = torch.randn((3, 50, 64)) * 8
+    x = full_range_input((3, 50, 64), dtype)
     input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
     for dim in _VIEW_DIMS:
         output = _assert_unsqueeze_like_torch(input_tensor, dim, read)

@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement {
 void bind_unsqueeze(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Returns `input_tensor` with a new dimension of size 1 inserted at position `dim`, like ``torch.unsqueeze``.
+        Returns `input_tensor` with a new dimension of size 1 inserted at position `dim`.
 
         When the new dimension comes before the last two dimensions of the output (`dim` in ``[-rank - 1, -3]`` or ``[0, rank - 2]``), the output is a view of `input_tensor`: it shares the input's buffer and no data moves.
 
