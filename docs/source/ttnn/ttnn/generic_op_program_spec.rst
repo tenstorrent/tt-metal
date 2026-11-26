@@ -16,10 +16,10 @@ Each Python class has the fields of the C++ struct with the same name, whose com
 (``tt_metal/api/tt-metalium/workload/``), apart from the advanced options, which stay experimental in
 advanced_options.hpp_. Of the advanced options, Python
 binds only ``DFBAdvancedOptions.alias_with``, which lets buffers of the same total size share memory; the others are
-C++ only. So far the GlobalSemaphore fields are C++ only too: ``ProgramSpec.global_semaphore_parameters``,
-``KernelSpec.global_semaphore_bindings`` and ``ProgramRunArgs.global_semaphore_args``. Two fields differ in type:
-``ProgramRunArgs.tensor_args`` takes a ``ttnn.Tensor`` for each name and keeps it alive, where C++ holds the tensor's
-``MeshTensor``; and the ``data_format_metadata`` of a ``DataflowBufferSpec`` or ``ScratchpadSpec`` takes a ttnn data
+C++ only. Three fields differ in type: ``ProgramRunArgs.tensor_args`` takes a ``ttnn.Tensor`` for each name and keeps
+it alive, where C++ holds the tensor's ``MeshTensor``; ``ProgramRunArgs.global_semaphore_args`` takes a global
+semaphore for each name, such as ``ttnn.create_global_semaphore`` returns, and keeps it alive too, where C++ holds a
+reference to it; and the ``data_format_metadata`` of a ``DataflowBufferSpec`` or ``ScratchpadSpec`` takes a ttnn data
 type, such as ``ttnn.bfloat16``, so a format without one, such as Float16, cannot be set, and ``ttnn.int8`` reads back
 as ``ttnn.uint8``. In Python, argument values are integers from 0 to 2**32 - 1.
 
@@ -49,9 +49,9 @@ example's TT-NN kernels. To give the code itself instead, pass ``E.KernelSpec.So
 How a kernel finds its inputs
 *****************************
 
-Everything a kernel uses has a name, which the kernel code reaches through a generated namespace. For a buffer,
-tensor, semaphore or scratchpad, that name is the ``accessor_name`` of the kernel's binding; the ``unique_id`` of the
-spec only ties the binding to it. In the example, the reader reads tensor parameter ``input`` as ``tensor::src``.
+Everything a kernel uses has a name, which the kernel code reaches through a generated namespace. For a buffer, tensor,
+semaphore, global semaphore or scratchpad, that name is the ``accessor_name`` of the kernel's binding; the ``unique_id``
+of the spec only ties the binding to it. In the example, the reader reads tensor parameter ``input`` as ``tensor::src``.
 ``E.producer_of`` and ``E.consumer_of`` make a buffer binding from the buffer's ``unique_id`` and the accessor name; the
 example's buffers and their accessors share the names ``in`` and ``out``.
 
@@ -76,6 +76,10 @@ What a kernel needs, where you set it, and how the kernel reaches it:
 - **A buffer on a sharded tensor's memory**: a ``DataflowBufferSpec`` whose ``borrowed_from`` names the
   ``TensorParameter``. In the kernel: ``DataflowBuffer(dfb::<accessor_name>)``.
 - **A semaphore**: a ``SemaphoreSpec`` and a ``SemaphoreBinding``. In the kernel: ``Semaphore(sem::<accessor_name>)``.
+- **A global semaphore**, whose value carries over from one call to the next: a ``GlobalSemaphoreParameter`` and a
+  ``GlobalSemaphoreBinding`` (data-movement kernels only), and the semaphore, such as one from
+  ``ttnn.create_global_semaphore``, in ``ProgramRunArgs.global_semaphore_args``. In the kernel:
+  ``GlobalSemaphore(global_sem::<accessor_name>)``.
 - **Private scratch memory**: a ``ScratchpadSpec`` and a ``ScratchpadBinding``. In the kernel:
   ``Scratchpad<T>(scratch::<accessor_name>)``.
 
@@ -112,9 +116,9 @@ Calls and the program cache
 ***************************
 
 The first call with a given program compiles its kernels and sets it up on the device. A later call with the same
-program only writes the new values: argument values and tensors can change from call to call without a recompile.
-``ttnn.experimental.prepare_generic_op`` takes the same arguments, compiles the program and puts it in the cache without
-running it.
+program only writes the new values: argument values, tensors and global semaphores can change from call to call without
+a recompile. ``ttnn.experimental.prepare_generic_op`` takes the same arguments, compiles the program and puts it in the
+cache without running it.
 
 The cache key is a hash of the whole ``ProgramSpec``, combined with the devices it runs on, apart from
 ``ProgramSpec.name``, ``WorkUnitSpec.name`` and the tensor fields that a parameter's ``TensorSpecRelaxations`` allow
@@ -127,12 +131,13 @@ could give two different programs the same cache entry.
 
 Every call checks its run args against the spec before Metal sees them: each kernel gets exactly the runtime arguments
 and arrays it declares, each array with its declared length, each tensor parameter gets a tensor from ``io_tensors``
-that matches it, and each dataflow buffer (DFB) size override names a buffer of the spec, at most once and with no size
-of 0. Whether every node got its values is checked on later calls only when ``ttnn.CONFIG.validate_program_args`` is on,
-which it is not by default; with it off, a node that a later call leaves out keeps its previous values. A DFB size
-override in ``ProgramRunArgs.dfb_run_overrides`` stays in effect for later calls that reuse the cached program,
-including calls with an equal spec from other code, until a call changes it. ``prepare_generic_op`` with a program that
-is already cached applies its run args to it the same way, even if the preparation then fails.
+that matches it, each GlobalSemaphore parameter gets a global semaphore on the MeshDevice the program runs on, and each
+dataflow buffer (DFB) size override names a buffer of the spec, at most once and with no size of 0. Whether every node
+got its values is checked on later calls only when ``ttnn.CONFIG.validate_program_args`` is on, which it is not by
+default; with it off, a node that a later call leaves out keeps its previous values. A DFB size override in
+``ProgramRunArgs.dfb_run_overrides`` stays in effect for later calls that reuse the cached program, including calls with
+an equal spec from other code, until a call changes it. ``prepare_generic_op`` with a program that is already cached
+applies its run args to it the same way, even if the preparation then fails.
 
 Running on a mesh
 *****************
@@ -204,12 +209,12 @@ kernel, keep the flag if its factory sets it.
 .. _test_generic_op_program_spec.py: https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py
 
 Some features of the ``ProgramDescriptor`` form are not available in the ``ProgramSpec`` form yet, such as global
-circular buffers, fabric connections and per-core allocated tensors. From Python, global semaphores are not available
-yet either, and a semaphore always starts at 0. Programs that need any of these stay on ``ttnn.generic_op``.
+circular buffers, fabric connections and per-core allocated tensors. From Python, a ``SemaphoreSpec``'s semaphore always
+starts at 0. Programs that need any of these stay on ``ttnn.generic_op``.
 
 More examples
 *************
 
 test_generic_op_program_spec.py_ builds programs with two inputs, array arguments, aliased buffers, buffers on a sharded
-tensor's memory, semaphores, the mesh form and, on Quasar, a compute kernel with two threads. The API reference lists
-the arguments of :func:`ttnn.experimental.generic_op`.
+tensor's memory, semaphores, global semaphores, the mesh form and, on Quasar, a compute kernel with two threads. The API
+reference lists the arguments of :func:`ttnn.experimental.generic_op`.

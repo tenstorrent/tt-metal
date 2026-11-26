@@ -3,24 +3,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "impl/buffers/buffer_impl.hpp"
-#include <mesh_buffer.hpp>
-#include <mesh_coord.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
-#include "device.hpp"
+#include "tt-metalium/mesh/legacy/device.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "mesh_device_impl.hpp"
 #include "mesh_device_view_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/debug/inspector/inspector.hpp"
 #include "impl/lightmetal/host_api_capture_helpers.hpp"
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 
 #include <algorithm>
 #include <array>

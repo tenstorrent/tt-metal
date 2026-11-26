@@ -21,9 +21,9 @@
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include "tt_metal.hpp"
+#include "tt-metalium/execution/slow_dispatch.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>

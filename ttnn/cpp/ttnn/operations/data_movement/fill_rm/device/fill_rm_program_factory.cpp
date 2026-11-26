@@ -8,8 +8,8 @@
 #include <cstdint>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 

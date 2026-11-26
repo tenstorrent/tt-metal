@@ -103,6 +103,18 @@ def _session(tmp_path, workers, reports):
     return SimpleNamespace(config=config)
 
 
+def test_the_session_start_turns_the_wall_time_on(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.PRODUCE, raising=False)
+    monkeypatch.setattr(plugin, "_sim_server", None)
+    session = _session(tmp_path, 10, [("a::t", 40.0)])
+    monkeypatch.setattr(plugin.time, "perf_counter", lambda: 1000.0)
+    plugin.pytest_sessionstart(session)
+    monkeypatch.setattr(plugin.time, "perf_counter", lambda: 1100.0)
+    plugin._store_split_durations(session)
+    assert json.loads(Path(".perf_split_durations").read_text()) == {"a::t": 100.0}
+
+
 def test_the_run_pass_adds_to_the_compile_pass(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.PRODUCE, raising=False)

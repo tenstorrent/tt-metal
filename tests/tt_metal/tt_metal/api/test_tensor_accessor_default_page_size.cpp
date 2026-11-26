@@ -18,22 +18,22 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgConfig (RuntimePageSize / IsDram)
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "device_fixture.hpp"
 

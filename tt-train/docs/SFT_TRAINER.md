@@ -83,6 +83,7 @@ SFTTrainer(
     attention_mask=None,
     *,
     lr_lambda=None,
+    precision=None,
 )
 ```
 
@@ -100,6 +101,7 @@ SFTTrainer(
 | `loss_composer` | `Any \| None` | Mesh composer for multi-device loss aggregation. Defaults to `concat_mesh_to_tensor_composer(device, 0)` which works for both single-device and DDP. Pass a custom composer to override. |
 | `attention_mask` | `Any \| None` | Attention mask passed as the second argument to `model(input_ids, mask)`. `None` (default) lets the model generate a causal mask on the fly. |
 | `lr_lambda` | `Callable[[int], float] \| None` | Keyword argument. Custom `step -> factor` schedule: every step, each param group's LR is set to `factor` times its initial LR, so param groups keep their ratios. Overrides the default linear-warmup-then-constant. |
+| `precision` | `dict \| None` | Keyword argument. The YAML's `training_config.precision` block as a dict (`master_dtype`, `reduce_dtype`; see [Precision](#precision)). Applied after the LoRA wrapping and before the optimizer is built from a dict or the default. `None` (default) means no block. Raises `ValueError` together with a ready optimizer instance, whose state is already sized. |
 
 ### Methods
 
@@ -127,6 +129,36 @@ SFTTrainer(..., optimizer=None)
 
 Any optimizer registered with `ttml.optimizers.register_optimizer` can be used via the dict form.
 See [TTML Onboarding — Optimizers](TTML_ONBOARDING.md) for the full list of built-in optimizers.
+
+### Precision
+
+Pass the config's precision block as `precision=` for fp32 master weights or fp32 gradient sums (see
+[Mixed Precision](MIXED_PRECISION.md)):
+
+```python
+training_config = TrainingConfig(yaml_config)  # checks the precision block: a typo fails here
+SFTTrainer(
+    ...,
+    optimizer={"type": "AdamW", "lr": 1e-4},
+    precision=training_config.precision,  # e.g. {"master_dtype": "float32", "reduce_dtype": "float32"}
+)
+```
+
+The trainer applies it before it builds the optimizer, so the optimizer state follows the stored dtype. With LoRA,
+only the trainable adapters are converted; the frozen base keeps its dtype. `None` means no block, as for
+`create_optimizer`: the parameters keep their dtype and no reduce dtype is stored. With a ready optimizer instance the
+trainer applies nothing: apply the block when you create it, as `ttml.common.utils.create_optimizer` does when it is
+given the whole config (`train.py`).
+
+Weights loaded before the trainer is built went into the model's dtype, so fp32 master weights get them rounded to bf16
+first; that changes nothing for bf16 files. For full fine-tuning from an fp32 file, build the trainer first and load the
+weights after it, as `load_checkpoint` does on a resume: the block is applied once, by the trainer, and a loader that
+writes into the dtype a parameter is stored in keeps the fp32 values. Checkpoints, the Python Llama and Qwen3 loaders
+and the C++ safetensors loaders all do (see [fp32 master weights](MIXED_PRECISION.md#fp32-master-weights)). With LoRA
+the order doesn't matter: the frozen base stays in bf16, so load it before the trainer as usual. Don't apply the block
+yourself before the trainer wraps the model: `LoraModel` keeps the base's tensors, so the frozen base would stay in
+fp32, 6 bytes per parameter (fp32 plus its bf16 view) instead of 2. The trainer warns when a frozen parameter is
+stored in fp32.
 
 ---
 

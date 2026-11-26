@@ -15,7 +15,7 @@
 
 #include <hostdevcommon/fabric_common.h>  // chan_id_t
 #include "tt_metal/fabric/hw/inc/edm_fabric/host_rdma_service_abi.hpp"
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId

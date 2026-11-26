@@ -11,8 +11,8 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 #include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"

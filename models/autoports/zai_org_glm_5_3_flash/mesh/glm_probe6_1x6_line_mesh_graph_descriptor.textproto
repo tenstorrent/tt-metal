@@ -1,0 +1,16 @@
+# GLM-5.3-Flash, homelab-1 tt-lock group `probe` (UMD logical chips 2-7 = BDFs 1d,1e,55,56,72,73) as a 1x6 LINE with
+# fabric DISABLED. Ethernet does not connect these six chips as a line (2-3, 4-5, 6-7 on-board; 2-5 and 3-4 cabled;
+# 6-7 only to the misc boards), so this is only used to satisfy the CUSTOM-cluster check (tt_cluster.cpp:287) while
+# the mesh is opened through the explicit-mapping path (pcie_p2p.use_isolated_mesh, *without* pcie_p2p.setup: PCIe
+# P2P traffic is forbidden on homelab-1, see knowledge/LEARNED_failures.md).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 6 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

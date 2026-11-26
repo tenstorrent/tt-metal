@@ -9,8 +9,8 @@
 #include <algorithm>
 #include <cmath>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"

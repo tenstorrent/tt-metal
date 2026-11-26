@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
-#include <allocator.hpp>
-#include <buffer_types.hpp>
-#include <device.hpp>
-#include <sub_device.hpp>
-#include <sub_device_types.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -20,12 +20,12 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "dispatch/dispatch_query_manager.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
-#include "mesh_device.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt_stl/strong_type.hpp>

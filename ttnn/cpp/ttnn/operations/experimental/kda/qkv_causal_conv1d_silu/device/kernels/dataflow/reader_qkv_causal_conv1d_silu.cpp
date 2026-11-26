@@ -86,15 +86,17 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t sp_rank) {
                            ? SlabCarry{0, false, true}
                            : read_slab_carry<slab, slab_index_limit, slab_scale, slab_offset, entry_pages>(noc, rows);
 
-    // Read the predecessor's history_rows rows of this channel block's columns into the rows staging area, from the
-    // exchange buffer's full-row pages.
-    const auto read_exchange_rows = [&](uint32_t ct_start) {
+    // A history slab (SP-sharded) holds only this rank's channels: the first rank reads the old tail from the exchange
+    // buffer's history rows, which its exchange core fills from every rank (history_ready), never from the slab.
+    // Read history_rows rows of this channel block's columns into the rows staging area, from the exchange buffer's
+    // full-row pages from `first_page`: the predecessor's rows, or (slab) the gathered old tail.
+    const auto read_exchange_rows = [&](uint32_t ct_start, uint32_t first_page = predecessor_page) {
         for (uint32_t row = 0; row < history_rows; ++row) {
             noc.async_read(
                 predecessor,
                 scratch,
                 block_row_bytes,
-                {.page_id = predecessor_page + row, .offset_bytes = ct_start * tile_row_bytes},
+                {.page_id = first_page + row, .offset_bytes = ct_start * tile_row_bytes},
                 {.offset_bytes = offset_of(rows) + row * block_row_bytes});
         }
     };
@@ -106,19 +108,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t sp_rank) {
         }
     };
 
-    // The exchange core replaces a slab's carry in place: signal it once this core's last history read (each block's
-    // first tile row, on the first rank) has landed.
-    Semaphore history_consumed(sem::history_consumed);
-    const auto first_rows = [](uint32_t index) { return (index + Mt - 1) / Mt; };
-    uint32_t history_reads_left =
-        slab && !initial_from_predecessor ? first_rows(wi_start + wi_count) - first_rows(wi_start) : 0;
-    const auto history_consumed_up = [&]() {
-        history_consumed.up(noc, exchange_core_x, exchange_core_y, 1);
-        noc.async_atomic_barrier();
-    };
-    if (slab && history_reads_left == 0) {
-        history_consumed_up();
-    }
+    Semaphore history_ready(sem::history_ready);
+    bool history_arrived = !slab;
 
     // With the fabric exchange, the exchange core releases this core once the predecessor's rows have landed.
     Semaphore predecessor_ready(sem::predecessor_ready);
@@ -191,6 +182,12 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t sp_rank) {
             if (carry.zeros) {
                 noc.async_write_zeros(scratch, history_rows * block_row_bytes, {.offset_bytes = offset_of(rows)});
                 noc.write_zeros_l1_barrier();
+            } else if constexpr (slab) {
+                if (!history_arrived) {
+                    history_ready.wait_min(1);
+                    history_arrived = true;
+                }
+                read_exchange_rows(ct_start, history_page);
             } else {
                 read_tail(history, ct_start, carry.page_base);
             }
@@ -220,9 +217,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t sp_rank) {
             }
         }
         noc.async_read_barrier();
-        if (slab && segment_start && !from_predecessor && --history_reads_left == 0) {
-            history_consumed_up();
-        }
 
         // Strip rows [0, 3).
         constexpr uint32_t carried_bytes = history_rows * face_row_bytes;

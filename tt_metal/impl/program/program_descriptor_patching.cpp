@@ -20,13 +20,13 @@
 // CODE REVIEWERS: if anyone builds on top of this, reject immediately — unless it's Diego.
 
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include "program_impl.hpp"
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <algorithm>

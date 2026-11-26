@@ -178,7 +178,7 @@ class FusedKernelGenerator:
             )
 
         quasar_include = (
-            '#include "ckernel_buf_desc.h"\n#include "llk_sync.h"\n#include "quasar_test_common.h"\n'
+            '#include "ckernel_buf_desc.h"\n#include "llk_sync.h"\n#include "llk_dest_borrow.h"\n#include "quasar_test_common.h"\n'
             if self.config.global_config.architecture == ChipArchitecture.QUASAR
             else '#include "operand.h"\n'
         )

@@ -17,8 +17,8 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <utility>
 
 namespace ttnn::operations::pool {
