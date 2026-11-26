@@ -133,7 +133,26 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "unsqueeze_to_4D",
-        &ttnn::unsqueeze_to_4D,
+        [](const ttnn::Tensor& tensor) {
+            // The rank-4 view keeps the buffer but rebuilds the padded shape from the logical shape, so a TILE input
+            // padded past the next tile multiple would read the wrong tiles. The docstring leaves such inputs out.
+            const auto& logical = tensor.logical_shape();
+            if (tensor.layout() == ttnn::TILE_LAYOUT && logical.rank() >= 2 && logical.rank() < 4) {
+                const auto& padded = tensor.padded_shape();
+                const auto tile = tensor.tensor_spec().tile();
+                const auto round_up = [](uint32_t value, uint32_t multiple) {
+                    return (value + multiple - 1) / multiple * multiple;
+                };
+                TT_FATAL(
+                    padded[-2] == round_up(logical[-2], tile.get_height()) &&
+                        padded[-1] == round_up(logical[-1], tile.get_width()),
+                    "unsqueeze_to_4D needs a TILE tensor padded only up to the next tile multiple, but shape {} is "
+                    "padded to {}",
+                    logical,
+                    padded);
+            }
+            return ttnn::unsqueeze_to_4D(tensor);
+        },
         nb::arg("tensor"),
         R"doc(
             Returns `tensor` as a rank-4 tensor, with dimensions of size 1 added in front: a tensor of shape ``[H, W]`` gives ``[1, 1, H, W]``. A rank-4 tensor is returned unchanged.

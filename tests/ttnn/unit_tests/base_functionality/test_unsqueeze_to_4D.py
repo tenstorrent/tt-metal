@@ -103,7 +103,7 @@ def test_unsqueeze_to_4D_docstring_blackhole_inputs(dtype, layout, buffer_type, 
     memory_config = interleaved_memory_config(buffer_type)
     torch.manual_seed(0)
     for shape in ((), (64,), (50, 64), (3, 50, 64), (2, 3, 50, 64)):
-        x = torch.randn(shape) * 8
+        x = full_range_input(shape, dtype)
         input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
         _assert_unsqueeze_to_4D_view(input_tensor, read)
 
@@ -112,3 +112,12 @@ def test_unsqueeze_to_4D_rank_above_4(device, expect_error):
     x = ttnn.from_torch(torch.zeros((1, 1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "Tensor rank is greater than 4"):
         ttnn.unsqueeze_to_4D(x)
+
+
+def test_unsqueeze_to_4D_rejects_over_padded_tile_input(device, expect_error):
+    """A TILE input padded past the next multiple of 32 is outside the ttnn.unsqueeze_to_4D docstring. The op raises
+    instead of returning a view that reads the wrong tiles."""
+    input_tensor = ttnn.from_torch(torch.ones(2, 16, 64), dtype=ttnn.bfloat16, device=device)
+    over_padded = ttnn.tilize_with_val_padding(input_tensor, [2, 64, 64], 0.0)
+    with expect_error(RuntimeError, "padded only up to the next tile multiple"):
+        ttnn.unsqueeze_to_4D(over_padded)
