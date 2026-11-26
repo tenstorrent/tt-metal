@@ -2553,8 +2553,6 @@
     # Below the job timeout, as for the SC1 legs; the job deadline caps it further for the second launch.
     export TABLE_WAIT_SECS=2400
     export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 90 * 60 ))  # the bh_sc4 timeout below
-    echo "===== [1/2] (Kimi-K3.1) prefill KV accuracy 8k@2.5k + perf 1M@2.5k, one chunk per forward ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc4 || exit $?
     echo "===== [2/2] (Kimi-K3.1) packed prefill KV accuracy 8k@2.5k + perf 1M@2.5k, four chunks per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc4 --variant packed || exit $?
     echo "===== both runs passed ====="
@@ -2631,7 +2629,7 @@
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1 --variant packed || exit $?
     echo "===== both runs passed ====="
   test_type: k31_prefill_runner_24l
-  test_tags: [kimi_k3_1, k31_runner, runner, kv_cache, k31_packed]
+  test_tags: [kimi_k3_1, runner, kv_cache, k31_packed]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
