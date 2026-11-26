@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Per-launch capture of the NoC interface event counters (tables in tt-llk perf_counters/noc_counters_*.h). The
-// counters belong to the tile, so one core captures. On Wormhole and Blackhole the BRISC firmware reads the start
-// values before it releases NCRISC and the TRISCs, and the BRISC kernel entry closes the window; on Quasar DM0 does
-// both.
+// Per-launch capture of the NoC interface counters (tables in tt-llk perf_counters/noc_counters_*.h): the BRISC
+// firmware opens the window before it starts the other cores, the kernel entry closes it; on Quasar DM0 does both.
 
 #pragma once
 
