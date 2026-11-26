@@ -113,6 +113,8 @@ struct FlatRoutedExpertPlan {
     // schedule page (CB 6) and the dynamic counts (CB 7) at one offset past every role's own bytes (one address on all
     // of them, as the static CBs had)
     uint32_t x_ring_offset = 0, h_local_offset = 0, pack_cb_offset = 0;
+    // K split: the partial CBs (out, in, own; partial_slots x 2 bf16 tiles each) after the pack CB
+    uint32_t partial_offset = 0, partial_slots = 4;  // (rows folded in pairs, a pass behind: up to 3 out)
     uint32_t down_h_offset = 0, down_output_offset = 0;
     uint32_t super_block_offset = 0, relay_landing_offset = 0;
     uint32_t arena_tiles = 0;

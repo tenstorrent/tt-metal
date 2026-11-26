@@ -176,21 +176,29 @@ FlatProgramHandles add_flat_routed_expert_program(
     // the x path's blocks: a row pass's rows with row passes (each pass then reads and frees its own x blocks, so the
     // next sub-block's x streams in through the whole sub-block, not only behind its last pass), else a sub-block's.
     // The ring keeps its bytes: x_ring_blocks of MT rows hold MT / XR times as many x blocks.
-    const uint32_t XR = p.gate_up_row_passes && !p.gate_up_full_sync &&
-                                !(std::getenv("FLAT_X_FULL_ROWS") && std::getenv("FLAT_X_FULL_ROWS")[0] == '1')
-                            ? std::max(1u, 4 / p.gate_up_weight_tiles_per_row)
-                            : MT;
+    uint32_t XR = p.gate_up_row_passes && !p.gate_up_full_sync &&
+                          !(std::getenv("FLAT_X_FULL_ROWS") && std::getenv("FLAT_X_FULL_ROWS")[0] == '1')
+                      ? std::max(1u, 4 / p.gate_up_weight_tiles_per_row)
+                      : MT;
+    // K split: one-row passes, but the relays' per-block costs want large x blocks - a whole sub-block's (GLM-5.3 4x4 M
+    // 320 at x blocks of 1 / 2 / 4 row tiles: 1203 / 1100 / 1088 us)
+    if (p.gate_up_k_split > 1) {
+        XR = MT;
+    }
+    // (MEASUREMENT: FLAT_XR=n - the x blocks' row tiles, a multiple of the passes' that divides MT)
+    if (const char* e = std::getenv("FLAT_XR"); e != nullptr && std::atoi(e) > 0) {
+        XR = std::atoi(e);
+    }
     TT_FATAL(MT % XR == 0, "flat_routed_expert: x rows {} do not divide the sub-block's {}", XR, MT);
     const uint32_t x_blk = MT * kKBlk, x_ring_bytes = p.x_ring_blocks * x_blk * x_tile;
     const uint32_t x_bytes = XR * kKBlk * x_tile;  // an x block
     const uint32_t PIN = cfg.pin;
     TT_FATAL(NR == 2, "flat_routed_expert: two gate/up rectangles");
-    // (WIP: the K split's plan and weight layout exist; its kernels - the partners' partial exchange, the x per K
-    // part - do not yet)
-    TT_FATAL(
-        p.gate_up_k_split == 1,
-        "flat_routed_expert: gate_up_k_split {} has no kernels yet (FLAT_KS)",
-        p.gate_up_k_split);
+    // K split (WIP): gate/up core ci is K part part_of(ci) of its column group (core j of a weight slot: part j % KS),
+    // its partner core ci ^ 1 (KS 2: the slot's cores come in partner pairs)
+    const uint32_t KS = p.gate_up_k_split;
+    auto part_of = [&](uint32_t ci) { return (ci % p.gate_up_cores_per_weight_slot) % KS; };
+    TT_FATAL(KS == 1 || (KS == 2 && p.units_per_core == 0), "flat_routed_expert: k split {} (2, whole pairs)", KS);
 
     // ---- per-core pieces ----
     std::vector<uint32_t> head_xy, gu_xy;
@@ -250,7 +258,7 @@ FlatProgramHandles add_flat_routed_expert_program(
     const uint32_t x_mcast_bits = std::getenv("FLAT_X_MCAST") ? uint32_t(std::atoi(std::getenv("FLAT_X_MCAST"))) : 0u;
     const bool x_mcast = (x_mcast_bits & 1) != 0;
     std::vector<uint32_t> rect_index(ngu, 0);
-    std::vector<uint32_t> x_head(NR, 0);  // each rectangle's snake head (gate/up index)
+    std::vector<uint32_t> x_head(NR * KS, 0);  // each rectangle's snake heads (a K part each; gate/up index)
     // MEASUREMENT ONLY (never commit), FLAT_X_NOC1=1: the snakes forward on NOC1 (north / west first): mirrored - from the
     // relay's row up a column (wrapping inside the rectangle), one column west, from the rectangle's east edge
     const bool x_noc1 = [] {
@@ -279,18 +287,29 @@ FlatProgramHandles add_flat_routed_expert_program(
                 }
             }
         }
-        x_head[k] = seq.front();
         for (size_t j = 0; j < rect_cores[k].size(); ++j) {
             rect_index[rect_cores[k][j]] = j;
         }
         TT_FATAL(!x_mcast || rect_cores[k].size() + 4 <= kRelayWordsBytes / 4, "FLAT_X_MCAST: rectangle too large");
+        TT_FATAL(KS == 1 || (!x_mcast && !x_noc1), "flat_routed_expert: the K split takes the unicast snakes on NOC0");
         if (x_mcast) {
+            x_head[k] = seq.front();
             continue;
         }
-        for (size_t j = 0; j < seq.size(); ++j) {
-            XLink& l = xlink[seq[j]];
-            l.pred = j ? pk(p.gate_up_cores[seq[j - 1]]) : 0;
-            l.succ0 = j + 1 < seq.size() ? pk(p.gate_up_cores[seq[j + 1]]) : 0;
+        // (the K split: a snake a K part, its cores in the rectangle's snake order)
+        for (uint32_t kp = 0; kp < KS; ++kp) {
+            std::vector<uint32_t> sq;
+            for (uint32_t ci : seq) {
+                if (part_of(ci) == kp) {
+                    sq.push_back(ci);
+                }
+            }
+            x_head[k * KS + kp] = sq.front();
+            for (size_t j = 0; j < sq.size(); ++j) {
+                XLink& l = xlink[sq[j]];
+                l.pred = j ? pk(p.gate_up_cores[sq[j - 1]]) : 0;
+                l.succ0 = j + 1 < sq.size() ? pk(p.gate_up_cores[sq[j + 1]]) : 0;
+            }
         }
     }
     const uint32_t ng_bytes = 4 * p.global_experts;
@@ -358,6 +377,8 @@ FlatProgramHandles add_flat_routed_expert_program(
     // the h exchange: the gate/up cores' slices into the down chain heads' buffers (one gather semaphore a buffer), go
     options["gate_up_core_count"] = ngu;
     options["gate_up_tile_pairs"] = NP;
+    options["gate_up_k_split"] = KS;
+    options["partial_slots"] = p.partial_slots;
     options["h_buffers"] = p.down_h_buffers;
     options["h_gather_sem_0"] = GATH;
     options["h_gather_sem_1"] = GATH1;
@@ -619,13 +640,16 @@ FlatProgramHandles add_flat_routed_expert_program(
                 const uint32_t corners =
                     (uint32_t(c0.x) << 24) | (uint32_t(c0.y) << 16) | (uint32_t(c1.x) << 8) | uint32_t(c1.y);
                 xm.a(FlatAddr::Arena, p.x_ring_offset)
-                    .lit(x_mcast ? corners : pk(p.gate_up_cores[x_head[k]]))
+                    .lit(x_mcast ? corners : pk(p.gate_up_cores[x_head[k * KS]]))
                     .a(FlatAddr::Words)
                     .lit(pk(p.relay_cores[NR]))
                     .a(FlatAddr::Arena, p.relay_landing_offset)
                     .lit(p.relay_landing_slots)
                     .lit(pk(p.relay_cores[NR + 1]));
                 xm.cat(dyn);
+                if (KS > 1) {  // (the K split: K part 1's snake head, after the schedule args)
+                    xm.lit(pk(p.gate_up_cores[x_head[k * KS + 1]]));
+                }
                 add_rt(k_x_injectors[idx], rl, xm);
             } else {
                 Args hl;
@@ -697,7 +721,11 @@ FlatProgramHandles add_flat_routed_expert_program(
                 const uint32_t cg_ = r * p.column_groups_per_weight_slot + j / p.gate_up_k_split;
                 Args a;
                 // the grant counter's semaphore id, column group, chain heads, GATH, h_all, head xy
-                a.lit(GRANT).lit(cg_).lit(head_xy.size()).lit(GATH).a(FlatAddr::Arena, p.down_h_offset);
+                a.lit(GRANT)
+                    .lit(cg_ | (part_of(ci) << 16))
+                    .lit(head_xy.size())
+                    .lit(GATH)
+                    .a(FlatAddr::Arena, p.down_h_offset);
                 if (x_noc1) {  // (FLAT_X_NOC1: the x ring and the successor, RT 5 / 6)
                     a.a(FlatAddr::Arena, p.x_ring_offset).lit(xlink[ci].succ0);
                 }
@@ -711,6 +739,9 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit(j * p.weight_block_tiles * w_tile)
                     .lit(p.gate_up_cores_per_weight_slot * p.weight_block_tiles * w_tile)
                     .a(FlatAddr::Arena, 0);
+                if (KS > 1) {  // (the K split: the partner's xy, after the schedule args)
+                    a.lit(pk(p.gate_up_cores[ci ^ 1]));
+                }
                 add_rt(kr, gc, a);
                 // x ring, predecessor (+ its free word's sem), successor, relay + this core's word there
                 Args f;
@@ -719,10 +750,11 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit(SFREE)
                     .lit(xlink[ci].succ0)
                     .lit(pk(p.relay_cores[p.rectangle_of(gc)]))
-                    .a(FlatAddr::Words, x_mcast ? 4 * rect_index[ci] : 0);
+                    .a(FlatAddr::Words, x_mcast ? 4 * rect_index[ci] : 4 * part_of(ci));  // (a snake's head: its word)
                 f.cat(gw);
                 add_rt(k_x_forwarder, gc, f);
-                set_runtime_args(program.kernels[kc], gc, std::vector<uint32_t>{(cg_ * p.units_per_core) & 1u});
+                set_runtime_args(
+                    program.kernels[kc], gc, std::vector<uint32_t>{(cg_ * p.units_per_core) & 1u, part_of(ci)});
             }
         }
     }
@@ -878,6 +910,12 @@ FlatProgramHandles add_flat_routed_expert_program(
     arena_cb(0, p.x_ring_offset, x_ring_bytes, p.gate_up_cores, xf, x_tile);
     arena_cb(3, p.h_local_offset, p.down_h_buffers * MT * p.h_tiles_per_core * h_tile, p.gate_up_cores, hf, h_tile);
     arena_cb(16, p.pack_cb_offset, 2048, p.gate_up_cores, tt::DataFormat::Float16_b, 2048);
+    if (KS > 1) {  // (the K split's partials: out, in (the partner writes it), own - bf16 tile pairs)
+        const uint32_t pb = p.partial_slots * 2 * 2048, pa = (pb + 2047) / 2048 * 2048;
+        arena_cb(4, p.partial_offset, pb, p.gate_up_cores, tt::DataFormat::Float16_b, 2048);
+        arena_cb(5, p.partial_offset + pa, pb, p.gate_up_cores, tt::DataFormat::Float16_b, 2048);
+        arena_cb(8, p.partial_offset + 2 * pa, pb, p.gate_up_cores, tt::DataFormat::Float16_b, 2048);
+    }
     arena_cb(2, p.down_h_offset, p.down_h_buffers * p.down_h_buffer_tiles * h_tile, p.down_cores, hf, h_tile);
     for (const auto& [pw, ds] : dgroups) {
         const uint32_t kd = FlatRoutedExpertPlan::down_k_block_tiles(pw, It);

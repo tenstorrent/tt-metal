@@ -35,6 +35,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/experimental/custom_mm.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "flat_options.hpp"
@@ -69,8 +70,12 @@ constexpr bool half_width = flat_options::half_width_gate_up;
 constexpr bool units = flat_options::gate_up_units != 0;
 // a row of a weight block (and of DST): this core's gate/up tiles
 constexpr uint32_t row_width = units ? flat_options::gate_up_units : 2 * tile_pairs;
+// K split: this core computes its group's tile_pairs pairs over its K part, keeps tile_pairs / k_split of them (part
+// kpart's, RT 1) after folding the partner's partials in
+constexpr uint32_t ks = flat_options::gate_up_k_split;
+uint32_t kpart = 0;
 // the h tiles this core produces per row tile
-constexpr uint32_t h_row_tiles = units ? flat_options::gate_up_units_h_tiles : tile_pairs;
+constexpr uint32_t h_row_tiles = units ? flat_options::gate_up_units_h_tiles : tile_pairs / ks;
 // row tiles in DST at once: the whole sub-block, or with row passes row_pass_rows
 constexpr bool row_passes = flat_options::row_pass_rows != 0;
 constexpr uint32_t pass_row_tiles = row_passes ? flat_options::row_pass_rows : row_tiles;
@@ -244,21 +249,119 @@ FORCE_INLINE void compute_sub_block(uint32_t first_block, uint32_t first_slot, b
     cb_push_back(h_cb, row_tiles * h_row_tiles);
 }
 
+// K split, after a row pass's matmul (one row tile; DST: the group's 2 pairs, [gate, up] of pair 0 then pair 1, its
+// partial sums over this core's K part): the partner's pair goes out (partial_out_cb, bf16; the receiver sends it),
+// this core's own pair to partial_own_cb; then own + the partner's (partial_in_cb) folded in DST (fp32), the activation
+// and the pack of this row's h tile. Each core sends before it waits for the partner's, so the pair cannot deadlock.
+// (two halves: k_split_pack after each pass, k_split_fold one pass later - the partner's partial has a whole pass to
+// arrive - and for a sub-block's last pass at its end)
+constexpr uint32_t pout = flat_options::partial_out_cb, pin = flat_options::partial_in_cb,
+                   pown = flat_options::partial_own_cb;
+ZZ_COUNTER(zz_ks_pack);  // (PACK: the partials' pack, incl. its DEST wait)
+ZZ_COUNTER(zz_ks_pin);   // (UNPACK: waiting for the partner's partial)
+ZZ_COUNTER(zz_ks_fold);  // (MATH: the fold incl. the inits around it)
+ZZ_COUNTER(zz_ks_h);     // (PACK: activation + h pack, incl. its DEST wait)
+FORCE_INLINE void k_split_pack() {
+    const uint32_t mine = 2 * kpart, theirs = 2 * (1 - kpart);
+    [[maybe_unused]] const uint32_t zz0 = ZZ_NOW();
+    WAYPOINT("KPDW");
+    tile_regs_wait();
+    WAYPOINT("KPOW");
+    cb_reserve_back(pout, 2);
+    WAYPOINT("KPMW");
+    cb_reserve_back(pown, 2);
+    WAYPOINT("KPGO");
+    pack_reconfig_data_format(out_cb, pout);
+    pack_tile<true>(theirs, pout, 0);
+    pack_tile<true>(theirs + 1, pout, 1);
+    pack_tile<true>(mine, pown, 0);
+    pack_tile<true>(mine + 1, pown, 1);
+    tile_regs_release();
+    cb_push_back(pout, 2);
+    cb_push_back(pown, 2);
+    pack_reconfig_data_format(pout, out_cb);
+    if constexpr (zz::on) {
+        zz_ks_pack += ZZ_NOW() - zz0;
+    }
+}
+
+// rows [row, row + n) (n 1 or 2: a DST half holds 2 rows' (gate, up)): DST 2 r / 2 r + 1 = own + the partner's.
+// The unpacker's tile indices do not wrap at a CB's end: 2 rows only when they sit in consecutive slots of the
+// partial rings (both advance a row a fold row, in step), never from the last slot (ks_slot_fit).
+uint32_t ks_rows_folded = 0;  // (rows folded over the call: the partial rings' read slot)
+FORCE_INLINE uint32_t ks_slot_fit(uint32_t want) {
+    return want > 1 && ks_rows_folded % flat_options::partial_slots == flat_options::partial_slots - 1 ? 1 : want;
+}
+FORCE_INLINE void k_split_fold(uint32_t row, uint32_t n) {
+    [[maybe_unused]] const uint32_t zz0 = ZZ_NOW();
+    reconfig_data_format(pown, pin);
+    add_init(pown, pin);
+    WAYPOINT("KFMW");
+    cb_wait_front(pown, 2 * n);
+    WAYPOINT("KFIW");
+    ZZ_WAIT(zz_ks_pin, cb_wait_front(pin, 2 * n));
+    WAYPOINT("KFAW");
+    tile_regs_acquire();
+    WAYPOINT("KFGO");
+    for (uint32_t t = 0; t < 2 * n; ++t) {
+        add_tiles(pown, pin, t, t, t);
+    }
+    tile_regs_commit();
+    cb_pop_front(pown, 2 * n);
+    cb_pop_front(pin, 2 * n);
+    ks_rows_folded += n;
+    // back to the matmul (its sources, its init) for the next pass
+    reconfig_data_format<SrcOrder::Reverse>(x_cb, weight_cb);
+    // (no SrcB clear: it waits for both SrcB banks every pass)
+    custom_mm_block_init_short<false, CustomMmDestLayout::Default, false>(x_cb, weight_cb, out_cb, row_width);
+    if constexpr (zz::on) {
+        zz_ks_fold += ZZ_NOW() - zz0;
+    }
+    [[maybe_unused]] const uint32_t zz1 = ZZ_NOW();
+    WAYPOINT("KHDW");
+    tile_regs_wait();
+    WAYPOINT("KHGO");
+    activate(2 * n);
+    pack_reconfig_data_format(out_cb, h_cb);
+    for (uint32_t r = 0; r < n; ++r) {
+        pack_tile<true>(2 * r, h_cb, row + r);
+    }
+    pack_reconfig_data_format(h_cb, out_cb);
+    tile_regs_release();
+    if constexpr (zz::on) {
+        zz_ks_h += ZZ_NOW() - zz1;
+    }
+}
+
 // One sub-block in row passes, for when DST cannot hold all of a sub-block's gate/up tiles: each pass computes
 // pass_row_tiles row tiles over all K blocks, as compute_sub_block does. The passes read the same weight blocks, which
-// stay in their ring until the last pass frees them; each pass has its own x blocks (flat_options::x_row_tiles =
-// pass_row_tiles: the x path sends a sub-block's x as one x sub-block a pass, in pass order), waited for and freed
-// block by block, so the next x streams in through the whole sub-block rather than only behind its last pass.
+// stay in their ring until the last pass frees them. x arrives in x sub-blocks of flat_options::x_row_tiles rows (a
+// whole number of passes' rows: the x path's granularity, chosen apart from the passes' - the relays' per-block costs
+// want few, large blocks; the ring's slack wants x freed early): a group of PPX passes shares an x sub-block's blocks,
+// the group's first pass waits for them block by block (they arrive in order) and its last frees them, the passes
+// between re-read them from their ring slots (stepped, not recomputed: the unpack thread's work per block is on the
+// matmul's critical path). PPX 1: each pass waits for and frees its own blocks.
+uint32_t x_blocks_freed = 0;  // (the x ring's read slot: x_blocks_freed % x_ring_blocks)
 FORCE_INLINE void compute_sub_block_in_row_passes(
     uint32_t first_block, uint32_t first_slot, bool frees_weights, uint32_t rows) {
-    static_assert(flat_options::x_row_tiles == pass_row_tiles, "row passes: an x block holds a pass's rows");
-    constexpr uint32_t x_block_tiles = pass_row_tiles * x_block_k_tiles;
+    constexpr uint32_t xr = flat_options::x_row_tiles, ppx = xr / pass_row_tiles;
+    static_assert(xr % pass_row_tiles == 0 && row_tiles % xr == 0, "row passes: an x block holds whole passes' rows");
+    constexpr uint32_t x_block_tiles = xr * x_block_k_tiles;
+    constexpr uint32_t x_ring_blocks = flat_options::x_ring_blocks;
     const uint32_t passes = (rows + pass_row_tiles - 1) / pass_row_tiles;
+    uint32_t front = 0;                       // (the ring slot of the group's first block)
+    [[maybe_unused]] uint32_t ks_folded = 0;  // (K split: the sub-block's rows folded so far)
     ZZ_WAIT(zz_h_wait, cb_reserve_back(h_cb, row_tiles * h_row_tiles));
     for (uint32_t pass = 0; pass < passes; ++pass) {
         const uint32_t first_row = pass * pass_row_tiles;
         const uint32_t pass_rows = rows - first_row < pass_row_tiles ? rows - first_row : pass_row_tiles;
         const bool last_pass = pass + 1 == passes;
+        const uint32_t in_group = pass % ppx;
+        const bool first_g = in_group == 0, last_g = in_group + 1 == ppx || last_pass;
+        if (first_g) {
+            front = x_blocks_freed % x_ring_blocks;
+        }
+        int32_t slot_offset = 0;  // (block `block`'s slot - front, wrapped once past the ring's end)
         matmul_rows_init(pass_rows);
         ZZ_WAIT(zz_acquire, tile_regs_acquire());
         [[maybe_unused]] const uint32_t zz_m0 = ZZ_NOW();
@@ -270,37 +373,67 @@ FORCE_INLINE void compute_sub_block_in_row_passes(
             static_cast<int32_t>(weight_block_tiles);
         const bool freeing = last_pass && frees_weights;
         for (uint32_t block = 0; block < blocks_per_load; ++block) {
-            // (block by block: grouped waits / frees cost the x chain its slack)
-            ZZ_WAIT(zz_x_wait, cb_wait_front(x_cb, x_block_tiles));
+            if (first_g) {  // (block by block: grouped waits / frees cost the x chain its slack)
+                WAYPOINT("KXWT");
+                ZZ_WAIT(zz_x_wait, cb_wait_front(x_cb, last_g ? x_block_tiles : (block + 1) * x_block_tiles));
+                WAYPOINT("KXGO");
+            }
+            const uint32_t x_offset = last_g ? 0 : static_cast<uint32_t>(slot_offset) * x_block_tiles;
             const uint32_t wb = first_block + block;
             if (wb + 1 > weight_blocks_landed) {
+                WAYPOINT("KWWT");
                 ZZ_WAIT(zz_w_wait, cb_wait_front(weight_cb, (wb + 1 - weight_blocks_freed) * weight_block_tiles));
+                WAYPOINT("KWGO");
                 weight_blocks_landed = wb + 1;
             }
             const uint32_t w_offset =
                 static_cast<uint32_t>(freeing ? w_base : w_base + static_cast<int32_t>(block * weight_block_tiles));
-            matmul_x_block<pass_row_tiles>(0, w_offset, pass_rows);
-            cb_pop_front(x_cb, x_block_tiles);
+            matmul_x_block<pass_row_tiles>(x_offset + in_group * pass_row_tiles * x_block_k_tiles, w_offset, pass_rows);
+            if (last_g) {
+                cb_pop_front(x_cb, x_block_tiles);
+                ++x_blocks_freed;
+            }
             if (freeing) {
                 free_weight_block();
             }
+            slot_offset = front + slot_offset + 1 == static_cast<int32_t>(x_ring_blocks)
+                              ? slot_offset + 1 - static_cast<int32_t>(x_ring_blocks)
+                              : slot_offset + 1;
         }
         tile_regs_commit();
         if constexpr (zz::on) {
             zz_mm += ZZ_NOW() - zz_m0;
             zz_tiles += blocks_per_load * x_block_k_tiles * pass_rows * row_width;
         }
-        tile_regs_wait();
         [[maybe_unused]] const uint32_t zz_p0 = ZZ_NOW();
-        activate(pass_rows * row_width);
-        pack_reconfig_data_format(out_cb, h_cb);
-        for (uint32_t h_tile = 0; h_tile < h_row_tiles; ++h_tile) {  // this pass's rows of each h tile
-            for (uint32_t row = 0; row < pass_rows; ++row) {
-                pack_tile<true>(row * row_width + h_tile_dest(h_tile), h_cb, h_tile * row_tiles + first_row + row);
+        if constexpr (ks > 1) {
+            // (rows fold in pairs, a pair once the pass after it is packed - its partner partials have had a pass to
+            // arrive - the rest at the sub-block's end)
+            k_split_pack();
+            while (first_row >= ks_folded + 2) {
+                const uint32_t n = ks_slot_fit(2);
+                k_split_fold(ks_folded, n);
+                ks_folded += n;
             }
+            if (last_pass) {
+                while (ks_folded <= first_row) {
+                    const uint32_t n = ks_slot_fit(first_row + 1 - ks_folded < 2 ? 1 : 2);
+                    k_split_fold(ks_folded, n);
+                    ks_folded += n;
+                }
+            }
+        } else {
+            tile_regs_wait();
+            activate(pass_rows * row_width);
+            pack_reconfig_data_format(out_cb, h_cb);
+            for (uint32_t h_tile = 0; h_tile < h_row_tiles; ++h_tile) {  // this pass's rows of each h tile
+                for (uint32_t row = 0; row < pass_rows; ++row) {
+                    pack_tile<true>(row * row_width + h_tile_dest(h_tile), h_cb, h_tile * row_tiles + first_row + row);
+                }
+            }
+            pack_reconfig_data_format(h_cb, out_cb);
+            tile_regs_release();
         }
-        pack_reconfig_data_format(h_cb, out_cb);
-        tile_regs_release();
         if constexpr (zz::on) {
             zz_pack += ZZ_NOW() - zz_p0;
         }
@@ -313,6 +446,11 @@ FORCE_INLINE void compute_sub_block_in_row_passes(
 void kernel_main() {
     if constexpr (units) {
         first_unit_offset = get_arg_val<uint32_t>(0);
+    }
+    if constexpr (ks > 1) {
+        static_assert(
+            ks == 1 || (custom_mm && row_passes && !units && tile_pairs == 2), "the K split: 2 whole pairs, custom_mm");
+        kpart = get_arg_val<uint32_t>(1);
     }
     compute_kernel_hw_startup<SrcOrder::Reverse>(x_cb, weight_cb, out_cb);
     if constexpr (custom_mm) {
@@ -366,5 +504,11 @@ void kernel_main() {
     PACK((ZZ_EMIT("ZZ-GU-PACKTIME", zz_pack)));
     MATH((ZZ_EMIT("ZZ-GU-ACQUIRE", zz_acquire)));
     MATH((ZZ_EMIT("ZZ-GU-MM", zz_mm)));
+    if constexpr (ks > 1) {
+        PACK((ZZ_EMIT("ZZ-KS-PACK", zz_ks_pack)));
+        PACK((ZZ_EMIT("ZZ-KS-H", zz_ks_h)));
+        UNPACK((ZZ_EMIT("ZZ-KS-PIN", zz_ks_pin)));
+        MATH((ZZ_EMIT("ZZ-KS-FOLD", zz_ks_fold)));
+    }
     MATH((ZZ_EMIT("ZZ-GU-MMTILES", zz_tiles * 1350)));  // (x 1350: the report divides by it)
 }

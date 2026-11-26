@@ -819,7 +819,9 @@ FlatRoutedExpertPlan make_plan(
     // gate/up: h_local (CB 3: hbuf x MT x hpc h tiles) and the pack CB (16: one bf16 tile) after the x ring
     p.pack_cb_offset =
         p.h_local_offset + al(p.down_h_buffers * p.row_tiles_per_sub_block * p.h_tiles_per_core * p.h_tile_bytes);
-    const uint32_t gu_bytes = p.pack_cb_offset + al(2048);
+    p.partial_offset = p.pack_cb_offset + al(2048);
+    const uint32_t partial_bytes = p.gate_up_k_split > 1 ? 3 * al(p.partial_slots * 2 * 2048) : 0;
+    const uint32_t gu_bytes = p.partial_offset + partial_bytes;
     {  // (CBs 6 / 7, as the program factory sizes them: schedule_page_bytes, 4 x schedule_scratch_bytes)
         const uint32_t se_max_e = p.experts_per_chip <= 16 ? 16 : (p.experts_per_chip <= 32 ? 32 : 64);
         p.schedule_page_bytes = se_max_e == 16 ? 512 : (se_max_e == 32 ? 1024 : 2048);

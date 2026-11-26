@@ -149,8 +149,28 @@ one-row passes. Partners: horizontal neighbours over a rectangle's column pairs,
 r * groups a slot + j / 2, K part j % 2. Host check: every core's blocks rebuild its Wg / Wu slice exactly, every (K
 block, column) once; KS 1 unchanged (layout identical, GLM 4x4 accuracy / determinism pass).
 
-Next: x per K part (each part's own snake over its cores), the partial exchange + fold in the gate/up kernel, the h
-tile a core (group x 2 + part) into the down layout.
+Step 2 (kernels, FLAT_KS=2, off by default): a snake per K part (the primary sends super-blocks 0-2 of an x
+sub-block to part 0's head, 3-5 to part 1's; per head its freed word, ring slots, XARR), 12 blocks an x sub-block a
+core; the compute packs the partner's pair (2 bf16 tiles) to partial_out_cb and its own to partial_own_cb after
+each one-row pass, the receiver (BRISC) writes the former into the partner's partial_in_cb ring (arrival semaphore
+11, slot credits on 13), the compute folds own + partner (add_tiles into DST), SwiGLU, packs the row's h tile; h at
+K-tile group x 2 + part. x blocks hold a group of passes' rows (x_row_tiles a multiple of the pass rows: the first
+pass of the group waits for them, the last frees them). Every GLM 4x4 case passes accuracy / determinism under the
+watcher (PCC unchanged: bf16 partials). Bugs found on the way: a static_assert in an if constexpr of a non-template
+function (fires for KS 1 too); a two-row fold reading 4 tiles across the partial ring's end (the unpacker's tile
+indices do not wrap): an LLK assert under the watcher (looked like a hang), wrong results without - folds take 2 rows
+only from consecutive slots.
+
+GLM 4x4 us, KS 1 vs KS 2 (x blocks of 4 rows, fold in row pairs): M 80 797 / 833, 160 889 / 916, 240 967 / 997, 320
+1054 / 1084, 320 zipf 1209 / 1266, 480 1366 / 1461 - worse everywhere. M 320 KS 2: x wait 73 us (KS 1 117), weight
+wait 21, the matmul at its ideal rate (821 us), the fold 159 us on MATH (~1.6 us a two-row fold), gate/up span 1017
+(KS 1 ~997). Not the fold's reconfigs (-12 us without), not the activation (-11 us skipped), not the exchange's
+latency (folding a pass later: no change). Variants on the way: x blocks of 1 row (the x split's default): 1203 us
+(the relays move 4x the super-blocks: primaries 478 us issuing + 172 flushing, helpers 415 waiting credits); 2 rows
+1100; 4 rows 1088; + folds in row pairs 1084.
+Verdict: the K split buys back at most the x wait it removes (~45 us at M 320) and its fold costs more than that;
+even a fold at the bench's cost (~25 us a call) would net ~4%, and that needs the own partial kept in DST (folding
+before the commit deadlocks the partners, or costs ~6% on the matmul through 1 x 2 calls). Parked behind FLAT_KS=2.
 
 ## NoC placement experiments (after the ablation)
 

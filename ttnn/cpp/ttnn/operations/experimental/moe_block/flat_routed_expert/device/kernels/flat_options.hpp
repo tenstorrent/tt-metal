@@ -109,6 +109,15 @@ constexpr uint32_t row_pass_rows = get_named_compile_time_arg_val("row_pass_rows
 // x blocks), else a sub-block's
 constexpr uint32_t x_row_tiles = get_named_compile_time_arg_val("x_row_tiles");
 constexpr uint32_t x_rows_per_sub_block = x_row_tiles * 32;
+// K split (the plan's gate_up_k_split; 1: none): a gate/up core computes its column group's tile pairs over K part
+// k_part (RT) of the K-blocks; it keeps pair group x NP + k_part x NP / k split's partial sums, sends the partner (the
+// group's other part) the rest, and folds the partner's into its own (gate_up_compute.cpp). The partials: bf16 tile
+// pairs through the partner's incoming ring (partial_slots slots of 2 tiles; CBs partial_out_cb (to send),
+// partial_in_cb (the partner's), partial_own_cb; semaphores partial_arrived_sem / partial_free_sem)
+constexpr uint32_t gate_up_k_split = get_named_compile_time_arg_val("gate_up_k_split");
+constexpr uint32_t partial_slots = get_named_compile_time_arg_val("partial_slots");
+constexpr uint32_t partial_out_cb = 4, partial_in_cb = 5, partial_own_cb = 8;
+constexpr uint32_t partial_arrived_sem = 11, partial_free_sem = 13;
 // x blocks (of x_row_tiles row tiles) the gate/up core's x ring holds
 constexpr uint32_t x_ring_blocks = get_named_compile_time_arg_val("x_ring_blocks");
 

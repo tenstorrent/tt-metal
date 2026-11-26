@@ -67,9 +67,11 @@ void kernel_main() {
     // with 16-column units (NCC cores x units = the K tiles x 2), else NP whole tile pairs a core
     constexpr bool units = flat_options::gate_up_units != 0;
     constexpr uint32_t units_per_core = flat_options::gate_up_units;
-    constexpr uint32_t hpc = units ? flat_options::gate_up_units_h_tiles : np;  // h tiles a row
-    // h: NCC cores x NP K-tiles (or x units / 2), MT rows
-    constexpr uint32_t h_all_tiles = units ? ncc * units_per_core * mt / 2 : ncc * np * mt;
+    // K split: a core keeps NP / KS of its group's pairs (its K part's), so as many h tiles a row
+    constexpr uint32_t ks = flat_options::gate_up_k_split;
+    constexpr uint32_t hpc = units ? flat_options::gate_up_units_h_tiles : np / ks;  // h tiles a row
+    // h: NCC cores x HPC K-tiles (or x units / 2), MT rows
+    constexpr uint32_t h_all_tiles = units ? ncc * units_per_core * mt / 2 : ncc * hpc * mt;
     static_assert(!units || (ncc * units_per_core) % 2 == 0);
     static_assert(!units || h_tile_bytes == 2048 || h_tile_bytes == 1088, "16-column units: bf16 or bfp8 h tiles");
     auto write_h = [](uint32_t src, uint64_t dst, uint32_t bytes) {
@@ -86,7 +88,7 @@ void kernel_main() {
     static_assert(hbuf >= 1 && hbuf <= 3);
 
     const uint32_t credit_sem_id = moe_block_args::arg(0);
-    const uint32_t cg = moe_block_args::arg(1);
+    const uint32_t cg = moe_block_args::arg(1) & 0xFFFF, kpart = moe_block_args::arg(1) >> 16;  // (K split: part)
     const uint32_t nh = moe_block_args::arg(2);
     const uint32_t gath_sem_id = moe_block_args::arg(3);
     const uint32_t h_all_addr = moe_block_args::arg(4);
@@ -167,8 +169,8 @@ void kernel_main() {
     static_assert(!x_fwd || (depth >= 1 && depth < h_trid));
     constexpr uint32_t x_bytes = xmt * flat_options::x_block_k_tiles * flat_options::x_tile_bytes;
     constexpr uint32_t piece = x_bytes / xp;
-    constexpr uint32_t nb =
-        flat_options::super_blocks_per_sub_block * flat_options::super_block_tiles / flat_options::x_block_k_tiles;
+    constexpr uint32_t nb = flat_options::super_blocks_per_sub_block * flat_options::super_block_tiles /
+                            flat_options::x_block_k_tiles / flat_options::gate_up_k_split;
     const uint32_t x_ring = x_fwd ? moe_block_args::arg(5) : 0;
     const uint32_t sxy = x_fwd ? moe_block_args::arg(6) : 0;
     const uint64_t s_xarr = get_noc_addr(sxy >> 16, sxy & 0xFFFF, get_semaphore(xarr_sem_id));
@@ -237,9 +239,61 @@ void kernel_main() {
     uint32_t h_sent = 0, h_pending = 0;
 
     const uint32_t x_total = x_num_v * nk_gu;
-    while (h_sent < num_v || pushed < total_w) {
+
+    // K split: the partials. Every row pass (one row tile) the compute packs the partner's pair (2 bf16 tiles) into
+    // partial_out_cb; this RISC writes them into the partner's partial_in_cb ring (same address there: slot n % SLOTS
+    // of the n-th) once the partner has freed the slot (partial_free_sem here, bumped by the partner), then bumps the
+    // partner's partial_arrived_sem; the partner's arrivals here go to the compute (partial_in_cb pushes), each slot
+    // the compute frees back to the partner. P_TOTAL: the call's row passes (a sub-block's token row tiles, at least
+    // 1).
+    uint32_t p_total = 0, p_sent = 0, p_arr = 0, p_freed = 0;
+    bool p_pending = false;
+    uint64_t partner_in = 0, partner_arr = 0, partner_free = 0;
+    uint32_t pin_base = 0;
+    if constexpr (ks > 1) {
+        for (uint32_t a = 0; a < schedule.entries; ++a) {
+            const uint32_t last = last_sub_block_row_tiles(schedule, a);
+            p_total += (schedule.sub_blocks[a] - 1) * mt + (last ? last : 1);
+        }
+        const uint32_t pxy = moe_block_args::arg(heads0 + kScheduleArgs);
+        pin_base = get_local_cb_interface(flat_options::partial_in_cb).fifo_limit -
+                   get_local_cb_interface(flat_options::partial_in_cb).fifo_size;
+        partner_in = get_noc_addr(pxy >> 16, pxy & 0xFFFF, pin_base);
+        partner_arr = get_noc_addr(pxy >> 16, pxy & 0xFFFF, get_semaphore(flat_options::partial_arrived_sem));
+        partner_free = get_noc_addr(pxy >> 16, pxy & 0xFFFF, get_semaphore(flat_options::partial_free_sem));
+    }
+    constexpr uint32_t p_slots = flat_options::partial_slots, p_bytes = 2 * 2048;
+    auto partial_step = [&]() {
+        if constexpr (ks > 1) {
+            if (!p_pending && p_sent < p_total && p_sent < *sem(flat_options::partial_free_sem) + p_slots &&
+                cb_pages_available_at_front(flat_options::partial_out_cb, 2)) {
+                noc_async_write(
+                    get_read_ptr(flat_options::partial_out_cb), partner_in + (p_sent % p_slots) * p_bytes, p_bytes);
+                p_pending = true;
+            }
+            if (p_pending && ncrisc_noc_nonposted_writes_flushed(noc_index)) {  // (data before its arrival count)
+                noc_semaphore_inc(partner_arr, 1);
+                cb_pop_front(flat_options::partial_out_cb, 2);
+                ++p_sent;
+                p_pending = false;
+            }
+            while (*sem(flat_options::partial_arrived_sem) > p_arr) {
+                cb_push_back(flat_options::partial_in_cb, 2);
+                ++p_arr;
+            }
+            if (p_freed < p_arr &&
+                cb_pages_reservable_at_back(flat_options::partial_in_cb, (p_slots - (p_arr - p_freed) + 1) * 2)) {
+                ++p_freed;  // (the compute folded one more)
+                noc_semaphore_inc(partner_free, 1);
+            }
+        }
+    };
+    auto partials_done = [&]() { return p_sent == p_total && p_freed == p_total; };
+    (void)pin_base;
+    while (h_sent < num_v || pushed < total_w || !partials_done()) {
         invalidate_l1_cache();
         x_step();
+        partial_step();
         if (w_brisc && !g_done) {
             g_done = gr.step();
         }
@@ -305,7 +359,8 @@ void kernel_main() {
                     }
                 } else {
                     // Down cores keep h K-tile-major ([K][rows]): this core's NP K-tiles are one run.
-                    write_h(src, bc_h + dst + cg * np * mt * h_tile_bytes, np * mt * h_tile_bytes);
+                    // (K split: K-tiles group x NP + part x HPC, HPC of them)
+                    write_h(src, bc_h + dst + (cg * np + kpart * hpc) * mt * h_tile_bytes, hpc * mt * h_tile_bytes);
                 }
             }
             h_pending = 1;

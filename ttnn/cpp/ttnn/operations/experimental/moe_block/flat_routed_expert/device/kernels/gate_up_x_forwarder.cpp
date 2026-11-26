@@ -54,8 +54,9 @@ void kernel_main() {
     // (MEASUREMENT ONLY, FLAT_X_NOC1: the receiver (BRISC, NOC1) forwards x and publishes min(consumed, forwarded) as
     // XCONS; this RISC only reports it upstream and reads the weights)
     constexpr bool x_fwd_brisc = get_named_compile_time_arg_val("x_fwd_brisc") != 0;
-    constexpr uint32_t nb =
-        flat_options::super_blocks_per_sub_block * flat_options::super_block_tiles / flat_options::x_block_k_tiles;
+    // (K split: a core's snake carries its K part's blocks only)
+    constexpr uint32_t nb = flat_options::super_blocks_per_sub_block * flat_options::super_block_tiles /
+                            flat_options::x_block_k_tiles / flat_options::gate_up_k_split;
     static_assert(depth >= 1 && depth <= 14);
     constexpr uint32_t piece = x_bytes / xp;
     const uint32_t x_ring = moe_block_args::arg(0);

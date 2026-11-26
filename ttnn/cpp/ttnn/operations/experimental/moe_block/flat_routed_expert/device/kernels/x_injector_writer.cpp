@@ -62,9 +62,17 @@ void kernel_main() {
     const uint64_t head_xarr = mcast ? get_noc_multicast_addr(msx, msy, mex, mey, get_semaphore(xarr_sem))
                                      : get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(xarr_sem));
     volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(moe_block_args::arg(2));
-    // the freed word restarts every launch: zeroed here (the head only bumps it after consuming x this relay sent in
-    // this launch), so no host write is needed between launches
-    for (uint32_t i = 0; i < (mcast ? kWords : 1u); ++i) {
+    // K split (flat_options::gate_up_k_split): a snake a K part - super-block b of an x sub-block goes to part
+    // (b % NSB) x KS / NSB's head (RT after the schedule args: part 1's head xy); each head its freed word (word kp),
+    // its ring slots (sent_kp), its XARR
+    constexpr uint32_t ks = flat_options::gate_up_k_split;
+    static_assert(ks == 1 || !mcast, "the K split: unicast snakes");
+    uint32_t hxy_k[2] = {hxy, 0};
+    uint64_t head_xarr_k[2] = {head_xarr, 0};
+    uint32_t sent_k[2] = {0, 0};
+    // the freed words restart every launch: zeroed here (a head only bumps its word after consuming x this relay sent
+    // in this launch), so no host write is needed between launches
+    for (uint32_t i = 0; i < (mcast ? kWords : ks); ++i) {
         freed[i] = 0;
     }
     // (16-byte aligned, as the semaphore it is multicast to: the NoC needs source and destination alike modulo 16)
@@ -104,8 +112,12 @@ void kernel_main() {
     ExpertSchedule schedule;
     load_schedule<num_e>(schedule, schedule_args, schedule_scratch(ScratchOwner::Ncrisc));
     to_x_schedule(schedule);
+    if constexpr (ks > 1) {
+        hxy_k[1] = moe_block_args::arg(schedule_args + kScheduleArgs);
+        head_xarr_k[1] = get_noc_addr(hxy_k[1] >> 16, hxy_k[1] & 0xFFFF, get_semaphore(xarr_sem));
+    }
+    uint8_t batch_kp[8] = {0};  // (each batch in flight: its K part's head)
     const uint32_t num_sb = schedule.total_sub_blocks * nsb;
-    uint32_t sent = 0;
     constexpr uint32_t kChainDepth = 4;  // batches of head writes in flight (transaction ids 1..kChainDepth)
     // Batch b's head writes carry transaction id 1 + b % DEPTH; once they are acknowledged the head's XARR moves by
     // that batch's pieces, in batch order (the head counts a contiguous prefix).
@@ -133,7 +145,7 @@ void kernel_main() {
                                                                    noc_index, 1 + cb_done % kChainDepth))) {
             while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, 1 + cb_done % kChainDepth)) {
             }
-            noc_semaphore_inc(head_xarr, per_sb * flat_options::x_chain_pieces);
+            noc_semaphore_inc(head_xarr_k[batch_kp[cb_done % 8]], per_sb * flat_options::x_chain_pieces);
             ++cb_done;
         }
     };
@@ -155,13 +167,16 @@ void kernel_main() {
             });
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])), hb + 1);
         const uint32_t src = land + (hh * land_slots + hb % land_slots) * sb_tiles * tb;
+        const uint32_t kp = ks > 1 ? (b % nsb) * ks / nsb : 0;  // (its K part's snake)
+        uint32_t& sent = sent_k[kp];
+        const uint32_t ghxy = hxy_k[kp];
         // The whole super-block goes out as one batch once its last block's ring slot is free. Batches in flight are
         // only counted into the head's XARR on retirement: every wait retires the acknowledged ones, else a compute
         // that needs the whole ring (row passes: all Ht / KBLK blocks of a sub-block resident, GLM-5.3 24 of 24)
         // never sees the last batch and never frees one (deadlock).
         invalidate_l1_cache();
         ZZ_WAIT(
-            zz_slots, while (sent + per_sb > (mcast ? freed_min() : *freed) + x_slots) {
+            zz_slots, while (sent + per_sb > (mcast ? freed_min() : freed[kp]) + x_slots) {
                 chain_retire(kChainDepth);
                 invalidate_l1_cache();
             });
@@ -199,7 +214,7 @@ void kernel_main() {
                 }
                 noc_async_write_one_packet_with_trid(
                     src + (m * sbt + k * kblk) * tb,
-                    get_noc_addr(hxy >> 16, hxy & 0xFFFF, dst + m * piece),
+                    get_noc_addr(ghxy >> 16, ghxy & 0xFFFF, dst + m * piece),
                     piece,
                     1 + cb_iss % kChainDepth,
                     write_cmd_buf,
@@ -218,6 +233,7 @@ void kernel_main() {
         if constexpr (mcast) {
             ack_target[cb_iss % 8] = noc_nonposted_writes_acked[noc_index];
         }
+        batch_kp[cb_iss % 8] = kp;
         ++cb_iss;
         chain_retire(kChainDepth);
         sent += per_sb;
