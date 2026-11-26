@@ -77,12 +77,13 @@ LAYER_RELATIVE_RMSE = 0.03
 ENCODER_PCC = 0.99
 ENCODER_RELATIVE_RMSE = 0.15
 MODEL_RELATIVE_RMSE = 0.17
-# `test_full_size_model_trace_perf`: the largest grid the processor makes, and the upper limit on one
-# traced replay of the model there per system mesh, with headroom over the current time so run-to-run
-# noise does not fail it. The Galaxy is slower: fewer cores per chip and slower links.
+# `test_full_size_model_trace_perf`: the largest grid the processor makes, and the (lower, upper) limits on
+# one traced replay of the model there per system mesh, with headroom around the current time so run-to-run
+# noise does not fail it. Falling below the lower limit means the model got faster (or skipped work): check
+# it and tighten both limits. The Galaxy is slower: fewer cores per chip and slower links.
 PERF_SIZE = SIZES["510x132"]
 GALAXY_SHAPE = (8, RING_SIZE)
-MODEL_TRACE_LIMIT_MS = {LOUDBOX_SHAPE: 3100, GALAXY_SHAPE: 4150}
+MODEL_TRACE_LIMIT_MS = {LOUDBOX_SHAPE: (2800, 3100), GALAXY_SHAPE: (3750, 4150)}
 
 
 @pytest.fixture(params=list(SIZES.values()), ids=list(SIZES))
@@ -396,11 +397,11 @@ def test_full_size_model_trace(mesh_device, sp_axis, num_links, config, referenc
 @SYNTHETIC
 def test_full_size_model_trace_perf(mesh_device, sp_axis, num_links, config, reference):
     """`test_full_size_model_trace` on PERF_SIZE with random weights, for time only: no saved outputs,
-    no output checks. Asserts the time per replay against the system mesh's MODEL_TRACE_LIMIT_MS."""
+    no output checks. Asserts the time per replay is within the system mesh's MODEL_TRACE_LIMIT_MS."""
     system_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
     if system_shape not in MODEL_TRACE_LIMIT_MS:
         pytest.skip(f"no time limit for system mesh {system_shape}")
-    limit_ms = MODEL_TRACE_LIMIT_MS[system_shape]
+    lower_limit_ms, upper_limit_ms = MODEL_TRACE_LIMIT_MS[system_shape]
     tt, pixels, grid_thws = model_inputs(mesh_device, sp_axis, num_links, config, reference, PERF_SIZE)
     inputs = tt.prepare_inputs(pixels, grid_thws)
 
@@ -415,4 +416,6 @@ def test_full_size_model_trace_perf(mesh_device, sp_axis, num_links, config, ref
             f"full-size {PERF_SIZE[0]}x{PERF_SIZE[1]} model ({config.num_hidden_layers} layers, merger, "
             "projector), random weights"
         )
-    assert milliseconds <= limit_ms, f"{milliseconds:.1f} ms per traced replay > {limit_ms} ms limit on {system_shape}"
+    assert (
+        lower_limit_ms <= milliseconds <= upper_limit_ms
+    ), f"{milliseconds:.1f} ms per traced replay outside [{lower_limit_ms}, {upper_limit_ms}] ms on {system_shape}"
