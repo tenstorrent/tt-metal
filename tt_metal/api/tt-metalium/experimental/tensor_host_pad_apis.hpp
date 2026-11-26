@@ -35,7 +35,8 @@ HostTensor pad(
     const HostTensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value);
 
 /**
- * Unpad **tensor** to the inclusive range [**output_tensor_start**, **output_tensor_end**).
+ * Unpad **tensor** to the half-open range [**output_tensor_start**, **output_tensor_end**):
+ * start indices are included, end indices are not.
  *
  * Return: a new HostTensor containing only the selected sub-volume.
  *

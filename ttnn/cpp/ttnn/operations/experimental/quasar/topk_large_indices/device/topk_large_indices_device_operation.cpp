@@ -175,25 +175,29 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     const uint32_t num_rows = flattened_rows_excluding_last_dim(input.logical_shape());
     const uint32_t input_last_dim = input.logical_shape()[-1];
     const uint32_t num_cores = attrs.resolved_worker_core_grid.num_cores();
+    // Each metadata tensor is keyed by its whole optional TensorSpec, which also carries its presence, and
+    // the input by its TensorLayout. Metal 2.0 requires an exact layout match (Alignment included) on every
+    // cache hit, so no layout field may be left free (#59915). The input's shape stays out of the key: the
+    // row count and width enter only through the program classes below, so one entry serves every width.
+    const auto metadata_spec = [](const std::optional<Tensor>& tensor) {
+        return tensor.has_value() ? std::optional<tt::tt_metal::TensorSpec>{tensor->tensor_spec()} : std::nullopt;
+    };
     return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
         // Metadata presence changes the reader/compute binaries (extra CBs + accessor args + the on-device
         // derivation) and the offset is baked in as a compile arg, so both must be hashed. The per-chunk
         // VALUE never enters the key -- that is what lets one captured program serve every chunk.
-        tensor_args.has_valid_length_metadata(),
-        // Presence only, and still required even though the reader no longer carries a valid_end flag: the
-        // accessor compile args are built from this tensor's buffer (the input is the placeholder when
-        // absent), so presence still changes the binary. The VALUE stays dynamic -- and so now does the
-        // bound's on/off, read from the common arg -- so one captured program serves partial and full chunks.
-        tensor_args.has_valid_end_metadata(),
+        metadata_spec(tensor_args.valid_length_tensor),
+        // Still required even though the reader no longer carries a valid_end flag: the accessor compile
+        // args are built from this tensor's buffer (the input is the placeholder when absent), so presence
+        // still changes the binary. The VALUE stays dynamic -- and so now does the bound's on/off, read from
+        // the common arg -- so one captured program serves partial and full chunks.
+        metadata_spec(tensor_args.valid_end_tensor),
         attrs.valid_length_offset,
         attrs.k,
         attrs.resolved_worker_core_grid,
         // Picks the reader's and writer's NoCs, so it changes the kernel binaries.
         static_cast<uint32_t>(attrs.dram_read_noc),
-        input.dtype(),
-        input.layout(),
-        input.memory_config().memory_layout(),
-        input.memory_config().buffer_type(),
+        input.tensor_spec().tensor_layout(),
         static_cast<uint32_t>(program::compute_body_mode(attrs.k, input_last_dim)),
         // The row count and width enter the key only through these classes of program.
         program::multi_chunk_rows(attrs.k, input_last_dim),

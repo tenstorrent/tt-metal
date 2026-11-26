@@ -125,13 +125,13 @@ struct CmdListProgramBindings {
 };
 
 // Adds `workload` to the CommandListBuilder recording on the calling thread instead of enqueueing it, recording as
-// TTNN command-list parameters the active binds that match `programs`. `op_owned_tensors` are the tensors the
-// workload's factory allocated for itself; lists built from the recording keep them alive.
+// TTNN command-list parameters the active binds that match `programs`. `op_owned_resources` are what the
+// workload's factory allocated for itself (tensors, GlobalSemaphores); lists built from the recording keep them alive.
 void record_to_command_list(
     std::string_view operation_name,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
     std::span<const CmdListProgramBindings> programs = {},
-    std::span<const std::shared_ptr<const std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors = {});
+    std::span<const std::shared_ptr<const void>> op_owned_resources = {});
 
 }  // namespace ttnn::device_operation::detail

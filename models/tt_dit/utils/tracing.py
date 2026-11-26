@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 _OMITTED = object()
 
+_live: weakref.WeakSet[Tracer] = weakref.WeakSet()
+
 
 class StateTensor:
     """A persistent device buffer refreshed in place under tracing.
@@ -157,6 +159,18 @@ class Tracer:
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
         self._trace_ids: tuple[ttnn.MeshTraceId, ...] | None = None
+        _live.add(self)
+
+    @staticmethod
+    def release_all() -> None:
+        """Release the captured trace of every live tracer."""
+        for tracer in list(_live):
+            try:
+                tracer.release_trace()
+            except RuntimeError as e:
+                # e.g. the tracer's mesh was closed; release_trace cleared its state before throwing
+                _live.discard(tracer)
+                logger.warning(f"could not release a trace: {e}")
 
     def __call__(
         self,

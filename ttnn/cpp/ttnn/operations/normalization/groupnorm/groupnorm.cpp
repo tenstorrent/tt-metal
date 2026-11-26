@@ -311,6 +311,16 @@ Tensor group_norm(
         input_shape[-1],
         num_groups);
 
+    // C must be a multiple of 32, except for ROW_MAJOR sharded input.
+    const bool channels_tile_aligned = input_shape[-1] % ttnn::types::TILE_SIZE == 0;
+    const bool row_major_sharded = input_tensor.layout() == Layout::ROW_MAJOR && input_tensor.is_sharded();
+    TT_FATAL(
+        channels_tile_aligned || row_major_sharded,
+        "Invalid channel configuration: Number of channels ({}) must be a multiple of the tile width ({}) unless "
+        "the input is ROW_MAJOR and sharded.",
+        input_shape[-1],
+        ttnn::types::TILE_SIZE);
+
     const auto& input_padded_shape = input_tensor.padded_shape();
     const auto nhw = input_padded_shape[0] * input_padded_shape[1] * input_padded_shape[2];
     TT_FATAL(
@@ -348,9 +358,7 @@ Tensor group_norm(
     const std::optional<ttnn::Tensor>& beta =
         bias.has_value() ? std::optional<ttnn::Tensor>(ttnn::unsqueeze_to_4D(bias.value())) : std::nullopt;
 
-    const MemoryConfig& dram_memory_config =
-        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    const MemoryConfig& output_mem_config = memory_config.value_or(dram_memory_config);
+    const MemoryConfig& output_mem_config = memory_config.value_or(input_tensor.memory_config());
 
     // Initialize compute kernel config
     TT_FATAL(
@@ -390,11 +398,15 @@ Tensor group_norm(
             "ROW_MAJOR output is supported only for sharded inputs, or on Wormhole.");
     }
 
-    const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
     // fp32 input accumulates in the fp32 DEST (like LayerNorm); welford already forces it. A
     // user-supplied compute_kernel_config still overrides this default.
     const auto fp32_acc = use_welford || (input_tensor.dtype() == DataType::FLOAT32);
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto math_fidelity = (fp32_acc && arch == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
+                                                                           : tt::tt_metal::MathFidelity::HiFi4;
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 

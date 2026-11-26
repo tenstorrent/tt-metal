@@ -314,6 +314,7 @@ ttnn::Tensor grid_sample(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = GridSampleOperation;
+    ttnn::verify_numerical_configuration(input_tensor.device()->arch(), compute_kernel_config);
     const auto resolved_compute_kernel_config = ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,

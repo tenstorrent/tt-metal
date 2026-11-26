@@ -28,7 +28,7 @@ void kernel_main() {
 
     // Tile size in bytes for parameters and moving averages (can be bf16 or fp32)
     const uint32_t tile_size_bytes = get_tile_size(cb_param_idx);
-    // Gradient is always bf16
+    // Gradient tile size in bytes (bf16 or fp32, independently of the parameter)
     const uint32_t grad_tile_size_bytes = get_tile_size(cb_grad_idx);
 
     constexpr auto param_args = TensorAccessorArgs<1U>();
