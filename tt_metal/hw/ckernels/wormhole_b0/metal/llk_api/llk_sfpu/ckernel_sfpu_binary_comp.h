@@ -50,11 +50,8 @@ inline void calculate_binary_comp_fp32_equal(
         TT_SFPSTORE(default_result, InstrModLoadStore::DEFAULT, ADDR_MOD_3, dst_index_out * dst_tile_size);
 
         TTI_SFPSETSGN(0, a, abs_a, 1);  // SFPSETSGN_MOD1_ARG_IMM
-        // Canonicalise: a = 1*a + 0, b = 1*b + 0. SFPMAD treats a subnormal input as zero and
-        // flushes a -0/subnormal result to +0, and is exact otherwise, so a ^ b below is zero iff
-        // the values are bitwise identical or both are in {±0, ±subnormal}. A NaN stays NaN and a
-        // non-NaN never becomes one, so when a ^ b == 0 either both are NaN or neither is: the NaN
-        // test only needs abs(a).
+        // 1*x + 0 reads a subnormal as 0 and flushes -0 to +0, so a ^ b == 0 iff equal or both zero; NaN stays
+        // NaN, so the NaN test only needs abs(a).
         TTI_SFPMAD(p_sfpu::LCONST_1, a, p_sfpu::LCONST_0, a, 0);
         TTI_SFPMAD(p_sfpu::LCONST_1, b, p_sfpu::LCONST_0, b, 0);
 

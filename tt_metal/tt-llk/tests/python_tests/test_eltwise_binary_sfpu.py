@@ -11,7 +11,7 @@ from typing import Dict
 import numpy as np
 import pytest
 import torch
-from conftest import skip_for_quasar, skip_for_wormhole, wormhole_only
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
@@ -1226,8 +1226,8 @@ def _fp32_from_bits(words):
     ).view(torch.float32)
 
 
-# Wormhole only: the expected verdicts model Wormhole's SFPU, which reads a subnormal as zero.
-@wormhole_only
+# The expected verdicts model the Wormhole and Blackhole SFPU, which read a subnormal as zero.
+@skip_for_quasar
 @parametrize(mathop=list(_FP32_COMPARE_REFERENCE), dest_acc=[DestAccumulation.Yes])
 def test_eltwise_binary_sfpu_float_comparison_specials(mathop, dest_acc):
     # Float32 into a 32-bit Dest delivers subnormals and NaN payloads to the SFPU. Expected:
