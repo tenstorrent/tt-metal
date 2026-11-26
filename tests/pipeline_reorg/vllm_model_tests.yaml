@@ -219,7 +219,7 @@
   benchmark-timeout: 10
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 1200000000, "l1_small_size": 65536}'
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 1200000000, "l1_small_size": 65536, "decode_interleave_prefill_steps": 1}'
   server-default-top-k: 32
   additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --block_size 128 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
   extra-env: "GEMMA4_CCL_TOPOLOGY=linear GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_MAX_TOKENS_ALL_USERS=1572864 GEMMA4_KV_BFP8=1 GEMMA4_HYBRID_KV_CACHE_GROUPS=1 GEMMA4_BOUNDED_SLIDING_KV_CACHE=0 GEMMA4_PREFIX_CACHING=1 GEMMA4_VLLM_SINGLE_CHUNK=0 GEMMA4_CHUNKED_PREFILL_TRACE=0"
