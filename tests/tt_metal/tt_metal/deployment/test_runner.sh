@@ -287,7 +287,7 @@ run_tests() {
 	run_test 'DRAM ACT test' env STRESS_OUT_DIR="$LOGDIR" $PYTHON -m pytest tests/dram/test_dram_act_patterns.py::test_dram_act_c3_screen -s -q -p no:randomly &&
 		last_dram_act_ok=1 || last_dram_act_ok=0
 
-	# The DRAM tests read each chunk straight back; this one writes all of DRAM, then reads it 5, 7 and 8 s later.
+	# The DRAM tests read each chunk straight back; this one writes all of DRAM, then reads it 2, 4 and 6 s later.
 	# Every iteration starts from a reset, so each run sees a fresh GDDR training.
 	run_test 'DRAM retention test' env RETENTION_OUT_DIR="$LOGDIR/dram_retention" PYTHONUNBUFFERED=1 \
 		$PYTHON -m pytest tools/scaleout/exabox/health_check_test_suite/gddr/test_gddr_retention.py::test_gddr_retention -s &&

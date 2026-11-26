@@ -104,7 +104,7 @@ PYTESTS = {
         "args": ["-s"],
     },
     # gddr_retention: every DRAM address the allocator leaves free is written
-    # once, then read back and compared 5, 7 and 8 s later. gddr_fast/gddr_full
+    # once, then read back and compared 2, 4 and 6 s later. gddr_fast/gddr_full
     # read each chunk straight back, so they never test retention. The JSON
     # report, with every failing address and its flipped bits, goes to the
     # check's log directory.

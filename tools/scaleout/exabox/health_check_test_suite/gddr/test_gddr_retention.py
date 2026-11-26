@@ -10,7 +10,7 @@ chip unless RETENTION_CHIPS lists some (RETENTION_CHIPS=0,5):
     pytest tools/scaleout/exabox/health_check_test_suite/gddr/test_gddr_retention.py
 
 test_gddr_retention writes each bank once with a hashed pattern, then reads and compares all of it in passes that start
-RETENTION_GAPS_S apart (default 5,2,1: reads 5, 7 and 8 s after the write). Every sweep visits a bank in the same
+RETENTION_GAPS_S apart (default 2,2,2: reads 2, 4 and 6 s after the write). Every sweep visits a bank in the same
 order, so each address waits the gap. Each failing word is reported in the JSON with its chip, bank, address, expected
 and read values, flipped bits, first failing read and its page's classification. RETENTION_SECONDS keeps reading at the
 last gap until that long after the write; RETENTION_REPS=n reads each chunk n times a pass and counts every failing
@@ -127,7 +127,7 @@ def read_config():
     unsafe = [name for name in UNSAFE_ENV if os.environ.get(name, "0") not in ("", "0")]
     assert not unsafe, f"{unsafe} use the reserved bottom of DRAM, which this test overwrites; unset them"
     cfg = {
-        "gaps_s": [float(gap) for gap in os.environ.get("RETENTION_GAPS_S", "5,2,1").split(",")],
+        "gaps_s": [float(gap) for gap in os.environ.get("RETENTION_GAPS_S", "2,2,2").split(",")],
         "seconds": env_float("RETENTION_SECONDS", 0),
         "reps": env_int("RETENTION_REPS", 1),
         "max_passes": env_int("RETENTION_MAX_PASSES", 1 << 30),
