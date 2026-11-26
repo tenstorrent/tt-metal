@@ -654,6 +654,41 @@ def prefill_sdpa_chunks(args, S, default_chunk, max_chunk=None):
     return min(q_chunk, cap), min(k_chunk, cap), bool(exp_approx)
 
 
+def prefill_sdpa_prefix_reuse(rows, q_chunk, k_chunk, n_heads, n_cores, chunk_start=0):
+    """(q_chunk, SDPAProgramConfig.prefix_reuse) for a chunked (paged) causal prefill SDPA of ``rows`` Q rows per head,
+    ``n_heads`` Q heads and Q and K chunks of ``q_chunk`` and ``k_chunk`` rows on ``n_cores`` cores.
+
+    Every causal Q chunk walks the whole K/V prefix on its own core. Both choices below only move K/V reads or Q chunks
+    between cores: each Q row still meets the same K chunks in the same order with the same masks, so the output is
+    bit-identical to (q_chunk, 0).
+
+    * Q split: a call with q_chunk = k_chunk = 128 halves its Q chunk (to 64, then 32) while ``chunk_start`` stays a
+      multiple of it and the call keeps at most 2/5 of the cores' worth of Q chunks. The short calls at depth then walk
+      their prefix on more cores; beyond about 2/5 of the grid the DRAM reads of the extra walks cost more than they
+      gain.
+    * prefix_reuse: more Q chunks than cores (the 8192-row chunks): 2, K/V prefix chains; otherwise 4, one Q chunk per
+      core; a split call of at most 1/5 of the cores' worth of Q chunks: 5, also K/V read batches sized by the cores that
+      read DRAM.
+
+    Measured on one TP=8 Galaxy row (12x10 grid, op level, prefix 24K to 96K): the SDPA alone 1.8x to 6x faster for
+    128 to 2048 rows and up to 1.27x for 8192 rows; a prefill of 600 tokens after 98K tokens 942 -> 413 ms. Calls of
+    fewer than 128 rows (the spec verify bucket) keep (q_chunk, 0)."""
+    if rows < 128:
+        return q_chunk, 0
+    if q_chunk == k_chunk == 128:
+        max_units = max(1, 2 * n_cores // 5)
+        q = q_chunk // 2
+        while q >= 32 and chunk_start % q == 0 and n_heads * -(-rows // q) <= max_units:
+            q_chunk = q
+            q //= 2
+    units = n_heads * -(-rows // q_chunk)
+    if units > n_cores:
+        return q_chunk, 2
+    if q_chunk < k_chunk and units <= n_cores // 5:
+        return q_chunk, 5
+    return q_chunk, 4
+
+
 # Tuned launch configs of the prefill all_gather_minimal_matmul_async (all_gather_matmul_prefill,
 # all_gather_swiglu_prefill) per weight shape and row count: (swiglu, K, N per device), both rounded up to a tile (the
 # GDN in-projection is 2060 wide), -> {rows: (grid_x, grid_y, M_block, N_block, transpose)}. Qwen3.8-27B at TP=8: MLP

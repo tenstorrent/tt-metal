@@ -91,7 +91,7 @@ inline void broadcast_block(const ckernel::TensorShape tensor_shape, const std::
     _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, false /*unpack_to_dest*/, acc_to_dest>(tensor_shape, math_format);
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
-        _llk_math_eltwise_unary_broadcast_<false /*unpack_to_dest*/>(tile /*tile_idx*/);
+        _llk_math_eltwise_unary_broadcast_(tile /*tile_idx*/);
     }
 }
 

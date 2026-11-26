@@ -1434,7 +1434,8 @@ class TPAttention:
         # The chunk must not exceed the query length: the decode-config spec verify runs a 32-row
         # bucket, where the default 128 over-runs Q (that is the bucket-32 capture crash). Keep q and k
         # SYMMETRIC -- an asymmetric q<k mis-masks the causal tail and silently corrupts the first
-        # query rows (observed: row 0 -> argmax 0 at an unaligned chunk_start).
+        # query rows (observed: row 0 -> argmax 0 at an unaligned chunk_start). prefill_sdpa_prefix_reuse
+        # makes q < k only for 128 rows or more at a chunk_start that the smaller q divides.
         qk_chunk = min(qk_chunk, S)
         # args.prefill_sdpa_config_fn (per-S tuning, default None) may pick other q/k chunks + exp_approx; the int
         # chunk_start_idx must stay a multiple of both (the tensor path's offsets are multiples of 2048).
@@ -1442,8 +1443,17 @@ class TPAttention:
         # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep) unless the SP config
         # names a smaller one.
         sdpa_grid = self.mesh.compute_with_storage_grid_size()
+        prefix_reuse = 0
         if sp is None:
             q_chunk, k_chunk, exp_approx = tpc.prefill_sdpa_chunks(self.args, S, qk_chunk, max_chunk=csi_cap)
+            q_chunk, prefix_reuse = tpc.prefill_sdpa_prefix_reuse(
+                S,
+                q_chunk,
+                k_chunk,
+                NH,
+                sdpa_grid.x * sdpa_grid.y,
+                chunk_start=0 if chunk_start_idx_tensor is not None else chunk_start_idx,
+            )
         else:
             # SP chunks follow the key length R*S (the last row attends over all R*S keys; the default is the
             # tensor-path 128, capped by the query length S). Row r starts at r*S, so both chunks must divide S:
@@ -1464,6 +1474,7 @@ class TPAttention:
             exp_approx_mode=exp_approx,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
+            prefix_reuse=prefix_reuse,
         )
 
         # Pad page table to cover Q+offset and satisfy stick-size % 32 (extra blocks masked by causality)

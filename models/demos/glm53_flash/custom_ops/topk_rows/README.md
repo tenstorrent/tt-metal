@@ -1,0 +1,50 @@
+# topk_rows (model-local generic op)
+
+Top-512 indices of every row of a `[B, 1, 1, W]` bf16 ROW_MAJOR score tensor, each row ranked over its own prefix
+(`valid_rows[b]`, a `[B, 1]` uint32 tensor read on device: one 4-byte page per row), descending by score. The
+sparse DSA decode (`tt/dsa.py`, `TtDSA._decode_unified`, `GLM53_TOPK_BATCHED=1`) concatenates the users' pool-score
+rows and ranks them in ONE call under their own causal bounds (`SparseDecodeMeta.valid_len_rows`): a 262 K-wide
+row costs 1.14 ms on its core and B rows cost the same together, against B x 1.14 ms of per-user calls of the
+shared op (which takes a single bound). Design: `doc/mesh/sparse_1m.md` section 2.4.
+
+| tensor | shape | dtype / layout | role |
+|---|---|---|---|
+| `scores` | `[B, 1, 1, W]`, W >= 512 | bf16 ROW_MAJOR DRAM | one page per row (read) |
+| `valid_rows` | `[B, 1]` | uint32 ROW_MAJOR DRAM | per-row search width in elements, 512 <= v <= W (read; refreshed in place between trace replays) |
+| `out` | `[B, 1, 1, 512]` | uint32 ROW_MAJOR DRAM, pre-allocated | descending top-512 indices per row; a -inf survivor is 0xFFFFFFFF |
+
+Kernels (`kernels/`): the shared `topk_large_indices` reader / compute / writer (and their three headers) copied
+next to the model with the per-row metadata change: the reader reads page `row` of `valid_rows`, validates and
+clamps it exactly like the shared op, derives that row's chunk bounds and pushes them to the compute mailbox
+before streaming the row's 512-element chunks; compute pops the bounds per row. K = 512 only (the LLK window;
+indices CB with 16-row x 2-face geometry, `FusedEndToEnd` body up to 32 chunks per row, `Classic` beyond).
+Compile-time / common / per-core runtime args follow the shared factory (`op.py`): reader
+`[cb_in, chunk_bytes, tile_bytes, tiles_per_sequence, acc(scores), 1, cb_meta, 0, acc(valid_rows), acc(scores),
+per_row=1]`, common `[scores_addr, valid_addr, W, row_bytes, 0]`, per core `[start_row, rows]`; compute
+`[cb_in, cb_indices, 512, body_mode, 1, cb_meta, 1]`, common `[W]`, per core `[rows]`; writer
+`[cb_indices, cb_scratch, row_bytes, 32, 32, 64, acc(out)]`, common `[out_addr]`, per core `[start_row, rows]`.
+Rows are dealt over the whole compute grid row-wise (one row per core while B <= cores).
+
+Segmented form (`segmented(scores_seg, S, ids1, vals1, out, valid_rows=None)`, `GLM53_TOPK_SEGMENTS`): stage 1 ranks
+every segment row `[B*S, 1, 1, W/S]` on its own core into user-major candidate tables (`ids1` / `vals1`
+`[B, 1, 1, S*512]`), stage 2 ranks the `S*512` candidates of each user and translates the winners back to pool ids.
+With `valid_rows` `[B, 1]` (the live bound, `GLM53_SPARSE_DECODE_BOUND`; `custom_ops/sparse_bound.py`) the reader's
+segment mode (compile-time `[seg_rows_per_user, seg_cols]` after the per-row flag) bounds segment row `r` of user
+`r / S` to `clamp(valid[u] - (r % S) * seg_cols, 0, seg_cols)` live columns; an empty segment is ONE chunk of -inf
+synthesized in L1 (never a DRAM read of columns the scorer did not write). The live chunks are read and sorted exactly
+as in the unbounded call. The trailing all--inf chunks of the PARTIAL segment are not free to drop on a classic row
+(> 32 chunks: values and ids travel as two tiles and the merge / rebuild permute EQUAL finite scores on every chunk,
+so the ranked ids depend on the chunk count; measured on chip 0, 2026-10-27): they are replayed as PHANTOM chunks,
+`GLM53_TOPK_PHANTOM` = "cheap" (default; the mailbox's third word: no page, the compute clears the incoming DEST slot
+to -inf with the zero-element copy and runs the unfused merge + rebuild only, no stamp / sort / split) or "full" (one
+synthesized -inf page per trailing chunk through the unchanged path; the partial live page -inf past its tail). A
+fused row (<= 32 chunks) ranks unique `[bf16 | index]` keys, a function of the key set alone, so its trailing chunks
+are dropped (phantom code 0). The tables and `out` are then the unbounded call's bit for bit
+(`test_topk_rows_segmented_live_bound`, both modes); the served 1 M build (S = 5 x 52 480 columns = 103 classic
+chunks per row) at position 1024 sorts 1 chunk per segment and replays 102 cheap merge + rebuilds on the partial one
+(the merge + rebuild are ~10 of the ~55 compare-exchange passes of a full chunk).
+
+Under trace all three
+tensors are persistent (`TtDSA` keeps the output per batch size; the concatenated score rows are allocated inside
+the trace). Test: `tests/custom_ops/test_topk_rows.py` (torch golden per row, W = 1056 and 262 176, B = 1/4/8/32,
+trace replay with refreshed bounds, timing).

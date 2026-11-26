@@ -15,6 +15,8 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <tt-metalium/experimental/kernel_config_buffer.hpp>
+
 #include "device/generic_program_spec_device_operation.hpp"
 #include "generic_op.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -190,15 +192,14 @@ void bind_generic_operation(nb::module_& mod) {
 
     // Overload for MeshProgramDescriptor (explicit mesh control)
     auto mesh_program_overload = ttnn::overload_t(
-        static_cast<Tensor (*)(
-            const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(&ttnn::generic_op),
+        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(
+            &ttnn::generic_op),
         nb::arg("io_tensors"),
         nb::arg("mesh_program_descriptor"));
 
     // Overload for ProgramDescriptor (SPMD mode - broadcasts to all devices)
     auto program_overload = ttnn::overload_t(
-        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(
-            &ttnn::generic_op),
+        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(&ttnn::generic_op),
         nb::arg("io_tensors"),
         nb::arg("program_descriptor"));
 
@@ -302,7 +303,8 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         The first call with a given program compiles its kernels; later calls with the same program write only the
         new argument values. Every call checks the run args against the spec: each kernel gets exactly its declared
         arguments, each array with its declared length, each tensor parameter gets a tensor from io_tensors that
-        matches its spec, and each DFB size override names a DFB of the spec, at most once and with no size of 0.
+        matches its spec, each GlobalSemaphore parameter gets a GlobalSemaphore on the MeshDevice the program runs on,
+        and each DFB size override names a DFB of the spec, at most once and with no size of 0.
         Whether every core got its per-core values is checked on later calls only when
         ttnn.CONFIG.validate_program_args is on; with it off, a core that a later call leaves out keeps the values it
         was given before.
@@ -335,14 +337,14 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
 )doc";
     const char* doc_after_note = R"doc(
         Raises:
-            RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter or
-                DFB at fault; if a tensor is on another MeshDevice or misses a device the program runs on; if the
-                MeshProgramSpec has no programs, its ranges overlap or reach outside the mesh, or the run args' ranges
-                differ from the spec's; if a tensor argument misses a device its program runs on, such as a
-                per-device view; if io_tensors is empty or holds a tensor that is not allocated on a device, or
-                one allocated per core; if Metal rejects the run args, such as a DFB size it cannot take; or, on a
-                first call, if Metal rejects the spec, a kernel does not compile or the program does not fit the
-                kernel-configuration buffer.
+            RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter,
+                GlobalSemaphore parameter or DFB at fault; if a tensor or a GlobalSemaphore is on another MeshDevice,
+                or a tensor in io_tensors misses a device the program runs on; if the MeshProgramSpec has no
+                programs, its ranges overlap or reach outside the mesh, or the run args' ranges differ from the
+                spec's; if a tensor argument misses a device its program runs on, such as a per-device view; if
+                io_tensors is empty or holds a tensor that is not allocated on a device, or one allocated per core; if
+                Metal rejects the run args, such as a DFB size it cannot take; or, on a first call, if Metal rejects
+                the spec, a kernel does not compile or the program does not fit the kernel-configuration buffer.
 
         Example:
             See the TT-NN guide "Running your own kernels with generic_op and a ProgramSpec", and
@@ -376,6 +378,99 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         combined with each program's mesh range. Runtime argument values, ProgramSpec.name and WorkUnitSpec.name are
         not part of it, and tensor parameter specs are hashed under their relaxations.
         )doc");
+}
+
+void bind_generic_operation_compilation(nb::module_& mod) {
+    using tt::tt_metal::ProgramDescriptor;
+    using tt::tt_metal::experimental::KernelConfigBuffer;
+    using tt::tt_metal::experimental::MeshProgramDescriptor;
+    using ttnn::device_operation::CompiledProgram;
+
+    const char* compile_doc =
+        R"doc(
+        Compiles and lays out the program that ``ttnn.generic_op`` would enqueue, without enqueueing it or touching
+        the program cache.
+
+        Run the result with ``ttnn.experimental.run_compiled_program``, as many times as needed, with tensors and
+        descriptors that have the same program cache key: runs may change runtime-argument values, io tensor shapes
+        and the tensor buffers backing CBs, but not io tensor layouts or global circular buffers.
+
+        In slow dispatch the program's kernel-configuration blocks are not checked against the KERNEL_CONFIG window
+        here: a program whose kernel binaries make it too large for the window runs them from a kernel config buffer
+        (``ttnn.experimental.create_kernel_config_buffer``), and running it without one fails.
+
+        Args:
+            io_tensors (List[ttnn.Tensor]): The input and output tensors ``ttnn.generic_op`` would receive.
+            program_descriptor (ttnn.ProgramDescriptor): The program, in SPMD mode (same program on all devices).
+            mesh_program_descriptor (ttnn.MeshProgramDescriptor): The per-device programs. Pass exactly one of
+                ``program_descriptor`` and ``mesh_program_descriptor``.
+
+        Returns:
+            ttnn.experimental.CompiledProgram: The compiled program, tied to the tensors' MeshDevice.
+        )doc";
+    ttnn::bind_function<"compile_generic_op", "ttnn.experimental.">(
+        mod,
+        compile_doc,
+        ttnn::overload_t(
+            static_cast<CompiledProgram (*)(const std::vector<Tensor>&, const MeshProgramDescriptor&)>(
+                &ttnn::experimental::compile_generic_op),
+            nb::arg("io_tensors"),
+            nb::arg("mesh_program_descriptor")),
+        ttnn::overload_t(
+            static_cast<CompiledProgram (*)(const std::vector<Tensor>&, const ProgramDescriptor&)>(
+                &ttnn::experimental::compile_generic_op),
+            nb::arg("io_tensors"),
+            nb::arg("program_descriptor")));
+
+    const char* run_doc =
+        R"doc(
+        ``ttnn.generic_op``, launching a program from ``ttnn.experimental.compile_generic_op`` instead of one from the
+        program cache.
+
+        The descriptor's runtime arguments, and the buffers its CBs name, are applied to the compiled program as a
+        program cache hit applies them. The program is then enqueued with ``ttnn.generic_op``'s bookkeeping
+        (profiler, inspector, graph capture). It cannot run while a trace is being captured, since the trace would
+        not keep the compiled program's kernel binaries alive.
+
+        Args:
+            compiled_program (ttnn.experimental.CompiledProgram): The program, from ``compile_generic_op``.
+            io_tensors (List[ttnn.Tensor]): The input and output tensors, output last.
+            program_descriptor (ttnn.ProgramDescriptor): The program in SPMD mode, with this run's runtime
+                arguments.
+            mesh_program_descriptor (ttnn.MeshProgramDescriptor): The per-device programs, with this run's runtime
+                arguments. Pass exactly one of ``program_descriptor`` and ``mesh_program_descriptor``; it must have
+                the program cache key of the descriptor the program was compiled from.
+            kernel_config_buffer (ttnn.experimental.KernelConfigBuffer, optional): Run the Tensix kernel binaries
+                from this buffer instead of the KERNEL_CONFIG window. Slow dispatch only.
+
+        Returns:
+            ttnn.Tensor: Handle to the output tensor.
+
+        Raises:
+            RuntimeError: If the descriptor or tensors have a different program cache key than the compiled ones,
+                if the kernel configuration does not fit the KERNEL_CONFIG window or the kernel binaries do not fit
+                the kernel config buffer, if a kernel config buffer is given while a CommandListBuilder records on
+                this thread, or if a trace is being captured on the command queue.
+        )doc";
+    ttnn::bind_function<"run_compiled_program", "ttnn.experimental.">(
+        mod,
+        run_doc,
+        ttnn::overload_t(
+            static_cast<Tensor (*)(
+                CompiledProgram&, const std::vector<Tensor>&, const MeshProgramDescriptor&, const KernelConfigBuffer*)>(
+                &ttnn::experimental::run_compiled_program),
+            nb::arg("compiled_program"),
+            nb::arg("io_tensors"),
+            nb::arg("mesh_program_descriptor"),
+            nb::arg("kernel_config_buffer") = nb::none()),
+        ttnn::overload_t(
+            static_cast<Tensor (*)(
+                CompiledProgram&, const std::vector<Tensor>&, const ProgramDescriptor&, const KernelConfigBuffer*)>(
+                &ttnn::experimental::run_compiled_program),
+            nb::arg("compiled_program"),
+            nb::arg("io_tensors"),
+            nb::arg("program_descriptor"),
+            nb::arg("kernel_config_buffer") = nb::none()));
 }
 
 }  // namespace ttnn::operations::generic

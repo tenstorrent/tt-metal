@@ -106,6 +106,19 @@
       "owners": [
         "@tenstorrent/metalium-api-owners"
       ]
+    },
+    {
+      "id": "moreh-sum-mean",
+      "description": "ttnn.moreh_sum and ttnn.moreh_mean are deprecated in favor of ttnn.sum and ttnn.mean (tt-metal#58424). C++ callers get [[deprecated]]; Python callers get a FutureWarning on each call site. All in-repo callers are migrated; the ops remain only for external callers during the grace period. Note that with keepdim=False moreh_sum/moreh_mean keep reduced H/W dims as size 1, while ttnn.sum/ttnn.mean remove them. The cleanup PR deletes the moreh_sum and moreh_mean ops (sources, bindings, the ttnn.operations.moreh.sum/mean aliases and their tests); moreh_sum_backward and moreh_mean_backward are not part of this deprecation.",
+      "files": [
+        "ttnn/cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp",
+        "ttnn/cpp/ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
+      ],
+      "introduced_by_pr": 65253,
+      "grace": "4w",
+      "owners": [
+        "ign-msati"
+      ]
     }
   ]
 }

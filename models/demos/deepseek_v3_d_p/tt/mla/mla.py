@@ -2108,6 +2108,8 @@ class ttMLA:
             v_out = ttnn.multiply(v_out, g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(g)
         if self.tp_factor > 1:
+            # CCL ports in the last grid column: the matmul keeps every row (GLM-5.3: 10x10 = 100 cores instead of
+            # 10x8 = 80, 12 -> 10 output tiles per core).
             return ttnn.experimental.matmul_reduce_scatter_prefill(
                 v_out,
                 self.o_proj_weight,
@@ -2115,6 +2117,7 @@ class ttMLA:
                 scatter_dim=-1,
                 topology=self.tp_ccl_topology,
                 num_links=self.ccl_num_links,
+                use_column_major_ccl=True,
             )
         return ttnn.linear(
             v_out,
