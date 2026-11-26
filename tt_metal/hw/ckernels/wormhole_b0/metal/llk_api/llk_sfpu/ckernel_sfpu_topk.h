@@ -18,6 +18,15 @@ using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
+// topk_replay_ownership: topk records anywhere in the replay buffer [0, 32), ignoring the
+// SFPU/FPU split at ckernel::math::replay_buf_offset; staying in [0, 16) would cost topk cycles.
+// Ops that replay what their init recorded (transpose_dest, matmul, reduce, ...) must re-run that
+// init after topk. Conversely, an op that records over windows cached in topk_replay_init requires
+// a topk init before the next topk call. Under ENABLE_LLK_ASSERT the FPU-half owner tag catches
+// both misuses against transpose_dest.
+
+// Which windows the previous call left recorded: 0 none (after init, fuse, defuse), -1 local-sort
+// load/store [0, 16), m_iter + 1 the rebuild windows of that iteration.
 static std::int32_t topk_replay_init = 0;
 
 // Tie-break polarity for the stable compare-exchange. A property of the GLOBAL sort order, not
@@ -857,6 +866,8 @@ inline void _bitonic_topk_phases_steps(
     topk_uint16_clear_value_tiles_high_bits();
 
     topk_validate_mode_combo<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>();
+    // The phase bodies record at slots 16+, over the FPU half (see topk_replay_ownership).
+    LLK_ASSERT_BLOCK(ckernel::math::llk_assert_replay_buf_fpu_half_owner = ckernel::math::ReplayBufFpuHalfOwner::Topk);
     // Fused packed keys halve the load/store footprint; replay window bases stay put
     // (slots 4-7 / 12-15 simply go unused in fused mode).
     constexpr int ldst_count = FUSED ? 4 : 8;
@@ -1211,6 +1222,12 @@ inline void _bitonic_topk_rebuild(
 
     // init replay buffer for rebuild iteration 'm_iter' if uninitialized
     bool init_rebuild = (topk_replay_init != m_iter + 1) ? true : false;
+    // Cached windows reach slot 28, over the FPU half (see topk_replay_ownership).
+    LLK_ASSERT(
+        init_rebuild ||
+            ckernel::math::llk_assert_replay_buf_fpu_half_owner == ckernel::math::ReplayBufFpuHalfOwner::Topk,
+        "Another op recorded over the cached rebuild windows; re-run topk init");
+    LLK_ASSERT_BLOCK(ckernel::math::llk_assert_replay_buf_fpu_half_owner = ckernel::math::ReplayBufFpuHalfOwner::Topk);
 
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++) {

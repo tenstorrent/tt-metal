@@ -167,6 +167,9 @@ inline void transpose_dest_32b()
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
 {
+    LLK_ASSERT(
+        math::llk_assert_replay_buf_fpu_half_owner == math::ReplayBufFpuHalfOwner::TransposeDest,
+        "transpose_dest replay recording was overwritten (e.g. by topk); re-run _llk_math_transpose_dest_init_");
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     math::reset_counters(p_setrwc::SET_ABD_F);
 
@@ -369,6 +372,7 @@ inline void _llk_math_transpose_dest_init_()
 {
     transpose_dest_configure_addrmod<is_32bit>();
     transpose_dest_configure_mop<transpose_of_faces, is_32bit>();
+    LLK_ASSERT_BLOCK(math::llk_assert_replay_buf_fpu_half_owner = math::ReplayBufFpuHalfOwner::TransposeDest);
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 }

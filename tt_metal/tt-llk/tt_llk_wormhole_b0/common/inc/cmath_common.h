@@ -29,6 +29,22 @@ namespace ckernel::math
 
 constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage between fpu/sfpu
                                                 // first 16 for sfpu, next 16 for fpu
+// Exception to the split: topk (ckernel_sfpu_topk.h) records anywhere in [0, 32). An op that replays
+// what its init recorded (transpose_dest, matmul, reduce, ...) must re-run that init after topk.
+
+// Last recorder of replay slots [replay_buf_offset, 32), tracked for LLK_ASSERT only. Without
+// ENABLE_LLK_ASSERT it is declared but never defined, like llk_assert_fp32_dest_acc_en.
+enum class ReplayBufFpuHalfOwner : std::uint8_t
+{
+    None,
+    TransposeDest,
+    Topk,
+};
+#ifdef ENABLE_LLK_ASSERT
+inline ReplayBufFpuHalfOwner llk_assert_replay_buf_fpu_half_owner = ReplayBufFpuHalfOwner::None;
+#else
+extern ReplayBufFpuHalfOwner llk_assert_replay_buf_fpu_half_owner;
+#endif
 
 // ---------------------------------------------------------------------------------------------
 // Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src).

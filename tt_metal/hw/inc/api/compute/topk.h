@@ -228,6 +228,13 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
  * rank-tag complement constant). tag_bits is the rank tag field width in the value word's low bits
  * (16 for bf16 values, 6..15 for fp32 keys whose low mantissa bits are zero); every stamp / merge /
  * strip call of that sort must use the same value.
+ *
+ * Replay buffer ownership: topk calls record anywhere in the math thread's replay buffer, including
+ * the slots FPU ops record into at init. After any topk call, re-run the init of an op that replays
+ * its init-time recording (e.g. transpose_init, matmul and reduce inits) before that op runs again.
+ * Consecutive topk_local_sort calls, and consecutive topk_rebuild calls with the same m_iter, reuse
+ * windows the first call recorded; an op that records over those windows in between requires
+ * topk_tile_init before the next such call.
  */
 template <bool fused = false, bool rank_stamped = false, std::uint32_t tag_bits = 16>
 ALWI void topk_tile_init() {
