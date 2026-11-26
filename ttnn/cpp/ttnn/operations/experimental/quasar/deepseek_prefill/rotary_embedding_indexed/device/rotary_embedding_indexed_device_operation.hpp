@@ -9,8 +9,8 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"

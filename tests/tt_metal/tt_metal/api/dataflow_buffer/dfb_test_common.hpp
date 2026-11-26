@@ -12,38 +12,38 @@
 #include <utility>
 #include <vector>
 #include <gtest/gtest.h>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/program/program_impl.hpp"
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <functional>
 #include <thread>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -108,6 +108,22 @@ inline TensorSpec make_flat_dram_tensor_spec(
     return TensorSpec(Shape{num_pages, elements_per_page}, tensor_layout);
 }
 
+// DRAM tensor for one DM side of a DFB. An implicit-sync BLOCKED DM side moves a whole block in one NoC
+// transaction from one address, but consecutive pages of an interleaved tensor sit in different DRAM banks,
+// so that side gets one page per block (block_pages). The flat host data is the same either way.
+inline TensorSpec make_dfb_side_tensor_spec(
+    uint32_t entry_size, uint32_t num_entries, bool block_pages, uint32_t block_size, DataType dtype) {
+    if (!block_pages) {
+        return make_flat_dram_tensor_spec(entry_size, num_entries, dtype);
+    }
+    TT_FATAL(
+        block_size > 0 && num_entries % block_size == 0,
+        "num_entries {} must be a whole number of blocks of {}",
+        num_entries,
+        block_size);
+    return make_flat_dram_tensor_spec(entry_size * block_size, num_entries / block_size, dtype);
+}
+
 template <typename T>
 inline void m2_writeshard_barrier_uint32(
     distributed::MeshDevice& unit_mesh, const MeshTensor& in_tensor, const std::vector<T>& input) {
@@ -157,6 +173,17 @@ inline void disable_implicit_sync_for(KernelSpec& kernel, DFBSpecName dfb_name) 
     }
     auto& config_2xx = *dm_cfg.config_2xx;
     config_2xx.disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
+}
+
+// Hand one side of a DFB to a compute kernel's SFPU pipeline (Quasar).
+inline void use_sfpu_pipeline_for(KernelSpec& kernel, DFBSpecName dfb_name, DFBEndpointType side) {
+    auto& compute_cfg = std::get<ComputeHardwareConfig>(kernel.hw_config);
+    if (!compute_cfg.config_2xx) {
+        compute_cfg.config_2xx = ComputeHardwareConfig::Compute2XXConfig{};
+    }
+    auto& listed = side == DFBEndpointType::CONSUMER ? compute_cfg.config_2xx->sfpu_pipeline_consumed_dfbs
+                                                     : compute_cfg.config_2xx->sfpu_pipeline_produced_dfbs;
+    listed.push_back(std::move(dfb_name));
 }
 
 inline void maybe_disable_implicit_sync(KernelSpec& kernel, bool implicit_sync, DFBSpecName dfb_name) {
@@ -239,6 +266,9 @@ struct M2SingleDFBParams {
     // DM STRIDED implicit sync only: spread each DM kernel's transfers over a temporary, a copy passed to
     // a helper and the main object, so the kernel-exit finish must see one shared count per DFB.
     bool use_temporaries = false;
+    // Quasar only: run the Tensix producer / consumer side on trisc3 instead of trisc2 / trisc0.
+    bool producer_on_trisc3 = false;
+    bool consumer_on_trisc3 = false;
 };
 
 inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
@@ -251,6 +281,10 @@ inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
 // digest of every entry it drains into an L1 scratch region. These two helpers are the
 // host side of that contract: the same hash, and the region's placement/sizing.
 constexpr uint32_t k_dfb_digest_sentinel = 0xDEADBEEFu;
+
+// A Tensix producer stamps word 0 of every entry it pushes with this base plus its thread id, so
+// the output shows which thread pushed each entry.
+constexpr uint32_t k_dfb_producer_stamp_base = 0x7D000000u;
 
 inline uint32_t fnv1a_page_digest(const std::vector<uint32_t>& words, uint32_t page_id, uint32_t words_per_entry) {
     uint32_t digest = 2166136261u;  // FNV-1a offset basis
@@ -340,6 +374,9 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     if (p.producer_type == M2PorCType::TENSIX && p.consumer_type == M2PorCType::TENSIX) {
         GTEST_SKIP() << "Tensix→Tensix unsupported (no NoC transfer)";
     }
+    if (mesh_device.arch() != ARCH::QUASAR && (p.producer_on_trisc3 || p.consumer_on_trisc3)) {
+        GTEST_SKIP() << "trisc3 DFB endpoints require Quasar";
+    }
     // An ALL (broadcast) DM consumer under implicit sync deadlocks: the broadcast
     // credit path is not driven for a DM consumer regardless of producer -- DM→DM
     // has no DM↔DM remapper, and a Tensix producer cannot post the DM consumer's
@@ -366,16 +403,21 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     const TensorParamName IN_TENSOR{"in_tensor"};
     const TensorParamName OUT_TENSOR{"out_tensor"};
 
-    const auto tensor_spec = make_flat_dram_tensor_spec(p.entry_size, entries_per_core, DataType::UINT32);
     // Only allocate (and bind) a DRAM tensor on the side that has a DM kernel.
     // Tensix producer reads from host-prefilled L1; Tensix consumer doesn't write DRAM.
     std::optional<MeshTensor> in_tensor;
     std::optional<MeshTensor> out_tensor;
     if (p.producer_type == M2PorCType::DM) {
-        in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+        in_tensor = MeshTensor::allocate_on_device(
+            mesh_device,
+            make_dfb_side_tensor_spec(
+                p.entry_size, entries_per_core, producer_blocked && p.implicit_sync, p.block_size, DataType::UINT32));
     }
     if (p.consumer_type == M2PorCType::DM) {
-        out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+        out_tensor = MeshTensor::allocate_on_device(
+            mesh_device,
+            make_dfb_side_tensor_spec(
+                p.entry_size, entries_per_core, consumer_blocked && p.implicit_sync, p.block_size, DataType::UINT32));
     }
 
     DataflowBufferSpec dfb_spec{
@@ -419,6 +461,9 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
          .endpoint_type = DFBEndpointType::PRODUCER,
          .access_pattern = p.pap,
          .block_size = producer_blocked ? p.block_size : 0u}};
+    if (p.producer_on_trisc3) {
+        use_sfpu_pipeline_for(producer, DFB, DFBEndpointType::PRODUCER);
+    }
     // The BLOCKED kernels also take block_size.
     if (producer_blocked) {
         producer.compile_time_args = {
@@ -428,6 +473,10 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     } else {
         producer.compile_time_args = {
             {"num_entries_per_producer", num_entries_per_producer}, {"implicit_sync", p.implicit_sync ? 1u : 0u}};
+    }
+    if (p.producer_type == M2PorCType::TENSIX) {
+        producer.compile_time_args.insert({"producer_on_trisc3", p.producer_on_trisc3 ? 1u : 0u});
+        producer.compile_time_args.insert({"producer_stamp_base", k_dfb_producer_stamp_base});
     }
 
     // Consumer kernel
@@ -460,8 +509,11 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             CONSUMER,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer_2_0.cpp",
             static_cast<uint8_t>(p.num_consumers));
-        // The Tensix consumer needs no block_size arg; the kernel reads it from the ring.
-        consumer.compile_time_args = {{"num_entries_per_consumer", num_entries_per_consumer}};
+        // The Tensix consumer needs no block_size arg; the kernel reads it from the ring. It does need
+        // consumer_on_trisc3: the kernel runs on every TRISC, and only the consuming one hashes the entries.
+        consumer.compile_time_args = {
+            {"num_entries_per_consumer", num_entries_per_consumer},
+            {"consumer_on_trisc3", p.consumer_on_trisc3 ? 1u : 0u}};
         consumer.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
     }
     consumer.dfb_bindings = {
@@ -470,6 +522,9 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
          .endpoint_type = DFBEndpointType::CONSUMER,
          .access_pattern = p.cap,
          .block_size = consumer_blocked ? p.block_size : 0u}};
+    if (p.consumer_on_trisc3) {
+        use_sfpu_pipeline_for(consumer, DFB, DFBEndpointType::CONSUMER);
+    }
 
     // Config is arch-specific (the _2_0 kernels are the same either way). On WH/BH a DFB lowers to
     // a circular buffer and ValidateProgramSpec requires config_1xx on DM kernels, so mirror the
@@ -622,6 +677,13 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             }
         }
         slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, slice);
+
+        // The producing thread overwrites word 0 of every entry with its stamp, so every output page
+        // must carry the stamp of the thread the host asked for.
+        const uint32_t expected_stamp = k_dfb_producer_stamp_base + (p.producer_on_trisc3 ? 3u : 2u);
+        for (uint32_t page_id = 0; page_id < entries_per_core; ++page_id) {
+            input[page_id * wpe] = expected_stamp;
+        }
     }
 
     // Seed the digest region so a slot the consumer never reached reads back as the
@@ -811,7 +873,8 @@ inline void run_a1_blocked_pipeline(
     const NodeCoord node{0, 0};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
-    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(
+        mesh_device, make_dfb_side_tensor_spec(entry_size, num_entries, implicit, block_size, DataType::BFLOAT16));
     auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
 
     const DFBSpecName DFB_IN{"dfb_in"};
@@ -1087,7 +1150,10 @@ inline void run_a1_fanout_blocked_pipeline(
     const NodeCoord node{0, 0};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
-    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(
+        mesh_device,
+        make_dfb_side_tensor_spec(
+            entry_size, num_entries, implicit && pap_in == DFBAccessPattern::BLOCKED, block_size, DataType::BFLOAT16));
     auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
 
     const DFBSpecName DFB_IN{"dfb_in"};
@@ -1216,6 +1282,87 @@ inline void run_a1_fanout_blocked_pipeline(
         log_output_provenance(input, output, wpe, num_entries, fmt::format("A1-fanout BLOCKED C={}", C));
     }
     EXPECT_EQ(expected, output) << "A1-fanout multi-Tensix-consumer BLOCKED data mismatch (C=" << C << ")";
+}
+
+// Metal 2.0 intra-Tensix self-loop harness
+inline void run_intra_tensix_dfb_program_2_0(
+    distributed::MeshDevice& mesh_device, uint32_t entry_size, uint32_t num_threads) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 INTRA test is Quasar-only";
+    }
+
+    constexpr uint32_t num_entries = 16;  // matches legacy
+    TT_FATAL(num_entries % num_threads == 0, "num_entries must be divisible by num_threads");
+    const uint32_t entries_per_neo = num_entries / num_threads;
+    const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+    const uint32_t total_bytes = num_entries * entry_size;
+
+    const DFBSpecName DFB{"intra_dfb"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    DataflowBufferSpec dfb_spec{
+        .unique_id = DFB,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    // Compute kernel binds the same DFB as both PRODUCER ("out") and CONSUMER
+    // ("in"). M2 infers INTRA scope. Names MUST differ: using the same name for
+    // both endpoints causes M2 to only wire one Neo's slice, leaving the others'
+    // L1 untouched. No tensor_bindings (TRISC compute kernels can't include
+    // tensor_accessor.h transitively). Matches the working
+    // run_intra_tensix_dfb_program pattern in main's test_dataflow_buffer.cpp.
+    auto compute =
+        make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra_2_0.cpp", num_threads);
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB,
+         .accessor_name = "out",
+         .endpoint_type = DFBEndpointType::PRODUCER,
+         .access_pattern = DFBAccessPattern::STRIDED},
+        {.dfb_spec_name = DFB,
+         .accessor_name = "in",
+         .endpoint_type = DFBEndpointType::CONSUMER,
+         .access_pattern = DFBAccessPattern::STRIDED},
+    };
+    compute.compile_time_args = {{"entries_per_neo", entries_per_neo}, {"words_per_entry", words_per_entry}};
+
+    // target_nodes MUST be a NodeRangeSet (not a bare NodeCoord) to match the
+    // working legacy M2 helper on main (run_intra_tensix_dfb_program). With a
+    // bare NodeCoord the framework takes a different scheduling path that
+    // exposes a PACK/UNPACK write race for some Neos' L1 slices.
+    const NodeRangeSet node_set{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}};
+    ProgramSpec spec{
+        .name = "intra_tensix_2_0",
+        .kernels = {compute},
+        .dataflow_buffers = {dfb_spec},
+        .tensor_parameters = {},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
+    };
+
+    Program program(mesh_device, spec);
+
+    // Kernel has no runtime args; pass kernel_spec_name only (matches legacy
+    // pattern in main's run_intra_tensix_dfb_program).
+    ProgramRunArgs params;
+    params.kernel_run_args = {{.kernel = COMPUTE}};
+    program.set_program_run_args(params);
+
+    // DFB is the first L1 allocation in the program → lands at the base L1
+    // allocator address. Same trick the legacy intra test uses.
+    const uint32_t dfb_l1_addr =
+        static_cast<uint32_t>(mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1));
+
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_bytes / sizeof(uint32_t));
+    slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, input);
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<uint32_t> expected(input.size());
+    std::transform(input.begin(), input.end(), expected.begin(), [](uint32_t v) { return v + 2; });
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, total_bytes, output);
+    EXPECT_EQ(expected, output) << "M2 intra-tensix DFB +2 per word mismatch (num_threads=" << num_threads << ")";
 }
 
 }  // namespace tt::tt_metal

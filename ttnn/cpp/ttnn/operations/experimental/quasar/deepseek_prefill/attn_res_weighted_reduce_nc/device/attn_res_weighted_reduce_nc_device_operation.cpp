@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/experimental/quasar/deepseek_prefill/attn_res_weighted_reduce_nc/device/attn_res_weighted_reduce_nc_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"

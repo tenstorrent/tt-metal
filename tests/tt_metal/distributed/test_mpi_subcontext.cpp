@@ -20,9 +20,9 @@
 
 #include <gtest/gtest.h>
 #include <mpi.h>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>

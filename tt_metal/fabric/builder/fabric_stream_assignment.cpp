@@ -78,11 +78,15 @@ StreamRequirements stream_requirements(const StreamPlacementInputs& placement, c
     need.add(StreamRole::DOWNSTREAM_FREE_SLOTS, 0, placement.max_receiver_counts[0] > 0 ? downstream_span_per_vc : 0);
     need.add(StreamRole::DOWNSTREAM_FREE_SLOTS, 1, placement.max_receiver_counts[1] > 0 ? downstream_span_per_vc : 0);
 
-    // VC2's sender and receiver ride pinned registers, so VC2 takes no group here.
     need.add(StreamRole::SENDER_FREE_SLOTS, 0, placement.max_sender_counts[0]);
     need.add(StreamRole::SENDER_FREE_SLOTS, 1, placement.max_sender_counts[1]);
+    if (placement.vc2_forwards) {
+        need.add(StreamRole::DOWNSTREAM_FREE_SLOTS, 2, downstream_span_per_vc);
+        need.add(StreamRole::SENDER_FREE_SLOTS, 2, placement.max_sender_counts[2] - 1);
+    }
 
     need.vc2_present = placement.vc2_present;
+    need.vc2_forwards = placement.vc2_forwards;
     need.tensix_relay_present = placement.tensix_relay_present;
     need.plan = plan;
     return need;
@@ -109,7 +113,7 @@ std::string describe(const StreamRequirements& need) {
 // The kernel's declared stream-register name set, generated from the same extents the emission
 // walks (fabric_erisc_router_ct_args.hpp's unconditional declarations). The mirror's two sides:
 // this function and named_args() must both move with the kernel header.
-std::set<std::string> expected_stream_name_set() {
+std::set<std::string> expected_stream_name_set(bool vc2_forwards) {
     std::set<std::string> names;
     for (uint32_t vc = 0; vc < num_receiver_pkts_sent_names; ++vc) {
         names.insert(fmt::format("TO_RECEIVER_{}_PKTS_SENT_ID", vc));
@@ -120,7 +124,8 @@ std::set<std::string> expected_stream_name_set() {
     for (uint32_t flat = 0; flat < num_pkts_completed_names; ++flat) {
         names.insert(fmt::format("TO_SENDER_{}_PKTS_COMPLETED_ID", flat));
     }
-    for (uint32_t vc = 0; vc <= 1; ++vc) {
+    const uint32_t last_forwarding_vc = vc2_forwards ? 2u : 1u;
+    for (uint32_t vc = 0; vc <= last_forwarding_vc; ++vc) {
         for (uint32_t compact = 1; compact <= num_downstream_free_slots_names_per_vc; ++compact) {
             names.insert(fmt::format("VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID", vc, compact));
         }
@@ -186,9 +191,15 @@ void StreamAssignment::emit_flat_table(
     for (; flat < extent; ++flat) {
         // The VC2 sender's flat slot rides its pinned register, not the sentinel.
         const bool is_vc2_slot = role == StreamRole::SENDER_FREE_SLOTS && vc2_present_ && flat == sender_flat_base_[2];
-        out.emplace_back(
-            fmt::format(fmt::runtime(pattern), flat),
-            is_vc2_slot ? StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id : k_unused_stream_id);
+        const bool is_vc2_forwarding = role == StreamRole::SENDER_FREE_SLOTS && vc2_present_ &&
+                                       flat > sender_flat_base_[2] && has(role, 2, flat - sender_flat_base_[2] - 1);
+        uint32_t stream_id = k_unused_stream_id;
+        if (is_vc2_slot) {
+            stream_id = StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id;
+        } else if (is_vc2_forwarding) {
+            stream_id = id(role, 2, flat - sender_flat_base_[2] - 1);
+        }
+        out.emplace_back(fmt::format(fmt::runtime(pattern), flat), stream_id);
     }
 }
 
@@ -208,7 +219,8 @@ std::vector<std::pair<std::string, uint32_t>> StreamAssignment::named_args() con
     emit_flat_table(StreamRole::SENDER_PKTS_COMPLETED, "TO_SENDER_{}_PKTS_COMPLETED_ID", num_pkts_completed_names, out);
 
     // Downstream free slots: direction-keyed, per VC.
-    for (uint32_t vc = 0; vc <= 1; ++vc) {
+    const uint32_t last_forwarding_vc = vc2_forwards_ ? 2u : 1u;
+    for (uint32_t vc = 0; vc <= last_forwarding_vc; ++vc) {
         for (uint32_t compact = 0; compact < num_downstream_free_slots_names_per_vc; ++compact) {
             out.emplace_back(
                 fmt::format("VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID", vc, compact + 1),
@@ -244,7 +256,7 @@ std::vector<std::pair<std::string, uint32_t>> StreamAssignment::named_args() con
         TT_FATAL(emitted.insert(name).second, "Stream-register name {} emitted twice", name);
     }
     TT_FATAL(
-        emitted == expected_stream_name_set(),
+        emitted == expected_stream_name_set(vc2_forwards_),
         "Emitted stream-register names do not match the kernel's declared set (mirror of "
         "fabric_erisc_router_ct_args.hpp)");
     return out;
@@ -273,6 +285,7 @@ StreamAssignment make_stream_assignment(const StreamRequirements& need) {
     a.sender_flat_base_ = need.sender_flat_base;
     a.sender_counts_ = need.sender_counts;
     a.vc2_present_ = need.vc2_present;
+    a.vc2_forwards_ = need.vc2_forwards;
     a.tensix_relay_present_ = need.tensix_relay_present;
     a.plan_ = need.plan;
 

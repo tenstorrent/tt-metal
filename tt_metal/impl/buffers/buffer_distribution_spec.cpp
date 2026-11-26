@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "buffer_distribution_spec.hpp"
+#include "tt-metalium/memory/buffer/buffer_distribution_spec.hpp"
 #include "impl/buffers/compute_page_mapping.hpp"
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include <algorithm>
 #include <utility>
@@ -149,7 +149,7 @@ BufferDistributionSpec::BufferDistributionSpec(
     TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
-    if (tensor_shape_in_pages_.volume() != 0) {
+    if (tensor_shape_in_pages.volume() != 0) {
         TT_FATAL(!cores_.empty(), "Can't distribute non zero volume tensor over an empty set of cores");
     }
 

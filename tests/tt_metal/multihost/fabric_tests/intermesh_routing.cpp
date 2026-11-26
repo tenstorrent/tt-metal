@@ -10,8 +10,9 @@
 #include <vector>
 
 #include "multihost_fabric_fixtures.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
 
 #include <random>
 #include <algorithm>

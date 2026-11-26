@@ -291,8 +291,8 @@ template <size_t VC>
 FORCE_INLINE void record_forwarded(uint32_t forward_to) {
     if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
         if constexpr (is_2d) {
-            constexpr std::array<uint32_t, 2> packed_by_vc = {
-                PACKED_DOWNSTREAM_VC0_SENDER_CHANNEL_IDS, PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS};
+            constexpr std::array<uint32_t, 3> packed_by_vc = {
+                PACKED_DOWNSTREAM_VC0_SENDER_CHANNEL_IDS, PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS, 0};
             constexpr uint32_t packed = packed_by_vc[ReceiverChannel<VC>::forwards_on_vc];
             uint32_t entries = 0;
             for (uint32_t names = forward_to; names != 0; names &= names - 1) {
@@ -550,13 +550,20 @@ FORCE_INLINE bool credit_completions(
         // and under traffic the pass's forward has read the same buffers' ready states first.
         if (handled_packet) {
             if constexpr (ReceiverChannel<VC>::forwards) {
-                wait_cmd_bufs_ready(
-                    LOCAL_NOC,
-                    CommandBuffers::local_writes,
-                    tt::tt_fabric::edm_to_downstream_noc,
-                    CommandBuffers::forward_data[VC]);
+                // Do not spin on the command buffers: a packet that is both forwarded and delivered issues two long
+                // writes, and on a single-ERISC router the wait also stalls the sender (large multicast packets
+                // measured 8-11% slower on a Wormhole Galaxy). The used reads of the ready states still order the
+                // status read after the commands issued so far. While this pass's writes are still being issued,
+                // prove an older slot if one waits (its commands went out a pass or more ago, on its own
+                // transaction ID); otherwise leave the credit to a later pass.
+                const bool local_write_ready = noc_cmd_buf_ready(LOCAL_DELIVERY_NOC, CommandBuffers::local_writes);
+                const bool forward_ready =
+                    noc_cmd_buf_ready(tt::tt_fabric::edm_to_downstream_noc, CommandBuffers::forward_data[VC]);
+                if (!(local_write_ready & forward_ready) && waiting <= 1) {
+                    return false;
+                }
             } else {
-                while (!noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes));
+                while (!noc_cmd_buf_ready(LOCAL_DELIVERY_NOC, CommandBuffers::local_writes));
             }
         }
     }
@@ -735,6 +742,9 @@ FORCE_INLINE Connections set_up_channels(const RuntimeArgs& args) {
         if constexpr (any_forwards_on_vc(1)) {
             init_downstreams(downstreams.vc1, args.vc1());
         }
+        if constexpr (any_forwards_on_vc(2)) {
+            init_downstreams(downstreams.vc2, args.vc2());
+        }
         if constexpr (udm_mode) {
             init_relay(downstreams.relay, args.relay);
         }
@@ -765,6 +775,9 @@ FORCE_INLINE void open_connections(const RuntimeArgs& args) {
     if constexpr (has_vc1 && open_downstream_vc1_connections) {
         open_downstreams<1>(args.vc1());
     }
+    if constexpr (any_forwards_on_vc(2) && open_downstream_vc2_connections) {
+        open_downstreams<2>(args.vc2());
+    }
     if constexpr (udm_mode) {
         open_relay(args.relay);
     }
@@ -774,7 +787,7 @@ FORCE_INLINE void open_connections(const RuntimeArgs& args) {
 template <size_t VC>
 FORCE_INLINE void preset_forward_pair(const RuntimeArgs& args) {
     if constexpr (CommandBuffers::presets_forward_pair(VC)) {
-        ForwardCommands<VC>::preset(VC == 0 ? args.vc0() : args.vc1());
+        ForwardCommands<VC>::preset(args.template of_vc<VC>());
     }
 }
 
@@ -783,7 +796,8 @@ FORCE_INLINE void preset_forward_pair(const RuntimeArgs& args) {
 FORCE_INLINE void preset_forward_commands(const RuntimeArgs& args) {
     preset_forward_pair<0>(args);
     preset_forward_pair<1>(args);
-    static_assert(!any_forwards_on_vc(2), "the runtime args list downstream routers for VC0 and VC1");
+    preset_forward_pair<2>(args);
+    static_assert(!any_forwards_on_vc(2) || vc2_forwards, "the runtime args list VC2's downstreams where it forwards");
 }
 
 // The receiver loop: rounds of passes until termination. A function of its own so its code depends only on this body;

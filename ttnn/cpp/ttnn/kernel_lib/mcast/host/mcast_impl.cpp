@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <set>
 #include <utility>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include <tt_stl/assert.hpp>
 

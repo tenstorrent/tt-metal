@@ -6,7 +6,7 @@
 
 #include <fmt/core.h>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 #include "metal/ops/common/ring_sdpa_utils.hpp"
 
