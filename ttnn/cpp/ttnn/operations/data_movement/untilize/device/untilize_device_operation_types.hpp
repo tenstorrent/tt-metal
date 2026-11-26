@@ -4,10 +4,10 @@
 
 #pragma once
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include <vector>
 #include <optional>
@@ -28,6 +28,9 @@ struct UntilizeOperationAttributes {
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
     bool enough_space_height{};
     uint32_t pf_type{};
+    // Multi-core factory with interleaved input and output: derive the per-core rows on device so one
+    // program serves every height. Default: main's host split.
+    bool runtime_rows{};
 };
 
 using UntilizeTensorReturnValue = Tensor;

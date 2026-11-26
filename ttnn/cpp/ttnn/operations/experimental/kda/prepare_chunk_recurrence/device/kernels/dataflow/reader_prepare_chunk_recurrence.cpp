@@ -49,11 +49,11 @@ template <
     uint32_t beta_offset_tiles,
     uint32_t has_actual_start,
     uint32_t has_actual_end,
-    uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows,
     uint32_t batch_items>
-TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks, uint32_t num_heads) {
+TT_KERNEL void reader(
+    uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks, uint32_t num_heads, uint32_t sp_rank) {
     // Padding is zeroed per tile, so each tile row must be one whole chunk.
     static_assert(Ct == 1, "chunk KDA currently requires chunk_size=32");
 

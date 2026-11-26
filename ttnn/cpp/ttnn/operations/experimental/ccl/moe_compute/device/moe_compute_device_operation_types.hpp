@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -97,6 +97,9 @@ struct MoEComputeParams {
         return attrs;
     }
 };
+
+// CLAMPED_SILU needs a finite, positive limit; the other activations take none.
+void validate_activation_limit(detail::MoEActivationFunction activation_type, std::optional<float> activation_limit);
 
 struct MoEComputeInputs {
     const ttnn::Tensor& tilize_input_tensor;

@@ -4,11 +4,11 @@
 
 #include "dit_layernorm_pre_all_gather_device_operation.hpp"
 
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "ttnn/distributed/types.hpp"
 
@@ -24,11 +24,12 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
     Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& shape = a.padded_shape();
-    const uint32_t W = shape[-1], H = shape[-2];
-    const uint32_t HW = H * W;
+    const uint32_t W = a.logical_shape()[-1];
+    const uint32_t padded_W = shape[-1], H = shape[-2];
+    const uint32_t HW = H * padded_W;
     const uint32_t NC = a.physical_volume() / HW;
 
-    const uint32_t Wt = W / TILE_WIDTH;
+    const uint32_t Wt = padded_W / TILE_WIDTH;
     const uint32_t Ht = H / TILE_HEIGHT;
 
     MeshDevice* device = a.device();

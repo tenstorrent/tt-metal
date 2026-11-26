@@ -4,15 +4,15 @@
 
 #pragma once
 
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <string>
 #include <variant>
 #include <initializer_list>
-#include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
@@ -102,6 +102,12 @@ struct StridedAllGatherFusedOpSignaler {
 
         const tt::tt_metal::CoreRangeSet& all_gather_workers,
         std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
+
+    void init_all_gather(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::distributed::MeshDevice* device,
+        const tt::tt_metal::CoreRangeSet& all_gather_workers,
+        const std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
 
     void push_all_gather_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args,

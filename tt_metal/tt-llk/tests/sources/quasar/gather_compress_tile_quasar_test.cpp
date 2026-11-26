@@ -28,9 +28,9 @@ using namespace ckernel;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "ckernel_buf_desc.h"
 #include "ckernel_vector.h"
 #include "experimental/llk_unpack_gather_compress.h"
-#include "llk_bfd_alloc.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -41,14 +41,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A = params.buffer_A;
     const Operand& buffer_B = params.buffer_B;
 #endif
-    auto unpack_arg_mbox = (std::uint8_t*)UNPACKER_ARG_MAILBOX_BASE1;
+    auto unpack_arg_mbox = reinterpret_cast<std::uint8_t*>(UNPACKER_ARG_MAILBOX_BASE1);
 
     // UNPACR_STRIDE indexes 16-element L1 rows as tiles.
     constexpr ckernel::TensorShape src_shape =
         ckernel::make_tensor_shape(1 /*face_r_dim*/, ROW_ELEMS /*face_c_dim*/, 1 /*num_faces_r_dim*/, 1 /*num_faces_c_dim*/);
 
-    const std::uint8_t src_bfd_id = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1, ckernel::trisc::L1AccessMode::Strided>(
-        src_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_B_src);
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1, ckernel::trisc::L1AccessMode::Strided>(src_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_B_src);
+    constexpr std::uint8_t src_bfd_id = ckernel::trisc::BFD_ID_UNP1;
 
     _llk_unpack_hw_configure_<p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_B_dst));
     _llk_unpack_gather_compress_init_<GATHER_COMPRESS_MODE>(src_bfd_id, static_cast<DataFormat>(formats.unpack_B_dst));
@@ -100,8 +100,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "ckernel_buf_desc.h"
 #include "experimental/llk_pack_gather_compress.h"
-#include "llk_bfd_alloc.h"
 #include "llk_pack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -117,10 +117,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::make_tensor_shape(GATHER_COMPRESS_ELEM_CNT / ROW_ELEMS /*face_r_dim*/, ROW_ELEMS /*face_c_dim*/, 1 /*num_faces_r_dim*/, 1 /*num_faces_c_dim*/);
 
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(res_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(res_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_gather_compress_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>());
+    _llk_pack_gather_compress_init_(ckernel::trisc::BFD_ID_PACK0);
 
     // Vector v packs to L1 slot v, so packing all TILE_VECTORS vectors rebuilds the row-major tile.
     for (std::uint32_t vector = 0; vector < TILE_VECTORS; vector++)

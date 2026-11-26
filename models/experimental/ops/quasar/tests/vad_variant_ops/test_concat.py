@@ -42,6 +42,8 @@ CASES = [
 @pytest.mark.parametrize("shapes, dim, layout, dt, mems, out_mem", CASES)
 def test_concat(ttnn_mesh_device, reset_seeds, shapes, dim, layout, dt, mems, out_mem):
     mesh = ttnn_mesh_device
+    if U.is_quasar() and dt == "bfp8":
+        dt = "bf16"  # Quasar has no block-float DFB formats (its set is MX)
     torch_dtype = torch.float32 if dt == "fp32" else torch.bfloat16
     parts = [U.torch_rand(s, dtype=torch_dtype) for s in shapes]
     tt_parts = [U.to_tt_mem(p, mesh, m, dtype=U.DTYPES[dt], layout=layout) for p, m in zip(parts, mems)]

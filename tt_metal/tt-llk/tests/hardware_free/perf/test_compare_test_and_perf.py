@@ -92,41 +92,6 @@ def test_cross_arch_verdict_uses_architecture_names():
     assert only == "[B] bcast_dim: B-only axis"
 
 
-def test_math_op_joins_mathop_without_renaming_when_both_sides_agree():
-    left = cmp.Sweep(
-        axes={"math_op": ["MathOperation.Elwadd", "MathOperation.Elwsub"]},
-        rows=[{"math_op": "MathOperation.Elwadd"}],
-        raw={"math_op": ["add", "sub"]},
-        raw_rows=[{"math_op": "add"}],
-    )
-    right = cmp.Sweep(
-        axes={"mathop": ["MathOperation.Elwadd"]},
-        rows=[{"mathop": "MathOperation.Elwadd"}],
-        raw={"mathop": ["add"]},
-        raw_rows=[{"mathop": "add"}],
-    )
-    both = cmp.Sweep(
-        axes={"math_op": ["MathOperation.Elwadd"]},
-        rows=[{"math_op": "MathOperation.Elwadd"}],
-        raw={"math_op": ["add"]},
-        raw_rows=[{"math_op": "add"}],
-    )
-    other = cmp.Sweep(
-        axes={"math_op": ["MathOperation.Elwsub"]},
-        rows=[{"math_op": "MathOperation.Elwsub"}],
-        raw={"math_op": ["sub"]},
-        raw_rows=[{"math_op": "sub"}],
-    )
-
-    cmp.align_sweeps(left, right)
-    cmp.align_sweeps(both, other)
-
-    assert list(left.axes) == ["mathop"]
-    assert left.rows[0]["mathop"] == "MathOperation.Elwadd"
-    assert "math_op" in both.axes
-    assert "mathop" not in both.axes
-
-
 def test_dest_sync_dest_acc_splits_onto_the_other_sides_axes():
     import enum
 

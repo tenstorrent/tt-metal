@@ -65,7 +65,13 @@ class ParallelFeedForward(Module):
         ff2_dtype=ttnn.bfloat16,
         activation_dtype=None,
         pin_output_bf16=False,
+        ff1_compute_kernel_config=None,
+        ff2_compute_kernel_config=None,
+        ff1_output_dtype=None,
     ):
+        """`ff1_compute_kernel_config` / `ff2_compute_kernel_config` are each projection's compute config (None: the
+        linear's default); a `compute_kernel_config` passed to `forward` overrides both. `ff1_output_dtype` (e.g.
+        bfloat8_b) sets the dtype of the ff1 -> ff2 intermediate."""
         super().__init__()
 
         if inner_dim is None:
@@ -79,6 +85,8 @@ class ParallelFeedForward(Module):
         self.bias = bias
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
+        self.ff1_output_dtype = ff1_output_dtype
+        self.ff2_output_dtype = None if ff1_output_dtype is None else ttnn.bfloat16
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -100,6 +108,7 @@ class ParallelFeedForward(Module):
             ccl_manager=ccl_manager,
             activation_dtype=activation_dtype,
             pin_output_bf16=pin_output_bf16,
+            compute_kernel_config=ff1_compute_kernel_config,
         )
         self.ff2 = RowCls(
             inner_dim,
@@ -110,6 +119,7 @@ class ParallelFeedForward(Module):
             mesh_axis=mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            compute_kernel_config=ff2_compute_kernel_config,
         )
 
     def forward(
@@ -120,13 +130,19 @@ class ParallelFeedForward(Module):
         default_block_size=None,
         force_transpose: bool = True,
         use_persistent_buffer: bool = True,
+        matmul_config=None,
+        num_workers_per_link=None,
+        transpose_core_grid: bool | None = None,
+        persistent_buffer_rows: int | None = None,
     ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
 
-        `default_block_size` and `force_transpose` are forwarded to ff1 only, for callers that have
-        measured block sizes for their ff1 shape; ff2 keeps the generic path.
+        `default_block_size`, `force_transpose`, the frozen `matmul_config` / `num_workers_per_link` /
+        `transpose_core_grid` and `persistent_buffer_rows` are forwarded to ff1 only, for callers that have
+        measured block sizes for their ff1 shape; ff2 keeps the generic path (and its exact-shape pairs: the
+        unfused reduce-scatter's intermediate must match the op's spec).
         """
         ff1_out = self.ff1(
             x,
@@ -135,9 +151,17 @@ class ParallelFeedForward(Module):
             default_block_size=default_block_size,
             force_transpose=force_transpose,
             use_persistent_buffer=use_persistent_buffer,
+            matmul_config=matmul_config,
+            num_workers_per_link=num_workers_per_link,
+            transpose_core_grid=transpose_core_grid,
+            persistent_buffer_rows=persistent_buffer_rows,
+            dtype=self.ff1_output_dtype,
         )
         return self.ff2(
-            ff1_out, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer
+            ff1_out,
+            compute_kernel_config=compute_kernel_config,
+            use_persistent_buffer=use_persistent_buffer,
+            dtype=self.ff2_output_dtype,
         )
 
     def forward_fused_addcmul(
@@ -152,6 +176,12 @@ class ParallelFeedForward(Module):
         core_grid=None,
         force_transpose: bool = True,
         use_persistent_buffer: bool = True,
+        matmul_config=None,
+        num_workers_per_link=None,
+        transpose_core_grid: bool | None = None,
+        persistent_buffer_rows: int | None = None,
+        mmrs_config=None,
+        ff2_use_persistent_buffer: bool | None = None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -159,7 +189,10 @@ class ParallelFeedForward(Module):
         Both addcmul_a and addcmul_b are already at their per-TP-device [D/tp] slice —
         no AllGather or scatter matmul is required.
 
-        `default_block_size` and `force_transpose` are forwarded to ff1 only, as in `forward`.
+        `default_block_size`, `force_transpose` and the frozen ff1 config go to ff1 only, as in `forward`;
+        `mmrs_config` is ff2's frozen fused MM+RS blocking. `persistent_buffer_rows` sizes ff1's all-gather pair;
+        ff2's reduce-scatter output pair is the activation it returns, so a caller serving varying lengths turns
+        that pair off with `ff2_use_persistent_buffer=False` (default: `use_persistent_buffer`).
         """
         ff1_out = self.ff1(
             x,
@@ -169,12 +202,21 @@ class ParallelFeedForward(Module):
             core_grid=core_grid,
             force_transpose=force_transpose,
             use_persistent_buffer=use_persistent_buffer,
+            matmul_config=matmul_config,
+            num_workers_per_link=num_workers_per_link,
+            transpose_core_grid=transpose_core_grid,
+            persistent_buffer_rows=persistent_buffer_rows,
+            dtype=self.ff1_output_dtype,
         )
+        if ff2_use_persistent_buffer is None:
+            ff2_use_persistent_buffer = use_persistent_buffer
         return self.ff2.forward_fused_addcmul(
             ff1_out,
             addcmul_a,
             addcmul_b,
             scalar=scalar,
             compute_kernel_config=compute_kernel_config,
-            use_persistent_buffer=use_persistent_buffer,
+            use_persistent_buffer=ff2_use_persistent_buffer,
+            mmrs_config=mmrs_config,
+            dtype=self.ff2_output_dtype,
         )

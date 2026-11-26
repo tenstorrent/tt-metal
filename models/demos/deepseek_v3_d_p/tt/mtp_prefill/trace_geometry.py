@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_row,
     rotated_row_of_position,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPSplitChipLookahead, MTPUnionEmbedding
 
 # The one-hot matmuls stand in for slices, so they must copy rows bit-exactly: HiFi4 keeps every
@@ -136,14 +137,16 @@ class MTPTraceGeometry:
     def take_next(self) -> ttnn.Tensor:
         return self._tensors["take_next"]
 
-    def write(self, actual_start: int, actual_end: int, provided_levels: int) -> None:
+    def write(self, actual_start: int, actual_end: int, provided_levels: int, *, full: bool = False) -> None:
         """Rewrite the tensors whose plan key changed for ``[actual_start, actual_end)``. Never inside a capture.
 
         A provided chunk leaves the generate-only tensors and the selects stale; its replay does not read them.
+        ``full`` writes them anyway, for a packed forward whose "generate" replay runs every chunk's generation
+        chain: a provided chunk's then select nothing and patch nothing.
         """
         plan = self._plan(actual_start, actual_end, provided_levels)
         self.split = plan["split"]
-        generates = provided_levels < self.num_levels
+        generates = full or provided_levels < self.num_levels
         built, written = {}, set()
         for name in self._names():
             if not generates and _generate_only(name):
@@ -162,7 +165,9 @@ class MTPTraceGeometry:
         self._tensors, self._selects, self._level_pick, self._level_cols = {}, [], [], []
 
     def _mapper(self):
-        return ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=self.mesh_shape, dims=(self.sp_axis, None))
+        return ttnn.ShardTensor2dMesh(
+            self.mesh_device, mesh_shape=self.mesh_shape, dims=mesh_shard_dims(0, self.sp_axis)
+        )
 
     def _host_tensor(self, host: torch.Tensor) -> ttnn.Tensor:
         return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper())

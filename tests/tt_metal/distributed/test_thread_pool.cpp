@@ -16,7 +16,7 @@
 #include <type_traits>
 #include <vector>
 
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "impl/context/metal_context.hpp"
@@ -307,6 +307,22 @@ TEST(ThreadPoolTest, ParallelForNested) {
     };
     nest(DEPTH);
     EXPECT_EQ(leaves.load(), 1u << DEPTH);
+}
+
+// AfterFanOut::Park on every path (nothing to run, one participant, a full fan-out) still runs every call, and later
+// fan-outs run as before.
+TEST(ThreadPoolTest, ParallelForParkAfter) {
+    auto thread_pool = create_pool_per_device();
+    const auto device_ids = one_call_per_device(2);
+    const std::vector<uint32_t> one_device(4, 0);
+    std::atomic<uint32_t> runs = 0;
+    for (uint32_t iter = 0; iter < 200; iter++) {
+        thread_pool->parallel_for({}, [&runs](size_t) { runs++; }, ThreadPool::AfterFanOut::Park);
+        thread_pool->parallel_for(one_device, [&runs](size_t) { runs++; }, ThreadPool::AfterFanOut::Park);
+        thread_pool->parallel_for(device_ids, [&runs](size_t) { runs++; }, ThreadPool::AfterFanOut::Park);
+        thread_pool->parallel_for(device_ids, [&runs](size_t) { runs++; });
+    }
+    EXPECT_EQ(runs.load(), 200 * (one_device.size() + 2 * device_ids.size()));
 }
 
 // Destroying the pool right after a fan-out, while workers may still hold the job, is safe.

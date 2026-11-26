@@ -107,3 +107,4 @@ __attribute__((__noinline__)) OldStyleDevicePrint operator<<(OldStyleDevicePrint
 #define DPRINT_PACK(format, ...) DEVICE_PRINT_PACK(format, ##__VA_ARGS__)
 #define DPRINT_DATA0(format, ...) DEVICE_PRINT_DATA0(format, ##__VA_ARGS__)
 #define DPRINT_DATA1(format, ...) DEVICE_PRINT_DATA1(format, ##__VA_ARGS__)
+#define DPRINT_FORCE_NOINLINE DEVICE_PRINT_FORCE_NOINLINE

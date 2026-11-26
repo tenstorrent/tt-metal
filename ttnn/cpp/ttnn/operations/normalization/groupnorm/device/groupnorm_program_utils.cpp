@@ -9,7 +9,7 @@
 #include <limits>
 #include <algorithm>
 
-#include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat, tt::tile_size
+#include <tt-metalium/data_formats/data_format.hpp>  // tt::DataFormat, tt::tile_size
 #include <ttnn/tensor/types.hpp>                 // tt::tt_metal::datatype_to_dataformat_converter
 
 namespace ttnn::prim {
@@ -311,6 +311,7 @@ void split_and_form_rectangle_grids(
         mcast_group_last.push_back(mcast_group_mid.back());
         mcast_group_mid.pop_back();
     }
+    std::reverse(mcast_group_last.begin(), mcast_group_last.end());
 }
 
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width) {

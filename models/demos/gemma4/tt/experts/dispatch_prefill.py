@@ -107,6 +107,8 @@ RING_FWD_EXTRA_BYTES = 64
 FABRIC_DEFAULT_PAYLOAD_BYTES = 4352
 FABRIC_PAYLOAD_UNIT_BYTES = 1088  # one bfp8 tile: the defaults are multiples of it (4 tiles) and so is the BH max (14)
 FABRIC_MAX_PAYLOAD_BYTES_BLACKHOLE = 14 * FABRIC_PAYLOAD_UNIT_BYTES
+# Pages one of dispatch_fabric2d's forwarding channels holds.
+RING_DISPATCH_FWD_VC_PAGES = 64
 
 
 def ring_token_bytes(hidden: int, elem_bytes: int = 2) -> int:
@@ -149,23 +151,26 @@ def ring_fabric_router_config(hidden: int, elem_bytes: int = 2):
     return cfg
 
 
-def combine_fwd_reduction() -> int:
-    """GEMMA4_MOE_COMBINE_FWD_REDUCTION (default 1 = no reduction): the divisor on combine_fabric2d's forwarding
-    region (tt-metal #61858, "no value can deadlock the ring"; it trades DRAM against throughput)."""
-    return max(1, int(os.environ.get("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "1")))
+def combine_fwd_vc_pages(
+    ring_extent: int, seq_len_per_chip: int, num_experts_per_tok: int, experts_per_chip: int, num_links: int
+) -> int:
+    """combine_fabric2d's pages per forwarding channel, from GEMMA4_MOE_COMBINE_FWD_REDUCTION (default 1).
 
-
-def combine2d_extra_kwargs(module_cls) -> dict:
-    """The keyword arguments the shared ``TtCombine2dModule`` constructor takes beyond the common ones: main's
-    ``fwd_reduction`` (required since #61858) when the signature has it, nothing on a tree without it -- one call
-    site that works on both bases."""
-    import inspect
-
-    try:
-        params = inspect.signature(module_cls.__init__).parameters
-    except (TypeError, ValueError):
-        return {}
-    return {"fwd_reduction": combine_fwd_reduction()} if "fwd_reduction" in params else {}
+    The variable is the divisor the op once took (#61858), so it is converted here, where it is read, the way the op
+    converted it: the pages one stream's forwarding buffer needed to hold its worst case before the op had channels
+    and credits, divided by the reduction and by the stream's channel count, rounded up. The arguments are the ones
+    the combine call passes; ring_extent is the mesh's size along the dispatch axis."""
+    reduction = max(1, int(os.environ.get("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "1")))
+    per_destination = seq_len_per_chip * num_experts_per_tok
+    half_extent = ring_extent // 2
+    relay_chunks = half_extent * (half_extent - 1) // 2
+    channels_per_stream = relay_chunks  # one per movement class
+    worst_case = (
+        (half_extent - 2) * (per_destination // num_links)
+        + per_destination // (2 * num_links)
+        + relay_chunks * experts_per_chip
+    )
+    return -(-worst_case // (reduction * channels_per_stream))
 
 
 def small_rows_admit(rows: int, lo: int, hi: int) -> bool:
@@ -271,7 +276,9 @@ class _DispatchChunkPlan:
                 cluster_axis=owner.dispatch_axis,
                 num_links=owner.num_links,
                 topology=ttnn.Topology.Ring,
-                **combine2d_extra_kwargs(TtCombine2dModule),
+                fwd_vc_pages=combine_fwd_vc_pages(
+                    dgs, self.seq_per_chip, owner.top_k, experts_per_chip, owner.num_links
+                ),
             )
         else:
             # the model-local dispatch / combine programs (custom_ops/moe_dispatch_prefill: the DeepSeek prefill
@@ -655,6 +662,7 @@ class Gemma4DispatchExperts:
                 seq_len_per_chip=S,
                 cluster_axis=self.dispatch_axis,
                 num_links=self.num_links,
+                fwd_vc_pages=RING_DISPATCH_FWD_VC_PAGES,
                 topology=ttnn.Topology.Ring,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )

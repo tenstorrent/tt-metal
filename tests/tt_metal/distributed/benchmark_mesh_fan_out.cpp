@@ -8,12 +8,12 @@
 
 #include <benchmark/benchmark.h>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/shard_data_transfer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/shard_data_transfer.hpp>
 
 #include <cstdint>
 #include <memory>

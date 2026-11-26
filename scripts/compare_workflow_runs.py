@@ -585,7 +585,6 @@ def run():
         "perf-device-models.yaml",
         # T3000 (T3K)
         "t3000-tests.yaml",
-        "t3000-dispatch-tests.yaml",
         "t3000-profiler-tests.yaml",
         # Galaxy
         "blaze-models-prefill-tests.yaml",

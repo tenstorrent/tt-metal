@@ -6,7 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 using namespace tt::tt_metal;
 
@@ -15,7 +15,7 @@ namespace ttnn::prim {
 static void validate_tensor(const Tensor& t, const std::string& name) {
     TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(t.is_allocated(), "{} must be allocated", name);
-    TT_FATAL(t.buffer()->buffer_type() == BufferType::DRAM, "{} must be in DRAM", name);
+    TT_FATAL(t.memory_config().buffer_type() == BufferType::DRAM, "{} must be in DRAM", name);
     TT_FATAL(t.layout() == Layout::TILE, "{} must be tiled", name);
     TT_FATAL(t.dtype() == DataType::FLOAT32, "{} must be float32, got {}", name, t.dtype());
 }

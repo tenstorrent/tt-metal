@@ -12,12 +12,12 @@
 #include <optional>
 #include <unordered_map>
 
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/math.hpp"
 
 using uint32_t = std::uint32_t;
@@ -217,7 +217,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
 
     const bool equal_batches_per_core = geometry.equal_batches_per_core;
 
-    uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
+    uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.mesh_buffer().alignment());
     bool reader_repack_output = (per_core_N % tile_width) != 0;
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
@@ -367,7 +367,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
     std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
     if ((device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0) && use_welford &&
-        !sfpu_two_pass_l1_replay && a.layout() == Layout::TILE && a.buffer()->buffer_type() == BufferType::DRAM &&
+        !sfpu_two_pass_l1_replay && a.layout() == Layout::TILE && a.memory_config().buffer_type() == BufferType::DRAM &&
         per_core_Nt == 1 && num_actual_cols == num_virtual_cols && num_virtual_cols == device->num_dram_channels() &&
         Wt == num_virtual_cols && detail::preferred_noc_for_dram_read(device->arch()) == NOC::NOC_0) {
         // Each virtual column reads one DRAM bank. Keep NoC0 responses near their

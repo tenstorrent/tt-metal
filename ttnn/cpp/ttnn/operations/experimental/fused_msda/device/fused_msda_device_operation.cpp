@@ -8,9 +8,9 @@
 #include <cstdlib>
 #include <string_view>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/experimental/fused_msda/device/kernels/msda_corner_word.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -564,8 +564,7 @@ bool can_use_fused_msda_from_offsets_l1_value(
         return false;
     }
 
-    const auto cb_plan =
-        derive_circular_buffer_plan(attrs, args, shapes, BufferType::L1, BufferType::L1, output_spec.data_type());
+    const auto cb_plan = derive_circular_buffer_plan(attrs, args, shapes, BufferType::L1, output_spec.data_type());
     return usable_program_l1 - pending_tensor_bytes > circular_buffer_bytes_per_core(cb_plan);
 }
 

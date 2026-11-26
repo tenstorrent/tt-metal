@@ -13,7 +13,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_allclose, assert_equal, assert_numeric_metrics
 
 REDUCE_OPS = {
     "sum": (ttnn.sum, lambda t, dim, keepdim: torch.sum(t, dim=dim, keepdim=keepdim)),
@@ -348,9 +348,8 @@ def test_reduce_dram_sharded_dtypes(device, op_name, dtype):
 
 def test_reduce_dram_sharded_non_natural_dim(device, expect_error):
     """Non-natural-dim reduce moves the axis into H/W position via transpose or permute, whose
-    DRAM-sharded handling is out of scope here. Behavior differs across ops - ttnn.sum succeeds on
-    this input while mean/max/min/std/var fail building the intermediate's TensorSpec - so only
-    ttnn.mean is pinned."""
+    DRAM-sharded handling is out of scope here. sum and mean take fast_reduce_nc instead and succeed;
+    max/min/std/var fail building the intermediate's TensorSpec, so ttnn.max is pinned."""
     torch.manual_seed(0)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
     shard_spec = ttnn.ShardSpec(shard_grid, (416, 32), ttnn.ShardOrientation.ROW_MAJOR)  # one shard per (n, c) slice
@@ -360,8 +359,11 @@ def test_reduce_dram_sharded_non_natural_dim(device, expect_error):
     interleaved_input = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     dram_sharded_input = ttnn.interleaved_to_sharded(interleaved_input, dram_sharded_config)
 
+    output_tensor = ttnn.to_torch(ttnn.mean(dram_sharded_input, dim=1, keepdim=True))
+    assert_allclose(torch_input_tensor.float().mean(dim=1, keepdim=True), output_tensor.float(), rtol=1e-2, atol=1e-2)
+
     with expect_error(RuntimeError, "Number of shards along height"):
-        ttnn.mean(dram_sharded_input, dim=1, keepdim=True)
+        ttnn.max(dram_sharded_input, dim=1, keepdim=True)
 
 
 def test_reduce_h_width_sharded_l1_and_dram_use_distinct_programs(device):

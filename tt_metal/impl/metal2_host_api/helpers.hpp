@@ -14,14 +14,15 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
 
 #include "llrt/hal.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ============================================================================
 // Constants
@@ -139,7 +140,7 @@ inline bool same_node_set(const NodeRangeSet& a, const NodeRangeSet& b) {
 // The nodes of a kernel binding a PrefetcherPipe accessor group that its role is derived from: all
 // of them but the binding's extra nodes, which take no part in the group's pipes.
 inline NodeRangeSet prefetcher_pipe_role_nodes(
-    const NodeRangeSet& kernel_nodes, const KernelAdvancedOptions::PrefetcherPipeBinding& binding) {
+    const NodeRangeSet& kernel_nodes, const experimental::KernelAdvancedOptions::PrefetcherPipeBinding& binding) {
     return kernel_nodes.subtract(binding.extra_nodes);
 }
 
@@ -184,4 +185,20 @@ inline bool DmKernelDisablesImplicitSync(const DataMovementHardwareConfig& dm_co
     return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
 }
 
-}  // namespace tt::tt_metal::experimental
+// Whether a compute kernel hands one side of a DFB to the SFPU pipeline, i.e. lists it in config_2xx's
+// sfpu_pipeline_consumed_dfbs (consumer side) or sfpu_pipeline_produced_dfbs (producer side).
+// Data-movement kernels never do.
+inline bool ComputeKernelUsesSfpuPipeline(const KernelSpec& kernel, const DFBSpecName& dfb_name, DFBEndpointType side) {
+    if (!kernel.is_compute_kernel()) {
+        return false;
+    }
+    const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
+    if (!compute_config.config_2xx.has_value()) {
+        return false;
+    }
+    const auto& listed = side == DFBEndpointType::CONSUMER ? compute_config.config_2xx->sfpu_pipeline_consumed_dfbs
+                                                           : compute_config.config_2xx->sfpu_pipeline_produced_dfbs;
+    return std::find(listed.begin(), listed.end(), dfb_name) != listed.end();
+}
+
+}  // namespace tt::tt_metal

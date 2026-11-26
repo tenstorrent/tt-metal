@@ -14,7 +14,6 @@
 #include "ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
-#include "lltt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel {
@@ -699,7 +698,7 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             .set(ADDR_MOD_7);
 
         // Single replay of 16 instructions = 8 LM + 8 SHFT2 (2 dummy + 6 real).
-        lltt::replay(0, 16);
+        TTI_REPLAY(0, 16, 0, 0);
 
         // Drain: SHFT2[6-7].
         TTI_SFPNOP;
@@ -727,8 +726,8 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             .set(ADDR_MOD_7);
 
         // 2 replays of 32 instructions = 32 LM + 32 SHFT2 (2 dummy + 30 real).
-        lltt::replay(0, 32);
-        lltt::replay(0, 32);
+        TTI_REPLAY(0, 32, 0, 0);
+        TTI_REPLAY(0, 32, 0, 0);
 
         // Drain: SHFT2[30-31].
         TTI_SFPNOP;
@@ -744,8 +743,9 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
 #endif
 }
 
+// Inlined into the init, which would otherwise call this cold callee off its straight path.
 template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
-void exp_init() {
+inline __attribute__((always_inline)) void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
     // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
@@ -1029,7 +1029,7 @@ void exp_init() {
         //   SHFT2 uses: LREG2, LREG3, LREG0, LREG1, LREG2, ...
         // ===================================================================
 
-        lltt::record(0, 32);
+        TTI_REPLAY(0, 32, 0, 1);
 
         // 16 pairs of LM + SHFT2 (LREG pattern repeats every 4 pairs)
         // Pairs 0-1: dummy SHFT2s, Pairs 2-15: real SHFT2s for elements 0-13

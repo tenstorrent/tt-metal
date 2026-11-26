@@ -22,6 +22,12 @@ void MorehBiasAddBackwardOperation::validate_inputs(
         auto bias_grad_tensor = bias_grad.value();
         TT_FATAL(
             is_scalar(bias_grad_tensor) || is_1d_tensor(bias_grad_tensor), "bias_grad tensor should be 1d or scalar");
+        // The program sizes and formats its buffers from output_grad.
+        TT_FATAL(
+            bias_grad_tensor.dtype() == tensor_args.output_grad.dtype(),
+            "bias_grad dtype {} must match the output_grad dtype {}",
+            bias_grad_tensor.dtype(),
+            tensor_args.output_grad.dtype());
     }
 }
 

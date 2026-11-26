@@ -172,9 +172,8 @@ Table 1 contains all unpack operations currently implemented for Tensix:
 | `llk_unpack_A.h` | Unpacks a single tile from L1 into Source A register. Used for unary operations. |
 | `llk_unpack_AB.h` | Unpacks two tiles from L1 into Source A and Source B registers. Used for binary operations. |
 | `llk_unpack_AB_matmul.h` | Optimizes matrix multiplication by unpacking tiles into Source A and B with register reuse. |
-| `llk_unpack_reduce.h` | Unpacks a single tile into Source A and a scalar value into Source B for reduction operations. |
+| `llk_unpack_AB_reduce.h` | Unpacks a data tile and a scaler tile into Source A and Source B for reduction operations. |
 | `llk_unpack_tilize.h` | Converts row-major input data into tile format during unpacking. |
-| `llk_unpack_untilize.h` | Converts tiled data back to row-major format during unpacking. **Deprecated** in favor of `llk_pack_untilize.h`; see tt-metal#22904. |
 ---
 
 ### LLK Math Operations (Table 2)

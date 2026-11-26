@@ -41,23 +41,36 @@ tt-train is built using the `build_metal.sh` script from the tt-metal root direc
 
 # Run
 ## MNIST
+Set `training_config.num_epochs` in
+[`configs/training_configs/mnist.yaml`](configs/training_configs/mnist.yaml).
+Training and evaluation use the fixed checkpoint path `/tmp/mnist_mlp.msgpack`;
+the executable currently ignores `training_config.model_path` in the YAML.
+Run training first to create the checkpoint for evaluation.
+
 ### Training
 ```
 # Navigate to the root directory of the repository
-./build/sources/examples/mnist_mlp/mnist_mlp --model_path mnist_mlp.msgpack --num_epochs 10
+export TT_METAL_RUNTIME_ROOT="$PWD"
+./build/tt-train/sources/examples/mnist_mlp/mnist_mlp --config tt-train/configs/training_configs/mnist.yaml
 ```
 ### Evaluation
 ```
 # Navigate to the root directory of the repository
-./build/sources/examples/mnist_mlp/mnist_mlp --model_path mnist_mlp.msgpack -e 1
+export TT_METAL_RUNTIME_ROOT="$PWD"
+./build/tt-train/sources/examples/mnist_mlp/mnist_mlp --config tt-train/configs/training_configs/mnist.yaml --eval 1
 ```
 
 ## NanoGPT Shakespeare
 ### Training
 ```
 # Navigate to the root directory of the repository
-TT_LOGGER_LEVEL=FATAL ./build/sources/examples/nano_gpt/nano_gpt
+export TT_METAL_RUNTIME_ROOT="$PWD"
+TT_LOGGER_LEVEL=FATAL ./build/tt-train/sources/examples/nano_gpt/nano_gpt \
+    --config tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml
 ```
+
+This character-level config uses `data/shakespeare.txt`, downloaded by the
+TT-Train CMake configuration, without a separate tokenization step.
 
 Training loss example from [wandb project](https://wandb.ai/tenstorrent-ml/tt_train_nano_gpt):
 ![NanoGPT training wandb chart](./images/nano-gpt-training-example.png)
@@ -70,10 +83,24 @@ For both training and evaluation, we encourage you to use the Python version of 
 More information on available configuration options can be found in the [configs directory](configs/README.md).
 
 ### Nightly only tests
-If CI fails, but local tests pass as expected, please consider changing the
-is_nightly_tt_train_tests_enabled in the nano_gpt_test.cpp
-TT-Train nightly tests are all tests with "NIGHTLY_" in the name.
-To run it in github please search for `Nightly tt-metal L2 tests`.
+Most TT-Train nightly tests are gtests whose names contain `NIGHTLY_` (for
+example SDPA, MoE, and optimizer tests). They run in the Blackhole nightly legs
+via `--gtest_filter=*NIGHTLY_*` in `tests/pipeline_reorg/train_unit_tests.yaml`,
+with no Wormhole-specific gate.
+
+The nano_gpt nightly tests in `tt-train/tests/model/nano_gpt_test.cpp` are an
+exception: they run only on Wormhole B0 when **both** are true (currently
+disabled; see [issue #37337](https://github.com/tenstorrent/tt-metal/issues/37337)):
+
+- `is_nigthly_tt_train_tests_enabled` is set to `true` in `nano_gpt_test.cpp`
+  (spelling matches the source constant)
+- `ENABLE_NIGHTLY_TT_TRAIN_TESTS` is set in the environment (for example
+  `ENABLE_NIGHTLY_TT_TRAIN_TESTS=1`)
+
+If CI fails but local runs pass, confirm both conditions (for nano_gpt) or the
+gtest filter and SKU (for other `NIGHTLY_` tests) before changing expected values
+or thresholds. To run them in GitHub Actions, search for `Nightly tt-metal L2
+tests`.
 
 ### wandb support
 If you don't have an account to wandb (or don't want to use it), use `-w 0` argument or run `wandb offline` beforehand (creates `wandb/settings` file)

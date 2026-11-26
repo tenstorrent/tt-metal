@@ -6,13 +6,13 @@
 #include "ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 
 #include <cmath>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
@@ -41,8 +41,8 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     const uint32_t src_cb_sharded = tt::CBIndex::c_0;
     const uint32_t dst_cb_sharded = tt::CBIndex::c_1;
 
-    const uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
-    const uint32_t page_size_bytes = input.buffer()->aligned_page_size();
+    const uint32_t total_size_bytes = input.mesh_buffer().aligned_size_per_bank();
+    const uint32_t page_size_bytes = input.mesh_buffer().aligned_page_size();
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();

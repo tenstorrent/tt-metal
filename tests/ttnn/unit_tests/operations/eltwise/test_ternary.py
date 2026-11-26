@@ -590,6 +590,100 @@ def test_ternary_cache_miss_different_alignment(device):
     device.disable_and_clear_program_cache()
 
 
+@pytest.mark.parametrize(
+    "shape_a, shape_b, shape_c",
+    [
+        ((1, 1, 0, 64), (1, 1, 0, 64), (1, 1, 0, 64)),
+        ((1, 1, 64, 0), (1, 1, 64, 0), (1, 1, 64, 0)),
+        ((0, 1, 32, 64), (0, 1, 32, 64), (0, 1, 32, 64)),
+        ((1, 1, 0, 64), (1, 1, 1, 64), (1, 1, 0, 64)),
+        ((1, 1, 64, 0), (1, 1, 64, 1), (1, 1, 64, 0)),
+        ((1, 1, 0, 64), (1, 1, 0, 1), (1, 1, 1, 1)),
+        ((0, 1, 32, 64), (1, 1, 32, 64), (0, 1, 32, 64)),
+    ],
+)
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda a, b, c: ttnn.where(a, b, c),
+        lambda a, b, c: ttnn.addcmul(a, b, c, value=1.0),
+        lambda a, b, c: ttnn.addcdiv(a, b, c, value=1.0),
+        lambda a, b, c: ttnn.lerp(a, b, c),
+        lambda a, b, c: ttnn.mac(a, b, c),
+        lambda a, b, c: ttnn.lerp(a, b, 0.25),
+        lambda a, b, c: ttnn.mac(a, b, 1.5),
+        lambda a, b, c: ttnn.mac(a, 1.5, c),
+    ],
+    ids=["where", "addcmul", "addcdiv", "lerp", "mac", "lerp_tts", "mac_tts", "mac_tst"],
+)
+def test_ternary_zero_size_dim(device, shape_a, shape_b, shape_c, op):
+    torch_a = torch.randint(0, 2, shape_a).bfloat16()
+    torch_b = torch.randn(shape_b, dtype=torch.bfloat16)
+    torch_c = torch.randn(shape_c, dtype=torch.bfloat16)
+    expected = torch.where(torch_a.bool(), torch_b, torch_c).shape
+
+    def to_tt(t):
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = op(to_tt(torch_a), to_tt(torch_b), to_tt(torch_c))
+
+    assert output.shape == expected
+    assert ttnn.to_torch(output).shape == expected
+
+
+@pytest.mark.parametrize(
+    "shape_a, shape_b, shape_c",
+    [
+        ((1, 1, 0, 64), (1, 1, 5, 64), (1, 1, 0, 64)),
+        ((1, 1, 64, 0), (1, 1, 64, 5), (1, 1, 64, 0)),
+        ((0, 1, 32, 64), (5, 1, 32, 64), (0, 1, 32, 64)),
+    ],
+)
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda a, b, c: ttnn.where(a, b, c),
+        lambda a, b, c: ttnn.addcmul(a, b, c, value=1.0),
+        lambda a, b, c: ttnn.lerp(a, b, c),
+        lambda a, b, c: ttnn.mac(a, b, c),
+        lambda a, b, c: ttnn.lerp(a, b, 0.25),
+        lambda a, b, c: ttnn.mac(a, 1.5, b),
+    ],
+    ids=["where", "addcmul", "lerp", "mac", "lerp_tts", "mac_tst"],
+)
+def test_ternary_zero_size_dim_rejects_incompatible(device, expect_error, shape_a, shape_b, shape_c, op):
+    def to_tt(shape):
+        return ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+    # where raises in the ternary op; addcmul, lerp and mac fall back to binary_ng, which raises there.
+    with expect_error(RuntimeError, "Broadcasting rule violation|do not broadcast|Invalid subtile broadcast type"):
+        op(to_tt(shape_a), to_tt(shape_b), to_tt(shape_c))
+
+
+def test_zero_size_dim_skips_launch(device):
+    device.enable_program_cache()
+    device.clear_program_cache()
+    torch_x = torch.zeros((1, 1, 0, 64), dtype=torch.bfloat16)
+    x = ttnn.from_torch(torch_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    outputs = [
+        ttnn.where(x, x, x),
+        ttnn.addcmul(x, x, x, value=1.0),
+        ttnn.addcdiv(x, x, x, value=1.0),
+        ttnn.lerp(x, x, x),
+        ttnn.mac(x, x, x),
+        ttnn.mac(x, x, 1.5),
+        ttnn.add(x, x),
+        ttnn.relu(x),
+        ttnn.typecast(x, ttnn.float32),
+    ]
+
+    assert device.num_program_cache_entries() == 0
+    assert all(output.shape == torch_x.shape for output in outputs)
+
+
 def _height_sharded(device, shard_shape=(32, 64)):
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
     return ttnn.MemoryConfig(

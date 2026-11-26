@@ -64,6 +64,12 @@ void kernel_main() {
     constexpr auto blk = get_arg(args::blk);
     constexpr auto stats_tiles_cols = get_arg(args::stats_tiles_cols);
     constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dtype) == 1;
+    constexpr auto dfb_length = get_arg(args::dfb_length);
+    static_assert(Wt % dfb_length == 0 && dfb_length % blk == 0, "the row must split into whole chunks of blocks");
+    constexpr uint32_t num_chunks = Wt / dfb_length;
+    // A row that fits in one chunk keeps gamma and beta resident across rows; the reader sends them once.
+    // Otherwise the reader sends them again with every chunk.
+    constexpr bool gamma_beta_resident = num_chunks == 1;
 
     constexpr uint32_t onetile = 1;
 
@@ -123,78 +129,88 @@ void kernel_main() {
         dfb_recip_sqrt_var.push_back(1);
         dfb_var.pop_front(1);
 
-        /*
-         * norm x
-         * RMSNorm: X * 1/sqrt(E[X**2] + eps)
-         */
-        reconfig_data_format(dfb_norm_x_input, dfb::recip_sqrt_var);
-        pack_reconfig_data_format(normed_output_dfb);
-        mul_bcast_cols_init(dfb_norm_x_input, dfb::recip_sqrt_var);
         dfb_recip_sqrt_var.wait_front(1);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            dfb_norm_x.wait_front(blk);
-            dfb_normed_output.reserve_back(blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles_bcast_cols(dfb_norm_x_input, dfb::recip_sqrt_var, wtr, 0, wtr);
-                pack_tile(wtr, normed_output_dfb);
+        for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+            /*
+             * norm x
+             * RMSNorm: X * 1/sqrt(E[X**2] + eps)
+             */
+            reconfig_data_format(dfb_norm_x_input, dfb::recip_sqrt_var);
+            pack_reconfig_data_format(normed_output_dfb);
+            mul_bcast_cols_init(dfb_norm_x_input, dfb::recip_sqrt_var);
+            for (uint32_t wt = 0; wt < dfb_length; wt += blk) {
+                dfb_norm_x.wait_front(blk);
+                dfb_normed_output.reserve_back(blk);
+                ACQ();
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                    mul_tiles_bcast_cols(dfb_norm_x_input, dfb::recip_sqrt_var, wtr, 0, wtr);
+                    pack_tile(wtr, normed_output_dfb);
+                }
+                REL();
+                dfb_normed_output.push_back(blk);
+                dfb_norm_x.pop_front(blk);
             }
-            REL();
-            dfb_normed_output.push_back(blk);
-            dfb_norm_x.pop_front(blk);
-        }
-        dfb_recip_sqrt_var.pop_front(1);
 
 #ifdef FUSE_GAMMA
-        /*
-         * x_normed * gamma
-         */
-        reconfig_data_format(dfb::x_normed, dfb::gamma);
-        pack_reconfig_data_format(dfb_times_gamma_out);
-        dfb_gamma.wait_front(Wt);
-        mul_bcast_rows_init(dfb::x_normed, dfb::gamma);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            dfb_normed_output.wait_front(blk);
-            dfb_times_gamma.reserve_back(blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles_bcast_rows(dfb::x_normed, dfb::gamma, wtr, wt + wtr, wtr);
-                pack_tile(wtr, dfb_times_gamma_out);
+            /*
+             * x_normed * gamma
+             */
+            reconfig_data_format(dfb::x_normed, dfb::gamma);
+            pack_reconfig_data_format(dfb_times_gamma_out);
+            dfb_gamma.wait_front(dfb_length);
+            mul_bcast_rows_init(dfb::x_normed, dfb::gamma);
+            for (uint32_t wt = 0; wt < dfb_length; wt += blk) {
+                dfb_normed_output.wait_front(blk);
+                dfb_times_gamma.reserve_back(blk);
+                ACQ();
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                    mul_tiles_bcast_rows(dfb::x_normed, dfb::gamma, wtr, wt + wtr, wtr);
+                    pack_tile(wtr, dfb_times_gamma_out);
+                }
+                REL();
+                dfb_times_gamma.push_back(blk);
+                dfb_normed_output.pop_front(blk);
             }
-            REL();
-            dfb_times_gamma.push_back(blk);
-            dfb_normed_output.pop_front(blk);
-        }
+            if constexpr (!gamma_beta_resident) {
+                dfb_gamma.pop_front(dfb_length);
+            }
 #endif
 
 #ifdef FUSE_BETA
-        /*
-         * x_normed (* gamma) + beta
-         */
-        reconfig_data_format(dfb_in_beta, dfb::beta);
-        pack_reconfig_data_format(dfb::out);
-        dfb_beta.wait_front(Wt);
-        add_bcast_rows_init(dfb_in_beta, dfb::beta);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            dfb_in_beta_obj.wait_front(blk);
-            dfb_out.reserve_back(blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                add_tiles_bcast_rows(dfb_in_beta, dfb::beta, wtr, wt + wtr, wtr);
-                pack_tile(wtr, dfb::out);
+            /*
+             * x_normed (* gamma) + beta
+             */
+            reconfig_data_format(dfb_in_beta, dfb::beta);
+            pack_reconfig_data_format(dfb::out);
+            dfb_beta.wait_front(dfb_length);
+            add_bcast_rows_init(dfb_in_beta, dfb::beta);
+            for (uint32_t wt = 0; wt < dfb_length; wt += blk) {
+                dfb_in_beta_obj.wait_front(blk);
+                dfb_out.reserve_back(blk);
+                ACQ();
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                    add_tiles_bcast_rows(dfb_in_beta, dfb::beta, wtr, wt + wtr, wtr);
+                    pack_tile(wtr, dfb::out);
+                }
+                REL();
+                dfb_out.push_back(blk);
+                dfb_in_beta_obj.pop_front(blk);
             }
-            REL();
-            dfb_out.push_back(blk);
-            dfb_in_beta_obj.pop_front(blk);
-        }
+            if constexpr (!gamma_beta_resident) {
+                dfb_beta.pop_front(dfb_length);
+            }
 #endif
+        }
+        dfb_recip_sqrt_var.pop_front(1);
     }
     dfb_eps.pop_front(1);
     dfb_reduce.pop_front(1);
+    if constexpr (gamma_beta_resident) {
 #ifdef FUSE_GAMMA
-    dfb_gamma.pop_front(Wt);
+        dfb_gamma.pop_front(Wt);
 #endif
 #ifdef FUSE_BETA
-    dfb_beta.pop_front(Wt);
+        dfb_beta.pop_front(Wt);
 #endif
+    }
 }
