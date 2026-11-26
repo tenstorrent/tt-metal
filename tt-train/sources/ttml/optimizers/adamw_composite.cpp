@@ -7,6 +7,7 @@
 #include "autograd/autocast_tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/debug.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
@@ -52,15 +53,11 @@ MorehAdamW::MorehAdamW(
 }
 
 void MorehAdamW::zero_grad() {
-    for (auto& [key, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-            // setting gradients to not initialized tensor
-            tensor_ptr->set_grad(ttnn::Tensor());
-        }
-    }
+    clear_gradients();
 }
 
 void MorehAdamW::step() {
+    core::cast_fp32_gradients_to_bf16(m_parameters);
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }
@@ -181,15 +178,11 @@ AdamWComposite::AdamWComposite(
 }
 
 void AdamWComposite::zero_grad() {
-    for (auto& [key, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-            // setting gradients to not initialized tensor
-            tensor_ptr->set_grad(ttnn::Tensor());
-        }
-    }
+    clear_gradients();
 }
 
 void AdamWComposite::step() {
+    core::cast_fp32_gradients_to_bf16(m_parameters);
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }

@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "circular_buffer_config.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer_config.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/constants.hpp>
-#include "buffer.hpp"
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 
 namespace tt {

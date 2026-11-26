@@ -9,7 +9,7 @@
 #include <unordered_map>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"

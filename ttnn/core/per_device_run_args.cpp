@@ -11,7 +11,7 @@
 
 #include <fmt/format.h>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 namespace ttnn::device_operation::per_device_run_args {
 

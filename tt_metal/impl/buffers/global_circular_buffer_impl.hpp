@@ -10,10 +10,10 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 
 namespace tt::tt_metal {
 
@@ -22,7 +22,7 @@ class IDevice;
 
 namespace experimental {
 
-// Impl-only backing state for tt-metalium/global_circular_buffer.hpp's GlobalCircularBuffer.
+// Impl-only backing state for tt-metalium/memory/cross_program/global_circular_buffer.hpp's GlobalCircularBuffer.
 // The public type holds a unique_ptr to this impl and copies by value (deep-copy of *impl_).
 // MeshBuffer members still share device resources across copies.
 // Callers inside tt_metal/ that need the INTERNAL-only surface (all_cores(), get_device())

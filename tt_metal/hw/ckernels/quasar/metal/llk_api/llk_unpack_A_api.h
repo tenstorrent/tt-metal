@@ -46,13 +46,11 @@ inline constexpr std::uint8_t unpack_a_bfd_id() {
  *
  * Overload matching Blackhole/Wormhole API signature `(transpose_of_faces, within_face_16x16_transpose, operand)`.
  *
- * When `binary_reuse_dest != NONE`, uses the eltwise-binary dest-reuse init path (UNP_A, default tile/face counts).
- * Otherwise uses the unary / unary-broadcast path. For the non-broadcast path the UNP_DEST routing
- * decision is made solely from the `unpack_to_dest` template parameter (no format inspection); when true,
- * all operands (including 16-bit) are routed to DEST through `_llk_unpack_unary_operand_to_dest_init_`, the
- * unpack-to-dest primitive (its section handshake runs once per tile_regs_acquire / tile_regs_commit in
- * llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done, not per tile); otherwise
- * `_llk_unpack_unary_operand_init_` targets UNP_A.
+ * When `binary_reuse_dest != NONE`, uses the binary path that reuses DEST, with UNP_A and default tile and face counts.
+ * Otherwise, uses the unary path with or without broadcast. Without broadcast, `unpack_to_dest` selects the destination
+ * regardless of the operand format. When true, `_llk_unpack_unary_operand_to_dest_init_` routes operands to DEST,
+ * including operands with 16 bits per value. The caller borrows the section with tile_regs_borrow and returns it with
+ * tile_regs_return after the copies finish. When false, `_llk_unpack_unary_operand_init_` targets UNP_A.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: On the broadcast path, zero SrcA per tile so math can accumulate the broadcast into dest; must
@@ -61,7 +59,7 @@ inline constexpr std::uint8_t unpack_a_bfd_id() {
  * @tparam unpack_to_dest: When true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of
  * format
  * @param transpose_of_faces: Non-zero enables transpose of 16x16 faces (unary/broadcast NONE path only)
- * @param within_face_16x16_transpose: Unused on Quasar; kept for API parity with Blackhole / other arches
+ * @param within_face_16x16_transpose: Unused on Quasar. Kept for API compatibility with other architectures.
  * @param operand: The input operand logical dataflow buffer / CB id
  */
 template <
@@ -132,11 +130,10 @@ inline void llk_unpack_A_init(
  *
  * @brief Unpacks a single operand for unary and unary-broadcast paths.
  *
- * For the non-broadcast path the UNP_DEST routing decision is made solely from the `unpack_to_dest` template
- * parameter (no format inspection): when true this calls `_llk_unpack_unary_operand_to_dest_tile_`, a sync-free
- * placer; the UNPACK_MATH / MATH_PACK section handshake and the SyncHalf bank flip live in
- * `llk_unpack_wait_for_dest_available` / `llk_unpack_dest_section_done` (tile_regs_acquire / tile_regs_commit), so
- * every call between the two lands in the same DEST section. Otherwise `_llk_unpack_unary_operand_` on UNP_A.
+ * Without broadcast, `unpack_to_dest` selects the destination regardless of the operand format. When true,
+ * calls `_llk_unpack_unary_operand_to_dest_tile_`, which does not synchronize on its own. The caller must use
+ * tile_regs_borrow and tile_regs_return to borrow the lender's section. All copies within that loan use the
+ * same section base. When false, calls `_llk_unpack_unary_operand_` on UNP_A.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Ignored at execute; selected by llk_unpack_A_init, which must use the same value
@@ -145,10 +142,9 @@ inline void llk_unpack_A_init(
  * format
  * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
- * @param dst_tile_index: DEST tile index the tile lands at, relative to the current section base; must be below the
- * section capacity for the sync mode and DEST width (get_dest_max_tiles, asserted). Used on the non-broadcast
- * unpack-to-dest path only: there the unpacker writes DEST directly, so math cannot place the tile. Ignored otherwise,
- * including the broadcast paths, which unpack tile by tile.
+ * @param dst_tile_index: Destination tile index relative to the current section base. Must be below the section
+ * capacity for the sync mode and Dest width, as checked with get_dest_max_tiles. Used only when the unpacker writes
+ * directly to DEST without broadcast. Ignored on all other paths.
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
@@ -166,8 +162,9 @@ inline void llk_unpack_A(
     WAYPOINT("UPAW");
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
+    LLK_DFB_ASSERT_MY_CONSUMER(local_dfb_interface, "unpack_A");
     // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194).
-    const std::uint32_t l1_tile_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx +
+    const std::uint32_t l1_tile_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx +
                                       tile_index * local_dfb_interface.stride_size_tiles;
 
     if constexpr (BType == BroadcastType::NONE) {
@@ -184,7 +181,7 @@ inline void llk_unpack_A(
                 dst_tile_index < dest_section_rows / _llk_unpack_to_dest_tile_rows_(tensor_shape),
                 "unpack-to-dest: dst_tile_index exceeds the DEST section capacity for this sync mode, DEST width and "
                 "tile shape");
-            // Sync-free: section handshake is in llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done.
+            // The caller must borrow the Dest section before writing tiles to it.
             _llk_unpack_unary_operand_to_dest_tile_(l1_tile_idx, dst_tile_index, tensor_shape);
         } else {
             _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
@@ -237,7 +234,8 @@ inline void llk_unpack_A_block(
 
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
-    const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx;
+    LLK_DFB_ASSERT_MY_CONSUMER(local_dfb_interface, "unpack_A_block");
+    const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;
     const std::uint32_t stride_size_tiles = local_dfb_interface.stride_size_tiles;
     if constexpr (BType == BroadcastType::NONE && unpack_to_dest) {
         WAYPOINT("UPAW");

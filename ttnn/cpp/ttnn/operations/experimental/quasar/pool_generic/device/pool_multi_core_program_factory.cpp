@@ -4,25 +4,25 @@
 #include "pool_multi_core_program_factory.hpp"
 #include "ttnn/core.hpp"
 
-#include "tt-metalium/constants.hpp"
-#include "tt-metalium/tt_backend_api_types.hpp"
-#include "tt-metalium/tile.hpp"
-#include "tt-metalium/bfloat16.hpp"
-#include "tt-metalium/math.hpp"
-#include "tt-metalium/mesh_buffer.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
+#include "tt-metalium/data_formats/data_format.hpp"
+#include "tt-metalium/data_formats/tile.hpp"
+#include "tt-metalium/data_formats/bfloat16.hpp"
+#include "tt-metalium/utils/math.hpp"
+#include "tt-metalium/memory/buffer/mesh_buffer.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "tt-metalium/host_buffer.hpp"
-#include "tt-metalium/buffer.hpp"
+#include "tt-metalium/memory/buffer/host_buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/tensor/tensor_apis.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

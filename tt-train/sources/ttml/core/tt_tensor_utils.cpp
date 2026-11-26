@@ -81,6 +81,10 @@ ttnn::Tensor ones_like(const ttnn::Tensor& tensor) {
     return ttnn::moreh_full_like(tensor, 1.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
 }
 
+ttnn::Tensor as_fp32(const ttnn::Tensor& tensor) {
+    return tensor.dtype() == ttnn::DataType::FLOAT32 ? tensor : ttnn::typecast(tensor, ttnn::DataType::FLOAT32);
+}
+
 ttnn::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const ttnn::MemoryConfig& memory_config) {
     return ttnn::empty(shape, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device, memory_config);

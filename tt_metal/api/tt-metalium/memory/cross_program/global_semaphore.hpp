@@ -11,8 +11,8 @@
 #include <ostream>
 #include <tuple>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 namespace tt::tt_metal {
 

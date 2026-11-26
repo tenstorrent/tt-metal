@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor.hpp"

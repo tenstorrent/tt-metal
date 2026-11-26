@@ -9,7 +9,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"

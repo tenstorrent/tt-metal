@@ -2204,3 +2204,69 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
   team: models
   budget_type: e2e
+
+- name: GLM-5.3-Flash 8x4 megakernel e2e (Galaxy)
+  cmd: |
+    # bh_sc1 (one exabox Blackhole Galaxy): every command runs on the Galaxy host through a single-rank mpirun, which
+    # forwards the exported environment. No TT_MESH_GRAPH_DESC_PATH: with one rank the control plane is built by
+    # auto-discovery (MetalEnv, world size 1), the path bh_galaxy takes, for this stack's 1D fabric and the mesh model's
+    # 2D torus alike. The checkpoint and the caches live on the exabox model store (/mnt/models, the HF home of the
+    # Flux.2 and Ideogram bh_sc1 entries); the first run on the store writes them (checkpoint ~306 GB, the tile cache
+    # ~174 GB and the expert copies ~109 GB).
+    export HF_MODEL=zai-org/GLM-5.3-Flash HF_HOME=/mnt/models/huggingface HF_HUB_CACHE=/mnt/models/huggingface/hub
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/zai-org/GLM-5.3-Flash
+    # The persistent-stack port on all 32 chips (TP32 x EP32, the sequence-sharded DSA pool: 1 M x 4 and 128 K x 16
+    # users resident; tt/galaxy_defaults.py). The reference-format tile cache lives beside the model's TT cache: the
+    # first run on the store builds it from the checkpoint as the stack loads (~1 h), later runs load it in ~5 min;
+    # the permuted expert copies sit next to it.
+    export GLM53_MK_TILE_CACHE_V3=$TT_CACHE_PATH/glm53_tile_cache_v3 GLM53_FUSED_EXPERTS_CACHE=$TT_CACHE_PATH/glm53_fused_experts_cache
+    # Stop at the first failed command: the devices are not reset between commands (#57706).
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" "$@" || exit $?; }
+    # the checkpoint (public, ~306 GB) into the store's hub cache on its first run; a complete snapshot returns without
+    # the network
+    HF_HUB_OFFLINE=0 run python3 -m models.demos.glm53_flash.reference.checkpoint
+    # 32 K x 4 users with one prompt and 1 M x 1 user (the resident capstone): the TP prefill, the traced decode step,
+    # TTFT and tok/s per user logged; the rows FAIL when the users disagree, the first ids leave the validated prefix
+    # or the decode drops under the floor (GLM53_MK_EXPECT_IDS / GLM53_MK_MIN_TOKS). The ids are this tree's on the current
+    # tt-metal (the KDA scan's complement-form state, #62895, moves near-ties: 32 K x 4 at token 6, 1 M x 1 at token 0; both
+    # texts coherent, decode 54.9 / 62.8 tok/s per user)
+    GLM53_MK_B=4 GLM53_MK_ISL=32768 GLM53_MK_EXPECT_IDS=785,1196,702,3267,291,264,1602,1293,1467,429 GLM53_MK_MIN_TOKS=30 run python3 -m pytest --timeout 6000 models/demos/glm53_flash/tests/test_mk_e2e.py
+    GLM53_MK_B=1 GLM53_MK_ISL=1048448 GLM53_MK_SEQ=1048576 GLM53_MK_EXPECT_IDS=785,1196,702,2661,752,264,1467,429 GLM53_MK_MIN_TOKS=40 run python3 -m pytest --timeout 3600 models/demos/glm53_flash/tests/test_mk_e2e.py
+  model: glm53-flash
+  model_family: GLM
+  skus:
+    bh_sc1:
+      timeout: 180
+      tier: 1
+      release_ready: false
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: e2e
+
+- name: GLM-5.3-Flash e2e tests (Galaxy)
+  cmd: |
+    # bh_sc1: run as the megakernel entry above (a single-rank mpirun, auto-discovery, the exabox model store).
+    export HF_MODEL=zai-org/GLM-5.3-Flash HF_HOME=/mnt/models/huggingface HF_HUB_CACHE=/mnt/models/huggingface/hub
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/zai-org/GLM-5.3-Flash
+    # The mesh weight cache (tensorbins) lives beside the model's TT cache. A cold store builds it from the fp8
+    # checkpoint at ~5 min per MoE layer (~3.5 h for the 42), so the first ~3 runs hit the job timeout while it fills;
+    # a cached MoE layer then loads in ~110 s from this store (~25 s on bh_galaxy), ~80 min for the whole model.
+    export GLM53_MESH_CACHE=$TT_CACHE_PATH/glm53_mesh GLM53_MESH_SHAPE=8,4
+    # Stop at the first failed command: the devices are not reset between commands (#57706).
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" "$@" || exit $?; }
+    # the checkpoint (public, ~306 GB) into the store's hub cache on its first run; a complete snapshot returns without
+    # the network
+    HF_HUB_OFFLINE=0 run python3 -m models.demos.glm53_flash.reference.checkpoint
+    # 32 users (4 per row) x 8 short questions, 64 greedy tokens each: the resident 45-layer mesh model, the eager
+    # prefill and the traced decode step end to end (TTFT and tok/s logged)
+    run python3 -m pytest models/demos/glm53_flash/demo/text_demo.py -k "questions_8-4users"
+  model: glm53-flash
+  model_family: GLM
+  skus:
+    bh_sc1:
+      timeout: 100
+      tier: 1
+      release_ready: false
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: e2e

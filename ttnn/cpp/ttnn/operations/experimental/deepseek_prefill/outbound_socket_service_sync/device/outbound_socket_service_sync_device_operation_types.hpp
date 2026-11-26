@@ -11,7 +11,7 @@
 
 #include <fmt/format.h>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include "ttnn/services/stream_counter.hpp"
 #include "ttnn/tensor/tensor.hpp"

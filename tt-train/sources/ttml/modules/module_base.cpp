@@ -16,6 +16,7 @@ void ModuleBase::register_tensor(const autograd::TensorPtr& tensor_ptr, const st
         throw std::logic_error("Names of two tensors coincide");
     }
     tensor_ptr->set_requires_grad(true);
+    tensor_ptr->mark_as_parameter();
 }
 
 void ModuleBase::register_module(const ModuleBasePtr& module_ptr, const std::string& name) {
@@ -32,6 +33,7 @@ void ModuleBase::override_tensor(const autograd::TensorPtr& tensor_ptr, const st
     if (auto it = m_named_tensors.find(name); it != m_named_tensors.end()) {
         it->second = tensor_ptr;
         tensor_ptr->set_requires_grad(true);
+        tensor_ptr->mark_as_parameter();
     } else {
         throw std::logic_error(fmt::format("Tensor with such name does not exist. Name {}", name));
     }

@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/mesh_workload_runtime_args.hpp>
 #include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt_stl/fmt.hpp>
-#include <mesh_command_queue.hpp>
-#include <mesh_workload.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <cstdint>
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt_metal/impl/program/program_command_sequence.hpp>
@@ -31,24 +31,25 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
-#include "buffer.hpp"
-#include "buffer_types.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal.hpp>
-#include "kernel_types.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
+#include "tt-metalium/vocabulary/mesh_coord.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
 #include "mesh_workload_impl.hpp"
 #include "program/program_device_map.hpp"
 #include "program/program_impl.hpp"
-#include "tt-metalium/program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/lightmetal/host_api_capture_helpers.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "llrt/tt_cluster.hpp"
-#include "sub_device_types.hpp"
+#include "tt-metalium/mesh/sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
 #include <tt-umd/types/core_coordinates.hpp>
@@ -464,6 +465,27 @@ void MeshWorkloadImpl::set_per_device_runtime_args(
     per_device_runtime_args_.at(program_range).dirty = true;
 }
 
+void MeshWorkloadImpl::set_device_specific_runtime_args(
+    const MeshCoordinateRange& program_range, const DeviceSpecificRuntimeArgs& run) {
+    auto* field = find_per_device_runtime_args_field(
+        program_range, run.kernel, run.core, run.first_word, run.num_words, /*metal2=*/true);
+    if (field == nullptr) {
+        // Untracked: no run arg covers these words, so a program-level update of the run args never drops them alone.
+        field = &add_per_device_runtime_args_field(
+            programs_.at(program_range),
+            program_range,
+            run.kernel,
+            run.core,
+            run.first_word,
+            run.num_words,
+            /*metal2=*/false);
+    }
+    std::ranges::copy(run.values_in_range_order, field->values.begin());
+    std::ranges::fill(field->present, 1);
+    field->dirty = true;
+    per_device_runtime_args_.at(program_range).dirty = true;
+}
+
 void MeshWorkloadImpl::clear_per_device_runtime_args(
     const MeshCoordinateRange& program_range,
     const MeshCoordinate& device,
@@ -491,10 +513,8 @@ void MeshWorkloadImpl::clear_per_device_runtime_args(
     }
 }
 
-namespace {
-// Applies `program`'s pending drops (Metal 2.0 Program::set_program_run_args / Program::update_program_run_args) to its
-// per-device args.
-void apply_run_arg_drops(PerDeviceRuntimeArgs& per_device, Program& program) {
+void MeshWorkloadImpl::apply_run_arg_drops(
+    const MeshCoordinateRange& program_range, PerDeviceRuntimeArgs& per_device, Program& program) {
     auto& drops = program.impl().per_device_run_arg_drops();
     if (!drops.any_pending()) {
         return;
@@ -508,8 +528,16 @@ void apply_run_arg_drops(PerDeviceRuntimeArgs& per_device, Program& program) {
     }
     drops.drop_all = false;
     drops.pending.clear();
+    const auto runs = device_specific_runtime_args_.find(program_range);
+    if (runs == device_specific_runtime_args_.end()) {
+        return;
+    }
+    for (const auto& run : runs->second) {
+        set_device_specific_runtime_args(program_range, run);
+    }
 }
 
+namespace {
 // Whether the field's effective values (which devices have one, and theirs) equal its last commit.
 bool equals_committed(const PerDeviceRuntimeArgsField& field) {
     if (field.present != field.committed_present) {
@@ -532,7 +560,7 @@ void MeshWorkloadImpl::apply_per_device_run_arg_drops(const MeshCoordinateRange&
     const auto program_it = programs_.find(program_range);
     if (it != per_device_runtime_args_.end() && program_it != programs_.end() &&
         holds_program(it->second, program_it->second)) {
-        apply_run_arg_drops(it->second, program_it->second);
+        apply_run_arg_drops(program_range, it->second, program_it->second);
     }
 }
 
@@ -580,7 +608,7 @@ void MeshWorkloadImpl::set_per_device_named_runtime_args(
     }
     // Drops recorded by earlier program-level sets / updates apply before these values, never to them.
     if (per_device != nullptr) {
-        apply_run_arg_drops(*per_device, *program);
+        apply_run_arg_drops(program_range, *per_device, *program);
     }
     const uint32_t index = coordinate_index_in_range(program_range, device);
     for (size_t i = 0; i < args.size(); ++i) {
@@ -622,7 +650,7 @@ const PerDeviceRuntimeArgs* MeshWorkloadImpl::per_device_runtime_args(const Mesh
         program_range);
     auto& per_device = it->second;
     auto& program = program_it->second;
-    apply_run_arg_drops(per_device, program);
+    apply_run_arg_drops(program_range, per_device, program);
     if (!per_device.dirty) {
         return &per_device;
     }
@@ -674,6 +702,15 @@ const PerDeviceRuntimeArgs* MeshWorkloadImpl::per_device_runtime_args(const Mesh
     return &per_device;
 }
 
+namespace {
+// Emulated devices launch each program through the slow-dispatch path (tt-emule's queue), as slow dispatch does,
+// so their workloads carry per-program configs rather than the FD workload finalization.
+bool uses_fd_program_configs(MetalEnvImpl& env) {
+    return env.get_rtoptions().get_fast_dispatch() &&
+           env.get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
+}
+}  // namespace
+
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
     auto& program = programs_.at(device_range);
     program.impl().compile_and_allocate(mesh_device, false);
@@ -693,6 +730,7 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
+    // 4. In fast dispatch, check the kernel-config block fits the KERNEL_CONFIG window
     // This runs on every enqueue, not just the first. Once the workload has been finalized its
     // programs are already compiled and laid out, so compile_program is a flag check per program;
     // handing those to the thread pool costs a worker wake-up and a join for no work. Only the
@@ -711,6 +749,33 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
         mesh_device->wait_for_thread_pool();
     }
     finalize_offsets(mesh_device);
+    for (auto& [device_range, program] : programs_) {
+        if (!device_specific_runtime_args_.contains(device_range)) {
+            install_device_specific_runtime_args(device_range, program, *mesh_device);
+        }
+    }
+    // Fast dispatch runs the whole block from the KERNEL_CONFIG window; slow dispatch checks the block at launch, where
+    // it knows whether the Tensix binaries run from a kernel config buffer. Checked on every compile, not only the
+    // first, so that a finalized workload that does not fit keeps failing, and against the mode now rather than at
+    // finalize, since DispatchContext switches it at runtime. A workload that fits costs one bool test.
+    if (!fits_kernel_config_window_ && uses_fd_program_configs(mesh_device->impl().metal_env())) {
+        throw_kernel_config_window_overflow(mesh_device);
+    }
+}
+
+void MeshWorkloadImpl::install_device_specific_runtime_args(
+    const MeshCoordinateRange& program_range, Program& program, MeshDevice& mesh_device) {
+    auto runs = program.impl().device_specific_runtime_args(program_range);
+    TT_FATAL(
+        runs.empty() || ArePerDeviceRuntimeArgsSupported(mesh_device, program_range),
+        "The Program on range {} has runtime args that differ per device (for example fabric connection args). This "
+        "range does not support per-device runtime args (a wraparound range, light-metal capture or an emulator). "
+        "Hint: give each device its own Program (a 1x1 range)",
+        program_range);
+    for (const auto& run : runs) {
+        set_device_specific_runtime_args(program_range, run);
+    }
+    device_specific_runtime_args_.emplace(program_range, std::move(runs));
 }
 
 void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
@@ -938,15 +1003,6 @@ void MeshWorkloadImpl::set_last_used_command_queue_for_testing(MeshCommandQueue*
 
 MeshCommandQueue* MeshWorkloadImpl::get_last_used_command_queue() const { return last_used_command_queue_; }
 
-namespace {
-// Emulated devices launch each program through the slow-dispatch path (tt-emule's queue), as slow dispatch does,
-// so their workloads carry per-program configs rather than the FD workload finalization.
-bool uses_fd_program_configs(MetalEnvImpl& env) {
-    return env.get_rtoptions().get_fast_dispatch() &&
-           env.get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
-}
-}  // namespace
-
 ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index, bool using_fast_dispatch) {
     TT_FATAL(!programs_.empty(), "Program Configs can only be queried if a MeshWorkload is populated.");
     const bool requires_finalized_config = using_fast_dispatch && !is_service_workload_.value_or(false);
@@ -1047,6 +1103,10 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         kernel_groups_getter,
         semaphores_getter,
         programs);
+    // The programs share one layout, so any of them holds its sizes.
+    fits_kernel_config_window_ =
+        programs.empty() || tt::tt_metal::detail::ProgramImpl::fits_kernel_config_window(
+                                mesh_device->impl().get_context_id(), mesh_device, *programs[0]);
 
     set_finalized(max_program_kernels_sizeB, mesh_device->id());
 }
@@ -1055,6 +1115,27 @@ void MeshWorkloadImpl::check_circular_buffers_bound() {
     for (auto& [_, program] : programs_) {
         program.impl().check_circular_buffers_bound();
     }
+}
+
+void MeshWorkloadImpl::throw_kernel_config_window_overflow(MeshDevice* mesh_device) {
+    // finalize_offsets records an empty workload as fitting, so callers that checked the block does not fit have
+    // programs.
+    TT_ASSERT(!programs_.empty(), "An empty MeshWorkload fits the KERNEL_CONFIG window");
+    tt::tt_metal::detail::KernelsGetter kernels_getter =
+        [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
+        return this->get_kernels(index);
+    };
+    tt::tt_metal::detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
+    // The programs share one layout, so any of them holds its sizes.
+    tt::tt_metal::detail::ProgramImpl::check_kernel_config_fits(
+        mesh_device->impl().get_context_id(),
+        mesh_device,
+        kernels_getter,
+        kernel_groups_getter,
+        programs_.begin()->second.impl(),
+        /*kernel_config_buffer=*/nullptr);
+    TT_THROW("throw_kernel_config_window_overflow called for a MeshWorkload that fits the KERNEL_CONFIG window");
 }
 
 // MeshWorkload PIMPL Implementation
@@ -1129,6 +1210,33 @@ void prepare(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& wo
     // check would leave the caller unable to fix the workload and retry.
     TT_FATAL(!workload.get_programs().empty(), "Cannot prepare a MeshWorkload that has no programs");
     workload.impl().compile(&mesh_device);
+    // In slow dispatch too, which compile() leaves to launch: a prepared workload runs from the window.
+    if (!workload.impl().fits_kernel_config_window()) {
+        workload.impl().throw_kernel_config_window_overflow(&mesh_device);
+    }
+}
+
+void compile(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& workload) {
+    TT_FATAL(!mesh_device.get_device_ids().empty(), "Cannot compile a MeshWorkload for an inactive MeshDevice");
+    TT_FATAL(!workload.get_programs().empty(), "Cannot compile a MeshWorkload that has no programs");
+    if (distributed::uses_fd_program_configs(mesh_device.impl().metal_env())) {
+        workload.impl().compile(&mesh_device);
+        return;
+    }
+    // Slow dispatch launches each program on its own (slow_dispatch::LaunchProgramAsync), compiling and laying it out
+    // on the first device it runs on and reusing that on the others. Do the same on the first local device.
+    for (auto& [device_range, program] : workload.get_programs()) {
+        IDevice* first_device = nullptr;
+        for (const auto& coord : device_range) {
+            if (mesh_device.is_local(coord)) {
+                first_device = mesh_device.impl().get_device(coord);
+                break;
+            }
+        }
+        if (first_device != nullptr) {
+            slow_dispatch::PrepareProgram(*first_device, program);
+        }
+    }
 }
 
 }  // namespace tt::tt_metal::experimental::program_preparation

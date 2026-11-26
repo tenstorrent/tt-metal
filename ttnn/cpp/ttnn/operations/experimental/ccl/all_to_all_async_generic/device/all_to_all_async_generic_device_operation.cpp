@@ -7,9 +7,9 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
 #include <internal/mesh_device.hpp>
 
 namespace ttnn::experimental::prim {
