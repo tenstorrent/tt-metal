@@ -585,6 +585,8 @@ std::vector<std::pair<ReduceScatterPlan::Operation, uint32_t>> ReduceScatterPlan
     }
     std::vector<std::pair<Operation, uint32_t>> out;
     std::vector<uint32_t> pending;
+    // (Pass must stay the first op: router_out_deferred relies on hall and lat being the only regions ro may overlay
+    // that are written before the first down W round)
     for (uint32_t i = 0; i < passes.size(); ++i) {
         out.emplace_back(Operation::Pass, i);
         for (uint32_t entry : piece_entries) {
@@ -1223,7 +1225,9 @@ SharedExpertSizing::SharedExpertSizing(const SharedExpertArgs& sizing_args) :
         }
         if (!hold_overlay.empty()) {
             const int64_t hold_bytes = region_bytes(hold_overlay, "hold");
-            if (hold_bytes <= accumulator_pages * kFp32TileBytes) {
+            // (over acc only with one row chunk: with more, the compute's deferred output finishes read the held
+            // partials after the next chunk's gate / up, whose accumulators acc is)
+            if (row_chunks == 1 && hold_bytes <= accumulator_pages * kFp32TileBytes) {
                 set_region(offsets, "hold", region_bytes(offsets, "acc"));
             } else {
                 set_region(offsets, "hold", arena_end);
@@ -1333,6 +1337,23 @@ SharedExpertSizing::SharedExpertSizing(const SharedExpertArgs& sizing_args) :
         }
     }
     router_overlay = router_overlays_zones || router_overlays_latent;
+    // (Deferred: the last iteration's ro is sent from the W loop, holding the first down W round. Safe only while,
+    // of the regions ro may overlay, gate/up writes just hall and lat, Pass is the first op of operations() and
+    // DispatchPrep (po) comes after the last down pass)
+    if (sizing_args.router_iterations > 1) {
+        const int64_t router_out_low = at("ro"),
+                      router_out_high = router_out_low + int64_t(router_expert_tiles_per_column) * row_tiles_per_core *
+                                                             row_chunks / sizing_args.router_iterations *
+                                                             kFp32TileBytes;
+        auto router_out_over = [&](int64_t low, int64_t high) {
+            return low < router_out_high && router_out_low < high;
+        };
+        router_out_deferred =
+            !router_out_over(at("hall"), at("xin")) &&
+            !(sizing_args.latent &&
+              router_out_over(
+                  at("lat"), at("lat") + int64_t(row_tiles_per_core) * max_latent_column_tiles * kBf16TileBytes));
+    }
     if (arena_end > arena_max) {
         throw ArenaTooLarge("moe_head shared expert: arena too large", arena_end, arena_max);
     }

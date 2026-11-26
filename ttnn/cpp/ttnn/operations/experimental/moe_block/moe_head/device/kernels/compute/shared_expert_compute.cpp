@@ -244,6 +244,95 @@ void process_row_block(const SharedExpertComputeArgs& args, uint32_t& output_til
             invalidate_l1_cache();
         }
     }
+    // Output finishes deferred: with several row chunks, a chunk's output entries finish (their held partial + the
+    // arrivals, written to y) after the next chunk's gate / up, so the reduce-scatter's last hop runs under it and not
+    // ahead of every row's next chunk (GLM-5.3 10k on the 4x4 carve: -27 us). Their syncs and arrival zones pop then.
+    constexpr bool defer_output_finishes = row_chunks > 1;
+    uint32_t deferred_finishes[reduce_scatter_entries > 0 ? reduce_scatter_entries : 1];
+    uint32_t num_deferred_finishes = 0, deferred_passes = 0;
+    // entry `index`'s finish: its held partial + the arrival(s), after passes_done down passes
+    auto finish_entry = [&](uint32_t index, uint32_t passes_done) {
+        const ReduceScatterEntry entry = args.entry(index);
+        // (the arrivals' zone offsets, tiles - every slot before them pushed with them)
+        const bool has_forward = entry.mode & 1, has_backward = entry.mode & 2, is_output = entry.mode & 4;
+        cb_wait_front(reduce_scatter_pass_sync_cb, passes_done);
+        if (has_forward) {
+            cb_wait_front(reduce_scatter_arrival_forward_cb, entry.forward_slot + entry.tiles);
+        }
+        if (has_backward) {
+            cb_wait_front(reduce_scatter_arrival_backward_cb, entry.backward_slot + entry.tiles);
+        }
+        const uint32_t first_arrival_cb =
+            has_forward ? reduce_scatter_arrival_forward_cb : reduce_scatter_arrival_backward_cb;
+        const uint32_t first_arrival_slot = has_forward ? entry.forward_slot : entry.backward_slot;
+        const uint32_t out_cb = is_output ? reduce_scatter_output_forward_cb : reduce_scatter_final_block_cb;
+        pack_reconfig_data_format(out_cb);
+        for (uint32_t first = 0, tiles = 0; first < entry.tiles; first += tiles) {
+            const uint32_t limit = is_output ? shared_expert_dest_tiles - output_tiles_pushed % shared_expert_dest_tiles
+                                             : shared_expert_dest_tiles;
+            tiles = entry.tiles - first < limit ? entry.tiles - first : limit;
+            if (is_output) {
+                output_tiles_pushed += tiles;
+            }
+            tile_regs_acquire();
+            reconfig_data_format(reduce_scatter_hold_cb, first_arrival_cb);
+            add_init(reduce_scatter_hold_cb, first_arrival_cb);
+            for (uint32_t j = 0; j < tiles; ++j) {
+                add_tiles(
+                    reduce_scatter_hold_cb,
+                    first_arrival_cb,
+                    entry.hold_offset + first + j,
+                    first_arrival_slot + first + j,
+                    j);
+            }
+            if (has_forward && has_backward) {  // (the second arrival: DEST -> srcA at fp32 width, + bwd)
+                reconfig_data_format(reduce_scatter_hold_cb, reduce_scatter_arrival_backward_cb);
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(reduce_scatter_arrival_backward_cb);
+                for (uint32_t j = 0; j < tiles; ++j) {
+                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                        reduce_scatter_arrival_backward_cb, entry.backward_slot + first + j, j);
+                }
+            }
+            tile_regs_commit();
+            if (is_output) {
+                cb_reserve_back(reduce_scatter_output_forward_cb, tiles);
+            }
+            tile_regs_wait();
+            for (uint32_t j = 0; j < tiles; ++j) {
+                if (is_output) {
+                    pack_tile(j, reduce_scatter_output_forward_cb);
+                } else {
+                    pack_tile<true>(j, reduce_scatter_final_block_cb, entry.final_block_offset + first + j);
+                }
+            }
+            tile_regs_release();
+            if (is_output) {
+                cb_push_back(reduce_scatter_output_forward_cb, tiles);
+            }
+        }
+        if (!is_output) {
+            cb_reserve_back(reduce_scatter_final_counter_cb, 1);
+            cb_push_back(reduce_scatter_final_counter_cb, 1);
+        }
+    };
+    auto pop_chunk_syncs = [&](uint32_t passes_done) {
+        if constexpr (row_chunks > 1 || row_block::BLOCKS > 1) {
+            cb_wait_front(reduce_scatter_pass_sync_cb, passes_done);
+            cb_pop_front(reduce_scatter_pass_sync_cb, passes_done);
+            uint32_t arrival_directions = 0;
+            for (uint32_t entry = 0; entry < reduce_scatter_entries; ++entry) {
+                arrival_directions |= args.entry_mode(entry);  // (the entries: TP of them)
+            }
+            if (arrival_directions & 1) {
+                cb_wait_front(reduce_scatter_arrival_forward_cb, reduce_scatter_zone_tiles_forward);
+                cb_pop_front(reduce_scatter_arrival_forward_cb, reduce_scatter_zone_tiles_forward);
+            }
+            if (arrival_directions & 2) {
+                cb_wait_front(reduce_scatter_arrival_backward_cb, reduce_scatter_zone_tiles_backward);
+                cb_pop_front(reduce_scatter_arrival_backward_cb, reduce_scatter_zone_tiles_backward);
+            }
+        }
+    };
     for (uint32_t chunk = 0; chunk < live_chunks; ++chunk) {
         // gate / up: per pass all of K in DEST, the activation, h packed once
         {
@@ -367,6 +456,14 @@ void process_row_block(const SharedExpertComputeArgs& args, uint32_t& output_til
                 cb_reserve_back(latent_cb, latent_pages);
                 cb_push_back(latent_cb, latent_pages);
             }
+        }
+        if (defer_output_finishes && chunk > 0) {  // (the last chunk's deferred output finishes and syncs)
+            DeviceZoneScopedN("SE-DEFFIN");
+            for (uint32_t i = 0; i < num_deferred_finishes; ++i) {
+                finish_entry(deferred_finishes[i], deferred_passes);
+            }
+            num_deferred_finishes = 0;
+            pop_chunk_syncs(deferred_passes);
         }
         {
             DeviceZoneScopedN("SE-DOWNRS");
@@ -495,91 +592,21 @@ void process_row_block(const SharedExpertComputeArgs& args, uint32_t& output_til
                     }
                     UNPACK((get_local_cb_interface(dispatch_prep_unit_cb).fifo_rd_ptr = unit_cb_read_pointer));
                 } else {  // (OperationKind::Finish) entry `index`: its held partial + the arrival(s)
-                    const ReduceScatterEntry entry = args.entry(index);
-                    // (the arrivals' zone offsets, tiles - every slot before them pushed with them)
-                    const bool has_forward = entry.mode & 1, has_backward = entry.mode & 2, is_output = entry.mode & 4;
-                    cb_wait_front(reduce_scatter_pass_sync_cb, down_passes_done);
-                    if (has_forward) {
-                        cb_wait_front(reduce_scatter_arrival_forward_cb, entry.forward_slot + entry.tiles);
+                    // (an output entry - this chip's final rows - but the last chunk's: after the next gate / up)
+                    if (defer_output_finishes && chunk + 1 < live_chunks && (args.entry(index).mode & 4)) {
+                        deferred_finishes[num_deferred_finishes++] = index;
+                        continue;
                     }
-                    if (has_backward) {
-                        cb_wait_front(reduce_scatter_arrival_backward_cb, entry.backward_slot + entry.tiles);
-                    }
-                    const uint32_t first_arrival_cb =
-                        has_forward ? reduce_scatter_arrival_forward_cb : reduce_scatter_arrival_backward_cb;
-                    const uint32_t first_arrival_slot = has_forward ? entry.forward_slot : entry.backward_slot;
-                    const uint32_t out_cb =
-                        is_output ? reduce_scatter_output_forward_cb : reduce_scatter_final_block_cb;
-                    pack_reconfig_data_format(out_cb);
-                    for (uint32_t first = 0, tiles = 0; first < entry.tiles; first += tiles) {
-                        const uint32_t limit =
-                            is_output ? shared_expert_dest_tiles - output_tiles_pushed % shared_expert_dest_tiles
-                                      : shared_expert_dest_tiles;
-                        tiles = entry.tiles - first < limit ? entry.tiles - first : limit;
-                        if (is_output) {
-                            output_tiles_pushed += tiles;
-                        }
-                        tile_regs_acquire();
-                        reconfig_data_format(reduce_scatter_hold_cb, first_arrival_cb);
-                        add_init(reduce_scatter_hold_cb, first_arrival_cb);
-                        for (uint32_t j = 0; j < tiles; ++j) {
-                            add_tiles(
-                                reduce_scatter_hold_cb,
-                                first_arrival_cb,
-                                entry.hold_offset + first + j,
-                                first_arrival_slot + first + j,
-                                j);
-                        }
-                        if (has_forward && has_backward) {  // (the second arrival: DEST -> srcA at fp32 width, + bwd)
-                            reconfig_data_format(reduce_scatter_hold_cb, reduce_scatter_arrival_backward_cb);
-                            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                                reduce_scatter_arrival_backward_cb);
-                            for (uint32_t j = 0; j < tiles; ++j) {
-                                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                                    reduce_scatter_arrival_backward_cb, entry.backward_slot + first + j, j);
-                            }
-                        }
-                        tile_regs_commit();
-                        if (is_output) {
-                            cb_reserve_back(reduce_scatter_output_forward_cb, tiles);
-                        }
-                        tile_regs_wait();
-                        for (uint32_t j = 0; j < tiles; ++j) {
-                            if (is_output) {
-                                pack_tile(j, reduce_scatter_output_forward_cb);
-                            } else {
-                                pack_tile<true>(j, reduce_scatter_final_block_cb, entry.final_block_offset + first + j);
-                            }
-                        }
-                        tile_regs_release();
-                        if (is_output) {
-                            cb_push_back(reduce_scatter_output_forward_cb, tiles);
-                        }
-                    }
-                    if (!is_output) {
-                        cb_reserve_back(reduce_scatter_final_counter_cb, 1);
-                        cb_push_back(reduce_scatter_final_counter_cb, 1);
-                    }
+                    finish_entry(index, down_passes_done);
                 }
             }
             cb_pop_front(cb_h_gathered, h_gathered_tiles);
             // (the chunk's syncs and arrival zones popped: the next chunk's - or the next row block's - from their
-            // start)
-            if constexpr (row_chunks > 1 || row_block::BLOCKS > 1) {
-                cb_wait_front(reduce_scatter_pass_sync_cb, down_passes_done);
-                cb_pop_front(reduce_scatter_pass_sync_cb, down_passes_done);
-                uint32_t arrival_directions = 0;
-                for (uint32_t entry = 0; entry < reduce_scatter_entries; ++entry) {
-                    arrival_directions |= args.entry_mode(entry);  // (the entries: TP of them)
-                }
-                if (arrival_directions & 1) {
-                    cb_wait_front(reduce_scatter_arrival_forward_cb, reduce_scatter_zone_tiles_forward);
-                    cb_pop_front(reduce_scatter_arrival_forward_cb, reduce_scatter_zone_tiles_forward);
-                }
-                if (arrival_directions & 2) {
-                    cb_wait_front(reduce_scatter_arrival_backward_cb, reduce_scatter_zone_tiles_backward);
-                    cb_pop_front(reduce_scatter_arrival_backward_cb, reduce_scatter_zone_tiles_backward);
-                }
+            // start; with deferred finishes after them, after the next chunk's gate / up)
+            if (defer_output_finishes && chunk + 1 < live_chunks) {
+                deferred_passes = down_passes_done;
+            } else {
+                pop_chunk_syncs(down_passes_done);
             }
         }
     }

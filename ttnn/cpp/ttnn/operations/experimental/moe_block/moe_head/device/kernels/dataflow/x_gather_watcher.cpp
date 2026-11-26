@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// x_gather_watcher: tells the matmul cores when each gathered x shard has fully landed on this chip
+// x_gather_watcher: tells the matmul cores when each gathered x shard's segment has fully landed on this chip
 // Runs on: the watcher core (one a chip), RISCV_1 (NCRISC), NoC 1 (RISCV_1_default)
 // Responsibilities:
 //  - polls its L1 counters, which the upstream fabric_port_sender cores increment over the fabric (a shard a stream)
-//  - once every stream carrying shard k of chunk m counted it: +1 on XREADY on every matmul core
+//  - once every stream carrying peer segment k of chunk m counted it: +1 on XREADY on every matmul core
 //    (shared_expert_row_dataflow waits on it); re-arms the counters
 //  - with a second Y direction (WATCHER_ROUTING_ARGS_OFFSET: a per-chip define - the args' offset is a chip value, and
 //    it selects the fabric headers included): that direction's routing exchange send, once the planner instances are
@@ -30,19 +30,20 @@ using namespace tt::tt_fabric;
 #endif
 
 // This kernel's runtime args (head_gather_program.cpp ChipProgram::gather, `watcher_args`), read once in kernel_main.
-// Chunk m's shard of rank k (k = 1 .. tp_size - 1 in the engine's order) is in once each stream carrying it counted it
-// (a stream counts every shard it sends: m (its entries a chunk) + its entry's index + 1): then XREADY + 1 on every
-// engine core (XREADY = m (tp_size - 1) + k).
+// The engine processes a shard in segments (HeadModel::segment_order: its own shard's, then each arrival wave's shards
+// a segment at a time). Chunk m's peer segment k (k = 1 .. its peer segments, in that order) is in once each stream
+// carrying its shard counted it (a stream counts every segment of every shard it sends: entry e's segment s is its
+// count e S + s of a chunk, S segments a shard): then XREADY + 1 on every engine core (XREADY = m (peer segments) + k).
 struct XGatherWatcherArgs {
     uint32_t num_chunks;                        // [0] the call's row chunks
     uint32_t x_ready_semaphore_address;         // [1] XREADY (its semaphore id: get_semaphore)
-    uint32_t num_ranks;                         // [2] the shards that land here: tp_size - 1
+    uint32_t num_ranks;                         // [2] the peer segments: (tp_size - 1) x segments a shard
     uint32_t num_engine_cores;                  // [3]
     uint32_t num_counters;                      // [4]
     volatile tt_l1_ptr uint32_t* counters;      // in place: num_counters x (counter address, its count a call)
     volatile tt_l1_ptr uint32_t* engine_cores;  // in place: num_engine_cores x (NoC x, NoC y)
-    // in place, per rank: its streams n, then n x (the stream's counter address, its entry's index, its entries a
-    // chunk)
+    // in place, per peer segment: its streams n, then n x (the stream's counter address, its count's index in a
+    // chunk, its counts a chunk)
     volatile tt_l1_ptr uint32_t* rank_streams;
     // (skip_padding_chunks only; common args: ChipProgram::live_args) padded_rows.hpp's LiveChunkArgs; [10] rounded up
     // to 64 B: the metadata is read into it

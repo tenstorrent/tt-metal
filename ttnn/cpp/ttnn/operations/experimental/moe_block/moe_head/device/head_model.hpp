@@ -66,6 +66,11 @@ public:
     std::optional<SharedExpertSizing> sizing;
     // gather
     uint32_t k_shard_tiles = 0, k_steps_per_shard = 0, tiles_per_packet = 0, group = 4;
+    // a shard's x segments (x_segment_steps K steps each): the gather sends a shard segment by segment (K-step-major),
+    // the watcher counts each segment ready and the engine processes the segments in segment_order - its own shard's,
+    // then each arrival wave's shards interleaved a segment at a time - so a peer shard's first steps are worked on
+    // while its later ones are still on the wire
+    uint32_t x_segments_per_shard = 1, x_segment_steps = 0;
     std::map<Coord, GatherChip> chips;
     CoreCoord watcher;
     std::map<std::pair<uint32_t, uint32_t>, XDirection> ties;  // (from, to) of a ring's far side -> the fabric's way
@@ -230,6 +235,10 @@ public:
         std::vector<uint32_t>,
         std::map<uint32_t, std::vector<std::tuple<XDirection, uint32_t, uint32_t, uint32_t>>>>
     shard_order(const Coord& coord) const;
+    // the engine's segment order: K segment ids (shard * x_segments_per_shard + segment) - its own shard's segments,
+    // then each arrival wave (the shards the same upstream entry index brings) a segment of each shard at a time
+    std::vector<uint32_t> segment_order(const Coord& coord) const;
+    // per K segment id, its index in segment_order (the destination tables' first words)
     std::vector<uint32_t> ranks(const Coord& coord) const;
     std::vector<uint32_t> tables(const Coord& coord) const;
     // ---- the router cores ----
