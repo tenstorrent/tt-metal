@@ -34,6 +34,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
+#include "api/compute/experimental/custom_mm.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "flat_options.hpp"
@@ -81,15 +82,6 @@ uint32_t first_unit_offset = 0;
 // pair, with half-width units the tile of its first unit.
 FORCE_INLINE uint32_t h_tile_dest(uint32_t h_tile) { return h_tile == 0 ? 0 : 2 * h_tile - first_unit_offset; }
 
-uint32_t matmul_rows = row_tiles;  // the row tiles the matmul is set up for
-
-FORCE_INLINE void matmul_rows_init(uint32_t rows) {
-    if (rows != matmul_rows) {
-        matmul_block_init(x_cb, weight_cb, false, row_width, rows, x_block_k_tiles);
-        matmul_rows = rows;
-    }
-}
-
 uint32_t weight_blocks_freed = 0;
 uint32_t weight_blocks_landed = 0;  // stream blocks known to have landed (waited for once, not every pass)
 
@@ -112,20 +104,19 @@ FORCE_INLINE void free_weight_block() {
 }
 
 // One x block times one weight block: x row tiles [rows][x_block_k_tiles] from tile x_index on, times the weight block
-// at w_index (row-major, row_width tiles a K row). All K steps go in one matmul_block_k call, which saves the per-step
-// call overhead (bit-identical to a matmul_block a step). A full sub-block or pass uses the compile-time row count FULL
-// so the LLK can unroll its loops; a short last one uses the runtime count in an out-of-line copy, which keeps the
-// common path's code small for the TRISCs' instruction fetch.
+// at w_index (row-major, row_width tiles a K row), output tile (r, c) at DST r * row_width + c. All K steps go in one
+// custom_mm_block call with full [32, 32] in0 tiles: bit-identical to matmul_block_k (the same DEST layout), fewer
+// cycles a tile product. A full sub-block or pass uses the compile-time row count FULL so the LLK can unroll its loops;
+// a short last one uses the runtime count in an out-of-line copy, which keeps the common path's code small for the
+// TRISCs' instruction fetch.
 __attribute__((noinline)) void matmul_x_block_short(uint32_t x_index, uint32_t w_index, uint32_t rows) {
-    matmul_block_k(
-        x_cb, weight_cb, x_index, w_index, 0, false, row_width, rows, x_block_k_tiles, x_block_k_tiles, row_width);
+    custom_mm_block(x_cb, weight_cb, x_index, w_index, 0, x_block_k_tiles, row_width, rows);
 }
 
 template <uint32_t FULL>
 FORCE_INLINE void matmul_x_block(uint32_t x_index, uint32_t w_index, uint32_t rows) {
     if (rows == FULL) [[likely]] {
-        matmul_block_k(
-            x_cb, weight_cb, x_index, w_index, 0, false, row_width, FULL, x_block_k_tiles, x_block_k_tiles, row_width);
+        custom_mm_block(x_cb, weight_cb, x_index, w_index, 0, x_block_k_tiles, row_width, FULL);
     } else {
         matmul_x_block_short(x_index, w_index, rows);
     }
@@ -165,7 +156,6 @@ FORCE_INLINE void activate(uint32_t tiles) {
 // are never written out) over all K blocks, then the activation and the pack. The load's weight blocks start at
 // stream block `first_block`, ring slot `first_slot`; `frees_weights`: the load's last use, its blocks go as used.
 FORCE_INLINE void compute_sub_block(uint32_t first_block, uint32_t first_slot, bool frees_weights, uint32_t rows) {
-    matmul_rows_init(rows);
     tile_regs_acquire();
     for (uint32_t block = 0; block < blocks_per_load; ++block) {
         cb_wait_front(x_cb, row_tiles * x_block_k_tiles);
@@ -205,7 +195,6 @@ FORCE_INLINE void compute_sub_block_in_row_passes(
         const uint32_t first_row = pass * pass_row_tiles;
         const uint32_t pass_rows = rows - first_row < pass_row_tiles ? rows - first_row : pass_row_tiles;
         const bool last_pass = pass + 1 == passes;
-        matmul_rows_init(pass_rows);
         tile_regs_acquire();
         // The load's weight blocks sit at ring slots first_slot .. in order, and a load is freed whole (in the last
         // pass of its last sub-block, block by block as used): block b's offset from the read pointer is w_base +
@@ -252,7 +241,7 @@ void kernel_main() {
         first_unit_offset = get_arg_val<uint32_t>(0);
     }
     compute_kernel_hw_startup<SrcOrder::Reverse>(x_cb, weight_cb, out_cb);
-    matmul_block_init(x_cb, weight_cb, false, row_width, row_tiles, x_block_k_tiles);
+    custom_mm_block_init(x_cb, weight_cb, out_cb, row_width);
     if constexpr (half_width) {  // (every face-wise activation uses SiTU's sigmoid: its init)
         PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
     } else {
