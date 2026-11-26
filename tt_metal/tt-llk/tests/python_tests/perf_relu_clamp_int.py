@@ -1,11 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""relu_clamp_int / relu_clamp_uint perf, sharing sources/relu_clamp_int_test.cpp with test_relu_clamp_int.py.
-
-A subset of the functional thresholds: one per kernel path (int32 relu_min with a positive and a
-negative threshold, int32 relu_max, uint32 with the threshold top bit clear and set), default build.
-"""
+"""relu_clamp_int / relu_clamp_uint perf, sharing sources/relu_clamp_int_test.cpp with test_relu_clamp_int.py."""
 
 import pytest
 from conftest import skip_for_blackhole, skip_for_quasar
