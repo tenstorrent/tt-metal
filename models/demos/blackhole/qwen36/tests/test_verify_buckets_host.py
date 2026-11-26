@@ -291,10 +291,12 @@ def test_a_sampled_chained_verify_takes_the_bucket_of_its_rows_with_its_sampler_
 def test_the_engine_prepares_the_buckets_below_its_width(bucket_engine):
     eng, _ = bucket_engine
     seen = {}
-    eng.model.prepare_verify_trace = lambda pt, T, warm_positions, sample, buckets: seen.update(buckets=buckets, T=T)
+    eng.model.prepare_verify_trace = lambda pt, T, warm_positions, sample, buckets, mask: seen.update(
+        buckets=buckets, T=T, mask=mask
+    )
     eng._prep_pt = torch.zeros(eng.B, eng.nb, dtype=torch.int32)
     eng._prepare_verify()
-    assert seen == {"buckets": (1, 2, 4), "T": eng.T}
+    assert seen == {"buckets": (1, 2, 4), "T": eng.T, "mask": eng.sample_on_device}
 
 
 # ----------------------------------------------------------------------------------------- the model's replay
