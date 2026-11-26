@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
 
 namespace tt::tt_metal::internal {
 

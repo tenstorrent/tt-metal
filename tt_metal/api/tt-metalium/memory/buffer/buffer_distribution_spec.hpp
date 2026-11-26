@@ -6,11 +6,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/buffer_page_mapping.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
+#include <tt-metalium/memory/buffer/buffer_page_mapping.hpp>
 #include <tuple>
 #include <utility>
 #include <vector>

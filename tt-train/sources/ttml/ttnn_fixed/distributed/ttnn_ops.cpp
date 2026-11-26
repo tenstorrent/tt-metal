@@ -4,7 +4,7 @@
 
 #include "ttnn_ops.hpp"
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-umd-workload/cluster.hpp>
@@ -23,6 +23,7 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
 
@@ -212,6 +213,9 @@ ttnn::Tensor ring_shift(
 
     const uint32_t cluster_axis_value = cluster_axis.has_value() ? cluster_axis.value() : 0;
     const uint32_t ring_size = mesh_shape[cluster_axis_value];
+    if (ring_size == 1U) {
+        return tensor;
+    }
     TT_FATAL(ring_size % 2 == 0, "ring_shift requires an even number of devices in the ring, got {}", ring_size);
     // ring_shift requires tensors of the same page size (see #64664).
     TT_FATAL(
@@ -219,16 +223,22 @@ ttnn::Tensor ring_shift(
             (tensor.dtype() == ttnn::DataType::BFLOAT16 || tensor.dtype() == ttnn::DataType::FLOAT32),
         "ring_shift requires TILE bf16/fp32 tensors");
 
-    if (ring_size <= 1U) {
-        return tensor;
-    }
+    // Every device sends once per shift. A device without the tensor would not, and the neighbour receiving from it
+    // would wait forever.
+    TT_FATAL(tensor.device() == mesh_device_ptr.get(), "ring_shift requires a tensor on the context's mesh device");
+    TT_FATAL(
+        tensor.device_storage().is_uniform_storage(),
+        "ring_shift requires a tensor on every device of the {} mesh, got one on {} devices",
+        mesh_shape,
+        tensor.device_storage().get_coords().size());
 
-    auto output_tensor = ttnn::empty_like(tensor);
+    // The direct sends below lay the data out as in `tensor`, so the output is allocated from its exact spec.
+    auto output_tensor = ttnn::create_device_tensor(tensor.tensor_spec(), tensor.device(), tensor.tensor_topology());
 
     const uint32_t num_devices = mesh_shape.mesh_size();
 
-    // Build connections for even->odd and odd->even transfers separately
-    // This two-phase approach avoids deadlock since send is blocking
+    // Build connections for even->odd and odd->even transfers separately, so that in each phase a device either
+    // sends or receives.
     const auto send_recv_core = tt::tt_metal::CoreCoord(0, 0);
     std::vector<tt::tt_metal::distributed::SocketConnection> even_to_odd_connections;
     std::vector<tt::tt_metal::distributed::SocketConnection> odd_to_even_connections;
@@ -251,15 +261,19 @@ ttnn::Tensor ring_shift(
 
     // For intra-mesh, we use same distributed context and rank (same host)
     const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
+    using core::distributed::IntraMeshTransport;
 
+    // Direct sockets: a send writes straight into its peer's output tensor.
     // No host sync needed: the two-phase exchange below is deadlock-free.
     // Phase 1: Even positions send, odd positions receive
-    const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
+    const core::distributed::IntraMeshParameters even_to_odd_params{
+        even_to_odd_connections, IntraMeshTransport::Direct};
     socket_manager.send(tensor, inter_host_params, even_to_odd_params);
     output_tensor = socket_manager.recv(output_tensor, inter_host_params, even_to_odd_params);
 
     // Phase 2: Odd positions send, even positions receive
-    const core::distributed::IntraMeshParameters odd_to_even_params{odd_to_even_connections};
+    const core::distributed::IntraMeshParameters odd_to_even_params{
+        odd_to_even_connections, IntraMeshTransport::Direct};
     socket_manager.send(tensor, inter_host_params, odd_to_even_params);
     output_tensor = socket_manager.recv(output_tensor, inter_host_params, odd_to_even_params);
 

@@ -5,7 +5,7 @@
 #include "unified_routed_expert_ffn.hpp"
 
 #include "device/unified_routed_expert_ffn_device_operation.hpp"
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {

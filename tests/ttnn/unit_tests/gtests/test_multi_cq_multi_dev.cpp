@@ -7,7 +7,7 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <cstring>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <map>
 #include <memory>
 #include <optional>
@@ -15,11 +15,11 @@
 #include <vector>
 
 #include "common_test_utils.hpp"
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"

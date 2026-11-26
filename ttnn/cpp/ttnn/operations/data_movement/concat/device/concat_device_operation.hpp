@@ -18,7 +18,7 @@
 #include "concat_device_operation_types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -74,5 +74,9 @@ Tensor concat_impl(
     unsigned int groups,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
+
+// Max buffer alignment across inputs and the resolved output buffer type (RM width-concat NOC rule).
+uint32_t rm_width_concat_common_alignment(
+    const std::vector<Tensor>& tensors, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 }  // namespace ttnn::operations::data_movement

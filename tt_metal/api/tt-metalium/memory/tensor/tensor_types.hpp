@@ -8,11 +8,11 @@
 #include <ostream>
 #include <utility>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include <fmt/base.h>
 
 namespace tt::tt_metal {

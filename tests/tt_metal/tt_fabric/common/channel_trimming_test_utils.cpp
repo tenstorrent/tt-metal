@@ -10,7 +10,7 @@
 #include <map>
 #include <string>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/dispatch/slow_dispatch.hpp"

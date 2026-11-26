@@ -8,8 +8,8 @@
 #include <tuple>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::experimental::moe_block {

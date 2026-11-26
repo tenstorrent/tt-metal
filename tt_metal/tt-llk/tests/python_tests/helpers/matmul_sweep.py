@@ -71,6 +71,102 @@ class MatmulConfig:
     dest_acc: DestAccumulation
 
 
+# Axis names a MatmulConfig is split into for ``parametrize``; ``input_tile_dimensions`` is
+# ((in0 rows, in0 cols), (in1 rows, in1 cols)) of one tile.
+MATMUL_CONFIG_AXES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "stochastic_rnd",
+    "dst_index",
+    "input_tile_dimensions",
+    "ct_dim",
+    "rt_dim",
+    "kt_dim",
+    "unpack_transpose_faces",
+)
+
+
+def matmul_config_columns(config: MatmulConfig) -> tuple:
+    """The ``MATMUL_CONFIG_AXES`` values of ``config``."""
+    tile = config.tile_dimensions
+    return (
+        config.formats,
+        config.dest_acc,
+        config.dest_sync,
+        config.stochastic_rnd,
+        config.dst_index,
+        (
+            (tile.in0_tile_r_dim, tile.in0_tile_c_dim),
+            (tile.in1_tile_r_dim, tile.in1_tile_c_dim),
+        ),
+        tile.ct_dim,
+        tile.rt_dim,
+        tile.kt_dim,
+        config.face_layout_config.unpack_transpose_faces,
+    )
+
+
+def matmul_config_from_axes(
+    formats,
+    dest_acc,
+    dest_sync,
+    stochastic_rnd,
+    dst_index,
+    input_tile_dimensions,
+    ct_dim,
+    rt_dim,
+    kt_dim,
+    unpack_transpose_faces,
+) -> MatmulConfig:
+    """Rebuild the MatmulConfig that ``matmul_config_columns`` split."""
+    (in0_tile_r_dim, _), (_, in1_tile_c_dim) = input_tile_dimensions
+    # Tiny tiles take the full-tile in0 and a tuple in1 shape, as sweep_tiny_tiles_matmul builds them.
+    is_tiny = in0_tile_r_dim != TILE_DIM
+    in1_dimensions = (kt_dim * TILE_DIM, ct_dim * TILE_DIM)
+    tile_dimensions = generate_tile_dims(
+        (
+            [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
+            in1_dimensions if is_tiny else list(in1_dimensions),
+        ),
+        in0_tile_r_dim=in0_tile_r_dim,
+        in1_tile_c_dim=in1_tile_c_dim,
+    )
+    if not is_tiny:
+        face_layout_config = FaceLayoutConfig(
+            unpack_transpose_faces=unpack_transpose_faces,
+            unpack_transpose_within_face=unpack_transpose_faces,
+            num_faces_in0=4,
+            num_faces_in1=4,
+            num_faces=calculate_matmul_output_faces(4, 4),
+            partial_face_in0=False,
+            partial_face_in1=False,
+            partial_face_math=False,
+            partial_face_pack=False,
+        )
+    else:
+        face_layout_config = FaceLayoutConfig(
+            unpack_transpose_faces=unpack_transpose_faces,
+            unpack_transpose_within_face=unpack_transpose_faces,
+            num_faces_in0=2,
+            num_faces_in1=4,
+            num_faces=calculate_matmul_output_faces(2, 4),
+            partial_face_in0=True,
+            partial_face_in1=False,
+            partial_face_math=in0_tile_r_dim < 16,
+            partial_face_pack=True,
+        )
+    return MatmulConfig(
+        tile_dimensions=tile_dimensions,
+        face_layout_config=face_layout_config,
+        formats=formats,
+        stochastic_rnd=stochastic_rnd,
+        dst_index=dst_index,
+        dest_sync=dest_sync,
+        dest_acc=dest_acc,
+    )
+
+
 # Keep in sync with tests/helpers/include/perf.h (PERF_ADDRESS wrap).
 PERF_RING_TILES = 16
 
