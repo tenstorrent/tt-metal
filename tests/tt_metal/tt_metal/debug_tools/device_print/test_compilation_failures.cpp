@@ -80,6 +80,9 @@ TEST_F(DevicePrintFailuresFixture, SpecNotSuitingArgument) {
     TestCompileKernelFailure(
         "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_not_suiting_argument.cpp",
         "invalid format specifier");
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/spec_suiting_no_type.cpp",
+        "invalid format specifier");
 }
 
 TEST_F(DevicePrintFailuresFixture, SpecNotSuitingChar) {

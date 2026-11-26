@@ -890,6 +890,8 @@ TEST_F(DevicePrintOutputFixture, PrintStringTypes) {
         "Sample string: 0x*",
         // Compile-time CTSTR resolves to the actual string content from the ELF
         "Compile time string: Hello world!",
+        "Sample string with a spec: 0x*",
+        "[    ab]",
     };
 
     TestOutputOnEveryRisc("tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", messages);
@@ -1002,6 +1004,7 @@ TEST_F(DevicePrintOutputFixture, PrintTypedArrayWithSpecNotSuitingData) {
         "[0.0 0.0 0.0 0.0 ]",
         "Warning: invalid format specifier {:x} for Float16_b data, printed with {}",
         "[0 0 0 0 ]",
+        "[ab 1234 ]",
     };
 
     TestOutputOnEveryRisc(

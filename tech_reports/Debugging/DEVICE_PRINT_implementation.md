@@ -586,8 +586,9 @@ In the manual's order:
 
 - **Lone `}`, fill outside ASCII.** `parse_format_token` in `device_print.h` treats a lone `}` as text and reads the
   fill as one byte.
-- **Format that is a reference parameter.** `DEVICE_PRINT` checks with `decltype` that the format's type is
-  `const char (&)[N]`, which such a parameter has too, and the macro's lambda, which captures nothing, can't use it.
+- **Format that names an array through a reference or a run-time index.** `DEVICE_PRINT` checks with `decltype` that
+  the format's type is `const char (&)[N]`, which such an expression has too, and the macro's lambda, which captures
+  nothing, can't use it.
 - **Prints of more than 1020 bytes.** The header's 10-bit payload field overflows (`-Werror=overflow`), which fails
   the build with an unrelated message and also limits Quasar's bigger buffers.
 - **`CTSTR` in inline functions and templates.** Its `static` array lands in a COMDAT group, which GCC won't mix

@@ -10,4 +10,7 @@ void kernel_main() {
     uint32_t words[2] = {};
     DPRINT("[{:.1f}]\n", dp_typed_array_t<2>(static_cast<uint16_t>(DataFormat::Float16_b), words));
     DPRINT("[{:x}]\n", dp_typed_array_t<2>(static_cast<uint16_t>(DataFormat::Float16_b), words));
+    // {:x} suits UInt32 values, so they print with it, without a warning.
+    uint32_t uint32_words[2] = {0xab, 0x1234};
+    DPRINT("[{:x}]\n", dp_typed_array_t<2>(static_cast<uint16_t>(DataFormat::UInt32), uint32_words));
 }

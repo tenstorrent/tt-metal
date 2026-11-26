@@ -1513,6 +1513,12 @@ constexpr bool spec_suits_kind(const parsing::FormatToken& token, spec_kind kind
     const char type = token.format_type.value_or('\0');
     // A char printed as a character takes no '#', and a '0' only after an alignment, which then ignores it.
     const bool as_character = character && (type == '\0' || type == 'c' || type == '?');
+    // The 0 flag with a width of 0 ({:00}) is sent as "00", which fmt rejects, and fmt takes no width or precision
+    // above INT_MAX.
+    constexpr uint32_t int_max = 0x7fffffff;
+    if ((token.use_zero_padding && token.width == 0u) || token.width > int_max || token.precision > int_max) {
+        return false;
+    }
     if (token.sign.has_value() && !(signed_int || floating)) {
         return false;
     }
@@ -1585,18 +1591,19 @@ constexpr uint32_t unsuitable_spec(const char (&format)[N]) {
 }
 
 // Instantiated only for the first placeholder whose spec doesn't suit its argument, so that the compiler names the
-// placeholder and the argument (counted from 0) and the argument's type.
+// placeholder and the argument (counted from 0) and the argument's type. A function, so that clang reports one error,
+// as GCC does, and not a second one at the macro's check.
 template <uint32_t Placeholder, uint32_t Argument, typename Type>
 inline constexpr bool spec_suits_argument = false;
 
 template <uint32_t Placeholder, uint32_t Argument, typename Type>
-struct invalid_format_specifier {
+constexpr bool invalid_format_specifier() {
     static_assert(
         spec_suits_argument<Placeholder, Argument, Type>,
         "DEVICE_PRINT: invalid format specifier: a spec doesn't suit the type of its argument (Placeholder and "
         "Argument, counted from 0, and Type in invalid_format_specifier<Placeholder, Argument, Type>)");
-    static constexpr bool value = true;
-};
+    return true;
+}
 
 template <uint32_t Unsuitable, typename... Args>
 constexpr bool specs_suit_arguments() {
@@ -1607,7 +1614,7 @@ constexpr bool specs_suit_arguments() {
         return invalid_format_specifier<
             (Unsuitable >> 16),
             argument,
-            std::tuple_element_t<argument, std::tuple<Args...>>>::value;
+            std::tuple_element_t<argument, std::tuple<Args...>>>();
     }
 }
 
