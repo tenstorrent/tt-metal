@@ -199,6 +199,19 @@ class EN_DEST_REUSE(TemplateParameter):
 
 
 @dataclass
+class RESHUFFLE_MASK(TemplateParameter):
+    """The reshuffle_rows row mask, recorded as a perf CSV column.
+
+    The mask is L1 stimulus, so it changes the kernel's cost without changing the build; it emits no code.
+    """
+
+    reshuffle_mask: str = ""
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+
+@dataclass
 class SFPU_INT_OP(TemplateParameter):
     """Emit a #define to select the integer SFPU operation in a shared C++ test source.
 
