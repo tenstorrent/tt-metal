@@ -853,7 +853,7 @@ FlatRoutedExpertProgramFactory::cached_mesh_workload_t FlatRoutedExpertProgramFa
                 .offset = patch.offset});
         }
         addresses.arena_cbs = arena_backed_cbs(desc, t.arena.buffer());
-        tt::tt_metal::Program program(desc);
+        tt::tt_metal::Program program(mesh_device, desc);
         write_program_addresses(program, addresses, flat_source_addresses(t), t.arena.buffer());
         workload.add_program(range, std::move(program));
         shared.emplace(range, std::move(addresses));

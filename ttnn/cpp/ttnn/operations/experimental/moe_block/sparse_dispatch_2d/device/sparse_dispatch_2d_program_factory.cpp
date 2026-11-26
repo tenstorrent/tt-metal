@@ -367,7 +367,7 @@ SparseDispatch2dProgramFactory::cached_mesh_workload_t SparseDispatch2dProgramFa
                 .table_kernels = table_kernels(table, kernels, 0, std::nullopt, 0),
                 .args = {},
                 .arena_cbs = arena_backed_cbs(desc, sources[kArenaSource])}};
-        add_chip_program(workload, one, i, tt::tt_metal::Program(desc));
+        add_chip_program(workload, one, i, tt::tt_metal::Program(mesh, desc));
         shared.emplace(range, std::move(sv));
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared)};

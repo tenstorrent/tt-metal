@@ -1107,7 +1107,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                         if (fabric_link_worker.has_fabric_connection) {
                             // [Ethernet channel, teardown semaphore, buffer index semaphore]: the channel is this
                             // chip's; the semaphores are the program's own, created above on every link worker core
-                            tt::tt_metal::Program scratch_program{};
+                            tt::tt_metal::Program scratch_program = tt::tt_metal::CreateProgram(*mesh_device);
                             std::vector<uint32_t> connection_args;
                             tt::tt_fabric::append_fabric_connection_rt_args(
                                 *mesh_device,

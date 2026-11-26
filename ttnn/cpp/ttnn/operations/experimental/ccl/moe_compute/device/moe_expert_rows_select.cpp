@@ -12,7 +12,7 @@
 #include <unordered_map>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 
 #include "moe_compute_device_operation.hpp"
@@ -273,9 +273,11 @@ uint32_t cb_budget_of(ttnn::MeshDevice& mesh_device) {
 uint64_t l1_outputs_per_core(ttnn::MeshDevice& mesh_device, const std::vector<tt::tt_metal::TensorSpec>& specs) {
     uint64_t bytes = 0;
     const uint32_t l1_banks = mesh_device.allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(mesh_device).node_local_mem_alignment();
     for (uint32_t i = 0; i < specs.size(); ++i) {
         if (i != kMatmulOutput && specs[i].memory_config().buffer_type() == tt::tt_metal::BufferType::L1) {
-            bytes += specs[i].compute_consumed_memory_bytes_per_bank(tt::tt_metal::hal::get_l1_alignment(), l1_banks);
+            bytes += specs[i].compute_consumed_memory_bytes_per_bank(l1_alignment, l1_banks);
         }
     }
     return bytes;
@@ -430,11 +432,15 @@ std::optional<MoEExpertRowsParams> choose_path(
     }
     const uint64_t outputs_per_core = l1_outputs_per_core(*mesh_device, specs);
     // place.cpp and rows_combine.cpp run on the same combine cores
-    const PlaceLayout place = place_layout(shape.tokens, shape.top_k, shape.local_experts);
+    const auto device_properties = tt::tt_metal::experimental::get_device_properties(*mesh_device);
+    const uint32_t dram_alignment = device_properties.dram_alignment();
+    const PlaceLayout place = place_layout(
+        shape.tokens, shape.top_k, shape.local_experts, device_properties.node_local_mem_alignment(), dram_alignment);
     uint64_t placement_cb_bytes = place.scratch_bytes;
     if (args.path != MoEComputePath::ComputeOnly) {
         const uint32_t senders = args.num_token_parallel_cores * args.num_data_parallel_cores;
-        placement_cb_bytes += combine_layout(shape.tokens, shape.top_k, shape.hidden_size, senders).bytes;
+        placement_cb_bytes +=
+            combine_layout(shape.tokens, shape.top_k, shape.hidden_size, senders, dram_alignment).bytes;
         if (args.path == MoEComputePath::FullCcl) {
             placement_cb_bytes += kCombinePacketHeaders * tt::tt_fabric::CLIENT_INTERFACE_SIZE;
         }

@@ -21,7 +21,7 @@
 #include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
@@ -343,11 +343,13 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     TT_FATAL(mesh_dispatch_coordinate.has_value(), "matmul_reduce_scatter_prefill: one program per mesh coordinate");
+    const uint32_t num_dataflow_buffers =
+        tt::tt_metal::experimental::get_device_properties(*tensor_args.input_tensor.device()).num_dataflow_buffers();
     TT_FATAL(
-        args::cb::ZERO < hal::get_num_dataflow_buffers(),
+        args::cb::ZERO < num_dataflow_buffers,
         "matmul_reduce_scatter_prefill: circular-buffer id {} exceeds the {} circular buffers of this architecture",
         args::cb::ZERO,
-        hal::get_num_dataflow_buffers());
+        num_dataflow_buffers);
     TT_FATAL(detail::kPortGroup + 1 <= 8, "port sender headers: PORT_GROUP data headers + 1 credit header (pool of 8)");
 
     const MeshCoordinate& coord = *mesh_dispatch_coordinate;

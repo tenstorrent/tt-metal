@@ -243,7 +243,7 @@ MoEHeadFactory::cached_mesh_workload_t MoEHeadFactory::create_mesh_workload(
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
     for (size_t i = 0; i < built.workload.programs.size(); ++i) {
         auto& [range, descriptor] = built.workload.programs[i];
-        workload.add_program(range, tt::tt_metal::Program(descriptor));
+        workload.add_program(range, tt::tt_metal::Program(*args.y.device(), descriptor));
         if (!built.per_device_runtime_args.at(i).empty()) {
             ttnn::apply_per_device_runtime_args(workload, range, built.per_device_runtime_args[i]);
         }

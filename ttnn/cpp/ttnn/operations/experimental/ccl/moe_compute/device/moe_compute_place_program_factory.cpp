@@ -4,7 +4,7 @@
 
 // The expert rows path's placement program, on the combine cores: place.cpp writes moe_compute's outputs from the rows
 // and the routing table; with a combine, rows_combine.cpp sends every routed row to the combine output.
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "moe_compute_device_operation.hpp"
@@ -49,7 +49,10 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
     const uint32_t top_k = tensor_args.tilize_expert_indices_tensor.logical_shape()[-1];
     const uint32_t local_experts = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
     const uint32_t height_shards = args.num_token_parallel_cores, width_shards = args.num_data_parallel_cores;
-    const PlaceLayout place = place_layout(tokens, top_k, local_experts);
+    const auto device_properties = tt::tt_metal::experimental::get_device_properties(*mesh_device);
+    const uint32_t dram_alignment = device_properties.dram_alignment();
+    const PlaceLayout place =
+        place_layout(tokens, top_k, local_experts, device_properties.node_local_mem_alignment(), dram_alignment);
     TT_FATAL(
         table.buffer()->size() >= place.table.bytes,
         "moe_compute expert rows placement program: routing table is {} B, expected {}",
@@ -108,7 +111,7 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         {"grid_h", grid.y},
         {"program_cores", static_cast<uint32_t>(cores.size())},
         {"row_bytes", row_bytes},
-        {"dram_alignment", tt::tt_metal::hal::get_dram_alignment()},
+        {"dram_alignment", dram_alignment},
         {"scratch_e_t", place.scratch_e_t},
         {"scratch_activation", place.scratch_activation},
         {"scratch_count_row", place.scratch_count_row},
@@ -156,7 +159,7 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         output.buffer()->page_size(),
         row_bytes);
     const uint32_t senders = cores.size();
-    const CombineLayout layout = combine_layout(tokens, top_k, hidden_size, senders);
+    const CombineLayout layout = combine_layout(tokens, top_k, hidden_size, senders, dram_alignment);
     create_cb(desc, core_set, kCombineScratchCb, layout.bytes, tt::DataFormat::UInt32, layout.bytes);
     tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs combine_ct = {
         {"cb_scratch", kCombineScratchCb},
@@ -166,7 +169,7 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         {"row_stride", layout.row_stride},
         {"batch_rows", layout.batch_rows},
         {"sender_rows_max", layout.sender_rows_max},
-        {"dram_alignment", tt::tt_metal::hal::get_dram_alignment()},
+        {"dram_alignment", dram_alignment},
         {"top_k", top_k},
         {"local_experts", local_experts},
         {"scratch_head", layout.scratch_head},

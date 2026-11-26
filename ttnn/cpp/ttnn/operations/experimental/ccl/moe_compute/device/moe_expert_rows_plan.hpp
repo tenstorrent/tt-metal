@@ -178,7 +178,8 @@ struct PlaceLayout {
     uint32_t count_words = 0, e_t_entry_words = 0, e_t_page_bytes = 0, activation_row_bytes = 0;
 };
 
-PlaceLayout place_layout(uint32_t tokens, uint32_t top_k, uint32_t local_experts);
+PlaceLayout place_layout(
+    uint32_t tokens, uint32_t top_k, uint32_t local_experts, uint32_t l1_alignment, uint32_t dram_alignment);
 
 // Rows of one double-buffer half on one core (output kTilizeOutput), in selective_reduce_combine's fused-source layout.
 uint32_t double_buffer_half_rows(const tt::tt_metal::TensorSpec& dense, uint32_t hidden_size, uint32_t width_shards);
@@ -190,7 +191,8 @@ struct CombineLayout {
     uint32_t scratch_head = 0, scratch_tokens = 0, scratch_k = 0, scratch_order = 0, scratch_stage = 0, bytes = 0;
 };
 
-CombineLayout combine_layout(uint32_t tokens, uint32_t top_k, uint32_t hidden_size, uint32_t senders);
+CombineLayout combine_layout(
+    uint32_t tokens, uint32_t top_k, uint32_t hidden_size, uint32_t senders, uint32_t dram_alignment);
 
 // The first rule of the expert rows path that `shape` breaks, with its values, or nullopt.
 std::optional<std::string> shape_refusal(const MoEExpertRowsShape& shape);

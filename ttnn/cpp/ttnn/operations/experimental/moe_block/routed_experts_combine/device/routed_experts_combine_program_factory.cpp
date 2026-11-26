@@ -415,7 +415,7 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
         // (the descriptor holds every address whole: the flat expert's were added before the args moved)
         shared_variables_t sv{
             .addresses = program_addresses(converted, builds[i], i, p, desc, bufs[CombineBuf::Arena])};
-        add_chip_program(workload, one, i, tt::tt_metal::Program(desc));
+        add_chip_program(workload, one, i, tt::tt_metal::Program(mesh_device, desc));
         shared.emplace(r, std::move(sv));
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared)};

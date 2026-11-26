@@ -12,6 +12,7 @@
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include "ttnn/global_semaphore.hpp"
@@ -75,8 +76,9 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
     const auto mapping_page_size_bytes = mapping_spec.compute_page_size_bytes();
     const auto metadata_page_size_bytes = metadata_spec.compute_page_size_bytes();
 
-    const auto l1_alignment = hal::get_l1_alignment();
-    const auto dram_alignment = hal::get_dram_alignment();
+    const auto device_properties = tt::tt_metal::experimental::get_device_properties(*mesh_device);
+    const auto l1_alignment = device_properties.node_local_mem_alignment();
+    const auto dram_alignment = device_properties.dram_alignment();
 
     const auto aligned_input_page_size_bytes = tt::align(input_page_size_bytes, input_is_dram? dram_alignment:l1_alignment);
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
