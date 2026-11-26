@@ -73,6 +73,12 @@ void bind_flash_mqa_decode(::nanobind::module_& mod) {
             row_groups (int): block mode: the rows run on ``row_groups`` groups of ``num_s_blocks`` x head-group
                 cores, group ``rg`` attending rows ``rg, rg + row_groups, ...`` (a chunk shared by rows is read once
                 per group); 0 picks the most that divides ``num_rows`` and fits the grid's height.
+            independent_rows (bool): block mode of ``num_rows`` 2 or 4 independent sessions (a B=4 batch step):
+                ``lengths`` is ``[1, 1, 1, 4 * num_rows]`` = ``[n_0 .. n_{R-1}, p_0 .. p_{R-1}, ring_first_row_0 ..,
+                selected_first_row_0 ..]``; row ``j`` attends its ring's positions ``max(0, p_j - (ring_rows - 1)) ..
+                p_j - 1`` from ``ring_first_row_j``, new kv row ``j`` only, and ``n_j`` selected rows from
+                ``selected_first_row_j`` (plus ``j * selected_capacity`` unless ``dense_selected``). One row per
+                row group.
 
         Returns:
             ttnn.Tensor: ``[1, 1, heads, head_dim]`` bfloat16 row-major (block mode: see ``num_rows``).
@@ -97,7 +103,8 @@ void bind_flash_mqa_decode(::nanobind::module_& mod) {
         nb::arg("new_kv") = std::nullopt,
         nb::arg("num_rows") = 1,
         nb::arg("dense_selected") = false,
-        nb::arg("row_groups") = 0);
+        nb::arg("row_groups") = 0,
+        nb::arg("independent_rows") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

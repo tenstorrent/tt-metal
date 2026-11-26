@@ -408,9 +408,18 @@ class DeepSeekV41Model(DeepSeekV4Model):
         moe_server: Optional[pmoe.PersistentMoE] = None,
         moe_requester: int = 0,
         drafter_on_stage: bool = False,
+        batch_block: bool = False,
     ):
         self.config = config
         self.drafter_on_stage = drafter_on_stage
+        # The verify_rows-row block steps are B=2 or B=4 batch steps: row j one token of its own session
+        # (decode_batch_block).
+        self.batch_block = batch_block
+        if batch_block and (not (persistent_moe or moe_server is not None) or verify_rows not in (2, 4)):
+            raise ValueError(
+                "batch_block steps 2 or 4 sessions as one block on the persistent stage: persistent_moe, "
+                f"verify_rows 2 or 4 (got {verify_rows})"
+            )
         if drafter_on_stage and not (persistent_moe or moe_server is not None):
             raise ValueError("drafter_on_stage sends the drafter's FFNs to the persistent MoE: needs persistent_moe")
         if moe_server is not None:
@@ -434,8 +443,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     f"persistent_moe serves one requester stage (its requests go in strict turn), got {num_stages}"
                 )
             unsupported = {
-                # A verify block runs every layer as (verify_rows, 32)-tiled block ops (decode_verify).
-                "verify_rows other than 1 or 4": verify_rows not in (1, 4),
+                # A verify block runs every layer as (verify_rows, 32)-tiled block ops (decode_verify); a B=2 batch
+                # step (batch_block) is a 2-row one.
+                "verify_rows other than 1 or 4 (or 2 with batch_block)": verify_rows
+                not in ((1, 2, 4) if batch_block else (1, 4)),
                 # The one stage holds the embedding table, so an image tower goes there too (vision_stage 0).
                 "vision_stage other than 0": vision_stage not in (None, 0),
                 "prefill_layer_submesh_ids": prefill_layer_submesh_ids is not None,
@@ -956,7 +967,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
         # A verify block's packet (_verify_packet) shares the socket, so the page holds the larger of the two.
         t = self.verify_rows
         self._verify_fields = {}
-        if self._block_verify:
+        if self.batch_block:
+            # _batch_packet: per row its token, position, session slot and what decode_step_context's terms cannot
+            # derive from those (see _batch_packet).
+            sizes = {"token": t, "pos": t, "slot": t, "win_start2": t}
+            for r in sorted(ratios):
+                sizes.update({f"entry{r}": t, f"dense{r}": t, f"index_pos{r}": t})
+            offset = 0
+            for name, size in sizes.items():
+                self._verify_fields[name] = (offset, size)
+                offset += size
+        elif self._block_verify:
             # _block_verify_packet: the block's tokens, positions, the starts of the ratio-2 groups it closes and
             # the drafter ring rows; every other per-row integer is a decode_step_context term of these.
             offset = 0
@@ -2218,6 +2239,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for ratio in sm["kv_ratios"]:
             if ratio > 1:
                 ctx["win_slot"][ratio] = self._win_slot(pos_f, win_rows or ratio, base_f=win_base_f)
+                if win_base_f is not None:
+                    # The session's window slot of pos - 1, which compress_pool_decode pairs with.
+                    rows_r = win_rows or ratio
+                    ctx.setdefault("prev_slot", {})[ratio] = self._win_slot(
+                        ttnn.add(pos_f, float(rows_r - 1)), rows_r, base_f=win_base_f
+                    )
             if ratio > 1 and win_rows and r2_pool:
                 prev = ttnn.add(pos_f, float(win_rows - 1))
                 prev = ttnn.subtract(
@@ -2306,9 +2333,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     [1],
                     [term(2, mode="mod", div=win_rows or ratio, add_field=5 if win_base else -1)],
                 )
-                if win_rows and not win_base:
-                    # The speculative window's slot of pos - 1, which compress_pool_decode pairs with.
-                    sb.add_int(("prev_slot", ratio), [1], [term(2, pre_add=win_rows - 1, mode="mod", div=win_rows)])
+                if win_rows or win_base:
+                    # The window slot of pos - 1 (a speculative window's, or in the session's slot), which
+                    # compress_pool_decode pairs with.
+                    rows_r = win_rows or ratio
+                    sb.add_int(
+                        ("prev_slot", ratio),
+                        [1],
+                        [term(2, pre_add=rows_r - 1, mode="mod", div=rows_r, add_field=5 if win_base else -1)],
+                    )
             if ratio > 1 and win_rows and r2_pool and win_base:
                 win_prev_ratios.append(ratio)
             if ratio == 1 or (ratio == 2 and r2_pool):
@@ -3754,6 +3787,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """
         if self._traces_compiled or self._traced_captured:
             raise RuntimeError("call prepare_spec_decode() before the decode traces are compiled")
+        if self.batch_block:
+            raise NotImplementedError("a batch_block model's blocks are B=4 batch steps (prepare_batch_decode)")
         if self._slotted and self.verify_rows > 1:
             raise NotImplementedError("several sessions' rings decode one row at a time: use verify_rows=1")
         if self.device_sampler is not None and not self._block_verify:
@@ -4357,7 +4392,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         # requester 1 and its stages are layers DSPARK_LAYER_BASE + s. The sockets take L1 on row 3 before the drafter
         # (prepare_spec_decode) builds there.
         self._drafter_mesh = None
-        if DSPARK_SERVER_MOE and self.verify_rows == 4 and DSPARK_BLOCK:
+        # (A batch_block model's 4-row blocks are batch steps: it has no drafter.)
+        if DSPARK_SERVER_MOE and self.verify_rows == 4 and DSPARK_BLOCK and not self.batch_block:
             self._drafter_mesh = self.device.create_submesh(
                 ttnn.MeshShape(1, self.tp_size), ttnn.MeshCoordinate(pmoe.REQUESTER_ROW - 1, 0)
             )
@@ -4480,7 +4516,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         server = self.moe_server
         if server is None or server.rows == rows:
             return
-        if server.mixed and getattr(self, "_spec_captured", False) and _FREEZE_SERVER_ROWS:
+        captured = getattr(self, "_spec_captured", False) or getattr(self, "_batch_captured", False)
+        if server.mixed and captured and _FREEZE_SERVER_ROWS:
             # One launch serves both and every request is in a captured trace: the server's default request rows only
             # matter to compiles and captures, so serving steps leave them be (several instances share them).
             return
@@ -4770,7 +4807,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ttnn.deallocate(collapsed)
         return rows
 
-    def _block_verify_stage(self, sm: dict, variant: tuple, kv_only: bool = False, image: bool = False) -> ttnn.Tensor:
+    def _block_verify_stage(
+        self, sm: dict, variant: tuple, kv_only: bool = False, image: bool = False, batch: bool = False
+    ) -> ttnn.Tensor:
         """The traced verify step of a block for ``variant`` (``(odd, dense, two_level, split)``), on the persistent
         stage: the packet off the H2D socket, every layer's :meth:`~.decode.decoder_layer.DeepSeekV41PersistentMoeDecoderLayer.
         decode_block`, the final norm, ``lm_head`` and the ``T``-row sampler (greedy: each row's argmax), whose page
@@ -4780,7 +4819,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ``kv_only`` runs only layers ``0 .. max(kv_source_layer_ids)`` (``sm["kv_block_layers"]``): every compressed
         KV entry, index key and ring row of those layers, as the full block writes them, but not the rings of the
         layers after them, no taps and no head; its page is ``sm["kv_block_done"]``. ``image``: the image twin, every
-        row an image-span token, whose MoE requests name the server's image twin rows."""
+        row an image-span token, whose MoE requests name the server's image twin rows.
+
+        ``batch``: a B=4 batch step instead (:meth:`decode_batch_block`), ``variant`` a :meth:`_batch_variant_key`:
+        its context is :meth:`_batch_context`'s and every layer's attention runs its independent rows; no taps."""
         cfg, t = self.config, self.verify_rows
         hc, d = cfg.hc_mult, cfg.hidden_size
         layers = sm["kv_block_layers"] if kv_only else sm["layers"]
@@ -4790,7 +4832,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=CCL_TOPOLOGY)
         if self.use_prefetcher:
             self.layers[layers[0]].prefetch_weights(one_row=True, fused_qkv=True)
-        ctx = self._block_context(sm, pkt, variant)
+        ctx = self._batch_context(sm, pkt, variant) if batch else self._block_context(sm, pkt, variant)
+        attention_inputs = self._batch_attention_inputs if batch else self._block_attention_inputs
         with _region("EMBED"):
             embedded = ttnn.embedding(ctx["token"], self.embed_tokens.embedding_weight, layout=ttnn.ROW_MAJOR_LAYOUT)
             stacked = ttnn.repeat(ttnn.reshape(embedded, [1, 1, t, d]), ttnn.Shape([1, 1, hc, 1]))
@@ -4799,7 +4842,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             )
             ttnn.deallocate(stacked)
         pre_mix = sm["block_pre_mix_init"]
-        taps = {} if kv_only else sm.get("taps", {})
+        taps = {} if kv_only or batch else sm.get("taps", {})
         tapped = {}
         for li in layers:
             layer = self.layers[li]
@@ -4827,7 +4870,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     for part in tapped.values():
                         part.deallocate(True)
             streams, new_pre = layer.decode_block(
-                streams, pre_mix, sm["scaches"][li], image=image, **self._block_attention_inputs(layer.self_attn, ctx)
+                streams, pre_mix, sm["scaches"][li], image=image, **attention_inputs(layer.self_attn, ctx)
             )
             if getattr(self, "_block_debug_streams", None) is not None:
                 self._block_debug_streams.append(
@@ -4903,10 +4946,19 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ttnn.deallocate(logits)
         return host.reshape(-1, host.shape[-1])[:t]
 
-    def _run_block_verify(self, dispatch: Callable[[], None], ids: list[int], pos: int, engram_rows: dict) -> list[int]:
-        """``dispatch`` the block's step, feed it its packet and Engram rows from a second thread (a block's rows
-        outnumber an Engram socket's pages), and return its rows' tokens."""
-        packet = self._block_verify_packet(ids, pos)
+    def _run_block_verify(
+        self,
+        dispatch: Callable[[], None],
+        ids: list[int],
+        pos: int,
+        engram_rows: dict,
+        packet: Optional[torch.Tensor] = None,
+    ) -> list[int]:
+        """``dispatch`` the block's step, feed it its packet (``packet``, else the verify block's of ``ids`` at
+        ``pos``) and Engram rows from a second thread (a block's rows outnumber an Engram socket's pages), and return
+        its rows' tokens."""
+        if packet is None:
+            packet = self._block_verify_packet(ids, pos)
 
         def feed() -> None:
             self._pkt_socket.write_tensor(packet)
@@ -5121,6 +5173,420 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if straddles_dense:
                 self._sync_dense_entries(sid)
             return result
+
+    # -- B=4 batch steps: the verify block's step with every row an independent session (batch_block) -- #
+    def prepare_batch_decode(self) -> None:
+        """Allocate what :meth:`decode_batch_block` adds to :meth:`prepare_static_decode` (with several sessions,
+        ``device_sampling`` and the ``lm_head``): the block step's buffers (:meth:`_prepare_block_verify`), each
+        row's two-level select buffers on the candidate source's group, and the scratch session whose slot pads a
+        step with fewer than ``verify_rows`` users. Call it before anything is compiled.
+
+        A batch step decodes ``verify_rows`` sessions at once, one token each at its own position: row ``j`` reads
+        and writes only session ``j``'s ring and window slots, page-table row and ``dense_kv`` rows, so the step
+        leaves every session's caches as one :meth:`decode_traced` step of it would."""
+        if not self.batch_block:
+            raise RuntimeError("build the model with batch_block=True")
+        if self._traces_compiled or self._traced_captured:
+            raise RuntimeError("call prepare_batch_decode() before the decode traces are compiled")
+        t = self.verify_rows
+        if self._max_sessions < t + 1:
+            raise ValueError(
+                f"a batch step's {t} rows are {t} sessions, plus a scratch one for padding: prepare_static_decode "
+                f"with num_sessions >= {t + 1}, got {self._max_sessions}"
+            )
+        self._prepare_block_verify()
+        cfg = self.config
+        sm = self.submeshes_io[0]
+        device = sm["device"]
+        if self._candidate_group is not None:
+            builds_pool = any(w in self._pool_builders for w in sm["layers"])
+            per_row = [candidate_buffers(device, cfg, with_pool=builds_pool, rows=1) for _ in range(t)]
+            if builds_pool:
+                # Every row's pool shares the one identity page table over the pool's blocks.
+                for cand in per_row[1:]:
+                    ttnn.deallocate(cand["pool_page_table"])
+                    cand["pool_page_table"] = per_row[0]["pool_page_table"]
+            # Fewer rows than TP ranks (B=2): each row's keys split over a pair of ranks, and merge_select_kv writes
+            # every row's candidate blocks and pool count ([t, blocks], [t]) on every rank (_select_rows_split).
+            per_row[0].update(candidate_buffers(device, cfg, with_pool=False, rows=t))
+            for li in sm["layers"]:
+                if cfg.compress_ratios[li] and self._kv_source_of[li] == self._candidate_group:
+                    sm["scaches"][li].batch_candidates = per_row
+        sm["batch_tids"], sm["batch_outs"] = {}, {}
+        # The scratch session: its slot takes the pad rows (always at position 0, writing only its own rows).
+        self._batch_scratch = self.open_session()
+        self.ensure_session_capacity(0, self._batch_scratch)
+        logger.info(
+            f"B={t} batch steps: {self._max_sessions - 1} session slots for users, slot "
+            f"{self._slot_of[self._batch_scratch]} pads"
+        )
+
+    def _batch_window_rows(self) -> int:
+        """Rows of a session's ratio-2 window slot that its positions cycle through (``pos % rows``), as the one-row
+        slotted decode writes them."""
+        return self.spec_window_rows or 2
+
+    def _batch_packet(self, ids: list[int], positions: list[int], slots: list[int]) -> torch.Tensor:
+        """One batch step's INT32 socket page: per row ``j`` its token, position ``p_j``, session slot ``s_j``, the
+        start of the ratio-2 group it closes (``p_j - 1``; ``p_j`` when it closes none), and per ratio ``r`` the
+        logical entry it closes (-1: none), that entry's ``dense_kv`` row (``s_j * index_topk + entry`` below
+        ``index_topk``, else -1) and its select position (``4 * max(keys, 1) - 1``)."""
+        topk = self.config.index_topk
+        values = {
+            "token": ids,
+            "pos": positions,
+            "slot": slots,
+            "win_start2": [p - 1 if (p + 1) % 2 == 0 else p for p in positions],
+        }
+        for name, (_, size) in self._verify_fields.items():
+            if name.startswith("entry"):
+                r = int(name[len("entry") :])
+                closes = [(p + 1) % r == 0 for p in positions]
+                values[name] = [p // r if c else -1 for p, c in zip(positions, closes)]
+                values[f"dense{r}"] = [
+                    s * topk + p // r if c and p // r < topk else -1 for p, s, c in zip(positions, slots, closes)
+                ]
+                values[f"index_pos{r}"] = [_SELECT_KV_RATE * max((p + 1) // r, 1) - 1 for p in positions]
+        packet = torch.zeros(1, 1, 1, self._pkt_w, dtype=torch.int32)
+        for name, (offset, size) in self._verify_fields.items():
+            row = values[name]
+            assert len(row) == size, (name, row)
+            packet[0, 0, 0, offset : offset + size] = torch.tensor(row, dtype=torch.int32)
+        return packet
+
+    def _batch_context(self, sm: dict, pkt: ttnn.Tensor, variant: tuple) -> dict:
+        """A batch step's per-row integers and RoPE rows, from one decode_step_context program (see
+        :meth:`_batch_packet` for the fields)."""
+        dense, two_level, split = variant
+        t, window, topk = self.verify_rows, self.sliding_window, self.config.index_topk
+        f = {name: offset for name, (offset, _) in self._verify_fields.items()}
+        pos0, slot0 = f["pos"], f["slot"]
+        sb = StepContextBuilder(pkt, sm["rope_tables"])
+        sb.add_int("token", [1, t], [term(f["token"] + j) for j in range(t)], ttnn.uint32)
+        sb.add_int(
+            "ring_slots",
+            [t],
+            [term(pos0 + j, mode="mod", div=window, add_field=slot0 + j, add_mul=window) for j in range(t)],
+        )
+        for family in sm["rope_tables"]:
+            sb.add_rope(("rope", family), family, pos0, rows=t, tile_height=t)
+        zero = term(-1, mul=0)
+        for ratio in [0] + list(sm["ratios"]):
+            counts = [
+                term(pos0 + j, pre_add=1, mode="div", div=ratio, clamp_max=topk) if ratio else zero for j in range(t)
+            ]
+            ring_first = [term(slot0 + j, mul=window) for j in range(t)]
+            # A dense row attends its session's dense_kv rows; a scored one its own block of sel_tile_rows.
+            sel_first = [term(slot0 + j, mul=topk) if ratio in dense else zero for j in range(t)]
+            sb.add_int(
+                ("lengths", ratio),
+                [1, 1, 1, 4 * t],
+                counts + [term(pos0 + j) for j in range(t)] + ring_first + sel_first,
+            )
+        win_rows = self._batch_window_rows()
+        if 2 in sm["kv_ratios"]:
+            sb.add_int(
+                ("win_slot", 2),
+                [t],
+                [
+                    term(pos0 + j, mode="mod", div=win_rows, add_field=slot0 + j, add_mul=_WIN_SLOT_ROWS)
+                    for j in range(t)
+                ],
+            )
+            sb.add_int(
+                ("prev_slot", 2),
+                [t],
+                [
+                    term(
+                        pos0 + j,
+                        pre_add=win_rows - 1,
+                        mode="mod",
+                        div=win_rows,
+                        add_field=slot0 + j,
+                        add_mul=_WIN_SLOT_ROWS,
+                    )
+                    for j in range(t)
+                ],
+            )
+            sb.add_rope(("win_rope", 2), "compress", f["win_start2"], rows=t, tile_height=t)
+        for ratio in sm["kv_ratios"]:
+            sb.add_int(("entry", ratio), [t], [term(f[f"entry{ratio}"] + j) for j in range(t)])
+            sb.add_int(("dense_entry", ratio), [t], [term(f[f"dense{ratio}"] + j) for j in range(t)])
+        sb.add_int("page_rows", [t], [term(slot0 + j) for j in range(t)])
+        sparse_ratios = [r for r in sm["index_ratios"] if r not in dense]
+        for ratio in sparse_ratios:
+            for j in range(t):
+                sb.add_int(("index_pos", ratio, j), [1], [term(f[f"index_pos{ratio}"] + j)])
+            # The same positions as one [t] tensor, for the row-split select (rank r reads entry r).
+            sb.add_int(("index_pos_rows", ratio), [t], [term(f[f"index_pos{ratio}"] + j) for j in range(t)])
+        if sparse_ratios:
+            for j in range(t):
+                sb.add_int(("page_row", j), [1], [term(slot0 + j)])
+            # untilize requires 32-high tiles; a 32x32 copy of the compress RoPE rows for the select's query.
+            sb.add_rope(("rope_row", "compress"), "compress", pos0, rows=t, tile_height=32)
+        out = sb.run()
+        cos_row = sin_row = None
+        if sparse_ratios:
+            cos_c, sin_c, neg_sin_c = out[("rope_row", "compress")]
+            cos_row = ttnn.to_layout(cos_c, ttnn.ROW_MAJOR_LAYOUT)
+            sin_row = ttnn.to_layout(sin_c, ttnn.ROW_MAJOR_LAYOUT)
+            for tensor in (cos_c, sin_c, neg_sin_c):
+                ttnn.deallocate(tensor)
+        return {
+            "token": out["token"],
+            "ring_slots": out["ring_slots"],
+            "rope": {family: out[("rope", family)] for family in sm["rope_tables"]},
+            "lengths": {r: out[("lengths", r)] for r in [0] + list(sm["ratios"])},
+            "win_slot": out.get(("win_slot", 2)),
+            "prev_slot": out.get(("prev_slot", 2)),
+            "win_rope": out.get(("win_rope", 2)),
+            "entry": {r: out[("entry", r)] for r in sm["kv_ratios"]},
+            "dense_entry": {r: out[("dense_entry", r)] for r in sm["kv_ratios"]},
+            "page_rows": out["page_rows"],
+            "page_row": [out[("page_row", j)] for j in range(t)] if sparse_ratios else None,
+            "index_pos": {r: [out[("index_pos", r, j)] for j in range(t)] for r in sparse_ratios},
+            "index_pos_rows": {r: out[("index_pos_rows", r)] for r in sparse_ratios},
+            "cos_row": cos_row,
+            "sin_row": sin_row,
+            "dense": dense,
+            "two_level": two_level,
+            "split": split,
+            "staging": sm["block_staging"],
+            "commit_rows": sm.get("block_commit_rows"),
+        }
+
+    def _batch_attention_inputs(self, attn, ctx: dict) -> dict:
+        """:meth:`~.decode.attention.DeepSeekV41Attention.decode_block`'s batch-step arguments for ``attn``."""
+        r = attn.compress_ratio
+        cos, sin, neg_sin = ctx["rope"]["main" if r == 0 else "compress"]
+        is_dense = r == 0 or r in ctx["dense"]
+        inputs = dict(
+            cos=cos,
+            sin=sin,
+            neg_sin=neg_sin,
+            staging=ctx["staging"],
+            commit_rows=ctx["commit_rows"],
+            lengths=ctx["lengths"][r],
+            ring_slots=ctx["ring_slots"],
+            dense=is_dense,
+            batch=True,
+        )
+        if attn.is_kv_source:
+            inputs.update(entry=ctx["entry"][r], dense_entry=ctx["dense_entry"][r], page_rows=ctx["page_rows"])
+            if r == 2:
+                cos_win, sin_win, _ = ctx["win_rope"]
+                inputs.update(win_slot=ctx["win_slot"], prev_slot=ctx["prev_slot"], cos_win=cos_win, sin_win=sin_win)
+            else:
+                inputs.update(cos_win=cos, sin_win=sin)
+        if attn.is_index_source and not is_dense:
+            inputs.update(
+                cos_row=ctx["cos_row"],
+                sin_row=ctx["sin_row"],
+                select_pos=ctx["index_pos"][r],
+                select_page_rows=ctx["page_row"],
+                select_pos_rows=ctx["index_pos_rows"][r],
+                select_page_rows_tensor=ctx["page_rows"],
+                split_keys=attn.layer_idx in ctx["split"],
+            )
+            if ctx["two_level"] and attn.layer_idx in self._candidate_layers:
+                inputs.update(candidates=True, build_pool=attn.layer_idx in self._pool_builders)
+        return inputs
+
+    def _batch_variant_key(self, pos: int) -> tuple[frozenset[int], bool, frozenset[int]]:
+        """``(dense ratios, two-level, split layers)`` of a batch step whose furthest row is at ``pos``: a ratio
+        selects densely only while every row's group does, and the select is two-level / key-split once any row's
+        is (a shorter row's select runs the same programs over its fewer keys)."""
+        cfg = self.config
+        dense = frozenset()
+        if DENSE_SELECT:
+            ratios = {int(cfg.compress_ratios[li]) for li in cfg.index_source_layer_ids if li < self.num_layers}
+            dense = frozenset(r for r in ratios if (pos + 1) // r <= cfg.index_topk)
+        two_level = (
+            self._two_level(pos)
+            and self._candidate_group is not None
+            and int(cfg.compress_ratios[self._candidate_group]) not in dense
+        )
+        split = frozenset(li for li in self._split_layers(pos) if int(cfg.compress_ratios[li]) not in dense)
+        return (dense, two_level, split)
+
+    def _reachable_batch_variants(self) -> list[tuple[frozenset[int], bool, frozenset[int]]]:
+        """Every batch variant some furthest row below ``max_seq`` asks for: each part of the key changes only at
+        one of these positions."""
+        cfg = self.config
+        starts = {0}
+        for li in cfg.index_source_layer_ids:
+            if li < self.num_layers:
+                starts.add((cfg.index_topk + 1) * int(cfg.compress_ratios[li]) - 1)
+        if self._candidate_group is not None:
+            r = int(cfg.compress_ratios[self._candidate_group])
+            starts.add((cfg.candidate_topk_blocks * cfg.candidate_block_size + 1) * r - 1)
+        starts.update(self._split_from.values())
+        positions = sorted(p for p in starts if p < self._decode_max_seq)
+        return list(dict.fromkeys(self._batch_variant_key(p) for p in positions))
+
+    def _compile_batch_block(self, token_id) -> None:
+        """Pass 1 of the batch traces: one executed step per reachable variant, every row on the scratch session
+        (its slot rewritten alike by each row), then the scratch session rewound."""
+        t = self.verify_rows
+        self._use_server_rows(t)
+        zeros = {li: torch.zeros(t, engram.kin, dtype=torch.bfloat16) for li, engram in self._engram_layers}
+        sm = self.submeshes_io[0]
+        scratch = self._batch_scratch
+        slot = self._slot_of[scratch]
+        for variant in self._reachable_batch_variants():
+            dense, two_level, split = variant
+            sparse = any(r not in dense for r in sm["index_ratios"])
+            pos = 2 if sparse else 0
+            self.ensure_session_capacity(pos, scratch)
+            logger.info(
+                f"[batch] compiling the B={t} step (dense={sorted(dense)}, two_level={two_level}, "
+                f"split={sorted(split)}) at {pos}"
+            )
+            outs = []
+
+            def dispatch() -> None:
+                outs.append(self._block_verify_stage(sm, variant, batch=True))
+
+            packet = self._batch_packet([int(token_id)] * t, [pos] * t, [slot] * t)
+            self._run_block_verify(dispatch, [], pos, zeros, packet=packet)
+            for out in outs:
+                out.deallocate(True)
+        self.reset_session(scratch)
+        self.ensure_session_capacity(0, scratch)
+
+    def _capture_batch_block(self) -> None:
+        sm = self.submeshes_io[0]
+        self._use_server_rows(self.verify_rows)  # its programs were compiled against the block-mode server
+        for variant in self._reachable_batch_variants():
+            dense, two_level, split = variant
+            logger.info(
+                f"[batch] capturing the B={self.verify_rows} step (dense={sorted(dense)}, two_level={two_level}, "
+                f"split={sorted(split)})"
+            )
+            tid = ttnn.begin_trace_capture(sm["device"], cq_id=0)
+            with _trace_capture_guard():
+                out = self._block_verify_stage(sm, variant, batch=True)
+            ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
+            sm["batch_tids"][variant], sm["batch_outs"][variant] = tid, out
+
+    def capture_batch_traces(self, token_id) -> None:
+        """Compile and then capture the one-row decode variants (which feed prompts) and the batch step's, all
+        compile runs before the first capture (see :meth:`_capture_traces`). The compile runs write the scratch
+        session, which is rewound after."""
+        sm = self.submeshes_io[0]
+        if not self.batch_block or "batch_tids" not in sm:
+            raise RuntimeError("call prepare_batch_decode() first")
+        scratch = self._batch_scratch
+        resident = list(self._resident)
+        self.activate_session(scratch)
+        self._use_server_rows(1)
+        self.compile_traces(token_id, 0)
+        self._compile_batch_block(token_id)
+        ttnn.synchronize_device(sm["device"])
+        self._use_server_rows(1)
+        self._capture_traces(token_id, 0)
+        self._capture_batch_block()
+        # As after the DSpark captures: on a mixed server every serving step is a captured trace carrying its rows.
+        self._batch_captured = True
+        self.reset_session(scratch)
+        self.ensure_session_capacity(0, scratch)
+        if resident and None not in resident:
+            self.activate_sessions(resident)
+
+    def decode_batch_block(self, token_ids, sids, positions=None) -> list[int]:
+        """One B=4 batch step on the persistent stage: session ``sids[j]`` is fed ``token_ids[j]`` at
+        ``positions[j]`` (default: the session's next position), every layer at once, and the step returns each
+        row's sampled token (greedy, or at the decode step's temperature), as one :meth:`decode_traced` step of
+        each session would. Up to ``verify_rows`` distinct sessions; the rest of the rows run on the scratch
+        session and are dropped. Text tokens only (an image-span block names one bias for every row)."""
+        return self._batch_step(token_ids, sids, positions)
+
+    def debug_batch_logits(self, token_ids, sids, positions=None) -> torch.Tensor:
+        """Debug: :meth:`decode_batch_block` run eagerly (not from its trace), returning the users' rows' logits
+        ``[users, V]`` (vocab-sharded ranks concatenated). Commits the step like the traced one. Eager ops allocate:
+        replay no trace after it."""
+        return self._batch_step(token_ids, sids, positions, debug=True)
+
+    def _batch_step(self, token_ids, sids, positions=None, debug: bool = False):
+        t = self.verify_rows
+        ids = [int(i) for i in token_ids]
+        sids = list(sids)
+        if not 1 <= len(sids) <= t or len(ids) != len(sids):
+            raise ValueError(f"a batch step takes 1..{t} sessions and a token each, got {sids} / {ids}")
+        if len(set(sids)) != len(sids):
+            raise ValueError(f"a session takes one row of a batch step, got {sids}")
+        if any(i >= self.config.vocab_size for i in ids):
+            raise NotImplementedError("a batch step takes text tokens (an image block ranks every row with one bias)")
+        if self._host is not None:
+            raise NotImplementedError(
+                "batch steps run on the Python host path (the Rust runtime owns the Engram history)"
+            )
+        sm = self.submeshes_io[0]
+        if not sm.get("batch_tids"):
+            raise RuntimeError("capture the batch traces first (capture_batch_traces)")
+        if positions is None:
+            positions = [self._session_pos[sid] for sid in sids]
+        positions = [int(p) for p in positions]
+        users = len(sids)
+        scratch = self._batch_scratch
+        row_sids = sids + [scratch] * (t - users)
+        row_ids = ids + [ids[0]] * (t - users)
+        row_pos = positions + [0] * (t - users)
+        self._wait_replays_dispatched()
+        self._use_server_rows(t)
+        with self._cq_lock:
+            # Every row's blocks first: a full pool then raises before any session has moved on.
+            for sid, pos in zip(sids, positions):
+                self.ensure_session_capacity(pos, sid)
+            for sid, pos in zip(sids, positions):
+                self._session_pos[sid] = pos + 1
+            slots = [self._slot_of[sid] for sid in row_sids]
+            tid = sm["batch_tids"][self._batch_variant_key(max(positions))]
+            engram_rows = {}
+            if self._engram_layers:
+                t_engram = time.perf_counter()
+                lookup = self._engram_lookup
+                # Each user row hashed against its own session's history, then one gather per layer for every row.
+                hashes = torch.cat(
+                    [
+                        lookup.hash_session(slots[j], torch.tensor([[row_ids[j]]], dtype=torch.long), row_pos[j])
+                        for j in range(users)
+                    ],
+                    dim=0,
+                )
+                for li, _ in self._engram_layers:
+                    rows = lookup.gather(li, hashes[:, :, lookup.layout.layer_ids.index(li)]).flatten(-2)
+                    rows = rows.reshape(users, -1)
+                    pad = torch.zeros(t - users, rows.shape[-1], dtype=rows.dtype)
+                    engram_rows[li] = torch.cat([rows, pad], dim=0)
+                OVERHEAD.add("host.batch_engram", time.perf_counter() - t_engram)
+            packet = self._batch_packet(row_ids, row_pos, slots)
+
+            if debug:
+                variant = self._batch_variant_key(max(positions))
+                self._block_debug_logits = []
+                outs = []
+
+                def dispatch() -> None:
+                    outs.append(self._block_verify_stage(sm, variant, batch=True))
+
+                try:
+                    self._run_block_verify(dispatch, row_ids, 0, engram_rows, packet=packet)
+                finally:
+                    kept, self._block_debug_logits = self._block_debug_logits, None
+                for out in outs:
+                    out.deallocate(True)
+                parts = [ttnn.to_torch(x.cpu()).float() for x in ttnn.get_device_tensors(kept[0])]
+                ttnn.deallocate(kept[0])
+                host = torch.cat([x.reshape(-1, x.shape[-1]) for x in parts], dim=-1)
+                return host.reshape(-1, host.shape[-1])[:users]
+
+            def replay() -> None:
+                ttnn.execute_trace(sm["device"], tid, cq_id=0, blocking=False)
+
+            with OVERHEAD.time("compute.batch_step"):
+                result = self._run_block_verify(replay, row_ids, 0, engram_rows, packet=packet)
+        return result[:users]
 
     def prefill_blocks(self, token_ids, start: int) -> tuple[int, list[int]]:
         """Feed known ``token_ids`` at ``start ..`` as verify blocks (the last one padded by repeating its last token);

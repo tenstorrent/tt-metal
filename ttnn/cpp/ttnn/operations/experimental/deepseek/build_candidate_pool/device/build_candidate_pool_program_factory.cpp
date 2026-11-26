@@ -40,7 +40,10 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
     const uint32_t cbs = args.candidate_block_size;
     const uint32_t topk_blocks = tensor_args.candidate_blocks.logical_shape()[-1];
     // Query rows of a verify block: the pool is the union of their blocks, up to num_rows * topk_blocks.
-    const uint32_t num_rows = tensor_args.candidate_blocks.logical_shape()[0];
+    // With query_row_tensor the blocks may hold several rows of which one is picked (PICK_ROW): a one-row pool.
+    const uint32_t blocks_rows = tensor_args.candidate_blocks.logical_shape()[0];
+    const bool pick_row = tensor_args.query_row_tensor.has_value() && blocks_rows > 1;
+    const uint32_t num_rows = tensor_args.query_row_tensor.has_value() ? 1 : blocks_rows;
     const bool union_rows = num_rows > 1;
     const uint32_t pool_blocks = num_rows * topk_blocks;
     const uint32_t page_block_size = tensor_args.key_cache.logical_shape()[-2];
@@ -141,6 +144,17 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
         key_bindings.push_back(
             TensorBinding{.tensor_parameter_name = PAGE_TABLE_ROW, .accessor_name = "page_table_row"});
         keys_options.defines.emplace("PAGE_TABLE_ROW", "1");
+    }
+    const TensorParamName QUERY_ROW{"query_row"};
+    const bool has_query_row = tensor_args.query_row_tensor.has_value();
+    if (has_query_row) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = QUERY_ROW, .spec = tensor_args.query_row_tensor->tensor_spec()});
+        key_bindings.push_back(TensorBinding{.tensor_parameter_name = QUERY_ROW, .accessor_name = "query_row"});
+        keys_options.defines.emplace("QUERY_ROW", "1");
+        if (pick_row) {
+            keys_options.defines.emplace("PICK_ROW", "1");
+        }
     }
     Group<TensorBinding> rows_bindings = key_bindings;
     rows_bindings.push_back(TensorBinding{.tensor_parameter_name = POOL_ROWS, .accessor_name = "pool_rows"});
@@ -316,6 +330,9 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
     };
     if (has_page_table_row) {
         run_args.tensor_args.emplace(PAGE_TABLE_ROW, tensor_args.page_table_row_tensor->mesh_tensor());
+    }
+    if (has_query_row) {
+        run_args.tensor_args.emplace(QUERY_ROW, tensor_args.query_row_tensor->mesh_tensor());
     }
     if (union_rows) {
         run_args.tensor_args.emplace(POOL_MASKS, output.at(2).mesh_tensor());

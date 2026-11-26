@@ -109,6 +109,8 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t kCandBlocksWord = 2 * k + 16;
     // Query row j's candidates page starts j * cand_page_words words into the staging buffer.
     [[maybe_unused]] constexpr uint32_t cand_page_words = get_arg(args::cand_page_words);
+    // Candidate blocks in the page: none with LOCAL_CANDIDATES (a row split writes its blocks itself).
+    [[maybe_unused]] constexpr uint32_t page_blocks = get_arg(args::page_blocks);
     // ROW_MASK: keys per row_mask entry (a candidate block of the pool).
     [[maybe_unused]] constexpr uint32_t row_mask_group = get_arg(args::row_mask_group);
     // cur_pos words from the reader: the most keys of any query row, the part, each row's keys.
@@ -1031,7 +1033,7 @@ void kernel_main() {
                 for (uint32_t row = 0; row < num_queries; ++row) {
                     const uint32_t page = row * cand_page_words;
                     send_run(page + key_shares[row].output_offset, num_rows[row], k);
-                    send_run(page + kCandBlocksWord + first_block[row], num_blocks_listed[row], candidate_topk_blocks);
+                    send_run(page + kCandBlocksWord + first_block[row], num_blocks_listed[row], page_blocks);
                 }
                 noc.async_write_barrier();
                 hist_arrived.up(noc, coord_x, coord_y, 1);
@@ -1049,9 +1051,9 @@ void kernel_main() {
                         page[j] = 0;
                         page[k + j] = 0;
                     }
-                    for (uint32_t j = num_blocks_selected[row]; j < candidate_topk_blocks; ++j) {
+                    for (uint32_t j = num_blocks_selected[row]; j < page_blocks; ++j) {
                         page[kCandBlocksWord + j] = 0;
-                        page[kCandBlocksWord + candidate_topk_blocks + j] = 0;
+                        page[kCandBlocksWord + page_blocks + j] = 0;
                     }
                     for (uint32_t j = 0; j < 16; ++j) {
                         page[kCandHeaderWord + j] = 0;
@@ -1063,14 +1065,14 @@ void kernel_main() {
                     noc.async_write(
                         kv_wr_dfb,
                         output,
-                        (kCandBlocksWord + 2 * candidate_topk_blocks) * sizeof(uint32_t),
+                        (kCandBlocksWord + 2 * page_blocks) * sizeof(uint32_t),
                         {.offset_bytes = row * cand_page_words * static_cast<uint32_t>(sizeof(uint32_t))},
                         {.page_id = row, .offset_bytes = 0});
                 }
                 noc.async_write_barrier();
             }
         };
-#ifndef CANDIDATE_SOURCE
+#if !defined(CANDIDATE_SOURCE) || defined(LOCAL_CANDIDATES)
     {
         const uint32_t zeros[num_queries] = {};
         write_partial(zeros, zeros, zeros);
@@ -1197,16 +1199,21 @@ void kernel_main() {
             num_blocks_selected[row] = hdr[kHdrAbove] + hdr[kHdrNeeded];
         }
 
-#ifdef PARTIAL_OUTPUT
+#if defined(PARTIAL_OUTPUT) && !defined(LOCAL_CANDIDATES)
         // The blocks go after this core's key run in the same staging page.
         constexpr uint32_t kListRowWords = cand_page_words;
         volatile tt_l1_ptr uint32_t* list = cand + kCandBlocksWord;
 #else
         // kv_wr is free once this core's gather is done, and core 0's is done before the allocation,
         // so every core lists its blocks at the same L1 offsets it then writes to on core 0. Row j's
-        // list starts kListRowWords words after row j - 1's.
+        // list starts kListRowWords words after row j - 1's. A row split's candidates pages stay ahead of them.
         constexpr uint32_t kListRowWords = (candidate_topk_blocks + 15) / 16 * 16;
-        const uint32_t list_addr = kv_wr_dfb.get_write_ptr();
+#ifdef PARTIAL_OUTPUT
+        constexpr uint32_t kListOffsetBytes = num_queries * cand_page_words * sizeof(uint32_t);
+#else
+        constexpr uint32_t kListOffsetBytes = 0;
+#endif
+        const uint32_t list_addr = kv_wr_dfb.get_write_ptr() + kListOffsetBytes;
         volatile tt_l1_ptr uint32_t* list = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(list_addr);
 #endif
         uint32_t num_listed[num_queries];
@@ -1225,7 +1232,7 @@ void kernel_main() {
                     take = true;
                 }
                 if (take) {
-#ifdef PARTIAL_OUTPUT
+#if defined(PARTIAL_OUTPUT) && !defined(LOCAL_CANDIDATES)
                     row_list[candidate_topk_blocks + block_share.output_offset + listed] = key;
 #endif
                     row_list[block_share.output_offset + listed++] = first_local_block + b;
@@ -1235,7 +1242,7 @@ void kernel_main() {
             first_listed[row] = block_share.output_offset;
         }
 
-#ifdef PARTIAL_OUTPUT
+#if defined(PARTIAL_OUTPUT) && !defined(LOCAL_CANDIDATES)
         write_partial(first_listed, num_listed, num_blocks_selected);
 #else
         // pool_count's Sq words follow the last row's list, 64 B aligned.
@@ -1284,14 +1291,14 @@ void kernel_main() {
                     kv_wr_dfb,
                     candidate_blocks,
                     candidate_topk_blocks * sizeof(uint32_t),
-                    {.offset_bytes = row * kListRowWords * static_cast<uint32_t>(sizeof(uint32_t))},
+                    {.offset_bytes = kListOffsetBytes + row * kListRowWords * static_cast<uint32_t>(sizeof(uint32_t))},
                     {.page_id = row, .offset_bytes = 0});
             }
             noc.async_write(
                 kv_wr_dfb,
                 pool_count,
                 num_queries * sizeof(uint32_t),
-                {.offset_bytes = kCountOffsetWords * sizeof(uint32_t)},
+                {.offset_bytes = kListOffsetBytes + kCountOffsetWords * sizeof(uint32_t)},
                 {.page_id = 0, .offset_bytes = 0});
             noc.async_write_barrier();
         }

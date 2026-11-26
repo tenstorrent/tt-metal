@@ -74,14 +74,26 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         key_cache[-2],
         kv_cache[-2]);
     const auto& weights = tensor_args.head_weights.logical_shape();
-    // head_weights [num_cores, 1, Sq, Hi] fixes the query rows and heads.
-    const uint32_t num_queries = weights[-2];
+    // head_weights [num_cores, 1, Sq, Hi] fixes the query rows and heads. A row split selects one of them.
+    const bool row_split = tensor_args.query_row_tensor.has_value();
+    const uint32_t num_rows_in = weights[-2];
+    const uint32_t num_queries = row_split ? 1 : num_rows_in;
     const uint32_t num_heads = weights[-1];
     TT_FATAL(
-        num_queries >= 1 && num_queries <= kMaxQueryRows,
+        num_rows_in >= 1 && num_rows_in <= kMaxQueryRows,
         "fused_lightning_select_kv: Sq must be in [1, {}], got {}",
         kMaxQueryRows,
-        num_queries);
+        num_rows_in);
+    if (row_split) {
+        require_int32_rm_interleaved(tensor_args.query_row_tensor.value(), ttnn::Shape({1}), "query_row_tensor");
+        TT_FATAL(
+            !tensor_args.output_tensor.has_value() && !tensor_args.new_kv_row.has_value() &&
+                !tensor_args.row_mask_table.has_value() && !tensor_args.valid_length_tensor.has_value(),
+            "fused_lightning_select_kv: a row split (query_row_tensor) takes no output_tensor, new_kv_row, "
+            "row_mask_table or valid_length_tensor");
+    }
+    // Per-row inputs: Sq entries, or with a row split also one (this device's own).
+    const auto per_row_ok = [&](uint32_t volume) { return volume == num_rows_in || (row_split && volume == 1); };
     TT_FATAL(
         query[-1] == key_cache[-1],
         "fused_lightning_select_kv: query D {} must match key_cache D {}",
@@ -119,10 +131,10 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
     }
     // Row j of the query is shard rows [j * Hi, (j + 1) * Hi).
     TT_FATAL(
-        query[-2] == 1 && query[1] == num_queries * num_heads,
+        query[-2] == 1 && query[1] == num_rows_in * num_heads,
         "fused_lightning_select_kv: query must be [num_cores, Sq * Hi, 1, D] = [num_cores, {}, 1, D] for head_weights "
         "{}, got {}",
-        num_queries * num_heads,
+        num_rows_in * num_heads,
         weights,
         query);
     TT_FATAL(weights[1] == 1, "fused_lightning_select_kv: head_weights dim 1 must be 1, got {}", weights[1]);
@@ -151,13 +163,17 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
     // Decode only: one user (B == 1), Sq query rows of it.
     TT_FATAL(batch == 1, "fused_lightning_select_kv: only B == 1 is supported, got page_table batch {}", batch);
     TT_FATAL(
-        pos_shape.rank() == 1 && pos_shape[0] == num_queries,
+        pos_shape.rank() == 1 && per_row_ok(pos_shape[0]),
         "fused_lightning_select_kv: cur_pos_tensor must be [Sq] = [{}], one position per query row, got {}",
-        num_queries,
+        num_rows_in,
         pos_shape);
     if (tensor_args.page_table_row_tensor.has_value()) {
-        require_int32_rm_interleaved(
-            tensor_args.page_table_row_tensor.value(), ttnn::Shape({1}), "page_table_row_tensor");
+        const auto& row_shape = tensor_args.page_table_row_tensor->logical_shape();
+        TT_FATAL(
+            row_shape.rank() == 1 && per_row_ok(row_shape[0]),
+            "fused_lightning_select_kv: page_table_row_tensor must be [1] (or [Sq] with query_row_tensor), got {}",
+            row_shape);
+        require_int32_rm_interleaved(tensor_args.page_table_row_tensor.value(), row_shape, "page_table_row_tensor");
         TT_FATAL(
             !page_table.is_sharded(),
             "fused_lightning_select_kv: page_table_row_tensor needs an interleaved page_table");
@@ -264,10 +280,10 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         weights_shard.grid.str(),
         query_shard.grid.str());
     TT_FATAL(
-        weights_shard.shape[0] * weights_shard.shape[1] == num_queries * num_heads,
+        weights_shard.shape[0] * weights_shard.shape[1] == num_rows_in * num_heads,
         "fused_lightning_select_kv: head_weights shard must hold one full [Sq, Hi] = [{}, {}] replica per core, got "
         "[{}, {}]",
-        num_queries,
+        num_rows_in,
         num_heads,
         weights_shard.shape[0],
         weights_shard.shape[1]);
@@ -395,10 +411,10 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
             "fused_lightning_select_kv: num_keys_tensor must be an interleaved device tensor");
         TT_FATAL(
             num_keys.dtype() == DataType::INT32 && num_keys.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-                num_keys.logical_shape().volume() == num_queries,
+                per_row_ok(num_keys.logical_shape().volume()),
             "fused_lightning_select_kv: num_keys_tensor must hold one INT32 row-major count per query row ({}), got "
             "{} {}",
-            num_queries,
+            num_rows_in,
             num_keys.dtype(),
             num_keys.logical_shape());
     }
@@ -475,13 +491,17 @@ FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectK
     const auto& kv = tensor_args.kv_cache;
     const auto& kv_shape = kv.logical_shape();
     const auto& pt_shape = tensor_args.page_table_tensor.logical_shape();
-    // One user (B == 1): its Sq query rows take the batch axis of the kv rows.
-    const uint32_t num_queries = tensor_args.head_weights.logical_shape()[-2];
+    // One user (B == 1): its Sq query rows take the batch axis of the kv rows. A row split selects one row, and
+    // returns its candidates page; alone (num_parts == 1) without candidate blocks (it writes those locally), with
+    // a key split too (each row's keys over num_parts devices) with them, for merge_select_kv.
+    const bool row_split = tensor_args.query_row_tensor.has_value();
+    const uint32_t num_queries = row_split ? 1 : tensor_args.head_weights.logical_shape()[-2];
     const uint32_t max_keys = pt_shape[1] * tensor_args.key_cache.logical_shape()[-2];
+    const uint32_t page_blocks = row_split && args.num_parts == 1 ? 0 : args.candidate_topk_blocks;
     spec_return_value_t specs = {
-        args.num_parts > 1
+        args.num_parts > 1 || row_split
             ? tt::tt_metal::TensorSpec(
-                  ttnn::Shape({1, 1, num_queries, 2 * args.k + 16 + 2 * args.candidate_topk_blocks}),
+                  ttnn::Shape({1, 1, num_queries, 2 * args.k + 16 + 2 * page_blocks}),
                   tt::tt_metal::TensorLayout(
                       DataType::INT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{}))
         : tensor_args.output_tensor.has_value()
@@ -567,7 +587,8 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     const std::optional<ttnn::Tensor>& row_table,
     const std::optional<ttnn::Tensor>& page_table_row_tensor,
     const std::optional<ttnn::Tensor>& kv_page_table,
-    const std::optional<ttnn::Tensor>& row_mask_table) {
+    const std::optional<ttnn::Tensor>& row_mask_table,
+    const std::optional<ttnn::Tensor>& query_row_tensor) {
     using OperationType =
         ttnn::operations::experimental::deepseek::fused_lightning_select_kv::FusedLightningSelectKvDeviceOperation;
 
@@ -613,6 +634,7 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
         .page_table_row_tensor = page_table_row_tensor,
         .kv_page_table = kv_page_table,
         .row_mask_table = row_mask_table,
+        .query_row_tensor = query_row_tensor,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

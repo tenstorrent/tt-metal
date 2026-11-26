@@ -31,6 +31,10 @@ namespace ttnn::experimental::deepseek {
 //   pool_keys_output, pool_rows_output: optional preallocated outputs.
 //   page_table_row_tensor: optional ``[1]`` INT32 row of a ``[num_sessions, max_blocks_per_user]``
 //                      page table to read, on device, so one traced call serves any session.
+//   query_row_tensor:  optional ``[1]`` INT32: ``page_table_row_tensor`` then holds one row per query row
+//                      (``[Sq]``, Sq <= 16) and entry ``query_row_tensor[0]`` is read, e.g. a batch step's
+//                      sessions with each device building its own row's pool (``fused_lightning_select_kv``'s
+//                      row split).
 //
 // Several query rows (a verify block): ``candidate_blocks`` ``[Sq, candidate_topk_blocks]`` and ``pool_count``
 // ``[Sq]`` hold every row's blocks and count. The pool is then the union of the rows' blocks in ascending order
@@ -53,6 +57,7 @@ std::vector<Tensor> build_candidate_pool(
     const std::optional<Tensor>& pool_rows_output = std::nullopt,
     const std::optional<Tensor>& page_table_row_tensor = std::nullopt,
     const std::optional<Tensor>& pool_masks_output = std::nullopt,
-    const std::optional<Tensor>& pool_counts_output = std::nullopt);
+    const std::optional<Tensor>& pool_counts_output = std::nullopt,
+    const std::optional<Tensor>& query_row_tensor = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek

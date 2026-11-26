@@ -47,6 +47,9 @@ struct CompressPoolDecodeParams {
     uint32_t rows = 1;
     uint32_t groups = 1;
     bool start_odd = false;
+    // The rows are tokens of independent sessions (a B=4 batch step): each row is a group, with its own prev_slot,
+    // page_row and entry (-1: closes nothing).
+    bool independent = false;
     // Byte offset of face 1 in a cos / sin tile (rows > 1 reads several rows of it).
     uint32_t cs_face1_bytes = 512;
 };
@@ -113,6 +116,7 @@ std::vector<ttnn::Tensor> compress_pool_decode(
     const std::optional<ttnn::Tensor>& dense_entry,
     const std::optional<ttnn::Tensor>& key_row,
     uint32_t kv_gate_interleave = 0,
-    bool start_odd = false);
+    bool start_odd = false,
+    bool independent_rows = false);
 
 }  // namespace ttnn::prim

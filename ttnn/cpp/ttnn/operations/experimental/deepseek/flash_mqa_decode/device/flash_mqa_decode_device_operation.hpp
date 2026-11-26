@@ -38,6 +38,9 @@ struct FlashMqaDecodeDeviceOperation {
         bool dense_selected = false;
         // num_rows > 1: groups of cores the rows are split over (group rg attends rows rg, rg + row_groups, ...).
         uint32_t row_groups = 1;
+        // num_rows > 1: the rows are tokens of independent sessions (a B=4 batch step), each with its own position,
+        // ring, dense rows and new kv row; row_groups == num_rows.
+        bool independent_rows = false;
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -99,6 +102,7 @@ ttnn::Tensor flash_mqa_decode(
     const std::optional<ttnn::Tensor>& new_kv = std::nullopt,
     uint32_t num_rows = 1,
     bool dense_selected = false,
-    uint32_t row_groups = 0);
+    uint32_t row_groups = 0,
+    bool independent_rows = false);
 
 }  // namespace ttnn::prim

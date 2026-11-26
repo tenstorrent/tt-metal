@@ -62,18 +62,29 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     // [Sq, Hi] weights.
     // The shards hold those values row-major in whatever shard shape, so take the counts from the logical shapes:
     // head_weights [num_cores, 1, Sq, Hi], query [num_cores, Sq * Hi, 1, D].
-    const uint32_t num_queries = tensor_args.head_weights.logical_shape()[-2];
-    const uint32_t num_heads = tensor_args.query.logical_shape()[1] / num_queries;
+    // A row split (query_row_tensor) scores one of the replicas' Sq rows, chosen on device, as a one-row select:
+    // the kernels see num_queries = 1 and read the inputs' num_rows_in rows.
+    const bool row_split = tensor_args.query_row_tensor.has_value();
+    const uint32_t num_rows_in = tensor_args.head_weights.logical_shape()[-2];
+    const uint32_t num_queries = row_split ? 1 : num_rows_in;
+    const uint32_t num_heads = tensor_args.query.logical_shape()[1] / num_rows_in;
     const uint32_t d_tiles = tensor_args.query.logical_shape()[-1] / tt::constants::TILE_WIDTH;
-    const uint32_t num_query_tiles = num_queries * num_heads * d_tiles;
-    const uint32_t num_weight_tiles = num_queries * num_heads / tt::constants::TILE_WIDTH;
+    // The borrowed query / weights buffers cover the whole replicas.
+    const uint32_t num_query_tiles = num_rows_in * num_heads * d_tiles;
+    const uint32_t num_weight_tiles = num_rows_in * num_heads / tt::constants::TILE_WIDTH;
     const bool has_valid_length = tensor_args.valid_length_tensor.has_value();
     const bool has_new_kv_row = tensor_args.new_kv_row.has_value();
     const uint32_t num_new_kv_rows =
         has_new_kv_row ? static_cast<uint32_t>(tensor_args.new_kv_row_index->logical_shape().volume()) : 0;
     const bool has_num_keys = tensor_args.num_keys_tensor.has_value();
     const bool is_candidate_source = args.candidate_topk_blocks > 0;
-    const bool is_partial = args.num_parts > 1;
+    // A row split returns its row's candidates page, as one part over the whole key range; in candidate source
+    // mode it writes the row's candidate blocks locally (no merge of blocks across devices).
+    const bool is_partial = args.num_parts > 1 || row_split;
+    const bool local_candidates = is_candidate_source && args.num_parts == 1;
+    // A row split with a key split too (num_parts > 1: row query_row's keys over num_parts devices) returns its
+    // part's candidates page with the candidate blocks, as a key split does.
+    const uint32_t page_blocks = row_split && args.num_parts == 1 ? 0 : args.candidate_topk_blocks;
     const bool has_row_table = tensor_args.row_table.has_value();
     const bool has_page_table_row = tensor_args.page_table_row_tensor.has_value();
     const bool has_kv_page_table = tensor_args.kv_page_table.has_value();
@@ -129,6 +140,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const TensorParamName KV_PAGE_TABLE{"kv_page_table"};
     const DFBSpecName ROW_TBL_DFB{"row_tbl"};
     const TensorParamName ROW_MASK{"row_mask"};
+    const TensorParamName QUERY_ROW{"query_row"};
     const DFBSpecName ROW_MASK_DFB{"row_mask_l1"};
 
     const KernelSpecName READER{"reader"};
@@ -177,7 +189,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const DataflowBufferSpec query_tiled_dfb{
         .unique_id = QUERY_TILED_DFB,
         .entry_size = head_group_tile.get_tile_size(query_format),
-        .num_entries = num_query_group_tiles,
+        .num_entries = num_queries * num_heads * d_tiles / kHeadsPerQueryTile,
         .data_format_metadata = query_format,
         .tile_format_metadata = head_group_tile,
     };
@@ -360,11 +372,17 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
             TensorParameter{.unique_id = NUM_KEYS, .spec = tensor_args.num_keys_tensor->tensor_spec()});
         reader_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = NUM_KEYS, .accessor_name = "num_keys"});
     }
-    if (is_partial) {
+    if (args.num_parts > 1) {
         tensor_parameters.push_back(
             TensorParameter{.unique_id = PART_INDEX, .spec = tensor_args.part_index_tensor->tensor_spec()});
         reader_tensor_bindings.push_back(
             TensorBinding{.tensor_parameter_name = PART_INDEX, .accessor_name = "part_index"});
+    }
+    if (row_split) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = QUERY_ROW, .spec = tensor_args.query_row_tensor->tensor_spec()});
+        reader_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = QUERY_ROW, .accessor_name = "query_row"});
     }
 
     Group<TensorBinding> writer_tensor_bindings = {
@@ -393,14 +411,16 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const uint32_t kv_stage_rows = num_queries > 1 ? 2 * kKvStageRows : kKvStageRows;
     uint32_t kv_wr_rows = kv_stage_rows;
     // num_parts > 1: one candidates page per query row, each starting cand_page_words words after the last.
-    const uint32_t cand_page_words = tt::round_up(2 * args.k + 16 + 2 * args.candidate_topk_blocks, 16u);
-    if (is_candidate_source && !is_partial) {
+    const uint32_t cand_page_words = tt::round_up(2 * args.k + 16 + 2 * page_blocks, 16u);
+    if (local_candidates) {
         // Core 0 assembles every query row's candidate list (64 B aligned each), then the Sq pool counts,
-        // in its kv_wr stage.
+        // in its kv_wr stage; a row split's lists follow its candidates page there.
         const uint32_t list_bytes =
             num_queries * tt::round_up(args.candidate_topk_blocks * static_cast<uint32_t>(sizeof(uint32_t)), 64u);
+        const uint32_t page_bytes =
+            row_split ? num_queries * cand_page_words * static_cast<uint32_t>(sizeof(uint32_t)) : 0;
         const uint32_t needed_bytes =
-            list_bytes + tt::round_up(num_queries * static_cast<uint32_t>(sizeof(uint32_t)), 64u);
+            page_bytes + list_bytes + tt::round_up(num_queries * static_cast<uint32_t>(sizeof(uint32_t)), 64u);
         kv_wr_rows = std::max(kv_wr_rows, tt::round_up(tt::div_up(needed_bytes, kv_page_bytes), 2u));
         tensor_parameters.push_back(TensorParameter{.unique_id = CANDIDATE_BLOCKS, .spec = output.at(2).tensor_spec()});
         tensor_parameters.push_back(TensorParameter{.unique_id = POOL_COUNT, .spec = output.at(3).tensor_spec()});
@@ -411,6 +431,9 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     }
     if (is_candidate_source) {
         writer_compiler_options.defines.emplace("CANDIDATE_SOURCE", "1");
+    }
+    if (is_partial && local_candidates) {
+        writer_compiler_options.defines.emplace("LOCAL_CANDIDATES", "1");
     }
     if (is_partial) {
         const uint32_t cand_bytes = num_queries * cand_page_words * static_cast<uint32_t>(sizeof(uint32_t));
@@ -488,6 +511,23 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     if (is_partial) {
         reader_compiler_options.defines.emplace("PARTIAL_OUTPUT", "1");
     }
+    KernelSpec::CompilerOptions compute_compiler_options;
+    if (row_split) {
+        reader_compiler_options.defines.emplace("QUERY_ROW", "1");
+        compute_compiler_options.defines.emplace("QUERY_ROW", "1");
+        if (args.num_parts > 1) {
+            reader_compiler_options.defines.emplace("QUERY_ROW_PARTS", "1");
+        }
+    }
+    // A row split's per-row inputs hold Sq entries (index by the row) or one (this device's own).
+    const uint32_t counts_volume = static_cast<uint32_t>(
+        (has_num_keys ? tensor_args.num_keys_tensor->logical_shape() : tensor_args.cur_pos_tensor.logical_shape())
+            .volume());
+    const uint32_t counts_indexed = row_split && counts_volume == num_rows_in ? 1 : 0;
+    const uint32_t page_row_indexed =
+        row_split && has_page_table_row && tensor_args.page_table_row_tensor->logical_shape().volume() == num_rows_in
+            ? 1
+            : 0;
     if (has_valid_length) {
         reader_compiler_options.defines.emplace("HAS_VALID_LENGTH", "1");
     }
@@ -525,6 +565,9 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         .compile_time_args =
             {{"k", args.k},
              {"num_queries", num_queries},
+             {"num_rows_in", num_rows_in},
+             {"counts_indexed", counts_indexed},
+             {"page_row_indexed", page_row_indexed},
              {"num_query_group_tiles", num_query_group_tiles},
              {"num_weight_tiles", num_weight_tiles},
              {"page_block_size", page_block_size},
@@ -630,6 +673,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              {"candidate_block_size", args.candidate_block_size},
              {"num_parts", args.num_parts},
              {"cand_page_words", cand_page_words},
+             {"page_blocks", page_blocks},
              {"max_ties", max_ties},
              {"alloc_row_words", alloc_row_words},
              {"row_mask_group", row_mask_group}},
@@ -658,6 +702,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = kComputeSource,
+        .compiler_options = std::move(compute_compiler_options),
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = QUERY_RM_DFB,
@@ -682,6 +727,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         .compile_time_args =
             {{"k", args.k},
              {"num_queries", num_queries},
+             {"num_rows_in", num_rows_in},
              {"num_heads", num_heads},
              {"d_tiles", d_tiles},
              {"num_weight_tiles", num_weight_tiles},
@@ -787,12 +833,15 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     if (has_num_keys) {
         run_args.tensor_args.emplace(NUM_KEYS, std::cref(tensor_args.num_keys_tensor->mesh_tensor()));
     }
-    if (is_candidate_source && !is_partial) {
+    if (local_candidates) {
         run_args.tensor_args.emplace(CANDIDATE_BLOCKS, std::cref(output.at(2).mesh_tensor()));
         run_args.tensor_args.emplace(POOL_COUNT, std::cref(output.at(3).mesh_tensor()));
     }
-    if (is_partial) {
+    if (args.num_parts > 1) {
         run_args.tensor_args.emplace(PART_INDEX, std::cref(tensor_args.part_index_tensor->mesh_tensor()));
+    }
+    if (row_split) {
+        run_args.tensor_args.emplace(QUERY_ROW, std::cref(tensor_args.query_row_tensor->mesh_tensor()));
     }
     if (has_row_table) {
         run_args.tensor_args.emplace(ROW_TABLE, std::cref(tensor_args.row_table->mesh_tensor()));

@@ -30,7 +30,10 @@ namespace ttnn::experimental::deepseek {
 //   memory_config:     output memory config, interleaved. Defaults to interleaved L1.
 //   output_tensor:     optional preallocated ``[1, 1, rows, Dh]`` row-major interleaved output with
 //                      ``kv_cache``'s dtype; only rows ``[output_row_offset, output_row_offset + k)``
-//                      are written.
+//                      are written. With one part per query row it may be TILE instead (k = 32 * the
+//                      cores a row merges on, i.e. 512 for up to 7 rows; tile-aligned offset and stride):
+//                      each core tilizes its 32 rows, so no separate tilize is needed. Rows of a 32-row
+//                      block past the selection are written as zeros.
 //   output_row_offset: output row of selected row 0. Needs ``output_tensor``.
 //   candidate_topk_blocks, candidate_block_size: candidate source mode when both are > 0, for the
 //                      candidates of a candidate source split. The ``candidate_topk_blocks`` best
@@ -49,6 +52,10 @@ namespace ttnn::experimental::deepseek {
 //                      ``candidate_blocks_output`` ``[Sq, candidate_topk_blocks]`` and its count to
 //                      ``pool_count_output[j]`` (``[Sq]``).
 //   output_row_stride: output rows between consecutive query rows' selections (default k).
+//
+// One part per query row (``num_parts`` = 1, e.g. ``fused_lightning_select_kv``'s row split, each device
+// selecting one row): a row's candidates are already its selection, in key order, so the cores only gather
+// them, with no radix select.
 //
 // Returns: the selected rows, ``[1, 1, Sq * k, Dh]``, or ``output_tensor``. With fewer than k candidates
 // in total, only that many rows are written.

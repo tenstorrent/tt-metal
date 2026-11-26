@@ -43,6 +43,8 @@ void bind_build_candidate_pool(::nanobind::module_& mod) {
             pool_masks_output (Optional[ttnn.Tensor]): preallocated ``[1, Sq * candidate_topk_blocks * cbs]``
                 INT32 pool masks, with several rows.
             pool_counts_output (Optional[ttnn.Tensor]): preallocated ``[Sq]`` INT32 pool counts, with several rows.
+            query_row_tensor (Optional[ttnn.Tensor]): ``[1]`` INT32 entry of a ``[Sq]``
+                ``page_table_row_tensor`` to read (a row split: each device builds its own row's pool).
 
             With ``candidate_blocks`` ``[Sq, candidate_topk_blocks]`` (Sq rows of a verify block, ``pool_count``
             ``[Sq]``) the pool is the union of the rows' blocks, ascending, and the op also returns
@@ -65,7 +67,8 @@ void bind_build_candidate_pool(::nanobind::module_& mod) {
         nb::arg("pool_rows_output") = std::nullopt,
         nb::arg("page_table_row_tensor") = std::nullopt,
         nb::arg("pool_masks_output") = std::nullopt,
-        nb::arg("pool_counts_output") = std::nullopt);
+        nb::arg("pool_counts_output") = std::nullopt,
+        nb::arg("query_row_tensor") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

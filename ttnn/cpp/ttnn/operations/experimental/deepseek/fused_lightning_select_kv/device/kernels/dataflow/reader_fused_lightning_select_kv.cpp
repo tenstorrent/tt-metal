@@ -33,9 +33,16 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t sel_rows_word = get_arg(args::sel_rows_word);
     [[maybe_unused]] constexpr uint32_t sel_max_rows = get_arg(args::sel_max_rows);
     constexpr uint32_t num_parts = get_arg(args::num_parts);
-    // cur_pos (or num_keys) arrives at byte 0 and part_index at byte 128; the counts go to the writer
-    // at kMaxKeysWord (the most keys of any query row), kPartWord and kRowKeysWord + j (query row j).
-    constexpr uint32_t kPosReadBytes = (num_queries * sizeof(uint32_t) + 63) / 64 * 64;
+    // QUERY_ROW (a row split): the inputs hold num_rows_in rows and this device selects row query_row of
+    // them; its count (cur_pos or num_keys) and page-table row are entry query_row when indexed, else entry 0.
+    constexpr uint32_t num_rows_in = get_arg(args::num_rows_in);
+    [[maybe_unused]] constexpr uint32_t counts_indexed = get_arg(args::counts_indexed);
+    [[maybe_unused]] constexpr uint32_t page_row_indexed = get_arg(args::page_row_indexed);
+    // cur_pos (or num_keys) arrives at byte 0 and part_index (or query_row) at byte 128; the counts go to the
+    // writer at kMaxKeysWord (the most keys of any query row), kPartWord and kRowKeysWord + j (query row j).
+    // QUERY_ROW_PARTS (a row split with a key split too): query_row at byte 128 and part_index at byte 192
+    // (kMaxKeysWord, read out before that word is written).
+    constexpr uint32_t kPosReadBytes = (num_rows_in * sizeof(uint32_t) + 63) / 64 * 64;
     static_assert(kPosReadBytes <= 128, "per-row positions must fit below part_index");
     constexpr uint32_t kPartIndexWord = 32;
     constexpr uint32_t kMaxKeysWord = 48;
@@ -54,8 +61,11 @@ void kernel_main() {
     const auto page_table = TensorAccessor(tensor::page_table);
     [[maybe_unused]] const auto cur_pos = TensorAccessor(tensor::cur_pos);
     [[maybe_unused]] const auto output = TensorAccessor(tensor::output);
-#ifdef PARTIAL_OUTPUT
+#if defined(PARTIAL_OUTPUT) && (!defined(QUERY_ROW) || defined(QUERY_ROW_PARTS))
     const auto part_index = TensorAccessor(tensor::part_index);
+#endif
+#ifdef QUERY_ROW
+    const auto query_row_index = TensorAccessor(tensor::query_row);
 #endif
 #ifdef HAS_VALID_LENGTH
     // tensor::valid_length only exists when the optional tensor is bound.
@@ -86,7 +96,13 @@ void kernel_main() {
     cur_pos_dfb.reserve_back(1);
     volatile tt_l1_ptr uint32_t* key_count =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_dfb.get_write_ptr());
-#ifdef PARTIAL_OUTPUT
+#ifdef QUERY_ROW
+    noc.async_read(
+        query_row_index, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = kPartIndexWord * sizeof(uint32_t)});
+#ifdef QUERY_ROW_PARTS
+    noc.async_read(part_index, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = kMaxKeysWord * sizeof(uint32_t)});
+#endif
+#elif defined(PARTIAL_OUTPUT)
     noc.async_read(part_index, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = kPartIndexWord * sizeof(uint32_t)});
 #endif
 #ifdef HAS_NUM_KEYS
@@ -96,20 +112,28 @@ void kernel_main() {
 #endif
     noc.async_read_barrier();
     invalidate_l1_cache();
+#ifdef QUERY_ROW
+    const uint32_t query_row = key_count[kPartIndexWord];
+    const uint32_t first_count = counts_indexed ? query_row : 0;
+#else
+    constexpr uint32_t first_count = 0;
+#endif
     // Every query row scores the keys of the row with the most; the writer masks each row's extra.
     uint32_t max_keys = 0;
     for (uint32_t row = 0; row < num_queries; ++row) {
 #ifdef HAS_NUM_KEYS
-        const uint32_t row_keys = key_count[row];
+        const uint32_t row_keys = key_count[first_count + row];
 #else
         // cur_pos is inclusive, so cur_pos + 1 tokens have been compressed into this many keys.
-        const uint32_t row_keys = (key_count[row] + 1) / COMPRESS_RATE;
+        const uint32_t row_keys = (key_count[first_count + row] + 1) / COMPRESS_RATE;
 #endif
         key_count[kRowKeysWord + row] = row_keys;
         max_keys = std::max(max_keys, row_keys);
     }
     const uint32_t num_keys = max_keys;
-#ifdef PARTIAL_OUTPUT
+#if defined(QUERY_ROW_PARTS)
+    const uint32_t part = key_count[kMaxKeysWord];
+#elif defined(PARTIAL_OUTPUT) && !defined(QUERY_ROW)
     const uint32_t part = key_count[kPartIndexWord];
 #else
     const uint32_t part = 0;
@@ -140,6 +164,10 @@ void kernel_main() {
     //     end_block - start_block);
     ctrl_dfb.reserve_back(2);
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_dfb.get_write_ptr())[0] = end_block - start_block;
+#ifdef QUERY_ROW
+    // Compute scores this row of the replicas.
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_dfb.get_write_ptr())[1] = query_row;
+#endif
     ctrl_dfb.push_back(1);
     volatile tt_l1_ptr uint32_t* page_table_chunk =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_dfb.get_write_ptr());
@@ -150,12 +178,17 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(blocks_dfb.get_write_ptr());
 
 #ifdef PAGE_TABLE_ROW
-    // This session's page-table row.
+    // This session's page-table row (a row split's row's entry when the tensor holds one per row).
     const auto page_table_row_gen = TensorAccessor(tensor::page_table_row);
-    noc.async_read(page_table_row_gen, ctrl_dfb, 64, {.page_id = 0}, {.offset_bytes = 0});
+#ifdef QUERY_ROW
+    const uint32_t page_row_entry = page_row_indexed ? query_row : 0;
+#else
+    constexpr uint32_t page_row_entry = 0;
+#endif
+    noc.async_read(page_table_row_gen, ctrl_dfb, 64, {.page_id = 0}, {.offset_bytes = page_row_entry / 16 * 64});
     noc.async_read_barrier();
     invalidate_l1_cache();
-    const uint32_t page_table_row = page_table_chunk[0];
+    const uint32_t page_table_row = page_table_chunk[page_row_entry % 16];
 #else
     const uint32_t page_table_row = 0;
 #endif
