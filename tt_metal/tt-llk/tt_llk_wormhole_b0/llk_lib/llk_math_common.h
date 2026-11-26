@@ -36,8 +36,10 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
 
-    // ADDR_MOD_7 is invariant state: zero advance, so it behaves like a NOOP.
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    // Perf experiment: three NOPs in place of the ADDR_MOD_7 set, same code size, no state change.
+    TTI_NOP;
+    TTI_NOP;
+    TTI_NOP;
     // ADDR_MOD_6 is invariant state: dest += 2, so it behaves like dst_reg++.
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 
