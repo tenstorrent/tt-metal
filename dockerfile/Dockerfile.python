@@ -92,6 +92,19 @@ RUN source /tmp/python-version.env && \
     uv pip install --no-cache uv build numpy setuptools==80 auditwheel==6.7.0 patchelf==0.17.2.4 && \
     uv clean --force
 
+# ctcache (clang-tidy result cache) 1.2.0, pinned by commit, installed at image
+# build so clang-tidy jobs never download it at run time. It is not on PyPI;
+# the commit archive carries no git metadata, so setuptools-scm is told the
+# version. Pulls in its declared dependencies (requests, flask).
+ARG CTCACHE_COMMIT=e33c063ca6e52b48bcefbc45d46d8c150ffa81ca
+RUN umask 000 && \
+    source ${PYTHON_ENV_DIR}/bin/activate && \
+    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_CTCACHE=1.2.0 \
+    uv pip install --no-cache "ctcache @ https://github.com/matus-chochlik/ctcache/archive/${CTCACHE_COMMIT}.tar.gz" && \
+    test -x ${PYTHON_ENV_DIR}/bin/clang-tidy-cache && \
+    python -c "import ctcache.clang_tidy_cache, requests" && \
+    uv clean --force
+
 # Export as scratch image with only the venv
 # NOTE: Use literal /opt/venv path, not ${PYTHON_ENV_DIR}. FROM scratch doesn't inherit ENV.
 FROM scratch AS ci-build-venv
