@@ -46,15 +46,10 @@ constexpr std::uint32_t BCAST_SCALAR_ADDR_MOD = ADDR_MOD_3;
 constexpr std::uint32_t BCAST_SCALAR_VECS_PER_TILE = DEST_TILE_SIZE_RAW / 2;
 
 inline void _sfpu_bcast_scalar_init_() {
-    // The shared SFPU configuration (as the sibling inits) and the zero-stride address modifier the loads and
-    // stores below address DEST through. Neither the column-broadcast mask nor the replay program is needed.
+    // The shared SFPU configuration (as the sibling inits). The loads and stores below address DEST through
+    // ADDR_MOD_7 at its zero-advance invariant, which hw_configure establishes. Neither the column-broadcast mask
+    // nor the replay program is needed.
     _init_sfpu_config_reg();
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
 }
 
 sfpi_inline sfpi::vFloat _bcast_scalar_or_bits_(sfpi::vFloat a, sfpi::vFloat b) {
