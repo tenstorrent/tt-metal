@@ -5,8 +5,8 @@
 #include "per_token_cast_to_fp8_program_factory.hpp"
 
 #include <bit>
-#include <map>
 #include <string>
+#include <utility>
 
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/work_split.hpp>
@@ -54,24 +54,23 @@ uint32_t units_for_core_from_split(
     return 0;
 }
 
-struct KernelIds {
-    tt::tt_metal::KernelHandle reader = 0;
-    tt::tt_metal::KernelHandle writer = 0;
-    tt::tt_metal::KernelHandle compute = 0;
-};
+// Kernel positions in ProgramDescriptor::kernels, fixed by the push_back order in build_kernels_and_cbs.
+constexpr size_t kReaderKernelIdx = 0;
+constexpr size_t kWriterKernelIdx = 1;
+constexpr size_t kComputeKernelIdx = 2;
 
-// Shared by both layout paths: creates every circular buffer and the three kernels on all_cores. The
+// Shared by both layout paths: describes every circular buffer and the three kernels on all_cores. The
 // kernels and CB layout are layout-agnostic; the tile path is selected via `defines` (INPUT_TILE_LAYOUT)
 // and only the scale-scratch footprint differs (one row for ROW_MAJOR, tile_h rows for TILE).
-KernelIds build_kernels_and_cbs(
-    tt::tt_metal::Program& program,
+void build_kernels_and_cbs(
+    tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& input,
     const Tensor& output_e4m3,
     const Tensor& output_scale,
     const tt::tt_metal::CoreRangeSet& all_cores,
     uint32_t scale_scratch_bytes,
     bool round_scale_to_power_of_two,
-    const std::map<std::string, std::string>& defines) {
+    const tt::tt_metal::KernelDescriptor::Defines& defines) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -120,18 +119,25 @@ KernelIds build_kernels_and_cbs(
     constexpr uint32_t cb_inv_scale_tiles_idx = CBIndex::c_7;
     constexpr uint32_t cb_output_e4m3_idx = CBIndex::c_16;
 
+    auto make_cb = [&](uint32_t cb_idx, DataFormat data_format, uint32_t total_size, uint32_t page_size) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = total_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_idx),
+                .data_format = data_format,
+                .page_size = page_size,
+            }}},
+        });
+    };
     auto make_fp32_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
-        CircularBufferConfig cfg = CircularBufferConfig(num_tiles * TILE_BYTES_FP32, {{cb_idx, fp32_df}})
-                                       .set_page_size(cb_idx, TILE_BYTES_FP32);
-        CreateCircularBuffer(program, all_cores, cfg);
+        make_cb(cb_idx, fp32_df, num_tiles * TILE_BYTES_FP32, TILE_BYTES_FP32);
     };
 
     // cb_in: input, one tile per page; tiles_per_block pages = one 128-wide block, double-buffered.
     // ROW_MAJOR input: the reader fills the block ([tile_h x 128]) contiguously across these pages.
     // TILE input: the reader reads the tiles_per_block tiles individually into these pages.
-    CircularBufferConfig cb_in_cfg = CircularBufferConfig(2 * tiles_per_block * in_tile_bytes, {{cb_in_idx, input_df}})
-                                         .set_page_size(cb_in_idx, in_tile_bytes);
-    CreateCircularBuffer(program, all_cores, cb_in_cfg);
+    make_cb(cb_in_idx, input_df, 2 * tiles_per_block * in_tile_bytes, in_tile_bytes);
 
     // cb_tile: input tiles in fp32. ROW_MAJOR: tilized input; TILE: copied input (already tiles).
     make_fp32_tile_cb(cb_tile_idx, tiles_per_block);
@@ -142,34 +148,29 @@ KernelIds build_kernels_and_cbs(
 
     // cb_output_e4m3: e4m3 output, always row-major, one tile per page, double-buffered.
     // Identical for both input layouts (ROW_MAJOR and TILE).
-    CircularBufferConfig cb_output_e4m3_cfg =
-        CircularBufferConfig(2 * tiles_per_block * output_e4m3_page_bytes, {{cb_output_e4m3_idx, fp8_df}})
-            .set_page_size(cb_output_e4m3_idx, output_e4m3_page_bytes);
-    CreateCircularBuffer(program, all_cores, cb_output_e4m3_cfg);
+    make_cb(cb_output_e4m3_idx, fp8_df, 2 * tiles_per_block * output_e4m3_page_bytes, output_e4m3_page_bytes);
 
     // cb_scale_scratch: writer-private scale staging. Caller sizes it: one page (ROW_MAJOR, one token's
-    // row) or tile_h pages (TILE, one row-tile's rows) — see each layout path in create_program.
-    CircularBufferConfig cb_scale_scratch_cfg =
-        CircularBufferConfig(scale_scratch_bytes, {{cb_scale_scratch_idx, fp32_df}})
-            .set_page_size(cb_scale_scratch_idx, scale_scratch_bytes);
-    CreateCircularBuffer(program, all_cores, cb_scale_scratch_cfg);
+    // row) or tile_h pages (TILE, one row-tile's rows) — see each layout path in create_descriptor.
+    make_cb(cb_scale_scratch_idx, fp32_df, scale_scratch_bytes, scale_scratch_bytes);
 
     // Reader CT layout is shared; CT[1] input_block_bytes is read only on the ROW_MAJOR branch but is
     // passed by both so the TensorAccessorArgs offset (<7>) and later indices line up across layouts.
     std::vector<uint32_t> reader_ct_args = {
         cb_in_idx, input_block_bytes, cb_scaler_idx, tile_h, tile_w, face_h, face_w};
     TensorAccessorArgs(src_buffer).append_to(reader_ct_args);
-    KernelIds ids;
-    ids.reader = CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/"
-        "reader_per_token_cast_to_fp8.cpp",
-        all_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_ct_args,
-            .defines = defines});
+        "reader_per_token_cast_to_fp8.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.defines = defines;
+    reader_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = NOC::RISCV_1_default,
+    };
 
     // Writer (RISCV_0): output_e4m3 block writes + scale extraction (col 0 of cb_scale_tiles) -> scale.
     std::vector<uint32_t> writer_ct_args = {
@@ -185,16 +186,18 @@ KernelIds build_kernels_and_cbs(
         face_w};
     TensorAccessorArgs(dst_e4m3_buffer).append_to(writer_ct_args);
     TensorAccessorArgs(dst_scale_buffer).append_to(writer_ct_args);
-    ids.writer = CreateKernel(
-        program,
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/"
-        "writer_per_token_cast_to_fp8.cpp",
-        all_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_ct_args,
-            .defines = defines});
+        "writer_per_token_cast_to_fp8.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.defines = defines;
+    writer_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::RISCV_0_default,
+    };
 
     // Compute (TRISC): [tilize] -> block amax scale + 1/scale -> divide -> untilize to output_e4m3.
     const uint32_t clamp_min_bits = std::bit_cast<uint32_t>(fp8::SCALE_CLAMP_MIN);
@@ -215,27 +218,41 @@ KernelIds build_kernels_and_cbs(
         static_cast<uint32_t>(round_scale_to_power_of_two)};
     // fp32_dest_acc_en=True is required whenever an 8-bit-float CB (output_e4m3) is on the core (DEST in
     // 32-bit family-agnostic mode); it also gives fp32 precision for the reduce/divide stages.
-    ids.compute = CreateKernel(
-        program,
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/per_token_cast_to_fp8/device/kernels/compute/"
-        "compute_per_token_cast_to_fp8.cpp",
-        all_cores,
-        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args, .defines = defines});
+        "compute_per_token_cast_to_fp8.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = std::move(compute_ct_args);
+    compute_desc.defines = defines;
+    compute_desc.config = ComputeConfigDescriptor{.fp32_dest_acc_en = true};
 
-    return ids;
+    // Push order fixes kReaderKernelIdx / kWriterKernelIdx / kComputeKernelIdx.
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 }
 
-// Shared create() body for both layout paths. `tile_layout` picks the input layout, which is the only thing
-// that varies: it changes the work-split unit, the scale-scratch size, the INPUT_TILE_LAYOUT kernel define,
-// and the per-core runtime args. Everything else (kernels, CBs, the split/build/loop skeleton) is identical.
-ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_program(
-    const PerTokenCastToFp8Params& attrs,
-    const Tensor& input,
-    const Tensor& output_e4m3,
-    const Tensor& output_scale,
-    bool tile_layout) {
+}  // namespace
+
+// Shared body for both layout paths. `tile_layout` picks the input layout, which is the only thing that varies:
+// it changes the work-split unit, the scale-scratch size, the INPUT_TILE_LAYOUT kernel define, and the per-core
+// runtime args. Everything else (kernels, CBs, the split/build/loop skeleton) is identical.
+//
+// Cache hits: everything here derives from the program hash (attributes + the input's TensorSpec, which also
+// fixes both outputs' specs), so only the three I/O buffer addresses differ between two calls sharing a key.
+// They are passed as Buffer* bindings and the framework re-points them on a hit; no override is needed.
+tt::tt_metal::ProgramDescriptor PerTokenCastToFp8ProgramFactory::create_descriptor(
+    const PerTokenCastToFp8Params& operation_attributes,
+    const PerTokenCastToFp8Inputs& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+
+    const auto& input = tensor_args.input_tensor;
+    const auto& [output_e4m3, output_scale] = tensor_return_value;
+    const bool tile_layout = input.layout() == Layout::TILE;
 
     const auto& input_shape = input.logical_shape();
     const auto [M, H] = fold_M_H(input_shape);  // M = rows, H = width (last dim)
@@ -248,7 +265,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     // extra geometry (computed here) to build its per-core args in the loop below.
     uint32_t total_units = 0;
     uint32_t scale_scratch_bytes = 0;
-    std::map<std::string, std::string> defines;
+    KernelDescriptor::Defines defines;
     uint32_t rows_per_plane = 0;
     uint32_t row_tiles_per_plane = 0;
     if (tile_layout) {
@@ -274,23 +291,28 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         scale_scratch_bytes = scale_page_bytes;
     }
 
-    Program program{};
+    ProgramDescriptor desc;
     auto compute_grid = input.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, crs1, crs2, upc1, upc2] = split_work_to_cores(compute_grid, total_units);
 
-    const KernelIds k = build_kernels_and_cbs(
-        program,
+    build_kernels_and_cbs(
+        desc,
         input,
         output_e4m3,
         output_scale,
         all_cores,
         scale_scratch_bytes,
-        attrs.round_scale_to_power_of_two,
+        operation_attributes.round_scale_to_power_of_two,
         defines);
 
-    const uint32_t src_addr = input.mesh_buffer().address();
-    const uint32_t dst_e4m3_addr = output_e4m3.mesh_buffer().address();
-    const uint32_t dst_scale_addr = output_scale.mesh_buffer().address();
+    auto& reader_desc = desc.kernels[kReaderKernelIdx];
+    auto& writer_desc = desc.kernels[kWriterKernelIdx];
+    auto& compute_desc = desc.kernels[kComputeKernelIdx];
+
+    // Buffer* (not ->address()) so each address slot is a binding the framework patches on a cache hit.
+    Buffer* src_buffer = input.buffer();
+    Buffer* dst_e4m3_buffer = output_e4m3.buffer();
+    Buffer* dst_scale_buffer = output_scale.buffer();
 
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
     uint32_t offset = 0;  // ROW_MAJOR: first row; TILE: first 128-block. Advances by this core's unit count.
@@ -300,61 +322,20 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         uint32_t num_blocks = 0;
         if (tile_layout) {
             num_blocks = core_units;  // the work unit is already a 128-block
-            SetRuntimeArgs(program, k.reader, core, {src_addr, offset, num_blocks});
-            SetRuntimeArgs(
-                program,
-                k.writer,
-                core,
-                {dst_e4m3_addr, dst_scale_addr, offset, num_blocks, rows_per_plane, row_tiles_per_plane});
+            reader_desc.emplace_runtime_args(core, {src_buffer, offset, num_blocks});
+            writer_desc.emplace_runtime_args(
+                core, {dst_e4m3_buffer, dst_scale_buffer, offset, num_blocks, rows_per_plane, row_tiles_per_plane});
         } else {
             num_blocks = div_up(core_units * scale_blocks_per_row, tile_h);  // core_units = rows; last may be partial
-            SetRuntimeArgs(program, k.reader, core, {src_addr, num_blocks, offset, core_units, H});
-            SetRuntimeArgs(program, k.writer, core, {dst_e4m3_addr, dst_scale_addr, num_blocks, offset, core_units, H});
+            reader_desc.emplace_runtime_args(core, {src_buffer, num_blocks, offset, core_units, H});
+            writer_desc.emplace_runtime_args(
+                core, {dst_e4m3_buffer, dst_scale_buffer, num_blocks, offset, core_units, H});
         }
-        SetRuntimeArgs(program, k.compute, core, {num_blocks});
+        compute_desc.emplace_runtime_args(core, {num_blocks});
         offset += core_units;
     }
 
-    return {std::move(program), {k.reader, k.writer, k.compute, std::move(all_cores_vec)}};
-}
-
-// Shared override body: only the I/O buffer addresses change on a program-cache hit; everything else is
-// shape-derived and captured at create time (and the shape is in the program hash).
-void apply_io_overrides(
-    ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables>& cached_program,
-    const PerTokenCastToFp8Inputs& tensor_args,
-    std::tuple<Tensor, Tensor>& tensor_return_value) {
-    const auto& [output_e4m3, output_scale] = tensor_return_value;
-    const auto& shared = cached_program.shared_variables;
-    const uint32_t src_addr = tensor_args.input_tensor.mesh_buffer().address();
-    const uint32_t dst_e4m3_addr = output_e4m3.mesh_buffer().address();
-    const uint32_t dst_scale_addr = output_scale.mesh_buffer().address();
-    for (const auto& core : shared.all_cores_vec) {
-        auto& reader_args = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.reader_kernel_id, core);
-        reader_args[0] = src_addr;
-        auto& writer_args = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.writer_kernel_id, core);
-        writer_args[0] = dst_e4m3_addr;
-        writer_args[1] = dst_scale_addr;
-    }
-}
-
-}  // namespace
-
-PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactory::create(
-    const PerTokenCastToFp8Params& operation_attributes,
-    const PerTokenCastToFp8Inputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto& [output_e4m3, output_scale] = tensor_return_value;
-    const bool tile_layout = tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE;
-    return create_program(operation_attributes, tensor_args.input_tensor, output_e4m3, output_scale, tile_layout);
-}
-
-void PerTokenCastToFp8ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const PerTokenCastToFp8Params& /*operation_attributes*/,
-    const PerTokenCastToFp8Inputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    apply_io_overrides(cached_program, tensor_args, tensor_return_value);
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim::qsr::per_token_cast_to_fp8

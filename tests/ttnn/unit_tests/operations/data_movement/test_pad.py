@@ -638,9 +638,9 @@ def test_pad_rm_sharded_height_only_override_addr_change(device):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-@pytest.mark.parametrize("padding,torch_padding", [(((0, 64),), (0, 64)), (((16, 16), (0, 32)), (0, 32, 0, 32))])
+@pytest.mark.parametrize("padding,torch_padding", [(((0, 64),), (0, 64)), (((0, 32), (0, 32)), (0, 32, 0, 32))])
 @pytest.mark.parametrize("value", [0])
-def test_pad(device, h, w, padding, torch_padding, value):
+def test_pad_tile_2d(device, h, w, padding, torch_padding, value):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -685,12 +685,11 @@ def test_pad_padding_validation_length(device, h, w, padding, torch_padding, val
     return
 
 
-@pytest.mark.skip(reason="ttnn.pad does not support row_major tensors because the kernel currently causes a PCC error")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 2)), (0, 2, 0, 1)), (((1, 1), (4, 2)), (4, 2, 1, 1))])
 @pytest.mark.parametrize("value", [0])
-def test_pad(device, h, w, padding, torch_padding, value):
+def test_pad_rm_2d(device, h, w, padding, torch_padding, value):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -709,7 +708,6 @@ def test_pad(device, h, w, padding, torch_padding, value):
     assert torch.equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.skip(reason="ttnn.pad does not support row_major tensors because the kernel currently causes a PCC error")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 2)), (0, 2, 0, 1)), (((1, 1), (4, 2)), (4, 2, 1, 1))])
@@ -719,6 +717,7 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+    torch_output_tensor = torch.nn.functional.pad(torch_output_tensor, torch_padding, mode="constant", value=value)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
@@ -736,7 +735,6 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
     assert torch.equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.skip(reason="ttnn.pad requires pad to start at 0")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding", [((0, 32), (0, 32)), ((1, 64), (0, 96)), ((0, 64), (0, 43)), ((32, 64), (64, 96))])
@@ -750,17 +748,11 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value, expect_erro
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
-    if (
-        padding[0][0] % ttnn.TILE_SIZE != 0
-        or padding[0][1] % ttnn.TILE_SIZE != 0
-        or padding[1][0] % ttnn.TILE_SIZE != 0
-        or padding[1][1] % ttnn.TILE_SIZE != 0
-    ):
-        with expect_error(RuntimeError, "must be a multiple of the tile size on height and width"):
+    if padding[0][0] != 0 or padding[1][0] != 0:
+        with expect_error(RuntimeError, "ttnn.pad: on device tile padding does not support front padding"):
             ttnn.pad(input_tensor, padding=padding, value=value)
         return
-    else:
-        output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
 
     assert output_tensor.shape == ttnn.Shape((h + padding[0][0] + padding[0][1], w + padding[1][0] + padding[1][1]))
 
@@ -769,6 +761,30 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value, expect_erro
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape, padding",
+    [
+        ((1, 1, 2, 4), ((0, 0), (0, 0), (0, 0), (0, 1))),
+        ((1, 1, 2, 4), ((0, 0), (0, 0), (0, 0), (1, 0))),
+        ((1, 1, 2, 4), ((0, 0), (0, 0), (1, 1), (1, 1))),
+        ((1, 2, 4), ((0, 0), (0, 0), (0, 1))),
+        ((1, 1, 1, 2, 4), ((0, 0),) * 4 + ((0, 1),)),
+    ],
+    ids=["rank4_after", "rank4_before", "rank4_both", "rank3_after", "rank5_after"],
+)
+def test_pad_host_tensor(shape, padding):
+    # Host ttnn.pad returns the padded shape as the logical shape, like on device.
+    torch_input_tensor = (torch.arange(prod(shape)) / 8 + 1).reshape(shape).bfloat16()
+    torch_padding = [p for dim in reversed(padding) for p in dim]
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=-1.0)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=-1.0)
+
+    assert list(output_tensor.padded_shape) == list(torch_output_tensor.shape)
+    assert_tensors_equal(torch_output_tensor, ttnn.to_torch(output_tensor))
 
 
 @skip_for_blackhole("Fails on Blackhole. Issue #20698")
