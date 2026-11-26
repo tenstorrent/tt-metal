@@ -68,19 +68,8 @@ constexpr size_t kRingHeadroomBatches = 4;
 constexpr size_t kMaxRingCapacity = 1u << 22;
 
 // How often each device's clock mapping is re-anchored, and how many reads of its wall clock one anchor takes.
-// The device clock's rate changes fastest just after load starts, so anchors come more often then.
-constexpr auto kAnchorPeriod = std::chrono::seconds(1);
-constexpr auto kEarlyAnchorPeriod = std::chrono::milliseconds(100);
-constexpr auto kEarlyAnchorWindow = std::chrono::seconds(5);
-constexpr auto kSettlingAnchorPeriod = std::chrono::milliseconds(250);
-constexpr auto kSettlingAnchorWindow = std::chrono::seconds(10);
-
-std::chrono::steady_clock::duration anchor_period(std::chrono::steady_clock::duration since_start) {
-    if (since_start < kEarlyAnchorWindow) {
-        return kEarlyAnchorPeriod;
-    }
-    return since_start < kSettlingAnchorWindow ? kSettlingAnchorPeriod : kAnchorPeriod;
-}
+// The device clock's rate changes with load, so anchors come often.
+constexpr auto kAnchorPeriod = std::chrono::milliseconds(100);
 constexpr uint32_t kAnchorReads = 4;
 
 // The host clock readings are taken on: Tracy's when Tracy is built in, so zones need no conversion.
@@ -342,7 +331,6 @@ void RealtimeProfilerReceiver::run_receiver_loop() {
     constexpr auto kFifoPlotInterval = std::chrono::milliseconds(10);
     auto last_fifo_plot = std::chrono::steady_clock::now();
     auto last_consumer_wake = last_fifo_plot;
-    const auto loop_start = last_fifo_plot;
     auto last_anchor = last_fifo_plot;
     bool consumers_owed_wake = false;
     while (!stop_.load(std::memory_order_acquire)) {
@@ -356,7 +344,7 @@ void RealtimeProfilerReceiver::run_receiver_loop() {
             std::this_thread::sleep_for(kReceiverPeriod);
             continue;
         }
-        if (now - last_anchor >= anchor_period(now - loop_start)) {
+        if (now - last_anchor >= kAnchorPeriod) {
             last_anchor = now;
             for (auto& dev_state : devices_) {
                 anchor_clock_mapping(dev_state);
@@ -364,6 +352,7 @@ void RealtimeProfilerReceiver::run_receiver_loop() {
                     dev_state.chip_id, dev_state.anchor_host, dev_state.anchor_device, dev_state.frequency);
                 publish_device_profiler_sync_anchor(dev_state);
             }
+            record_anchor_time(std::chrono::steady_clock::now() - now);
             // The Tracy consumer places zones once an anchor brackets them, so a new anchor can unblock some.
             service_->wake_consumers();
         }
@@ -521,6 +510,13 @@ void log_dispatch_stalls(const RealtimeProfilerDevice& dev_state) {
 
 }  // namespace
 
+void RealtimeProfilerReceiver::record_anchor_time(std::chrono::steady_clock::duration took) {
+    const auto ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(took).count());
+    anchor_count_++;
+    anchor_total_ns_ += ns;
+    anchor_max_ns_ = std::max(anchor_max_ns_, ns);
+}
+
 RealtimeProfilerReceiver::~RealtimeProfilerReceiver() {
     for (auto& dev_state : devices_) {
         request_kernel_exit(dev_state);
@@ -532,6 +528,22 @@ RealtimeProfilerReceiver::~RealtimeProfilerReceiver() {
 
     stop_.store(true, std::memory_order_release);
     receiver_thread_.join();
+
+    // One last reading, later than every zone's end, so the Tracy consumer places each remaining zone between two
+    // anchors instead of extrapolating past the last one.
+    for (auto& dev_state : devices_) {
+        anchor_clock_mapping(dev_state);
+        service_->tracy().calibrate_device(
+            dev_state.chip_id, dev_state.anchor_host, dev_state.anchor_device, dev_state.frequency);
+    }
+    if (anchor_count_ != 0) {
+        log_info(
+            tt::LogMetal,
+            "[Real-time profiler] {} clock anchors, mean {:.1f} us, max {:.1f} us each (all devices)",
+            anchor_count_,
+            static_cast<double>(anchor_total_ns_) / static_cast<double>(anchor_count_) / 1e3,
+            static_cast<double>(anchor_max_ns_) / 1e3);
+    }
 
     // The receiver has drained every page, so each dispatch-stall marker has been counted.
     for (const auto& dev_state : devices_) {

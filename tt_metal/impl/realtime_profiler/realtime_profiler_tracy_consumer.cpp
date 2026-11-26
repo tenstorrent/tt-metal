@@ -9,6 +9,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iterator>
+#include <limits>
 #include <mutex>
 #include <ranges>
 #include <span>
@@ -285,6 +286,7 @@ void RealtimeProfilerTracyConsumer::emit_pending(Chip& chip, bool all) {
         emit_stall(chip, chip.pending_stalls.front());
         chip.pending_stalls.pop_front();
     }
+    trim_anchors(chip);
 }
 
 void RealtimeProfilerTracyConsumer::add_anchor(Chip& chip, int64_t host_time, uint64_t device_timestamp) {
@@ -327,10 +329,27 @@ void RealtimeProfilerTracyConsumer::finalize_anchor(Chip& chip, size_t index) {
         result.slope = chip.host_per_wall;
     }
     chip.smooth.push_back(result);
-    constexpr size_t kFinalAnchorsKept = 4;
-    if (chip.smooth.size() > kFinalAnchorsKept) {
-        chip.smooth.erase(chip.smooth.begin());
+    trim_anchors(chip);
+}
+
+void RealtimeProfilerTracyConsumer::trim_anchors(Chip& chip) {
+    // An anchor stays until no zone that is still waiting can need the segment before it. Zones of a chip come in
+    // order, so only the oldest waiting one matters. A consumer that falls behind keeps the anchors it will need.
+    double oldest_waiting = std::numeric_limits<double>::infinity();
+    const auto relative = [&](uint64_t timestamp) {
+        return static_cast<double>(static_cast<int64_t>(timestamp - chip.base_wall));
+    };
+    if (!chip.pending_programs.empty()) {
+        oldest_waiting = std::min(oldest_waiting, relative(chip.pending_programs.front().start_timestamp));
     }
+    if (!chip.pending_stalls.empty()) {
+        oldest_waiting = std::min(oldest_waiting, relative(chip.pending_stalls.front().device_timestamp));
+    }
+    size_t drop = 0;
+    while (chip.smooth.size() - drop > 2 && chip.smooth[drop + 1].wall <= oldest_waiting) {
+        ++drop;
+    }
+    chip.smooth.erase(chip.smooth.begin(), chip.smooth.begin() + drop);
 }
 
 const tracy::SourceLocationData* RealtimeProfilerTracyConsumer::program_srcloc(

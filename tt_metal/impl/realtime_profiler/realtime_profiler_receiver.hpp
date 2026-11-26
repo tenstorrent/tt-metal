@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -64,6 +65,7 @@ public:
     size_t num_active_devices() const { return devices_.size(); }
 
 private:
+    void record_anchor_time(std::chrono::steady_clock::duration took);
     RealtimeProfilerReceiver(ContextId context_id, std::vector<RealtimeProfilerDevice> devices);
 
     // Receiver thread entry point: drain every device socket, re-anchor the clock mapping when due, and
@@ -101,6 +103,10 @@ private:
     // Receiver diagnostics
     std::atomic<uint32_t> peak_fifo_pages_{0};        // all-time peak D2H FIFO usage
     uint32_t windowed_peak_fifo_pages_ = 0;           // for plotting in Tracy; gets reset each plot sample
+    // The time one round of clock anchors takes, over all devices; written by the receiver thread, read after it joins.
+    uint64_t anchor_count_ = 0;
+    uint64_t anchor_total_ns_ = 0;
+    uint64_t anchor_max_ns_ = 0;
     std::atomic<uint64_t> num_published_records_{0};  // count of records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // count of batches published to the ring
     std::atomic<uint64_t> dispatch_stall_events_{0};  // dispatch-stall markers received

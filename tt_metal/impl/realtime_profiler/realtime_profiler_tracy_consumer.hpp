@@ -117,6 +117,8 @@ private:
     void finalize_anchor(Chip& chip, size_t index);
     // Emits the chip's pending zones that smoothed anchors bracket, or all of them when `all` is set.
     void emit_pending(Chip& chip, bool all);
+    // Drops the oldest final anchors that no waiting zone can still need.
+    void trim_anchors(Chip& chip);
     void emit_program(Chip& chip, const experimental::ProgramRealtimeRecord& record);
     void emit_stall(Chip& chip, const PendingStall& stall);
     void flush_stall_message(uint32_t chip_id, Chip& chip);
