@@ -1,1 +1,4 @@
 {"event":"friction","what":"none","ts":"2026-11-26T19:45:42+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-26T23:10:59+00:00"}
+{"event":"note","detail":"Integrity: working tree holds a pre-boundary g6_to_memory_config implementation (commit 54f1251ab1f). Not reading it; rewriting op file, descriptor, kernels from op_design.md (1e21d19d3fc).","ts":"2026-11-26T23:10:59+00:00"}
+{"event":"test_run","result":"pass","detail":"acceptance 31/31 --dev and plain; golden 91 passed 26 xfailed; shard->core rule cross-checked vs compute_shard_page_mapping on 2058/2065/2071/2062/block","ts":"2026-11-26T23:21:39+00:00"}

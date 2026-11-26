@@ -1,36 +1,34 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_to_memory_config: return a new TILE tensor with the input's values placed as `memory_config` names.
+"""g6_to_memory_config: move a TILE tensor's pages into the placement memory_config names.
 
-One device program per call. Regimes (op_design.md, Blocking Model / Regimes):
-  PULL  — target L1-sharded: each target-shard owner reads its pages into its own shard.
-  PUSH  — source L1-sharded: each source-shard owner writes its pages from its own shard.
-  STAGE — both ends banks: a full-grid set of movers stages page ranges through an L1 ring.
+    y[p] = x[p] for every tile page p (bit copy); shape, dtype, TILE layout kept;
+    placement(y) = memory_config.
+
+One device program per call (ttnn.generic_op); see op_design.md for the regimes.
 """
 
 from __future__ import annotations
 
 import ttnn
-
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_to_memory_config_program_descriptor import create_program_descriptor, select_regime  # noqa: F401
-
-TILE = 32
-
-_BUFFER_NAME = {ttnn.BufferType.DRAM: "dram", ttnn.BufferType.L1: "l1"}
-_SCHEME_NAME = {
-    ttnn.TensorMemoryLayout.INTERLEAVED: "interleaved",
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: "height_sharded",
-    ttnn.TensorMemoryLayout.WIDTH_SHARDED: "width_sharded",
-    ttnn.TensorMemoryLayout.BLOCK_SHARDED: "block_sharded",
-}
+from .g6_to_memory_config_program_descriptor import (
+    L1_BUDGET_BYTES,
+    Plan,
+    create_program_descriptor,
+    dump_core_roles,
+    geometry_of,
+    op_l1_bytes_per_core,
+    placement_of,
+    select_plan,
+    shard_layout_error,
+)
 
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_TAGGERS — inputs is (scenario,), scenario a dict with "shape", "dtype",
-#    "layout", "in_memory", "out_memory" (feature_spec.py / axes.py)
+# 1. INPUT_TAGGERS — inputs is (scenario,), the scenario dict of one production case
 # ---------------------------------------------------------------------------
 
 
@@ -48,7 +46,7 @@ def tag_rank(inputs, axes):
 
 def tag_alignment(inputs, axes):
     shape = inputs[0]["shape"]
-    if shape[-1] % TILE == 0 and shape[-2] % TILE == 0:
+    if shape[-2] % 32 == 0 and shape[-1] % 32 == 0:
         return "tile_aligned"
     return "h_non_aligned"
 
@@ -104,16 +102,9 @@ SUPPORTED = {
 # ---------------------------------------------------------------------------
 
 EXCLUSIONS = [
-    # DRAM width-sharded targets (bf4 weights): STAGE with a sharded DRAM output accessor,
-    # lifted once that page path is tested (op_design.md, Registry).
+    # DRAM width-sharded target: used only by the bfloat4_b weights; leaves with the block-format refinement.
     {"out_scheme": "width_sharded", "out_buffer": "dram"},
 ]
-
-
-PROPERTIES = {
-    "multi_core": {"value": True, "source": "declared"},
-    "bounded_cb": {"value": True, "source": "declared"},
-}
 
 
 # ---------------------------------------------------------------------------
@@ -121,80 +112,51 @@ PROPERTIES = {
 # ---------------------------------------------------------------------------
 
 
-def _memory_entry(memory_config):
-    return {
-        "buffer": _BUFFER_NAME.get(memory_config.buffer_type, str(memory_config.buffer_type)),
-        "scheme": _SCHEME_NAME.get(memory_config.memory_layout, str(memory_config.memory_layout)),
+def _structural_error(input_tensor, memory_config):
+    """Refusals the spec requires as ValueError; they precede the SUPPORTED gate."""
+    if not isinstance(input_tensor, ttnn.Tensor):
+        return "input_tensor must be a ttnn.Tensor"
+    if not ttnn.is_tensor_storage_on_device(input_tensor):
+        return "input_tensor must be on a device"
+    if input_tensor.layout != ttnn.TILE_LAYOUT:
+        return f"input_tensor must be in TILE_LAYOUT, got {input_tensor.layout}"
+    rank = len(input_tensor.shape)
+    if rank not in (2, 3, 4):
+        return f"rank must be 2, 3 or 4, got {rank}"
+    if not isinstance(memory_config, ttnn.MemoryConfig):
+        return "memory_config must be a ttnn.MemoryConfig"
+    geom = geometry_of(input_tensor)
+    for name, config in (("input_tensor", input_tensor.memory_config()), ("memory_config", memory_config)):
+        placement = placement_of(config)
+        if placement.is_sharded:
+            reason = shard_layout_error(placement, geom)
+            if reason is not None:
+                return f"{name} shard spec: {reason}"
+    return None
+
+
+def _axes(input_tensor, memory_config):
+    in_placement = placement_of(input_tensor.memory_config())
+    out_placement = placement_of(memory_config)
+    scenario = {
+        "shape": list(input_tensor.shape),
+        "dtype": input_tensor.dtype,
+        "layout": input_tensor.layout,
+        "in_memory": {"buffer": in_placement.buffer, "scheme": in_placement.scheme},
+        "out_memory": {"buffer": out_placement.buffer, "scheme": out_placement.scheme},
     }
-
-
-def _tile_grid(shape):
-    leading = 1
-    for d in shape[:-2]:
-        leading *= d
-    return leading * ((shape[-2] + TILE - 1) // TILE), (shape[-1] + TILE - 1) // TILE
-
-
-def _check_shard_spec(what, memory_config, tile_rows, tile_cols):
-    if not memory_config.is_sharded():
-        return
-    spec = memory_config.shard_spec
-    if spec is None:
-        raise ValueError(f"g6_to_memory_config: {what} is sharded but has no shard spec")
-    if spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
-        raise ValueError(f"g6_to_memory_config: {what} shard orientation must be ROW_MAJOR, got {spec.orientation}")
-    sh, sw = spec.shape
-    if sh % TILE or sw % TILE or sh <= 0 or sw <= 0:
-        raise ValueError(f"g6_to_memory_config: {what} shard shape {tuple(spec.shape)} must be multiples of {TILE}")
-    n_rows = (tile_rows + sh // TILE - 1) // (sh // TILE)
-    n_cols = (tile_cols + sw // TILE - 1) // (sw // TILE)
-    layout = memory_config.memory_layout
-    if layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-        bbox = spec.grid.bounding_box()
-        bw = bbox.end.x - bbox.start.x + 1
-        bh = bbox.end.y - bbox.start.y + 1
-        if bh < n_rows or bw < n_cols:
-            raise ValueError(
-                f"g6_to_memory_config: {what} block shard grid {bw}x{bh} cannot hold {n_cols}x{n_rows} shards"
-            )
-    else:
-        if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED and n_cols != 1:
-            raise ValueError(f"g6_to_memory_config: {what} height shard width must cover the tensor width")
-        if layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED and n_rows != 1:
-            raise ValueError(f"g6_to_memory_config: {what} width shard height must cover the tensor height")
-        if spec.grid.num_cores() < n_rows * n_cols:
-            raise ValueError(
-                f"g6_to_memory_config: {what} shard grid has {spec.grid.num_cores()} cores, "
-                f"needs {n_rows * n_cols} shards"
-            )
+    axes = {}
+    for axis, tagger in INPUT_TAGGERS.items():
+        axes[axis] = tagger((scenario,), axes)
+    return axes
 
 
 def validate(input_tensor, memory_config):
-    # Host validation (ValueError) first.
-    if not ttnn.is_tensor_storage_on_device(input_tensor):
-        raise ValueError("g6_to_memory_config: input tensor must be on device")
-    if input_tensor.layout != ttnn.TILE_LAYOUT:
-        raise ValueError(f"g6_to_memory_config: input must be TILE layout, got {input_tensor.layout}")
-    shape = list(input_tensor.shape)
-    if not 2 <= len(shape) <= 4:
-        raise ValueError(f"g6_to_memory_config: rank must be 2..4, got {len(shape)}")
-    if memory_config is None:
-        raise ValueError("g6_to_memory_config: memory_config is required")
-    tile_rows, tile_cols = _tile_grid(shape)
-    _check_shard_spec("input", input_tensor.memory_config(), tile_rows, tile_cols)
-    _check_shard_spec("memory_config", memory_config, tile_rows, tile_cols)
+    reason = _structural_error(input_tensor, memory_config)
+    if reason is not None:
+        raise ValueError(f"g6_to_memory_config: {reason}")
 
-    scenario = {
-        "shape": shape,
-        "dtype": input_tensor.dtype,
-        "layout": input_tensor.layout,
-        "in_memory": _memory_entry(input_tensor.memory_config()),
-        "out_memory": _memory_entry(memory_config),
-    }
-    axes = {}
-    for axis_name, tagger in INPUT_TAGGERS.items():
-        axes[axis_name] = tagger((scenario,), axes)
-
+    axes = _axes(input_tensor, memory_config)
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
             raise UnsupportedAxisValue(f"g6_to_memory_config: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
@@ -210,12 +172,32 @@ def validate(input_tensor, memory_config):
 
 def g6_to_memory_config(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
     validate(input_tensor, memory_config)
+
+    l1_bytes = op_l1_bytes_per_core(input_tensor, memory_config)
+    if l1_bytes > L1_BUDGET_BYTES:
+        raise ValueError(
+            f"g6_to_memory_config: needs {l1_bytes} B of L1 on a core (output + op buffers), "
+            f"over the {L1_BUDGET_BYTES} B the model leaves to the op"
+        )
+
     output_tensor = ttnn.allocate_tensor_on_device(
-        input_tensor.shape,
+        ttnn.Shape(list(input_tensor.shape)),
         input_tensor.dtype,
         ttnn.TILE_LAYOUT,
         input_tensor.device(),
         memory_config,
     )
-    program_descriptor = create_program_descriptor(input_tensor, output_tensor)
-    return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
+    descriptor = create_program_descriptor(input_tensor, output_tensor, memory_config)
+    return ttnn.generic_op([input_tensor, output_tensor], descriptor)
+
+
+__all__ = [
+    "EXCLUSIONS",
+    "INPUT_TAGGERS",
+    "Plan",
+    "SUPPORTED",
+    "dump_core_roles",
+    "g6_to_memory_config",
+    "select_plan",
+    "validate",
+]
