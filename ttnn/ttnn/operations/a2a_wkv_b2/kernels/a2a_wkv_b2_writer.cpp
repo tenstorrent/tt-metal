@@ -31,7 +31,7 @@ void kernel_main() {
 
     // Common runtime args only (no per-core args: launch gap, Perf 1):
     //   [out_addr, my_pos, grid_x, table_base, block-counter address per head slot...,
-    //    from table_base, per logical core index y * grid_x + x: head_start | num_heads << 8]
+    //    from table_base, per logical core index y * grid_x + x: head_start | num_heads << 8 | noc << 16]
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t my_pos = get_common_arg_val<uint32_t>(1);  // this chip's ring position = source index j
     const uint32_t core_word = get_common_arg_val<uint32_t>(
@@ -39,6 +39,9 @@ void kernel_main() {
         get_relative_logical_x());
     const uint32_t head_start = core_word & 0xFF;
     const uint32_t num_heads = (core_word >> 8) & 0xFF;
+    // One writer kernel over every worker core (Perf 2, launch_gap2): this core's NoC is bit 16 of its table word
+    // (NoC 1, or NoC 0 on the cores whose reads default to NoC 1); every write, barrier and inc names it.
+    const uint8_t noc = (core_word >> 16) & 1;
     constexpr uint32_t counter_args_base = 4;
 
     const auto out = TensorAccessor(out_args, out_addr, out_tile_bytes);
@@ -49,7 +52,7 @@ void kernel_main() {
         const uint32_t h = head_start + head_idx;
         const bool local = (h / heads_per_chip) == my_pos;
         const uint32_t h_local = h % heads_per_chip;
-        const uint64_t counter_noc_addr = get_noc_addr(get_common_arg_val<uint32_t>(counter_args_base + head_idx));
+        const uint64_t counter_noc_addr = get_noc_addr(get_common_arg_val<uint32_t>(counter_args_base + head_idx), noc);
         for (uint32_t mb = 0; mb < num_mt_blocks; ++mb) {
             const uint32_t mt0 = mb * mt_block;
             const uint32_t mt_rows = (Mt - mt0) < mt_block ? (Mt - mt0) : mt_block;
@@ -63,17 +66,17 @@ void kernel_main() {
                 uint32_t l1 = cb_base + tiles_published * out_tile_bytes;
                 const uint32_t tile0 = h_local * tiles_per_source_head + (my_pos * Mt + mt0) * Nt;
                 for (uint32_t t = 0; t < block_tiles; ++t) {
-                    noc_async_write(l1, out.get_noc_addr(tile0 + t), out_tile_bytes);
+                    noc_async_write(l1, out.get_noc_addr(tile0 + t, 0, noc), out_tile_bytes, noc);
                     l1 += out_tile_bytes;
                 }
-                noc_async_write_barrier();
+                noc_async_write_barrier(noc);
             }
             tiles_published += block_tiles;
             if (!local) {
-                noc_semaphore_inc(counter_noc_addr, 1);
+                noc_semaphore_inc(counter_noc_addr, 1, noc);
             }
         }
     }
-    noc_async_atomic_barrier();
+    noc_async_atomic_barrier(noc);
     cb_pop_front(cb_out, tiles_published);
 }

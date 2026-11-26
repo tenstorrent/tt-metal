@@ -48,10 +48,15 @@ TX_BUFFERS = 2  # cb_tx_stage depth in batches (pull batch b+1 overlaps send of 
 # over the stream's heads (worker cores finish at very different times, so a strict mt-major stream is gated
 # by its slowest head every round); "strict" = mt-major, heads in order (Phase 0 - Refinement 2 order).
 TX_ORDER = "ready"
-# Which worker core gets which head (Refinement 3): "by_stream" = local heads on the first core rows, the
-# heaviest fabric streams on the last; "interleaved" = local heads first, remote destinations round-robin
-# over the rest (see _head_order; the two measured equal); "rowmajor" = head h on core h.
-HEAD_PLACEMENT = "by_stream"
+# Which worker core gets which head (Perf 2, read_order): "spread" = local heads on the first core rows, every
+# fabric stream's heads spread evenly over the rest (see _head_order); "rowmajor" = head h on core h.
+HEAD_PLACEMENT = "spread"
+# Local-head read gate (Perf 2, read_order): local-head cores start their DRAM reads only after this fraction
+# of the remote-head cores have finished theirs, so the fabric-bound heads get the DRAM bandwidth first and
+# only local heads (no send) finish at the end of the read stream. Measured on the focus case: 7/12 of 72
+# remote cores (K = 42) best; K = 36..48 within ~1 us of span.
+READ_GATE_FRACTION = 7 / 12
+READ_GATE_SEM = 0  # program semaphore id of the gate counter (on the gate core only)
 # R6 (Refinement 3): heads of each neighbour stream moved onto link 1 as a second stream; link 1 is then
 # shared by two fabric_tx cores through a fabric mux core (ttnn.experimental.fabric_mux). 0 = one stream per
 # link (no mux), the Phase 0 - Refinement 2 topology.
@@ -241,26 +246,24 @@ def _core_ranges(cores):
 def _head_order(r, n, hpc, streams):
     """Global head order in which heads fill the worker cores (row-major), for chip r (HEAD_PLACEMENT).
 
-    "by_stream" (Refinement 3): destination blocks of hpc heads in the order local, then remote
-    destinations by ascending per-stream head count (antipode halves before whole-chunk neighbours), so
-    the heaviest fabric streams sit on the last core rows and the local heads (no fabric send) on the
-    first. Measured on this grid (READ_NOC_SPLIT = "halves"): worker DRAM streams finish from ~24 us
-    (bottom rows) to ~60 us (top rows), so the heads whose late blocks must still cross a link are the
-    ones that finish first. "rowmajor": head h on core h (Phase 0 - Refinement 2).
+    "spread" (Perf 2, read_order): local heads (no fabric send) first, on the first core rows, whose DRAM reads
+    finish last (measured: worker reads end from ~20 us on the bottom rows to ~52 us on the top rows, NoC
+    arbitration); then every fabric stream's heads spread evenly over the remaining cores in proportion to its
+    head count, so each stream is fed by fast and slow rows alike and its supply covers the whole read stream
+    instead of bunching at the end (antipode streams ended 53-59 us under the R3 "by_stream" grouping; with
+    spread 49-51 us). With more than one head per core the order is not consecutive per core and
+    _place_heads falls back to row-major. "rowmajor": head h on core h.
     """
     if HEAD_PLACEMENT == "rowmajor":
         return list(range(n * hpc))
-    assert HEAD_PLACEMENT in ("by_stream", "interleaved"), HEAD_PLACEMENT
-    stream_heads = {}  # destination offset k -> max heads of one of its streams
-    for s in streams:
-        stream_heads[s["offset"]] = max(stream_heads.get(s["offset"], 0), len(s["heads"]))
-    offsets = sorted(range(1, n), key=lambda k: (stream_heads[k], k))
+    assert HEAD_PLACEMENT == "spread", HEAD_PLACEMENT
     local = [r * hpc + h for h in range(hpc)]
-    if HEAD_PLACEMENT == "by_stream":
-        return local + [((r + k) % n) * hpc + h for k in offsets for h in range(hpc)]
-    # "interleaved": remote destinations round-robin over the remaining cores, so every stream gets
-    # heads on fast and slow cores alike (each starts sending as early as the fastest cores publish).
-    return local + [((r + k) % n) * hpc + h for h in range(hpc) for k in offsets]
+    items = []
+    for si, st in enumerate(streams):
+        d = (r + st["offset"]) % n
+        cnt = len(st["heads"])
+        items += [((i + 0.5) / cnt, si, d * hpc + h) for i, h in enumerate(st["heads"])]
+    return local + [g for _, _, g in sorted(items)]
 
 
 def _place_heads(core_slots, order):
@@ -468,47 +471,72 @@ def create_mesh_program_descriptor(
         for core in worker_cores:
             reader_table[core.y * grid.x + core.x] |= _noc1_bank_mask(core, grid, worker_cores) << 16
         w_reader_common = [input_tensor.buffer_address(), weight.buffer_address(), grid.x] + reader_table
+        # Local-head read gate (Perf 2, read_order). Remote-head cores atomically bump a counter (program semaphore
+        # READ_GATE_SEM on the first local core) after their last read; local-head cores poll it before their
+        # first read and start once gate_k remote cores are done. Remote cores never wait, and gate_k <= the
+        # number of remote cores, so it cannot deadlock on any grid. A core is "local" if its first head is
+        # local. Off (feasibility) only when a chip has no local or no remote core. Appended to the reader's
+        # common args: [gate core noc x, noc y, gate_k, role per logical core (1 signal, 2 wait)].
+        is_local = {core: (start // hpc) == r for core, start, _ in worker_assign}
+        n_remote = sum(1 for v in is_local.values() if not v)
+        gate_k = min(n_remote, round(READ_GATE_FRACTION * n_remote))
+        reader_defines = list(_ABL_DEFINES)
+        if gate_k > 0 and n_remote < len(is_local):
+            gate_core = next(core for core, _, _ in worker_assign if is_local[core])
+            gv = mesh_device.worker_core_from_logical_core(gate_core)
+            role = [0] * len(core_table)
+            for core, loc in is_local.items():
+                role[core.y * grid.x + core.x] = 2 if loc else 1
+            reader_defines += [
+                ("A2A_READ_GATE_OFF", str(len(w_reader_common) + 3)),
+                ("A2A_READ_GATE_SEM", str(READ_GATE_SEM)),
+            ]
+            w_reader_common += [gv.x, gv.y, gate_k] + role
+            semaphores.append(
+                ttnn.SemaphoreDescriptor(
+                    id=READ_GATE_SEM,
+                    core_type=ttnn.CoreType.WORKER,
+                    core_ranges=_core_ranges([gate_core]),
+                    initial_value=0,
+                )
+            )
         w_writer_common = [output_tensor.buffer_address(), r, grid.x, 4 + heads_per_core]
         w_writer_common += counter_addrs[:heads_per_core] + core_table
         compute_common = [grid.x] + core_table
         assert max(len(w_reader_common), len(w_writer_common)) <= MAX_COMMON_RUNTIME_ARGS
 
-        worker_kernels = []
-        for on_noc1 in (False, True):
-            cores = [c for c in worker_cores if _reads_on_noc1(c, grid) == on_noc1]
-            if not cores:
-                continue
-            crs = _core_ranges(cores)
-            # Dynamic NoC mode (Perf 1): the reader issues DRAM reads on BOTH NoCs (per-bank NoC mask), so the
-            # two RISCs share a NoC; in dedicated mode the writer's end-of-kernel idle check (and any barrier
-            # on its NoC) would count the reader's transactions as its own. Each kernel's default NoC is
-            # unchanged: reader NoC 0 / writer NoC 1, swapped on the on_noc1 set.
-            read_noc, write_noc = (ttnn.NOC.NOC_1, ttnn.NOC.NOC_0) if on_noc1 else (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
-            reader_cfg = ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_1, noc=read_noc, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC
-            )
-            writer_cfg = ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_0, noc=write_noc, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC
-            )
-            worker_kernels.append(
-                ttnn.KernelDescriptor(
-                    kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_reader.cpp"),
-                    core_ranges=crs,
-                    compile_time_args=w_reader_ct,
-                    defines=_ABL_DEFINES,
-                    common_runtime_args=w_reader_common,
-                    config=reader_cfg,
-                )
-            )
-            worker_kernels.append(
-                ttnn.KernelDescriptor(
-                    kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_writer.cpp"),
-                    core_ranges=crs,
-                    compile_time_args=w_writer_ct,
-                    common_runtime_args=w_writer_common,
-                    config=writer_cfg,
-                )
-            )
+        # One reader and one writer kernel over the whole worker set (Perf 2, launch_gap2: the NoC-split kernel
+        # pairs cost a dispatch kernel group each; trace-replay launch gap 7.45 -> 5.5 us, 72.7 -> 70.5 us per
+        # call). Dynamic NoC mode (Perf 1): the reader issues each DRAM page on the NoC its per-bank mask picks,
+        # on BOTH NoCs, so its kernel default NoC is unused; the writer issues every write / barrier / semaphore
+        # inc on the NoC in bit 16 of its table word (NoC 1, or NoC 0 on the cores whose reads default to NoC 1
+        # under READ_NOC_SPLIT). Two RISCs share each NoC, which dedicated mode cannot track.
+        w_writer_table = list(core_table)
+        for core in worker_cores:
+            w_writer_table[core.y * grid.x + core.x] |= (0 if _reads_on_noc1(core, grid) else 1) << 16
+        w_writer_common = w_writer_common[: len(w_writer_common) - len(core_table)] + w_writer_table
+        dyn = ttnn.NOC_MODE.DM_DYNAMIC_NOC
+        worker_kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_reader.cpp"),
+                core_ranges=worker_set,
+                compile_time_args=w_reader_ct,
+                defines=reader_defines,
+                common_runtime_args=w_reader_common,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0, noc_mode=dyn
+                ),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_writer.cpp"),
+                core_ranges=worker_set,
+                compile_time_args=w_writer_ct,
+                common_runtime_args=w_writer_common,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1, noc_mode=dyn
+                ),
+            ),
+        ]
         worker_compute = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "a2a_wkv_b2_compute.cpp"),
             core_ranges=worker_set,

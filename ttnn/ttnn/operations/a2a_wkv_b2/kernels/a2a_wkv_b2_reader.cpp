@@ -82,6 +82,37 @@ void kernel_main() {
     const auto attn = TensorAccessor(attn_args, attn_addr, attn_page_bytes);
     const auto w = TensorAccessor(w_args, w_addr, w_tile_bytes);
 
+#ifdef A2A_READ_GATE_OFF
+    // Local-head read gate (Perf 2, read_order; a2a_wkv_b2_program_descriptor.py READ_GATE_FRACTION). Common args at
+    // A2A_READ_GATE_OFF - 3: [gate core noc x, noc y, gate_k], then a role per logical core: 1 = remote-head core
+    // (bumps the counter after its last read), 2 = local-head core (waits for gate_k bumps before its first read).
+    // Remote cores never wait, so the fabric-bound heads take the DRAM bandwidth first and only local heads finish
+    // at the end of the read stream (measured 73.8 -> 65.0 us per call together with the "spread" placement).
+    const uint32_t gate_role = get_common_arg_val<uint32_t>(
+        A2A_READ_GATE_OFF + get_relative_logical_y() * get_common_arg_val<uint32_t>(2) + get_relative_logical_x());
+    const uint64_t gate_addr = get_noc_addr(
+        get_common_arg_val<uint32_t>(A2A_READ_GATE_OFF - 3),
+        get_common_arg_val<uint32_t>(A2A_READ_GATE_OFF - 2),
+        get_semaphore(A2A_READ_GATE_SEM),
+        noc_index);
+    if (gate_role == 2) {
+        MaybeDeviceZoneScope("reader_gate");  // local-head core: wait for gate_k remote cores to finish reading
+        const uint32_t gate_k = get_common_arg_val<uint32_t>(A2A_READ_GATE_OFF - 1);
+        const uint32_t scratch = get_write_ptr(cb_attn_rm);  // free until the first reserve / push
+        volatile tt_l1_ptr uint32_t* v = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+        for (;;) {
+            noc_async_read(gate_addr, scratch, sizeof(uint32_t), noc_index);
+            noc_async_read_barrier(noc_index);
+            if (*v >= gate_k) {
+                break;
+            }
+            const uint32_t t0 = get_timestamp_32b();
+            while (get_timestamp_32b() - t0 < 500) {  // ~0.4 us between polls
+            }
+        }
+    }
+#endif
+
     for (uint32_t head_idx = 0; head_idx < num_heads; ++head_idx) {
         const uint32_t h = head_start + head_idx;
 
@@ -121,4 +152,10 @@ void kernel_main() {
         }
     }
     set_trid_both(0);
+#ifdef A2A_READ_GATE_OFF
+    if (gate_role == 1) {
+        noc_semaphore_inc(gate_addr, 1, noc_index);  // this remote-head core's reads have all landed
+        noc_async_atomic_barrier(noc_index);
+    }
+#endif
 }
