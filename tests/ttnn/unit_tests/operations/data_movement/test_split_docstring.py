@@ -108,10 +108,9 @@ def test_split_docstring_blackhole_inputs(dtype, layout, buffer_type, device):
         return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
 
     memory_config = interleaved_memory_config(buffer_type)
-    torch.manual_seed(0)
     for shape, split_size, dim in _DOCSTRING_SPLIT_CASES:
         input_tensor = ttnn.from_torch(
-            torch.randn(shape) * 8, dtype=dtype, layout=layout, device=device, memory_config=memory_config
+            full_range_input(shape, dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
         )
         expected = torch.split(read(input_tensor), split_size, dim)
 

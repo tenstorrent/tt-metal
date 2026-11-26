@@ -57,7 +57,7 @@ void bind_split(nb::module_& mod) {
             ``BFLOAT8_B`` tensors need a rank of 2 or more and, when `dim` is one of the last two dimensions, every
             chunk but the last must have a size that is a multiple of 32.
 
-            ``BFLOAT16`` TILE input values must not be NaN when the input has rank 1, or when `dim` is one of the last
+            ``BFLOAT16`` TILE input values must not be NaN or -0.0 when the input has rank 1, or when `dim` is one of the last
             two dimensions and a chunk other than the last has a size that is not a multiple of 32.
 
             On Blackhole, the input can also be an ``FP8_E4M3`` tensor in ROW_MAJOR layout.
