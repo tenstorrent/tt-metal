@@ -794,7 +794,7 @@ void call_unary_sfpu_operation_quasar(
             is_fp32_dest_acc_en,
             TILE_SHAPE,
             calculate_exponential,
-            (APPROX, is_fp32_dest_acc_en, false, ITERATIONS),
+            (APPROX, is_fp32_dest_acc_en, false, ITERATIONS, true /* CLAMP_NEGATIVE */),
             dst_index,
             vector_mode,
             p_sfpu::kCONST_1_FP16B);
@@ -805,7 +805,16 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::relu)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, _calculate_relu_, (ITERATIONS), dst_index, vector_mode);
+        // relu_tile runs relu_min with a zero threshold.
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            _relu_min_,
+            (sfpi::vFloat, APPROX, ITERATIONS, std::uint32_t),
+            dst_index,
+            vector_mode,
+            0 /* threshold */);
     }
     else if constexpr (OPERATION == SfpuType::lrelu)
     {
@@ -860,7 +869,13 @@ void call_unary_sfpu_operation_quasar(
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
         SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_rsqrt, (APPROX, ITERATIONS, is_fp32_dest_acc_en), dst_index, vector_mode);
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_rsqrt,
+            (APPROX, ITERATIONS, is_fp32_dest_acc_en, false /* FAST_APPROX */),
+            dst_index,
+            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
@@ -1310,7 +1325,8 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::i0)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_i0, (APPROX, ITERATIONS), dst_index, vector_mode);
+        static_assert(ITERATIONS == 8, "i0_tile runs calculate_i0 with its default ITERATIONS");
+        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_i0, (APPROX), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::i1)
     {
