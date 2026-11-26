@@ -59,6 +59,18 @@ extern "C" __attribute__((noinline, used)) void reference_write_runtime_state_fu
     TT_RMWCIB3(0xff /*Mask*/, seed >> 24, 186 /*CfgRegAddr*/);
 }
 
+// An upper-halfword field takes its bytes straight from the value, as production's cfg_reg_rmw_tensix does.
+extern "C" __attribute__((noinline, used)) void write_runtime_state_upper_halfword(std::uint32_t address)
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg5].Dest_cntx1_address, cfg::Sec::S0>(address);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_write_runtime_state_upper_halfword(std::uint32_t address)
+{
+    TT_RMWCIB2(0xff /*Mask*/, address & 0xffu, THCON_SEC0_REG5_Dest_cntx1_address_ADDR32);
+    TT_RMWCIB3(0xff /*Mask*/, (address >> 8) & 0xffu, THCON_SEC0_REG5_Dest_cntx1_address_ADDR32);
+}
+
 // SETC16 to thread word 19 with the value shifted to bits 13:8.
 extern "C" __attribute__((noinline, used)) void write_runtime_thread_section(std::uint32_t increment)
 {
