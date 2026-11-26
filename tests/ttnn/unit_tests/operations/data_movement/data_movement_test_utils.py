@@ -127,3 +127,22 @@ def convertible_input(shape, input_dtype, output_dtype, seed=0):
         return full_range_input(shape, input_dtype, seed=seed)
     assert {input_dtype, output_dtype} <= {ttnn.bfloat16, ttnn.float32}, f"no convertible input for {input_dtype}"
     return full_range_input(shape, ttnn.bfloat16, seed=seed, nan=False).float()
+
+
+def int8_with_min_value(shape, seed=0):
+    """Random int8 values in which every third element is -128, the one value the sign-magnitude Int8 format loses."""
+    x = torch.randint(-128, 128, shape, generator=torch.Generator().manual_seed(seed), dtype=torch.int8)
+    x.view(-1)[::3] = -128
+    return x
+
+
+def height_sharded_l1_config(shape, num_cores):
+    """L1 height-sharded config that splits the rows of the 4D ``shape`` evenly over ``num_cores`` cores in one row."""
+    rows = shape[0] * shape[1] * shape[2]
+    return ttnn.create_sharded_memory_config(
+        shape=(rows // num_cores, shape[3]),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )

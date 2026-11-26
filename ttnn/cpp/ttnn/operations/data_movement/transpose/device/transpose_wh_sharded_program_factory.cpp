@@ -35,9 +35,10 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
     TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
-    tt::DataFormat src0_dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    // INT8 CBs use UInt8: the sign-magnitude Int8 format would turn -128 into 0.
+    tt::DataFormat src0_dfb_data_format = cb_dataformat_for(input_tensor.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_dfb_data_format);
-    tt::DataFormat dst_dfb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
+    tt::DataFormat dst_dfb_data_format = cb_dataformat_for(output_tensor.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_dfb_data_format);
 
     const auto tile = input_tensor.tensor_spec().tile();

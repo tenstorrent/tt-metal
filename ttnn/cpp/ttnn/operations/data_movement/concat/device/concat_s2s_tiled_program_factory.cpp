@@ -113,7 +113,8 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
         get_num_tiles_per_shard(output.shard_spec().value());
 
     TT_FATAL(inputs.at(0).get().dtype() == inputs.at(1).get().dtype(), "Input tensor data types must match");
-    const tt::DataFormat data_format = datatype_to_dataformat_converter(inputs.at(0).get().dtype());
+    // INT8 CBs use UInt8: the sign-magnitude Int8 format would turn -128 into 0.
+    const tt::DataFormat data_format = cb_dataformat_for(inputs.at(0).get().dtype());
     const uint32_t tile_size = tt::tile_size(data_format);
 
     // The three tensor-backed buffers borrow their tensors' shard memory; the four below them are
@@ -128,9 +129,9 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
         const uint32_t total_num_tiles = get_total_num_tiles_per_shard(num_tiles_for_each_input_shard[idx]);
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = input_dfb_names[idx],
-            .entry_size = tt::tile_size(datatype_to_dataformat_converter(input_tensor.dtype())),
+            .entry_size = tt::tile_size(cb_dataformat_for(input_tensor.dtype())),
             .num_entries = total_num_tiles,
-            .data_format_metadata = datatype_to_dataformat_converter(input_tensor.dtype()),
+            .data_format_metadata = cb_dataformat_for(input_tensor.dtype()),
             .borrowed_from = input_param_names[idx],
         });
     }
@@ -138,9 +139,9 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
     const uint32_t total_num_output_tiles = get_total_num_tiles_per_shard(num_tiles_for_output_shard);
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUTPUT_DFB,
-        .entry_size = tt::tile_size(datatype_to_dataformat_converter(output.dtype())),
+        .entry_size = tt::tile_size(cb_dataformat_for(output.dtype())),
         .num_entries = total_num_output_tiles,
-        .data_format_metadata = datatype_to_dataformat_converter(output.dtype()),
+        .data_format_metadata = cb_dataformat_for(output.dtype()),
         .borrowed_from = OUTPUT,
     });
 

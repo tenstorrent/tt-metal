@@ -23,6 +23,7 @@ from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils imp
     block_shards,
     contiguous_1d_shards,
     full_range_input,
+    int8_with_min_value,
 )
 
 
@@ -1153,3 +1154,28 @@ def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
     output = ttnn.permute(t, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     assert_exact(x.permute(0, 1, 3, 2), ttnn.to_torch(output), signed_zeros=False)
+
+
+# INT8 regression: the Int8 CB format is sign-magnitude, so unpack/pack turned -128 into 0.
+# The row_major cases cover the WH factory path; BH stages 8-bit RM through UINT32 and passes regardless.
+# Routing (interleaved): the last-two swap (0,1,3,2) goes to ttnn::transpose; the other tile cases reach prim::permute.
+# (0,3,1,2) moves one tile dim, so it selects MultiCoreTileRowInvariant with its transpose_wh compute kernel;
+# (3,2,1,0) moves both, so it selects MultiCoreTiledGeneric (transpose_xw_tiled compute kernel).
+@pytest.mark.parametrize(
+    "layout, shape, dims",
+    [
+        (ttnn.TILE_LAYOUT, [1, 1, 64, 64], (0, 1, 3, 2)),
+        (ttnn.TILE_LAYOUT, [2, 32, 64, 64], (0, 3, 1, 2)),
+        (ttnn.TILE_LAYOUT, [32, 32, 32, 32], (3, 2, 1, 0)),
+        (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 64, 64], (0, 1, 3, 2)),
+        (ttnn.ROW_MAJOR_LAYOUT, [64, 64], (1, 0)),
+    ],
+    ids=["tile_wh", "tile_row_invariant", "tile_generic", "row_major_4d", "row_major_2d"],
+)
+def test_permute_int8_min_value(device, layout, shape, dims):
+    x = int8_with_min_value(shape)
+    t = ttnn.from_torch(x, dtype=ttnn.int8, layout=layout, device=device)
+
+    got = ttnn.to_torch(ttnn.from_device(ttnn.permute(t, dims)).to(ttnn.ROW_MAJOR_LAYOUT))
+
+    assert torch.equal(got, x.permute(*dims))

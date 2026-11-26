@@ -7,7 +7,10 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
-
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    height_sharded_l1_config,
+    int8_with_min_value,
+)
 
 # 4D shapes cover tile-aligned and unaligned H (40); the rank 3 shape goes through the unsqueeze/squeeze to 4D.
 _DIMS_4D = [(1, 2), (0, 2), (0, 3), (1, 3), (2, 3), (0, 1)]
@@ -41,3 +44,25 @@ def test_transpose_block_float_tile(device, shape, dims, dtype):
         assert_with_pcc(expected, output, 0.99)
     else:
         assert_equal(expected, output)
+
+
+# INT8 regression: the Int8 CB format is sign-magnitude, so unpack/pack turned -128 into 0.
+# row_major_interleaved covers the WH factory path; BH stages 8-bit RM through UINT32 and passes regardless.
+@pytest.mark.parametrize(
+    "shape, layout, sharded",
+    [
+        ([1, 1, 64, 64], ttnn.TILE_LAYOUT, False),
+        ([1, 1, 50, 70], ttnn.TILE_LAYOUT, False),
+        ([1, 1, 64, 64], ttnn.TILE_LAYOUT, True),
+        ([1, 1, 64, 64], ttnn.ROW_MAJOR_LAYOUT, False),
+    ],
+    ids=["tile_interleaved", "tile_interleaved_unaligned", "tile_height_sharded", "row_major_interleaved"],
+)
+def test_transpose_wh_int8_min_value(device, shape, layout, sharded):
+    x = int8_with_min_value(shape)
+    memory_config = height_sharded_l1_config(shape, 2) if sharded else ttnn.DRAM_MEMORY_CONFIG
+    t = ttnn.from_torch(x, dtype=ttnn.int8, layout=layout, device=device, memory_config=memory_config)
+
+    got = ttnn.to_torch(ttnn.from_device(ttnn.transpose(t, -2, -1)).to(ttnn.ROW_MAJOR_LAYOUT))
+
+    assert torch.equal(got, x.transpose(-2, -1))

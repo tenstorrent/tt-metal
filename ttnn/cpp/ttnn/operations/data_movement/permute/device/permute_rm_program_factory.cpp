@@ -174,11 +174,12 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    // INT8 CBs use UInt8: the sign-magnitude Int8 format would turn -128 into 0.
+    tt::DataFormat cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     uint32_t w_block_size = constants::TILE_WIDTH;
     uint32_t input_cb_page_size = w_block_size * input_tensor.element_size();
 
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    tt::DataFormat cb_data_format_output = tt::tt_metal::cb_dataformat_for(output_tensor.dtype());
     uint32_t x_block_size = constants::TILE_HEIGHT;
     uint32_t output_cb_page_size = x_block_size * input_tensor.element_size();
 
