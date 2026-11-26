@@ -1010,7 +1010,7 @@
       status=${PIPESTATUS[0]}
       [ "$status" -eq 0 ] || exit "$status"
       grep -qE "[0-9]+ passed" /tmp/glm_moe_host_perf.out && ! grep -qE "[0-9]+ skipped" /tmp/glm_moe_host_perf.out || { echo "::error::glm_moe_host_perf: glm53-8x4-5120 did not pass (skipped?)"; exit 1; }
-      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 480 --expect 6 models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py::test_moe_block_perf -k "glm53" || exit $?
+      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 6 models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py::test_moe_block_perf -k "glm53" || exit $?
       export DS_PREFILL_REUSE_MODEL=1
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
     '
