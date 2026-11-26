@@ -43,9 +43,11 @@ set -o pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 TRIAGE_OUT_DIR="${REPO_DIR}/generated/tt-triage"
-TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage.txt"
-LOCK_FILE="/tmp/tt-device.lock"
-DIRTY_FLAG="/tmp/tt-device.dirty"
+# Lock, dirty flag and reset per card when TT_VISIBLE_DEVICES names one card; whole machine otherwise.
+source "${REPO_DIR}/scripts/tt_device_lock.sh"
+TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage${TT_DEV_TRIAGE_SUFFIX}.txt"
+LOCK_FILE="$TT_DEV_LOCK"
+DIRTY_FLAG="$TT_DEV_DIRTY"
 TRIAGE_LOG="/tmp/tt-probe-triage-$$.log"
 
 # --- Device-lock contention profiling (see run_safe_pytest.sh for details) ---
@@ -160,7 +162,7 @@ MISSING_TTEXALENS=false
 if [[ "$SIM_MODE" == false ]]; then
     if python3 -c "import ttexalens" 2>/dev/null; then
         mkdir -p "${TRIAGE_OUT_DIR}"
-        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
+        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} ${TT_DEV_TRIAGE_ARGS} > ${TRIAGE_LOG} 2>&1"
     else
         # Defer the missing-tool warning to EXIT via trap — otherwise it gets
         # buried in probe output and users never see it.
@@ -209,15 +211,16 @@ fi
 
 # --- Acquire flock (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
+    tt_dev_hold_machine_shared TT_PROBE
     exec 9>"$LOCK_FILE"
-    echo "TT_PROBE: Waiting for device lock..."
+    echo "TT_PROBE: Waiting for device lock ($TT_DEV_LABEL)..."
     flock 9
     TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
-    echo "TT_PROBE: Device lock acquired"
+    echo "TT_PROBE: Device lock acquired ($TT_DEV_LABEL)"
 
-    if [[ -f "$DIRTY_FLAG" ]]; then
-        echo "TT_PROBE: Device dirty from previous run, resetting..."
-        if ! tt-smi -r; then
+    if tt_dev_is_dirty; then
+        echo "TT_PROBE: Device dirty from previous run, resetting $TT_DEV_LABEL..."
+        if ! tt_dev_reset; then
             echo "TT_PROBE_ERROR: Device reset failed"
             exit 3
         fi
@@ -285,8 +288,8 @@ fi
 
 # --- Reset device (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
-    echo "TT_PROBE: Resetting device..."
-    if tt-smi -r; then
+    echo "TT_PROBE: Resetting $TT_DEV_LABEL..."
+    if tt_dev_reset; then
         sleep 2
         rm -f "$DIRTY_FLAG"
         echo "TT_PROBE: Device reset complete"
