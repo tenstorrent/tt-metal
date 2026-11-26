@@ -306,6 +306,11 @@ class MochiPipeline(PipelineAPIMixin):
                 # The VAE is memory-constrained: it evicts the transformer, which reloads at the next call.
                 evicts=[self._transformer] if self.reload_dit_model else [],
             )
+            # Load the VAE before the transformer's first load. Loaded lazily at decode, its weights would land in the
+            # DRAM hole the evicted transformer leaves, which is the only block large enough for the decoder's largest
+            # activations on a 1x8 mesh. The transformer is not loaded yet, so this evicts nothing.
+            with self._reshape_vae():
+                self.residency.load(self._vae.decoder)
 
         logger.info("Pipeline allocation run...")
         self(prompts=[""], num_inference_steps=2, guidance_scale=2, traced=False)
