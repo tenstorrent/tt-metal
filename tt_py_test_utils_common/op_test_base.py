@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from loguru import logger
@@ -273,8 +275,13 @@ class OpTestBase:
             out = [None] * num_devices
             self.activations = self.convert_activations_to_memory_config(a_t[0])
 
+            # DIDT_MIN_LOOP_SECONDS keeps iterating past loop_count until the loop has run that long: a rerun on one
+            # chip iterates faster than the full mesh, so a fixed count would load the chip for a shorter time.
+            min_loop_seconds = float(os.environ.get("DIDT_MIN_LOOP_SECONDS") or 0)
             logger.debug("Starting iterations")
-            for i in range(self.loop_count):
+            loop_start = time.monotonic()
+            i = 0
+            while i < self.loop_count or time.monotonic() - loop_start < min_loop_seconds:
                 out = self.run_device_operation()
 
                 # Synchronize devices in mesh in order (this ensures we sync with closer devices first -
@@ -314,11 +321,16 @@ class OpTestBase:
                 out.deallocate(True)
 
                 logger.debug(f"Iteration = {i}, done!")
+                i += 1
+            if min_loop_seconds:
+                logger.debug(
+                    f"Iterations: {i} in {time.monotonic() - loop_start:.1f} s (DIDT_MIN_LOOP_SECONDS={min_loop_seconds:g})"
+                )
 
         catch_nd_on_fail = True
         if self.determinism_check_enabled:
             self.log_nd_core_summary(
-                -(-self.loop_count // self.determinism_check_interval),
+                -(-i // self.determinism_check_interval),
                 {self.device_ids[i]: n for i, n in enumerate(num_nd_outputs)},
             )
             for nd_output_id in range(num_devices):
