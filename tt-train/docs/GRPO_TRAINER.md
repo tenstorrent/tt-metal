@@ -305,9 +305,9 @@ For Qwen3, `setup_ttml_model` opens a **named** mesh via
 model is wrapped with `fully_shard`, the parameters are materialized
 already-sharded, and the HuggingFace weights are then streamed in sharded (the
 full unsharded model is never materialized on one chip). With
-`lazy_parameter_init=False` it instead loads the (still replicated) weights
-first and then wraps with `fully_shard`. Either way, parameters, gradients, and
-optimizer state end up sharded `1/N` across the FSDP axis.
+`lazy_parameter_init=False` it builds the model replicated, wraps it with
+`fully_shard`, and then streams the weights in sharded the same way. Either way,
+parameters, gradients, and optimizer state end up sharded `1/N` across the FSDP axis.
 
 ### TTTRolloutSampler
 
@@ -350,6 +350,7 @@ from ttml.trainers import GRPOConfig
 | `max_staleness` | `int \| None` | `None` (`weight_sync_every`) | *(no direct equivalent)* | `ttt_remote_async` only: drop a batch generated with weights more than this many optimizer steps older than the policy. Must be >= `weight_sync_every - num_iterations`. |
 | `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `ttt_remote_sync` and `ttt_remote_async`: push the policy weights to the rollout rank at a generation-batch boundary once *N* optimizer steps have passed since the last push. On `ttt_remote_async`, must be a multiple of `num_iterations`. |
 | `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `ttt_remote_sync` and `ttt_remote_async`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `top_k` (default 32), `top_p` (default 1.0), `rollout_queue_capacity` (`ttt_remote_async` only, default 2). |
+| `precision` | `dict \| None` | `None` | *(no direct equivalent)* | The precision block (`master_dtype`, `reduce_dtype`), applied once right after the model is built (see [Precision](#precision)). `get_grpo_config` reads it from `training_config.precision`, not from `grpo_config`. `None` means no block. |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
@@ -390,7 +391,7 @@ GRPOTrainer(
 | `device_config` | `DeviceConfig` | Device mesh the trainer opens (see [Device Config](#device-config)). |
 | `model_source` | `str` | HuggingFace model ID or local checkpoint directory the trainer loads the model from. Its HF config is also saved with checkpoints. |
 | `dataset_func` | `Callable[[], Dataset]` | Zero-argument callable returning a HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. Called once, in the constructor. |
-| `config` | `GRPOConfig` | Training configuration (see above); `rollout_backend` selects the sampler. |
+| `config` | `GRPOConfig` | Training configuration (see above); `rollout_backend` selects the sampler, and `precision` holds the precision block (see [Precision](#precision)). |
 | `reward_func` | `Callable` | Single reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). Pass exactly one of `reward_func` / `reward_funcs`. |
 | `optimizer_dict` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](TTML_ONBOARDING.md). Must include a `"type"` key. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
@@ -654,6 +655,30 @@ built-in optimizers.
 
 ---
 
+## Precision
+
+`GRPOConfig.precision` holds the YAML's `training_config.precision` block as a dict (see
+[Mixed Precision](MIXED_PRECISION.md)). `get_grpo_config` reads it from there, next to `training_config.optimizer`, so a
+script passes nothing extra:
+
+```python
+raw = load_config(config_path)
+grpo_config = get_grpo_config(raw)  # checks the block: a typo stops here, before the model is built
+trainer = GRPOTrainer(..., config=grpo_config, optimizer_dict=raw["training_config"]["optimizer"])
+```
+
+A `precision` key inside `training_config.grpo_config` raises: the block has one place in the YAML.
+
+The trainer applies it once, right after it builds the model and before the weights or a trainer checkpoint load, so
+fp32 master weights resume from a checkpoint bit for bit and the optimizer state follows the stored dtype. Under FSDP
+Qwen3 is sharded before that, in the lazy and the eager build alike, so the block converts the shards and no device
+holds the whole model in fp32. `None` (default) means no block: the parameters keep their dtype and no reduce dtype is
+stored. fp32 master weights (`master_dtype: float32`) need `"type": "AdamW"`, because `MorehAdamW` takes bf16
+parameters only. `reduce_dtype: float32` works with either optimizer and also adds up the micro-batches' gradients in
+fp32. `GRPOConfig` checks the block when it is created, so a typo in a config built by hand stops there too.
+
+---
+
 ## Device Config
 
 `GRPOTrainer` opens the mesh from `device_config` and reads the topology
@@ -752,8 +777,9 @@ To start from a checkpoint's weights, point `model_source` at the checkpoint
 directory (it contains `checkpoint.pkl` and the tokenizer files). A
 `model.safetensors` with ttml parameter names (the old GRPO checkpoint format)
 raises `ValueError`, and a HuggingFace source must provide every model weight.
-Only the weights are loaded: the optimizer starts fresh and the LR schedule
-restarts at step 0. The checkpoint directory must hold `config.json`;
+Only the weights are loaded, each in the dtype its parameter is stored in, so with
+the same `precision` block fp32 master weights resume bit for bit: the optimizer
+starts fresh and the LR schedule restarts at step 0. The checkpoint directory must hold `config.json`;
 `save_checkpoint` writes it from `model_source`. If that write fails,
 `save_checkpoint` only logs a warning, and the checkpoint cannot be resumed.
 
