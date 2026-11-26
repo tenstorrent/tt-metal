@@ -300,31 +300,31 @@ FORCE_INLINE void rope_stage(uint32_t out_a, uint32_t out_b, uint32_t rope) {
 // S0-8 kKRot: HAD = (H8 x H32) / 16 (tile index x column in tile): y_i = x_i @ (H32 / 16) (cb_had, one tile), then H8's
 // +-1 across the Dt tiles as three butterfly stages (stride s: tile j <- y_j + y_j+s, tile j + s <- y_j - y_j+s),
 // ping-ponging cb_rotx -> cb_rot2 -> cb_rotx -> cb_rot2 -> out_a / out_b (8 tile matmuls instead of 64)
-// had_mm_stage: cb_rot2 = cb_rotx @ (H32 / 16)
-FORCE_INLINE void had_mm_stage() {
+// had_mm_stage: b = a @ (H32 / 16) (q / k: cb_rotx -> cb_rot2; S0-9's output: cb_vr1 -> cb_vr2)
+FORCE_INLINE void had_mm_stage(uint32_t a = cb_rotx, uint32_t b = cb_rot2) {
     if constexpr (kKRot) {
-        cb_wait_front(cb_rotx, Dt);
-        cb_reserve_back(cb_rot2, Dt);
-        reconfig_data_format(cb_had, cb_rotx);
-        pack_reconfig_data_format(cb_rot2);
-        matmul_init(cb_rotx, cb_had, 0);
+        cb_wait_front(a, Dt);
+        cb_reserve_back(b, Dt);
+        reconfig_data_format(cb_had, a);
+        pack_reconfig_data_format(b);
+        matmul_init(a, cb_had, 0);
         for (uint32_t i = 0; i < Dt; i++) {
             tile_regs_acquire();
-            matmul_tiles(cb_rotx, cb_had, i, 0, 0);
+            matmul_tiles(a, cb_had, i, 0, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, cb_rot2);
+            pack_tile(0, b);
             tile_regs_release();
         }
-        cb_push_back(cb_rot2, Dt);
-        cb_pop_front(cb_rotx, Dt);
+        cb_push_back(b, Dt);
+        cb_pop_front(a, Dt);
     }
 }
 
-// had_bfly_stage: H8's butterflies, cb_rot2 -> .. -> out_a (and out_b)
-FORCE_INLINE void had_bfly_stage(uint32_t out_a, uint32_t out_b) {
+// had_bfly_stage: H8's butterflies, b -> a -> b -> out_a (and out_b) (q / k: b = cb_rot2, a = cb_rotx)
+FORCE_INLINE void had_bfly_stage(uint32_t out_a, uint32_t out_b, uint32_t b = cb_rot2, uint32_t a = cb_rotx) {
     if constexpr (kKRot) {
-        uint32_t src = cb_rot2, dst = cb_rotx;
+        uint32_t src = b, dst = a;
         for (uint32_t s = 1; s < Dt; s <<= 1) {
             const bool last = (s << 1) >= Dt;
             const uint32_t o_a = last ? out_a : dst, o_b = last ? out_b : dst;

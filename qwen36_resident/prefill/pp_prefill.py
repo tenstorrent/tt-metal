@@ -56,6 +56,7 @@ from qwen36_resident.model import (
     is_attn,
     l1_layout,
     quantize_rows,
+    V_ROT,
 )
 
 KDIR = f"{PKG_DIR}/prefill/kernels/"
@@ -221,7 +222,7 @@ class PPPrefill:
         )
         # (S0-8: q and k rotated by HAD after RoPE, as the decode's norm_rope; HiFi4 keeps bf16 x +-1/16 exact)
         self.had = None
-        if K_BFP4:
+        if K_BFP4 or V_ROT:  # (S0-9 V_ROT: the attention output rotated back after SDPA)
             self.had = ttnn.from_torch(
                 HAD,
                 dtype=ttnn.bfloat16,
@@ -1007,6 +1008,8 @@ class PPPrefill:
             program_config=self.sdpa_pc,
             compute_kernel_config=self.hifi,
         )
+        if V_ROT:  # (S0-9: V rotated by HAD — each head's output rotated back before the gate, as the decode leader)
+            o = ttnn.matmul(o, self.had, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.rot_cfg)
         o = ttnn.experimental.nlp_concat_heads(o, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         o = ttnn.multiply(o, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID])
         out = self._linear(o, w["out"], "out")

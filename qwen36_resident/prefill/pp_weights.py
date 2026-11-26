@@ -11,7 +11,7 @@ The GDN output norm's weight (per head dim) is folded into the out-projection ro
 """
 import torch
 
-from qwen36_resident.weights import _fold
+from qwen36_resident.weights import _fold, v_proj
 from qwen36_resident.model import DV, HD, NQ, NV, is_attn
 
 VD = NV * DV
@@ -45,7 +45,7 @@ def attn_layer(ck, i):
         [
             qg[:, 0].reshape(NQ * HD, -1),
             ck.layer(i, "self_attn.k_proj.weight"),
-            ck.layer(i, "self_attn.v_proj.weight"),
+            v_proj(ck, i),  # (S0-9: rotated with V_ROT)
             qg[:, 1].reshape(NQ * HD, -1),
         ]
     )

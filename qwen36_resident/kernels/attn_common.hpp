@@ -269,6 +269,11 @@ constexpr uint32_t cb_had = 43;    // S0-8: H32 / 16 (one bf16 tile; resident) â
 constexpr uint32_t cb_rot2 = 46;   // S0-8: the rotation's butterfly ping-pong (Dt, bf16)
 constexpr uint32_t cb_rotx = 44;   // S0-8: norm_rope's output before the rotation (Dt, bf16)
 constexpr uint32_t cb_knr = 45;    // S0-8: the tail's rotated k rows before the writer rounds them into cb_knew
+// S0-9 stage 1 (named arg v_rot): V is stored Hadamard-rotated (the V projection rows folded with HAD), so the leader
+// rotates each user's normalized output back (HAD is its own inverse) before the gate â€” in its own scratch (cb_vr1 /
+// cb_vr2, Dt each), apart from the staged q prep's cb_rotx / cb_rot2
+constexpr bool kVRot = get_named_compile_time_arg_val("v_rot") != 0;
+constexpr uint32_t cb_vr1 = 48, cb_vr2 = 49;
 
 // S0-8: the device packer truncates toward zero when it packs bfp4, so a decode-written K row is rounded to nearest on
 // the bfp4 grid first (by the tail writer, as prefill/kernels/v_rtn.cpp rounds the prefill's): one face row (16 bf16

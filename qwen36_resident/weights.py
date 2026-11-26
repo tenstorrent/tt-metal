@@ -17,7 +17,7 @@ from huggingface_hub import snapshot_download
 from safetensors import safe_open
 
 from qwen36_resident.common import Deferred
-from qwen36_resident.model import DK, DV, HD, NK, NQ, NV, is_attn
+from qwen36_resident.model import DK, DV, HAD, HD, NK, NQ, NV, V_ROT, is_attn
 
 PREFIX = "model.language_model."
 
@@ -99,7 +99,7 @@ def attn_proj(ck, i, d):
     ln = ck.layer(i, "input_layernorm.weight")
     qg = ck.layer(i, "self_attn.q_proj.weight").reshape(NQ, 2, HD, -1)  # per head [q | gate]
     k = ck.layer(i, "self_attn.k_proj.weight")
-    v = ck.layer(i, "self_attn.v_proj.weight")
+    v = v_proj(ck, i)  # (S0-9: rotated with V_ROT)
     out = []
     for c in range(d.n):
         hs = slice(c * d.h, (c + 1) * d.h)
@@ -115,6 +115,16 @@ def attn_proj(ck, i, d):
         Wq[:, : rows.shape[0]] = _fold(ln, rows.T)
         out.append(Wq)
     return out
+
+
+def v_proj(ck, i):
+    """layer i's V projection rows [kv heads x HD, H]; S0-9 V_ROT: each kv head's rows rotated so the projection gives
+    v HAD (the rows HAD @ W; HAD is symmetric), the decode leader / prefill rotating the attention output back"""
+    v = ck.layer(i, "self_attn.v_proj.weight")
+    if not V_ROT:
+        return v
+    vh = v.float().reshape(-1, HD, v.shape[1])
+    return torch.einsum("de,hdk->hek", HAD.float(), vh).reshape(v.shape).to(v.dtype)
 
 
 def attn_layer(ck, i, d, lazy=False):

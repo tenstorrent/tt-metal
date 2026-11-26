@@ -191,6 +191,11 @@ def hadamard(n):
 
 
 HAD = hadamard(HD)  # (S0-8: K's rotation; q gets the same so q . k is unchanged)
+# S0-9 stage 1 (RESIDENT_V_ROT, default off; with K_BFP4 — it shares S0-8's HAD tile and scratch): V Hadamard-rotated —
+# HAD folded into the V projection rows (weights.py v_proj), each head's attention output rotated back before the gate
+# (HAD is its own inverse): the leader's normalize_gate (attn_common.hpp kVRot) and the prefill after SDPA
+V_ROT = os.environ.get("RESIDENT_V_ROT", "0") == "1"
+assert not V_ROT or K_BFP4, "S0-9 V_ROT rides on S0-8 (RESIDENT_KV_K_BFP4=1): HAD tile and scratch"
 
 
 # Live decode models, for the persistent-L1 layout check of traces captured beside them (see l1_layout)
@@ -508,7 +513,10 @@ def torch_step(x0, d, w, st, layers, interval, lm_head=False, attn_out=None, xs=
                 K = torch.cat([st.K[c][chip][:pos], kn[None]])
                 V = torch.cat([st.V[c][chip][:pos], v[None]])
                 p = torch.softmax(qn @ K.T, dim=-1)
-                o = bf16((p @ V) * torch.sigmoid(gate)).flatten()
+                if V_ROT:  # (S0-9: V rotated; the leader rotates the normalized output back before the gate)
+                    o = bf16(bf16(bf16(p @ V) @ HAD) * torch.sigmoid(gate)).flatten()
+                else:
+                    o = bf16((p @ V) * torch.sigmoid(gate)).flatten()
                 if attn_out is not None:
                     attn_out.append((l, chip, o))
                 st.K[c][chip][pos] = quantize_rows(kn[None], K_DT)[0]
@@ -1670,8 +1678,9 @@ class ResidentModel:
                 # leader and tail core
                 cb(13, prep_grid, Dt),
                 cb(14, prep_grid, 2),
-                *(
-                    [T(43, had_t), cb(44, prep_grid, Dt), cb(46, prep_grid, Dt)] if K_BFP4 else []
+                *([T(43, had_t), cb(44, prep_grid, Dt), cb(46, prep_grid, Dt)] if K_BFP4 else []),
+                *(  # (S0-9 V_ROT: the leader's output rotation scratch, apart from the staged q prep's)
+                    [cb(48, lead_grid, Dt), cb(49, lead_grid, Dt)] if V_ROT else []
                 ),  # (S0-8: H32 / 16, the rotation's scratch)
                 *(
                     [cb(45, tail_grid, 2 * Dt)] if K_BFP4 and K_RTN else []
@@ -1825,6 +1834,7 @@ class ResidentModel:
                 ("sem_m1", SEM_m1),
                 ("sem_part1", SEM_PART1),
                 ("kv_k_rot", int(K_BFP4)),  # (attn_common.hpp kKRot: q / k rotated by HAD after RoPE, S0-8)
+                ("v_rot", int(V_ROT)),  # (attn_common.hpp kVRot, S0-9: the output rotated back before the gate)
                 ("kv_k_rtn", int(K_BFP4 and K_RTN)),  # (kKRtn: the tail writer rounds the decode-written K rows)
                 ("kv_k_patch", int(K_PATCH)),  # (kKPatch: ... re-encoding the packed row at the write-back)
             ]

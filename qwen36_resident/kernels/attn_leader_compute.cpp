@@ -41,7 +41,7 @@ FORCE_INLINE void gate_sigmoid(uint32_t out_cb) {
     cb_pop_front(cb_gate, Dt);
 }
 
-// cb_out = osum / rowsum * gs
+// cb_out = osum / rowsum * gs (S0-9 kVRot: osum / rowsum rotated back by HAD, then * gs)
 FORCE_INLINE void normalize_gate() {
     cb_wait_front(cb_osum, kPart);
     cb_reserve_back(cb_rl, 1);
@@ -60,6 +60,43 @@ FORCE_INLINE void normalize_gate() {
 
     cb_wait_front(cb_rl, 1);
     cb_wait_front(cb_gs, Dt);
+    if constexpr (kVRot) {
+        // o = osum / rowsum into cb_vr1, rotated back (V is stored rotated), then * gs into cb_out
+        cb_reserve_back(cb_vr1, Dt);
+        reconfig_data_format(cb_osum, cb_rl);
+        pack_reconfig_data_format(cb_vr1);
+        mul_bcast_cols_init(cb_osum, cb_rl);
+        for (uint32_t d = 0; d < Dt; d++) {
+            tile_regs_acquire();
+            mul_tiles_bcast_cols(cb_osum, cb_rl, d, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_vr1);
+            tile_regs_release();
+        }
+        cb_push_back(cb_vr1, Dt);
+        cb_pop_front(cb_osum, kPart);
+        cb_pop_front(cb_rl, 1);
+        had_mm_stage(cb_vr1, cb_vr2);
+        had_bfly_stage(cb_vr1, cb_vr1, cb_vr2, cb_vr1);
+        cb_wait_front(cb_vr1, Dt);
+        cb_reserve_back(cb_out, Dt);
+        reconfig_data_format(cb_vr1, cb_gs);
+        pack_reconfig_data_format(cb_out);
+        mul_init(cb_vr1, cb_gs);
+        for (uint32_t d = 0; d < Dt; d++) {
+            tile_regs_acquire();
+            mul_tiles(cb_vr1, cb_gs, d, d, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_out);
+            tile_regs_release();
+        }
+        cb_push_back(cb_out, Dt);
+        cb_pop_front(cb_vr1, Dt);
+        cb_pop_front(cb_gs, Dt);
+        return;
+    }
     cb_reserve_back(cb_out, Dt);
     reconfig_data_format(cb_osum, cb_rl);
     pack_reconfig_data_format(cb_out);
