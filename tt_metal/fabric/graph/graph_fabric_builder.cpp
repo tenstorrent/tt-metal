@@ -6,6 +6,8 @@
 
 #include <algorithm>
 
+#include <set>
+
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -70,17 +72,31 @@ RouterGraphInputs GraphFabricBuilder::inputs_of(RouterIndex router) const {
         const auto shape = domain.shape();
         const auto chip = domain.domain_chip.at(port.node);
         Vc2DomainInputs vc2{.y = chip / shape[1], .x = chip % shape[1], .rows = shape[0], .cols = shape[1]};
+        // its downstreams are on its own plane: a domain direction the chip has elsewhere but not there can't be routed
+        std::set<RoutingDirection> on_chip;
         for (const auto& r : g.routers) {
             if (r.port.node != port.node) {
                 continue;
             }
             if (const auto d = domain.direction(port.node, r.port.peer)) {
+                on_chip.insert(*d);
+                if (r.port.plane != port.plane) {
+                    continue;
+                }
                 const auto local = builder::routing_direction_to_eth_direction(*r.port.direction);
                 vc2.routers.at(builder::routing_direction_to_eth_direction(*d)) = local;
                 if (&r.port == &port) {
                     vc2.facing = builder::routing_direction_to_eth_direction(*d);
                 }
             }
+        }
+        for (const RoutingDirection d : on_chip) {
+            TT_FATAL(
+                vc2.routers.at(builder::routing_direction_to_eth_direction(d)) != eth_chan_directions::COUNT,
+                "fabric graph: VC2 over the domain needs {} on {}'s plane {}, which has no router that way",
+                enchantum::to_string(d),
+                port.node,
+                port.plane);
         }
         vc2.translates = in.inter_domain && domain.translates();
         in.vc2_domain = vc2;
