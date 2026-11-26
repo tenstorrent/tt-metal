@@ -565,6 +565,18 @@ inline __attribute__((always_inline)) void emit_runtime(const std::uint8_t clien
 
 inline constexpr __attribute__((always_inline)) std::uint32_t AddrCounter::operation() const
 {
+    if (!__builtin_is_constant_evaluated())
+    {
+        // Encode the one group directly, as set(descriptor) does: the same instruction plan() selects at runtime, without
+        // the Sequence that makes GCC's early size estimate of the caller larger than the instruction it folds into.
+        hal::detail::require(detail::is_valid(*this), "address-counter descriptor requires valid clients, an action, and at least one field");
+        const detail::Group xy {channel0.x, channel0.y, channel1.x, channel1.y};
+        const detail::Group zw {channel0.z, channel0.w, channel1.z, channel1.w};
+        const bool is_zw = xy.mask() == detail::EmptyCounterMask;
+        hal::detail::require(
+            is_zw || zw.mask() == detail::EmptyCounterMask, "AddrCounter::operation() requires an update that encodes as one instruction; issue it with set()");
+        return detail::runtime_operation(clients, is_zw, action, is_zw ? zw : xy);
+    }
     const auto sequence = detail::plan(*this);
     hal::detail::require(sequence.count == 1, "AddrCounter::operation() requires an update that encodes as one instruction; issue it with set()");
     return sequence.words[0];

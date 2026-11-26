@@ -457,48 +457,34 @@ inline __attribute__((always_inline)) void program(const cfg<detail::Template0Pl
 /**
  * @brief Program this thread's MopCfg with a Template 1 configuration.
  *
- * Writes the counts, StartOp and EndOp0 always; EndOp1 only when the configuration has end
- * ops, and the inner-loop and last-iteration ops only when the inner count is nonzero.
- * Skipped words keep their previous values, which the expander does not read.
+ * Writes every MopCfg word, as ckernel_template::program() does, except EndOp1, which only a
+ * configuration with end ops writes; the expander does not read the skipped word. Plain inline,
+ * not always_inline, with the shape of ckernel_template::program(), so GCC makes the same
+ * inline-or-outline choice for each caller as it does for production's.
  *
  * @param config: Configuration built by @ref loop, optionally patched with @ref cfg::patch.
  * @note Waits for the preceding MOP expansion before writing. Run it with
  *       @ref Runner<MopTemplate::Template1>.
  */
 template <bool HasEndOp>
-inline __attribute__((always_inline)) void program(const cfg<detail::Template1Plan<HasEndOp>> &config)
+inline void program(const cfg<detail::Template1Plan<HasEndOp>> &config)
 {
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
-    // Copy the configuration into scalars before the sync; reading the aggregate between the
-    // volatile MopCfg accesses forces it onto the stack instead of into registers.
-    const std::uint32_t outer_count   = config.outer_count;
-    const std::uint32_t inner_count   = config.inner_count;
-    const std::uint32_t start_op      = config.start_op;
-    const std::uint32_t end_op        = config.end_op;
-    const std::uint32_t second_end_op = config.second_end_op;
-    const std::uint32_t op            = config.op;
-    const std::uint32_t alternate_op  = config.alternate_op;
-    const std::uint32_t last_outer_op = config.last_outer_op;
-    const std::uint32_t last_inner_op = config.last_inner_op;
-
     ckernel::mop_sync();
 
-    mop_cfg[0] = outer_count;
-    mop_cfg[1] = inner_count;
-    mop_cfg[2] = start_op;
-    mop_cfg[3] = end_op;
+    mop_cfg[0] = config.outer_count;
+    mop_cfg[1] = config.inner_count;
+    mop_cfg[2] = config.start_op;
+    mop_cfg[3] = config.end_op;
     if constexpr (HasEndOp)
     {
-        mop_cfg[4] = second_end_op;
+        mop_cfg[4] = config.second_end_op;
     }
-    if (inner_count != 0)
-    {
-        mop_cfg[5] = op;
-        mop_cfg[6] = alternate_op;
-        mop_cfg[7] = last_outer_op;
-        mop_cfg[8] = last_inner_op;
-    }
+    mop_cfg[5] = config.op;
+    mop_cfg[6] = config.alternate_op;
+    mop_cfg[7] = config.last_outer_op;
+    mop_cfg[8] = config.last_inner_op;
 }
 
 // ---------------- Updates ----------------
@@ -514,9 +500,8 @@ inline constexpr std::uint32_t occurrences = (0u + ... + static_cast<std::uint32
  *
  * @param updates: Distinct words built with @ref outer_count, @ref inner_count, @ref last_outer or @ref last_inner.
  * @note Program a Template 1 configuration with @ref program first. MopCfg is write-only, so
- *       the new words are not checked against it: keep a programmed inner count of 0 at 0, since
- *       an empty inner loop leaves its op words unwritten, and keep the result clear of the count
- *       anomaly and the unsupported EndOp1 read rejected by @ref loop. An outer count of 0 is rejected.
+ *       the new words are not checked against it: keep the result clear of the count anomaly and
+ *       the unsupported EndOp1 read rejected by @ref loop. An outer count of 0 is rejected.
  */
 template <std::uint32_t... Words>
 inline __attribute__((always_inline)) void update(const Update<Words>... updates)
