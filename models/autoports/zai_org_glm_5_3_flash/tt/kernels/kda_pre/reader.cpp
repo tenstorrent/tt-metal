@@ -19,9 +19,14 @@
 // staged per group in the dedicated scratch page `units` of CB_H0..2 (the CBs hold units + 1 pages).
 // KDA_VERIFY_PIPE (GLM53_KDA_VERIFY_PIPE=1, with KDA_VERIFY_GROUPS): the same windows group by group -- each group's
 // pages pushed once built, the next group's reads in flight while a group is built, its write-back after the push.
+// KDA_VERIFY_FLAT (GLM53_KDA_VERIFY_FLAT=1, on KDA_VERIFY_PIPE): every group's reads behind one barrier, then the PIPE
+// windows / pushes / write-backs group by group without a read wait between groups.
 
 #if defined(KDA_VERIFY_PIPE) && !defined(KDA_VERIFY_GROUPS)
 #error "KDA_VERIFY_PIPE: the KDA_VERIFY_GROUPS reader only"
+#endif
+#if defined(KDA_VERIFY_FLAT) && !defined(KDA_VERIFY_PIPE)
+#error "KDA_VERIFY_FLAT: on the KDA_VERIFY_PIPE reader only"
 #endif
 
 #include <cstdint>
@@ -235,7 +240,119 @@ void kernel_main() {
         // mixed-pair history rows (3 targets x 2 face halves x 64 B) are assembled in L1 (CB_SCR, 64-B aligned: the
         // NoC cannot read the RISC's local memory)
         const uint32_t s0 = get_write_ptr(CB_SCR);
-#if defined(KDA_VERIFY) && defined(KDA_VERIFY_GROUPS) && defined(KDA_VERIFY_PIPE)
+#if defined(KDA_VERIFY) && defined(KDA_VERIFY_GROUPS) && defined(KDA_VERIFY_PIPE) && defined(KDA_VERIFY_FLAT)
+        {
+            // KDA_VERIFY_FLAT (GLM53_KDA_VERIFY_FLAT, on KDA_VERIFY_PIPE): the PIPE reader's reads for EVERY group
+            // issued up front behind one barrier, then group by group the same windows, push and write-back. No two
+            // groups share a page (a group's pre-conv pairs land in its own CB_Q pages and its slot pair in its own
+            // last unit's pages of CB_H0..2), so the reads cannot overlap; one wait for all groups' reads (after the
+            // selector's) instead of one per group. Every read lands before the first write-back, so no group's
+            // write-back waits for a later group (PIPE's `late`). Same window values in the same pages, pushed in the
+            // same unit order; the same CB page counts and rewind contract.
+            constexpr uint32_t G = KDA_VERIFY_GROUPS;
+            static_assert(G >= 1 && G <= 16, "KDA_VERIFY_GROUPS: 1..16 groups");
+            const uint32_t units = pairs;
+            const uint32_t gp = units / G;  // row pairs per group (the host asserts units % G == 0)
+            cb_reserve_back(CB_H0, units + 1);
+            cb_reserve_back(CB_H1, units + 1);
+            cb_reserve_back(CB_H2, units + 1);
+            cb_reserve_back(CB_Q, units);
+            const uint32_t hb[3] = {get_write_ptr(CB_H0), get_write_ptr(CB_H1), get_write_ptr(CB_H2)};
+            const uint32_t qb = get_write_ptr(CB_Q);
+            const auto sg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), sel_addr, 128);
+            noc_async_read(sg.get_noc_addr(0), s0, 64);
+            noc_async_read_barrier();
+            uint32_t selw[G];
+            for (uint32_t gi = 0; gi < G; ++gi) {
+                selw[gi] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s0)[gi];
+            }
+            // packed row R of a bf16 tile: two 16-value face-half rows (32 B each); the 8 words of a half are loaded
+            // before they are stored, and a row copied onto itself (the landing page at gp = 1) is skipped
+            auto copy_row = [](uint32_t dst, uint32_t dr, uint32_t src, uint32_t sr) {
+                for (uint32_t hh = 0; hh < 2; ++hh) {
+                    const uint32_t da = dst + tile_off(dr, 16 * hh) * 2, sa = src + tile_off(sr, 16 * hh) * 2;
+                    if (da == sa) {
+                        continue;
+                    }
+                    volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(da);
+                    volatile tt_l1_ptr uint32_t* q = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sa);
+                    uint32_t w[8];
+#pragma GCC unroll 8
+                    for (uint32_t j = 0; j < 8; ++j) {
+                        w[j] = q[j];
+                    }
+#pragma GCC unroll 8
+                    for (uint32_t j = 0; j < 8; ++j) {
+                        d[j] = w[j];
+                    }
+                }
+            };
+            // every group's pre-conv pairs and slot pair (the landing page of group gi = its last unit's page)
+            for (uint32_t gi = 0; gi < G && gp > 0; ++gi) {
+                const uint32_t land = (gi * gp + gp - 1) * BF16_TILE;
+                for (uint32_t r = 0; r < CONV_PER_CORE; ++r) {
+                    for (uint32_t lu = 0; lu < gp; ++lu) {
+                        const uint32_t u = gi * gp + lu;
+                        read_pair_bf16(qkv, c0 + r, u, qb + u * BF16_TILE, r);
+                    }
+                    for (uint32_t sl = 0; sl < HIST; ++sl) {
+                        read_pair_bf16(hist, sl * QKV_TILES + c0 + r, selw[gi] / 2, hb[sl] + land, r);
+                    }
+                }
+            }
+            noc_async_read_barrier();
+            // the windows group by group: only units lu <= 1 read slot rows (window row j < 3), and the build writes
+            // the landing page last, H0 before H1 before H2, every row 2r before any row 2r + 1 -- each slot row is
+            // read before it is overwritten (as in PIPE)
+#pragma GCC unroll 1
+            for (uint32_t gi = 0; gi < G; ++gi) {
+                const uint32_t sel = selw[gi];
+                const uint32_t land = (gi * gp + gp - 1) * BF16_TILE;
+                for (uint32_t lu = 0; lu < gp; ++lu) {
+                    const uint32_t u = gi * gp + lu;          // the global pair
+                    for (uint32_t sl = 0; sl < HIST; ++sl) {  // H_sl[j] = src(j - 3 + sl), j the group-local row
+                        for (uint32_t p = 0; p < 2; ++p) {
+                            const int32_t i = static_cast<int32_t>(2 * lu + p) - 3 + static_cast<int32_t>(sl);
+                            for (uint32_t r = 0; r < CONV_PER_CORE; ++r) {
+                                if (i < 0) {
+                                    copy_row(hb[sl] + u * BF16_TILE, 2 * r + p, hb[3 + i] + land, 2 * r + (sel & 1u));
+                                } else {
+                                    copy_row(
+                                        hb[sl] + u * BF16_TILE,
+                                        2 * r + p,
+                                        qb + (gi * gp + static_cast<uint32_t>(i) / 2) * BF16_TILE,
+                                        2 * r + (static_cast<uint32_t>(i) & 1u));
+                                }
+                            }
+                        }
+                    }
+                }
+                // compute only reads these pages (the write-back's sources): push before the write-back; the last push
+                // also takes units - G gp unbuilt pages (none: the host asserts units % G == 0), `units` pages in all
+                const uint32_t n = gp + (gi + 1 == G ? units - G * gp : 0u);
+                cb_push_back(CB_H0, n);
+                cb_push_back(CB_H1, n);
+                cb_push_back(CB_H2, n);
+                cb_push_back(CB_Q, n);
+                if (update_hist) {
+                    for (uint32_t lu = 0; lu < gp; ++lu) {
+                        const uint32_t u = gi * gp + lu;
+                        // KDA_PRE_REV 3: an inactive group's rows (verify mask 0) keep their history
+                        if (((active >> (2 * u)) & 3u) == 0) {
+                            continue;
+                        }
+                        for (uint32_t r = 0; r < CONV_PER_CORE; ++r) {
+                            const uint32_t c = c0 + r;
+                            write_pair_bf16(hist, c, u, hb[1] + u * BF16_TILE, r);
+                            write_pair_bf16(hist, QKV_TILES + c, u, hb[2] + u * BF16_TILE, r);
+                            write_pair_bf16(hist, 2 * QKV_TILES + c, u, qb + u * BF16_TILE, r);
+                        }
+                    }
+                }
+            }
+            noc_async_write_barrier();
+        }
+#elif defined(KDA_VERIFY) && defined(KDA_VERIFY_GROUPS) && defined(KDA_VERIFY_PIPE)
         {
             // KDA_VERIFY_PIPE: the KDA_VERIFY_GROUPS reader below, pipelined per group. Iteration it issues group it's
             // reads (its pre-conv pairs and slot sel[it]'s history pair), then builds group it - 1's windows (landed at

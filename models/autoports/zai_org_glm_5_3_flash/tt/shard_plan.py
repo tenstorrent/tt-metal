@@ -2656,6 +2656,75 @@ def accept_batch() -> bool:
     return _flag("GLM53_ACCEPT_BATCH")
 
 
+def kda_verify_flat() -> bool:
+    """GLM53_KDA_VERIFY_FLAT (default 0; on GLM53_KDA_VERIFY_PIPE): kernels/kda_pre/reader.cpp KDA_VERIFY_FLAT in the
+    speculative verify's kda_pre (KDA_VERIFY_GROUPS) -- every group's pre-conv and slot-history reads behind one barrier,
+    then the same windows, pushes and write-backs group by group"""
+    return _flag("GLM53_KDA_VERIFY_FLAT")
+
+
+def kda_verify_schedule(G: int, gp: int, selw: list, variant: str, active=None) -> tuple:
+    """kernels/kda_pre/reader.cpp's verify readers as an event schedule over the DRAM history, row by row: G groups of gp
+    row pairs (rows 2 gp g .. of group g, one user's consecutive tokens), selw[g] = the absolute row whose 3 history rows
+    are group g's window rows i < 0. A slot read takes hist[sl][sel] at the time it is issued; the window of group-local
+    row j is H_sl[j] = src(j - 3 + sl) (i < 0: the slot's history row 3 + i, i >= 0: this launch's pre-conv row
+    2 gp g + i); a group's write-back sets hist[0..2][row] = (H1, H2, Q) of its active rows. variant: "groups" (the
+    knob-off GROUPS reader: per group slot read + build, every write-back after the last group), "pipe" (PIPE: group it's
+    slot read, then group it - 1's build + write-back, a write-back deferred to the end when a later group's slot lies in
+    its rows), "flat" (KDA_VERIFY_FLAT: every slot read, then per group build + write-back), "pipe_no_late" (PIPE
+    without the deferral: the negative control). -> (windows {row: (H0, H1, H2)}, final hist)"""
+    assert variant in ("groups", "pipe", "flat", "pipe_no_late"), variant
+    rows = 2 * G * gp
+    hist = [[("h", sl, r) for r in range(rows)] for sl in range(3)]
+    q = [("q", r) for r in range(rows)]
+    act = [True] * rows if active is None else list(active)
+    slot, win = {}, {}
+
+    def read(g):
+        slot[g] = [hist[sl][selw[g]] for sl in range(3)]
+
+    def build(g):
+        for j in range(2 * gp):
+            win[2 * gp * g + j] = tuple(slot[g][3 + i] if i < 0 else q[2 * gp * g + i] for i in (j - 3, j - 2, j - 1))
+
+    def write_back(g):
+        for j in range(2 * gp):
+            r = 2 * gp * g + j
+            if act[r]:
+                hist[0][r], hist[1][r], hist[2][r] = win[r][1], win[r][2], q[r]
+
+    if variant == "groups":
+        for g in range(G):
+            read(g)
+            build(g)
+        for g in range(G):
+            write_back(g)
+    elif variant == "flat":
+        for g in range(G):
+            read(g)
+        for g in range(G):
+            build(g)
+            write_back(g)
+    else:
+        late = 0
+        for gj in range(1, G):
+            gs = selw[gj] // 2 // gp
+            if gs < gj:
+                late |= 1 << gs
+        if variant == "pipe_no_late":
+            late = 0
+        for it in range(G + 1):
+            if it < G:
+                read(it)
+            if it > 0:
+                build(it - 1)
+                due = ((1 << (it - 1)) & ~late) | (late if it == G else 0)
+                for g in range(G):
+                    if (due >> g) & 1:
+                        write_back(g)
+    return win, hist
+
+
 def head_select_fast() -> bool:
     """GLM53_HEAD_SELECT_FAST (default 0): kernels/head/topk_select.cpp TOPK_SEL_FAST on every MkHead select core (the
     plain head, the verify head, the MTP heads) -- a staging page per row with one write barrier for all rows, and TOPK_FAB's

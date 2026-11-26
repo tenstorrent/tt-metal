@@ -1244,6 +1244,31 @@ def test_agk_count_is_the_local_select_count(monkeypatch):
     monkeypatch.setenv("GLM53_HEAD_SELECT_FAST", "2")
     with expect_error(ValueError, "GLM53_HEAD_SELECT_FAST=2: 0 or 1"):
         SP.head_select_fast()
+    # GLM53_KDA_VERIFY_FLAT (kda_pre reader.cpp KDA_VERIFY_FLAT, on PIPE): the readers' schedules over the DRAM history
+    # (SP.kda_verify_schedule) -- the knob-off GROUPS reader, PIPE and FLAT build the same windows and leave the same
+    # history for any selector (cross-group slots and inactive groups included); PIPE without its `late` deferral (the
+    # negative control) does not; the knob parses 0 / 1
+    rng, broken = random.Random(11), 0
+    for trial in range(400):
+        G, gp = rng.choice([(8, 1), (4, 1), (4, 2), (2, 2), (3, 2), (8, 2)])
+        rows = 2 * G * gp
+        selw = [rng.randrange(rows) if trial % 2 else 2 * gp * g + rng.randrange(2 * gp) for g in range(G)]
+        dead = {g for g in range(G) if rng.random() < 0.2}
+        active = [r // (2 * gp) not in dead for r in range(rows)]
+        ref = SP.kda_verify_schedule(G, gp, selw, "groups", active)
+        assert SP.kda_verify_schedule(G, gp, selw, "pipe", active) == ref, (G, gp, selw)
+        assert SP.kda_verify_schedule(G, gp, selw, "flat", active) == ref, (G, gp, selw)
+        broken += SP.kda_verify_schedule(G, gp, selw, "pipe_no_late", active) != ref
+    assert broken > 20, broken
+    monkeypatch.delenv("GLM53_KDA_VERIFY_FLAT", raising=False)
+    assert not SP.kda_verify_flat()
+    monkeypatch.setenv("GLM53_KDA_VERIFY_FLAT", "0")
+    assert not SP.kda_verify_flat()
+    monkeypatch.setenv("GLM53_KDA_VERIFY_FLAT", "1")
+    assert SP.kda_verify_flat()
+    monkeypatch.setenv("GLM53_KDA_VERIFY_FLAT", "2")
+    with expect_error(ValueError, "GLM53_KDA_VERIFY_FLAT=2: 0 or 1"):
+        SP.kda_verify_flat()
     gen = torch.Generator().manual_seed(66)
     for p in (2051, 2052, 4095, 4096 + 127, 4096 + 128 + 3, 32767, 65535 - 128, 65535, 65535 + 129, 262143):
         keys = torch.randint(1, 1 << 31, ((p + 1) // 4,), generator=gen, dtype=torch.int64)

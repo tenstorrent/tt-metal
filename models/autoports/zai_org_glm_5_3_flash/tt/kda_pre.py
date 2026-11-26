@@ -36,6 +36,7 @@ import torch
 import ttnn
 
 KERNEL_DIR = os.path.join("models", "autoports", "zai_org_glm_5_3_flash", "tt", "kernels", "kda_pre")
+_VFLAT_LOGGED: list = []  # GLM53_KDA_VERIFY_FLAT: its "active" line once per process
 FP32, BF16 = ttnn.float32, ttnn.bfloat16
 DRAM, L1 = ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG
 TILE = 32
@@ -268,13 +269,27 @@ class KdaPre:
         # the next group's reads in flight meanwhile, write-back after the push (kernels/kda_pre/reader.cpp
         # KDA_VERIFY_PIPE; same values, same unit order, same CB pages); off = the KDA_VERIFY_GROUPS reader
         vpipe = vsel is not None and self.verify_groups > 1 and os.environ.get("GLM53_KDA_VERIFY_PIPE", "0") == "1"
+        # GLM53_KDA_VERIFY_FLAT=1 (on PIPE; shard_plan.kda_verify_flat): every group's reads behind one barrier, then the
+        # PIPE windows / pushes / write-backs (KDA_VERIFY_FLAT; the same pages and values, one wait for all groups'
+        # reads); FLAT on a verify-groups launch without PIPE is refused (it would be a silent no-op)
+        from models.autoports.zai_org_glm_5_3_flash.tt.shard_plan import kda_verify_flat
+
+        vflat = vpipe and kda_verify_flat()
+        if vsel is not None and self.verify_groups > 1 and kda_verify_flat() and not vpipe:
+            raise ValueError(
+                "GLM53_KDA_VERIFY_FLAT=1 needs GLM53_KDA_VERIFY_PIPE=1 (the flat reader is a PIPE variant)"
+            )
+        if vflat and not _VFLAT_LOGGED:
+            _VFLAT_LOGGED.append(True)
+            print("GLM53_KDA_VERIFY_FLAT active (kda_pre reader.cpp KDA_VERIFY_FLAT: every verify group's reads behind "
+                  "one barrier)", flush=True)  # fmt: skip
         reader = (reader_ct, self._rtd(lambda kk: addrs + [kk, b, int(roww or hist_tiles)]
                                        + ([vsel.buffer_address()] if vsel is not None else [])),
                   self.defines + ([("KDA_BATCH", "1")] if batch else []) + ([("KDA_TILES_HIST", "1")] if hist_tiles else [])
                   + ([("KDA_VERIFY", "1")] if vsel is not None else [])
                   + ([("KDA_VERIFY_GROUPS", str(self.verify_groups))] if vsel is not None and self.verify_groups > 1
                      else [])
-                  + ([("KDA_VERIFY_PIPE", "1")] if vpipe else []),
+                  + ([("KDA_VERIFY_PIPE", "1")] if vpipe else []) + ([("KDA_VERIFY_FLAT", "1")] if vflat else []),
                   ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0,
                                                     noc=ttnn.NOC.RISCV_0_default))  # fmt: skip
         writer_ct = [int(roww)]
