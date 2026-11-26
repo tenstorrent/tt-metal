@@ -163,11 +163,11 @@ runs:
         # Find packages artifact (optional)
         PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)
 
-        # Pattern mode: when one pattern is set, the patterns replace the loose
-        # filters above. An artifact with an empty pattern is not downloaded, and an
-        # artifact with a set pattern is required.
+        # Pattern mode: when one pattern or the ttnn-import name is set, the patterns
+        # replace the loose filters above. An artifact with an empty pattern is not
+        # downloaded, and an artifact with a set pattern is required.
         PATTERN_MODE=false
-        if [ -n "$BUILD_PATTERN$PACKAGES_PATTERN$WHEEL_PATTERN" ]; then
+        if [ -n "$BUILD_PATTERN$PACKAGES_PATTERN$WHEEL_PATTERN$TTNN_IMPORT_NAME" ]; then
           PATTERN_MODE=true
           BUILD_ARTIFACT=""
           WHEEL_ARTIFACT=""
