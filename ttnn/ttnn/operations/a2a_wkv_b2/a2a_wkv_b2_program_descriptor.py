@@ -14,7 +14,7 @@ Regime R1 of op_design.md (matmul-first, heads over cores, streamed mt rounds):
     writer  (BRISC)        : ready handshake, scatter-write packets to the destination's output tiles
                              over the fabric, done handshake (flush), wait for the peer's done
 
-Every block knob (mt_block, attn_rm_depth, tx_depth, tiles_per_packet, heads_per_core) is defined
+Every block knob (mt_block, attn_rm_depth, tx_batch, tx_buffers, tiles_per_packet, heads_per_core) is defined
 once here and every dependent CB size / loop count derives from it.
 """
 
@@ -31,7 +31,8 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 # ---------------------------------------------------------------------------
 MT_BLOCK = 1  # token tile rows per block (op_design.md: mt_block)
 ATTN_RM_DEPTH = 2  # cb_attn_rm depth in blocks (reader fetches mt+1 while compute tilizes mt)
-TX_DEPTH = 2  # cb_tx_stage depth in packets (pull p+1 overlaps send p)
+TX_BATCH = 8  # packets per fabric_tx batch: one pull barrier (reader), one flush + pop (writer)
+TX_BUFFERS = 2  # cb_tx_stage depth in batches (pull batch b+1 overlaps send of batch b)
 MAX_MATMUL_CORES = 110  # matmul di/dt cap
 SCATTER_MAX_CHUNKS = 4  # NOC_SCATTER_WRITE_MAX_CHUNKS
 DEST_TILES_HALF_SYNC_16B = 8  # DEST capacity (half sync, 16-bit)
@@ -221,7 +222,7 @@ def create_mesh_program_descriptor(
             cb(CB_ATTN_RM, ttnn.bfloat16, attn_tile_bytes, ATTN_RM_DEPTH * mt_block * Kt),
             cb(CB_ATTN_TILED, ttnn.bfloat16, attn_tile_bytes, mt_block * Kt),
             cb(CB_OUT, ttnn.bfloat8_b, out_tile_bytes, heads_per_core * Mt * Nt),
-            cb(CB_TX_STAGE, ttnn.bfloat8_b, out_tile_bytes, TX_DEPTH * tiles_per_packet),
+            cb(CB_TX_STAGE, ttnn.bfloat8_b, out_tile_bytes, TX_BUFFERS * TX_BATCH * tiles_per_packet),
         ]
         semaphores = [
             ttnn.SemaphoreDescriptor(
@@ -266,8 +267,10 @@ def create_mesh_program_descriptor(
         )
 
         # ---------------- fabric_tx kernels ----------------
+        max_stream_heads = max(len(s["heads"]) for s in streams)
         tx_reader_ct = [CB_TX_STAGE, CB_OUT, SEM_BLOCKS_DONE, Mt, Nt, mt_block, tiles_per_packet, out_tile_bytes]
-        tx_writer_ct = [CB_TX_STAGE, Mt, Nt, mt_block, tiles_per_packet, out_tile_bytes, n, l1_alignment]
+        tx_reader_ct += [TX_BATCH, max_stream_heads]
+        tx_writer_ct = [CB_TX_STAGE, Mt, Nt, mt_block, tiles_per_packet, out_tile_bytes, n, l1_alignment, TX_BATCH]
         tx_writer_ct += out_ct_accessor
         tx_reader_rt = ttnn.RuntimeArgs()
         tx_writer_rt = ttnn.RuntimeArgs()

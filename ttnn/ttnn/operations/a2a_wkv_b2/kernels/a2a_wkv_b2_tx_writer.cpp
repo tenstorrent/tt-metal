@@ -6,7 +6,9 @@
 //   announce_ready : fabric atomic inc -> peer fabric_tx sem_ready on the destination
 //   await_ready    : local wait sem_ready >= 1, reset 0 (destination has started this program)
 //   send_block     : per packet, one scatter write of up to tiles_per_packet tiles straight into
-//                    the destination's L1-interleaved output tiles (no receiver kernel)
+//                    the destination's L1-interleaved output tiles (no receiver kernel). Packets are
+//                    consumed in the tx reader's batches (up to tx_batch packets, one whole batch
+//                    region of cb_tx_stage): issue every packet, one flush, one pop per batch.
 //   announce_done  : fabric atomic inc with flush -> peer sem_done (after the last data packet)
 //   await_done     : local wait sem_done >= 1 (the peer's data has landed here), reset 0
 //
@@ -28,7 +30,8 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t ring_size = get_compile_time_arg_val(6);
     constexpr uint32_t l1_alignment = get_compile_time_arg_val(7);
-    constexpr auto out_args = TensorAccessorArgs<8>();
+    constexpr uint32_t tx_batch = get_compile_time_arg_val(8);
+    constexpr auto out_args = TensorAccessorArgs<9>();
 
     // tiles_per_packet is clamped on the host to the scatter cap (and the fabric payload); restated
     // here only as a guard, never as a second source of the packet size.
@@ -36,6 +39,8 @@ void kernel_main() {
 
     constexpr uint32_t num_mt_blocks = (Mt + mt_block - 1) / mt_block;
     constexpr uint32_t tiles_per_source_head = ring_size * Mt * Nt;
+    constexpr uint32_t packet_bytes = tiles_per_packet * tile_bytes;
+    constexpr uint32_t batch_pages = tx_batch * tiles_per_packet;
 
     using namespace dataflow_kernel_lib::ccl;
 
@@ -83,24 +88,31 @@ void kernel_main() {
         const uint32_t mt0 = mb * mt_block;
         const uint32_t mt_rows = (Mt - mt0) < mt_block ? (Mt - mt0) : mt_block;
         const uint32_t block_tiles = mt_rows * Nt;
-        for (uint32_t s = 0; s < num_heads; ++s) {
-            const uint32_t h_local = get_arg_val<uint32_t>(heads_base + s);
-            const uint32_t tile0 = h_local * tiles_per_source_head + (my_pos * Mt + mt0) * Nt;
-            for (uint32_t p = 0; p < block_tiles; p += tiles_per_packet) {
+        const uint32_t packets_per_block = (block_tiles + tiles_per_packet - 1) / tiles_per_packet;
+        const uint32_t round_packets = num_heads * packets_per_block;
+        for (uint32_t q0 = 0; q0 < round_packets; q0 += tx_batch) {
+            const uint32_t k = (round_packets - q0) < tx_batch ? (round_packets - q0) : tx_batch;
+            cb_wait_front(cb_tx_stage, batch_pages);
+            const uint32_t base = get_read_ptr(cb_tx_stage);
+            for (uint32_t i = 0; i < k; ++i) {
+                const uint32_t q = q0 + i;
+                const uint32_t s = q / packets_per_block;
+                const uint32_t p = (q % packets_per_block) * tiles_per_packet;
                 const uint32_t chunks = (block_tiles - p) < tiles_per_packet ? (block_tiles - p) : tiles_per_packet;
-                cb_wait_front(cb_tx_stage, tiles_per_packet);
-                const uint32_t l1 = get_read_ptr(cb_tx_stage);
+                const uint32_t h_local = get_arg_val<uint32_t>(heads_base + s);
+                const uint32_t tile0 = h_local * tiles_per_source_head + (my_pos * Mt + mt0) * Nt + p;
+                const uint32_t l1 = base + i * packet_bytes;
                 for (uint32_t c = 0; c < chunks; ++c) {
-                    dst_addrs[c] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(out, tile0 + p + c, 0);
+                    dst_addrs[c] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(out, tile0 + c, 0);
                 }
                 if (chunks == 1) {
                     unicast_ch.write(dst_addrs[0], l1);
                 } else {
                     scatter_ch.write_scatter(dst_addrs, chunks, l1);
                 }
-                stream.flush();  // payload has left this L1 slot before the reader reuses it
-                cb_pop_front(cb_tx_stage, tiles_per_packet);
             }
+            stream.flush();  // every payload of the batch has left its L1 slot before the reader reuses it
+            cb_pop_front(cb_tx_stage, batch_pages);
         }
     }
 
