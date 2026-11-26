@@ -30,7 +30,6 @@ from models.demos.audio.qwen3_asr.demo.transcribe import find_text_decoder
 from models.demos.audio.qwen3_asr.tt.audio_encoder import MAX_MEL_FRAMES, MEL_FRAMES_PER_SECOND
 from models.demos.audio.qwen3_asr.tt.forced_aligner import Qwen3ForcedAligner
 from models.demos.audio.qwen3_asr.tt.generator import Qwen3ASRGenerator, split_audio_features
-from models.experimental.pyannote.tt.diarizer import TtDiarizer
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
@@ -246,6 +245,8 @@ class Qwen3ForcedAlignerDiarizer(Qwen3ASRForcedAlignerForTokenClassification):
 
     @classmethod
     def initialize_vllm_model(cls, hf_config, mesh_device, *args, **kwargs):
+        from models.experimental.pyannote.tt.diarizer import TtDiarizer
+
         model = super().initialize_vllm_model(hf_config, mesh_device, *args, **kwargs)
         model.diarizer = TtDiarizer(mesh_device)
         model.diarizer.warmup()
