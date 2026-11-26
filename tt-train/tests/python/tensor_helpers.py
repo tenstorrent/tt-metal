@@ -36,5 +36,10 @@ def as_stored(array, dtype="bf16"):
     return to_host(value(to_device(array, dtype)))
 
 
+def stored_dtypes(model) -> set:
+    """The dtypes ``model``'s parameters are stored in."""
+    return {t.get_value(NATIVE).dtype for t in model.parameters().values()}
+
+
 def sigmoid(z):
     return 1.0 / (1.0 + np.exp(-z))
