@@ -15,6 +15,11 @@
 
 namespace ttnn::experimental::prim {
 
+// Whether one program serves every size of the padded dims: runtime_shapes is set, the output is interleaved, and
+// the fabric cores split the dims before the padded one, which the program hash keeps, rather than the sticks of a
+// padded dim 0.
+bool neighbor_pad_async_is_shape_free(const NeighborPadAsyncParams& args, const NeighborPadAsyncInputs& tensor_args);
+
 struct NeighborPadAsyncMeshWorkloadFactory {
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const NeighborPadAsyncParams& operation_attributes,
