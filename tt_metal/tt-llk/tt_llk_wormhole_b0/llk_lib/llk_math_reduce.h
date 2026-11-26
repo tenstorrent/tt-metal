@@ -247,7 +247,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
-    asm volatile("j 1f\n\t.space 20\n1:"); // trial: jump over a pad, work stays the same
+    asm volatile("j 1f\n\t.space 516\n1:"); // trial: jump over a pad, work stays the same
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_", tensor_shape);
 
     // Supported narrow tiles per BH Tiny Tile Summary: [16]x16 (num_faces=1) and [32]x16 (num_faces=2) only
