@@ -426,7 +426,7 @@ Tensor group_norm(
         } else {
             const auto dev_grid = input_tensor.device()->compute_with_storage_grid_size();
             auto dram_grid = ttnn::operations::normalization::find_expected_dram_grid(
-                dev_grid.x, dev_grid.y, input_padded_shape[3], num_groups, nhw, input_padded_shape[0]);
+                dev_grid.x, dev_grid.y, input_shape[-1], num_groups, nhw, input_padded_shape[0]);
             TT_FATAL(
                 dram_grid.has_value(),
                 "group_norm: Could not determine a valid DRAM core grid for channels={}, num_groups={}, nhw={}. "
@@ -466,7 +466,7 @@ Tensor group_norm(
     // where num_virtual_rows = (grid_x / num_virtual_cols) * grid_y and Ht = NHW / TILE_SIZE.
     // Violating this leads to per_core_Mt == 0, causing division-by-zero in kernels.
     if (!input_tensor.is_sharded()) {
-        const uint32_t W = input_padded_shape[3];
+        const uint32_t W = input_shape[-1];
         const uint32_t Ht = nhw / ttnn::types::TILE_SIZE;
         validate_dram_grid(core_grid.value(), W, Ht, num_groups, input_padded_shape[0]);
     }

@@ -34,6 +34,7 @@ GroupNormShardedConfigAndGridSize determine_expected_group_norm_sharded_config_a
 // Finds the largest nvc <= min(grid_x, num_groups) such that:
 //   (num_channels / nvc) % TILE_SIZE == 0  &&  num_groups % nvc == 0
 // Returns 0 if no valid value exists for the given grid_x.
+// num_channels is the logical C; a non-tile-aligned C always gives 1 (all channels on one core).
 uint32_t compute_num_virtual_cols(uint32_t grid_x, int num_groups, uint32_t num_channels);
 
 // Find the largest valid CoreGrid within (max_x, max_y) bounds for DRAM group-norm.

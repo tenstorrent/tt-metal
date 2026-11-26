@@ -112,11 +112,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     const auto& shape = a.padded_shape();
     const uint32_t H = shape[1] * shape[2] * num_batches;
     const uint32_t W = shape[3];
+    // Logical channel count: defines the groups. W (padded) only sizes the tiles.
+    const uint32_t C = a.logical_shape()[3];
 
     TT_FATAL(W % tile_width == 0, "W (channels): {} must be divisible by {}", W, tile_width);
-    TT_FATAL(W % num_groups == 0, "W (channels): {} must be divisible by num_groups: {}", W, num_groups);
+    TT_FATAL(C % num_groups == 0, "C (channels): {} must be divisible by num_groups: {}", C, num_groups);
     const auto geometry =
-        derive_groupnorm_interleaved_geometry(H, W, num_batches, num_groups, grid_size, tile_height, tile_width);
+        derive_groupnorm_interleaved_geometry(H, W, C, num_batches, num_groups, grid_size, tile_height, tile_width);
     TT_FATAL(
         geometry.num_virtual_cols > 0,
         "No valid virtual column count for W={}, num_groups={}, grid_x={}, and tile_width={}",
@@ -281,12 +283,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         num_cores_per_batch,
         num_cores_per_group);
     TT_FATAL(
-        per_core_N % num_channels_per_group == 0,
-        "per_core_N ({}) must be divisible by num_channels_per_group ({})",
-        per_core_N,
+        (C / geometry.num_virtual_cols) % num_channels_per_group == 0,
+        "per-core channels ({}) must be divisible by num_channels_per_group ({})",
+        C / geometry.num_virtual_cols,
         num_channels_per_group);
     TT_FATAL(per_core_M_group_1 % tile_height == 0, "per_core_M must be divisible by TILE_HEIGHT");
-    TT_FATAL(W % num_groups == 0, "Tensor W ({}) must be divisible by num_groups ({})", W, num_groups);
+    TT_FATAL(C % num_groups == 0, "Tensor C ({}) must be divisible by num_groups ({})", C, num_groups);
     TT_FATAL(W % per_core_N == 0, "W dim ({}) must be divisible by per_core_N ({})", W, per_core_N);
 
     if (input_mask.has_value()) {
