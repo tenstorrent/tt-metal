@@ -1,37 +1,74 @@
 # L1 Ledger: g6_expand
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking Model: `op_design.md`.
-Block axes: `n` (images, `block_images`), `h` (out tile rows, `block_tile_rows`), `w` (out tile columns, `block_tile_cols`).
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking axes: `pattern`
+(extent `block_pattern_tiles`) and `replica` (extent `block_replica_rows = core_replica_rows`);
+`image` is folded into `pattern` (see `op_design.md`, Blocking Model).
+
+## Inventory
+
+One buffer. Every phase boundary that could be storage is not:
+
+| Phase boundary | Expressed as | Why no buffer |
+|----------------|--------------|---------------|
+| DRAM fetch of row 0 → replicate | pack into the destination | the fetch lands row 0 directly in the pattern page at its final offsets (0, 512); no staging slot |
+| replicate → multicast | transform in place | rows 1–31 are filled from row 0 inside the same page; the multicast sources the same pages |
+| multicast → receiver | pack into the destination | the payload lands in the receiver's reserved `cb_pattern_tiles` pages at the same address |
+| pattern page → every output page of its column | resident source, streamed writes | the writer re-reads the same resident pages for every replica row; no per-row buffer |
+
+## Table
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_bcast_row_tiles` | `block_tile_cols · bcast_buffer_depth` (page = `tile_bytes` = 2048 B) | `block_tile_cols` (one block's B tiles: each is held from its read until its last out write is flushed; up to all of a block's tiles at once while the writer drains) | `{n: streams → 1 image per block (block_images = 1), h: streams → one B tile serves all this_block_tile_rows writes, w: spans → block_tile_cols}` | bfloat16 (`Float16_b`) — input dtype; raw bytes moved by the NoC, never unpacked, never through DEST (no `fp32_dest_acc_en` exists; audit 2 n/a: dataflow-only payload) | reader | writer | whole kernel; per page: reserve → partial x read → in-place replication → push → `this_block_tile_rows` writes → flush → pop | the only CB. Capacity − live set = `block_tile_cols · (bcast_buffer_depth − 1)`: double buffering across blocks (reader prepares block k+1 while writer drains block k), mechanism reason. The x landing area is the B tile itself (in-place transform, Rule 3.2) and out is written straight from it (no staging CB, Rule 3.1), so no second buffer exists to share with. |
+| `cb_pattern_tiles` (index 0, page 2048 B) | `pattern_cb_depth_blocks × block_pattern_tiles` | `block_pattern_tiles` pages (one block: every page of it is read for every replica row, so all are live at once) | `{pattern: spans → block_pattern_tiles, replica: streams → 0 pages (writes stream over resident pages), image: folded into pattern}` | bfloat16 (raw bits: dataflow-only payload, never unpacked or packed, no DEST; `fp32_dest_acc_en` does not exist for this op) | reader | writer | one block per CB cycle; every block of the kernel | Shares with nothing: it is the only buffer. Capacity equals the live set at depth 1. At depth 2 the gap is the explicit pipelining decision (block `k+1` fetch/replicate/multicast overlapping block `k` writes), used only when `num_blocks_this_core > 1`. |
+
+Semaphores (not CBs, listed for the footprint): the `ttnn.Mcast` channel's ready and data
+semaphores, on the rectangle, bounded by `L1_RESERVED_BYTES`.
 
 ## Symbol table
 
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
-| `tile_bytes` | 2048 | bfloat16 TILE (SUPPORTED dtype/layout) |
-| `bcast_buffer_depth` | 2 (host constant) | Phase 0 knob |
-| `block_tile_cols` | `1 ≤ block_tile_cols ≤ max_block_tile_cols` | host clamp `block_tile_cols = clamp(ceil(Wt / num_cores), 1, max_block_tile_cols)`; production = 1 |
-| `max_block_tile_cols` | `floor((1347776 − reserved_margin) / (bcast_buffer_depth · tile_bytes))` (≈ 328 at margin 4 KB) | BB-05 budget; wider assignments become more blocks per core, never a refusal |
-| `block_tile_rows` | `≤ tensor_out_tile_rows`; not in any capacity expression | streams (writes from one page) |
-| `Wt`, `Ht`, `tensor_images` | unbounded (W has no upper limit) — appear in **no** capacity expression | — |
+| `tile_bytes` | 2048 | dtype ∈ SUPPORTED = TARGET = {bfloat16}, 32×32 tile |
+| `block_pattern_tiles` | `1 ≤ block_pattern_tiles ≤ max_block_pattern_tiles = (L1_OP_BUDGET_BYTES − L1_RESERVED_BYTES) // (pattern_cb_depth_blocks × tile_bytes)` = 656 at depth 1, 327 at depth 2 | clamp in `select_plan`; `block_pattern_tiles = min(pattern_tiles_per_group, max_block_pattern_tiles)` |
+| `pattern_cb_depth_blocks` | ∈ {1, 2}; Phase 0 = 1 | host constant |
+| `L1_OP_BUDGET_BYTES` | 1,347,776 | spec, Model environment (BB-05) |
+| `L1_RESERVED_BYTES` | 4,096 | host constant; covers the multicast semaphores (2 × L1-aligned words) and allocation alignment |
+| `core_replica_rows` | unbounded (≤ `tensor_replica_rows`) | not in any capacity expression (`replica` streams) |
+| `tensor_pattern_tiles`, `tensor_replica_rows`, W, H_out | unbounded | not in any capacity expression: they set the plan and trip counts, never a page count |
 
-## Footprint
+## Total per-core footprint
 
-Total per core = `block_tile_cols · bcast_buffer_depth · tile_bytes` = **4096 B in every production case** (1 · 2 · 2048), ≤ `1347776 − reserved_margin` for every W by the clamp. Scales only with `block_tile_cols` (w-extent knob) and `bcast_buffer_depth`; independent of W, H and the image count. No semaphores, no compute CBs.
+```
+L1(core) = pattern_cb_depth_blocks × block_pattern_tiles × tile_bytes  +  mcast semaphores
+         ≤ (L1_OP_BUDGET_BYTES − L1_RESERVED_BYTES) + L1_RESERVED_BYTES = 1,347,776 B
+```
+
+The only term that scales with a knob is the first: linear in `block_pattern_tiles` and in
+`pattern_cb_depth_blocks`. Nothing scales with `core_replica_rows`, W or H_out. Production
+(depth 1): 4,096 B at W=512 (`block_pattern_tiles = 2`), 2,048 B for every other width.
 
 ## Data-movement budget
 
-Chosen split: R1 (columns first, then rows; per-core partial read of x). Counts on a 110-core grid (`row_groups` = 6 / 4 / 4 / 4 / 3).
-
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| out (W=512: 256 pages, 524 288 B) | 1 (write only; never read) | every page written exactly once from a resident B tile; no intermediate tensor in DRAM | 0 |
-| x (W=512: 16 pages) | `row_groups` = 6 partial reads per page, 576 B each (28 % of a page): 96 requests, 55 296 B | each core that writes column w builds its own B(n, w); one read per (core, column), reused for all `block_tile_rows` writes of that column | 0 |
-| x (W=256 / 207 / 196 / 185) | 4 / 4 / 4 / 3 partial reads per page: 32 / 28 / 28 / 18 requests (18 432 / 16 128 / 16 128 / 10 368 B) | same; `min_block_tile_rows = 2` keeps it ≤ one read per two out tiles of the column | 0 |
+| `x` | **1** for the 64 B of row 0 per input tile (two 32-B reads); **0** for rows 1–31 | each pattern range is fetched once, by its grid column's top core (injector), and shared down the column by multicast | per grid column, per block: `this_block_pattern_tiles × 2048` B multicast once to `replica_groups − 1` receivers, plus the handshake (one ready increment per receiver, one flag multicast) |
+| `out` | **1** (write) | every output page is written exactly once, from a resident pattern page | none |
 
-Totals per tier at W=512: DRAM write 524 288 B (minimum), DRAM read 55 296 B (minimum 9 216 B), cross-core 0, core-local replication 16 × 2 KB per row-group core (96 B tiles = 192 KB of L1→L1 self-copies, 62 transfers per tile).
+Totals per production case (11×10 grid):
 
-> Cheapest-traffic split considered: columns only (R4, `row_groups = 1`) — DRAM read 9 216 B instead of 55 296 B (−46 080 B DRAM, −80 requests), same 524 288 B written, but 16 cores issuing 16 writes each instead of 96 cores issuing ≤ 3. Read-once + mcast (R2) reaches the same DRAM read but adds 80 × 2048 B = 163 840 B of cross-core multicast and a semaphore handshake per column group. Implemented: R1 with `min_block_tile_rows = 2`. R4 is not deferred — it is the same built code at `min_block_tile_rows = Ht` (a knob-turn); R2 is deferred because it places the sender's read + replication + handshake in front of every receiver's first write in a write-bound op, while the reads it removes are single 576 B requests issued concurrently at kernel start.
+| W | `x` DRAM read | `out` DRAM write | Multicast injected (per column × columns) | Receivers per column |
+|---|---------------|------------------|-------------------------------------------|----------------------|
+| 512 | 1,024 B | 524,288 B | 4,096 B × 8 | 7 |
+| 256 | 512 B | 131,072 B | 2,048 B × 8 | 7 |
+| 207 | 448 B | 100,352 B | 2,048 B × 7 | 6 |
+| 196 | 448 B | 100,352 B | 2,048 B × 7 | 6 |
+| 185 | 384 B | 73,728 B | 2,048 B × 6 | 5 |
+
+> Cheapest-traffic split considered: pattern-only (`replica_groups = 1`, regime R2): same DRAM
+> crossings as R1 (`x` row 0 once, `out` once), and **0 B** cross-core instead of R1's
+> 8 × 4 KB (W=512) to 6 × 2 KB (W=185) multicast. Implemented: R1, 2D column multicast.
+> R2 is R1 at `max_replica_groups = 1`: the same kernels with no receivers, reachable by one
+> host-knob turn. It is not the Phase-0 value because its core count is
+> `pattern_groups ≤ ceil(W / 32)` (6–16 cores), fixed by the tensor's shape, which the spec
+> forbids for multi-tile outputs. The two differ only in cross-core bytes, which R1 keeps to
+> a multicast of at most 4 KB per column.
