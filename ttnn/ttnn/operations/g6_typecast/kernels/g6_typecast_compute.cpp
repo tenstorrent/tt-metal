@@ -3,36 +3,51 @@
 
 // g6_typecast compute — convert_block.
 //
-// One compute_kernel_lib::typecast call walks the core's whole page range (core_pages tiles), so
-// the typecast init and data-format reconfig run once per core; the chain waits/pops
-// cb_input_tiles and reserves/pushes cb_output_tiles once per block_tiles group (the tail block
-// synchronizes its valid tiles only, BlockTailSync::ValidTiles — matching the reader/writer).
-// The LLK formats come from the CB formats: Float16_b -> Float32 (packer), -> Bfp8_b (packer),
-// -> Int32 (SFPU fp32_to_int32). The host sets fp32_dest_acc_en for the 32-bit destinations.
-//
-// CT: [cb_input_tiles, cb_output_tiles, block_tiles]   per-core RT: [core_pages]
+// One typecast chain per block: wait the whole block upfront, convert it in DEST groups of
+// DEST_AUTO_LIMIT tiles, pack straight into cb_output_tiles, publish the block at the end.
+// The LLK in/out formats are derived from the CB formats the host bound, so one source serves
+// every (input, output) dtype pair the program descriptor configures.
 
 #include <cstdint>
+
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t block_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t block_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(2);
 
-    const uint32_t core_pages = get_arg_val<uint32_t>(0);
-
-    DataflowBuffer input_tiles(cb_input_tiles);
-    DataflowBuffer output_tiles(cb_output_tiles);
+    const uint32_t core_tiles = get_arg_val<uint32_t>(0);
 
     compute_kernel_hw_startup(cb_input_tiles, cb_output_tiles);
 
-    DeviceZoneScopedN("convert");
     using namespace compute_kernel_lib;
-    typecast<
-        input(cb_input_tiles, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block),
-        output(cb_output_tiles, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(
-        IterationShape::tiles(core_pages).block_size(block_tiles), input_tiles, output_tiles);
+    DataflowBuffer input_tiles(cb_input_tiles);
+    DataflowBuffer output_tiles(cb_output_tiles);
+
+    // Block mapping is mandatory with an upfront window: the default Scalar mapping would make
+    // every DEST lane read tile 0 of the block.
+    constexpr auto input_spec = input(cb_input_tiles, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block);
+    constexpr auto output_spec = output(cb_output_tiles, ReservePolicy::Upfront, PushPolicy::AtEnd);
+
+    const uint32_t num_blocks = (core_tiles + block_tiles - 1) / block_tiles;
+    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        const uint32_t block_extent =
+            (block_idx + 1 == num_blocks) ? core_tiles - block_idx * block_tiles : block_tiles;
+#if defined(PROFILE_KERNEL)
+        {
+            // Split the upstream starvation out of TC-CV-BLOCK; the chain's own wait then returns at once.
+            DeviceZoneScopedN("TC-CV-WAIT");
+            input_tiles.wait_front(block_extent);
+        }
+#endif
+        {
+            DeviceZoneScopedN("TC-CV-BLOCK");
+            typecast<input_spec, output_spec>(
+                IterationShape::tiles(block_extent).block_size(DEST_AUTO_LIMIT), input_tiles, output_tiles);
+        }
+    }
 }

@@ -4,11 +4,10 @@
 from .g6_typecast import (
     EXCLUSIONS,
     INPUT_TAGGERS,
-    PROPERTIES,
     SUPPORTED,
+    describe_plan,
     g6_typecast,
-    last_plan,
     validate,
 )
 
-__all__ = ["g6_typecast", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS", "PROPERTIES", "validate", "last_plan"]
+__all__ = ["g6_typecast", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS", "validate", "describe_plan"]
