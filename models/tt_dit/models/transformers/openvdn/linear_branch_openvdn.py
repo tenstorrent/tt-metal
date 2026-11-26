@@ -36,12 +36,15 @@ from . import linear_ops_openvdn as ops
 Range = tuple[int, int]
 
 
-def to_heads(x: ttnn.Tensor, num_frames: int, num_heads: int) -> ttnn.Tensor:
-    """`[1, 1, F*S, H*d]` -> `[F, H, S, d]`."""
+def to_heads(x: ttnn.Tensor, num_frames: int, num_heads: int, partition=None) -> ttnn.Tensor:
+    """`[1, 1, F*S, H*d]` -> `[F, H, S, d]`. `partition` (frames on dim 0 -> this device's share) is applied in the
+    row-major frame layout, before the permute."""
     rows, channels = x.shape[-2], x.shape[-1]
     per_frame, head_dim = rows // num_frames, channels // num_heads
     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.reshape(x, [num_frames, per_frame, num_heads, head_dim])
+    if partition is not None:
+        x = partition(x)
     x = ttnn.permute(x, (0, 2, 1, 3))
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
@@ -68,12 +71,12 @@ def heads_column(x: ttnn.Tensor, num_frames: int) -> ttnn.Tensor:
 
 
 def _pad_dim(x: ttnn.Tensor, dim: int, size: int) -> ttnn.Tensor:
-    """Zero-pad an outer dim (0 or 1) of a tiled tensor to `size`, by concatenating zeros."""
+    """Zero-pad an outer dim (0 or 1) of a tensor to `size`, by concatenating zeros in its layout."""
     if x.shape[dim] == size:
         return x
     shape = list(x.shape)
     shape[dim] = size - shape[dim]
-    zeros = ttnn.zeros(shape, dtype=x.dtype, layout=ttnn.TILE_LAYOUT, device=x.device())
+    zeros = ttnn.zeros(shape, dtype=x.dtype, layout=x.layout, device=x.device())
     return ttnn.concat([x, zeros], dim=dim)
 
 
@@ -258,16 +261,13 @@ class OpenVDNLinearBranch(Module):
         partition=None,
     ) -> ttnn.Tensor:
         """`prepare_linear_features`: `[1, 1, F*S, C]` raw bf16 -> `[F, H, S, d]` bf16. `frame_size=None` skips the
-        conv (the text chunk). `partition` (rows -> this device's frames) is applied after the conv, which needs
-        the neighbouring frames."""
+        conv (the text chunk). `partition` (frames on dim 0 -> this device's share; see `to_heads`) is applied after
+        the conv, which needs the neighbouring frames, and returns `[f, H, S, d]` for the local frames."""
         if frame_size is not None and proj in self.short_conv:
             x = self.conv(tokens, proj, num_frames, frame_size)
         else:
             x = ttnn.typecast(tokens, ttnn.float32)
-        if partition is not None:
-            x = partition(x)
-            num_frames = x.shape[-2] // (frame_size[0] * frame_size[1])
-        x = to_heads(ttnn.silu(x), num_frames, self.num_local_heads)
+        x = to_heads(ttnn.silu(x), num_frames, self.num_local_heads, partition=partition)
         if proj != "v":
             x = l2_normalize(x)
         return ttnn.typecast(x, ttnn.bfloat16)
@@ -319,28 +319,19 @@ class OpenVDNLinearBranch(Module):
 
         # With `branch_split` (and `frame_split`), every per-frame stage (features, statistics, alpha, inverse,
         # readout) runs on this device's share of the frames; only the scans see all frames, between two gathers.
-        frames = num_frames
         partition = gather = None
         if self.branch_split and self.frame_split is not None:
             axis, factor, all_gather = self.frame_split
-            frames = -(-num_frames // factor)
-            pad_rows = (frames * factor - num_frames) * per_frame
+            padded_frames = num_frames + (-num_frames % factor)
 
-            def partition(t: ttnn.Tensor) -> ttnn.Tensor:  # [1, 1, F*S, C] replicated -> [1, 1, f*S, C] local
-                if pad_rows:
-                    t = ttnn.pad(t, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], 0.0)
-                return ttnn.mesh_partition(t, dim=2, cluster_axis=axis)
+            def partition(t: ttnn.Tensor) -> ttnn.Tensor:  # frames on dim 0, replicated -> this device's share
+                return ttnn.mesh_partition(_pad_dim(t, 0, padded_frames), dim=0, cluster_axis=axis)
 
-            def gather(t: ttnn.Tensor, dim: int, rows_per_frame: int = 1) -> ttnn.Tensor:
-                """Local frames on `dim` (`rows_per_frame` rows each) -> the F real ones, on every device."""
-                t = all_gather(t, dim)
-                end = num_frames * rows_per_frame
-                if t.shape[dim] == end:
-                    return t
-                return ttnn.slice(t, [0] * 4, [end if i == dim else s for i, s in enumerate(t.shape)])
+            def gather(t: ttnn.Tensor) -> ttnn.Tensor:  # local frames on dim 0 -> the F real ones, everywhere
+                t = all_gather(t, 0)
+                return t if t.shape[0] == num_frames else ttnn.slice(t, [0] * 4, [num_frames, *t.shape[1:]])
 
-            xv = partition(xv)
-
+        local = partition if partition is not None else (lambda t: t)
         query = self.features(q_raw, "q", num_frames, frame_size, partition=partition)
         mark("q features")
         key = self.features(k_raw, "k", num_frames, frame_size, partition=partition)
@@ -348,32 +339,30 @@ class OpenVDNLinearBranch(Module):
         value = self.features(v_raw, "v", num_frames, frame_size, partition=partition)
         mark("v features (conv)")
 
-        a, b = ops.frame_statistics(key, value, self.beta(xv, frames), config=self.config)
-        alpha_rows = self.alpha(xv, frames)
-        alpha = ops.rows_to_heads(alpha_rows, frames, self.num_local_heads, self.head_dim)
+        a, b = ops.frame_statistics(key, value, local(self.beta(xv, num_frames)), config=self.config)
+        alpha_rows = self.alpha(xv, num_frames)
+        alpha = local(ops.rows_to_heads(alpha_rows, num_frames, self.num_local_heads, self.head_dim))
         mark("frame statistics and alpha")
         transition, injection = ops.vdn_factor_apply(alpha, a, b, max_eig=1.0 + per_frame, config=self.config)
         if gather is not None:
-            transition, injection = gather(transition, 0), gather(injection, 0)
-            alpha_rows = gather(alpha_rows, 2)
+            transition, injection = gather(transition), gather(injection)
         mark("inverse")
         scan = ops.parallel_bidirectional_scan if self.parallel_scan else ops.bidirectional_scan
         prefix, suffix = scan(transition, injection, text_state=text_state, config=self.config)
         mark("scans")
         state = ops.gather_linear_state(prefix, suffix, alpha_rows, bounds, text_state=text_state, config=self.config)
-        if partition is not None:
-            state = ttnn.mesh_partition(_pad_dim(state, 0, frames * factor), dim=0, cluster_axis=axis)
         mark("state gather")
 
-        out = ops.split_matmul(query, ttnn.transpose(state, -2, -1), config=self.config)  # [F, H, S, d_v] fp32
+        out = ops.split_matmul(query, ttnn.transpose(local(state), -2, -1), config=self.config)  # [F, H, S, d_v]
         mean_square = ttnn.multiply(ttnn.sum(ttnn.multiply(out, out), dim=-1, keepdim=True), 1.0 / self.head_dim)
         out = ttnn.multiply(out, ttnn.rsqrt(ttnn.add(mean_square, self.NORM_EPS)))
-        out = from_heads(ttnn.multiply(out, self.norm_weight.data))
+        out = ttnn.multiply(out, self.norm_weight.data)
+        if gather is not None:
+            out = gather(out)
+        out = from_heads(out)
 
         gate = ttnn.sigmoid(self.gate_up(self.gate_down(xv)))
         out = ttnn.typecast(ttnn.multiply(out, ttnn.typecast(gate, ttnn.float32)), ttnn.bfloat16)
-        if gather is not None:
-            out = gather(out, 2, per_frame)
         mark("readout")
         return out
 
