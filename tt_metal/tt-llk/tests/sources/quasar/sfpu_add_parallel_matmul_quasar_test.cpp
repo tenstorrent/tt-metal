@@ -168,6 +168,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_sfpu/ckernel_sfpu_add.h"
 #include "llk_sfpu/ckernel_sfpu_srcs.h"
+#include "llk_sfpu_common.h"
 #include "llk_sfpu_srcs_api.h"
 #include "params.h"
 
@@ -194,6 +195,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
+        _llk_sfpu_hw_configure_<is_fp32_dest_acc_en>();
         // FormatConfig has no unpack_T_* fields, so T is unpacked with S's format. Callers must keep
         // stimuli_T_format == stimuli_S_format or T will be read with the wrong format.
         // The SrcS layout is known only at runtime, so init and the tile loop each dispatch once.
