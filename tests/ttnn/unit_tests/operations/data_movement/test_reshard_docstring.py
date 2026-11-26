@@ -213,7 +213,7 @@ def test_reshard_docstring_blackhole_inputs(dtype, layout, input_placement, outp
 
     torch.manual_seed(0)
     input_tensor = sharded_tensor(
-        torch.randn(_SHAPE) * 8, _sharded_memory_config(*input_placement, *_INPUT_SHARDS[input_placement[0]])
+        full_range_input(_SHAPE, dtype), _sharded_memory_config(*input_placement, *_INPUT_SHARDS[input_placement[0]])
     )
     expected = read(input_tensor)
     memory_config = _sharded_memory_config(*output_placement, *_OUTPUT_SHARDS[output_placement[0]])
