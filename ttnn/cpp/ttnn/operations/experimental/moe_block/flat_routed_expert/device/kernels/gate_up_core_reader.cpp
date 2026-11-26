@@ -114,14 +114,21 @@ void kernel_main() {
         }
         *sem(flat_options::gate_up_mailbox_sem) = 1;
     }
-    grant(w_slots);  // every landing slot starts free
-    uint32_t granted = w_slots, pushed = 0;
+    // Until the first sub-block's x has arrived, at most gate_up_w_start landing slots granted (0: the whole ring),
+    // the weight reads kept off the NoC while x ramps up; then the whole ring.
+    constexpr uint32_t w_start = get_named_compile_time_arg_val("gate_up_w_start");
+    constexpr uint32_t w_first = w_start && w_start < w_slots ? w_start : w_slots;
     uint32_t x_pub = 0, x_cons = 0;
+    auto w_cap = [&]() { return w_start == 0 || x_pub >= nk_gu ? w_slots : w_first; };
+    grant(w_first);  // every landing slot starts free
+    uint32_t granted = w_first, pushed = 0;
     uint32_t h_sent = 0, h_pending = 0;
 
     while (h_sent < num_v || pushed < total_w) {
         invalidate_l1_cache();
-        while (granted < total_w && cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1) * slot)) {
+        // (granted and not yet freed <= the cap: the ring's free space from the write pointer leaves w_slots - cap)
+        while (granted < total_w &&
+               cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1 + w_slots - w_cap()) * slot)) {
             grant(1);
             ++granted;
         }
