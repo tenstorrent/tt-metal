@@ -389,10 +389,8 @@ inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
 }
 
 inline void power_init() {
-    // calculate_unary_power_iterative's paired store walks dest through ADDR_MOD_6, advancing by the two
-    // rows the pair just wrote (one sfpi row is two dest counter steps), so the row loop needs no
-    // separate increment. Same contract as init_square, which advances by one sfpi row.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    // calculate_unary_power_iterative's second store of a row pair advances Dest past both rows.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
 }
 
@@ -411,14 +409,8 @@ inline void calculate_unary_power(const uint32_t exponent) {
 }
 
 /**
- * @brief Raises two adjacent rows to the power (exp_minus_one + 1) by binary exponentiation
- *
- * Each row runs the same multiply sequence as a single-row walk; pairing them shares the walk's
- * branches and lets each row's multiply cover the other's MUL latency, so no NOPs are needed.
- * The last squaring is skipped since its result is never used. Advances dst_reg by two rows: the second
- * store does it through ADDR_MOD_6 as programmed by @ref power_init.
- *
- * @param exp_minus_one Exponent minus one (the first factor is the base itself)
+ * @brief Raises two adjacent rows to the power (exp_minus_one + 1) by binary exponentiation; each row's
+ *        multiply covers the other's latency, and the second store advances Dest through ADDR_MOD_6.
  */
 sfpi_inline void _sfpu_unary_power_iterative_two_rows_(const uint32_t exp_minus_one) {
     sfpi::vFloat in0 = sfpi::dst_reg[0];
@@ -464,12 +456,17 @@ inline void calculate_unary_power_iterative(const uint32_t exponent) {
     }
     // Iterative approach for positive integer exponents
     const uint32_t exp_minus_one = exponent - 1;
-    if (__builtin_constant_p(exponent) || exponent == 1) {
-        // A constant exponent folds the walk to straight-line multiplies, and x^1 has no walk at all, so
-        // unrolling lets the compiler replay-roll the rows.
+    if (__builtin_constant_p(exponent)) {
+        // A constant exponent folds the walk to straight-line multiplies, which sfpi records into replay.
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d += 2) {
             _sfpu_unary_power_iterative_two_rows_(exp_minus_one);
+        }
+    } else if (exponent == 1) {
+        // x^1 has no walk; the literal 0 keeps that true whenever the compiler resolves the test above.
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d += 2) {
+            _sfpu_unary_power_iterative_two_rows_(0);
         }
     } else {
         // Runtime exponent: keep the row loop rolled so the bit walk is emitted once, not per row.

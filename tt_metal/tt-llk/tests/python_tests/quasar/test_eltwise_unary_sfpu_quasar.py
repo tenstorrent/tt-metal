@@ -1625,23 +1625,17 @@ def _dest_acc_for_typecast_formats(formats):
     return quasar_sfpu_dest_acc_modes(_typecast_variants(), formats)
 
 
-# Exponents for the power_iterative sweep: 0 and 1 (no walk), then one set bit, two set bits, a
-# single high bit and all bits set, so every shape of the bit walk runs.
+# 0 and 1 (no walk), then every shape of the bit walk: one set bit, two, a single high bit, all set.
 POWER_ITERATIVE_EXPONENTS = [0, 1, 2, 3, 5, 8, 17, 31]
-# Base magnitudes, apart from the planted zeros: wide enough that no two elements agree, and narrow
-# enough that the largest exponent neither overflows fp32 nor reaches its denormals.
+# Base magnitudes: the largest exponent neither overflows fp32 nor reaches its denormals.
 POWER_ITERATIVE_BASE_MAGNITUDES = (0.5, 1.75)
 
 
 def prepare_power_iterative_inputs(
     src_A: torch.Tensor, input_format: DataFormat
 ) -> torch.Tensor:
-    """
-    A different base in every element, signs alternating, with both zeros and +/-1.0 at the front.
-
-    No two rows hold the same values, so a row pair written to the wrong Dest rows, or a row left
-    unprocessed, cannot match the model.
-    """
+    """Bases distinct per row, signs alternating, with both zeros and +/-1.0 at the front, so a row
+    pair written to the wrong Dest rows cannot match the model."""
     low, high = POWER_ITERATIVE_BASE_MAGNITUDES
     magnitudes = torch.linspace(low, high, src_A.numel(), dtype=torch.float64)
     signs = torch.where(torch.arange(src_A.numel()) % 2 == 0, 1.0, -1.0)
@@ -1653,13 +1647,14 @@ def prepare_power_iterative_inputs(
 def power_iterative_expected(
     src: torch.Tensor, exponent: int, output_format: DataFormat
 ) -> torch.Tensor:
+    """calculate_unary_power_iterative in fp32, in the kernel's multiply order (torch.pow differs in
+    the last bits). SFPMUL gives +0.0 for every zero product, so (-0.0)^n is +0.0 above n = 1.
     """
-    calculate_unary_power_iterative in fp32, in the kernel's multiply order.
 
-    Exponent 0 is 1.0 for every input. Otherwise the result starts as the base and the bits of
-    exponent - 1 are walked from the low end: a set bit multiplies the result by the running square,
-    which is then squared for the next bit. torch.pow would differ in the last bits.
-    """
+    def sfpmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        product = a * b
+        return torch.where(product == 0, torch.zeros_like(product), product)
+
     base = src.flatten().to(torch.float32)
     if exponent == 0:
         result = torch.ones_like(base)
@@ -1669,10 +1664,10 @@ def power_iterative_expected(
         remaining = exponent - 1
         while remaining:
             if remaining & 1:
-                result = result * square
+                result = sfpmul(result, square)
             remaining >>= 1
             if remaining:
-                square = square * square
+                square = sfpmul(square, square)
     if output_format == DataFormat.Float16_b:
         # The store into a 16-bit Dest keeps the top 16 bits of the fp32 result.
         truncated = result.contiguous().view(torch.int32) & ~0xFFFF
@@ -1703,9 +1698,8 @@ def run_eltwise_unary_sfpu_quasar(
 
     *format_variant* overrides the resolved route, for routes the resolver never picks.
     *inverse_trig_edges* swaps the stimulus for prepare_inverse_trig_edge_inputs.
-    *power_iterative_exponent* sets power_iterative's exponent (the harness default is 3), swaps the
-    stimulus for prepare_power_iterative_inputs and the golden for power_iterative_expected;
-    *power_iterative_runtime* has the kernel see that exponent as a runtime value.
+    *power_iterative_exponent* sets the exponent and swaps in the power_iterative stimulus and model;
+    *power_iterative_runtime* has the kernel see it as a runtime value.
     """
     if format_variant is None:
         format_variant = resolve_quasar_sfpu_variant(mathop, formats, dest_acc)
@@ -1952,8 +1946,10 @@ def run_eltwise_unary_sfpu_quasar(
         ), f"heaviside differs from its bit-level model in {int(mismatch.sum())} lanes"
 
     if power_iterative_exponent is not None:
-        # The model multiplies in the kernel's order, so nothing short of equality is a pass.
-        mismatch = res_tensor.to(torch.float32) != golden_tensor.to(torch.float32)
+        # The model multiplies in the kernel's order, so the bit patterns must agree, zero sign included.
+        res_bits = res_tensor.to(torch.float32).contiguous().view(torch.int32)
+        golden_bits = golden_tensor.to(torch.float32).contiguous().view(torch.int32)
+        mismatch = res_bits != golden_bits
         assert not bool(
             mismatch.any()
         ), f"power_iterative differs from its model in {int(mismatch.sum())} lanes"
@@ -2295,12 +2291,8 @@ def test_eltwise_unary_sfpu_power_iterative_quasar(
     runtime_exponent,
     input_dimensions,
 ):
-    """power_iterative, exact, for constant and runtime exponents on both Dest widths.
-
-    A constant exponent folds the bit walk and unrolls the row pairs; a runtime one keeps the walk
-    and the row loop. Both go through the init the Compute API's power_iterative_tile_init runs.
-    See prepare_power_iterative_inputs for the stimulus and power_iterative_expected for the model.
-    """
+    """power_iterative, bit-exact against power_iterative_expected, for constant and runtime
+    exponents on both Dest widths."""
     run_eltwise_unary_sfpu_quasar(
         format_variant.formats,
         format_variant.dest_acc,
