@@ -165,6 +165,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const DataFormat src_format     = static_cast<DataFormat>(formats.math);
     const DataFormat sfpu_in_format = static_cast<DataFormat>(formats.sfpu_src);
+    constexpr bool sfpu_runs        = !test_utils::is_unary_sfpu_no_op(SFPU_UNARY_OPERATION, TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT);
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
     if constexpr (
@@ -186,8 +187,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // SFPU uses ADDR_MOD_7 and does not overwrite the datacopy MOP's
         // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
         // the INIT zone before the measured TILE_LOOP.
-        _llk_math_eltwise_sfpu_init_();
-        test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en, APPROX_MODE>();
+        if constexpr (sfpu_runs)
+        {
+            _llk_math_eltwise_sfpu_init_();
+            test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en, APPROX_MODE>();
+        }
 
         if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
@@ -240,31 +244,34 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
                     _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                 }
-                for (std::uint32_t i = 0; i < section_tiles; ++i)
+                if constexpr (sfpu_runs)
                 {
-                    if constexpr (SFPU_UNARY_OPERATION == SfpuType::reshuffle_rows)
+                    for (std::uint32_t i = 0; i < section_tiles; ++i)
                     {
-                        // (input, accumulator) tile pairs; the kernel skips a 16-byte header before the mask.
-                        if (i % 2 == 0)
+                        if constexpr (SFPU_UNARY_OPERATION == SfpuType::reshuffle_rows)
                         {
-                            test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, dest_sync, is_fp32_dest_acc_en, APPROX_MODE>(
-                                DST_INDEX + i /*dst_index*/,
-                                sfpu_in_format,
-                                true /*first*/,
-                                5.0f /*fill_const_value*/,
-                                buffer_B[0] - RESHUFFLE_MASK_HEADER_BYTES /*idx_addr*/);
+                            // (input, accumulator) tile pairs; the kernel skips a 16-byte header before the mask.
+                            if (i % 2 == 0)
+                            {
+                                test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, dest_sync, is_fp32_dest_acc_en, APPROX_MODE>(
+                                    DST_INDEX + i /*dst_index*/,
+                                    sfpu_in_format,
+                                    true /*first*/,
+                                    5.0f /*fill_const_value*/,
+                                    buffer_B[0] - RESHUFFLE_MASK_HEADER_BYTES /*idx_addr*/);
+                            }
                         }
-                    }
-                    else
-                    {
-                        test_utils::call_unary_sfpu_operation_quasar<
-                            SFPU_UNARY_OPERATION,
-                            dest_sync,
-                            is_fp32_dest_acc_en,
-                            APPROX_MODE,
-                            SFPU_ITERATIONS,
-                            TYPECAST_IN_FORMAT,
-                            TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_in_format);
+                        else
+                        {
+                            test_utils::call_unary_sfpu_operation_quasar<
+                                SFPU_UNARY_OPERATION,
+                                dest_sync,
+                                is_fp32_dest_acc_en,
+                                APPROX_MODE,
+                                SFPU_ITERATIONS,
+                                TYPECAST_IN_FORMAT,
+                                TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_in_format);
+                        }
                     }
                 }
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
