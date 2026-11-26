@@ -40,7 +40,8 @@ from .model_config import MoonViTConfig
 POS_EMB_CHUNK = 64
 # Smallest share of a fill worth a pool thread, in elements: a smaller fill runs inline.
 MIN_TASK_ELEMENTS = 1 << 20
-POOL_THREADS = min(16, os.cpu_count() or 1)
+POOL_THREADS = min(8, os.cpu_count() or 1)
+
 # Starts no thread until its first task.
 _POOL = ThreadPoolExecutor(max_workers=POOL_THREADS, thread_name_prefix="moonvit-host")
 
