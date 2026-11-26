@@ -801,6 +801,8 @@ def test_pow_fp32_huge_exponent(base, exponent, expected, binary, device):
     ],
 )
 def test_pow_float_exponent_integer_routing(exponent, message, device, expect_error):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("integer pow is not supported on Quasar")
     tt_base = ttnn.from_torch(
         torch.full((32, 32), 2, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
@@ -809,6 +811,8 @@ def test_pow_float_exponent_integer_routing(exponent, message, device, expect_er
 
 
 def test_pow_float_exponent_largest_int32_takes_integer_path(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("integer pow is not supported on Quasar")
     # 2147483520 is the largest float below 2^31, so it is an int32 exponent: 1 to that power stays 1.
     tt_base = ttnn.from_torch(
         torch.ones((32, 32), dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device

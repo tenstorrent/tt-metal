@@ -359,3 +359,13 @@ def test_bw_unary_pow_zero_input(input_shapes, exponent, device):
     assert torch.equal(
         output, golden
     ), f"expected {golden.flatten()[0].item()} at input == 0, got {output.flatten()[0].item()}"
+
+
+def test_pow_bw_exponent_past_int32(device):
+    # n = 1e35 is outside int32, so pow_bw must use the float power (#67291): n * 0.5^(n - 1) is exactly 0. An
+    # exponent taken as an integer would come out as -2^31 and give inf.
+    x = torch.full((32, 32), 0.5)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_grad = ttnn.from_torch(torch.ones((32, 32)), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    (grad_x,) = ttnn.pow_bw(tt_grad, tt_x, 1e35)
+    assert torch.equal(ttnn.to_torch(grad_x), torch.zeros((32, 32)))
