@@ -46,8 +46,13 @@ constexpr bool llk_int_cbs(const T (&formats)[n]) {
 
 }  // namespace ckernel
 
-// Use after the JIT descriptors (chlkc_descriptors.h), where unpack_src_format is defined.
+// Use after the JIT descriptors (chlkc_descriptors.h), where unpack_src_format is defined. The ring SDPA kernels
+// (ring_joint_sdpa, sliding_ring_sdpa: those given SLIDING_HALO_SLOT_COUNT) also sit 1 KB under the limit on main.
+#if defined(SLIDING_HALO_SLOT_COUNT)
+#define LLK_SIZE_MODE true
+#else
 #define LLK_SIZE_MODE (::ckernel::llk_configured_cbs(unpack_src_format) >= ::ckernel::llk_size_mode_min_cbs)
+#endif
 
 // Unpack to dest takes main's per-tile handshake (the math RISC takes its own post back) at 16-bit DEST and in 32-bit DEST kernels
 // with an Int32 or UInt32 CB (pow_int 32x32 +0.6 %, fp32 sort with its UInt32 index +0.15 % on the other one); Float32-only kernels
