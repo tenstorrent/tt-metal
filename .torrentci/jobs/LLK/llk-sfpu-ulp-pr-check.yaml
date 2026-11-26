@@ -29,7 +29,6 @@ jobs:
         shell:
           run:
             - mkdir -p "$HOME" && git config --global --add safe.directory '*'
-            - ls -l /dev/tenstorrent/
             - python3 -m venv /tmp/uv && /tmp/uv/bin/pip install -q uv
             - /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv
             - >-
@@ -41,7 +40,6 @@ jobs:
               t0=$(date +%s) && git clone -q --shared --no-checkout "$PWD" /tmp/ws
               && git -C /tmp/ws checkout -q --detach "$(git rev-parse HEAD)"
               && echo "clone seconds: $(( $(date +%s) - t0 ))"
-            - git -C /tmp/ws log --oneline -2
             - >-
               cd /tmp/ws/tt_metal/tt-llk/tests && eval "$(./sfpi-info.sh SHELL txz)"
               && if [ -d /opt/tenstorrent/sfpi ]; then mkdir sfpi && cp -as /opt/tenstorrent/sfpi/. sfpi/
@@ -77,7 +75,6 @@ jobs:
         shell:
           run:
             - mkdir -p "$HOME" && git config --global --add safe.directory '*'
-            - ls -l /dev/tenstorrent/
             - python3 -m venv /tmp/uv && /tmp/uv/bin/pip install -q uv
             - /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv
             - >-
@@ -89,7 +86,6 @@ jobs:
               t0=$(date +%s) && git clone -q --shared --no-checkout "$PWD" /tmp/ws
               && git -C /tmp/ws checkout -q --detach "$(git rev-parse HEAD)"
               && echo "clone seconds: $(( $(date +%s) - t0 ))"
-            - git -C /tmp/ws log --oneline -2
             - >-
               cd /tmp/ws/tt_metal/tt-llk/tests && eval "$(./sfpi-info.sh SHELL txz)"
               && if [ -d /opt/tenstorrent/sfpi ]; then mkdir sfpi && cp -as /opt/tenstorrent/sfpi/. sfpi/
