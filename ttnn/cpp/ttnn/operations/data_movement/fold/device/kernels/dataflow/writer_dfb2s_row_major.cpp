@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 
 void kernel_main() {
     // src0 / dst0 are borrowed-memory DFBs.

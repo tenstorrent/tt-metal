@@ -496,7 +496,7 @@ ProgramDescriptor PaddedSliceTileProgramFactory::create_descriptor(
     };
 
     const std::string compute_kernel =
-        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/compute/pack_untilize.cpp";
 
     KernelDescriptor untilize_compute_kernel;
     untilize_compute_kernel.kernel_source = compute_kernel;

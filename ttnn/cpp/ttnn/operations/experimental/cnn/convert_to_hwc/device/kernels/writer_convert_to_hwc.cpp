@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 
 constexpr uint32_t TILE_SIZE = 32;
 

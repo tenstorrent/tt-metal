@@ -8,7 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 

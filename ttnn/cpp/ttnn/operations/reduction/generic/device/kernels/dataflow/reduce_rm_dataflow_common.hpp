@@ -10,7 +10,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 // Pulled in for UnicastEndpoint (used by rm_fill_page_with_clear_template below) and, at the
 // includers, experimental::local_addr.
-#include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp"
 
 #define RM_DF_ALWI inline __attribute__((always_inline))
 

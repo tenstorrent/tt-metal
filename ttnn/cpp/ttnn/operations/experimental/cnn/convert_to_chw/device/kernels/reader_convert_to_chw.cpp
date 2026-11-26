@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 
 void kernel_main() {
     const uint32_t total_tiles = get_arg_val<uint32_t>(0);

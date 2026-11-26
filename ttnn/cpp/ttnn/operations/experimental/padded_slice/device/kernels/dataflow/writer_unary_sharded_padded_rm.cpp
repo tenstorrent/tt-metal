@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 void kernel_main() {
     const uint32_t num_units = get_arg_val<uint32_t>(0);
     const uint32_t num_elements_per_row = get_arg_val<uint32_t>(1);

@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 
 void kernel_main() {
     constexpr uint32_t cb = get_compile_time_arg_val(0);

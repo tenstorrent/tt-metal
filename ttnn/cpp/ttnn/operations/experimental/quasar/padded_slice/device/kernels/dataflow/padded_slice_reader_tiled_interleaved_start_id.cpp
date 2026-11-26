@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 
 void kernel_main() {
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(0);

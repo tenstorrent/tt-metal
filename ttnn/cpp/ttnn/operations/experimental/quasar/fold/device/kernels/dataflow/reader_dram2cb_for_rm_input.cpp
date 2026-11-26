@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 #include "experimental/kernel_args.h"
 
 void kernel_main() {

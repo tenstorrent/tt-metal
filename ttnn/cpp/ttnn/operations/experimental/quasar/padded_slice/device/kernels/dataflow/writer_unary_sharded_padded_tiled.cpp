@@ -8,7 +8,7 @@
 #include "internal/dataflow/dataflow_api_addrgen.h"
 #include "ckernel_defs.h"
 #include "api/tile_constants.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include <ttnn/cpp/ttnn/kernel_lib/experimental_device_api.hpp>
 
 uint32_t round_down(uint32_t value, uint32_t multiple) {
     if (value % multiple != 0) {
