@@ -6,6 +6,7 @@ from loguru import logger
 import pytest
 import torch
 
+from tests.didt.didt_chip import pick_submesh
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
@@ -176,7 +177,7 @@ def test_specific_chip_minimal_matmul(
 ):
     submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
     test_minimal_matmul(
-        submesh_devices[logical_chip_id],
+        pick_submesh(submesh_devices, logical_chip_id),
         dtype,
         math_fidelity,
         fp32_acc,
