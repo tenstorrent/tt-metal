@@ -2,7 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import os
 import time
@@ -32,6 +34,10 @@ class OpTestBase:
         "start_step": 0,
         "results_path": None,
     }
+    # True when every device computes the same thing on the same (replicated) inputs, so healthy devices produce
+    # bit-identical outputs. None = assume so unless the subclass reads its own outputs (read_outputs overridden).
+    # A VF sweep then takes each reference output from the cross-device majority (see _majority_reference).
+    outputs_identical_across_devices = None
 
     def __init__(
         self,
@@ -192,6 +198,43 @@ class OpTestBase:
                 clock.release()
                 logger.info(f"VF sweep: released the forced AICLK and VDD on devices {list(self.device_ids)}")
 
+    def _identical_outputs(self):
+        if self.outputs_identical_across_devices is not None:
+            return self.outputs_identical_across_devices
+        return type(self).read_outputs is OpTestBase.read_outputs and len(self.device_ids) > 2
+
+    def _majority_reference(self, outputs, act):
+        """Replace device outputs that differ from the strict cross-device majority; return the replaced indices.
+
+        A device that is non-deterministic can corrupt its own reference output, after which every later check
+        against it fails at every clock and voltage. With identical outputs expected on all devices, the
+        majority is the correct reference. Without a strict majority nothing is replaced.
+        """
+        try:
+            keys = [
+                (
+                    tuple(o.shape),
+                    str(o.dtype),
+                    hashlib.sha1(o.contiguous().view(torch.uint8).numpy().tobytes()).digest(),
+                )
+                for o in outputs
+            ]
+        except Exception as e:  # outputs that are not plain tensors
+            logger.debug(f"VF sweep: no cross-device reference for output {act}: {e}")
+            return []
+        key, count = Counter(keys).most_common(1)[0]
+        if count * 2 <= len(outputs):
+            logger.warning(
+                f"VF sweep: reference output {act}: no majority across {len(outputs)} devices "
+                f"(largest group {count}), keeping each device's own reference"
+            )
+            return []
+        majority = outputs[keys.index(key)]
+        replaced = [i for i, k in enumerate(keys) if k != key]
+        for i in replaced:
+            outputs[i] = majority.clone()
+        return replaced
+
     def _record_sweep_event(self, event, **fields):
         """Append one sweep event to vf_results_path (if set), flushed to disk so it survives a hang or a kill."""
         if not self.vf_results_path:
@@ -299,6 +342,14 @@ class OpTestBase:
                         ttnn.device.synchronize_device(self.get_device(device_idx))
                     reference_out[act] = self.read_outputs(output, pool)
                     self.release_output(output)
+                    if clock is not None and self._identical_outputs():
+                        for output_id in self._majority_reference(reference_out[act], act):
+                            logger.warning(
+                                f"Device {self.device_ids[output_id]} reference output {act} differs from the "
+                                f"other devices; using theirs"
+                            )
+                            num_nd_outputs[output_id] += 1
+                            reference_failed.add(self.device_ids[output_id])
                     bad = self.output_failures(reference_out[act])
                     for output_id, failed in enumerate(bad or []):
                         if failed:
