@@ -407,6 +407,7 @@ jobs:
           BUILD_WHEEL: ${{ inputs.build-wheel }}
           BUILD_TTNN_IMPORT: ${{ inputs.build-ttnn-import-artifact }}
           INPUT_REF: ${{ inputs.ref }}
+          INPUT_WHEEL_REF: ${{ inputs.wheel-ref }}
           SOURCE_RUN: ${{ inputs.use-artifacts-from-run }}
         run: |
           set -euo pipefail
@@ -434,7 +435,12 @@ jobs:
             PACKAGES="^$(re "packages-${DISTRO}-${VERSION}-${ARCH}-${BUILD_TYPE}-${TOOLCHAIN_CLEANED}${T_DASH}${D_DASH}-")${REF}-${SOURCE_RUN}\$"
           fi
           if [ "$BUILD_WHEEL" = "true" ]; then
-            WHEEL="^$(re "ttnn-dist-cp${PY}-${BUILD_TYPE}${T_DASH}-")${REF}-${SOURCE_RUN}\$"
+            # wheels.yaml names the wheel after wheel-ref when it is set.
+            WHEEL_REF=$REF
+            if [ -n "$INPUT_WHEEL_REF" ]; then
+              WHEEL_REF=$(re "$(echo "$INPUT_WHEEL_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')")
+            fi
+            WHEEL="^$(re "ttnn-dist-cp${PY}-${BUILD_TYPE}${T_DASH}-")${WHEEL_REF}-${SOURCE_RUN}\$"
           elif [ "$BUILD_INPLACE_WHEEL" = "true" ]; then
             WHEEL="^$(re "ttnn-dist-inplace-cp${PY}-${BUILD_TYPE}${T_DASH}-")${REF}-${SOURCE_RUN}\$"
           fi
