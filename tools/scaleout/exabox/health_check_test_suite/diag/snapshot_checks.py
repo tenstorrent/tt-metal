@@ -11,8 +11,6 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 
 from .galaxy import (
-    BOARD_ID_PREFIX_REVAB,
-    BOARD_ID_PREFIX_REVC,
     BOARD_REV_EXPECTATIONS,
     ETH_EXAMAX_BY_ASIC,
     ETH_INTERNAL_BY_ASIC,
@@ -37,13 +35,16 @@ from .naming import blamed, chip
 # Fully-trained + BIST-passed = 0x55555555.
 
 
-def detect_board_rev(devs: list[dict]) -> tuple[str | None, dict[str, list[str]]]:
+def detect_board_rev(devs: list[dict]) -> tuple[str | None, dict | None, dict[str, list[str]]]:
     """Classify chips by board ID prefix → revision.
 
-    Returns (rev_label, per_rev_bdfs).
-    rev_label is 'RevA/B', 'RevC', or None when chips are mixed or any chip
-    has an unrecognised board_id (callers should treat None as indeterminate
-    and surface a FAIL on the board_rev check).
+    Returns (rev_label, expectations, per_rev_bdfs).
+    rev_label names the revision(s) found ('RevC', or 'RevC + Rev 00000474' when
+    the prefixes differ but expect the same GDDR speed and PCIe gen) and
+    expectations is the shared BOARD_REV_EXPECTATIONS entry. Both are None when
+    any chip has an unrecognised board_id or the prefixes expect different
+    values (callers should treat None as indeterminate and surface a FAIL on the
+    board_rev check).
     per_rev_bdfs maps each observed bucket label (including 'unknown:<prefix>')
     to its list of BDFs, for diagnostic output.
     """
@@ -51,16 +52,17 @@ def detect_board_rev(devs: list[dict]) -> tuple[str | None, dict[str, list[str]]
     for d in devs:
         bid = (d.get("board_info") or {}).get("board_id") or ""
         bdf = (d.get("board_info") or {}).get("bus_id", "?")
-        if bid.startswith(BOARD_ID_PREFIX_REVAB):
-            per_rev["RevA/B"].append(bdf)
-        elif bid.startswith(BOARD_ID_PREFIX_REVC):
-            per_rev["RevC"].append(bdf)
-        else:
-            per_rev[f"unknown:{bid[:8] or '<empty>'}"].append(bdf)
-    buckets = list(per_rev.keys())
-    if len(buckets) == 1 and buckets[0] in BOARD_REV_EXPECTATIONS:
-        return buckets[0], dict(per_rev)
-    return None, dict(per_rev)
+        label = next(
+            (k for k, v in BOARD_REV_EXPECTATIONS.items() if bid.startswith(v["board_id_prefix"])),
+            f"unknown:{bid[:8] or '<empty>'}",
+        )
+        per_rev[label].append(bdf)
+    if not all(k in BOARD_REV_EXPECTATIONS for k in per_rev):
+        return None, None, dict(per_rev)
+    known = sorted(per_rev, key=lambda k: BOARD_REV_EXPECTATIONS[k]["board_id_prefix"])
+    if len({(BOARD_REV_EXPECTATIONS[k]["gddr_speed"], BOARD_REV_EXPECTATIONS[k]["pcie_gen"]) for k in known}) != 1:
+        return None, None, dict(per_rev)
+    return " + ".join(known), BOARD_REV_EXPECTATIONS[known[0]], dict(per_rev)
 
 
 def pcie_enum_check(devs: list[dict], name: str = "pcie_enum_count") -> Check:
@@ -182,7 +184,8 @@ def _thermal_and_telemetry(devs: list[dict], phase: Phase) -> None:
 
 def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     """Run all snapshot checks. Returns the detected board revision
-    ('RevA/B', 'RevC') or None if indeterminate, so the caller can record it
+    ('RevA/B', 'RevC', 'Rev 00000474', or a ' + ' mix of those that expect the
+    same values) or None if indeterminate, so the caller can record it
     on the report.
     """
     devs = snap.get("device_info") or []
@@ -199,22 +202,30 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     # 1b. Board revision — gates GDDR speed + PCIe gen expectations below.
     # RevA/B (board_id 00000471xxxxxxxx): 14G GDDR, Gen4 PCIe.
     # RevC   (board_id 00000473xxxxxxxx): 16G GDDR, Gen5 PCIe.
-    # Mixed-rev or unknown-prefix board_ids => FAIL here, downstream
+    # Rev 00000474 (board_id 00000474xxxxxxxx): 16G GDDR, Gen5 PCIe, as measured.
+    # Prefixes that expect different values, or an unknown prefix => FAIL here,
     # rev-dependent checks => SKIP. Spec: Confluence SYS-4055.
-    rev, per_rev_bdfs = detect_board_rev(devs)
+    rev, expect, per_rev_bdfs = detect_board_rev(devs)
     rev_dist = {k: len(v) for k, v in per_rev_bdfs.items()}
     if rev is not None:
-        prefix = BOARD_REV_EXPECTATIONS[rev]["board_id_prefix"]
+        prefixes = ", ".join(
+            f"{BOARD_REV_EXPECTATIONS[k]['board_id_prefix']} x{n}"
+            for k, n in sorted(rev_dist.items(), key=lambda kv: BOARD_REV_EXPECTATIONS[kv[0]]["board_id_prefix"])
+        )
         phase.add(
             Check(
                 name="board_rev",
                 status=PASS,
-                details=f"Rev: {rev} ({rev_dist[rev]}/{n} chips, board_id prefix {prefix})",
+                details=(
+                    f"Rev: {rev} ({n}/{n} chips, board_id prefix {expect['board_id_prefix']})"
+                    if rev in BOARD_REV_EXPECTATIONS
+                    else f"Rev: {rev} ({n} chips, same expectations; board_id prefixes {prefixes})"
+                ),
                 data={
                     "rev": rev,
                     "distribution": rev_dist,
                     "per_rev_bdfs": per_rev_bdfs,
-                    "expectations": BOARD_REV_EXPECTATIONS[rev],
+                    "expectations": expect,
                 },
                 ip="board",
             )
@@ -573,7 +584,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             )
         )
     else:
-        expected_gen = BOARD_REV_EXPECTATIONS[rev]["pcie_gen"]
+        expected_gen = expect["pcie_gen"]
 
         # WARN only on chips trained *below* the rev's expected gen (the known
         # down-train bug). Above-expected is silicon-out-of-spec but not a
@@ -625,7 +636,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             )
         )
     else:
-        expected_speed = BOARD_REV_EXPECTATIONS[rev]["gddr_speed"]
+        expected_speed = expect["gddr_speed"]
         gddr_speed_bad = [
             (d["board_info"]["bus_id"], d["board_info"].get("dram_speed"))
             for d in devs

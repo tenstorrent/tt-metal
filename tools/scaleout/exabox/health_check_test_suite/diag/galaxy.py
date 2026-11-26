@@ -143,12 +143,18 @@ QSFP_PORT_IDS: tuple[int, ...] = tuple(sorted(pid for ptype, pid in UBB_ETH_PORT
 # Spec: BH Galaxy Revisions Comparison Table (Confluence SYS-4055).
 # RevA/B silicon: GDDR runs at 14G, host-PCIe at Gen4.
 # RevC silicon:   GDDR runs at 16G, host-PCIe at Gen5.
+# Prefix 00000474: no spec names it; every chip read with it on production galaxies showed 16G GDDR and Gen5 (the
+# RevC values), so it carries those, labelled by its prefix, not a rev letter.
 # Mixing the wrong expected values on the wrong rev is unsafe (RevC commands
 # on RevA/B hardware can brick the board), so we gate the rev-dependent checks
-# below and FAIL if the rev can't be unambiguously detected.
+# below and FAIL if the rev can't be unambiguously detected. Chips of different
+# prefixes that expect the same GDDR speed and PCIe gen (a tray swapped for another
+# prefix) share that expectation and pass.
 BOARD_ID_PREFIX_REVAB = "00000471"
 BOARD_ID_PREFIX_REVC = "00000473"
+BOARD_ID_PREFIX_0474 = "00000474"
 BOARD_REV_EXPECTATIONS = {
     "RevA/B": {"gddr_speed": "14G", "pcie_gen": 4, "board_id_prefix": BOARD_ID_PREFIX_REVAB},
     "RevC": {"gddr_speed": "16G", "pcie_gen": 5, "board_id_prefix": BOARD_ID_PREFIX_REVC},
+    "Rev 00000474": {"gddr_speed": "16G", "pcie_gen": 5, "board_id_prefix": BOARD_ID_PREFIX_0474},
 }

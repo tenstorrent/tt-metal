@@ -781,14 +781,15 @@ FAIL or WARN check of a phase that gates, go to `findings.txt` and `finding_stag
 ### Board
 | Check | Rule | On fail |
 |---|---|---|
-| `board_rev` | All chips' `board_info.board_id` share one known prefix → `RevA/B` (`00000471…`) or `RevC` (`00000473…`). Sets the per-rev expected values for `gddr_speed` and `pcie_gen` below. | **FAIL** if mixed-rev across chips, or any chip has an unrecognised prefix. Downstream rev-dependent checks SKIP. |
+| `board_rev` | Every chip's `board_info.board_id` has a known prefix → `RevA/B` (`00000471…`), `RevC` (`00000473…`) or `Rev 00000474`. Sets the expected values for `gddr_speed` and `pcie_gen` below. Prefixes that expect the same GDDR speed and PCIe gen (e.g. a tray of `00000474` chips beside `00000473` trays) pass together, the detail line listing each prefix and its chip count; `gddr_speed` and `pcie_gen` then judge every chip against that shared expectation. | **FAIL** if the prefixes expect different values (e.g. `00000471` with `00000473`), or any chip has an unrecognised prefix. Downstream rev-dependent checks SKIP. |
 
-Per-rev hardware expectations (Confluence SYS-4055):
+Per-rev hardware expectations (Confluence SYS-4055; `00000474` is not in that spec: its values are what every chip read with that prefix on production galaxies showed):
 
 | Rev | board_id prefix | GDDR speed | PCIe gen (U6 only) |
 |---|---|---|---|
 | RevA/B | `00000471…` | `14G` | Gen4 |
 | RevC   | `00000473…` | `16G` | Gen5 |
+| Rev 00000474 | `00000474…` | `16G` | Gen5 |
 
 The detected rev is also recorded at the top of the JSON report as `detected_board_rev`.
 
@@ -804,7 +805,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 | `recount_N` (reset loop) | After reset N, `lspci` lists all 32 chips; each missing one is named by BDF, tray and ASIC (`data.missing`) | **FAIL** |
 | `pcie_aer_delta` (`pcie_aer` phase, `full`) | New AER errors per chip over the whole run, from after the pre-test resets to the end, counted up to each later reset and again from the counters as it left them. Any uncorrectable: **FAIL**. Correctable: **WARN** at 2 or more and 6 or more per hour. | **FAIL** / **WARN**. Also **WARN** naming the chips whose counters were not read at the start or the end (errors on them were not counted). **SKIP** when no chip's counters could be read (AER off in the kernel or BIOS). |
 | `pcie_lane_width` | x8 on host-PCIe chips (`ASIC_LOCATION==0x6`); x1 elsewhere | **FAIL** |
-| `pcie_gen` | Host-PCIe (U6) chips trained to at least the rev's expected gen (Gen4 on RevA/B, Gen5 on RevC). Above-spec is rendered with `(^)` but doesn't degrade status; under-spec is rendered with `(!)` and WARNs. | **WARN** (known: occasional Gen1 fallback). **SKIP** when `board_rev` is indeterminate. |
+| `pcie_gen` | Host-PCIe (U6) chips trained to at least the rev's expected gen (Gen4 on RevA/B, Gen5 on RevC and Rev 00000474). Above-spec is rendered with `(^)` but doesn't degrade status; under-spec is rendered with `(!)` and WARNs. | **WARN** (known: occasional Gen1 fallback). **SKIP** when `board_rev` is indeterminate. |
 
 ### Around the tests
 | Check | Rule | On fail |
@@ -827,7 +828,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 | `enabled_gddr_full` | `ENABLED_GDDR == 0xff` per chip | **FAIL** |
 | `gddr_training_per_channel` | All 256 channels (32 × 8) trained per `DDR_STATUS` | **FAIL** |
 | `gddr_bist_per_channel` | All 256 channels BIST-passed per `DDR_STATUS` | **FAIL** |
-| `gddr_speed` | `board_info.dram_speed` matches the rev's expected speed (`14G` on RevA/B, `16G` on RevC) | **FAIL**. **SKIP** when `board_rev` is indeterminate. |
+| `gddr_speed` | `board_info.dram_speed` matches the rev's expected speed (`14G` on RevA/B, `16G` on RevC and Rev 00000474) | **FAIL**. **SKIP** when `board_rev` is indeterminate. |
 | `gddr_info_*` (5.1+) | Store-only: per-pair GDDR temps, corr-err counts, `GDDR_UNCORR_ERRS`, `MAX_GDDR_TEMP` | never alerts — forensics only |
 
 ### ETH

@@ -25,9 +25,10 @@ import tiers  # noqa: E402
 from diag import firmware, resets, sel  # noqa: E402
 from diag.aer import AerWindow, aer_check, aer_new, read_aer  # noqa: E402
 from diag.galaxy import TRAY_TO_UBB_NIBBLE, expected_bdf  # noqa: E402
-from diag.model import FAIL, PASS, SKIP, WARN, Phase  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.naming import chip  # noqa: E402
-from diag.snapshot_checks import _thermal_and_telemetry  # noqa: E402
+from diag.qsfp import QSFP_REV_CHECK, qsfp_rev_crosscheck  # noqa: E402
+from diag.snapshot_checks import _thermal_and_telemetry, validate_snapshot  # noqa: E402
 
 
 def all_bdfs():
@@ -57,6 +58,78 @@ class TestNaming(unittest.TestCase):
 
     def test_off_map_bdf_has_no_tray(self):
         self.assertEqual(chip("0000:ff:00.0"), {"bdf": "0000:ff:00.0", "tray": None, "asic": None})
+
+
+def _boards(prefix_counts, gen=5, speed="16G"):
+    """A 32-chip snapshot: prefix_counts maps a board_id prefix to how many chips carry it."""
+    prefixes = [p for p, c in prefix_counts.items() for _ in range(c)]
+    return {
+        "device_info": [
+            {
+                "board_info": {
+                    "bus_id": bdf,
+                    "board_id": f"{prefix}31831011",
+                    "dram_speed": speed,
+                    "pcie_speed": gen,
+                }
+            }
+            for bdf, prefix in zip(all_bdfs(), prefixes)
+        ]
+    }
+
+
+class TestBoardRev(unittest.TestCase):
+    def _judge(self, snap):
+        phase = Phase(name="snapshot")
+        rev = validate_snapshot(snap, phase)
+        return rev, {c.name: c for c in phase.checks}
+
+    def test_a_uniform_00000474_box_passes_at_16g_and_gen5(self):
+        rev, checks = self._judge(_boards({"00000474": 32}))
+        self.assertEqual(rev, "Rev 00000474")
+        for name in ("board_rev", "pcie_gen", "gddr_speed"):
+            self.assertEqual(checks[name].status, PASS, name)
+
+    def test_a_mix_that_expects_the_same_values_passes_and_lists_the_prefixes(self):
+        rev, checks = self._judge(_boards({"00000473": 24, "00000474": 8}))
+        self.assertEqual(rev, "RevC + Rev 00000474")
+        self.assertEqual(checks["board_rev"].status, PASS)
+        self.assertIn("00000473 x24, 00000474 x8", checks["board_rev"].details)
+        self.assertEqual(checks["gddr_speed"].status, PASS)
+
+    def test_a_mix_that_expects_different_values_fails(self):
+        rev, checks = self._judge(_boards({"00000471": 8, "00000473": 24}))
+        self.assertIsNone(rev)
+        self.assertEqual(checks["board_rev"].status, FAIL)
+        self.assertEqual(checks["gddr_speed"].status, SKIP)
+
+    def test_an_unknown_prefix_fails_even_beside_known_ones(self):
+        rev, checks = self._judge(_boards({"00000473": 24, "00000999": 8}))
+        self.assertIsNone(rev)
+        self.assertEqual(checks["board_rev"].status, FAIL)
+        self.assertIn("unknown:00000999", checks["board_rev"].details)
+
+    def test_a_00000474_chip_trained_below_gen5_is_named_by_pcie_gen(self):
+        snap = _boards({"00000474": 32})
+        u6 = next(d for d in snap["device_info"] if d["board_info"]["bus_id"] == expected_bdf(1, 6))
+        u6["board_info"]["pcie_speed"] = 4
+        _, checks = self._judge(snap)
+        self.assertEqual(checks["board_rev"].status, PASS)
+        self.assertEqual(checks["pcie_gen"].status, WARN)
+        self.assertIn(u6["board_info"]["bus_id"].split(":", 1)[-1], checks["pcie_gen"].details)
+
+    def test_a_00000474_chip_off_16g_fails_gddr_speed(self):
+        snap = _boards({"00000474": 32})
+        snap["device_info"][3]["board_info"]["dram_speed"] = "14G"
+        _, checks = self._judge(snap)
+        self.assertEqual(checks["gddr_speed"].status, FAIL)
+
+    def test_the_qsfp_cross_check_skips_a_revision_it_has_no_equivalent_for(self):
+        dump = [Check(name=QSFP_REV_CHECK, status=PASS, data={"rev": "BH_GALAXY_REV_C"})]
+        for rev in ("Rev 00000474", "RevC + Rev 00000474"):
+            c = qsfp_rev_crosscheck(dump, rev, gating=True)
+            self.assertEqual(c.status, SKIP, rev)
+            self.assertIn(rev, c.details)
 
 
 class TestRecount(unittest.TestCase):

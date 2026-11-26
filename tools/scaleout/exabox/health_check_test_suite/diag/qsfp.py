@@ -120,12 +120,18 @@ def qsfp_rev_crosscheck(checks: list[Check], detected_rev: str | None, gating: b
     """
     found = next((c for c in checks if c.name == QSFP_REV_CHECK), None)
     dump_rev = (found.data or {}).get("rev") if found else None
-    if detected_rev is None or dump_rev in (None, "unknown"):
-        missing = "the tt-smi snapshot" if detected_rev is None else "the dump"
+    if detected_rev not in QSFP_REV_EQUIVALENT or dump_rev in (None, "unknown"):
+        missing = (
+            "the tt-smi snapshot did not determine one"
+            if detected_rev is None
+            else "the dump did not determine one"
+            if dump_rev in (None, "unknown")
+            else f"no dump revision is known for tt-smi's {detected_rev}"
+        )
         payload = {
             "name": "board_rev_agrees",
             "status": SKIP,
-            "details": f"no revision to compare: {missing} did not determine one",
+            "details": f"no revision to compare: {missing}",
             "data": {"tt_smi_rev": detected_rev, "dump_rev": dump_rev},
             "ip": "board",
         }
