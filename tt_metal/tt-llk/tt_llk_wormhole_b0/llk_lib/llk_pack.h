@@ -342,6 +342,11 @@ inline void _llk_pack_hw_configure_(
 
     LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
+
+    // perf trial: same size as the ADDR_MOD_7 write (3 x SETC16), no effect.
+    TTI_NOP;
+    TTI_NOP;
+    TTI_NOP;
 }
 
 /**

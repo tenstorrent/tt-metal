@@ -3103,19 +3103,13 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
 
 // Program ADDR_MOD_0 with a +2 increment: the two Dest rows of an SFPU
 // load/store. Used by both `remove_msb_values` and `separate_indices`,
-// which both walk the K-element region 32 datums at a time. Also sets
-// ADDR_MOD_7 (zero advance) for the load part of the sequence.
+// which both walk the K-element region 32 datums at a time. The load part of
+// the sequence uses ADDR_MOD_7 at its zero-advance invariant.
 inline void _topk_xl_remove_msb_values_init_()
 {
     // ADDR_MOD_0 — +2 (one 32-lane group, an eighth of a face).
     // Not programmed by _topk_xl_init_; independent of ADDR_MOD_2's +24 fold.
     detail::set_dst_addr_mode<ADDR_MOD_0, EIGHTH_FACE_INC>();
-
-    if constexpr (!topk_xl_blaze_compat)
-    {
-        // ADDR_MOD_7 — no advance, used by SFPLOAD.
-        detail::set_dst_addr_mode<ADDR_MOD_7, 0 /* Increment */>();
-    }
 }
 
 // Store zero into the hi16 half of every DST word in the K-sized region.
@@ -3486,13 +3480,10 @@ inline void _topk_xl_split_sfpu_init_()
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024 or 2048");
     _init_sfpu_config_reg();
-
-    detail::set_dst_addr_mode<ADDR_MOD_7, 0>();
     detail::set_dst_addr_mode<ADDR_MOD_6, TWO_FACE_INC>();
     detail::set_dst_addr_mode<ADDR_MOD_5, FACE_INC>();
     detail::set_dst_addr_mode<ADDR_MOD_1, THREE_FACE_INC>();
     detail::set_dst_addr_mode<ADDR_MOD_3, QUARTER_FACE_INC>();
-
     if constexpr (K >= 1024)
     {
         detail::set_dst_addr_mode<ADDR_MOD_4, FACE_INC>();
