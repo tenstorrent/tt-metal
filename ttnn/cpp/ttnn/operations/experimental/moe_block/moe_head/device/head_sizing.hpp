@@ -231,6 +231,10 @@ struct SharedExpertSizing {
     // the router logits on the engine (args.router)
     uint32_t router_expert_tiles_per_column = 0, router_row_tiles_per_group = 0, router_k_chunk_tiles = 0;
     bool router_overlays_zones = false, router_overlays_latent = false, router_overlay = false;
+    // the last router iteration's partial logits (ro) sent from the W stream's loop, after the W stream starts: ro
+    // not over a region written before the engine's first down pass (hall: other cores' h; lat: the latent pass) -
+    // the column dataflow holds the down pass's W until ro is out
+    bool router_out_deferred = false;
     Regions reduce_scatter_sizes;  // the reduce-scatter's regions
     int64_t arena_bytes = 0;
     Regions offsets;  // region offsets, arena order

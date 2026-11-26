@@ -55,6 +55,9 @@ inline constexpr const char* kPaddedForwardMetadata = "padded_forward_metadata";
 inline constexpr const char* kKStepTiles = "k_step_tiles";
 inline constexpr const char* kRowTilesPerCore = "row_tiles_per_core";
 inline constexpr const char* kKStepsPerShard = "k_steps_per_shard";
+// the x segments a shard: a shard is gathered, counted ready and processed in segments of k_steps_per_shard / it K
+// steps (HeadModel::x_segments_per_shard)
+inline constexpr const char* kXSegmentsPerShard = "x_segments_per_shard";
 inline constexpr const char* kTilesPerPacket = "tiles_per_packet";
 inline constexpr const char* kChunkRowTiles = "chunk_row_tiles";
 inline constexpr const char* kRowChunks = "row_chunks";
@@ -171,6 +174,7 @@ inline constexpr const char* kRouterRowTilesPerGroup = "router_row_tiles_per_gro
 inline constexpr const char* kRouterDepth = "router_depth";
 inline constexpr const char* kRouterKChunkTiles = "router_k_chunk_tiles";
 inline constexpr const char* kRouterDoneCredit = "router_done_credit";  // 1: the router overlay's done credit
+inline constexpr const char* kRouterOutDeferred = "router_out_deferred";  // 1: the last router out from the W loop
 inline constexpr const char* kRouterAccessorOffset = "router_accessor_compile_time_args_offset";
 inline constexpr const char* kXAcknowledgeFlagId = "x_acknowledge_flag_id";
 inline constexpr const char* kWAcknowledgeFlagId = "w_acknowledge_flag_id";

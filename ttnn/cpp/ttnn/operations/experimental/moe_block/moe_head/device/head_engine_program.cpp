@@ -8,10 +8,12 @@
 
 namespace ttnn::operations::experimental::moe_block::moe_head {
 
+// The engine's K order: K steps a segment, the segments, then the segment order (K segment ids - shard x segments a
+// shard + segment: my own shard's, then each arrival wave's shards a segment at a time; HeadModel::segment_order)
 std::vector<uint32_t> ChipProgram::shard_order_args() const {
-    std::vector<uint32_t> shard_order = model.shard_order(coord).first;
-    std::vector<uint32_t> out = {sizing.num_k_steps / u32(shard_order.size()), u32(shard_order.size())};
-    out.insert(out.end(), shard_order.begin(), shard_order.end());
+    const std::vector<uint32_t> order = model.segment_order(coord);
+    std::vector<uint32_t> out = {model.x_segment_steps, u32(order.size())};
+    out.insert(out.end(), order.begin(), order.end());
     return out;
 }
 
@@ -180,12 +182,8 @@ std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>> ChipPr
         }
         return out;
     }
-    const std::vector<uint32_t> shard_order = model.shard_order(coord).first;
-    const uint32_t k_steps_per_shard = sizing.num_k_steps / u32(shard_order.size());
-    std::map<uint32_t, uint32_t> rank;
-    for (uint32_t k = 0; k < shard_order.size(); ++k) {
-        rank[shard_order[k]] = k;
-    }
+    const std::vector<uint32_t> segment_ranks = model.ranks(coord);  // (per K segment: its index in the order)
+    const uint32_t segment_steps = model.x_segment_steps;
     const uint32_t family0_slots = sizing.family0_slots(core_x), owned_slots = sizing.owned_slots(core_x);
     const uint32_t owner_chunk_row_tiles = sizing.chunk_row_tiles / num_shards;
     for (uint32_t owner_row = 0; owner_row < owner_row_tiles; ++owner_row) {
@@ -202,8 +200,9 @@ std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>> ChipPr
             continue;
         }
         const uint32_t core_row_tile = local_row_tile % row_tiles_per_core;
-        for (uint32_t j = 0; j < shard_order.size() * k_steps_per_shard; ++j) {
-            const uint32_t k_step = rank.at(j / k_steps_per_shard) * k_steps_per_shard + j % k_steps_per_shard;
+        for (uint32_t j = 0; j < segment_ranks.size() * segment_steps; ++j) {
+            // (K step j's processing position)
+            const uint32_t k_step = segment_ranks.at(j / segment_steps) * segment_steps + j % segment_steps;
             const auto [column, family, _] = sizing.owner(k_step);
             if (column != core_x) {
                 continue;
@@ -507,8 +506,10 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
         {names::kWTileBytes, sizing.w_tile_bytes},
         {names::kWValidSemaphoreId, kWValidSemaphore},
         {names::kWFreeSemaphoreId, kWFreeSemaphore},
+        // (the compute's accumulation units: the segments and their K steps)
         {names::kKShards, shard_order[1]},
         {names::kKStepsPerShard, shard_order[0]},
+        {names::kXSegmentsPerShard, model.x_segments_per_shard},
         // (the shared expert's sizes; global_row_tile's owner form - row chunks over TP shards - or its chunk-major
         // form, the other's values 0)
         {names::kSharedExpertHSlots, sizing.h_slots},
@@ -558,6 +559,7 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
         {names::kRouterXReadyFlagId, kRouterXReadyFlag},
         {names::kRouterWReadyFlagId, kRouterWReadyFlag},
         {names::kRouterDoneCredit, sizing.router_overlay},
+        {names::kRouterOutDeferred, sizing.router_out_deferred},
         {names::kRouterXSentFlagId, kRouterXSentFlag},
         {names::kRouterKChunkTiles, sizing.router_k_chunk_tiles},
         {names::kXReadLocalFlagId, kXReadLocalFlag},

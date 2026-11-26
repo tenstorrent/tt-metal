@@ -59,6 +59,8 @@ constexpr uint32_t router_x_ready_flag_id = get_named_compile_time_arg_val(names
 constexpr uint32_t router_w_ready_flag_id = get_named_compile_time_arg_val(names::kRouterWReadyFlagId);
 // 1: the router's buffers overlay the arrival zones: this core's "router done" count goes to the ports
 constexpr bool router_done_credit = get_named_compile_time_arg_val(names::kRouterDoneCredit) != 0;
+// (iterating, HeadSizing::router_out_deferred: the last iteration's partials from the W stream's loop)
+constexpr bool router_out_deferred = iterating && get_named_compile_time_arg_val(names::kRouterOutDeferred) != 0;
 // the W ring (one chunk: my W-own a ring of W block slots; 0: no ring)
 constexpr uint32_t shared_expert_w_ring_slots = get_named_compile_time_arg_val(names::kSharedExpertWRingSlots);
 constexpr bool w_ring = shared_expert_w_ring_slots > 0;
@@ -342,6 +344,40 @@ void process_row_block(const ColumnDataflowArgs& args, uint32_t block, uint32_t&
     // chip's K slice) and multicasts it along the row; the column's first core reads the column's W_r^T expert tiles
     // and multicasts them down the column; then the compute's partial logits go to the router cores' HOLD (the main
     // loop below)
+    // my partial logits of router iteration `iteration` (the compute's, a few us later) to their router cores' HOLD
+    auto send_router_out = [&](uint32_t iteration) {
+        cb_wait_front(router_out_cb, router_expert_tiles_per_column * router_core_row_tiles);
+        // (row tile `row_tile` of mine: my own owner's block into its router core's HOLD, another owner's straight
+        // into the port sub-block it leaves from - (NoC, base, count) a row tile; the count router_expert_tiles
+        // tiles, after they landed)
+        const uint32_t router_out_address = get_read_ptr(router_out_cb);
+        for (uint32_t row_tile = 0; row_tile < router_core_row_tiles; ++row_tile) {
+            const uint32_t call_row_tile =
+                iteration * router_core_row_tiles + row_tile;  // (my row tile call_row_tile of the call)
+            const uint32_t destination_noc_xy = args.router_destination_noc_xy(call_row_tile),
+                           destination_noc_x = moe_head_port_words::kNocXyX.get(destination_noc_xy),
+                           destination_noc_y = moe_head_port_words::kNocXyY.get(destination_noc_xy);
+            const uint32_t destination_base = args.router_destination_base(call_row_tile),
+                           destination_counter = args.router_destination_counter(call_row_tile);
+            for (uint32_t expert_tile = 0; expert_tile < args.router_expert_tiles; ++expert_tile) {
+                noc_async_write(
+                    router_out_address +
+                        (expert_tile * router_core_row_tiles + row_tile) * moe_block_tiles::kFp32TileBytes,
+                    get_noc_addr(
+                        destination_noc_x,
+                        destination_noc_y,
+                        destination_base +
+                            (args.router_first_expert_tile + expert_tile) * moe_block_tiles::kFp32TileBytes),
+                    moe_block_tiles::kFp32TileBytes);
+            }
+            noc_async_write_barrier();  // (landed before the count)
+            if (args.router_expert_tiles) {
+                noc_semaphore_inc(
+                    get_noc_addr(destination_noc_x, destination_noc_y, destination_counter), args.router_expert_tiles);
+            }
+        }
+        cb_pop_front(router_out_cb, router_expert_tiles_per_column * router_core_row_tiles);
+    };
     for (uint32_t iteration = 0; iteration < router_iterations;
          ++iteration) {  // (router iterations: my rows iteration x router_core_row_tiles ..)
         {
@@ -456,7 +492,9 @@ void process_row_block(const ColumnDataflowArgs& args, uint32_t block, uint32_t&
                 }
             }
         }
-        {  // my partial logits (the compute's, a few us later) to their router cores' HOLD - before my W stream starts
+        // (router_out_deferred: the last iteration's partials go from the W stream's loop below once router core 0's
+        // go came - the W stream starts meanwhile; the go waits on every router core and logits port, ~45 us at 5k)
+        if (!(router_out_deferred && iteration + 1 == router_iterations)) {
             DeviceZoneScopedN("SE-RTROUT");
             if (iterating && iteration > 0) {  // (router core 0's go: every router core and logits port of the chip is
                                                // done with iteration - 1)
@@ -464,51 +502,26 @@ void process_row_block(const ColumnDataflowArgs& args, uint32_t block, uint32_t&
                     invalidate_l1_cache();
                 }
             }
-            cb_wait_front(router_out_cb, router_expert_tiles_per_column * router_core_row_tiles);
-            // (row tile `row_tile` of mine: my own owner's block into its router core's HOLD, another owner's straight
-            // into the port sub-block it leaves from - (NoC, base, count) a row tile; the count router_expert_tiles
-            // tiles, after they landed)
-            const uint32_t router_out_address = get_read_ptr(router_out_cb);
-            for (uint32_t row_tile = 0; row_tile < router_core_row_tiles; ++row_tile) {
-                const uint32_t call_row_tile =
-                    iteration * router_core_row_tiles + row_tile;  // (my row tile call_row_tile of the call)
-                const uint32_t destination_noc_xy = args.router_destination_noc_xy(call_row_tile),
-                               destination_noc_x = moe_head_port_words::kNocXyX.get(destination_noc_xy),
-                               destination_noc_y = moe_head_port_words::kNocXyY.get(destination_noc_xy);
-                const uint32_t destination_base = args.router_destination_base(call_row_tile),
-                               destination_counter = args.router_destination_counter(call_row_tile);
-                for (uint32_t expert_tile = 0; expert_tile < args.router_expert_tiles; ++expert_tile) {
-                    noc_async_write(
-                        router_out_address +
-                            (expert_tile * router_core_row_tiles + row_tile) * moe_block_tiles::kFp32TileBytes,
-                        get_noc_addr(
-                            destination_noc_x,
-                            destination_noc_y,
-                            destination_base +
-                                (args.router_first_expert_tile + expert_tile) * moe_block_tiles::kFp32TileBytes),
-                        moe_block_tiles::kFp32TileBytes);
-                }
-                noc_async_write_barrier();  // (landed before the count)
-                if (args.router_expert_tiles) {
-                    noc_semaphore_inc(
-                        get_noc_addr(destination_noc_x, destination_noc_y, destination_counter),
-                        args.router_expert_tiles);
-                }
-            }
-            cb_pop_front(router_out_cb, router_expert_tiles_per_column * router_core_row_tiles);
+            send_router_out(iteration);
         }
     }  // (router iterations)
-    if constexpr (iterating) {
-        *args.phase_word(router_go_flag_id) =
-            0;  // (re-armed: router core 0's last go came before my last iteration's sends)
-    }
-    if constexpr (router_done_credit) {
-        // my router phase is over - x rows / W_r^T read, the partials out: +1 on every port's "router done" word (the
-        // ports credit this chip's arrival zones / tell the latent's senders "started" once every core's is: the
-        // router's buffers overlay them - rtr_overlay)
-        for (uint32_t port = 0; port < args.ports; ++port) {
-            noc_semaphore_inc(get_noc_addr(args.port_noc_x(port), args.port_noc_y(port), args.router_done_word), 1);
+    bool router_out_pending = router_out_deferred;  // (the last iteration's partials: from the loop below)
+    auto finish_router_phase = [&]() {
+        if constexpr (iterating) {
+            *args.phase_word(router_go_flag_id) =
+                0;  // (re-armed: router core 0's last go came before my last iteration's sends)
         }
+        if constexpr (router_done_credit) {
+            // my router phase is over - x rows / W_r^T read, the partials out: +1 on every port's "router done" word
+            // (the ports credit this chip's arrival zones / tell the latent's senders "started" once every core's is:
+            // the router's buffers overlay them - rtr_overlay)
+            for (uint32_t port = 0; port < args.ports; ++port) {
+                noc_semaphore_inc(get_noc_addr(args.port_noc_x(port), args.port_noc_y(port), args.router_done_word), 1);
+            }
+        }
+    };
+    if (!router_out_pending) {
+        finish_router_phase();
     }
     {  // (after my core's x load: the DRAM serves the x first - the gather is waiting on it)
         while (*semaphore_word(args.x_loaded_semaphore_id) == 0) {
@@ -633,12 +646,18 @@ void process_row_block(const ColumnDataflowArgs& args, uint32_t block, uint32_t&
     // (the last prep unit: the fence's source / rows - mine: nothing else writes them)
     uint32_t fence_source = 0, fence_row = 0, fence_column_offset = 0;
     uint32_t prep_units_written = 0;
-    while (send_round < w_rounds || pushed_rounds < w_rounds || credited_rounds < w_rounds ||
+    while (router_out_pending || send_round < w_rounds || pushed_rounds < w_rounds || credited_rounds < w_rounds ||
            forward_slots_done < live_chunks * forward_arrival_slots ||
            backward_slots_done < live_chunks * backward_arrival_slots ||
            final_tiles_written < live_chunks * final_tiles || final_free_pushed < final_free_credits ||
            latent_chunks_ready < latent_chunks || prep_units_written < prep_units) {
         invalidate_l1_cache();
+        if (router_out_pending && *args.phase_word(router_go_flag_id) >= router_iterations - 1) {
+            DeviceZoneScopedN("SE-RTROUT");
+            send_router_out(router_iterations - 1);
+            finish_router_phase();
+            router_out_pending = false;
+        }
         if (latent_chunks_ready < latent_chunks && *latent_counter >= (latent_chunks_ready + 1) * args.latent_sources) {
             cb_reserve_back(latent_ready_cb, 1);  // (the compute's prep may untilize the arrivals)
             cb_push_back(latent_ready_cb, 1);
@@ -851,7 +870,9 @@ void process_row_block(const ColumnDataflowArgs& args, uint32_t block, uint32_t&
                 ++send_round;
             }
         }
-        if (pushed_rounds < w_rounds &&
+        // (a W round to the compute - the down pass's first held until my partials are out: ro may overlay the
+        // regions the down pass writes)
+        if (pushed_rounds < w_rounds && !(router_out_pending && pushed_rounds >= gate_up_passes * gate_up_k_steps) &&
             (*semaphore_word(w_valid_semaphore_id + w_slot_of(pushed_rounds)) >= pushed_rounds + 1)) {  // W round
                                                                                                         // landed here
             cb_reserve_back(cb_w, w_slot_tiles);

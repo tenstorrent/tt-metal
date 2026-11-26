@@ -25,6 +25,11 @@ constexpr uint32_t k_step_tiles = get_named_compile_time_arg_val(x_gather_names:
 constexpr uint32_t row_tiles_per_core = get_named_compile_time_arg_val(x_gather_names::kRowTilesPerCore);
 // the K steps of one chip's x shard
 constexpr uint32_t k_steps_per_shard = get_named_compile_time_arg_val(x_gather_names::kKStepsPerShard);
+// a shard's x segments (HeadModel::x_segments_per_shard): the walk sends a shard segment by segment, the sender counts
+// each on the watcher
+constexpr uint32_t x_segments_per_shard = get_named_compile_time_arg_val(x_gather_names::kXSegmentsPerShard);
+constexpr uint32_t x_segment_steps = k_steps_per_shard / x_segments_per_shard;
+static_assert(x_segments_per_shard * x_segment_steps == k_steps_per_shard, "a shard's segments: whole K steps");
 // a fabric packet's bf16 tiles
 constexpr uint32_t tiles_per_packet = get_named_compile_time_arg_val(x_gather_names::kTilesPerPacket);
 // a row chunk's row tiles
@@ -74,6 +79,14 @@ FORCE_INLINE uint32_t tiles_of_block(uint32_t counts_word, uint32_t block) {
 // the call's live row chunks (skip_padding_chunks, a padded forward: up to the last with a real row - the kernel sets
 // it at the start of each row block; else every chunk)
 inline uint32_t x_gather_num_live_chunks = row_chunks;
+
+// The port's order of the x gather and the reduce-scatter (with the latent all-to-all) over the chunks: chunk m's
+// reduce-scatter goes out after chunk m + 1's gather, so the links carry the next chunk's x while the engine still
+// computes chunk m (all of them gathers first: GLM-5.3 10k on the 4x4 carve +40 us). The reduce-scatter chunks sent
+// once chunk `chunk`'s gather is out (the stager and the sender share it: CB 0's order).
+FORCE_INLINE uint32_t reduce_scatter_chunks_after_gather(uint32_t chunk) {
+    return chunk + 1 >= x_gather_num_live_chunks ? x_gather_num_live_chunks : chunk;
+}
 // The common args a padded forward's live chunks come from (head_chip_program.hpp ChipProgram::live_args:
 // padded_rows.hpp's [0 .. 9], then [10] the "valid" scratch word), read once in kernel_main
 // (read_x_gather_live_chunk_args; only with skip_padding_chunks)
@@ -166,36 +179,60 @@ FORCE_INLINE bool x_gather_block_real(uint32_t chunk, uint32_t core, uint32_t bl
 }
 
 // ---- the walk ----
-// The packets of chunk `chunk`'s shard `shard` on link `link`, in the order both kernels walk them: per row tile of the
-// chunk on the link (its chunk-local row's pair: (row / 2) % gather_links - the host counts packets so; part 0: every
-// such row, 1 / 2: its even / odd chunk-local rows), per K step of the shard, per packet of tiles_per_packet tiles.
-// visit(row_tile, k_step, shard_tile, step_tile, num_tiles, packet_index): the row tile of the call, the K step (the
-// shard's steps after the earlier shards'), the packet's first tile within the shard's K and within the step, its
-// tiles, and its index in the link's full (part 0) walk of the chunk's shard.
-template <typename Visit>
-FORCE_INLINE void x_gather_walk(uint32_t chunk, uint32_t shard, uint32_t part, uint32_t link, Visit&& visit) {
-    uint32_t link_rows = 0;
-    for (uint32_t row_tile = chunk * chunk_row_tiles; row_tile < (chunk + 1) * chunk_row_tiles; ++row_tile) {
-        const uint32_t chunk_row_tile = row_tile - chunk * chunk_row_tiles;
-        if ((chunk_row_tile / 2) % gather_links != link) {
-            continue;
-        }
-        if (part == 0 || (chunk_row_tile & 1) == part - 1) {
-            for (uint32_t step = 0; step < k_steps_per_shard; ++step) {
-                for (uint32_t step_tile = 0, packet = 0; step_tile < k_step_tiles;
-                     step_tile += tiles_per_packet, ++packet) {
-                    visit(
-                        row_tile,
-                        shard * k_steps_per_shard + step,
-                        step * k_step_tiles + step_tile,
-                        step_tile,
-                        k_step_tiles - step_tile < tiles_per_packet ? k_step_tiles - step_tile : tiles_per_packet,
-                        link_rows * packets_per_row_tile + step * packets_per_k_step + packet);
+// a chunk's row tiles on link `link` (its chunk-local row's pair: (row / 2) % gather_links - the host counts packets
+// so)
+constexpr uint32_t x_gather_link_rows(uint32_t link) {
+    uint32_t rows = 0;
+    for (uint32_t chunk_row_tile = 0; chunk_row_tile < chunk_row_tiles; ++chunk_row_tile) {
+        rows += (chunk_row_tile / 2) % gather_links == link ? 1 : 0;
+    }
+    return rows;
+}
+// The packets of chunk `chunk`'s shard `shard` on link `link`, in the order both kernels walk them: segment-major - per
+// segment of the shard (x_segment_steps K steps), per row tile of the chunk on the link (part 0: every such row, 1 / 2:
+// its even / odd chunk-local rows), per K step of the segment, per packet of tiles_per_packet tiles - so a segment is
+// complete on the wire before the next one starts, while a row tile's steps still spread over their owner cores (a
+// K-step-major walk sends a run of packets into one owner: K3 8x4 gate / up +24 us). One segment a shard: row-major,
+// per K step. visit(row_tile, k_step, shard_tile, step_tile, num_tiles, packet_index): the row tile of the call, the K
+// step (the shard's steps after the earlier shards'), the packet's first tile within the shard's K and within the step,
+// its tiles, and its index in the link's full (part 0) walk of the chunk's shard (increasing along any part's walk: a
+// relay waits on the upstream's arrivals by it); segment_done(segment) after each segment.
+template <typename Visit, typename SegmentDone>
+FORCE_INLINE void x_gather_walk(
+    uint32_t chunk, uint32_t shard, uint32_t part, uint32_t link, Visit&& visit, SegmentDone&& segment_done) {
+    constexpr uint32_t packets_per_segment_row = x_segment_steps * packets_per_k_step;
+    const uint32_t link_rows_total = x_gather_link_rows(link);
+    for (uint32_t segment = 0; segment < x_segments_per_shard; ++segment) {
+        uint32_t link_rows = 0;
+        for (uint32_t row_tile = chunk * chunk_row_tiles; row_tile < (chunk + 1) * chunk_row_tiles; ++row_tile) {
+            const uint32_t chunk_row_tile = row_tile - chunk * chunk_row_tiles;
+            if ((chunk_row_tile / 2) % gather_links != link) {
+                continue;
+            }
+            if (part == 0 || (chunk_row_tile & 1) == part - 1) {
+                for (uint32_t segment_step = 0; segment_step < x_segment_steps; ++segment_step) {
+                    const uint32_t step = segment * x_segment_steps + segment_step;
+                    for (uint32_t step_tile = 0, packet = 0; step_tile < k_step_tiles;
+                         step_tile += tiles_per_packet, ++packet) {
+                        visit(
+                            row_tile,
+                            shard * k_steps_per_shard + step,
+                            step * k_step_tiles + step_tile,
+                            step_tile,
+                            k_step_tiles - step_tile < tiles_per_packet ? k_step_tiles - step_tile : tiles_per_packet,
+                            (segment * link_rows_total + link_rows) * packets_per_segment_row +
+                                segment_step * packets_per_k_step + packet);
+                    }
                 }
             }
+            ++link_rows;
         }
-        ++link_rows;
+        segment_done(segment);
     }
+}
+template <typename Visit>
+FORCE_INLINE void x_gather_walk(uint32_t chunk, uint32_t shard, uint32_t part, uint32_t link, Visit&& visit) {
+    x_gather_walk(chunk, shard, part, link, visit, [](uint32_t) {});
 }
 
 // ---- where a packet lands ----
@@ -203,13 +240,15 @@ struct XGatherDestination {
     uint32_t noc_x, noc_y, address;
 };
 // A chip's destination tables in a kernel's args, in place (head_model.cpp HeadModel::tables - the stager's: its own
-// chip's, the sender's: the neighbour's): the chip's shard ranks [tp_size]; the family 0 owner columns
+// chip's, the sender's: the neighbour's): the chip's K segments' ranks in its segment order
+// [tp_size x_segments_per_shard]; the family 0 owner columns
 // [num_family_0_columns]; the family 1 owner columns [num_family_1_columns]; per engine column (its owned slots, its
 // family 1 base slot); per engine column its NoC x; per engine row its NoC y
 struct XGatherDestinationTables {
+    static constexpr uint32_t num_ranks = tp_size * x_segments_per_shard;
     static constexpr uint32_t num_words =
-        tp_size + num_family_0_columns + num_family_1_columns + 3 * engine_columns + engine_rows;
-    static constexpr uint32_t columns_at = tp_size + num_family_0_columns + num_family_1_columns;
+        num_ranks + num_family_0_columns + num_family_1_columns + 3 * engine_columns + engine_rows;
+    static constexpr uint32_t columns_at = num_ranks + num_family_0_columns + num_family_1_columns;
     volatile tt_l1_ptr uint32_t* words;
 
     // x K step `k_step` of chunk `chunk`, row tile `row_tile` on the chip: its processing position there (the chip's
@@ -217,10 +256,11 @@ struct XGatherDestinationTables {
     // (the matmul cores' arena layout) for the packet starting at tile `step_tile` of the step
     XGatherDestination destination(
         uint32_t x_own_address, uint32_t chunk, uint32_t row_tile, uint32_t k_step, uint32_t step_tile) const {
-        const uint32_t position = words[k_step / k_steps_per_shard] * k_steps_per_shard + k_step % k_steps_per_shard;
+        const uint32_t position = words[k_step / x_segment_steps] * x_segment_steps + k_step % x_segment_steps;
         const uint32_t family = position & 1, index_in_family = position / 2;
-        const uint32_t column = family ? words[tp_size + num_family_0_columns + index_in_family % num_family_1_columns]
-                                       : words[tp_size + index_in_family % num_family_0_columns];
+        const uint32_t column = family
+                                    ? words[num_ranks + num_family_0_columns + index_in_family % num_family_1_columns]
+                                    : words[num_ranks + index_in_family % num_family_0_columns];
         const uint32_t owned_slots = words[columns_at + 2 * column],
                        family_1_base_slot = words[columns_at + 2 * column + 1];
         const uint32_t slot = family ? family_1_base_slot + index_in_family / num_family_1_columns

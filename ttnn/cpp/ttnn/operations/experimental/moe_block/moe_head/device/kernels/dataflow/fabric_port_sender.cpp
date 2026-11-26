@@ -6,7 +6,8 @@
 // Runs on: port cores (one per X direction and fabric link), RISCV_1 (NCRISC), NoC 0 (RISCV_0_default)
 // Responsibilities:
 //  - x all-gather: pops CB 0 (fabric_port_stager) and fabric-writes each packet into the neighbour's matmul cores'
-//    x-own L1, incrementing the downstream port's arrival counter; +1 on the neighbour's x_gather_watcher a shard
+//    x-own L1, incrementing the downstream port's arrival counter; +1 on the neighbour's x_gather_watcher a shard's
+//    segment
 //  - from CB 0: reduce-scatter sub-blocks (the downstream chip's zones), latent all-to-all rows (the destination's
 //    LATZ); from L1: router logits partials (the owner chips' router arrival zones), the routing exchange's X packets
 //    (the destination chips' DRAM slots)
@@ -323,7 +324,9 @@ void process_row_block(uint32_t block, const FabricPortSenderArgs& args) {
             }
             routing_exchange.poll(connection, routing_exchange_header, false, ROUTING_EXCHANGE_MY_CHIP);
         };
-        for (uint32_t chunk = 0; chunk < x_gather_num_live_chunks && args.num_entries > 0; ++chunk) {
+        uint32_t packets_popped = 0;         // (as the stager's packets_pushed)
+        uint32_t reduce_scatter_chunks = 0;  // (reduce-scatter chunks sent)
+        for (uint32_t chunk = 0; chunk < x_gather_num_live_chunks; ++chunk) {
             for (uint32_t entry = 0; entry < args.num_entries; ++entry) {
                 const uint32_t packets_per_chunk = args.entries.packets_per_chunk(entry);
                 uint32_t packets_sent = 0;
@@ -339,15 +342,23 @@ void process_row_block(uint32_t block, const FabricPortSenderArgs& args) {
                         uint32_t step_tile,
                         uint32_t packet_tiles,
                         uint32_t) {
-                        // (chunks: the upstream's chunk 0 reduce-scatter comes before my gather of the last chunk's x
-                        // ends; one chunk: after it - no blocking header between the x packets, it cost K3 640 ~3 us
-                        // of gather)
+                        // (chunks: router done may come while the gather runs - the reduce-scatter of chunk 0 goes
+                        // out after chunk 1's x; one chunk: after it - no blocking header between the x packets, it
+                        // cost K3 640 ~3 us of gather)
                         if (row_chunks > 1 && !router_done_told) {
                             invalidate_l1_cache();
                             poll_router_done();
                         }
                         if constexpr (router_logits_first) {
                             poll_interleaved_sends();  // (GLM-type: the logits ahead of the x gather)
+                            while (!cb_pages_available_at_front(0, tiles_per_packet * (unflushed_packets + 1))) {
+                                poll_interleaved_sends();
+                            }
+                        } else if (reduce_scatter_chunks > 0) {
+                            // (a gather after a reduce-scatter: its x may wait on an upstream port whose
+                            // reduce-scatter waits on router done - the go of my chip's router cores, which waits on
+                            // my logits sends: polled while the x is not here, never between packets - the stager
+                            // pushes whole groups, so this waits only when unflushed_packets == 0)
                             while (!cb_pages_available_at_front(0, tiles_per_packet * (unflushed_packets + 1))) {
                                 poll_interleaved_sends();
                             }
@@ -388,19 +399,42 @@ void process_row_block(uint32_t block, const FabricPortSenderArgs& args) {
                             cb_pop_front(0, tiles_per_packet * packets_per_group);
                             unflushed_packets = 0;
                         }
+                    },
+                    [&](uint32_t segment) {
+                        // a segment of this chunk's shard `entry` sent: the neighbour's watcher (behind its packets on
+                        // this link)
+                        send_increment(
+                            blocking_header,
+                            get_noc_addr(args.watcher_noc_x, args.watcher_noc_y, args.watcher_counter_address));
                     });
-                // this chunk's shard `entry` all sent: the neighbour's watcher (behind its packets on this link)
-                send_increment(
-                    blocking_header,
-                    get_noc_addr(args.watcher_noc_x, args.watcher_noc_y, args.watcher_counter_address));
             }
-        }
-        poll_interleaved_sends();
-        uint32_t packets_popped = 0;  // (as the stager's packets_pushed)
-        for (uint32_t chunk = 0; chunk < x_gather_num_live_chunks; ++chunk) {
-            latent_all_to_all_send(latent, connection, packet_headers, poll_interleaved_sends, packets_popped, chunk);
-            reduce_scatter_send(
-                reduce_scatter, connection, packet_headers, poll_interleaved_sends, packets_popped, chunk);
+            const uint32_t reduce_scatter_target = reduce_scatter_chunks_after_gather(chunk);
+            if (reduce_scatter_chunks < reduce_scatter_target) {
+                poll_interleaved_sends();
+                for (; reduce_scatter_chunks < reduce_scatter_target; ++reduce_scatter_chunks) {
+                    latent_all_to_all_send(
+                        latent,
+                        connection,
+                        packet_headers,
+                        poll_interleaved_sends,
+                        packets_popped,
+                        reduce_scatter_chunks);
+                    reduce_scatter_send(
+                        reduce_scatter,
+                        connection,
+                        packet_headers,
+                        poll_interleaved_sends,
+                        packets_popped,
+                        reduce_scatter_chunks);
+                }
+                if (chunk + 1 < x_gather_num_live_chunks && packets_popped % packets_per_group) {
+                    // (more gather follows: the stager's padding to a whole group)
+                    const uint32_t pad = packets_per_group - packets_popped % packets_per_group;
+                    cb_wait_front(0, pad * tiles_per_packet);
+                    cb_pop_front(0, pad * tiles_per_packet);
+                    packets_popped += pad;
+                }
+            }
         }
         if constexpr (row_block::BLOCKS > 1) {
             if (packets_popped % packets_per_group) {  // (row blocks: the stager padded its last group - the next
