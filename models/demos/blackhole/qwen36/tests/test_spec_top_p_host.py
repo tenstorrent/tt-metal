@@ -186,6 +186,7 @@ def test_a_failed_certificate_row_is_drawn_again_from_the_steps_logits(engine):
     eng, log, full = engine
     T, V = eng.T, full.shape[1]
     params = SimpleNamespace(temperature=[0.9, 1.0], top_k=[V, V], top_p=[0.9, 0.8], seed=[11, None])
+    counts = dict(spec_engine._CERTIFICATE_COUNTS)
     res = eng.decode_forward(
         torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]], dtype=torch.int32),
         torch.tensor([[10 + j for j in range(T)], [20 + j for j in range(T)]]),
@@ -207,6 +208,9 @@ def test_a_failed_certificate_row_is_drawn_again_from_the_steps_logits(engine):
     # user 0 passes (q = 0.99 > 0.9): the device draws; user 1 fails (q = 0.5 < 0.8): each column drawn again.
     assert ids[0].tolist() == [3, 3, 3, 3]
     assert pending.redone.tolist() == [False] * T + [True] * T
+    # the counts the server log reports: one certificate verify of 2 x T columns, T of them drawn again on the host
+    now = spec_engine._CERTIFICATE_COUNTS
+    assert [now[k] - counts.get(k, 0) for k in ("verifies", "columns", "redone")] == [1, 2 * T, T]
     seeds = kw["sample_plan"].seeds
     want = redo_draws(torch.full((2, T), 3), full, pending.redone, kw["top_p"], seeds, T)
     assert torch.equal(ids.to(torch.int64), want)
@@ -253,7 +257,7 @@ def test_a_redone_rows_logprobs_come_from_the_full_logits(engine):
     )
 
 
-def test_no_prefill_runs_behind_an_unread_certificate_verify(engine):
+def test_no_prefill_runs_behind_an_unread_certificate_verify(engine, expect_error):
     eng, log, full = engine
     T, V = eng.T, full.shape[1]
     params = SimpleNamespace(temperature=[0.9, 1.0], top_k=[V, V], top_p=[0.9, 0.8], seed=[11, None])
@@ -268,7 +272,7 @@ def test_no_prefill_runs_behind_an_unread_certificate_verify(engine):
         sampling=params,
         defer=True,
     )
-    with pytest.raises(ValueError, match="certificate rows"):
+    with expect_error(ValueError, "certificate rows"):
         eng.prefill_over_pending([5])
 
 

@@ -19,7 +19,7 @@ import math
 import os
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -68,6 +68,25 @@ ONE_ENQUEUE_LOG_EVERY = 1000
 # Runner contract: token id for unused tail columns of a returned block.
 PLACEHOLDER_TOKEN_ID = -1
 SPEC_MODES = ("argmax_ids", "logits")
+
+# Per process: verifies with top-p certificate rows (spec_top_p), those rows' columns, and the columns drawn again on
+# the host. Logged when the verify or the redone count passes a power of two, so a server log shows that the
+# certificate path ran and how often its proof failed.
+_CERTIFICATE_COUNTS = Counter()
+
+
+def note_certificate(verifies=0, columns=0, redone=0):
+    """Add to the certificate counts and log them when the verify or the redone count passes a power of two."""
+    c = _CERTIFICATE_COUNTS
+    before = (c["verifies"], c["redone"])
+    c["verifies"] += verifies
+    c["columns"] += columns
+    c["redone"] += redone
+    if any(now.bit_length() > was.bit_length() for now, was in zip((c["verifies"], c["redone"]), before)):
+        logger.info(
+            f"[spec_engine] top-p certificate: {c['verifies']} verifies with certificate rows (top-k off, top_p < 1, "
+            f"drawn by the verify sampler), {c['columns']} columns, {c['redone']} drawn again on the host"
+        )
 
 
 @dataclass
@@ -166,6 +185,7 @@ class PendingVerify:
                     self.redone = failed_rows(host[k], self.cert, T) & live
                     k += 1
                     if bool(self.redone.any()):
+                        note_certificate(redone=int(self.redone.sum()))
                         full = self._full_logits()
                         ids = redo_draws(ids, full, self.redone, self.cert, self.sample_plan.seeds, T)
                 if self.logprobs:
@@ -1403,6 +1423,8 @@ class MTPSpecEngine:
                 if cert is not None:
                     cert.rows = [bool(c and a) for c, a in zip(cert.rows, active.tolist())]
                     cert = cert if cert.any else None
+                if cert is not None:
+                    note_certificate(verifies=1, columns=self.T * sum(cert.rows))
             plan = sampling_plan(sampler_params(sampling, cert), torch.where(active, start0, -1).tolist(), self.T)
             plan = plan if plan.any_sampled else None
         if plan is not None and not self.sample_on_device:
