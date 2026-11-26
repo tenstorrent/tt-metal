@@ -396,6 +396,18 @@ def _plant_log_special_values(src_A: torch.Tensor) -> torch.Tensor:
     return flat.view(src_A.shape)
 
 
+# Large negative inputs, where accurate fp32 mish used to return NaN; mish is 0 there.
+def _mish_large_negatives(torch_format) -> tuple:
+    return (-1.0e7, -1.7e7, -1.0e30, torch.finfo(torch_format).min)
+
+
+def _plant_mish_large_negatives(src_A: torch.Tensor) -> torch.Tensor:
+    values = _mish_large_negatives(src_A.dtype)
+    flat = src_A.flatten().clone()
+    flat[: len(values)] = torch.tensor(values, dtype=torch.float32).to(flat.dtype)
+    return flat.view(src_A.shape)
+
+
 def prepare_inputs_for_operation(
     src_A: torch.Tensor,
     mathop: MathOperation,
@@ -550,6 +562,7 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+        src_A = _plant_mish_large_negatives(src_A)
     elif mathop == MathOperation.Silu:
         # Scale to range [-10, 10] for SiLU (avoid overflow with negative exponential)
         min_val = -10.0
@@ -2225,6 +2238,13 @@ def run_eltwise_unary_sfpu_quasar(
         assert not bool(
             bad.any()
         ), f"Erf special inputs {[ERF_SPECIAL_VALUES[i] for i in torch.nonzero(bad).flatten().tolist()]}: got {got[bad].tolist()}, want {want[bad].tolist()}"
+
+    if mathop == MathOperation.Mish:
+        values = _mish_large_negatives(src_A.dtype)
+        got = res_tensor.flatten()[: len(values)].to(torch.float32)
+        assert bool(
+            (got == 0).all()
+        ), f"mish of large negative inputs {list(values)} is {got.tolist()}, not 0"
 
     if mathop == MathOperation.Softplus:
         # atol 0.05 lets a flush to 0 through. Require t < -5 to stay positive
