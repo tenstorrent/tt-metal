@@ -7,7 +7,6 @@
 #include "ckernel_sfpu_polyval.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -86,7 +85,7 @@ inline void calculate_tanh() {
 
     sfpi::l_reg[TANH_RESULT_LREG] = sfpi::approx_tanh(sfpi::dst_reg[0]);
     // Body for pass r: load pass r+1, store pass r (Dest += SFP_ROWS), tanh pass r+1.
-    lltt::record(TANH_REPLAY_START, TANH_REPLAY_LEN);
+    TTI_REPLAY(TANH_REPLAY_START, TANH_REPLAY_LEN, 0, 0, 0, 1);
     {
         sfpi::vFloat result = sfpi::l_reg[TANH_RESULT_LREG];
         sfpi::vFloat next = sfpi::dst_reg[1];
@@ -95,7 +94,7 @@ inline void calculate_tanh() {
     }
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(TANH_REPLAY_START, TANH_REPLAY_LEN);
+        TTI_REPLAY(TANH_REPLAY_START, TANH_REPLAY_LEN, 0, 0, 0, 0);
     }
     sfpi::dst_reg[0].mode(ADDR_MOD_6) = sfpi::vFloat(sfpi::l_reg[TANH_RESULT_LREG]);
 }
