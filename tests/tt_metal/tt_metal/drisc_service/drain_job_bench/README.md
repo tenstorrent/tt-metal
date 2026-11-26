@@ -258,3 +258,36 @@ The harness's `PerformanceChecker` stops at the first test below its bounds and 
 test's runs, so under load the saved CSVs were reparsed with its `StatsCollector` without the check. To rerun, from
 the tt-metal root with `python_env` active: `dm_under_load.sh <outdir> 2`, then `python dm_reparse.py <outdir>` and
 `python dm_table.py <outdir>`.
+
+### Host-crossing latency probe, 2026-11-26
+
+bh-19 (same part and host as bh-17). `DRISC_SERVICE_LOAD_PROBE_OP=local|h2d` makes SteadyLoad's probe a 64 B copy
+inside bank 0 or a 64 B read of host memory into bank 0, keeps the copies off bank 0, and prints the probe's
+percentiles over the run. The probe's completion reaches the host through the control page in host memory, so even the
+local probe crosses PCIe once, as a write toward the host. 8 s per run, 2 runs, which agree within 0.4 µs at p50.
+
+| d2h copies on banks | Copy rate | local probe p50 | h2d probe p50 | h2d minus local |
+|---|---|---|---|---|
+| none | - | 2.40 µs | 3.13 µs | 0.73 µs |
+| 1 | 51.2 GB/s | 3.89 µs | 5.55 µs | 1.66 µs |
+| 2 | 53.4 GB/s | 4.72 µs | 7.60 µs | 2.88 µs |
+| 4 | 54.4 GB/s | 6.48 µs | 9.75 µs | 3.27 µs |
+| 6 | 54.4 GB/s | 6.39 µs | 9.92 µs | 3.53 µs |
+| local copies, 6 banks | 167 GB/s | 3.63 µs | 4.30 µs | 0.67 µs |
+
+Both the completion write and the read wait longer with more banks copying to the host at the same rate, and local
+copies add no PCIe-specific delay, so the queueing toward the host is real. But it levels off at about 3x by 4 banks,
+while ResNet and a Tensix core's PCIe read keep falling past it. Which banks copy matters as much as how many:
+
+| d2h copies on banks | ResNet-50 FPS | 603 PCIe read, B/cycle | Copy rate |
+|---|---|---|---|
+| none | 10,444-10,470 | 42.5 | - |
+| 0 only | 9,725-9,831 | 17.6 | 49.2 GB/s |
+| 1 only | 8,597-8,871 | 17.4 | 51.1 GB/s |
+| 0-5 | 356 | 3.73 | 54.0 GB/s |
+| 1-6 | 178-179 | 1.83 | 54.1 GB/s |
+| 0-6 | 178 | 1.83 | 54.1 GB/s |
+
+Six banks cost twice as much with bank 6 among them as without it, at the same copy rate. The rest of the loss is
+therefore not one shared queue at the PCIe tile but where each bank's writes cross the NoC on their way to it,
+presumably over links that fast dispatch's traffic to and from the host also uses.

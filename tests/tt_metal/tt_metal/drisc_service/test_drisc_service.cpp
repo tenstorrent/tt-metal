@@ -2413,15 +2413,20 @@ TEST_F(DriscService, SteadyLoad) {
     const uint32_t banks = device().num_banks();
     HostMemory host(device(), host_size);
 
-    // DRISC_SERVICE_LOAD_BANKS limits the copies to the first N banks, to vary the load.
+    // DRISC_SERVICE_LOAD_PROBE_OP=local|h2d picks what the probe times: a 64 B copy inside bank 0, or a 64 B read of
+    // host memory into bank 0. When it is set, the copies leave bank 0 alone, so the probe's seat does nothing else.
+    const char* probe_env = std::getenv("DRISC_SERVICE_LOAD_PROBE_OP");
+    const bool probe_h2d = probe_env != nullptr && std::string_view(probe_env) == "h2d";
+    const uint32_t first_bank = probe_env != nullptr ? 1 : 0;
+    // DRISC_SERVICE_LOAD_BANKS limits the copies to N banks from first_bank on, to vary the load.
     const char* banks_env = std::getenv("DRISC_SERVICE_LOAD_BANKS");
     const uint32_t loaded_banks =
-        banks_env != nullptr ? std::min<uint32_t>(banks, std::strtoul(banks_env, nullptr, 10)) : banks;
+        std::min<uint32_t>(banks - first_bank, banks_env != nullptr ? std::strtoul(banks_env, nullptr, 10) : banks);
 
     std::optional<Client> client;
     attach(client, all_banks());
     std::vector<BenchLane> lanes;
-    for (uint32_t bank = 0; bank < loaded_banks; bank++) {
+    for (uint32_t bank = first_bank; bank < first_bank + loaded_banks; bank++) {
         for (uint32_t noc = 0; noc < 2; noc++) {
             SeatClient& seat = client->seat(bank, noc);
             BenchLane& lane = lanes.emplace_back(BenchLane{&seat, {}});
@@ -2461,7 +2466,13 @@ TEST_F(DriscService, SteadyLoad) {
     uint32_t page_heartbeat = probe.heartbeat();
     auto page_heartbeat_at = clock::now();
     const uint64_t probe_addr = device().bank_offset(0) + dram_base + 4 * dram_span;
-    const abi::KernelCommand probe_cmd = abi::make_local_command(probe_addr, probe_addr + 4096, 64);
+    HostMemory probe_host(device(), 1u << 20);
+    const abi::KernelCommand probe_cmd = probe_h2d ? abi::make_single_command(
+                                                         probe.host_endpoint(probe_host.device_addr(0)),
+                                                         device().dram_endpoint(0, dram_base + 4 * dram_span, 1),
+                                                         64)
+                                                   : abi::make_local_command(probe_addr, probe_addr + 4096, 64);
+    std::vector<double> all_probe_us;
 
     std::optional<uint64_t> probe_ticket;
     clock::time_point probe_start;
@@ -2498,6 +2509,7 @@ TEST_F(DriscService, SteadyLoad) {
             const auto t = clock::now();
             const double latency = std::chrono::duration<double, std::micro>(t - probe_start).count();
             probe_us.push_back(latency);
+            all_probe_us.push_back(latency);
             if (latency > 2000 && spikes.size() < 64) {
                 spikes.push_back(
                     {latency, std::chrono::duration<double, std::micro>(t - page_heartbeat_at).count(), new_heartbeat});
@@ -2544,6 +2556,20 @@ TEST_F(DriscService, SteadyLoad) {
             spike.page_still_us,
             spike.with_new_heartbeat ? "came with a new heartbeat" : "no new heartbeat");
     }
+    std::sort(all_probe_us.begin(), all_probe_us.end());
+    const auto pct = [&](double q) {
+        return all_probe_us.empty() ? 0.0
+                                    : all_probe_us[std::min(all_probe_us.size() - 1, size_t(q * all_probe_us.size()))];
+    };
+    fmt::print(
+        "PROBE {} on bank 0, {} banks loaded: p50 {:.2f} us, p90 {:.2f} us, p99 {:.2f} us, max {:.2f} us, {} probes\n",
+        probe_h2d ? "h2d" : "local",
+        loaded_banks,
+        pct(0.5),
+        pct(0.9),
+        pct(0.99),
+        all_probe_us.empty() ? 0.0 : all_probe_us.back(),
+        all_probe_us.size());
     fmt::print(
         "LOAD {} {:.3f} GB/s over {:.1f} s\n",
         d2h ? "d2h" : "local",
