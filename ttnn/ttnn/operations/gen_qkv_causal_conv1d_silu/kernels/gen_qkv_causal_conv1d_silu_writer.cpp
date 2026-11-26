@@ -27,6 +27,14 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+// Perf diagnosis only (test_perf_r3.py, define GQKV_ZONES): device-profiler zones on the DM timeline.
+#ifdef GQKV_ZONES
+#include "api/debug/kernel_profiler.hpp"
+#define GQKV_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define GQKV_ZONE(name)
+#endif
+
 namespace {
 
 constexpr uint32_t cb_output_tiles = 3;
@@ -109,11 +117,16 @@ void kernel_main() {
         if constexpr (split_rows > 0) {
             const uint32_t m = r - core_seq_start;
             const uint32_t next_block_end = (m / block_rows + 2) * block_rows;
+            GQKV_ZONE("W_SERVE");
             serve_split_rows_through(next_block_end < core_seq_tiles ? next_block_end : core_seq_tiles);
         }
         for (uint32_t c0 = 0; c0 < block_ch_tiles; c0 += out_group_tiles) {
             const uint32_t group = (block_ch_tiles - c0 < out_group_tiles) ? (block_ch_tiles - c0) : out_group_tiles;
-            cb_wait_front(cb_output_tiles, group);
+            {
+                GQKV_ZONE("W_WOUT");
+                cb_wait_front(cb_output_tiles, group);
+            }
+            GQKV_ZONE("W_WR");
             const uint32_t src = get_read_ptr(cb_output_tiles);
             for (uint32_t i = 0; i < group; ++i) {
                 store_tile(src + i * tile_bytes, r, ch_group_tile_start + c0 + i);

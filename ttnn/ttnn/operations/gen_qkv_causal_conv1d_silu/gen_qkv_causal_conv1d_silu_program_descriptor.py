@@ -84,6 +84,27 @@ SPLIT_READER_ROWS = 24
 # totals. Kept as a live CT switch (reader + writer) for shapes where it may pay.
 STAGGER_ROW_WALK = False
 
+# ---------------------------------------------------------------------------------------------
+# SiLU body (Refinement 3; Plan.silu_body -> compute CT arg). A 32-bit DEST always runs the library
+# calculate_silu (fp32-accurate exp, two Newton steps); for a 16-bit DEST:
+#   SILU_LIBRARY (0): the library body — exp_21f + 3-op float->int + reciprocal with a masked Newton
+#     step, 26 SFPU instructions per row.
+#   SILU_BF16_QUARTIC (1): silu_pack::silu_bf16_rows (compute kernel) — the same z = 2^floor(y)(1+f)
+#     built by one shift, a quartic mantissa correction (relative error 1.1e-4 vs 1.7e-3), an unmasked
+#     Newton step, two rows interleaved per step. Correctly rounded for ~99.4% of inputs vs 90-98%.
+#     Measured SFPU cost of one pass over conv1d-004 (96 tiles / core, device-time difference of 1 and
+#     3 passes): 58.8 us (cubic, two rows) vs 66.4 (cubic, one row) vs 78.8 us (library).
+# default_silu_body picks the quartic body where it wins and the library body elsewhere (see there).
+# ---------------------------------------------------------------------------------------------
+SILU_LIBRARY = 0
+SILU_BF16_QUARTIC = 1
+
+# Per-tile STALLWAIT(STALL_SFPU, MATH) before each tile's SiLU on the packer (the library SFPU start
+# issues it; redundant after the MATH_PACK semaphore wait — compute kernel, silu_from_pack). Measured
+# null on conv1d-004 (library 129.9 -> 129.9 us, quartic family 149.8 -> 149.2): parked at True, the
+# library start's exact sequence.
+SILU_TILE_STALL = True
+
 
 def dest_capacity_tiles(fp32_dest_acc_en: bool, dst_full_sync_en: bool) -> int:
     """Tiles one DEST acquire can hold (dest_helpers.hpp capacity table)."""
@@ -119,6 +140,7 @@ class Plan:
     core_seq_tiles_max: int
     split_rows: int  # RM: body rows per tile-row read by the writer RISC on NoC1 (0: reader reads all)
     out_group_tiles: int  # output tiles per DEST acquire = per cb_output_tiles push = per writer wait
+    silu_body: int = SILU_LIBRARY  # SFPU SiLU body for a 16-bit DEST (SILU_LIBRARY / SILU_BF16_QUARTIC)
 
 
 def select_regime(layout) -> str:
@@ -189,7 +211,9 @@ def select_plan(
     max_cores_per_group: Optional[int] = None,
     split_rows: Optional[int] = None,
     out_group_tiles: Optional[int] = None,
+    silu_body: Optional[int] = None,
     dest_tiles: int = 8,
+    fp32_dest_acc_en: bool = False,
     elem_bytes: int = 2,
     tile_bytes: int = 2048,
 ) -> Plan:
@@ -202,7 +226,8 @@ def select_plan(
     max_block_rows (default OVERLAP_BLOCK_ROWS, the measured overlap optimum). split_rows = the
     writer's share of each tile-row's body reads (ROW_MAJOR only; default_split_rows), or the pin.
     out_group_tiles = the output push quantum (default_out_group_tiles, or the pin), at most
-    min(block_ch_tiles, dest_tiles).
+    min(block_ch_tiles, dest_tiles). silu_body = the 16-bit-DEST SiLU body (default_silu_body, or the
+    pin); a 32-bit DEST always runs the library body.
     """
     num_grid_cores = grid_x * grid_y
     cpg_cap = tensor_seq_tiles if max_cores_per_group is None else max(1, min(max_cores_per_group, tensor_seq_tiles))
@@ -249,6 +274,10 @@ def select_plan(
         split = default_split_rows()
     group = default_out_group_tiles(w, dest_tiles, core_seq_tiles_max) if out_group_tiles is None else out_group_tiles
     group = max(1, min(group, w, dest_tiles))
+    if fp32_dest_acc_en:
+        body = SILU_LIBRARY
+    else:
+        body = default_silu_body(core_seq_tiles_max) if silu_body is None else silu_body
 
     return Plan(
         regime=regime,
@@ -260,6 +289,7 @@ def select_plan(
         core_seq_tiles_max=core_seq_tiles_max,
         split_rows=split,
         out_group_tiles=group,
+        silu_body=body,
     )
 
 
@@ -279,6 +309,26 @@ def default_out_group_tiles(block_ch_tiles: int, dest_tiles: int, core_seq_tiles
     if core_seq_tiles_max == 1:
         return 1
     return min(block_ch_tiles, dest_tiles)
+
+
+def default_silu_body(core_seq_tiles_max: int) -> int:
+    """16-bit-DEST SiLU body (Refinement 3): the quartic body where a core owns one tile-row, the
+    library body otherwise.
+
+    One tile-row per core (decode-size calls): the activation of the core's only row is a tail on
+    the critical path, so a cheaper SFPU pass is a direct win. Several tile-rows per core: the call is
+    DRAM-bound once compute stops pacing it — with the quartic body the median core finishes ~9-13 us
+    earlier on conv1d-004 (p50 115 -> 99-106 us), but the raised aggregate DRAM demand starves the
+    cores with the longest NoC routes from the DRAM endpoints (a corner of the grid that moves with the
+    split-reader ratio: NoC1-heavy split 24 -> bottom-right, NoC0-only split 0 -> top rows), whose tail
+    sets the op time. The library body's pace keeps demand under DRAM capacity.
+    Measured (BH 11x10, device kernel us, library vs quartic family):
+      one row:   001 5.99 vs 5.79   002 6.86 vs 6.47   003 10.00 vs 9.30   014 8.60 vs 8.07
+                 016 15.52 vs 14.24
+      several:   004 123-132 vs 150 (split 24; split 8: 126 vs 125-131, tail p100 136)
+                 020 59.3 vs 60.9
+    """
+    return SILU_BF16_QUARTIC if core_seq_tiles_max == 1 else SILU_LIBRARY
 
 
 def default_split_rows() -> int:
@@ -347,7 +397,19 @@ READER_ADDR_SLOTS = 6  # input, history, tap0..tap3
 WRITER_ADDR_SLOTS = 4  # q, k, v, input (split reader)
 READER_KERNEL_INDEX = 0
 WRITER_KERNEL_INDEX = 1
-READER_NOC = ttnn.NOC.NOC_0  # ReaderConfigDescriptor lowers to RISCV_1 on NOC_0
+# NoC of each data-movement kernel (the reader's also carries the tap multicast). The defaults are what
+# ReaderConfigDescriptor / WriterConfigDescriptor lower to: reader RISCV_1 on NOC_0, writer RISCV_0 on NOC_1.
+READER_NOC = ttnn.NOC.NOC_0
+WRITER_NOC = ttnn.NOC.NOC_1
+
+
+def _dm_config(processor, noc):
+    config = ttnn.DataMovementConfigDescriptor()
+    config.processor = processor
+    config.noc = noc
+    return config
+
+
 TAPS_MCAST_PREFIX = "taps_mcast"  # named CT args taps_mcast_ct_offset / taps_mcast_rt_offset
 
 
@@ -431,7 +493,7 @@ def create_program_descriptor(
     for t in list(outputs) + [input_tensor]:
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     # ---- compute ----
-    compute_ct = [w, block_rows, int(tile_input), plan.out_group_tiles]
+    compute_ct = [w, block_rows, int(tile_input), plan.out_group_tiles, plan.silu_body, int(SILU_TILE_STALL)]
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
@@ -460,14 +522,14 @@ def create_program_descriptor(
         core_ranges=core_ranges,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
+        config=_dm_config(ttnn.DataMovementProcessor.RISCV_1, READER_NOC),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "gen_qkv_causal_conv1d_silu_writer.cpp"),
         core_ranges=core_ranges,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),
+        config=_dm_config(ttnn.DataMovementProcessor.RISCV_0, WRITER_NOC),
     )
     compute_config = ttnn.ComputeConfigDescriptor()
     compute_config.math_fidelity = math_fidelity

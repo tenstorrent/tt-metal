@@ -41,6 +41,14 @@
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
+// Perf diagnosis only (test_perf_r3.py, define GQKV_ZONES): device-profiler zones on the DM timeline.
+#ifdef GQKV_ZONES
+#include "api/debug/kernel_profiler.hpp"
+#define GQKV_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define GQKV_ZONE(name)
+#endif
+
 namespace {
 
 constexpr uint32_t cb_rows = 0;
@@ -206,7 +214,10 @@ void kernel_main() {
         const uint32_t slot_sticks = TILE_DIM * rows_this_block + HALO_ROWS;
 
         // ---- load_rows_block: one slot ----
-        cb_reserve_back(cb_rows, slot_sticks);
+        {
+            GQKV_ZONE("R_RSV");
+            cb_reserve_back(cb_rows, slot_sticks);
+        }
         const uint32_t slot_base = get_write_ptr(cb_rows);
 
         // Halo sticks [0, 3): tokens block_t0 - 3 .. block_t0 - 1.
@@ -239,17 +250,21 @@ void kernel_main() {
                     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_split_requests)) = dst;
                     cb_push_back(cb_split_requests, 1);
                 }
-                for (uint32_t j = 0; j < own_rows; ++j) {
-                    const uint32_t i = stagger_row_walk ? (j + ch_group_tile_start + core_seq_start) % own_rows : j;
-                    noc_async_read(
-                        input_acc.get_noc_addr(token0 + i, input_byte_offset), dst + i * stick_bytes, stick_bytes);
-                }
-                if (taps_pending) {
-                    publish_taps_and_barrier();
-                } else {
-                    noc_async_read_barrier();
+                {
+                    GQKV_ZONE("R_RD");
+                    for (uint32_t j = 0; j < own_rows; ++j) {
+                        const uint32_t i = stagger_row_walk ? (j + ch_group_tile_start + core_seq_start) % own_rows : j;
+                        noc_async_read(
+                            input_acc.get_noc_addr(token0 + i, input_byte_offset), dst + i * stick_bytes, stick_bytes);
+                    }
+                    if (taps_pending) {
+                        publish_taps_and_barrier();
+                    } else {
+                        noc_async_read_barrier();
+                    }
                 }
                 if constexpr (split_rows > 0) {
+                    GQKV_ZONE("R_SPLW");
                     cb_wait_front(cb_split_done, 1);
                     cb_pop_front(cb_split_done, 1);
                 }
