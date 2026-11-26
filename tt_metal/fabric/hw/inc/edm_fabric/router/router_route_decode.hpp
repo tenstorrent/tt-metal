@@ -85,8 +85,32 @@ struct Routing2D {
                 fabric_set_2d_intermesh_landing_route(header, routing_table, VC2_DOMAIN_Y_SIZE, VC2_DOMAIN_X_SIZE);
             }
         } else {
+            if constexpr (vc2_domain) {
+                // into another domain: to its exit chip and out its inter-domain link, or toward the exit's mesh
+                const InterDomainExit exit = domain_exit(header);
+                if (exit.action != 0) {
+                    const uint16_t chip = exit.mesh_id == routing_table.my_mesh_id
+                                              ? exit.chip_id
+                                              : routing_table.exit_node_table[exit.mesh_id];
+                    widen_2d_route_to_chip(
+                        header, routing_table.route_table_2d.action_vectors, chip, MESH_Y_SIZE, MESH_X_SIZE);
+                    if (exit.mesh_id == routing_table.my_mesh_id) {
+                        header->route_buffer[MESH_Y_SIZE + chip % MESH_X_SIZE] = exit.action;
+                    }
+                    return;
+                }
+            }
             fabric_set_2d_intermesh_landing_route(header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
         }
+    }
+    // A packet into another domain: the exit its sender chose (action 0: not such a packet).
+    static FORCE_INLINE InterDomainExit domain_exit(tt_l1_ptr PACKET_HEADER_TYPE* header) {
+        const volatile tt_l1_ptr PACKET_HEADER_TYPE* const volatile_header = header;
+        const uint32_t word = volatile_header->routing_fields.value;
+        return InterDomainExit{
+            .mesh_id = static_cast<uint16_t>(word),
+            .chip_id = static_cast<uint8_t>(word >> 16),
+            .action = static_cast<uint8_t>(word >> 24)};
     }
     // The action byte, by the codec's decode for this build (Fabric2DRoutingConfig over Routing2DCodec; Y first after a
     // landing). The link's DMA writes the header, so its bytes are read through the codec's volatile API.
@@ -118,7 +142,14 @@ struct Routing2D {
         }
         if constexpr (intermesh_exits) {
             const volatile PACKET_HEADER_TYPE* const volatile_header = header;
-            const uint32_t dst_mesh = volatile_header->dst_start_mesh_id;
+            uint32_t dst_mesh = volatile_header->dst_start_mesh_id;
+            if constexpr (vc2_domain) {
+                // into another domain: the destination numbers the other domain's chip, so leave toward the exit's mesh
+                const InterDomainExit exit = domain_exit(header);
+                if (exit.action != 0) {
+                    dst_mesh = exit.mesh_id;
+                }
+            }
             const uint32_t route_action = action(header, my_chip);
             return Routing2DCodec::action_is_intermesh_exit(route_action, dst_mesh, my_chip.mesh_id)
                        ? exit_action<VC>(dst_mesh)

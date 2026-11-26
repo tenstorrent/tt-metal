@@ -227,6 +227,13 @@ private:
     uint32_t word;
 };
 
+// The remote receiver progress VC's channels send against: on an inter-domain router every VC sends into the peer's one
+// VC2 receiver channel, so every VC takes VC0's.
+template <size_t VC>
+constexpr size_t remote_progress_vc = is_inter_domain_router ? 0 : VC;
+template <size_t VC>
+using RemoteProgress = RemoteReceiverChannelProgress<remote_progress_vc<VC>>;
+
 // A sender channel's progress through its slots: its per-packet state.
 struct SenderChannelProgress {
     uint32_t next_slot_addr;     // the next slot to send from
@@ -531,7 +538,7 @@ FORCE_INLINE uint32_t channels_with_packets(uint32_t* connection_semaphores = nu
 template <size_t CH>
 FORCE_INLINE bool send(
     uint32_t& next_slot_addr,
-    RemoteReceiverChannelProgress<SenderChannel<CH>::vc>& remote,
+    RemoteProgress<SenderChannel<CH>::vc>& remote,
     uint32_t& sent,
     uint32_t completed,
     uint32_t& completions,
@@ -619,10 +626,7 @@ FORCE_INLINE void credit_slots(const SenderChannelState<CH>& state, uint32_t n, 
 // checked at the top of the pass: check_worker_connection.)
 template <size_t CH>
 FORCE_INLINE void visit_worker(
-    SenderChannelState<CH>& state,
-    bool has_packet,
-    RemoteReceiverChannelProgress<SenderChannel<CH>::vc>& remote,
-    bool& send_yielded) {
+    SenderChannelState<CH>& state, bool has_packet, RemoteProgress<SenderChannel<CH>::vc>& remote, bool& send_yielded) {
     SenderChannelProgress& progress = state.progress;
     uint32_t completions = 0;
     uint32_t sent_acks = 0;  // the ack count the send read (first-level-ack VCs)
@@ -677,7 +681,7 @@ FORCE_INLINE void visit_channel_with_work(
     SenderChannelState<CH>& state,
     uint32_t& channels_in_flight,
     bool has_packet,
-    RemoteReceiverChannelProgress<SenderChannel<CH>::vc>& remote,
+    RemoteProgress<SenderChannel<CH>::vc>& remote,
     bool& send_yielded) {
     uint32_t sent = state.progress.sent;
     uint32_t completed = state.progress.completed;
@@ -866,6 +870,19 @@ FORCE_INLINE void visit_vc(
         SenderVcState<VC>& send_state = states.template progress_for<VC>(loop_copy);
         if constexpr (SenderChannelStates::visited_every_pass<VC>) {
             visit_channels<VC>(states, send_state, send_state.remote, holding, channels_in_flight, send_yielded);
+        } else if constexpr (remote_progress_vc<VC> != VC) {
+            // on another VC's progress, in place
+            static_assert(SenderChannelStates::visited_every_pass<remote_progress_vc<VC>>);
+            if (((holding | channels_in_flight) & SenderVc<VC>::sender_channels) == 0) {
+                return;
+            }
+            visit_channels<VC>(
+                states,
+                send_state,
+                states.template progress_for<remote_progress_vc<VC>>(loop_copy).remote,
+                holding,
+                channels_in_flight,
+                send_yielded);
         } else {
             if (((holding | channels_in_flight) & SenderVc<VC>::sender_channels) == 0) {
                 return;

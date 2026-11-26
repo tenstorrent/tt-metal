@@ -65,8 +65,9 @@ public:
         }
         const bool from_perimeter = in.capability == EdgeCapability::INTERDOMAIN;
         const bool to_perimeter = out.capability == EdgeCapability::INTERDOMAIN;
+        // out of the domain on VC0 and VC1 (from another mesh), into it on VC2
         if (from_perimeter || to_perimeter) {
-            return vc != 1 && from_perimeter != to_perimeter && (vc == 0 ? to_perimeter : from_perimeter);
+            return from_perimeter != to_perimeter && (vc == 2 ? from_perimeter : to_perimeter);
         }
         if (vc2_forwards) {
             // dimension order over the domain: on, or from its Y axis onto its X axis
