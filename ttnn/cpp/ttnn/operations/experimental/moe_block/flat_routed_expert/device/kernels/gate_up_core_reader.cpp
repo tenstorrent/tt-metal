@@ -308,7 +308,10 @@ void kernel_main() {
             ++pushed;
         }
         const uint32_t arrived_p = *xarr_sem;     // pieces
-        const uint32_t arrived = arrived_p / xp;  // whole blocks
+        // whole blocks (+ the preloaded ones, emulation)
+        const uint32_t arrived =
+            arrived_p / xp + zz::pre_x * (flat_options::super_blocks_per_sub_block * flat_options::super_block_tiles /
+                                          flat_options::x_block_k_tiles / flat_options::gate_up_k_split);
         while (arrived > x_pub) {
             cb_push_back(x_cb, x_blk);
             ++x_pub;

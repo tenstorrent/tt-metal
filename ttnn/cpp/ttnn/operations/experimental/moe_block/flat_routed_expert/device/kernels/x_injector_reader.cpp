@@ -87,10 +87,10 @@ void kernel_main() {
     load_schedule<num_e>(schedule, 3, schedule_scratch(ScratchOwner::Brisc));
     to_x_schedule(schedule);
     {
-        const uint32_t tot = schedule.total_sub_blocks * nsb;
+        const uint32_t tot = schedule.total_sub_blocks * nsb, p0 = zz::pre_x * nsb;  // (p0: preloaded, emulation)
         cb_reserve_back(tt::CBIndex::c_6, 1);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_6)) =
-            tot > soff ? (tot - soff + stride - 1) / stride : 0;
+            (tot > soff ? (tot - soff + stride - 1) / stride : 0) - (p0 > soff ? (p0 - soff + stride - 1) / stride : 0);
         cb_push_back(tt::CBIndex::c_6, 1);
     }
     for (uint32_t a = 0; a < schedule.entries; ++a) {
@@ -112,7 +112,7 @@ void kernel_main() {
                 }
             }
             for (uint32_t j = 0; j < nsb; ++j, ++g) {
-                if (g % stride != soff) {
+                if (g % stride != soff || g < zz::pre_x * nsb) {  // (not this relay's, or preloaded: emulation)
                     continue;
                 }
                 for (uint32_t m = 0; m < mt; ++m) {

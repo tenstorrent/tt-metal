@@ -71,7 +71,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sfree = sem(sfree_id);
     volatile tt_l1_ptr uint32_t* xcons = sem(xcons_id);
     volatile tt_l1_ptr uint32_t* xend = sem(xend_id);
-    uint32_t iss = 0, fwd = 0, rep = 0;  // pieces issued / acknowledged (+ XARR'd), blocks reported
+    // pieces issued / acknowledged (+ XARR'd), blocks reported (the preloaded ones: issued and acknowledged, emulation)
+    uint32_t iss = zz::pre_x * nb * xp, fwd = iss, rep = 0;
     // gate/up weights read from here (gate_up_weight_read.hpp, RT 6..), into the landing slots the receiver (BRISC)
     // grants; the loads list comes from the receiver (its mailbox word, then the list in this RISC's half of CB 7)
     GateUpWeightReads gr;
@@ -137,7 +138,7 @@ void kernel_main() {
             g_done = gr.step();
         }
         if (!x_fwd_brisc && sxy) {
-            const uint32_t arrived = *xarr;
+            const uint32_t arrived = *xarr + zz::pre_x * nb * xp;
             while (iss < arrived && iss - fwd < cdepth && (iss / xp < x_slots || *sfree >= iss / xp + 1 - x_slots)) {
                 while (iss / xp >= cv_end) {  // (the cursor onto the block's sub-block)
                     cv_end += nb;

@@ -63,19 +63,22 @@ void kernel_main() {
     ZZ_COUNTER(zz_credit);
     ZZ_COUNTER(zz_wbar);
     [[maybe_unused]] const uint32_t zz_start = ZZ_NOW();
-    for (uint32_t b = 0; b < num_sb; ++b) {
+    // (preload emulation: this helper's super-blocks of the preloaded x sub-blocks are skipped; rb counts the rest)
+    const uint32_t p0 = zz::pre_x * nsb, b0 = p0 > x2k ? (p0 - x2k + x2s - 1) / x2s : 0;
+    for (uint32_t b = b0; b < num_sb; ++b) {
+        const uint32_t rb = b - b0;
         ZZ_WAIT(zz_tiles, cb_wait_front(sb_cb, sb_tiles));
-        if (b >= land_slots) {
-            ZZ_WAIT(zz_credit, noc_semaphore_wait_min(credit, b + 1 - land_slots);  // the slot's previous super-block
-                    noc_semaphore_wait_min(credit2, b + 1 - land_slots));
+        if (rb >= land_slots) {
+            ZZ_WAIT(zz_credit, noc_semaphore_wait_min(credit, rb + 1 - land_slots);  // the slot's previous super-block
+                    noc_semaphore_wait_min(credit2, rb + 1 - land_slots));
         }
         // (row tile major: a short last sub-block's rows are the super-block's first bytes - only those go)
         const uint32_t g = x2k + (place + b * round_) * x2s;
         const uint32_t bytes = sub_block_row_tiles(schedule, g / nsb) * sbt * tb;
         ASSERT(bytes <= sb_bytes);  // (within its landing slot: the schedule and mt are both the x path's)
         if constexpr ((zz::iso & 8) == 0) {
-            noc_async_write(get_read_ptr(sb_cb), prim_land + (b % land_slots) * sb_bytes, bytes);
-            noc_async_write(get_read_ptr(sb_cb), prim2_land + (b % land_slots) * sb_bytes, bytes);
+            noc_async_write(get_read_ptr(sb_cb), prim_land + (rb % land_slots) * sb_bytes, bytes);
+            noc_async_write(get_read_ptr(sb_cb), prim2_land + (rb % land_slots) * sb_bytes, bytes);
         }
         ZZ_WAIT(zz_wbar, noc_async_write_barrier());
         noc_semaphore_inc(prim_data, 1);

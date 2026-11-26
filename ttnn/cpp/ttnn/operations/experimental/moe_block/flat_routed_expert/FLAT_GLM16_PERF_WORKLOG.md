@@ -132,6 +132,26 @@ FLAT_DN_NOC_SWAP=1 (down weight reads on NOC1, the h chain / y on NOC0; each RIS
 stalls everything (gate/up h wait 818 us). With the chains ordered by NOC0 hops: 821.7 / 1084.3 / 1469.3, still worse
 than 796.6 / 1055.9 / 1364.2. Not kept.
 
+## Preload upper bounds (emulated: FLAT_PRE_W / FLAT_PRE_X, timing only)
+
+Idea: the block's arena persists from moe_head to routed_experts_combine and sparse_dispatch_2d does not use it, so
+something running during dispatch could fill the flat expert's rings. Emulation: FLAT_PRE_W=n - the first n loads'
+gate/up chunks and down blocks count as landed (not read; still granted / published); FLAT_PRE_X=n - the first n x
+sub-blocks count as in every gate/up ring (the relays skip them entirely - not read, tilized, landed or sent - the
+forwarders count them arrived and forwarded, the primaries' ring slots start past them). GLM 4x4 uniform, us:
+
+| | M 80 | M 160 | M 320 | M 480 |
+|---|---|---|---|---|
+| baseline | 797.3 | 885.1 | 1057.5 | 1374.7 |
+| PRE_W 2 (the rings' 2 loads, ~42 MB) | 730.8 | 836.1 | 1017.8 | 1329.3 |
+| PRE_X 1 / 2 | 795.1 / 793.9 | 895.0 / 895.9 | 1053.2 / 1055.9 | 1378.8 / 1366.2 |
+| PRE_X 2 + PRE_W 2 | 792.0 | 894.3 | 1052.6 | 1386.8 |
+
+Weights: -8.3 / -5.5 / -3.8 / -3.3% - worth a dispatch-time prefetch (needs a fixed first-loads order in the
+schedule and an arena contract with whatever runs during dispatch). x: nothing, and with the weights preloaded it
+takes their gain back (expert 0 then waits ~46 us on weights through the grant / publish handshakes - an emulation
+artifact or not, the x path's start is not just the snake's fill: even preloaded, expert 0 waits ~15-18 us for x).
+
 ## K split (WIP): gate/up K over partner cores
 
 Prior art: moe_fused_swiglu (main: K over KGROUPS grid rows, gate / up partials reduce-scattered per column on both

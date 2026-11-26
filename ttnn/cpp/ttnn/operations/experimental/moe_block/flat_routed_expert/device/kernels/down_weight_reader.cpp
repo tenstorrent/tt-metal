@@ -139,7 +139,7 @@ void kernel_main() {
             landing[i] = destination(block + i, i);
         }
         for (uint32_t i = 0; i < count; ++i) {
-            if constexpr ((zz::iso & 2) == 0) {
+            if ((zz::iso & 2) == 0 && (block + i) / blocks_per_expert >= zz::pre_w) {
                 noc_async_read(block_source(expert_block(block + i)), landing[i], block_bytes);
             }
             if constexpr (zz::on) {

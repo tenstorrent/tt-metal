@@ -31,6 +31,7 @@ struct GateUpWeightReads {
     // next piece of the block being issued
     static constexpr uint32_t pieces = flat_options::gate_up_read_pieces;
     uint32_t pbytes = 0, pc = 0;
+    uint32_t skipped = 0;  // (MEASUREMENT: chunks marked landed without a read this step)
     volatile tt_l1_ptr uint32_t* grant = nullptr;
     volatile tt_l1_ptr uint32_t* data = nullptr;
     const volatile tt_l1_ptr uint32_t* loads = nullptr;  // expert | region << 8 a load
@@ -94,13 +95,14 @@ struct GateUpWeightReads {
             const uint32_t v = loads[l];
             const uint32_t src = base + ((v & 0xFF) * per_e + ce) * chunk + pc * pbytes;
             const uint32_t dst = land + (((v >> 8) & 0xFF) * per_e + ce) * blk + pc * pbytes;
-            if constexpr ((zz::iso & 1) == 0) {
+            if ((zz::iso & 1) == 0 && l >= zz::pre_w) {
                 noc_async_read_set_trid(kGateUpReadFirstTrid + ri);
                 noc_async_read(get_noc_addr_from_bank_id<true>(bank, src), dst, pbytes);
             } else {
                 (void)src;
                 (void)dst;
                 ++done;  // (MEASUREMENT: landed at once)
+                ++skipped;
             }
             ++iss;
             ri = ri + 1 == depth ? 0 : ri + 1;
@@ -115,7 +117,8 @@ struct GateUpWeightReads {
         // (the read command buffer drained first: an id's outstanding count covers only requests the NIU has taken)
         while (done < iss && !noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
         }
-        bool moved = (zz::iso & 1) != 0 && done > 0;
+        bool moved = skipped > 0;
+        skipped = 0;
         while (done < iss && ncrisc_noc_read_with_transaction_id_flushed(noc_index, kGateUpReadFirstTrid + rd)) {
             ++done;
             zz::hist.add(pbytes);

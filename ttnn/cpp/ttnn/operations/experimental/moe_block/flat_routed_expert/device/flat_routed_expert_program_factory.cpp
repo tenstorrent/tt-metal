@@ -418,6 +418,9 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["x_vc"] = std::getenv("FLAT_X_VC") ? uint32_t(std::atoi(std::getenv("FLAT_X_VC"))) : 3u;
     options["x_stateful"] = std::getenv("FLAT_X_STATE") != nullptr && std::getenv("FLAT_X_STATE")[0] == '1';
     options["x_mcast_vc"] = std::getenv("FLAT_X_MCAST_VC") ? uint32_t(std::atoi(std::getenv("FLAT_X_MCAST_VC"))) : 0u;
+    // (MEASUREMENT ONLY: preload emulation, zz_probes.hpp)
+    options["zz_pre_x"] = std::getenv("FLAT_PRE_X") ? uint32_t(std::atoi(std::getenv("FLAT_PRE_X"))) : 0u;
+    options["zz_pre_w"] = std::getenv("FLAT_PRE_W") ? uint32_t(std::atoi(std::getenv("FLAT_PRE_W"))) : 0u;
     options["zz_iso"] =
         std::getenv("FLAT_ISO") ? uint32_t(std::atoi(std::getenv("FLAT_ISO"))) : 0u;  // (MEASUREMENT ONLY)
     options["zz_flat_probes"] = std::getenv("FLAT_ZZ_PROBES") != nullptr && std::getenv("FLAT_ZZ_PROBES")[0] == '1';

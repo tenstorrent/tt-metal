@@ -18,6 +18,11 @@ inline constexpr bool on = get_named_compile_time_arg_val("zz_flat_probes") != 0
 // gate/up weight reads, 2 down weight reads, 4 x DRAM reads, 8 x helper -> primary landing writes, 16 x primary ->
 // snake head writes, 32 x snake forwarding, 64 h gate/up -> down chain heads, 128 h along the down chains, 256 y writes
 inline constexpr uint32_t iso = get_named_compile_time_arg_val("zz_iso");
+// preload emulation (host FLAT_PRE_X / FLAT_PRE_W; timing only, the data is garbage): the first pre_x x sub-blocks
+// count as already in every gate/up core's x ring (not sent by the primaries, not forwarded), the first pre_w loads'
+// gate/up and down weights as already landed (not read)
+inline constexpr uint32_t pre_x = get_named_compile_time_arg_val("zz_pre_x");
+inline constexpr uint32_t pre_w = get_named_compile_time_arg_val("zz_pre_w");
 }  // namespace zz
 
 #define ZZ_COUNTER(name) [[maybe_unused]] uint32_t name = 0

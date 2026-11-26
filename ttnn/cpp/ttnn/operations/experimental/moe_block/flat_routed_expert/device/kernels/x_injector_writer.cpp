@@ -69,7 +69,11 @@ void kernel_main() {
     static_assert(ks == 1 || !mcast, "the K split: unicast snakes");
     uint32_t hxy_k[2] = {hxy, 0};
     uint64_t head_xarr_k[2] = {head_xarr, 0};
-    uint32_t sent_k[2] = {0, 0};
+    uint32_t sent_k[2] = {
+        zz::pre_x * flat_options::super_blocks_per_sub_block *
+            (flat_options::super_block_tiles / flat_options::x_block_k_tiles),
+        0};  // (the preloaded blocks hold their ring slots, emulation)
+    static_assert(zz::pre_x == 0 || ks == 1, "preload emulation: KS 1");
     // the freed words restart every launch: zeroed here (a head only bumps its word after consuming x this relay sent
     // in this launch), so no host write is needed between launches
     for (uint32_t i = 0; i < (mcast ? kWords : ks); ++i) {
@@ -158,7 +162,14 @@ void kernel_main() {
         // Super-block b was read and tilized by helper h = b % kXnh (x_injector_helper_writer.cpp) into landing ring h
         // here (ring h follows ring h - 1); DATA sem help_sem[h] here counts arrivals, the CREDIT sem x_credit_sem on
         // the helper counts freed slots.
-        const uint32_t hh = b % kXnh, hb = b / kXnh;
+        // (preload emulation: the preloaded x sub-blocks' super-blocks never come - not read, not landed, not sent;
+        // NSB is even, so the helpers' alternation and the landing counts start over at P0)
+        constexpr uint32_t p0 = zz::pre_x * nsb;
+        static_assert(p0 % kXnh == 0);
+        if (b < p0) {
+            continue;
+        }
+        const uint32_t hh = b % kXnh, hb = (b - p0) / kXnh;
         constexpr uint32_t help_sem[kXnh] = {4, 7};
         ZZ_WAIT(
             zz_data, while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])) < hb + 1) {
@@ -167,6 +178,7 @@ void kernel_main() {
             });
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])), hb + 1);
         const uint32_t src = land + (hh * land_slots + hb % land_slots) * sb_tiles * tb;
+
         const uint32_t kp = ks > 1 ? (b % nsb) * ks / nsb : 0;  // (its K part's snake)
         uint32_t& sent = sent_k[kp];
         const uint32_t ghxy = hxy_k[kp];
