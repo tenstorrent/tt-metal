@@ -136,31 +136,34 @@ CASES = [
     BlockCase("kimi_k3", "8x4", 5120, pad=(5120, 5120 + 2000)),
     BlockCase("glm53", "8x4", 5120, chunks=((0, 0, 2560), (1, 300, 2000))),
     # the 4x4 tray-half stage (#61481): SP on the axis-1 ring, TP on the axis-0 line - the block on the transposed mesh
+    # (Kimi-K3 runs its 4x4 stage on the carve below)
     BlockCase("glm53", "4x4-sp1", 2560),
     BlockCase("glm53", "4x4-sp1", 5120),
-    BlockCase("kimi_k3", "4x4-sp1", 2560),
-    BlockCase("kimi_k3", "4x4-sp1", 5120),
     BlockCase("glm53", "4x4-sp1", 5120, pad=(1000, 3100)),
-    BlockCase("kimi_k3", "4x4-sp1", 2560, pad=(3 * 2560, 3 * 2560 + 1500)),
     BlockCase("glm53", "4x4-sp1", 5120, chunks=((0, 0, 2560), (1, 700, 1900))),
-    BlockCase("kimi_k3", "4x4-sp1", 5120, chunks=((0, 0, 1800), (1, 2560, 5120))),
     # batching as the 4x4 stage runs it (#63276 / #63937: 2,560-token chunks, PREFILL_FORWARD_TOKENS_BUDGET 5120 /
     # 10240): two full chunks a forward, and four with partial ones (p25 / p50 new-token sizes, a resume mid-slab)
     BlockCase("glm53", "4x4-sp1", 5120, chunks=((0, 0, 2560), (1, 2560, 5120))),
-    BlockCase("kimi_k3", "4x4-sp1", 5120, chunks=((0, 0, 2560), (1, 2560, 5120))),
     BlockCase("glm53", "4x4-sp1", 10240, chunks=((0, 0, 2560), (1, 2560, 4160), (2, 0, 640), (3, 6400, 7680))),
-    BlockCase("kimi_k3", "4x4-sp1", 10240, chunks=((0, 0, 2560), (1, 2560, 4160), (2, 0, 640), (3, 6400, 7680))),
     BlockCase("glm53", "4x4-sp1", 10240),
-    BlockCase("kimi_k3", "4x4-sp1", 10240),
     BlockCase("glm53", "4x4-sp1", 2560, pad=(2560, 2560 + 1600)),
-    # Kimi-K3.1's production stage (its runner's 4x4 manifests: SP=4 on mesh axis 1, one 2,560-token chunk a forward) on
-    # K3.1's own config: K3's MoE, the mesh opened with K3.1's L1_SMALL_SIZE
-    BlockCase("kimi_k3_1", "4x4-sp1", 2560),
     # GLM-5.3's 4x4 stage on the [RING, RING] carve (run_subtorus_4x4_tests.sh): forwards of one, two and four full
     # 2,560-token chunks, the packed ones with their metadata words (test_moe_block_host_perf's carve cases)
     BlockCase("glm53", "xy4-sp1", 2560),
     BlockCase("glm53", "xy4-sp1", 5120, chunks=((0, 0, 2560), (1, 2560, 5120))),
     BlockCase("glm53", "xy4-sp1", 10240, chunks=((0, 0, 2560), (1, 2560, 5120), (2, 5120, 7680), (3, 7680, 10240))),
+    # Kimi-K3's 4x4 stage on the same carve: one, two and four full chunks, partial and padded chunks, and K3.1's
+    # production stage (its runner's 4x4 manifests: SP=4 on mesh axis 1, one 2,560-token chunk a forward) on K3.1's own
+    # config: K3's MoE, the mesh opened with K3.1's L1_SMALL_SIZE
+    BlockCase("kimi_k3", "xy4-sp1", 2560),
+    BlockCase("kimi_k3", "xy4-sp1", 5120),
+    BlockCase("kimi_k3", "xy4-sp1", 2560, pad=(3 * 2560, 3 * 2560 + 1500)),
+    BlockCase("kimi_k3", "xy4-sp1", 5120, chunks=((0, 0, 1800), (1, 2560, 5120))),
+    BlockCase("kimi_k3", "xy4-sp1", 5120, chunks=((0, 0, 2560), (1, 2560, 5120))),
+    BlockCase("kimi_k3", "xy4-sp1", 10240, chunks=((0, 0, 2560), (1, 2560, 5120), (2, 5120, 7680), (3, 7680, 10240))),
+    BlockCase("kimi_k3", "xy4-sp1", 10240, chunks=((0, 0, 2560), (1, 2560, 4160), (2, 0, 640), (3, 6400, 7680))),
+    BlockCase("kimi_k3", "xy4-sp1", 10240),
+    BlockCase("kimi_k3_1", "xy4-sp1", 2560),
 ]
 
 
@@ -390,9 +393,6 @@ BLOCK_US = {
     "glm53-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (772.4, 425.7, 1632.3, 140.0),
     "glm53-xy4-sp1-2560": (197.0, 131.3, 1024.7, 77.3),
     "glm53-xy4-sp1-5120-packed-2560@0-2560@2560": (384.7, 229.7, 1181.0, 102.0),
-    "kimi_k3-4x4-sp1-10240": (2624.1, 478.4, 3106.9, 553.8),
-    "kimi_k3-4x4-sp1-2560": (520.9, 157.2, 2748.1, 153.4),
-    "kimi_k3-4x4-sp1-5120": (1103.6, 300.3, 2800.4, 260.8),
     "kimi_k3-4x4-y-10240": (1180.0, 520.2, 3100.7, 248.5),
     "kimi_k3-4x4-y-2560": (578.7, 155.3, 2727.1, 152.3),
     "kimi_k3-4x4-y-5120": (1177.8, 287.5, 2772.4, 251.5),
@@ -400,7 +400,13 @@ BLOCK_US = {
     "kimi_k3-8x4-10240": (870.3, 324.8, 1686.2, 248.0),
     "kimi_k3-8x4-5120": (408.3, 184.4, 1495.9, 140.0),  # (moe_tail: 137.9 us uncapped, 151.2 us on an 8 kW CI Galaxy)
     "kimi_k3-8x4-5120-weka-L1": (427.1, 203.2, 1542.2, 163.3),
-    "kimi_k3_1-4x4-sp1-2560": (529.8, 158.5, 2653.9, 152.2),  # (14 kW CI Galaxy)
+    # (K3 / K3.1 carve rows: local b07u08 runs of main, mean of 2 - re-centre on CI)
+    "kimi_k3-xy4-sp1-10240": (2162.5, 402.0, 3131.0, 401.0),
+    "kimi_k3-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (2167.5, 395.0, 3159.5, 397.5),
+    "kimi_k3-xy4-sp1-2560": (396.5, 118.0, 2755.0, 127.0),
+    "kimi_k3-xy4-sp1-5120": (1069.5, 207.0, 2804.5, 219.0),
+    "kimi_k3-xy4-sp1-5120-packed-2560@0-2560@2560": (1073.0, 208.5, 2812.5, 216.5),
+    "kimi_k3_1-xy4-sp1-2560": (396.0, 117.0, 2746.5, 126.0),
     "minimax_m3-2x4-2048-c2048": (564.8, 195.7, 1345.9, 85.6),
     "minimax_m3-2x4-4096-4xc1024": (1107.0, 345.0, 1440.9, 153.0),
     "minimax_m3-2x4-5120-c5120": (1292.0, 431.8, 1483.2, 185.9),
