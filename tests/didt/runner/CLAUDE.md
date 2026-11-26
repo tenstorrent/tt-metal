@@ -57,7 +57,8 @@ Design and reasons: `docs/superpowers/specs/2026-11-26-didt-runner-design.md`.
 
 - Today: `throttle` (`TT_MM_THROTTLE_PERF=5`), then `pin_core` on every step.
 - `pin_core`: each failing device of the first attempt (ND or hang) reruns alone via the step's `pin_id` with
-  `DIDT_DEVICE_ID=<dev>`, at twice the iterations. A per-chip test must pick its chip with
+  `DIDT_DEVICE_ID=<dev>`, at twice the iterations and at least the original attempt's loop time
+  (`DIDT_MIN_LOOP_SECONDS`, honoured by `op_test_base.run_op_test`; read from the original log's iteration debug lines). A per-chip test must pick its chip with
   `tests/didt/didt_chip.py` `pick_submesh`, never `submeshes[logical_chip_id]` alone: the submesh index is not the
   device id. A new per-chip test = a `pin_id` in the config, collected on a galaxy first.
 - Not reproduced on the chip alone is WARN, not PASS. A reset failure inside `pin_core` aborts the run.

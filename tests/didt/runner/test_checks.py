@@ -12,6 +12,7 @@ from tests.didt.runner.checks import (
     collected_node_ids,
     gddr_edc,
     gddr_result,
+    loop_seconds,
     missing_node_ids,
     read_tail,
     sweep_skipped_windows,
@@ -181,3 +182,15 @@ def test_gddr_result_warns_on_corrected_and_fails_on_uncorrected():
     assert gddr_result(Result(Status.PASS), [corr, uncorr], {}).status == Status.FAIL
     assert gddr_result(Result(Status.HANG, "triage x"), [corr], {}).status == Status.HANG
     assert gddr_result(Result(Status.PASS, "ok"), [], {}) == Result(Status.PASS, "ok")
+
+
+def test_loop_seconds_real_log():
+    # testdata/iteration_loop.log: see testdata/SOURCES.txt; loop 12:04:27.134 -> 12:07:11.506
+    seconds, iterations = loop_seconds(TESTDATA / "iteration_loop.log")
+    assert round(seconds, 3) == 164.372 and iterations == 1000
+
+
+def test_loop_seconds_without_iteration_lines(tmp_path):
+    (tmp_path / "log").write_text("Device 27: Timeout waiting for dispatch\n")
+    assert loop_seconds(tmp_path / "log") is None
+    assert loop_seconds(tmp_path / "missing") is None

@@ -1,0 +1,6 @@
+2026-11-26 12:04:27.134 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:276 - Starting iterations
+2026-11-26 12:04:30.960 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:316 - Iteration = 0, done!
+2026-11-26 12:04:31.006 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:316 - Iteration = 1, done!
+2026-11-26 12:07:11.445 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:316 - Iteration = 998, done!
+2026-11-26 12:07:11.506 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:316 - Iteration = 999, done!
+                logger.debug(f"Iteration = {i}, done!")
