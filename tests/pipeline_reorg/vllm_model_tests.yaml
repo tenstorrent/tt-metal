@@ -412,6 +412,65 @@
   team: models
   budget_type: vllm
 
+# CI-only (throwaway branch): Qwen3.8-27B MTP on a BH Galaxy with the tt-inference-server BLACKHOLE_GALAXY settings of
+# qwen36_blackhole_mtp (tt-inference-server PR 5567): TP=8 x DP=4, one engine per (1, 8) submesh of the (4, 8) mesh,
+# 8 requests per engine. The runner's hub cache has no refs/main, so the snapshot is served by path under the hub id.
+# The weight cache is written under /work: /mnt/MLPerf is read-only and holds no Qwen3.8 MambaSpec cache.
+# Two legs: synchronous scheduling (the PR 5567 setting) and asynchronous scheduling (chained verifies with DP).
+- name: "Qwen3.8-27B MTP DP=4 sync (BH Galaxy)"
+  model: Qwen/Qwen3.8-27B
+  coherence-test: true
+  prefix-caching-test: true
+  multimodal: true
+  sampling-tests: true
+  sampling-test-filter: "not test_mixed_params_batch"
+  sampling-test-timeout: 30
+  print-dram-banks: true
+  server-timeout: 120
+  benchmark-timeout: 30
+  mesh-device: BH-Galaxy
+  arch: arch-blackhole
+  tt-config: '{"fabric_config": "FABRIC_1D_RING", "trace_region_size": 1073741824, "l1_small_size": 24576, "sample_on_device_mode": "decode_only"}'
+  additional-server-args: "--data_parallel_size 4 --max_model_len 262144 --max_num_seqs 8 --max_num_batched_tokens 525312 --block_size 1024 --enable-prefix-caching --prefix-cache-retention-interval 0 --enable-prompt-tokens-details --enable-chunked-prefill --long_prefill_token_threshold 16384 --no-async-scheduling --limit-mm-per-prompt.image 1 --limit-mm-per-prompt.video 1 --mm-processor-cache-gb 0 --mm-processor-kwargs.max_pixels 1048576 --media-io-kwargs.video.num_frames 16 --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 3 --enable-auto-tool-choice --reasoning-parser qwen3 --tool-call-parser qwen3_coder --exclude-tools-when-tool-choice-none --structured-outputs-config.backend xgrammar --structured-outputs-config.disable_any_whitespace true --seed 9472 --max-log-len 32"
+  additional-benchmark-args: "--max-concurrency 32 --num-prompts 128 --temperature 0 --tokenizer $HF_MODEL_LOCAL"
+  hf-snapshot-revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+  default-chat-template-kwargs: '{"enable_thinking": false}'
+  extra-env: "TT_QWEN35_TEXT_VER=qwen36_blackhole TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36MTPContractForCausalLM QWEN36_SPEC_K=3 QWEN36_MAX_TOKENS_ALL_USERS=525312 QWEN_SDPA_BF8=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 VLLM_IMAGE_FETCH_TIMEOUT=30 OMP_NUM_THREADS=8 OMP_WAIT_POLICY=PASSIVE TT_CACHE_PATH=/work/tt_cache/Qwen--Qwen3.8-27B-mambaspec-tp8"
+  skus:
+    bh_galaxy:
+      timeout: 240
+      tier: 3
+  owner_id: U09LTAPEU2U # Viktor Pus
+  team: models
+  budget_type: vllm
+
+- name: "Qwen3.8-27B MTP DP=4 async (BH Galaxy)"
+  model: Qwen/Qwen3.8-27B
+  coherence-test: true
+  prefix-caching-test: true
+  multimodal: true
+  sampling-tests: true
+  sampling-test-filter: "not test_mixed_params_batch"
+  sampling-test-timeout: 30
+  print-dram-banks: true
+  server-timeout: 120
+  benchmark-timeout: 30
+  mesh-device: BH-Galaxy
+  arch: arch-blackhole
+  tt-config: '{"fabric_config": "FABRIC_1D_RING", "trace_region_size": 1073741824, "l1_small_size": 24576, "sample_on_device_mode": "decode_only"}'
+  additional-server-args: "--data_parallel_size 4 --max_model_len 262144 --max_num_seqs 8 --max_num_batched_tokens 525312 --block_size 1024 --enable-prefix-caching --prefix-cache-retention-interval 0 --enable-prompt-tokens-details --enable-chunked-prefill --long_prefill_token_threshold 16384 --async-scheduling --limit-mm-per-prompt.image 1 --limit-mm-per-prompt.video 1 --mm-processor-cache-gb 0 --mm-processor-kwargs.max_pixels 1048576 --media-io-kwargs.video.num_frames 16 --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 3 --enable-auto-tool-choice --reasoning-parser qwen3 --tool-call-parser qwen3_coder --exclude-tools-when-tool-choice-none --structured-outputs-config.backend xgrammar --structured-outputs-config.disable_any_whitespace true --seed 9472 --max-log-len 32"
+  additional-benchmark-args: "--max-concurrency 32 --num-prompts 128 --temperature 0 --tokenizer $HF_MODEL_LOCAL"
+  hf-snapshot-revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+  default-chat-template-kwargs: '{"enable_thinking": false}'
+  extra-env: "TT_QWEN35_TEXT_VER=qwen36_blackhole TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36MTPContractForCausalLM QWEN36_SPEC_K=3 QWEN36_MAX_TOKENS_ALL_USERS=525312 QWEN_SDPA_BF8=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 VLLM_IMAGE_FETCH_TIMEOUT=30 OMP_NUM_THREADS=8 OMP_WAIT_POLICY=PASSIVE TT_CACHE_PATH=/work/tt_cache/Qwen--Qwen3.8-27B-mambaspec-tp8"
+  skus:
+    bh_galaxy:
+      timeout: 240
+      tier: 3
+  owner_id: U09LTAPEU2U # Viktor Pus
+  team: models
+  budget_type: vllm
+
 # ── GPT-OSS ────────────────────────────────────────────────────────
 
 - name: "GPT-OSS-120B (low-latency)"
