@@ -18,7 +18,7 @@ std::string FlatLayoutOptions::str() const {
         arena_bytes,
         x_bf16 ? "bf16" : "bfp8",
         h_bf16 ? "bf16" : "bfp8",
-        x_ring_fill ? "filled" : "a sub-block");
+        x_ring_fill ? "growth on" : "growth off");
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::flat_routed_expert

@@ -117,8 +117,9 @@ struct ExpertSchedule {
     uint8_t load_expert[flat_options::max_experts];  // its local expert
     uint8_t load_region[flat_options::max_experts];  // its ring region
     uint32_t max_tokens = 0;                         // the most tokens of an entry
-    // rows a sub-block: flat_options::rows_per_sub_block, or x_rows_per_sub_block in the x path's view (to_x_schedule).
-    // The row-tile helpers below read it, so a converted schedule cannot be measured in the other unit.
+    // rows a sub-block in this schedule's unit: the compute's (flat_options::rows_per_sub_block), or the x path's
+    // (x_rows_per_sub_block) once to_x_schedule has converted it. The row-tile helpers below use it, so they always
+    // count in the schedule's own unit.
     uint32_t rows_per_sub_block = flat_options::rows_per_sub_block;
 };
 

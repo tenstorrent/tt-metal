@@ -144,7 +144,7 @@ CASES = [
     FlatCase("glm53", "8x4", 10240, "zipf"),
     FlatCase("glm53", "4x4", 5120, "uniform"),
     FlatCase("glm53", "4x4", 7680, "uniform"),
-    # (16 experts a chip at M 320: the 4x4 stage at a 10240 chunk)
+    # (the 4x4 stage at a 10240-token chunk: 16 experts a chip, 320 tokens an expert with uniform routing)
     FlatCase("glm53", "4x4", 10240, "uniform"),
     FlatCase("glm53", "4x4", 10240, "zipf"),
     # Kimi K3
@@ -207,8 +207,8 @@ def _inputs(case):
     return x, c_, r_, gids, list(zip(offs, counts))
 
 
-def _setup(case, device):
-    """(op, device inputs, host inputs, weight sets)."""
+def _setup(case, device, layout=None):
+    """(op, device inputs, host inputs, weight sets). layout: FlatLayoutOptions fields (None: the defaults)."""
     md = cases.MODELS[case.model]
     x, c_, r_, gids, spans = _inputs(case)
     wsets = cases.weight_sets(md["H"], md["I"])
@@ -222,6 +222,7 @@ def _setup(case, device):
         n_global=md["E"],
         act=md["act"],
         pin=1,
+        layout=layout,
     )
     args = (_rm(x, ttnn.bfloat16, device), _rm(c_, ttnn.uint32, device), _rm(r_, ttnn.uint32, device))
     logger.info(f"{case.id}: {len(gids)} experts, rows {[c for _, c in spans]} (total {sum(c for _, c in spans)})")
@@ -241,8 +242,12 @@ DEVICE_PARAMS = [{"l1_small_size": 0}]
 @pytest.mark.parametrize("case", _params(CASES))
 def test_flat_expert_accuracy(device, case):
     _skip_unless_supported(device)
+    _check_accuracy(case, device)
+
+
+def _check_accuracy(case, device, layout=None):
     md = cases.MODELS[case.model]
-    op, args, (x, spans), wsets = _setup(case, device)
+    op, args, (x, spans), wsets = _setup(case, device, layout)
     y = ttnn.to_torch(op(*args)).float()
     q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()  # noqa: E731
     wq = [tuple(q(w) for w in ws) for ws in wsets]
@@ -262,6 +267,41 @@ def test_flat_expert_accuracy(device, case):
         assert ok, f"{case.id}: expert {e} ({c} rows at {o}): pcc {pcc}"
     logger.info(f"ACCURACY {case.id}: worst expert pcc {worst[0]:.5f} (expert {worst[1]})")
     op.close()
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_flat_expert_short_x_ring(device):
+    """The gate/up start-up cap (weight reads limited to 8 landing slots until the first x row group is in) on a plan
+    whose x ring is shorter than a row group (no row passes: the ring holds fewer x blocks than the K blocks) and whose
+    experts span several sub-blocks (a load's weights stay until its last sub-block): the cap has to lift once the
+    ring is full, else the weight reads and the compute wait on each other. A small arena (x ring growth off) gives
+    such a plan; accuracy, within the timeout, checks it."""
+    _skip_unless_supported(device)
+    case = FlatCase("glm53", "4x4", 10240, "uniform")
+    md = cases.MODELS[case.model]
+    _, _, _, gids, spans = _inputs(case)
+    tried = []
+    for arena in range(1_400_000, 150_000, -50_000):
+        layout = dict(arena_bytes=arena, x_ring_fill=False)
+        try:
+            lay = weights_py.moe_block_utils.flat_routed_expert_plan(
+                device, md["H"], md["I"], len(gids), md["E"], case.chunk, pin=1, layout=weights_py.flat_layout(layout)
+            ).as_dict()
+        except RuntimeError:
+            continue
+        k, ring, rows = lay["gate_up_k_blocks"], lay["x_ring_blocks"], 32 * lay["row_tiles_per_sub_block"]
+        passes = lay["gate_up_row_passes"]
+        tried.append((arena, k, ring, rows, passes))
+        # (no row passes: the kernels' x ring is the plan's, in blocks of a sub-block's rows - with row passes it would
+        # hold MT / pass rows times as many smaller blocks)
+        if k >= 24 and not passes and ring < k and rows < max(c for _, c in spans):
+            logger.info(f"short x ring: arena {arena} B, {k} K blocks, x ring {ring} blocks, {rows} rows a sub-block")
+            _check_accuracy(case, device, layout)
+            return
+    pytest.fail(
+        f"no arena gives a plan with an x ring shorter than its K blocks (arena, K, ring, rows, passes): {tried}"
+    )
 
 
 @pytest.mark.timeout(1800)
