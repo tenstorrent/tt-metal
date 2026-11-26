@@ -34,7 +34,7 @@ from ..data_transfer_blocks.data_transfer_blocks import (
     DataTransferBlocks,
     as_dest_acc,
 )
-from ..data_transfer_blocks.l1_codec import datums_per_tile
+from ..data_transfer_blocks.l1_codec import datums_per_tile, tile_bytes_for
 from .chain import Chain, Registers, StageRecord, Step
 
 
@@ -86,6 +86,11 @@ def check_source_layout(
             f"this cannot tell from the tensor alone. Otherwise hand over real "
             f"L1 buffers with run_l1."
         )
+
+
+def is_l1_image(operand) -> bool:
+    """Whether `operand` is already an L1 image, as opposed to a tensor to pack."""
+    return isinstance(operand, (bytes, bytearray, memoryview))
 
 
 PACK_EFFECT_KEYWORDS = frozenset(
@@ -422,6 +427,47 @@ class Golden:
         chunk = values.reshape(-1)[index * per_tile : (index + 1) * per_tile]
         return self.blocks.pack_to_l1(chunk, fmt, **geometry)
 
+    def pack_stimuli(
+        self,
+        stimuli: Union[torch.Tensor, Sequence[torch.Tensor]],
+        in_formats: Union[DataFormat, Sequence[DataFormat]],
+        *,
+        num_faces: int = MAX_NUM_FACES,
+        face_r_dim: int = MAX_FACE_R_DIM,
+    ) -> List[bytes]:
+        """Each operand's L1 image: the bytes :meth:`run` would lay out for it.
+
+        For packing the stimuli once per test. Hand the images to :meth:`run`
+        in place of the tensors, and to ``StimuliConfig`` as its buffers, which
+        writes bytes to L1 verbatim. The device then reads the very bytes the
+        golden read, and neither side packs them a second time.
+
+        Tiles sit back to back, ``datums_per_tile`` apart in the tensor, which
+        is the ``use_dense_tile_dimensions=True`` layout.
+        """
+        if isinstance(stimuli, torch.Tensor):
+            stimuli = [stimuli]
+        if isinstance(in_formats, DataFormat):
+            in_formats = [in_formats] * len(stimuli)
+        geometry = dict(num_faces=num_faces, face_r_dim=face_r_dim)
+        return [
+            bytes(self.blocks.pack_to_l1(tensor, fmt, **geometry))
+            for tensor, fmt in zip(stimuli, in_formats)
+        ]
+
+    @staticmethod
+    def _image_tiles(operand: int, image, fmt: DataFormat, geometry: Dict) -> int:
+        """Whole tiles in an operand handed over as an L1 image."""
+        tile_bytes = tile_bytes_for(fmt, **geometry)
+        tiles, remainder = divmod(len(image), tile_bytes)
+        if remainder or not tiles:
+            raise ValueError(
+                f"operand {operand} is an L1 image of {len(image)} bytes, which "
+                f"is not a whole number of {tile_bytes}-byte {fmt} tiles at "
+                f"{geometry}"
+            )
+        return tiles
+
     def run(
         self,
         stimuli: Union[torch.Tensor, Sequence[torch.Tensor]],
@@ -441,22 +487,26 @@ class Golden:
 
         Takes and returns what a test has: tensors. The blocks only ever handle
         L1 bytes, so this is the adapter on either side of the chain.
+
+        An operand may also be an L1 image from :meth:`pack_stimuli`, which is
+        used as it is and not packed again.
         """
-        if isinstance(stimuli, torch.Tensor):
+        if isinstance(stimuli, torch.Tensor) or is_l1_image(stimuli):
             stimuli = [stimuli]
         geometry = dict(num_faces=num_faces, face_r_dim=face_r_dim)
 
         per_tile = datums_per_tile(**geometry)
+        tensors = [operand for operand in stimuli if not is_l1_image(operand)]
         for operand, tensor in enumerate(stimuli):
-            if tensor.numel() % per_tile:
+            if not is_l1_image(tensor) and tensor.numel() % per_tile:
                 raise ValueError(
                     f"operand {operand} has {tensor.numel()} datums, which is not "
                     f"a whole number of {per_tile}-datum tiles"
                 )
-        if len({tensor.numel() for tensor in stimuli}) > 1:
+        if len({tensor.numel() for tensor in tensors}) > 1:
             raise ValueError(
                 f"operands differ in size: "
-                f"{[tensor.numel() for tensor in stimuli]} datums"
+                f"{[tensor.numel() for tensor in tensors]} datums"
             )
         in_formats, cfg = self._make_config(
             in_formats,
@@ -468,16 +518,30 @@ class Golden:
             dest_acc=dest_acc,
             pack_effects=pack_effects,
         )
+        tile_counts = [
+            (
+                self._image_tiles(i, operand, fmt, geometry)
+                if is_l1_image(operand)
+                else operand.numel() // per_tile
+            )
+            for i, (operand, fmt) in enumerate(zip(stimuli, in_formats))
+        ]
+        if len(set(tile_counts)) > 1:
+            raise ValueError(f"operands differ in size: {tile_counts} tiles")
+        # An image states its own layout. Only a tensor leaves it to be inferred.
+        dense_layout = dense_layout or not tensors
         if num_tiles_per_output > 1:
-            return self._run_blocked(stimuli, in_formats, cfg, trace, dense_layout)
+            return self._run_blocked(
+                stimuli, in_formats, cfg, trace, tile_counts[0], dense_layout
+            )
         # Lay the stimuli out in L1 the way the harness does, so the chain
         # reads the bytes the hardware read.
-        check_source_layout(
-            stimuli[0].numel() // datums_per_tile(**geometry), geometry, dense_layout
-        )
+        check_source_layout(tile_counts[0], geometry, dense_layout)
         regs = Registers(
             **{
-                f"in{i}": self.blocks.pack_to_l1(t, f, **geometry)
+                f"in{i}": (
+                    t if is_l1_image(t) else self.blocks.pack_to_l1(t, f, **geometry)
+                )
                 for i, (t, f) in enumerate(zip(stimuli, in_formats))
             }
         )
@@ -499,6 +563,7 @@ class Golden:
         in_formats: Sequence[DataFormat],
         cfg: OpConfig,
         trace: Optional[List[StageRecord]],
+        total_tiles: int,
         dense_layout: bool = False,
     ) -> torch.Tensor:
         """Run one chain per block of `cfg.tiles_per_output` input tiles.
@@ -506,9 +571,7 @@ class Golden:
         Each block folds its tiles into a single Dest and packs once, so the
         output holds one tile per block rather than one per input tile.
         """
-        per_tile = datums_per_tile(**cfg.geometry)
         depth = cfg.tiles_per_output
-        total_tiles = stimuli[0].numel() // per_tile
         if total_tiles % depth:
             raise ValueError(
                 f"{total_tiles} input tiles is not a multiple of the "
@@ -534,15 +597,27 @@ class Golden:
                 f"num_tiles_per_output=1, or give it a chain that consumes "
                 f"every staged tile."
             )
-        packed_blocks: List[int] = []
+        # Every operand's whole L1 image, packed once. A tile's bytes do not
+        # depend on its neighbours, so slicing the image gives each block the
+        # bytes that packing its tiles one at a time would.
+        images = [
+            (
+                values
+                if is_l1_image(values)
+                else self.blocks.pack_to_l1(values, fmt, **cfg.geometry)
+            )
+            for values, fmt in zip(stimuli, in_formats)
+        ]
+        packed_blocks = bytearray()
         for block in range(total_tiles // depth):
             regs = Registers()
             for tile in range(depth):
                 index = block * depth + tile
-                for operand, (values, fmt) in enumerate(zip(stimuli, in_formats)):
-                    regs[self.source(operand, tile)] = self._tile_to_l1(
-                        values, index, fmt, cfg.geometry
-                    )
+                for operand, image in enumerate(images):
+                    tile_bytes = len(image) // total_tiles
+                    regs[self.source(operand, tile)] = image[
+                        index * tile_bytes : (index + 1) * tile_bytes
+                    ]
             packed_blocks.extend(chain.run(regs, result="out", trace=trace))
         return self.blocks.unpack_from_l1(packed_blocks, cfg.out_format, **cfg.geometry)
 
