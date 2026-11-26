@@ -432,10 +432,21 @@ def _warmup_model(calls, max_batch_size):
         calls.append("record masked")
         model._masked_traces_recorded = True
 
+    def record_big(device):
+        # Qwen36Model.record_prefill_trace_chunked_big is a no-op once its trace is captured.
+        if not model._big_recorded:
+            calls.append("record big")
+            model._big_recorded = True
+
+    model._big_recorded = False
     model.prepare_prefill_trace_chunked = lambda device, page_table, chunk_size: calls.append(
         ("prepare", tuple(page_table.shape))
     )
+    model.prepare_prefill_trace_chunked_big = lambda device, page_table: calls.append(
+        ("prepare big", tuple(page_table.shape))
+    )
     model.record_prefill_trace_chunked = record
+    model.record_prefill_trace_chunked_big = record_big
     model.prepare_prefill_traces_masked = lambda: calls.append("prepare masked")
     model.record_prefill_traces_masked = record_masked
     model.gdn_blocks = SimpleNamespace(
@@ -445,7 +456,7 @@ def _warmup_model(calls, max_batch_size):
 
 
 def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatch):
-    """#56474: the eager call allocates/compiles prefill (the chunk trace and the masked-bucket traces); the traced
+    """#56474: the eager call allocates/compiles prefill (the chunk traces and the masked-bucket traces); the traced
     call records on the same buffers. Both phases compile the GDN state-block programs (idempotent) before any trace
     can be captured after them."""
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
@@ -458,14 +469,15 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
 
-    prepare = ("prepare", (1, 128))
+    prepare = [("prepare", (1, 128)), ("prepare big", (1, 128))]
     assert calls == [
-        prepare,
+        *prepare,
         "prepare masked",
         "blocks",
-        prepare,
+        *prepare,
         "prepare masked",
         "record",
+        "record big",
         "record masked",
         "blocks",
         "block traces",
@@ -474,7 +486,7 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
     calls.clear()
     model._masked_traces_recorded = False
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
-    assert calls == [prepare, "prepare masked", "record masked", "blocks", "block traces"]
+    assert calls == [*prepare, "prepare masked", "record masked", "blocks", "block traces"]
 
 
 @pytest.mark.parametrize("max_batch_size, per_row_rope_delta", [(1, False), (8, True)])
@@ -496,15 +508,16 @@ def test_prefill_warmup_warms_vision_before_any_trace(monkeypatch, max_batch_siz
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, False)
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
 
-    prepare = ("prepare", (1, 128))
+    prepare = [("prepare", (1, 128)), ("prepare big", (1, 128))]
     assert calls == [
         "vision",
-        prepare,
+        *prepare,
         "prepare masked",
         "blocks",
-        prepare,
+        *prepare,
         "prepare masked",
         "record",
+        "record big",
         "record masked",
     ] + ["blocks", "block traces"]
 
