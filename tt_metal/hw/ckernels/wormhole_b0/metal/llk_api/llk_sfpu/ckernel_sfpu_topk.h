@@ -1352,7 +1352,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k) {
                         }
                     }
                     if (record_body) {
-                        lltt::record<lltt::Exec>(0, RANK_STAMPED ? merge_head : merge_body);
+                        TTI_REPLAY(0, RANK_STAMPED ? merge_head : merge_body, 1, 1);
                         bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_dist);
                         if constexpr (RANK_STAMPED) {
                             // Left run: global direction, lower rank range.
@@ -1363,7 +1363,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k) {
                             TOPK_SFPENCC_ALL_LANES_ON();
                         }
                     } else {
-                        lltt::replay(0, RANK_STAMPED ? merge_head : merge_body);
+                        TTI_REPLAY(0, RANK_STAMPED ? merge_head : merge_body, 0, 0);
                     }
                     if constexpr (RANK_STAMPED) {
                         // Right run: mirror direction, upper range -- rank' = (2K-1) - rank,
@@ -1376,9 +1376,9 @@ inline void _bitonic_topk_merge(const int m_iter, const int k) {
                         TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
                         TOPK_SFPENCC_ALL_LANES_ON();
                         if (record_body) {
-                            lltt::record<lltt::Exec>(merge_head, merge_body - merge_head);
+                            TTI_REPLAY(merge_head, merge_body - merge_head, 1, 1);
                         } else {
-                            lltt::replay(merge_head, merge_body - merge_head);
+                            TTI_REPLAY(merge_head, merge_body - merge_head, 0, 0);
                         }
                     }
                     if (record_body) {
