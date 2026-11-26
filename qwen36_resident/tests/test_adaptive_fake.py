@@ -767,3 +767,29 @@ def test_no_promotion_with_a_step_in_flight(monkeypatch):
     for _ in range(4):
         run.step()
     run.check()
+
+
+def test_no_promotion_when_the_plain_state_is_ahead(monkeypatch):
+    """a decode call with no propose (e.g. a host-sampled step) leaves the decode / propose counts one apart, so their
+    equality alone does not mean no step in flight: a promotion also needs the rows adapter's pos_of at the history
+    (the plain state consumed exactly history[:-1]) — else the spec user's position is a token short and dflash's
+    verify asserts (0, 449, 448), as in a served run on 2026-11-25"""
+    m, pf = make(monkeypatch)
+    run = Runner(m)
+    prompts = [[(r * 11 + i * 5) % V for i in range(40)] for r in range(2)]
+    run.arrive([0, 1], prompts)
+    m._calls[0] += 1  # (promotions held off while stepping, as above)
+    for _ in range(2):
+        run.step()
+    m._calls[0] -= 1
+    assert not m.spec_of
+    r0 = sorted(m.live)[0]
+    m.pos_of[r0] += 1  # (its plain state a step ahead of its history: a step still in flight)
+    m._promote()
+    assert r0 not in m.spec_of, "promoted a row whose plain state is ahead of its history"
+    m.pos_of[r0] -= 1
+    m._promote()
+    assert r0 in m.spec_of
+    for _ in range(4):
+        run.step()
+    run.check()

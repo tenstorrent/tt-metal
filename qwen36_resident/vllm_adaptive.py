@@ -444,8 +444,17 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
 
         t0 = time.perf_counter()
         free = self._free_spec()
+        # (and only a row whose plain state consumed exactly history[:-1], which the move assumes — the rows adapter's
+        # pos_of advances at each submitted step, so a step still in flight shows here even when the decode / propose
+        # call counts agree: a decode call with no propose, e.g. a host-sampled step, leaves those counts one apart, and
+        # a promotion then set the spec user's position a token short — dflash.py verify's assert, (0, 449, 448))
         cands = [
-            r for r in sorted(self.live) if r not in self.spec_of and r in self.greedy_ok and r not in self.sampled
+            r
+            for r in sorted(self.live)
+            if r not in self.spec_of
+            and r in self.greedy_ok
+            and r not in self.sampled
+            and self.pos_of.get(r) == len(self.history.get(r) or ()) - 2
         ]
         cands = cands[: len(free)]
         if not cands:
