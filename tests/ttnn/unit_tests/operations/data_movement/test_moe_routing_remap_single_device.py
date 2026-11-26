@@ -120,3 +120,35 @@ def test_moe_routing_remap_docstring_most_experts(dtype, layout, buffer_type, de
     output = ttnn.moe_routing_remap(routing_weights, non_zero_weight_size=5, expert_parallel_size=1, cluster_axis=0)
 
     _check(output, expected, dtype, memory_config)
+
+
+def test_moe_routing_remap_rejects_more_than_65536_experts(device, expect_error):
+    """The ttnn.moe_routing_remap docstring allows at most 65536 experts; 65537 raises instead of wrapping the expert
+    index."""
+    weights = torch.zeros(1, 65537)
+    weights[0, :8] = 1
+    routing_weights = ttnn.from_torch(weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must be at most 65536"):
+        ttnn.moe_routing_remap(routing_weights, 8, 1, 0)
+
+
+def test_moe_routing_remap_rejects_sharded_tensors(device, expect_error):
+    """The ttnn.moe_routing_remap docstring asks for interleaved tensors: a sharded ``memory_config`` and a sharded
+    ``routing_weights_tensor`` raise."""
+    weights = torch.zeros(1, 64)
+    weights[0, :8] = 1
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (1, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    routing_weights = ttnn.from_torch(weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must be interleaved"):
+        ttnn.moe_routing_remap(routing_weights, 8, 1, 0, memory_config=sharded)
+
+    sharded_weights = ttnn.from_torch(
+        weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded
+    )
+    with expect_error(RuntimeError, "must be interleaved"):
+        ttnn.moe_routing_remap(sharded_weights, 8, 1, 0)
