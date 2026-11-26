@@ -110,7 +110,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    if constexpr (unpack_to_dest && MATH_TRANSPOSE_FACES && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    if constexpr (
+                        unpack_to_dest && MATH_TRANSPOSE_FACES && (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE))
                     {
                         // transpose_tile: one DEST loan per tile, holding that tile's unpack and dummy SrcB valid.
                         for (std::uint32_t i = 0; i < tiles_in_block; ++i)
@@ -277,7 +278,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
     const DataFormat math_format       = static_cast<DataFormat>(formats.math);
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+    if constexpr (
+        PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE ||
+        (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && unpack_to_dest && MATH_TRANSPOSE_FACES))
     {
         _llk_math_pack_sync_init_<dest_sync>();
     }
@@ -317,13 +320,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // cannot produce until the preceding SrcB block is consumed.
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    if constexpr (!unpack_to_dest)
+                    if constexpr (unpack_to_dest && MATH_TRANSPOSE_FACES)
                     {
-                        // Match real 32-bit unpack: datacopy consumes and clears
-                        // paired SrcA/SrcB before transpose consumes dummy SrcB.
-                        _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en /*clear_b*/>(tiles_in_block);
+                        // transpose_tile: math lends DEST for each tile's unpack, then consumes its dummy SrcB valid.
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                        {
+                            _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                            _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                            _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1);
+                        }
+                        // The lender moves to the other DEST bank per section; pack is idle, so math takes MATH_PACK back.
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                        ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                     }
-                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tiles_in_block);
+                    else
+                    {
+                        if constexpr (!unpack_to_dest)
+                        {
+                            // Match real 32-bit unpack: datacopy consumes and clears
+                            // paired SrcA/SrcB before transpose consumes dummy SrcB.
+                            _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en /*clear_b*/>(tiles_in_block);
+                        }
+                        _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tiles_in_block);
+                    }
                 }
             }
         }
