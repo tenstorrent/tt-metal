@@ -36,6 +36,20 @@ FIXES_FILE="${FIXES_DIR}/${BASENAME}-${HASH}.yaml"
 # avoiding a repeated PATH scan across thousands of TU invocations.
 if [ "${CTCACHE_S3_OK:-0}" = "1" ] && [ -n "${CTCACHE_BIN:-}" ]; then
     exec "$CTCACHE_BIN" "$CLANG_TIDY" --export-fixes="$FIXES_FILE" "$@"
+elif [ -n "${CTCACHE_HOST:-}" ] && [ -n "${CTCACHE_BIN:-}" ]; then
+    # TorrentCI: the platform renders CTCACHE_HOST (its loopback cache proxy)
+    # only for jobs that opt in with `analysis-cache: ctcache`. ctcache stores
+    # a marker only when clang-tidy exits 0 with empty stdout, so a TU that
+    # exits 0 but prints something is never cached; log one line per TU
+    # ("<exit> <stdout non-empty>") beside the fixes dir, never in it, so the
+    # job can count those TUs.
+    OUT=$(mktemp)
+    rc=0
+    "$CTCACHE_BIN" "$CLANG_TIDY" --export-fixes="$FIXES_FILE" "$@" >"$OUT" || rc=$?
+    cat "$OUT"
+    printf '%d %d\n' "$rc" "$([ -s "$OUT" ] && echo 1 || echo 0)" >>"${FIXES_DIR%/}.ctcache-tus"
+    rm -f "$OUT"
+    exit "$rc"
 else
     exec "$CLANG_TIDY" --export-fixes="$FIXES_FILE" "$@"
 fi

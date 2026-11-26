@@ -26,6 +26,10 @@ jobs:
       - {name: CCACHE_BASEDIR, value: /workspace}
       - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
       - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+      # The image's ctcache client (dockerfile/Dockerfile.python). The wrapper
+      # uses it only when the platform also renders CTCACHE_HOST, which it does
+      # only for `analysis-cache: ctcache` jobs; until then this is inert.
+      - {name: CTCACHE_BIN, value: /opt/venv/bin/clang-tidy-cache}
     # asan-build's CPM source cache: the same dependencies.
     cache:
       key: 'cpm-v1-${ref_name}-${commit_sha}'
@@ -81,6 +85,14 @@ jobs:
             - build_exit=0; cmake --build --preset clang-tidy-fix-parallel || build_exit=$?
             - echo "cmake --build exited with $build_exit"
             - ccache -s
+            # One line per TU the wrapper sent through ctcache: "<exit> <stdout non-empty>".
+            # A TU that exits 0 with output is never cached (ctcache stores clean, silent runs only).
+            - >-
+              if [ -f .build/clang-tidy/fixes.ctcache-tus ]; then
+              awk '{n++} $1 == 0 && $2 == 1 {o++} $1 != 0 {f++}
+              END {printf "ctcache counters: tus=%d exit0_with_output=%d nonzero_exit=%d\n", n, o, f}'
+              .build/clang-tidy/fixes.ctcache-tus;
+              else echo "ctcache counters: off (the platform rendered no CTCACHE_HOST)"; fi
             - uv pip install --quiet PyYAML
             - >-
               violations=$(python3 .github/scripts/clang_tidy_report.py .build/clang-tidy/fixes
