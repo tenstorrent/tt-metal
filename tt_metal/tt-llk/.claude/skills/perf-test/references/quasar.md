@@ -119,8 +119,8 @@ from `max_dest_tiles(dest_acc, dest_sync)`, which halves when `dest_acc=Yes`, so
   per-run-type difference in `INIT` (see `perf-test`, "INIT").
 - `PACK_ISOLATE` runs production's per-section release,
   `_llk_pack_dest_semaphore_section_done_` (pack stall, `ZEROACC` of the
-  packed half, `SEMGET` on MATH_PACK, bank flip), after `_llk_pack_dest_init_`
-  in `INIT`, but not the wait for math. With no math producer, pack posts
+  packed half, `SEMGET` on MATH_PACK, bank flip), with `_llk_pack_dest_init_`
+  before the `INIT` zone, but not the wait for math. With no math producer, pack posts
   MATH_PACK itself before each section done (a stand-in for math's post), so
   the `SEMGET` never underflows.
 - `MATH_ISOLATE` runs math without any Dest hand-over. `UNPACK_ISOLATE`

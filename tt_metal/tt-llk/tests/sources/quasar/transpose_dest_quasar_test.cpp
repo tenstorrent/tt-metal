@@ -310,7 +310,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t output_tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
     {
         _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
     }
@@ -321,7 +321,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
-            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(TENSOR_SHAPE_FROM_PARAMS(params), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);

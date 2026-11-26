@@ -216,7 +216,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
-            _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         }
 
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);

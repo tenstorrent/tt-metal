@@ -280,7 +280,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
     {
         _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
     }
@@ -298,10 +298,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // PACK_ISOLATE packs independently. UNPACK_ISOLATE /
             // MATH_ISOLATE do not pack. None may inherit the L1_TO_L1 wait mask.
             set_up_zero_dest_dvalid_handshake_for_pack();
-            if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
-            {
-                _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
-            }
         }
         PROFILER_SYNC();
     }
