@@ -190,7 +190,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
 
     // cb_in packs input rows back to back, as tilize requires. When a row is not a multiple of the input's NoC read
     // alignment (e.g. 32 B UINT8 rows vs 64 B BH DRAM), a row's L1 slot can sit at a different offset within an
-    // alignment block than its source, so the reader bounces such rows through an aligned scratchpad window.
+    // alignment block than its source, so the reader bounces such rows through aligned scratchpad slots.
     const uint32_t read_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                         ? tt::tt_metal::hal::get_dram_alignment()
                                         : tt::tt_metal::hal::get_l1_alignment();
@@ -398,8 +398,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     ProgramSpec spec;
     spec.name = "permute_rm_blocked_generic";
     if (bounce_misaligned_rows) {
+        // read_alignment bytes to align the base, then one slot per X-block row (see the reader's bounce_slot_bytes).
+        const uint32_t bounce_slot_bytes = tt::round_up(input_cb_page_size + read_alignment - 1, read_alignment);
         spec.scratchpads = {
-            ScratchpadSpec{.unique_id = BOUNCE_SP, .size_per_node = 2 * read_alignment + input_cb_page_size}};
+            ScratchpadSpec{.unique_id = BOUNCE_SP, .size_per_node = read_alignment + x_block_size * bounce_slot_bytes}};
     }
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     spec.dataflow_buffers = {std::move(src_cb), std::move(out_cb), std::move(tilize_cb)};
