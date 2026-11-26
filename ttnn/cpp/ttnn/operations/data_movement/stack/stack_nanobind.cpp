@@ -46,7 +46,7 @@ void bind_stack(nb::module_& mod) {
             ``BFLOAT8_B`` tensors need the new dimension to come before the last two dimensions of the output: `dim`
             from 0 to ``r - 2``, or from ``-(r + 1)`` to -3.
 
-            ``BFLOAT16`` input values must not be NaN when the new dimension is the last dimension of the output
+            ``BFLOAT16`` input values must not be NaN or -0.0 when the new dimension is the last dimension of the output
             (`dim` is ``r`` or -1), or, for TILE inputs, the second-to-last (`dim` is ``r - 1`` or -2).
 
         Memory Support:
