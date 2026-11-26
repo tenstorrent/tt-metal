@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cmath>
 #include <map>
 #include <optional>
 #include <string>
@@ -157,4 +158,10 @@ uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, 
 // True when the op's result at 0 is inf or nan. Run on the zero tile padding, such an op leaves a non-finite value in
 // the lanes that share a BFLOAT8_B / BFLOAT4_B block with real lanes, and that value sets the block's exponent.
 bool is_non_finite_at_zero(const EltwiseUnaryWithParam& op);
+
+// Whether value is an integer that int32 can hold. The range is checked before anything converts: a float-to-int32
+// conversion out of range (1e35, inf) is undefined, and compilers can drop a convert-and-compare round trip.
+inline bool is_int32_integer(float value) {
+    return value >= -2147483648.0f && value < 2147483648.0f && value == std::trunc(value);
+}
 }  // namespace ttnn::operations::unary::utils
