@@ -10,8 +10,8 @@ program cache, so a scalar that is not refreshed on a cache hit fails. Outputs o
 case could not tell a stale scalar from a fresh one.
 
 That the generated code is the same for every value is checked per op on the host by the UnaryRuntimeScalars gtests;
-these cases cover the device path: one scalar, two scalars, a compiled-in param next to a runtime one, a chain, and
-integer dtypes.
+these cases cover the device path: one scalar, two scalars, a compiled-in param next to a runtime one, a chain, the
+dedicated WHERE_TSS and MAC_TSS kernels, and integer dtypes.
 """
 
 import pytest
@@ -75,6 +75,9 @@ CASES = {
     "add_then_mul": [
         [P(Op.ADD_UNARY_SFPU, a), P(Op.MUL_UNARY_SFPU, m)] for a, m in ((1.0, 2.0), (1.0, 3.0), (-2.0, 2.0))
     ],
+    # WHERE_TSS and MAC_TSS run dedicated kernels that read both scalars as packed_scalar1/2.
+    "where_tss": [[P(Op.WHERE_TSS, t, f)] for t, f in ((1.0, 2.0), (3.0, -1.0), (0.5, 4.0))],
+    "mac_tss": [[P(Op.MAC_TSS, a, b)] for a, b in ((2.0, 1.0), (3.0, 1.0), (-0.5, 2.0))],
     "bitwise_and": [[P(Op.BITWISE_AND, v)] for v in (0x0F, 0xF0, 0x3C)],
     "add": [[P(Op.ADD_UNARY_SFPU, v)] for v in (1, 77, 5000)],
 }
@@ -85,7 +88,7 @@ CASES = {
     [
         *[
             (case, dtype)
-            for case in ("relu_max", "hardtanh", "rdiv", "add_then_mul")
+            for case in ("relu_max", "hardtanh", "rdiv", "add_then_mul", "where_tss", "mac_tss")
             for dtype in (ttnn.bfloat16, ttnn.float32)
         ],
         ("bitwise_and", ttnn.int32),
@@ -95,6 +98,8 @@ CASES = {
     ],
 )
 def test_runtime_scalars_reuse_program(device, case, dtype):
+    if dtype == ttnn.uint32 and device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar has no UInt32 data format")
     _check_runtime_scalars(device, dtype, CASES[case])
 
 

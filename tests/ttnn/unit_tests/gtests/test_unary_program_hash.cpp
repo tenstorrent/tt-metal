@@ -15,6 +15,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
@@ -159,6 +160,36 @@ TEST(UnaryRuntimeScalars, CodeIsIndependentOfRuntimeScalars) {
         read_runtime_scalars |= expect_code_independent_of_runtime_scalars<int32_t>(op_type, DataType::INT32);
         read_runtime_scalars |= expect_code_independent_of_runtime_scalars<uint32_t>(op_type, DataType::UINT32);
         EXPECT_TRUE(read_runtime_scalars) << enchantum::to_string(op_type);
+    }
+}
+
+// WHERE_TSS and MAC_TSS read their scalars as packed_scalar1/2 rather than through generated code, so their code must
+// stay the same for every value while the cache key zeroes them.
+TEST(UnaryRuntimeScalars, PackedScalarOpsCodeIsIndependentOfScalars) {
+    const std::array<std::pair<UnaryOpType, std::vector<DataType>>, 2> cases = {{
+        {UnaryOpType::WHERE_TSS, {DataType::BFLOAT16, DataType::FLOAT32, DataType::INT32, DataType::UINT32}},
+        {UnaryOpType::MAC_TSS, {DataType::BFLOAT16, DataType::FLOAT32}},
+    }};
+    for (const auto& [op_type, dtypes] : cases) {
+        EXPECT_TRUE(utils::takes_runtime_scalars(op_type)) << enchantum::to_string(op_type);
+        const EltwiseUnaryWithParam first(op_type, std::vector<float>{1.0f, 3.0f});
+        const EltwiseUnaryWithParam second(op_type, std::vector<float>{2.0f, 5.0f});
+        const auto cache_key = [](const EltwiseUnaryWithParam& op) {
+            const auto projected = utils::without_runtime_scalars(op);
+            const auto params = projected.get_params_if<float>();
+            return std::vector<float>(params.begin(), params.end());
+        };
+        EXPECT_EQ(cache_key(first), cache_key(second)) << enchantum::to_string(op_type);
+        for (const auto dtype : dtypes) {
+            std::vector<uint32_t> first_values;
+            std::vector<uint32_t> second_values;
+            EXPECT_EQ(
+                utils::get_unary_chain_defines({first}, dtype, first_values),
+                utils::get_unary_chain_defines({second}, dtype, second_values))
+                << enchantum::to_string(op_type) << " " << enchantum::to_string(dtype);
+            EXPECT_TRUE(first_values.empty() && second_values.empty())
+                << enchantum::to_string(op_type) << " " << enchantum::to_string(dtype);
+        }
     }
 }
 
