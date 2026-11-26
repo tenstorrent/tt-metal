@@ -1,10 +1,11 @@
 #!/bin/bash
 # usage: build-wait <jobid>   blocks until the build job ends; exit 0 only if it COMPLETED with BUILD_DONE in its log.
 # Run it in the background / with a monitor: a build can take up to an hour, longer than one tool call.
+. "$(dirname "$(readlink -f "$0")")/env.sh"
 J="$1"; [ -n "$J" ] || { echo "usage: build-wait <jobid>"; exit 2; }
 while squeue -j "$J" -h 2>/dev/null | grep -q .; do sleep 20; done
 STATE=$(sacct -j "$J" -X -n -o State%20 | head -1 | tr -d " ")
-LOG=/data/dstoiljkovic/logs/ttmetal-build-$J.out
+LOG=$XRUN_LOGS/ttmetal-build-$J.out
 echo "job $J: $STATE  log: $LOG"
 if [ "$STATE" = "COMPLETED" ] && grep -q BUILD_DONE "$LOG" 2>/dev/null; then echo BUILD_OK; exit 0; fi
 echo BUILD_FAILED; grep -nE "FAILED:|error:|ABORT|No space|what\(\)" "$LOG" 2>/dev/null | tail -5 | cut -c1-200; exit 1

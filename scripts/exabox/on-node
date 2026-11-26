@@ -1,7 +1,20 @@
 #!/bin/bash
 # usage: [NODE_JOB=<jobid>] on-node <command...>
-# Runs a command as a Slurm step inside the reserved node job (no ssh to the node, so no extra watcher threads).
-JOB="${NODE_JOB:-$(squeue -u "$USER" -h -t RUNNING -n lb-a10u28-dstoiljkovic -o %i | head -1)}"
-[ -n "$JOB" ] || { echo "no running reservation job found (set NODE_JOB=<jobid>)"; exit 2; }
+# Runs a command in $XRUN_REPO as a Slurm step inside your reservation job (no ssh to the node, so no extra
+# watcher threads). The job is NODE_JOB if set, else your running job named $XRUN_RESERVATION_NAME if set,
+# else your only running job outside the build partition.
 . "$(dirname "$(readlink -f "$0")")/env.sh"
-exec srun --jobid="$JOB" --overlap -N1 bash -c "cd /data/dstoiljkovic/tt-metal && $*"
+JOB="${NODE_JOB:-}"
+if [ -z "$JOB" ]; then
+  if [ -n "${XRUN_RESERVATION_NAME:-}" ]; then
+    JOBS="$(squeue -u "$USER" -h -t RUNNING -n "$XRUN_RESERVATION_NAME" -o %i 2>/dev/null)"
+  else
+    JOBS="$(squeue -u "$USER" -h -t RUNNING -o '%i %P' 2>/dev/null | awk -v p="$XRUN_BUILD_PARTITION" '$2 != p {print $1}')"
+  fi
+  case "$(echo "$JOBS" | grep -c .)" in
+    0) echo "no running reservation job found (set NODE_JOB=<jobid>)"; exit 2 ;;
+    1) JOB="$JOBS" ;;
+    *) echo "several running jobs ($(echo $JOBS)); set NODE_JOB=<jobid> or XRUN_RESERVATION_NAME=<job name>"; exit 2 ;;
+  esac
+fi
+exec srun --jobid="$JOB" --overlap -N1 bash -c "cd $(printf %q "$XRUN_REPO") && $*"

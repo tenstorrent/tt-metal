@@ -1,8 +1,10 @@
 #!/bin/bash
-# Exabox login node: this machine has no devices; route to the reserved node (see scripts/exabox/README.md).
-if [[ "$(hostname -f 2>/dev/null)" =~ ^slurm-login-0[1-3]\. ]] && [ -z "${XRUN_BYPASS:-}" ] && [ -x "$(dirname "$0")/exabox/xrun" ]; then
-    exec "$(dirname "$0")/exabox/xrun" test "$@"
+# Slurm login node: this machine has no devices; route to the reserved node (see scripts/exabox/README.md).
+_XR="$(dirname "$0")/exabox/xrun"
+if [ -z "${XRUN_BYPASS:-}" ] && [ -x "$_XR" ] && [ "$("$_XR" mode)" = login ]; then
+    exec "$_XR" test "$@"
 fi
+unset _XR
 # run_safe_pytest.sh - Cooperative device-aware test runner
 #
 # Uses flock to serialize device access across multiple agents/terminals.

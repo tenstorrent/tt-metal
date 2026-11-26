@@ -1,4 +1,7 @@
 #!/bin/bash
-# usage: build-metal [branch]   -> submits the build to a cpu_only node and prints the job id
-mkdir -p /data/dstoiljkovic/logs
-sbatch --export=ALL,BRANCH="${1:-}",BUILD_ARGS="${BUILD_ARGS:-}" "$(dirname "$(readlink -f "$0")")/build_tt_metal.sbatch"
+# usage: build-metal [branch]   -> submits the build of $XRUN_REPO to a build node and prints the job id
+. "$(dirname "$(readlink -f "$0")")/env.sh"
+EXTRA=()
+[ -n "$XRUN_BUILD_EXCLUDE" ] && EXTRA+=(--exclude="$XRUN_BUILD_EXCLUDE")
+sbatch --partition="$XRUN_BUILD_PARTITION" "${EXTRA[@]}" --output="$XRUN_LOGS/%x-%j.out" \
+  --export=ALL,BRANCH="${1:-}",BUILD_ARGS="${BUILD_ARGS:-}" "$(dirname "$(readlink -f "$0")")/build_tt_metal.sbatch"
