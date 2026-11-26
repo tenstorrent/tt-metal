@@ -1,0 +1,2 @@
+case                                    base         mr+fraw      au+mr+fraw         au+fraw
+unet_rm_ip_1024x1280           13,184          12,576  -4.6%   12,993  -1.4%   13,137  -0.4%

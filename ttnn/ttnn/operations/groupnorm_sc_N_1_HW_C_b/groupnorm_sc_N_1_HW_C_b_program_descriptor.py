@@ -81,8 +81,6 @@ CB_GROUP_MAP = 12
 CB_GAMMA_ROWS = 13  # expand in1: gamma map (W bf16 tiles), + beta map (W) when beta; reader-built
 CB_LOCAL_PARTIALS = 15
 CB_GATHERED_PARTIALS = 16
-CB_ONES_TILES = 17
-CB_MR_E = 18  # [mean*rstd, e] (Float32, 1-2 pages), the b' expand matmul's in0: a view on the local partials
 CB_STATS_OUT = 19
 CB_GROUP_STATS = 20
 CB_AFFINE_STAGING = 21  # reader-only staging: pilot row (step 0) / affine slices (step B), disjoint in time
@@ -164,14 +162,13 @@ def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta, map
         (D_RM * T if is_rm and not sharded else 0)
         + (0 if tile_shard else input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm))
         + 1  # the constant -1 tile (pass 2)
-        + R  # ones tiles
         + W * (2 + hg + hb)  # map, pilot rows, gamma map, beta map
     )
     # Sharded: TILE packs into the output shard, RM pack-untilizes into it (no output tile ring).
     out_ring = 0 if sharded else output_ring_bytes(T)
     # 2W: alias groups E (sum acc / chan scale) and C (sumsq acc / chan work).
-    # 2R + 7: gathered partials, local partials / [mean*rstd, e] (2), stats out (2), group stats (2), group shift (1).
-    f32_bytes = out_ring + F32_TILE_BYTES * (2 * W + 2 * R + 7)
+    # 2R + 8: gathered partials, local partials (2), stats out (2), group stats [rstd, mean*rstd, e] (3), group shift (1).
+    f32_bytes = out_ring + F32_TILE_BYTES * (2 * W + 2 * R + 8)
     staging = staging_bytes(W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb)
     return BF16_TILE_BYTES * bf16_pages + f32_bytes + staging
 
@@ -698,21 +695,12 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     if hg:
         # The expand matmul's in1: the gamma map, + the beta map when beta (reader-built; beta-only is refused).
         cbs.append(_cb((hg + hb) * W * BF16_TILE_BYTES, cores, [(CB_GAMMA_ROWS, bf16, BF16_TILE_BYTES)]))
-    # Alias group D: local partials (collapse -> gather) / [mean*rstd, e] (expand). The writer pops the partials
-    # after its gather write, before the stats multicast the expand waits for can arrive; the next collapse packs
-    # only after this block's pass 2.
-    cbs.append(
-        _cb(
-            2 * F32_TILE_BYTES,
-            cores,
-            [(CB_LOCAL_PARTIALS, f32, F32_TILE_BYTES), (CB_MR_E, f32, F32_TILE_BYTES)],
-        )
-    )
+    cbs.append(_cb(2 * F32_TILE_BYTES, cores, [(CB_LOCAL_PARTIALS, f32, F32_TILE_BYTES)]))
     # Remote-written landing zones (allocated on every used core so the base address is identical).
     cbs.append(_cb(2 * R * F32_TILE_BYTES, cores, [(CB_GATHERED_PARTIALS, f32, F32_TILE_BYTES)]))
-    cbs.append(_cb(R * BF16_TILE_BYTES, cores, [(CB_ONES_TILES, bf16, BF16_TILE_BYTES)]))
     cbs.append(_cb(2 * F32_TILE_BYTES, cores, [(CB_STATS_OUT, f32, F32_TILE_BYTES)]))
-    cbs.append(_cb(2 * F32_TILE_BYTES, cores, [(CB_GROUP_STATS, f32, F32_TILE_BYTES)]))
+    # [rstd, mean*rstd] (multicast from the unit root) + e = 1.0 (page 2, written once by the writer): the expand's in0.
+    cbs.append(_cb(3 * F32_TILE_BYTES, cores, [(CB_GROUP_STATS, f32, F32_TILE_BYTES)]))
     stage = staging_bytes(W=W, map_period=map_period, is_rm=is_rm, n_affine=hg + hb)
     cbs.append(_cb(stage, cores, [(CB_AFFINE_STAGING, bf16, stage)]))
 
@@ -849,7 +837,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         dst_full_sync_en=False,
     )
     unpack_modes = [ttnn.UnpackToDestMode.Default] * NUM_CB_SLOTS
-    for idx in (CB_SUM_ACC, CB_SUMSQ_ACC, CB_GROUP_SHIFT):
+    for idx in (CB_SUM_ACC, CB_SUMSQ_ACC):  # cb_group_shift is a matmul operand (srcA) now, not a DEST copy
         unpack_modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_config.unpack_to_dest_mode = unpack_modes
     compute_kernels = [

@@ -1,0 +1,4 @@
+{"variant": "base", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981804773981, "rms": 0.0019073255665823358}
+{"variant": "mr+fraw", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981853463668, "rms": 0.001904875210704373, "ndiff": 3589, "maxdiff": 0.03125}
+{"variant": "au+mr+fraw", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981853463668, "rms": 0.001904875210704373, "ndiff": 3589, "maxdiff": 0.03125}
+{"variant": "au+fraw", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981804773981, "rms": 0.0019073255665823358, "ndiff": 0, "maxdiff": 0.0}

@@ -1,0 +1,6 @@
+{"variant": "mr+fraw", "case": "refiner_rm_ip_256x1536", "pcc": 0.9999981558318233, "rms": 0.0019255416821274932}
+{"variant": "base", "case": "refiner_rm_ip_256x1536", "pcc": 0.9999981518335381, "rms": 0.0019275213365171373, "ndiff": 1381, "maxdiff": 0.03125}
+{"variant": "mr+fraw", "case": "unet_rm_ip_1024x640", "pcc": 0.9999983998095017, "rms": 0.0017910825066487406}
+{"variant": "base", "case": "unet_rm_ip_1024x640", "pcc": 0.999998400589602, "rms": 0.0017907956524949788, "ndiff": 1660, "maxdiff": 0.03125}
+{"variant": "mr+fraw", "case": "unet_tile_4096x640_4x8", "pcc": 0.9999982698462656, "rms": 0.0018656562716676667}
+{"variant": "base", "case": "unet_tile_4096x640_4x8", "pcc": 0.9999982703513858, "rms": 0.001865367572178539, "ndiff": 1836, "maxdiff": 0.03125}

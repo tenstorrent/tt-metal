@@ -1,0 +1,4 @@
+{"variant": "base", "case": "c_b160_dram_tile_64x640", "pcc": 0.9999979963507285, "rms": 0.002004576685923444, "cpi": 1, "max_blocks": 6, "R": 1}
+{"variant": "mr+fraw", "case": "c_b160_dram_tile_64x640", "pcc": 0.9999979904651324, "rms": 0.0020047472082656923, "cpi": 1, "max_blocks": 6, "R": 1, "ndiff": 58156, "maxdiff": 0.03125}
+{"variant": "base", "case": "c_b160_dram_rm_64x640_gonly", "pcc": 0.9999969490623375, "rms": 0.0024721834784013764, "cpi": 1, "max_blocks": 3, "R": 1}
+{"variant": "mr+fraw", "case": "c_b160_dram_rm_64x640_gonly", "pcc": 0.9999969468787516, "rms": 0.0024730131044506604, "cpi": 1, "max_blocks": 3, "R": 1, "ndiff": 139662, "maxdiff": 0.03125}

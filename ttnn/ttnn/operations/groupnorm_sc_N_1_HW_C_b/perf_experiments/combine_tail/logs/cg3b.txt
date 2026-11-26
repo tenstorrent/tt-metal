@@ -1,0 +1,2 @@
+case                                    base         mr+fraw            fraw              mr
+g_dram_tile_16384x96_cg3       26,593          26,905  +1.2%   26,461  -0.5%   26,079  -1.9%

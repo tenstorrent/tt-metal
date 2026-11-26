@@ -1,0 +1,7 @@
+{"variant": "mr+fraw", "case": "unet_rm_ip_1024x1280", "pcc": 0.9999981853463668, "rms": 0.001904875210704373, "cpi": 8, "max_blocks": 1, "R": 1}
+{"variant": "mr+fraw", "case": "unet_tile_4096x640_4x8", "pcc": 0.9999982698462656, "rms": 0.0018656562716676667, "cpi": 8, "max_blocks": 1, "R": 1}
+{"variant": "mr+fraw", "case": "refiner_rm_ip_256x1536", "pcc": 0.9999981558318233, "rms": 0.0019255416821274932, "cpi": 8, "max_blocks": 1, "R": 1}
+{"variant": "mr+fraw", "case": "mid_4096x640_rm", "pcc": 0.9999982928102054, "rms": 0.001854487200460437, "cpi": 27, "max_blocks": 1, "R": 1}
+{"variant": "mr+fraw", "case": "g_dram_tile_16384x96_cg3", "pcc": 0.9999978006923845, "rms": 0.0021316766952896304, "cpi": 110, "max_blocks": 1, "R": 4}
+{"variant": "mr+fraw", "case": "b16_dram_tile_1024x1280", "pcc": 0.9999981435635056, "rms": 0.0019322519443806798, "cpi": 3, "max_blocks": 1, "R": 1}
+{"variant": "mr+fraw", "case": "g_rm_ip_1024x1280_none", "pcc": 0.9999975094808479, "rms": 0.002290500978838139, "cpi": 8, "max_blocks": 1, "R": 1}

@@ -1,0 +1,4 @@
+case                                 mr+fraw            base
+refiner_rm_ip_256x1536          9,678           9,964  +3.0%
+unet_rm_ip_1024x640            10,044          10,381  +3.4%
+unet_tile_4096x640_4x8         24,104          24,602  +2.1%

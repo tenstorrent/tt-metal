@@ -67,6 +67,7 @@ void kernel_main() {
 
     constexpr uint32_t T = CHUNK_HT * W;
     constexpr uint32_t STATS_BYTES = 2 * F32_TILE_BYTES;
+    constexpr uint32_t N_STATS = 3;  // cb_group_stats pages: [rstd, mean*rstd, e]; only the first 2 are multicast
 
     uint32_t arg = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
@@ -94,6 +95,14 @@ void kernel_main() {
     const uint32_t row = slot % 32;
     const uint32_t dst_row = pair_base + face_row_lo(row);
 
+    {
+        // e = 1.0 (page 2 of cb_group_stats; only column 0 counts, the rest must be finite). Written once: the CB
+        // moves N_STATS pages per block, so page 2 is always these bytes.
+        volatile tt_l1_ptr uint32_t* e = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(group_stats_base + STATS_BYTES);
+        for (uint32_t i = 0; i < F32_TILE_BYTES / 4; ++i) {
+            e[i] = 0x3F800000u;
+        }
+    }
     if constexpr (IS_ROOT) {
         const uint32_t first_unused = cpi % 32;
         if (first_unused != 0) {
@@ -162,22 +171,22 @@ void kernel_main() {
                 MaybeDeviceZoneScope("w_wait_finalize");
                 cb_wait_front(cb_stats_out, 2);
             }
-            cb_reserve_back(cb_group_stats, 2);
+            cb_reserve_back(cb_group_stats, N_STATS);
             if constexpr (McastT::sender_available) {
                 MaybeDeviceZoneScope("w_mcast_send");
                 mc.sender(noc).send(get_read_ptr(cb_stats_out), group_stats_base, STATS_BYTES);
             }
-            cb_push_back(cb_group_stats, 2);
+            cb_push_back(cb_group_stats, N_STATS);
             cb_pop_front(cb_stats_out, 2);
         } else {
             // Member cores exist only when cpi > 1; their binary carries the receiver pipe only.
-            cb_reserve_back(cb_group_stats, 2);
+            cb_reserve_back(cb_group_stats, N_STATS);
             if constexpr (McastT::receiver_available) {
                 // The combine round trip seen from a member: gather -> root finalize -> mcast.
                 MaybeDeviceZoneScope("w_mcast_recv");
                 mc.receiver(noc).receive();
             }
-            cb_push_back(cb_group_stats, 2);
+            cb_push_back(cb_group_stats, N_STATS);
         }
 
         // ---------------- output: pass-2 order (resident tail first, then the re-read head) ----------------
