@@ -222,3 +222,39 @@ outstanding writes; more writers make that queue deeper at the same bandwidth. T
 copies off the queue for a while, which is why the profiler helps (and helps under local copies too, by the same
 pause). Not yet measured directly; a 64 B host-to-device probe timed against the number of writing banks would confirm
 it.
+
+### Data movement tests under copies and the streaming profiler, 2026-11-25
+
+A subset of `unit_tests_data_movement` on bh-17, 2 runs each (the two agree within about 1% almost everywhere), with
+the legacy device profiler as the measuring backend (L) or the streaming profiler (S), whose drain jobs are a load of
+their own. Copies are SteadyLoad as above. The streaming profiler's zone CSV, minus its two logical-coordinate columns,
+goes through the harness's own collector, and S with no copies matches L within 1%. Figures are bytes per cycle;
+multi-core tests show their slowest core (the harness's figure), the packet-size sweeps their best size. Host rows are
+`ReadShard`/`WriteShard` of 1 MiB in GB/s (`TT_METAL_DM_HOST_BW_ITERS=200`).
+
+| Test | L none | L local | L d2h 1 bank | L d2h 2 banks | L d2h 7 banks | S none | S local | S d2h 1 bank | S d2h 7 banks |
+|---|---|---|---|---|---|---|---|---|---|
+| 603 PCIe read, 1 core | 42.7 | 42.5 | 17.4 | 8.9 | 1.8 | 42.3 | 42.1 | 29.6 | 6.8 |
+| 604 PCIe write sweep | 42.8 | 42.8 | 14.2 | 7.2 | 1.8 | 42.8 | 42.8 | 25.1 | 2.7 |
+| Host ReadShard 1 MiB | 19.6 | 16.5 | 9.3 | 6.3 | 1.8 | 20.3 | 21.6 | 12.6 | 2.7 |
+| Host WriteShard 1 MiB | 29.0 | 28.6 | 15.6 | 9.1 | 2.3 | 28.8 | 26.4 | 18.4 | 4.6 |
+| 84 DRAM sharded read | 61.7 | 58.7 | 46.3 | 48.5 | 49.7 | 61.3 | 60.4 | 55.9 | 49.6 |
+| 112 multi-interleaved read | 2.23 | 0.85 | 0.99 | 1.72 | 0.44 | 2.23 | 1.08 | 1.78 | 2.01 |
+| 114 multi-interleaved write | 1.69 | 0.38 | 0.73 | 1.24 | 1.47 | 1.68 | 0.58 | 1.28 | 1.41 |
+| 50 one-to-one L1 | 62.2 | 62.2 | 40.2 | 51.4 | 59.5 | 62.1 | 62.1 | 53.9 | 58.6 |
+| 51 one-from-one, 300 all-to-all, 320 all-from-all | | within 13% everywhere | | | | | | | |
+
+- Every PCIe path, device-initiated reads and writes as much as host `ReadShard`/`WriteShard`, falls with the number
+  of banks copying to the host at the same total rate (1 bank -59%, 2 banks -79%, 7 banks -96% for a core's PCIe
+  read), the same shape as ResNet's loss. Local copies, which never cross PCIe, leave every PCIe path alone.
+- Local copies at 200 GB/s hit what goes through DRAM from many cores (multi-interleaved read -62%, write -78%) and
+  leave L1-to-L1 traffic alone.
+- The streaming profiler alone costs nothing measurable. With copies, its holds give the PCIe paths back 1.5-4x of
+  what they lose (PCIe read under 7 banks of d2h 1.8 -> 6.8).
+- d2h copies also cost DRAM and some NoC traffic (DRAM sharded read -20%, one-to-one -35% at 1 bank), which the PCIe
+  queueing explanation does not cover; their write path crosses the NoC from each bank to the PCIe tile.
+
+The harness's `PerformanceChecker` stops at the first test below its bounds and reports the lowest bandwidth across a
+test's runs, so under load the saved CSVs were reparsed with its `StatsCollector` without the check. To rerun, from
+the tt-metal root with `python_env` active: `dm_under_load.sh <outdir> 2`, then `python dm_reparse.py <outdir>` and
+`python dm_table.py <outdir>`.
