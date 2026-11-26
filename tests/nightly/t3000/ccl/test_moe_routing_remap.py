@@ -310,6 +310,8 @@ def test_moe_routing_remap_gpt_oss_decode_call_on_2x4(mesh_device):
     assert len(tt_outputs) == len(reference_outputs_torch)
     for test, ref in zip(tt_outputs, reference_outputs_torch):
         assert_with_pcc(ttnn.to_torch(test), ref)
+
+
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_moe_routing_remap_negative_zero_weights(mesh_device, dtype):
