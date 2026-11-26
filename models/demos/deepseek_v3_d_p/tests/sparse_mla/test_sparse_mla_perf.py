@@ -20,6 +20,11 @@ against PERF_TARGETS_MS ± MARGIN[mode] (a case without targets only reports), a
 untraced one (one extra untimed run of each, for triage). GLM-5.3 layers run inside a stage, as in the model, with the
 sparse KV push plan and the next layer's prefix push where the fabric supports the push; one layer is timed.
 
+test_sparse_mla_real_data_perf: GLM-5.3 full and shared layers on a real prompt at 64K-512K (Galaxy 8x4 only), for the
+full layers whose top-k picks the median and the most distinct rows. Unlike zero caches' tied top-k, theirs is the
+model's, which drives the push and sparse SDPA reads. Gated like test_sparse_mla_perf at 64K and 512K; 128K and
+256K only report.
+
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
 GLM-5.3 (last full indexer layer, as a stage) and K3.1 x warm/cold/long x sparse with a BF16 or
 scaled-FP8 cache / dense ring-MLA baseline. Narrow with -k, e.g. -k "glm_5_3 and cold and kv_scaled_fp8".
@@ -40,11 +45,15 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.perf_cases import (
     BOX,
     GATE_CASES,
     LONG_CACHE_TOKENS,
+    REAL_DATA_CASES,
+    REAL_DATA_LAYERS,
     SCENARIO_CACHE_TOKENS,
     WARM_CACHE_TOKENS,
+    RealData,
     build_sparse_perf_case,
     detect_box,
     gate_params,
+    real_data_params,
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -85,11 +94,30 @@ _TARGETS_MS = {
         "glm_5_3-no_indexer": (1.97, 1.92, 2.71, 2.67),
     },
 }
+# Real-data cases (Galaxy 8x4 only), per case and layer: (untraced, traced) at 64k and 512k; 128k and 256k only report.
+# Mean of 4 runs on one Galaxy, scaled onto the CI host by the ratio of the Galaxy targets above to the gate cases
+# measured in the same session (per case and mode, mean of warm and long).
+REAL_GATED = ("64k", "512k")
+_REAL_TARGETS_MS = {
+    "glm_5_3": {
+        "L58-median": (3.19, 2.81, 6.75, 6.35),
+        "L42-max": (3.24, 2.86, 8.34, 7.96),
+    },
+    "glm_5_3-no_indexer": {
+        "L58-median": (2.06, 1.74, 2.14, 1.84),
+        "L42-max": (2.11, 1.79, 3.62, 3.34),
+    },
+}
 PERF_TARGETS_MS = {
     (case, box, scenario, mode): ms
     for box, rows in _TARGETS_MS.items()
     for case, row in rows.items()
     for (scenario, mode), ms in zip([(s, m) for s in SCENARIO_CACHE_TOKENS for m in MODES], row)
+} | {
+    (case, "Galaxy", f"real_{layer}_{data}", mode): ms
+    for case, layers in _REAL_TARGETS_MS.items()
+    for layer, row in layers.items()
+    for (data, mode), ms in zip([(d, m) for d in REAL_GATED for m in MODES], row)
 }
 # Traced output must match the untraced output of the same forward.
 TRACE_PCC = 0.9999
@@ -157,14 +185,33 @@ def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name
         shared_layer=shared_layer,
         sp_axis=BOX.sp_axis,
     )
-    start = cache
+    _measure_and_gate(
+        request,
+        mesh_device,
+        device_params,
+        variant,
+        case,
+        case_name=case_name,
+        label=label,
+        scenario=scenario,
+        cache=cache,
+        weights="random",
+    )
+
+
+def _measure_and_gate(
+    request, mesh_device, device_params, variant, case, *, case_name, label, scenario, cache, weights
+):
+    """Times the chunk after `cache` untraced and traced, reports both, and gates them against PERF_TARGETS_MS (a
+    (case, box, scenario, mode) without a target only reports) and the traced output against the untraced one."""
+    box, chunk = BOX.name, BOX.chunk
     clock = hold_full_cpu_clock()
     request.addfinalizer(clock.restore)
     print(f"{label} host: {clock.status}")
     samples = {}
     eager_repeat, traced_repeat = [], []
-    samples["untraced"], eager_out = _time_untraced(mesh_device, case, start, eager_repeat)
-    samples["traced"], traced_out = _time_traced(mesh_device, case, start, traced_repeat)
+    samples["untraced"], eager_out = _time_untraced(mesh_device, case, cache, eager_repeat)
+    samples["traced"], traced_out = _time_traced(mesh_device, case, cache, traced_repeat)
 
     def min_pcc(xs, ys):
         return min(comp_pcc(a, b, TRACE_PCC)[1] for a, b in zip(xs, ys))
@@ -188,7 +235,7 @@ def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name
                 "fabric": device_params["fabric_config"].name,
                 "fabric_payload_bytes": model_fabric_payload(variant.name),
                 "kv_cache_format": "scaled_fp8",
-                "weights": "random",
+                "weights": weights,
                 "samples_ms": samples[mode],
                 "measured_ms": measured,
                 "target_ms": target,
@@ -205,6 +252,46 @@ def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name
             f"{min_pcc(eager_repeat[0], eager_out):.6f}, replay vs replay {min_pcc(traced_repeat[0], traced_out):.6f})"
         )
     gate(label, results, correctness=correctness)
+
+
+@skip_with_llk_assert("LLK assertions perturb kernel timing")
+@skip_with_watcher("Watcher perturbs kernel timing")
+@pytest.mark.timeout(3600)  # 512k fills its caches with 100 untraced chunk forwards first
+@pytest.mark.parametrize(
+    "mesh_device, device_params, variant, case_name, layer, data",
+    real_data_params(),
+    indirect=["mesh_device", "device_params", "variant"],
+)
+def test_sparse_mla_real_data_perf(request, mesh_device, device_params, variant, case_name, layer, data, config_only):
+    real_data = RealData(REAL_DATA_LAYERS[layer])
+    if reason := real_data.missing():
+        pytest.skip(reason)
+    cache, shared_layer = REAL_DATA_CASES[data], GATE_CASES[case_name][1]
+    label = f"{case_name} sparse MLA {BOX.name} real {layer} {data}"
+    require_high_power(f"{label} perf")
+    case = build_sparse_perf_case(
+        mesh_device,
+        variant,
+        config_only,
+        cache=cache,
+        chunk=BOX.chunk,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        shared_layer=shared_layer,
+        sp_axis=BOX.sp_axis,
+        real_data=real_data,
+    )
+    _measure_and_gate(
+        request,
+        mesh_device,
+        device_params,
+        variant,
+        case,
+        case_name=case_name,
+        label=label,
+        scenario=f"real_{layer}_{data}",
+        cache=cache,
+        weights="random, reusing a pretrained full layer's top-k" if shared_layer else "pretrained",
+    )
 
 
 # ============================================================================

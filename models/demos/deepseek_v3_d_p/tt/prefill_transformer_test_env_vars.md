@@ -216,7 +216,9 @@ Same roles again:
 A large `PREFILL_*` family exists in this module
 (`PREFILL_HF_MODEL`, `PREFILL_TTNN_CACHE`, `PREFILL_NUM_LAYERS`, `PREFILL_SP`/`PREFILL_TP`,
 `PREFILL_STANDALONE_CHUNKED_*`, `PREFILL_CHUNK_SIZE`, `PREFILL_MIGRATE_*`, `PREFILL_STRESS_*`,
-`PREFILL_H2D_*`, `MIGRATION_DONE_FILE`, `DEEPSEEK_PREFILL_TRACE_DIR/PT`, etc.).
+`PREFILL_H2D_*`, `MIGRATION_DONE_FILE`, `DEEPSEEK_PREFILL_TRACE_DIR/PT`, etc.), and
+`TT_PREFILL_DUMP_LAYERS` / `TT_PREFILL_DUMP_DIR` (`LayerOutputCapture` in test_prefill_transformer_chunked.py: a real
+prompt's layer outputs for the sparse MLA real-data perf test).
 
 These belong to the multi-process prefill runner (`tt/runners/*`) and the
 chunked/migration/stress tests — they are **not** read by `test_prefill_transformer.py`,
