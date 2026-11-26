@@ -70,15 +70,20 @@ struct Routing2D {
         const auto& routing_table = l1_routing_table();
         if constexpr (over_domain) {
             if constexpr (VC2_DOMAIN_TRANSLATES) {
-                // the workload's (mesh, chip) as the domain's chip: exit_node_table holds the map here
+                // the workload's (mesh, chip) as the domain's chip: exit_node_table holds the map here. The route is
+                // built from it and the header keeps the workload's: a packet held for a full downstream lands again.
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* const volatile_header = header;
                 ASSERT(volatile_header->mcast_params_64 == 0);
+                const uint32_t workload = volatile_header->dst_start_node_id;
                 const uint32_t base = routing_table.exit_node_table[volatile_header->dst_start_mesh_id];
                 volatile_header->dst_start_node_id =
                     (uint32_t{routing_table.my_mesh_id} << 16) |
                     routing_table.exit_node_table[base + volatile_header->dst_start_chip_id];
+                fabric_set_2d_intermesh_landing_route(header, routing_table, VC2_DOMAIN_Y_SIZE, VC2_DOMAIN_X_SIZE);
+                volatile_header->dst_start_node_id = workload;
+            } else {
+                fabric_set_2d_intermesh_landing_route(header, routing_table, VC2_DOMAIN_Y_SIZE, VC2_DOMAIN_X_SIZE);
             }
-            fabric_set_2d_intermesh_landing_route(header, routing_table, VC2_DOMAIN_Y_SIZE, VC2_DOMAIN_X_SIZE);
         } else {
             fabric_set_2d_intermesh_landing_route(header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
         }
