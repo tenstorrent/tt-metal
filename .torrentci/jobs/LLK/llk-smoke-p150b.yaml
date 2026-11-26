@@ -28,10 +28,6 @@ jobs:
         shell:
           run:
             - mkdir -p "$HOME"
-            - ls -l /dev/tenstorrent/
-            - "nproc; grep -m1 'model name' /proc/cpuinfo; grep -m1 -o -w -E 'avx512f|avx2' /proc/cpuinfo | sort -u | tr '\\n' ' '; echo"
-            - "free -g; df -hT . /tmp; grep -E ' (/|/tmp|/workspace[^ ]*) ' /proc/mounts || true"
-            - python3 -c 'import os; print("cpu_count", os.cpu_count(), "affinity", len(os.sched_getaffinity(0)))'
             - python3 -m venv /tmp/uv && /tmp/uv/bin/pip install -q uv
             - /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv
             - >-
@@ -41,7 +37,6 @@ jobs:
             - >-
               mkdir -p /tmp/ws && t0=$(date +%s) && tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf -
               && echo "copy-in seconds: $(( $(date +%s) - t0 ))"
-            - du -sh /tmp/ws
             - . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh
       - id: group-1
         kind: shell
@@ -76,10 +71,6 @@ jobs:
         shell:
           run:
             - mkdir -p "$HOME"
-            - ls -l /dev/tenstorrent/
-            - "nproc; grep -m1 'model name' /proc/cpuinfo; grep -m1 -o -w -E 'avx512f|avx2' /proc/cpuinfo | sort -u | tr '\\n' ' '; echo"
-            - "free -g; df -hT . /tmp; grep -E ' (/|/tmp|/workspace[^ ]*) ' /proc/mounts || true"
-            - python3 -c 'import os; print("cpu_count", os.cpu_count(), "affinity", len(os.sched_getaffinity(0)))'
             - python3 -m venv /tmp/uv && /tmp/uv/bin/pip install -q uv
             - /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv
             - >-
@@ -89,7 +80,6 @@ jobs:
             - >-
               mkdir -p /tmp/ws && t0=$(date +%s) && tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf -
               && echo "copy-in seconds: $(( $(date +%s) - t0 ))"
-            - du -sh /tmp/ws
             - . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh
       - id: group-2
         kind: shell
@@ -124,10 +114,6 @@ jobs:
         shell:
           run:
             - mkdir -p "$HOME"
-            - ls -l /dev/tenstorrent/
-            - "nproc; grep -m1 'model name' /proc/cpuinfo; grep -m1 -o -w -E 'avx512f|avx2' /proc/cpuinfo | sort -u | tr '\\n' ' '; echo"
-            - "free -g; df -hT . /tmp; grep -E ' (/|/tmp|/workspace[^ ]*) ' /proc/mounts || true"
-            - python3 -c 'import os; print("cpu_count", os.cpu_count(), "affinity", len(os.sched_getaffinity(0)))'
             - python3 -m venv /tmp/uv && /tmp/uv/bin/pip install -q uv
             - /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv
             - >-
@@ -137,7 +123,6 @@ jobs:
             - >-
               mkdir -p /tmp/ws && t0=$(date +%s) && tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf -
               && echo "copy-in seconds: $(( $(date +%s) - t0 ))"
-            - du -sh /tmp/ws
             - . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh
       - id: group-3
         kind: shell

@@ -37,8 +37,6 @@ jobs:
         shell:
           run:
             - mkdir -p "$HOME" "$TT_METAL_CACHE" generated/test_reports
-            - dpkg -s tt-metalium tt-nn tt-ml-validation | grep -e '^Package' -e '^Version'
-            - ls -l /dev/tenstorrent/
             # Log to a file and print the tail, to stay under the output budget.
             - >-
               ulimit -n 4096; rc=0; timeout 45m tt-train/tests/ops/run_smoke_tests.sh
