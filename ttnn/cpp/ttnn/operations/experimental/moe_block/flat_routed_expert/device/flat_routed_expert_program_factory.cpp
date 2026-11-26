@@ -352,6 +352,9 @@ FlatProgramHandles add_flat_routed_expert_program(
     // (MEASUREMENT ONLY: the kernels' wait probes, kernels/zz_probes.hpp)
     // (MEASUREMENT ONLY: FLAT_GU_K_STEPS=0 - the gate/up matmul a matmul_block a K step, the A/B of matmul_block_k)
     options["gate_up_k_steps"] = std::getenv("FLAT_GU_K_STEPS") == nullptr || std::getenv("FLAT_GU_K_STEPS")[0] != '0';
+    // gate/up matmul as custom_mm with a full [32, 32] in0 tile: bit-identical to matmul_block_k, 16.65 vs 18.14
+    // cycles a tile matmul for the 2 x 2 x 8 block alone (GLM-5.3 4x4 M 320 / 480 -2.5% / -7.2%). (FLAT_GU_CMM=0: off)
+    options["gate_up_custom_mm"] = std::getenv("FLAT_GU_CMM") == nullptr || std::getenv("FLAT_GU_CMM")[0] != '0';
     options["gate_up_skip_activation"] =
         std::getenv("FLAT_GU_SKIP_ACT") != nullptr && std::getenv("FLAT_GU_SKIP_ACT")[0] == '1';  // (MEASUREMENT ONLY)
     options["gate_up_w_brisc"] =

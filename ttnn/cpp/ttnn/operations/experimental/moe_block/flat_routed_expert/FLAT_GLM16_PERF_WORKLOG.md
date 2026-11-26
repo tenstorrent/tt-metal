@@ -53,6 +53,31 @@ Side effects elsewhere: 8x4 10240 -10%, DSV4.1-Flash hot -15%, K3 hot -3%; worst
   8 experts a chip and unit splits slower (DSV4.1-Flash up to +7%). Enabled at 16+ experts a chip, whole-tile gate / up
   only (A/B over the 23-case matrix: GLM 4x4 -0.3 .. -4.7%, every other case within +-0.8%).
 
+## custom_mm for the gate/up matmul (full [32, 32] in0 tiles)
+
+Gate/up matmul per core and expert: x [M, 192 K tiles] @ W [192, 2] (one gate/up tile pair a core); K blocks of 8
+tiles (24 an expert), MT 4 row tiles a sub-block, DEST passes of rt 2 x ct 2 (fp32 half sync), so matmul_block_k
+calls of 2 x 2 x 8. Plain custom_mm extended to full [32, 32] in0 tiles + rt_dim (the commit before this one in
+tt-llk / the compute API; bfp in0 needed the SrcB base stepped per tile, not the face counters). Single core,
+cycles a tile matmul: 2x2x8 18.14 -> 16.65, 2x2x24 17.85 -> 16.34, bit-identical. In the op the gate/up matmul
+runs at ~16.8 (was ~19). Default on (FLAT_GU_CMM=0: off).
+
+| GLM 4x4 | matmul_block_k | custom_mm |
+|---|---|---|
+| M 80 | 800.0 | 802.1 |
+| M 160 | 904.2 | 901.7 |
+| M 240 | 987.7 | 979.1 |
+| M 320 | 1093.9 | 1066.8 (-2.5%) |
+| M 320 zipf | 1265.7 | 1215.2 (-4.0%) |
+| M 480 | 1497.6 | 1389.4 (-7.2%) |
+
+GLM 4x4 accuracy + determinism pass. M 320 after it (per-expert probes ZZ-GU-EX/EW/ET): expert 0 107 us (x wait
+35, weight wait 27), experts 1-15 55-64 us each with 4-10 us x wait (ideal math ~51). x wait is uniform over the
+rectangle (head cores too) and every wait is in pass 0: with row passes an x block is freed only in the last pass,
+so the next sub-block's x can only come in behind it and then has to arrive at pass speed (~87 GB/s, the link).
+FLAT_GU_FULL_SYNC=1 / FLAT_NO_ROW_PASSES=1 (one pass): 1164.7 / 1202.6 (worse). Next: x blocks of a pass's rows
+(x_row_tiles), each pass reading and freeing its own (WIP commit after this one, untested).
+
 ## DRAM timeline (zz_hist.hpp: bytes landed a reader in 12 us bins, FLAT_ZZ_PROBES=1)
 
 Per bin: gate/up weights by bank, down weights, x reads (helpers), y writes (bfp8 tiles, down_core_writer). Bytes a
