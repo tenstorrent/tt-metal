@@ -325,7 +325,11 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["gate_up_weight_ring_blocks"] = p.gate_up_weight_ring_blocks;
     options["gate_up_block_bytes"] = p.weight_block_tiles * w_tile;
     options["gate_up_blocks_per_expert"] = p.gate_up_k_blocks;
-    options["gate_up_reads_in_flight"] = FlatRoutedExpertPlan::gate_up_reads_in_flight;
+    // (MEASUREMENT ONLY, FLAT_GU_RIF=n: gate/up weight reads in flight. 1 is faster on GLM-5.3 4x4 - M 80 / 160 / 240
+    // -3.2% / -3.4% / -4.0%, the bank's cores share it more evenly - but GLM-5.3 4x4 M 80 then fails determinism
+    // (call 2, the first row of every expert): not understood, not used)
+    options["gate_up_reads_in_flight"] = std::getenv("FLAT_GU_RIF") ? uint32_t(std::atoi(std::getenv("FLAT_GU_RIF")))
+                                                                    : FlatRoutedExpertPlan::gate_up_reads_in_flight;
     options["gate_up_read_pieces"] = p.gate_up_block_pieces;
     options["gate_up_mailbox_sem"] = 0;
     options["gate_up_grant_sem"] = GRANT;
@@ -729,14 +733,17 @@ FlatProgramHandles add_flat_routed_expert_program(
                     {"h_pieces", H_PIECES},
                     {"out_cb", 16},
                     {"out_tiles", out}}));
-        const auto kw = dm(
-            "down_weight_reader.cpp",
-            cores,
-            DataMovementProcessor::RISCV_1,
-            NOC::NOC_0,
-            with_added(
-                writer_options(down_options, w_widx),
-                {{"down_weight_cb", 1}, {"weight_tile_bytes", w_tile}, {"down_weight_reads_per_barrier", DW_BATCH}}));
+        const auto kw =
+            dm("down_weight_reader.cpp",
+               cores,
+               DataMovementProcessor::RISCV_1,
+               NOC::NOC_0,
+               with_added(
+                   writer_options(down_options, w_widx),
+                   {{"down_weight_cb", 1},
+                    {"weight_tile_bytes", w_tile},
+                    {"down_weight_reads_per_barrier",
+                     std::getenv("FLAT_DW_BATCH") ? uint32_t(std::atoi(std::getenv("FLAT_DW_BATCH"))) : DW_BATCH}}));
         program.kernels[kr].common_runtime_args = gu_xy;  // (the gate/up cores' xy: the same on every down core)
         const auto kc = cp("down_compute.cpp", cores, down_options, cfg.down_fp32, cfg.down_fp32);
         for (uint32_t d : ds) {
