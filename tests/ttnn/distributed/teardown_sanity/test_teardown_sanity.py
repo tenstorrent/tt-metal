@@ -139,33 +139,33 @@ def test_fabric_mismatch():
 
 
 def test_job_timeout():
-    """A send nobody receives under tt-run's --job-timeout 60: at 60 s tt-run sends SIGTERM to every rank (graceful;
+    """A send nobody receives under tt-run's --job-timeout 20: at 20 s tt-run sends SIGTERM to every rank (graceful;
     the force only after the stop grace), both ranks leave their wait, close their mesh, and tt-run returns 241.
 
     The timeout is longer than the ttnn import on a loaded runner, and the row checks that both ranks were past
     open when the clock fired, so it is the deadlock that was ended and not the start-up."""
     r = run_case(
-        "send_no_recv+job_timeout60",
+        "send_no_recv+job_timeout20",
         {"PROBE_COLL": "send_no_recv"},
         DEADLINE_END + 60,
-        cmd=legacy_cmd(ttrun_extra=("--job-timeout", "60")),
+        cmd=legacy_cmd(ttrun_extra=("--job-timeout", "20")),
     )
     ended(r)
     assert r.exit == 241, str(r)
     _both_ranks_were_in_the_collective(r)
     tore_down(r)  # the --job-timeout is graceful: both ranks leave the collective on SIGTERM and close their mesh
-    assert "the job reached its --job-timeout of 60 s: sent SIGTERM to all ranks" in r.log, r.log[-3000:]
+    assert "the job reached its --job-timeout of 20 s: sent SIGTERM to all ranks" in r.log, r.log[-3000:]
     assert "outcome=stopped exit=241" in r.log and "job forced down" not in r.log, r.log[-3000:]
     clean(r)
 
 
 def test_prte_timeout():
-    """The same deadlock under PRRTE's own clock (--mpi-args "--timeout 60"), passed to the launcher unchanged: at
-    60 s PRRTE ends every rank itself (SIGTERM, SIGKILL 250 ms later) and tt-run reports the job as forced, 241.
+    """The same deadlock under PRRTE's own clock (--mpi-args "--timeout 20"), passed to the launcher unchanged: at
+    20 s PRRTE ends every rank itself (SIGTERM, SIGKILL 250 ms later) and tt-run reports the job as forced, 241.
     The SIGTERM still reaches the rank's handler first: both ranks leave their wait and close their mesh inside
     PRRTE's window, so even the launcher's own kill path ends with the devices closed."""
     r = run_case(
-        "send_no_recv+prte_timeout60", {"PROBE_COLL": "send_no_recv"}, DEADLINE_END + 60, cmd=legacy_cmd("--timeout 60")
+        "send_no_recv+prte_timeout20", {"PROBE_COLL": "send_no_recv"}, DEADLINE_END + 20, cmd=legacy_cmd("--timeout 20")
     )
     ended(r)
     assert r.exit == 241, str(r)
@@ -272,7 +272,12 @@ def test_bad_shape():
 
 
 def test_bad_descriptor(tmp_path):
-    r = run_case("conflicting_descriptor", {}, DEADLINE_HANG, cmd=legacy_cmd(mapping=conflict_mapping(tmp_path)))
+    r = run_case(
+        "conflicting_descriptor",
+        {"PROBE_SCENARIO": "mesh_open"},
+        DEADLINE_HANG,
+        cmd=legacy_cmd(mapping=conflict_mapping(tmp_path)),
+    )
     ended(r)
     nonzero(r)
     clean(r)
@@ -284,7 +289,7 @@ def test_barrier_timeout():
     ranks end, nothing left), rather than one rank raising while the peer keeps waiting. Ends well before the hang
     deadline, which proves the operation timeout fired, not the harness kill."""
     r = run_case(
-        "barrier_skip", {"PROBE_COLL": "barrier_skip", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "8"}, DEADLINE_END
+        "barrier_skip", {"PROBE_COLL": "barrier_skip", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "4"}, DEADLINE_END
     )
     ended(r)
     nonzero(r)
@@ -294,7 +299,7 @@ def test_barrier_timeout():
 def test_send_timeout():
     """P16 on send: a send nobody receives gives up at TT_METAL_OPERATION_TIMEOUT_SECONDS and the job is torn down."""
     r = run_case(
-        "send_no_recv", {"PROBE_COLL": "send_no_recv", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "8"}, DEADLINE_END
+        "send_no_recv", {"PROBE_COLL": "send_no_recv", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "4"}, DEADLINE_END
     )
     ended(r)
     nonzero(r)
@@ -377,7 +382,13 @@ def test_sigterm_at_ttrun():
 
 
 def test_solve_rank_killed():
-    r = run_case("solve_rank_killed", {}, DEADLINE_HANG, cmd=solve_cmd(), phase1_kill=True)
+    r = run_case(
+        "solve_rank_killed",
+        {},
+        DEADLINE_HANG,
+        cmd=solve_cmd(),
+        phase1_kill=True,
+    )
     fault_delivered(r)  # the phase-1 (generate_rank_bindings) process really was found and killed
     ended(r)
     nonzero(r)
@@ -406,7 +417,7 @@ def test_survivor_tears_down_ulfm():
             "PROBE_SCENARIO": "sigkill",
             "PROBE_PHASE": "after_open",
             "PROBE_ON_ERROR": "continue",
-            "TT_RUN_STOP_GRACE_S": "10",
+            "TT_RUN_STOP_GRACE_S": "6",
         },
         DEADLINE_HANG,
         cmd=legacy_cmd("--with-ft ulfm"),
@@ -429,7 +440,7 @@ def test_abort_core_dump():
             "PROBE_SCENARIO": "abort",
             "PROBE_PHASE": "after_open",
             "PROBE_CORE_UNLIMITED": "1",
-            "TT_METAL_OPERATION_TIMEOUT_SECONDS": "8",
+            "TT_METAL_OPERATION_TIMEOUT_SECONDS": "4",
         },
         DEADLINE_END,
     )
@@ -445,7 +456,12 @@ def test_abort_core_dump():
 
 def test_unsat_mgd():
     """A quad-galaxy descriptor asked of the dual-galaxy mock: phase 1 cannot place it and must end non-zero."""
-    r = run_case("unsat_mgd", {}, DEADLINE_HANG, cmd=solve_cmd(mgd=MGD_QUAD))
+    r = run_case(
+        "unsat_mgd",
+        {},
+        DEADLINE_HANG,
+        cmd=solve_cmd(mgd=MGD_QUAD),
+    )
     ended(r)
     nonzero(r)
     clean(r)
@@ -486,7 +502,7 @@ def test_allgather_timeout():
     not a local raise that leaves the peers waiting."""
     r = run_case(
         "allgather_missing_peer",
-        {"PROBE_COLL": "allgather_skip", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "8"},
+        {"PROBE_COLL": "allgather_skip", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "4"},
         DEADLINE_END,
     )
     ended(r)
@@ -498,7 +514,7 @@ def test_recv_timeout():
     """P16 on recv: rank 0 waits in recv for a peer that never sends; the per-call timeout cancels it at the deadline
     and tears the job down."""
     r = run_case(
-        "recv_without_send", {"PROBE_COLL": "recv_no_send", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "8"}, DEADLINE_END
+        "recv_without_send", {"PROBE_COLL": "recv_no_send", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "4"}, DEADLINE_END
     )
     ended(r)
     nonzero(r)
@@ -511,7 +527,7 @@ def test_slow_collective_ok():
     would tear this down, so this gate guards against that."""
     r = run_case(
         "slow_collective_ok",
-        {"PROBE_COLL": "barrier_slow", "PROBE_SLOW_S": "2", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "10"},
+        {"PROBE_COLL": "barrier_slow", "PROBE_SLOW_S": "2", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "5"},
         DEADLINE_END,
     )
     ended(r)
@@ -761,7 +777,7 @@ def test_early_exit0_hangs_peer():
     Without a timeout both wait forever (P30, test_hang_without_any_timeout)."""
     r = run_case(
         "exit0_after_open",
-        {"PROBE_SCENARIO": "exit0", "PROBE_PHASE": "after_open", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "8"},
+        {"PROBE_SCENARIO": "exit0", "PROBE_PHASE": "after_open", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "4"},
         DEADLINE_HANG,
     )
     ended(r)
@@ -813,7 +829,11 @@ def test_segfault_stops_the_job():
 
 def test_sigkill_with_mesh_open_stops_the_job():
     """Rank 1 is SIGKILLed with the mesh open (OOM, kill -9): its wrapper stops the job, rank 0 closes; 137."""
-    r = run_case("sigkill_after_open", {"PROBE_SCENARIO": "sigkill", "PROBE_PHASE": "after_open"}, DEADLINE_END)
+    r = run_case(
+        "sigkill_after_open",
+        {"PROBE_SCENARIO": "sigkill", "PROBE_PHASE": "after_open"},
+        DEADLINE_END,
+    )
     ended(r)
     stopped_by(r, 1, "was killed by signal 9 (SIGKILL)", 137)
     tore_down(r, ranks=(0,))
@@ -821,13 +841,12 @@ def test_sigkill_with_mesh_open_stops_the_job():
 
 
 def test_clean_exit_waits_for_a_slow_rank():
-    """Rank 1 has finished and exits 0 while rank 0 is still working 15 s longer (longer than tt-run's old 10 s
-    settle). A rank that exits 0 starts nothing: no stop, no warning, nothing killed; the job waits for rank 0 and
+    """Rank 1 has finished and exits 0 while rank 0 is still working 8 s longer. A rank that exits 0 starts nothing: no stop, no warning, nothing killed; the job waits for rank 0 and
     exits 0."""
-    r = run_case("slow_exit", {"PROBE_SCENARIO": "slow_exit", "PROBE_VICTIM": "0", "PROBE_SLOW_S": "15"}, DEADLINE_END)
+    r = run_case("slow_exit", {"PROBE_SCENARIO": "slow_exit", "PROBE_VICTIM": "0", "PROBE_SLOW_S": "8"}, DEADLINE_END)
     ended(r)
     assert r.exit == 0 and "outcome=clean exit=0" in r.log, str(r)
-    assert r.wall_s >= 15, f"the job ended before the slow rank finished: {r}"
+    assert r.wall_s >= 8, f"the job ended before the slow rank finished: {r}"
     for bad in ("stopping the job", "sent SIGTERM", "job forced down", "a leak", "still running"):
         assert bad not in r.log, f"{bad!r} on a clean job\n{r.log[-3000:]}"
     assert any("[probe r=0 " in line and "main_exit" in line for line in r.log.splitlines()), r.log[-3000:]
@@ -842,7 +861,7 @@ def test_stuck_rank_is_forced(how):
     reset line, and prterun ends the job). tt-run returns 130 either way."""
     env = {"PROBE_SCENARIO": "ignore_sigterm", "PROBE_PHASE": "after_open", "PROBE_COLL": "barrier"}
     if how == "grace_expired":
-        env["TT_RUN_STOP_GRACE_S"] = "6"
+        env["TT_RUN_STOP_GRACE_S"] = "4"
     r = run_case(
         f"stuck_rank_{how}",
         env,

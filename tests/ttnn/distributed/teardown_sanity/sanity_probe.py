@@ -3,14 +3,13 @@
 """The rank program of the teardown sanity: one tt-metal rank on a mock cluster, with one injected fault.
 
 Walks what a real rank walks after tt-run starts it: import ttnn, initialize the distributed context,
-open a MeshDevice on the mock cluster (the control plane's distributed init: discovery barrier, the
-topology mapper's exchange, init_control_plane), one section of collectives on the distributed context,
-close, exit. Exactly one thing goes wrong, chosen by the environment, on the victim rank or in the
+open a MeshDevice on the mock cluster when the row is about the mesh (needs_mesh(): the control plane's
+distributed init, 5-10 s a rank), one section of collectives on the distributed context, close, exit. Exactly one thing goes wrong, chosen by the environment, on the victim rank or in the
 collectives section. Timestamped markers on stdout let the test see how far each rank got and what each
 call returned.
 
 Env (all optional):
-  PROBE_SCENARIO   clean | raise | exit_nofinalize | sigkill | segv | abort | use_before_init | sigint | fork_helper
+  PROBE_SCENARIO   clean | mesh_open | raise | exit_nofinalize | sigkill | segv | abort | use_before_init | sigint | fork_helper
                    segv: SIGSEGV to this rank (a crash; tt-run-rank stops the job in its place)
                    cxx_throw: an uncaught C++ exception (std::runtime_error) on this rank, as a C++ TT_FATAL escapes
                    ignore_sigterm: this rank ignores SIGTERM from here on (a rank stuck in a device wait)
@@ -213,8 +212,25 @@ mark(f"ctx_init rank={RANK} size={SIZE}")
 timed("barrier_init", ttnn.distributed_context_barrier)
 maybe_fault("after_init")
 
+
 # ---- open: the control plane's distributed init ----
-fabric_on = FABRIC_RANK != "-1" and RANK == int(FABRIC_RANK)
+# Only the rows about the mesh itself open one (a mock MeshDevice: the control plane's collectives, the firmware
+# build environment, no kernels; 5-10 s a rank in a launched job). Every other row tests the DistributedContext
+# alone. The open/close markers are emitted either way, so the rows' gating is the same.
+def needs_mesh() -> bool:
+    return (
+        SCENARIO == "mesh_open"  # a clean run whose subject is the open (a descriptor conflict)
+        or PHASE == "in_open"  # a fault inside open_mesh_device
+        or bool(env("PROBE_MESH_SHAPE_VICTIM", ""))  # ranks disagree on the mesh shape
+        or FABRIC_RANK != "-1"  # ranks disagree on the fabric config
+        or COLL in ("recv_bad_rank_peer_barrier", "split_peer_raises")  # a Python failure unwinding into the close
+        or (SCENARIO in ("raise", "sigint", "exit1") and PHASE == "after_open")  # the same
+        or (SCENARIO in ("sigkill", "segv", "abort") and PHASE == "after_open")  # a rank dies with the mesh open
+    )
+
+
+MESH = needs_mesh()
+fabric_on = MESH and FABRIC_RANK != "-1" and RANK == int(FABRIC_RANK)
 if fabric_on:
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
     mark("fabric_config_set FABRIC_2D")
@@ -227,9 +243,9 @@ if is_victim() and env("PROBE_MESH_SHAPE_VICTIM", ""):
 if SCENARIO in ("raise", "abort", "exit_nofinalize") and is_victim() and PHASE == "in_open":
     threading.Timer(0.0, do_fault).start()
 t = time.time()
-mark(f"open_enter shape={rows}x{cols}")
+mark(f"open_enter shape={rows}x{cols}" + ("" if MESH else " (no mesh)"))
 _touch("open_enter")  # the parent waits on this to signal a rank precisely while it is inside open
-mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols))
+mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols)) if MESH else None
 mark(f"open_done dt={time.time() - t:.3f}")
 timed("barrier_open", ttnn.distributed_context_barrier)
 
@@ -309,7 +325,8 @@ try:
 finally:
     t = time.time()
     mark("close_enter")
-    ttnn.close_mesh_device(mesh)
+    if MESH:
+        ttnn.close_mesh_device(mesh)
     mark(f"close_done dt={time.time() - t:.3f}")
 if fabric_on:
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

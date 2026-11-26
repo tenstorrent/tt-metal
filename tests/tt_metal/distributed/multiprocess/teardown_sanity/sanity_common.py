@@ -45,7 +45,7 @@ TTRUN = shutil.which("tt-run") or "tt-run"
 # a row that must end gets this long; a row expected to hang today is given up on sooner, it is the whole budget
 DEADLINE_END = float(os.environ.get("TT_SANITY_DEADLINE", "90"))
 DEADLINE_HANG = float(os.environ.get("TT_SANITY_DEADLINE_HANG", "60"))
-SETTLE_S = 3.0  # after the launcher returns, before the census
+SETTLE_S = 1.0  # after the launcher returns, before the census
 # how long a job may take to start (the Python import alone takes minutes on a loaded host), on top of a row's deadline
 STARTUP_S = float(os.environ.get("TT_SANITY_STARTUP_S", "600"))
 
