@@ -67,6 +67,19 @@ if [[ -n "${TT_METAL_SIMULATOR:-}" ]]; then
     export TT_METAL_DISABLE_SFPLOADMACRO=1
 fi
 
+# --- One chip of a multi-chip host (CHIP=N, hardware only) ---
+# CHIP_TOOL is the path to the host's chip tool (chip.py). With CHIP set, only that chip is locked, reset and
+# visible to tt-metal, so agents on other chips keep running. Without CHIP: the whole host, as before.
+RESET_CMD=(tt-smi -r)
+if [[ -n "${CHIP:-}" && "$SIM_MODE" == false ]]; then
+    : "${CHIP_TOOL:?CHIP is set but CHIP_TOOL (path to chip.py) is not}"
+    CHIP_ENV="$(python3 "$CHIP_TOOL" env --runtime metal)" || exit 3
+    export TT_VISIBLE_DEVICES="$(sed -n 's/^export TT_VISIBLE_DEVICES=//p' <<< "$CHIP_ENV")"
+    LOCK_FILE="$(sed -n 's/^export CHIP_LOCK_FILE=//p' <<< "$CHIP_ENV")"
+    DIRTY_FLAG="${LOCK_FILE%.lock}.metal-dirty"
+    RESET_CMD=(tt-smi -r "$(sed -n 's/^export CHIP_UMD=//p' <<< "$CHIP_ENV")")
+fi
+
 # --- Parse flags ---
 DEV_MODE=false
 FAIL_FAST=true
@@ -142,12 +155,16 @@ if [[ "$SIM_MODE" == false ]]; then
     echo "SAFE_PYTEST: Waiting for device lock..."
     flock 9
     echo "SAFE_PYTEST: Device lock acquired"
+    if [[ -n "${CHIP:-}" ]]; then
+        # resets first if another runtime used the chip last or it needs a reset; records tt-metal's use
+        python3 "$CHIP_TOOL" prepare --runtime metal || exit 3
+    fi
 
     # --- Check if device needs reset from previous hang ---
     if [[ -f "$DIRTY_FLAG" ]]; then
         echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..."
-        if ! tt-smi -r; then
-            echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed"
+        if ! "${RESET_CMD[@]}"; then
+            echo "SAFE_PYTEST_ERROR: Device reset (${RESET_CMD[*]}) failed"
             exit 3
         fi
         rm -f "$DIRTY_FLAG"
@@ -311,7 +328,7 @@ fi
 # assertion errors) and collection errors don't touch the device.
 if [[ "$IS_HANG" == true ]]; then
     echo "SAFE_PYTEST: Resetting device..."
-    if tt-smi -r; then
+    if "${RESET_CMD[@]}"; then
         sleep 2
         rm -f "$DIRTY_FLAG"
         echo "SAFE_PYTEST: Device reset complete"
