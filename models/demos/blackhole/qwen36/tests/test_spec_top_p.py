@@ -7,8 +7,8 @@ The trace runs as the model runs it: a trace of its own over a persistent buffer
 [1, 1, rows, V / TP] bfloat16 (V = 248320), warmed eagerly, captured with program cache misses disallowed, and replayed
 with a fresh sampling plan per verify (the plan of spec_top_p.sampler_params). B = 8 users x T = 4 columns:
 
-* users 0 to 3: peaked rows whose nucleus lies inside the top-32 at their (temperature, top_p): q >= top_p + CERT_EPS
-  on every device, and over N replays each column's draws follow vLLM's full-vocabulary nucleus
+* users 0 to 3: peaked rows whose nucleus lies inside the top-32 at their (temperature, top_p): q equals the float64
+  host value within 1e-4 and q >= top_p + CERT_EPS on every device, and over N replays each column's draws follow vLLM's full-vocabulary nucleus
   (sampling_reference.target_probs with top-k off): Pearson chi-square p-value above P_MIN per column;
 * user 4: rows with a plateau of 200 tokens, whose nucleus reaches far past the top-32: q < top_p, so
   spec_top_p.failed_rows marks every column, and the redo from the logits read back from the devices (the reads the engine makes) follows vLLM's
@@ -70,17 +70,23 @@ def _mapper(mesh):
 
 
 def _row_logits(r, g):
-    """Users 0 to 3 and 5: a peaked row (a few large logits over N(0, 1)); user 4: a plateau of 200 tokens 8 above
-    the rest, whose nucleus holds far more than 32 tokens; the greedy and padding users: N(0, 1)."""
+    """Users 0 to 3 and 5: 12 large logits (30 down to 25) over N(0, 1), a nucleus inside the top-32 at every
+    temperature here; user 4: a plateau of 200 tokens 16 above N(0, 1), a nucleus of far more than 32 tokens; the
+    greedy and padding users: N(0, 1)."""
     u = r // T
     x = torch.randn(VOCAB, generator=g)
     if u == 4:
-        x[torch.randperm(VOCAB, generator=g)[:200]] += 8.0
-        return x.to(torch.bfloat16).float()
-    if u in (0, 1, 2, 3, 5):
-        idx = torch.randperm(VOCAB, generator=g)[:12]
-        x[idx] += torch.linspace(9.0, 4.0, 12)
+        x[torch.randperm(VOCAB, generator=g)[:200]] += 16.0
+    elif u in (0, 1, 2, 3, 5):
+        x[torch.randperm(VOCAB, generator=g)[:12]] += torch.linspace(30.0, 25.0, 12)
     return x.to(torch.bfloat16).float()
+
+
+def _host_q(x, temperature):
+    """q of a row in float64 at the sampler's bfloat16 inverse temperature: the top-32's share of the vocabulary."""
+    t = float(torch.tensor(1.0 / temperature).to(torch.bfloat16))
+    e = torch.exp((x.double() - x.max()) * t)
+    return float(torch.topk(e, 32).values.sum() / e.sum())
 
 
 def _capture(mesh, fn):
@@ -146,6 +152,9 @@ def test_certificate_rows_draw_vllms_nucleus_and_failed_rows_redo_from_the_devic
         q = qs[0]
         fail = failed_rows(q, cert, T)
         logger.info(f"certificate q per user: {[round(float(q[u * T]), 4) for u in range(B)]}")
+        for r in range(5 * T):
+            want = _host_q(logits[r], USERS[r // T][0])
+            assert abs(float(q[r]) - want) < 1e-4, f"row {r}: q {float(q[r])} on the device, {want} on the host"
         assert fail.tolist() == [False] * (4 * T) + [True] * T + [False] * (3 * T)
         for u in range(4):
             temp, _, p = USERS[u]
