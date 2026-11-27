@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regime E (tile_padding_extension), BRISC / NoC1, the only kernel of the regime.
+// Regime E (tile_padding_extension) writer. Runs on BRISC / NoC1 and, for the second part of each
+// core's run, on NCRISC / NoC0, each instance with its own fill page and its own sub-run.
 //
 // Writes c into tile rows [in_row_rem, out_row_end) of the last tile row of every slice of x, in
 // place, as <= 3 face-row-aligned segments per tile sourced from cb_fill_tile at the same byte
@@ -36,6 +37,9 @@ void kernel_main() {
     const uint32_t core_work_begin = get_arg_val<uint32_t>(0);
     const uint32_t core_work_tiles = get_arg_val<uint32_t>(1);
     const uint32_t num_blocks_this_core = get_arg_val<uint32_t>(2);
+    // The run is walked from core_work_begin + walk_offset, wrapping once to core_work_begin, so
+    // that concurrent writers start on different DRAM banks.
+    const uint32_t walk_offset = get_arg_val<uint32_t>(3);
 
     const auto x_accessor = TensorAccessor(x_args, x_addr, tile_bytes);
     const uint32_t fill_addr = get_write_ptr(cb_fill_tile);
@@ -57,9 +61,16 @@ void kernel_main() {
 
     // Work tile w = slice * tensor_col_tiles + tile_col maps to the last tile row of its slice.
     constexpr uint32_t slice_page_stride = tensor_row_tiles * tensor_col_tiles;
-    uint32_t tile_col = core_work_begin % tensor_col_tiles;
-    const uint32_t slice = core_work_begin / tensor_col_tiles;
-    uint32_t page = slice * slice_page_stride + (tensor_row_tiles - 1) * tensor_col_tiles + tile_col;
+    uint32_t w = core_work_begin + walk_offset;
+    uint32_t tile_col = 0;
+    uint32_t page = 0;
+    auto seek = [&](uint32_t to_w) {
+        w = to_w;
+        tile_col = w % tensor_col_tiles;
+        page = (w / tensor_col_tiles) * slice_page_stride + (tensor_row_tiles - 1) * tensor_col_tiles + tile_col;
+    };
+    seek(w);
+    const uint32_t core_work_end = core_work_begin + core_work_tiles;
 
     uint32_t tiles_left = core_work_tiles;
     for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
@@ -71,10 +82,14 @@ void kernel_main() {
             for (uint32_t k = 0; k < num_segments; ++k) {
                 noc_async_write(fill_addr + seg_offset[k], page_noc_addr + seg_offset[k], seg_bytes[k]);
             }
-            ++page;
-            if (++tile_col == tensor_col_tiles) {
-                tile_col = 0;
-                page += slice_page_stride - tensor_col_tiles;
+            if (++w == core_work_end) {
+                seek(core_work_begin);
+            } else {
+                ++page;
+                if (++tile_col == tensor_col_tiles) {
+                    tile_col = 0;
+                    page += slice_page_stride - tensor_col_tiles;
+                }
             }
         }
         tiles_left -= block_extent;

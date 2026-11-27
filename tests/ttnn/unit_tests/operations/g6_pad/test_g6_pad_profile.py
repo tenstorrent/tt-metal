@@ -5,11 +5,20 @@
 examples, for `run_safe_pytest.sh --profile`. Prints the plan each call selected (BB-08).
 Correctness is gated by test_g6_pad.py, not here."""
 
+import os
+
 import pytest
 import torch
 import ttnn
 
 import ttnn.operations.g6_pad as g6
+from ttnn.operations.g6_pad import g6_pad_program_descriptor as g6_descriptors
+
+# Knob sweeps: G6PAD_KNOBS="E_SECOND_RISC_SHARE=(1,3);MIN_CORE_WORK_TILES=2"
+for assignment in filter(None, os.environ.get("G6PAD_KNOBS", "").split(";")):
+    knob, value = assignment.split("=", 1)
+    assert hasattr(g6_descriptors, knob), knob
+    setattr(g6_descriptors, knob, eval(value))
 
 CASES = {
     "p2_258": ((1, 1, 2, 62080), ((0, 0), (0, 0), (0, 30), (0, 0)), 0.0),
@@ -24,7 +33,10 @@ CASES = {
 }
 
 
-@pytest.mark.parametrize("name", list(CASES))
+SELECTED = [n for n in os.environ.get("G6PAD_CASES", "").split(",") if n] or list(CASES)
+
+
+@pytest.mark.parametrize("name", SELECTED)
 def test_g6_pad_profile(device, name):
     shape, padding, value = CASES[name]
     torch_input = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)

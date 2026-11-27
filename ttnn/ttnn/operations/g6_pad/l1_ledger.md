@@ -4,14 +4,15 @@ Schema: `.claude/references/l1-footprint-discipline.md`. Block axis: the folded 
 (extent `block_tiles`); its constituents (slice, tile row, tile column) are folded and accounted
 through `w`; the intra-tile 32×32 is always one whole page.
 
-Inventory: regime E holds **one** CB (the fill bytes it writes from — it reads nothing, so there is
-no data buffer at all). Regime N holds two: the slot the reader lands a tile in is the slot the writer
+Inventory: regime E holds **one fill CB per writer RISC** (the fill bytes it writes from — it reads nothing, so
+there is no data buffer at all): BRISC writes its part of each core's run on NoC1, NCRISC the rest on NoC0. Regime N holds two: the slot the reader lands a tile in is the slot the writer
 sends it from, and boundary pages are assembled in place in that slot, so the read → assemble →
 store phase boundaries are not storage.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_fill_tile` (E) | `1` — constant, independent of every block axis | ≤3 segment ranges of one tile (≤ `1024e - 16e` bytes); the page is the allocation quantum | `{w: streams (every touched tile's writes source the same bytes); slice/tile row/tile col: folded into w; intra-tile: one page}` | x's dtype, raw (DM only, never through DEST; audit 2 n/a: no compute, no `fp32_dest_acc_en`) | writer | writer (self-owned scratch) | whole kernel | nothing to share with: the only CB of the regime. A smaller-than-a-page buffer would need a source offset different from the destination offset; one page keeps `src_off == dst_off` (alignment congruence for free) at ≤ 4 KB |
+| `cb_fill_tile_second_risc` (E) | `1` — constant | same as `cb_fill_tile` (E) | same as `cb_fill_tile` (E) | x's dtype, raw | NCRISC E writer | NCRISC E writer (self-owned scratch) | whole kernel; allocated only on cores whose run has an NCRISC part (`E_SECOND_RISC_SHARE` gives it `floor(n * 2 / 5)` tiles) | cannot share with `cb_fill_tile`: a second RISC filling the same scratch would make one scratch with two writers; one extra page (≤ 4 KB) keeps single ownership |
 | `cb_work_tiles` (N) | `block_tiles * buffer_depth` | `block_tiles` (one block reserved by the reader or held by the writer); `2 * block_tiles` when `buffer_depth = 2` | `{w: spans → block_tiles; slice/tile row/tile col: folded into w; intra-tile: one tile per page}` | x's dtype, raw (DM only; audit 2 n/a) | reader | writer | whole kernel | cannot share with `cb_fill_tile`: concurrent lifetime (the fill page must stay intact while slots cycle every block) and different producer (ownership invariant). Capacity = live set; slots of fill-only tiles stay unused because slot `i` ↔ block tile `i` keeps the push/pop quantum nominal (ring-wrap invariant) — at most `block_tiles` idle pages, ≤ 48 KB in INPUTS |
 | `cb_fill_tile` (N) | `1` — constant | 1 | `{w: streams (read once per fill-only tile, never rewritten); slice/tile row/tile col: folded; intra-tile: one page}` | x's dtype, raw | writer | writer (self-owned scratch) | whole kernel; allocated only when the call has fill-only tiles (`has_fill_only_tiles`) | cannot alias into `cb_work_tiles`: concurrent lifetime, and a slot would need a copy per fill-only tile; the reader masks with `fill_l1_range` directly and needs no fill page |
 
@@ -29,7 +30,7 @@ store phase boundaries are not storage.
 
 | Regime | Expression | Scales with | Bound |
 |---|---|---|---|
-| E | `tile_bytes` | nothing (constant) | 2048 / 4096 B for every shape |
+| E | `tile_bytes * (1 + has_second_risc_part)` | nothing (constant) | ≤ 4096 / 8192 B for every shape |
 | N | `tile_bytes * (block_tiles * buffer_depth + has_fill_only_tiles)` | `block_tiles` (block knob), `buffer_depth` (depth knob); fill term constant | `≤ tile_bytes * (2 * block_tiles_cap + 1) ≤ 1347776` B for every shape — BB-05 met by construction, no host refusal needed |
 
 Phase 0 examples (110-core grid of the probed device, illustration): p2–p4 (E) 2048 B; case 247 (E) 2048 B; case 65 (N,

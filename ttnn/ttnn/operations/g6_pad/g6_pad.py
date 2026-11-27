@@ -258,7 +258,8 @@ def g6_pad(input_tensor: ttnn.Tensor, padding, value: float = 0.0) -> ttnn.Tenso
 
     if _is_extension(input_tensor.layout, in_shape, highs):
         descriptor, plan, roles = _descriptor_for("E", input_tensor, None, in_shape, highs, out_shape)
-        descriptor.kernels[roles["extension_writer"]].common_runtime_args = [input_tensor.buffer_address(), fill_bits]
+        for kernel_index in roles.values():
+            descriptor.kernels[kernel_index].common_runtime_args = [input_tensor.buffer_address(), fill_bits]
         _last_plan.clear()
         _last_plan.update(plan)
         ttnn.generic_op([input_tensor], descriptor)

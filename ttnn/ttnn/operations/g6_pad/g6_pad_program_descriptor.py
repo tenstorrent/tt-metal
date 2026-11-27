@@ -36,13 +36,21 @@ N_BLOCK_TILES_LIMIT = None
 N_MULTI_BLOCK_BUFFER_DEPTH = 2
 # Most E write segments per touched tile (rows [a, b) of a tile split by faces, merged).
 MAX_EXTENSION_SEGMENTS = 3
+# Share (numerator, denominator) of each core's E run written by NCRISC on NoC0; BRISC writes the
+# rest on NoC1. Two NoCs give the writes two disjoint link sets. (0, 1) = BRISC only.
+E_SECOND_RISC_SHARE = (2, 5)
+# E: start each writer's walk on DRAM bank (writer ordinal % num_banks) instead of all writers
+# starting on the banks their run offsets happen to hit. Off: p2-p4 are bound by aggregate DRAM
+# write bandwidth at 110 cores x 2 RISCs, where the stagger measured flat.
+BANK_STAGGER = False
 
 CB_WORK_TILES = 0
 CB_FILL_TILE = 1
+CB_FILL_TILE_SECOND_RISC = 2
 
 
 def knobs_key():
-    return (MIN_CORE_WORK_TILES, N_BLOCK_TILES_LIMIT, N_MULTI_BLOCK_BUFFER_DEPTH)
+    return (MIN_CORE_WORK_TILES, N_BLOCK_TILES_LIMIT, N_MULTI_BLOCK_BUFFER_DEPTH, E_SECOND_RISC_SHARE, BANK_STAGGER)
 
 
 def _ceil_div(a, b):
@@ -139,22 +147,22 @@ def row_band_segments(first_row, end_row, elem_bytes):
 def _split_work(grid, num_work_tiles):
     """Contiguous runs of `w` over a row-major prefix of the grid.
 
-    Returns (all_cores, [(core, core_work_begin, core_work_tiles)], max_core_work_tiles)."""
+    Returns (all_cores, [(core, core_work_begin, core_work_tiles)], max_core_work_tiles,
+    [(group core range set, core_work_tiles)])."""
     num_cores_cap = min(grid.x * grid.y, _ceil_div(num_work_tiles, MIN_CORE_WORK_TILES))
     candidate_cores = ttnn.num_cores_to_corerangeset(num_cores_cap, grid, True)
     _, all_cores, core_group_1, core_group_2, group_1_tiles, group_2_tiles = ttnn.split_work_to_cores(
         candidate_cores, num_work_tiles, True
     )
+    groups = [(g, n) for g, n in ((core_group_1, group_1_tiles), (core_group_2, group_2_tiles)) if n > 0]
     assignment = []
     core_work_begin = 0
-    for group, core_work_tiles in ((core_group_1, group_1_tiles), (core_group_2, group_2_tiles)):
-        if core_work_tiles == 0:
-            continue
+    for group, core_work_tiles in groups:
         for core in ttnn.corerange_to_cores(group, None, True):
             assignment.append((core, core_work_begin, core_work_tiles))
             core_work_begin += core_work_tiles
     assert core_work_begin == num_work_tiles, (core_work_begin, num_work_tiles)
-    return all_cores, assignment, group_1_tiles
+    return all_cores, assignment, group_1_tiles, groups
 
 
 def _cb(index, num_pages, geom, dtype, core_ranges):
@@ -170,60 +178,123 @@ def _cb(index, num_pages, geom, dtype, core_ranges):
 # ------------------------------------------------------------------------------------------------
 
 
+def _second_risc_tiles(core_work_tiles):
+    numerator, denominator = E_SECOND_RISC_SHARE
+    return core_work_tiles * numerator // denominator
+
+
+def _extension_page(geom, w):
+    slice_index, tile_col = divmod(w, geom.in_col_tiles)
+    return (slice_index * geom.in_row_tiles + geom.in_row_tiles - 1) * geom.in_col_tiles + tile_col
+
+
+def _walk_offset(geom, run_begin, run_tiles, target_bank, num_banks):
+    """Offset into [run_begin, run_begin + run_tiles) whose page sits on target_bank (interleaved
+    page p lives on bank p % num_banks); 0 when stagger is off or no page of the run matches."""
+    if not BANK_STAGGER:
+        return 0
+    for offset in range(min(run_tiles, num_banks)):
+        if _extension_page(geom, run_begin + offset) % num_banks == target_bank:
+            return offset
+    return 0
+
+
 def build_extension_descriptor(geom, input_tensor, grid):
-    """Returns (descriptor, plan, {role: kernel index}). Common RT args of the writer:
-    [x_addr, fill_bits]."""
+    """Returns (descriptor, plan, {role: kernel index}). Common RT args of every E writer:
+    [x_addr, fill_bits].
+
+    Each core's run is split in two contiguous parts: BRISC (NoC1) writes the first, NCRISC
+    (NoC0) the second, each from its own fill page. Both run the same kernel source."""
     num_work_tiles = geom.out_tensor_slices * geom.out_col_tiles
-    all_cores, assignment, max_core_work_tiles = _split_work(grid, num_work_tiles)
-    block_tiles = max_core_work_tiles
+    all_cores, assignment, max_core_work_tiles, groups = _split_work(grid, num_work_tiles)
 
     segments = row_band_segments(geom.in_row_rem, geom.out_row_end, geom.elem_bytes)
     assert 1 <= len(segments) <= MAX_EXTENSION_SEGMENTS, segments
     for offset, length in segments:
         assert offset % NOC_WRITE_ALIGNMENT == 0 and length % NOC_WRITE_ALIGNMENT == 0, segments
     padded_segments = list(segments) + [(0, 0)] * (MAX_EXTENSION_SEGMENTS - len(segments))
+    accessor_ct_args = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
 
-    ct_args = [
-        CB_FILL_TILE,
-        geom.tile_bytes,
-        geom.elem_bytes,
-        geom.in_row_tiles,
-        geom.in_col_tiles,
-        block_tiles,
-        len(segments),
-    ]
-    for offset, length in padded_segments:
-        ct_args += [offset, length]
-    ct_args += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    def writer_kernel(cb_fill_index, block_tiles, core_ranges, rt_args, config):
+        ct_args = [
+            cb_fill_index,
+            geom.tile_bytes,
+            geom.elem_bytes,
+            geom.in_row_tiles,
+            geom.in_col_tiles,
+            block_tiles,
+            len(segments),
+        ]
+        for offset, length in padded_segments:
+            ct_args += [offset, length]
+        ct_args += accessor_ct_args
+        return ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "g6_pad_extension_writer.cpp"),
+            core_ranges=core_ranges,
+            compile_time_args=ct_args,
+            runtime_args=rt_args,
+            common_runtime_args=[0, 0],
+            config=config,
+        )
 
-    rt_args = ttnn.RuntimeArgs()
-    for core, core_work_begin, core_work_tiles in assignment:
-        num_blocks_this_core = _ceil_div(core_work_tiles, block_tiles)
-        rt_args[core.x][core.y] = [core_work_begin, core_work_tiles, num_blocks_this_core]
+    # BRISC part: [begin, begin + n - second); NCRISC part: the remaining `second` tiles.
+    first_block_tiles = max_core_work_tiles - _second_risc_tiles(max_core_work_tiles)
+    second_block_tiles = _second_risc_tiles(max_core_work_tiles)
+    num_banks = ttnn.device.get_memory_view(input_tensor.device(), input_tensor.memory_config().buffer_type).num_banks
+    first_rt_args = ttnn.RuntimeArgs()
+    second_rt_args = ttnn.RuntimeArgs()
+    for ordinal, (core, core_work_begin, core_work_tiles) in enumerate(assignment):
+        second_tiles = _second_risc_tiles(core_work_tiles)
+        first_tiles = core_work_tiles - second_tiles
+        first_rt_args[core.x][core.y] = [
+            core_work_begin,
+            first_tiles,
+            _ceil_div(first_tiles, first_block_tiles),
+            _walk_offset(geom, core_work_begin, first_tiles, ordinal % num_banks, num_banks),
+        ]
+        if second_tiles > 0:
+            second_begin = core_work_begin + first_tiles
+            second_rt_args[core.x][core.y] = [
+                second_begin,
+                second_tiles,
+                _ceil_div(second_tiles, second_block_tiles),
+                _walk_offset(geom, second_begin, second_tiles, (ordinal + num_banks // 2) % num_banks, num_banks),
+            ]
 
-    writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "g6_pad_extension_writer.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=ct_args,
-        runtime_args=rt_args,
-        common_runtime_args=[0, 0],
-        config=ttnn.WriterConfigDescriptor(),
-    )
-    descriptor = ttnn.ProgramDescriptor(
-        kernels=[writer],
-        semaphores=[],
-        cbs=[_cb(CB_FILL_TILE, 1, geom, input_tensor.dtype, all_cores)],
-    )
+    kernels = [writer_kernel(CB_FILL_TILE, first_block_tiles, all_cores, first_rt_args, ttnn.WriterConfigDescriptor())]
+    cbs = [_cb(CB_FILL_TILE, 1, geom, input_tensor.dtype, all_cores)]
+    roles = {"extension_writer": 0}
+    plan_roles = {str(all_cores): "extension_writer (BRISC, NoC1)"}
+    second_groups = [group for group, core_work_tiles in groups if _second_risc_tiles(core_work_tiles) > 0]
+    if second_groups:
+        second_cores = second_groups[0]
+        for group in second_groups[1:]:
+            second_cores = second_cores.merge(group)
+        kernels.append(
+            writer_kernel(
+                CB_FILL_TILE_SECOND_RISC,
+                second_block_tiles,
+                second_cores,
+                second_rt_args,
+                ttnn.ReaderConfigDescriptor(),
+            )
+        )
+        cbs.append(_cb(CB_FILL_TILE_SECOND_RISC, 1, geom, input_tensor.dtype, second_cores))
+        roles["extension_writer_second_risc"] = 1
+        plan_roles[str(second_cores)] = "extension_writer (NCRISC, NoC0)"
+
+    descriptor = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
     plan = {
         "regime": "E",
         "num_work_tiles": num_work_tiles,
         "num_cores": len(assignment),
-        "block_tiles": block_tiles,
+        "block_tiles": max_core_work_tiles,
+        "block_tiles_per_risc": (first_block_tiles, second_block_tiles),
         "buffer_depth": None,
         "segments": segments,
-        "roles": {str(all_cores): "extension_writer"},
+        "roles": plan_roles,
     }
-    return descriptor, plan, {"extension_writer": 0}
+    return descriptor, plan, roles
 
 
 # ------------------------------------------------------------------------------------------------
@@ -282,7 +353,7 @@ def build_new_storage_descriptor(geom, input_tensor, output_tensor, grid):
     """Returns (descriptor, plan, {role: kernel index}). Common RT args: reader [x_addr, fill_bits],
     writer [out_addr, fill_bits]."""
     num_work_tiles = geom.out_tensor_slices * geom.out_row_tiles * geom.out_col_tiles
-    all_cores, assignment, max_core_work_tiles = _split_work(grid, num_work_tiles)
+    all_cores, assignment, max_core_work_tiles, _ = _split_work(grid, num_work_tiles)
     block_tiles, buffer_depth = new_storage_block(geom, max_core_work_tiles)
     has_fill_only_tiles = count_input_backed(geom, num_work_tiles) < num_work_tiles
 
