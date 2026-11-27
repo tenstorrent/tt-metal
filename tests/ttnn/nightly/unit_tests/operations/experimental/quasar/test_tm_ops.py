@@ -10,11 +10,14 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from tests.ttnn.utils_for_testing import assert_reshape as _assert_reshape
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 # Every test in this module takes the function-scoped `device` fixture without
 # parametrizing device_params, so the device is opened once per module rather than
 # once per test.
 pytestmark = pytest.mark.use_module_device
+
+_SKIP_BLOCK_FLOAT_ON_QUASAR = pytest.mark.skipif(is_quasar(), reason="Quasar has no Bfp8_b/Bfp4_b formats")
 
 _LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
 _LAYOUT_IDS = ["TILE", "RM"]
@@ -163,6 +166,21 @@ def test_quasar_slice_rm_block_sharded_subaligned_shard_row_out(device):
     _run_quasar_slice((1, 1, 64, 96), (0, 0, 0, 0), (1, 1, 32, 96), (1, 1, 1, 1), L1_INTERLEAVED, omc, device)
 
 
+def _nd_shard_config(shard_shape, ncores):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, ncores // 8 - 1))})
+    spec = ttnn.NdShardSpec(
+        ttnn.Shape(shard_shape), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, spec)
+
+
+# An ND-sharded input with 8-byte shard rows reaches the device op, which stages it through interleaved memory
+# (#64020). The output is DRAM because quasar slice misreads ND inputs it does not stage (#64473).
+def test_quasar_slice_rm_nd_sharded_subaligned_shard_row_in(device):
+    imc = _nd_shard_config([1, 1, 8, 4], 16)
+    _run_quasar_slice((1, 1, 64, 64), (0, 0, 0, 0), (1, 1, 32, 64), (1, 1, 1, 1), imc, ttnn.DRAM_MEMORY_CONFIG, device)
+
+
 def test_quasar_slice_tile_tensor_args(device):
     shape = (1, 1, 64, 64)
     starts, ends = [0, 0, 32, 0], [1, 1, 64, 64]
@@ -243,6 +261,7 @@ def test_quasar_slice_preallocated_output_dtype_mismatch_fatal(device, expect_er
 
 # The fallback returns BFLOAT16 for a BFLOAT8_B input (untilize promotes it); a preallocated output may
 # match either that result or the input.
+@_SKIP_BLOCK_FLOAT_ON_QUASAR
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16_out", "bf8_out"])
 def test_quasar_slice_bfloat8_b_unaligned_begin_preallocated_output(device, out_dtype):
     torch.manual_seed(0)
@@ -923,7 +942,17 @@ def test_quasar_s2i_oversized_grid(device, memory_layout, layout, shape, shard_s
     assert_equal(torch_guard, ttnn.to_torch(guard))
 
 
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8_b"])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        pytest.param(ttnn.bfloat16, id="bf16"),
+        pytest.param(
+            ttnn.bfloat8_b,
+            id="bf8_b",
+            marks=_SKIP_BLOCK_FLOAT_ON_QUASAR,
+        ),
+    ],
+)
 def test_quasar_untilize_with_unpadding_l1_output_reserved_in_budget(device, input_dtype):
     """The L1 budget must reserve the op's own interleaved-L1 output and size it (and the output DFB)
     by the output dtype. The prim emits BFLOAT16 for a BFLOAT8_B input.
@@ -1080,7 +1109,7 @@ def test_quasar_untilize_with_unpadding_rejects_rank_mismatch(device, shape, out
         ttnn.experimental.quasar.untilize_with_unpadding(ttnn_in, output_end)
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, pytest.param(ttnn.bfloat8_b, marks=_SKIP_BLOCK_FLOAT_ON_QUASAR)])
 def test_quasar_untilize_l1_output_reserved_in_budget(device, dtype):
     tile_dim, out_tile_bytes = 32, 2048  # untilize emits bfloat16 for both input dtypes
     in_tile_bytes = 2048 if dtype == ttnn.bfloat16 else 1088
@@ -1267,6 +1296,21 @@ def test_quasar_transpose_rm_bw_sharded_subaligned_shard_row(shape, dim0, dim1, 
         assert tuple(actual.shape) == tuple(requested.shape), f"Expected shard {requested.shape}, got {actual.shape}"
         assert actual.grid == requested.grid, f"Expected grid {requested.grid}, got {actual.grid}"
     assert_with_ulp(expected_result=x.transpose(dim0, dim1), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# An ND-sharded input with 8-byte shard rows: the device op stages it through interleaved memory (#64020).
+def test_quasar_transpose_rm_nd_sharded_subaligned_shard_row_in(device):
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, 32, 64), dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=_nd_shard_config([1, 1, 32, 4], 16),
+    )
+    out = ttnn.experimental.quasar.transpose(tt_in, 2, 3)
+    assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
 
 
 # Sub-aligned RM input staged through L1 interleaved must still seed a specless sharded output from

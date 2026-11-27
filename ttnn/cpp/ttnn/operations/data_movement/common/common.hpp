@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <concepts>
+#include <functional>
+#include <optional>
+#include <type_traits>
 #include <utility>
 
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
@@ -319,8 +323,10 @@ uint32_t get_pending_l1_output_reservation(
 // for `input_dtype`: block floats cannot exist in ROW_MAJOR, so a BFLOAT8_B input is written out as
 // BFLOAT16. The device operations' compute_output_specs and the composites' L1 accounting (output
 // tile size, pending L1 output reservation) must all agree on this, so they all go through here.
+// MX tiles (Quasar) are expanded to Float16_b by the unpacker and cannot exist in ROW_MAJOR either, so they
+// also come out as BFLOAT16.
 constexpr DataType untilize_output_dtype(DataType input_dtype) {
-    return input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
+    return (input_dtype == DataType::BFLOAT8_B || tt::tt_metal::is_mx(input_dtype)) ? DataType::BFLOAT16 : input_dtype;
 }
 
 ttnn::Tensor pad_to_tile_vol(
@@ -509,6 +515,95 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_byte
 // the tensor width, so for RM one page is a whole tensor row, which `noc_async_*_sharded` moves in a
 // single transfer of the size the caller asks for, using the page size only as the distance between pages.
 bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size);
+
+// True for a ROW_MAJOR tensor whose rows each span several pages (BLOCK or WIDTH sharding, or an ND shard
+// narrower than the row) when one page, a shard row, is not a multiple of the buffer alignment. That is
+// has_subaligned_shard_row for the tensor's actual spec: it also covers ND shard specs, and it is false for a
+// shard as wide as the row, which `noc_async_*_sharded` move in one transfer.
+bool has_subaligned_split_row(const tt::tt_metal::TensorSpec& spec);
+
+// True for a ROW_MAJOR tensor whose rows each span several pages when the buffer folds the shard's outer
+// dims into the row's pages, e.g. a BLOCK/WIDTH shard one row high on two or more shard columns. The folded
+// page grid no longer says how many pages a row has, so `noc_async_*_sharded` place every row after the first
+// at the wrong pages (#67023).
+bool has_folded_split_row(const tt::tt_metal::TensorSpec& spec);
+
+// True when `noc_async_*_sharded` can't move this tensor's rows correctly: has_subaligned_split_row or
+// has_folded_split_row.
+bool needs_interleaved_row_staging(const tt::tt_metal::TensorSpec& spec);
+
+namespace detail {
+
+// False when no ROW_MAJOR tensor with this config has rows that span several pages. An ND shard spec can be
+// HEIGHT sharding for one shape and split the rows of the output an operation reindexes it to, so it counts.
+bool may_split_rows(const tt::tt_metal::MemoryConfig& memory_config);
+
+using ShardRowLaunch = std::function<Tensor(const Tensor&, const std::optional<tt::tt_metal::MemoryConfig>&)>;
+
+Tensor launch_through_interleaved(
+    const Tensor& input,
+    const tt::tt_metal::TensorSpec& output_spec,
+    const std::optional<Tensor>& preallocated_output,
+    const ShardRowLaunch& launch,
+    bool stage_input,
+    bool stage_output);
+
+}  // namespace detail
+
+// compute_output_spec() returns the spec the operation gives its output.
+template <typename F>
+concept OutputSpecFn = std::invocable<F&> && std::convertible_to<std::invoke_result_t<F&>, tt::tt_metal::TensorSpec>;
+
+// launch(input, explicit_output_config) launches the operation and returns its output.
+template <typename F>
+concept ShardRowLaunchFn =
+    std::invocable<F&, const Tensor&, const std::optional<tt::tt_metal::MemoryConfig>&> &&
+    std::convertible_to<
+        std::invoke_result_t<F&, const Tensor&, const std::optional<tt::tt_metal::MemoryConfig>&>,
+        Tensor>;
+
+// Launches a device operation whose kernels move ROW_MAJOR rows with `noc_async_{read,write}_sharded` so that
+// it never gets a tensor whose rows those helpers can't move (needs_interleaved_row_staging). They move a full
+// aligned page per shard row, so for a sub-aligned split row they drop or misplace part of every row (#58402
+// item 17), and on a folded page grid they misplace every row after the first (#67023). Such an input is copied
+// to interleaved memory of its buffer type first. Such an output is written to interleaved memory of its buffer
+// type, then copied into the memory config the operation would have given it, or into `preallocated_output`.
+// - `output_memory_config`: the output config the operation was given. Only used to skip the check cheaply.
+// - `compute_output_spec()`: the spec the operation gives its output for `input` when there is no
+//   `preallocated_output`.
+// - `launch(input, std::nullopt)` launches the operation as requested. `launch(input, config)` launches it with
+//   `config` as its explicit output config and without the preallocated output.
+template <OutputSpecFn ComputeOutputSpec, ShardRowLaunchFn Launch>
+Tensor launch_with_aligned_shard_rows(
+    const Tensor& input,
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    const std::optional<Tensor>& preallocated_output,
+    ComputeOutputSpec&& compute_output_spec,
+    Launch&& launch) {
+    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+        (detail::may_split_rows(input.memory_config()) || detail::may_split_rows(output_memory_config) ||
+         (preallocated_output.has_value() && detail::may_split_rows(preallocated_output->memory_config())))) {
+        // Some operations' compute_output_specs ignore a preallocated output, which is what they write to.
+        const tt::tt_metal::TensorSpec output_spec =
+            preallocated_output.has_value() ? preallocated_output->tensor_spec() : compute_output_spec();
+        const bool stage_input = needs_interleaved_row_staging(input.tensor_spec());
+        const bool stage_output = needs_interleaved_row_staging(output_spec);
+        if (stage_input || stage_output) {
+            return detail::launch_through_interleaved(
+                input, output_spec, preallocated_output, launch, stage_input, stage_output);
+        }
+    }
+    // Skipping the output-spec check when neither config may split rows relies on no operation deriving a WIDTH,
+    // BLOCK or ND output from a HEIGHT or interleaved config. None of the wrapped operations does: they keep the
+    // given config's layout and reindex into ND only from an ND config. Fold passes its input's config here as a
+    // stand-in for the output config it synthesizes, which keeps the input's layout. The output is checked in every
+    // build, so an operation that breaks this fails instead of returning wrong values.
+    Tensor output = launch(input, std::nullopt);
+    TT_FATAL(
+        input.layout() != tt::tt_metal::Layout::ROW_MAJOR || !needs_interleaved_row_staging(output.tensor_spec()),
+        "An operation launched without staging produced a row-major output with sub-aligned or folded split rows");
+    return output;
+}
 
 bool codegen_supported_on_arch(const ttnn::Tensor& input);
 

@@ -9,6 +9,7 @@
 #include <optional>
 #include <tuple>
 #include <utility>
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
@@ -17,15 +18,16 @@
 
 #include <bit>
 #include <numeric>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -1003,6 +1005,113 @@ bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, u
                                    : tt::tt_metal::hal::get_l1_alignment();
     return (memory_config.shard_spec()->shape[1] * element_size) % alignment != 0;
 }
+
+namespace detail {
+
+bool may_split_rows(const tt::tt_metal::MemoryConfig& memory_config) {
+    return memory_config.is_sharded() &&
+           (memory_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+            memory_config.created_with_nd_shard_spec());
+}
+
+}  // namespace detail
+
+bool has_subaligned_split_row(const tt::tt_metal::TensorSpec& spec) {
+    const auto& memory_config = spec.memory_config();
+    if (spec.layout() != tt::tt_metal::Layout::ROW_MAJOR || !detail::may_split_rows(memory_config)) {
+        return false;
+    }
+    // The row-major page is one shard row; the same precedence as the page shape (page_config.cpp).
+    uint32_t shard_width = 0;
+    if (memory_config.shard_spec().has_value()) {
+        shard_width = memory_config.shard_spec()->shape[1];
+    } else if (memory_config.nd_shard_spec().has_value()) {
+        shard_width = memory_config.nd_shard_spec()->shard_shape[-1];
+    } else {
+        return false;
+    }
+    if (shard_width >= spec.padded_shape()[-1]) {
+        return false;
+    }
+    const uint32_t alignment = (memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM)
+                                   ? tt::tt_metal::hal::get_dram_alignment()
+                                   : tt::tt_metal::hal::get_l1_alignment();
+    return spec.compute_page_size_bytes() % alignment != 0;
+}
+
+bool has_folded_split_row(const tt::tt_metal::TensorSpec& spec) {
+    const auto& memory_config = spec.memory_config();
+    if (spec.layout() != tt::tt_metal::Layout::ROW_MAJOR || !detail::may_split_rows(memory_config)) {
+        return false;
+    }
+    uint32_t shard_width = 0;
+    if (memory_config.shard_spec().has_value()) {
+        shard_width = memory_config.shard_spec()->shape[1];
+    } else if (memory_config.nd_shard_spec().has_value()) {
+        shard_width = memory_config.nd_shard_spec()->shard_shape[-1];
+    } else {
+        return false;
+    }
+    const uint32_t row_width = spec.padded_shape()[-1];
+    if (shard_width == 0 || shard_width >= row_width) {
+        return false;
+    }
+    // The page grid the buffer builds (TensorLayout::compute_buffer_sharding_args): from the ND shard spec when the
+    // config has one, with ROW_MAJOR pages one row high and one shard wide.
+    tt::tt_metal::Shape tensor_pages = spec.padded_shape();
+    if (tensor_pages.rank() < 2) {
+        tensor_pages = tt::tt_metal::Shape({1, row_width});
+    }
+    tt::tt_metal::Shape shard_pages = memory_config.nd_shard_spec().has_value()
+                                          ? memory_config.nd_shard_spec()->shard_shape
+                                          : tt::tt_metal::Shape(memory_config.shard_spec()->shape);
+    if (shard_pages.rank() > tensor_pages.rank()) {
+        return false;
+    }
+    const uint32_t pages_per_row = tt::div_up(row_width, shard_width);
+    tensor_pages[-1] = pages_per_row;
+    shard_pages[-1] = tt::div_up(shard_pages[-1], shard_width);
+    // The buffer squeezes its page grid; when a one-page-high shard dim is merged into the row's pages, the
+    // innermost dim no longer holds one row's pages and the kernels can't recover the row-to-page stride.
+    const auto squeezed = tt::tt_metal::detail::squeeze_shape_ranks(tensor_pages, shard_pages);
+    return squeezed.first[-1] != pages_per_row;
+}
+
+bool needs_interleaved_row_staging(const tt::tt_metal::TensorSpec& spec) {
+    return has_subaligned_split_row(spec) || has_folded_split_row(spec);
+}
+
+namespace detail {
+
+Tensor launch_through_interleaved(
+    const Tensor& input,
+    const tt::tt_metal::TensorSpec& output_spec,
+    const std::optional<Tensor>& preallocated_output,
+    const ShardRowLaunch& launch,
+    bool stage_input,
+    bool stage_output) {
+    const auto interleaved = [](const tt::tt_metal::MemoryConfig& memory_config) {
+        return tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type());
+    };
+    const Tensor moved_input = stage_input ? ttnn::to_memory_config(input, interleaved(input.memory_config())) : input;
+    const auto& output_memory_config = output_spec.memory_config();
+    if (!stage_output && preallocated_output.has_value()) {
+        // Only the input needed staging: write straight into the preallocated output.
+        return launch(moved_input, std::nullopt);
+    }
+    if (!stage_output) {
+        // The output config was derived from the input before it moved; the moved input would derive another.
+        Tensor output = launch(moved_input, output_memory_config);
+        if (is_functionally_same_memory_config(output.memory_config(), output_memory_config)) {
+            return output;
+        }
+        return ttnn::to_memory_config(output, output_memory_config);
+    }
+    const Tensor staged = launch(moved_input, interleaved(output_memory_config));
+    return ttnn::to_memory_config(staged, output_memory_config, std::nullopt, preallocated_output);
+}
+
+}  // namespace detail
 
 void push_buffer_set(
     tt::tt_metal::ProgramDescriptor& desc,

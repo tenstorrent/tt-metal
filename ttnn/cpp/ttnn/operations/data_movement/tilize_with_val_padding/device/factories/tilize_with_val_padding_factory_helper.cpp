@@ -6,9 +6,9 @@
 
 #include <bit>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/float8.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 using namespace tt::tt_metal;

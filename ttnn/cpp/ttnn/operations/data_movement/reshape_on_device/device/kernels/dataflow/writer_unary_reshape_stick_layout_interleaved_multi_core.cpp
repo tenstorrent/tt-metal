@@ -6,39 +6,37 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(1);
-    uint32_t num_read_per_barrier = get_arg_val<uint32_t>(2);
-    uint32_t num_sticks_per_cb_push = get_arg_val<uint32_t>(3);
-    uint32_t start_id = get_arg_val<uint32_t>(4);
+    uint32_t num_sticks_per_core_read = get_arg(args::num_sticks_per_core_read);
+    uint32_t num_read_per_barrier = get_arg(args::num_read_per_barrier);
+    uint32_t num_sticks_per_dfb_push = get_arg(args::num_sticks_per_dfb_push);
+    uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t new_stick_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr uint32_t new_stick_size = get_arg(args::new_stick_size);
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer dfb_output(dfb_out0);
+    DataflowBuffer dfb_output(dfb::out0);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {
-        dfb_output.wait_front(num_sticks_per_cb_push);
-        uint32_t cb_read_offset = 0;
+        dfb_output.wait_front(num_sticks_per_dfb_push);
+        uint32_t dfb_read_offset = 0;
 
         for (uint32_t i = 0; i < num_read_per_barrier; ++i) {
             noc.async_write(
                 dfb_output,
                 s,
                 new_stick_size,
-                {.offset_bytes = cb_read_offset},
+                {.offset_bytes = dfb_read_offset},
                 {.page_id = i_stick, .offset_bytes = 0});
-            cb_read_offset += new_stick_size;
+            dfb_read_offset += new_stick_size;
             i_stick += 1;
         }
         noc.async_write_barrier();
-        dfb_output.pop_front(num_sticks_per_cb_push);
+        dfb_output.pop_front(num_sticks_per_dfb_push);
     }
 }

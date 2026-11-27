@@ -753,6 +753,8 @@ def test_l1_interleaved_everything(device):
     ids=["bfp8_inputs", "bfp8_weights_only", "bfp8_out"],
 )
 def test_bfp8(device, in0_dtype, in1_dtype, out_dtype, rtol):
+    if _on_quasar(device):
+        pytest.skip("Quasar has no Bfp8_b format")
     M, K, N = 4 * TILE, 8 * TILE, 4 * TILE
     torch.manual_seed(9)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
@@ -931,6 +933,8 @@ def test_bias_with_fp32_dest_acc_is_added_separately(device):
 
 
 def test_fused_bias_bfp8(device):
+    if _on_quasar(device):
+        pytest.skip("Quasar has no Bfp8_b format")
     M, K, N = 2 * TILE, 2 * TILE, 4 * TILE
     torch.manual_seed(7)
     a, b, bias = _randn(1, 1, M, K), _randn(1, 1, K, N), _bias_row(N)
@@ -1634,19 +1638,8 @@ def test_auto_config_batched_a_unbatched_b(device, sharded_out):
         ((1, 320, 32), (1, 32, 64), (320, 64), False),
         ((1, 128, 32), (1, 32, 128), (128, 128), False),
         ((16, 32, 32), (32, 512), (512, 512), False),
-        # fp32 accumulation exercises the fp32 branch of the subblock search (h * w <= 4). It cannot run until the
-        # Quasar 2D factory sets unpack_modes for the fp32 partials DFB (#61018); strict so it flags when fixed.
-        pytest.param(
-            (1, 128, 32),
-            (1, 32, 128),
-            (128, 128),
-            True,
-            marks=pytest.mark.xfail(
-                reason="#61018: fp32_dest_acc_en fails in the 2D factory (partials DFB has no unpack_modes entry)",
-                raises=RuntimeError,
-                strict=True,
-            ),
-        ),
+        # fp32 accumulation takes the fp32 branch of the subblock search (h * w <= 4).
+        ((1, 128, 32), (1, 32, 128), (128, 128), True),
     ],
     ids=[
         "400x400",

@@ -15,8 +15,8 @@
 #include <iostream>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -275,10 +275,10 @@ TEST(RelationalUnaryScalarWord, FloatScalarIsConvertedByValue) {
         const std::array<float, 1> params = {scalar};
         return get_defines<float>(op, std::span<const float>(params), "0", "0", dtype).at("SFPU_OP_FUNC_0");
     };
-    EXPECT_EQ(func(UnaryOpType::UNARY_NE, 7.0f, DataType::INT32), "unary_ne_tile_int32(0, 7u);");
-    EXPECT_EQ(func(UnaryOpType::UNARY_EQ, -5.0f, DataType::INT32), "unary_eq_tile_int32(0, 4294967291u);");
-    EXPECT_EQ(func(UnaryOpType::UNARY_GT, 2.0f, DataType::INT32), "unary_gt_tile_int32(0, 2);");
-    EXPECT_EQ(func(UnaryOpType::UNARY_LT, 2.0f, DataType::INT32), "unary_lt_tile_int32(0, 2);");
+    EXPECT_EQ(func(UnaryOpType::UNARY_NE, 7.0f, DataType::INT32), "unary_ne_tile_int32(0, 0x7u);");
+    EXPECT_EQ(func(UnaryOpType::UNARY_EQ, -5.0f, DataType::INT32), "unary_eq_tile_int32(0, 0xfffffffbu);");
+    EXPECT_EQ(func(UnaryOpType::UNARY_GT, 2.0f, DataType::INT32), "unary_gt_tile_int32(0, 0x2u);");
+    EXPECT_EQ(func(UnaryOpType::UNARY_LT, 2.0f, DataType::INT32), "unary_lt_tile_int32(0, 0x2u);");
 }
 
 TEST(RelationalUnaryScalarWord, UnrepresentableFloatScalarIsRejected) {
@@ -289,7 +289,7 @@ TEST(RelationalUnaryScalarWord, UnrepresentableFloatScalarIsRejected) {
         const std::array<float, 1> params = {scalar};
         get_defines<float>(op, std::span<const float>(params), "0", "0", dtype);
     };
-    constexpr const char* reason = "cannot represent the scalar";
+    constexpr const char* reason = "on INT32 data requires an integer scalar in [-2147483648, 2147483647], got";
     EXPECT_THAT(
         [&] { emit(UnaryOpType::UNARY_GE, 2.5f, DataType::INT32); },
         ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
@@ -318,7 +318,7 @@ TEST(RelationalUnaryScalarWord, Uint32ScalarOutsideInt32RangeIsRejected) {
         const std::array<T, 1> params = {scalar};
         get_defines<T>(op, std::span<const T>(params), "0", "0", dtype);
     };
-    constexpr const char* reason = "cannot represent the scalar";
+    constexpr const char* reason = "on INT32 data requires an integer scalar in [-2147483648, 2147483647], got";
     EXPECT_THAT(
         [&] { emit(UnaryOpType::UNARY_LT, std::uint32_t{2147483648u}, DataType::INT32); },
         ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
@@ -334,7 +334,7 @@ TEST(RelationalUnaryScalarWord, Uint32ScalarOutsideInt32RangeIsRejected) {
         get_defines<std::uint32_t>(
             UnaryOpType::UNARY_GT, std::span<const std::uint32_t>(five), "0", "0", DataType::INT32)
             .at("SFPU_OP_FUNC_0"),
-        "unary_gt_tile_int32(0, 5);");
+        "unary_gt_tile_int32(0, 0x5u);");
 }
 
 // Host side only: an op placed after a TYPECAST is generated for the cast's target dtype. A relational
@@ -357,7 +357,7 @@ TEST(RelationalUnaryScalarWord, OpsAfterTypecastUseTheCastDtype) {
     EXPECT_EQ(func_1(int_to_float_gt_half, DataType::INT32), "unary_gt_tile(0, 0x3f000000u);");
     const std::vector<EltwiseUnaryWithParam> float_to_int_gt = {
         typecast(DataType::FLOAT32, DataType::INT32), EltwiseUnaryWithParam(UnaryOpType::UNARY_GT, 2.0f)};
-    EXPECT_EQ(func_1(float_to_int_gt, DataType::FLOAT32), "unary_gt_tile_int32(0, 2);");
+    EXPECT_EQ(func_1(float_to_int_gt, DataType::FLOAT32), "unary_gt_tile_int32(0, 0x2u);");
     // The TYPECAST parameters may be int32_t or uint32_t backed; the cast's dtype is read from the active type.
     const std::vector<EltwiseUnaryWithParam> int_params_gt_half = {
         EltwiseUnaryWithParam(
@@ -397,7 +397,7 @@ TEST_P(RelationalUnaryRejectFixture, UnrepresentableFloatScalarIsRejected) {
     const auto p = GetParam();
     auto t = make_int_tensor(*device_, p.dtype, 32, 32, 1);
     const float s = p.scalar_param;
-    constexpr const char* reason = "cannot represent the scalar";
+    constexpr const char* reason = "on INT32 data requires an integer scalar in [-2147483648, 2147483647], got";
 
     EXPECT_THAT([&] { ttnn::eq_unary(t, s); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
     EXPECT_THAT([&] { ttnn::ne_unary(t, s); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
@@ -409,6 +409,10 @@ TEST_P(RelationalUnaryRejectFixture, UnrepresentableFloatScalarIsRejected) {
     EXPECT_THAT([&] { ttnn::ne(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
     EXPECT_THAT([&] { ttnn::gt(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
     EXPECT_THAT([&] { ttnn::lt(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    // ge, le and eq with the scalar first subtract the tensor from the scalar (RSUB) and compare to zero.
+    EXPECT_THAT([&] { ttnn::ge(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT([&] { ttnn::le(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
+    EXPECT_THAT([&] { ttnn::eq(s, t); }, ThrowsMessage<std::runtime_error>(HasSubstr(reason)));
 }
 
 INSTANTIATE_TEST_SUITE_P(

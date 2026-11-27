@@ -18,9 +18,9 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include <nanobind/stl/vector.h>
 
@@ -444,6 +444,11 @@ void py_module(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): the optional output memory configuration.
             sub_core_grids (ttnn.CoreRangeSet, optional): the optional sub core grids. Defaults to `None`.
             pad_value (float, optional): the optional pad value. Defaults to `0.0f`.
+
+        Note:
+            MX formats (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``; Quasar only) exist in TILE layout only. Converting an
+            MX tensor to ROW_MAJOR_LAYOUT returns a BFLOAT16 tensor (``dtype``, if given, must be ``ttnn.bfloat16``). A
+            ROW_MAJOR BFLOAT16 or FLOAT32 tensor is converted to an MX TILE tensor by passing the MX format as ``dtype``.
 
         Returns:
             ttnn.Tensor: the tensor with the requested layout.

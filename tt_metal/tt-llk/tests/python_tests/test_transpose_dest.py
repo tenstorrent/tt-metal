@@ -9,17 +9,19 @@ from helpers.golden_generators import (
     TransposeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, DestSync, Transpose
+from helpers.llk_params import DestAccumulation, DestSync, PerfRunType, Transpose
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
+    LOOP_FACTOR,
     MATH_TRANSPOSE_FACES,
     NUM_BLOCKS,
     NUM_FACES,
@@ -71,34 +73,44 @@ def transpose_dest_float_unpack_to_dest(formats, math_transpose_faces):
     return [True]
 
 
-@parametrize(
+TRANSPOSE_DEST_FLOAT_SWEEP = dict(
     formats=TRANSPOSE_DEST_FLOAT_FORMATS,
     dest_acc=transpose_dest_float_dest_acc,
     math_transpose_faces=transpose_dest_float_math_transpose_faces,
     unpack_to_dest=transpose_dest_float_unpack_to_dest,
 )
+
+TRANSPOSE_DEST_FLOAT_PERF_SWEEP = {
+    **TRANSPOSE_DEST_FLOAT_SWEEP,
+    "formats": input_output_formats([DataFormat.Float16_b]),
+}
+
+TRANSPOSE_DEST_INT_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Int32], same=True),
+    dest_acc=[DestAccumulation.Yes],
+    math_transpose_faces=[Transpose.Yes, Transpose.No],
+    unpack_to_dest=[True],
+)
+
+
+@parametrize(**TRANSPOSE_DEST_FLOAT_SWEEP)
 def test_transpose_dest_float(
     formats,
     dest_acc,
     math_transpose_faces,
     unpack_to_dest,
 ):
-    transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest)
+    _run_transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest)
 
 
-@parametrize(
-    formats=input_output_formats([DataFormat.Int32], same=True),
-    dest_acc=[DestAccumulation.Yes],
-    math_transpose_faces=[Transpose.Yes, Transpose.No],
-    unpack_to_dest=[True],
-)
+@parametrize(**TRANSPOSE_DEST_INT_SWEEP)
 def test_transpose_dest_int(
     formats,
     dest_acc,
     math_transpose_faces,
     unpack_to_dest,
 ):
-    transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest)
+    _run_transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest)
 
 
 @parametrize(
@@ -222,7 +234,21 @@ def transpose_dest_int8(
     assert torch.equal(res_tensor, golden_tensor), "Assert against golden failed"
 
 
-def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
+def _run_transpose_dest(
+    formats,
+    dest_acc,
+    math_transpose_faces,
+    unpack_to_dest,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
 
     # Exercise four destination-register usages. FP32 destination modes hold four
     # tiles per half, while 16-bit modes hold eight tiles per half.
@@ -232,41 +258,50 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
         else [256, 128]
     )
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
-
-    # Generate custom test input stimuli to check if zeroflag fix works
-    if formats.input_format == DataFormat.Int32:
-        src_A = (torch.arange(0, src_A.numel()) * 10000).reshape_as(src_A)
-        src_B = (torch.arange(0, src_B.numel()) * 10000).reshape_as(src_B)
-
-    generate_datacopy_golden = get_golden_generator(DataCopyGolden)
-    datacopy_tensor = generate_datacopy_golden(
-        src_A, formats.output_format, num_faces=4, input_dimensions=input_dimensions
-    )
-
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        t_matrix = get_golden_generator(TransposeGolden)
-        golden_tensor = t_matrix.transpose_faces_multi_tile(
-            datacopy_tensor,
-            formats.output_format,
-            num_tiles=tile_cnt_A,
-            tilize=False,
-            input_dimensions=input_dimensions,
-        )
-        golden_tensor = t_matrix.transpose_within_faces_multi_tile(
-            golden_tensor,
-            formats.output_format,
-            num_tiles=tile_cnt_A,
-            untilize=False,
-            input_dimensions=input_dimensions,
+    src_A = src_B = None
+    golden_tensor = None
+    if is_perf:
+        tile_cnt_A = tile_cnt_B = (
+            input_dimensions[0]
+            * input_dimensions[1]
+            // (TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1])
         )
     else:
-        golden_tensor = []
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=input_dimensions,
+        )
+
+        # Generate custom test input stimuli to check if zeroflag fix works.
+        if formats.input_format == DataFormat.Int32:
+            src_A = (torch.arange(0, src_A.numel()) * 10000).reshape_as(src_A)
+            src_B = (torch.arange(0, src_B.numel()) * 10000).reshape_as(src_B)
+
+        generate_datacopy_golden = get_golden_generator(DataCopyGolden)
+        datacopy_tensor = generate_datacopy_golden(
+            src_A, formats.output_format, num_faces=4, input_dimensions=input_dimensions
+        )
+
+        if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+            t_matrix = get_golden_generator(TransposeGolden)
+            golden_tensor = t_matrix.transpose_faces_multi_tile(
+                datacopy_tensor,
+                formats.output_format,
+                num_tiles=tile_cnt_A,
+                tilize=False,
+                input_dimensions=input_dimensions,
+            )
+            golden_tensor = t_matrix.transpose_within_faces_multi_tile(
+                golden_tensor,
+                formats.output_format,
+                num_tiles=tile_cnt_A,
+                untilize=False,
+                input_dimensions=input_dimensions,
+            )
+        else:
+            golden_tensor = []
 
     # Partition the tiles into destination-register banks. transpose is applied
     # per tile, so the block size only controls how many tiles share a DEST bank
@@ -279,43 +314,49 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
         TILE_DIMENSIONS,
     )
 
-    configuration = TestConfig(
-        "sources/transpose_dest_test.cpp",
-        formats,
-        templates=[
-            # The kernel only syncs Dest in halves.
-            DEST_SYNC(DestSync.Half),
-            MATH_TRANSPOSE_FACES(math_transpose_faces),
-        ],
-        runtimes=[
-            # When math_transpose_faces is False, unpack_transpose_faces should be Transpose.Yes
-            # This mode is supported only for 32-bit dest
-            UNPACK_TRANS_FACES(
-                Transpose.Yes
-                if (
-                    dest_acc == DestAccumulation.Yes
-                    and math_transpose_faces == Transpose.No
-                )
-                else Transpose.No
-            ),
-            TILE_COUNT(tile_cnt_A),
-            NUM_FACES(),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
+    unpack_transpose_faces = (
+        Transpose.Yes
+        if dest_acc == DestAccumulation.Yes and math_transpose_faces == Transpose.No
+        else Transpose.No
     )
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=dict(
+            test_name="sources/transpose_dest_test.cpp",
+            formats=formats,
+            templates=[
+                # The kernel only syncs Dest in halves.
+                DEST_SYNC(DestSync.Half),
+                MATH_TRANSPOSE_FACES(math_transpose_faces),
+            ],
+            runtimes=[
+                UNPACK_TRANS_FACES(unpack_transpose_faces),
+                TILE_COUNT(tile_cnt_A),
+                NUM_FACES(),
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+                LOOP_FACTOR(loop_factor),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=unpack_to_dest,
+        ),
+    )
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 

@@ -120,6 +120,8 @@ class TtKimiK3Transformer(LightweightModule):
         # Chunks per packed forward (TtPrefillRuntime forward_tokens_budget); see forward_packed. Named so the
         # runtime's value reaches every block explicitly rather than through **block_kwargs.
         forward_chunks: int = 1,
+        # The MoE every MoE layer builds (tt/moe_impl.py: "block" - the MoE block's C++ ops, K3's default - or "ttmoe").
+        moe_impl: Optional[str] = None,
         **block_kwargs,
     ):
         super().__init__()
@@ -293,6 +295,7 @@ class TtKimiK3Transformer(LightweightModule):
                     weight_cache_path=weight_cache_path,
                     kv_only=kv_only_last_layer and is_last,
                     forward_chunks=forward_chunks,
+                    moe_impl=moe_impl,
                     **block_kwargs,
                 )
             )
@@ -313,6 +316,9 @@ class TtKimiK3Transformer(LightweightModule):
             if layer_state and not (kv_only_last_layer and is_last):
                 mark_layer_cached(weight_cache_path, layer_idx)
 
+        # The MoE layers' implementation (tt/moe_impl.py; one for the whole model): the MoE block takes a packed forward's
+        # padding as a MoEBlockPacking, TtMoe as a PackedPadding (forward_packed; TtPrefillRuntime's traced path).
+        self.moe_is_block = any(getattr(layer, "moe_block", False) for layer in self.layers)
         self.norm = None
         if is_last_rank and build_tail and not kv_only_last_layer:
             self.norm = TtDistributedRmsNorm(
@@ -595,8 +601,10 @@ class TtKimiK3Transformer(LightweightModule):
             forward().
         zero_pad: zero each chunk's KV pad window as it is written without acking it, for a caller that sends the
             acks itself once the forward is done (TtPrefillRuntime.prefill_forward; always on the traced path).
-        seed_indexer_indices: part of the shared packed contract (GLM-5.3's indexer reuse); Kimi-K3 has no indexer,
-            so it must be None.
+        index_kv_cache: K3.1's DSA indexer key cache (None on K3). Each DSA layer runs its own indexer per chunk, as
+            in forward(): the chunk's index-key write and top-k against that chunk's slot and prefix.
+        seed_indexer_indices: part of the shared packed contract (GLM-5.3's indexer reuse). No K3 or K3.1 layer reuses
+            another's top-k, so none cross a pipeline boundary and it must be None.
         metadata / padding_config: the traced form. One ``(slot, actual_start, actual_end)`` device triple per
             chunk position replaces ``chunks`` (then None), and the runtime's persistent PackedPadding replaces the
             one built from the chunks. Every position runs (an empty one points at a scratch slot); no acks.
@@ -607,10 +615,12 @@ class TtKimiK3Transformer(LightweightModule):
         n = len(metadata) if traced else len(chunks)
         if n != self.forward_chunks:
             raise ValueError(f"{n} chunks for a model built for {self.forward_chunks}")
-        if self.has_indexer:
-            raise NotImplementedError("Kimi-K3.1 (DSA indexer) runs one chunk per forward; packed forwards are K3 only")
-        if index_kv_cache is not None or seed_indexer_indices is not None:
-            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache and seed_indexer_indices must be None")
+        if seed_indexer_indices is not None:
+            raise ValueError("Kimi-K3 passes no indexer indices between ranks; seed_indexer_indices must be None")
+        if index_kv_cache is not None and not self.has_indexer:
+            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
+        if index_kv_cache is None and self.has_indexer and self.schedule.num_mla_layers:
+            raise ValueError("Kimi-K3.1's DSA layers write and read an indexer key cache; pass index_kv_cache")
         if traced and (padding_config is None or on_layer_complete is not None):
             raise ValueError("a traced packed forward takes the persistent padding_config and no host acks")
 
@@ -638,8 +648,14 @@ class TtKimiK3Transformer(LightweightModule):
         sp_factor = tuple(self.mesh_device.shape)[self.sp_axis]
         empty = [False] * n if traced else [c.is_empty for c in chunks]
         if not traced:
-            # One MoE padding (PackedPadding) for every layer of the forward (None when every row is real).
-            padding_config = packed_padding(self.mesh_device, chunks, sp_factor, rows, sp_axis=self.sp_axis)
+            # One MoE padding for every layer of the forward: the MoE block's planner reads the chunks themselves
+            # (MoEBlockPacking); TtMoe's PackedPadding is None when every row is real.
+            if self.moe_is_block:
+                from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockPacking
+
+                padding_config = MoEBlockPacking(chunks=list(chunks))
+            else:
+                padding_config = packed_padding(self.mesh_device, chunks, sp_factor, rows, sp_axis=self.sp_axis)
 
         # Each chunk's KDA scalars, built once per forward like the single-chunk path builds them once per
         # chunk: borrowed from its metadata when traced, uploaded from its host ints when eager.
@@ -663,6 +679,9 @@ class TtKimiK3Transformer(LightweightModule):
                     dict(
                         rope_tensors=rope_tensors,
                         kvpe_cache=kvpe_cache,
+                        # K3.1: each DSA layer writes this chunk's indexer keys to its own slot and runs its own
+                        # top-k over the chunk's prefix, so nothing indexer-related crosses chunks or layers.
+                        index_kv_cache=index_kv_cache,
                         cache_user_id=slot,
                         actual_start=start,
                         actual_end=end,

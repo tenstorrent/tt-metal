@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_device_operation.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -25,10 +26,7 @@ namespace utils {
 // only benefit is rounding the bfloat16 result to nearest even. Reject the flag when the result is
 // not bfloat16 rather than silently accepting a request we cannot honour.
 void validate_fast_and_approximate_mode(
-    BinaryOpType binary_op_type,
-    const std::optional<bool>& fast_and_approximate_mode,
-    DataType output_dtype,
-    tt::ARCH arch) {
+    BinaryOpType binary_op_type, const std::optional<bool>& fast_and_approximate_mode, DataType output_dtype) {
     using enum BinaryOpType;
     const bool accurate_mode_requested = fast_and_approximate_mode.has_value() && !*fast_and_approximate_mode;
     if (!accurate_mode_requested) {
@@ -44,11 +42,6 @@ void validate_fast_and_approximate_mode(
         "other output dtypes; leave the flag unset (or pass true) for those.",
         binary_op_type,
         output_dtype);
-    TT_FATAL(
-        !(binary_op_type == RSUB && arch == tt::ARCH::QUASAR),
-        "fast_and_approximate_mode=false is not supported for RSUB on Quasar. "
-        "The RSUB SFPU kernel is not available on this architecture. "
-        "Use ttnn.subtract with swapped operands, or leave fast_and_approximate_mode unset (or pass true).");
 }
 
 bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_approximate_mode = false) {
@@ -112,6 +105,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case ISCLOSE:
         // Fused SFPU kernel only: there is no FPU form, so every float dtype routes here.
         case SITU_GLU: return true;
+        case SILU_GLU:
         case GEGLU_TANH: return a == b && (a == BFLOAT16 || a == BFLOAT8_B);
         default: return false;
     }
@@ -254,6 +248,16 @@ SubtileBroadcastType get_subtile_broadcast_type(
     }
 
     TT_THROW("Invalid subtile broadcast type");  // codespell:ignore subtile
+}
+
+ttsl::SmallVector<unary::EltwiseUnaryWithParam> without_runtime_scalars(
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations) {
+    ttsl::SmallVector<unary::EltwiseUnaryWithParam> projected;
+    projected.reserve(activations.size());
+    for (const auto& activation : activations) {
+        projected.push_back(unary::utils::without_runtime_scalars(activation));
+    }
+    return projected;
 }
 
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
@@ -400,6 +404,20 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             attributes.lhs_activations.empty() && attributes.rhs_activations.empty(),
             "Input activations are not supported for 8-bit subtract (including subalpha)");
+    }
+
+    // These pairs have no conversion into a UINT8 output yet, so the packer would write DEST's raw bits.
+    const auto output_dtype =
+        output_tensor.has_value() ? output_tensor->dtype() : attributes.dtype.value_or(input_tensor_a.dtype());
+    if (output_dtype == DataType::UINT8) {
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::UINT16,
+            "A UINT8 output is not supported for UINT16 inputs of binary operation {}",
+            attributes.binary_op_type);
+        TT_FATAL(
+            !(attributes.binary_op_type == BinaryOpType::DIV && input_tensor_a.dtype() == DataType::INT32 &&
+              input_tensor_b.has_value() && input_tensor_b->dtype() == DataType::INT32),
+            "A UINT8 output is not supported for INT32 integer division");
     }
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
@@ -728,8 +746,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     ttnn::operations::binary_ng::utils::validate_fast_and_approximate_mode(
         binary_op_type,
         fast_and_approximate_mode,
-        output_tensor ? output_tensor->dtype() : output_dtype.value_or(dtype_a),
-        input_tensor_a.device()->arch());
+        output_tensor ? output_tensor->dtype() : output_dtype.value_or(dtype_a));
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);
@@ -910,8 +927,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     ttnn::operations::binary_ng::utils::validate_fast_and_approximate_mode(
         binary_op_type,
         fast_and_approximate_mode,
-        output_tensor ? output_tensor->dtype() : output_dtype.value_or(dtype_a),
-        input_tensor_a.device()->arch());
+        output_tensor ? output_tensor->dtype() : output_dtype.value_or(dtype_a));
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);

@@ -14,15 +14,22 @@ Boxes, from the device count and TT_MESH_GRAPH_DESC_PATH:
 """
 
 import copy
+import functools
 import gc
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
+from pathlib import Path
 
 import pytest
+import torch
+from safetensors import safe_open
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
+from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.reference import pretrained_mla_weights
+from models.demos.deepseek_v3_d_p.reference.glm_5_3.block import rms_norm
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     STAGE_4X4_TOPOLOGY,
     fabric2d_device_params,
@@ -36,7 +43,9 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import m
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import read_sharded_rows
 
 GALAXY_SP = 8
 # Galaxy-global scenario sizes: a 5k chunk over a 50k (warm) or 500k (long) cache. A 4x4 stage runs 2.5k chunks.
@@ -52,6 +61,68 @@ GATE_CASES = {
     "glm_5_3": ("glm_5_3", False),
     "glm_5_3-no_indexer": ("glm_5_3", True),
 }
+
+# Real-data cases: GLM-5.3 full layers on a real prompt (the 1M golden trace's), from a Galaxy prefill's
+# LayerOutputCapture (test_prefill_transformer_chunked.py) of rows [0, 517120). Shorter caches read a prefix.
+REAL_DATA_TRACE = Path(GLM53Adapter.prefill_trace_default).parent / "glm53-real-prompt-517k"
+# name -> cache tokens; the timed chunk follows the cache.
+REAL_DATA_CASES = {"64k": 61440, "128k": 128000, "256k": 256000, "512k": LONG_CACHE_TOKENS}
+# The full layers whose top-k picks the median and the most distinct rows on this prompt. (The fewest, L2's, times like
+# the median: its push hides under sparse SDPA at every length.)
+REAL_DATA_LAYERS = {"L58-median": 58, "L42-max": 42}
+
+
+def _glm53_checkpoint() -> Path:
+    """The GLM-5.3 HF checkpoint, resolved as the prefill runner does."""
+    return Path(
+        os.environ.get(GLM53Adapter.env_var) or os.environ.get("PREFILL_HF_MODEL") or GLM53Adapter.hf_model_default
+    )
+
+
+@dataclass(frozen=True)
+class RealData:
+    """A GLM-5.3 full layer on the real prompt: its pretrained weights, and its input (the previous layer's captured
+    output, normalized by the layer's input RMSNorm)."""
+
+    layer: int
+    trace_dir: Path = REAL_DATA_TRACE
+    checkpoint: Path = field(default_factory=_glm53_checkpoint)
+
+    @property
+    def captured(self) -> Path:
+        return self.trace_dir / "decoder_io" / f"decoder_output_layer_{self.layer - 1}"
+
+    def missing(self) -> str | None:
+        """Why this machine can't run it, or None."""
+        if not self.captured.exists():
+            return f"real-data capture {self.captured} not found"
+        if not (self.checkpoint / "model.safetensors.index.json").exists():
+            return f"GLM-5.3 checkpoint {self.checkpoint} not found"
+        return None
+
+    def weights(self, config) -> dict:
+        return pretrained_mla_weights(
+            config, layer=self.layer, checkpoint_path=self._shards(f"model.layers.{self.layer}.self_attn.")
+        )
+
+    def layer_input(self, config, start: int, end: int) -> torch.Tensor:
+        """Rows [start, end) of the layer's attention input, [1, 1, end - start, hidden] bf16."""
+        h = read_sharded_rows(self.captured, self.captured.name, start, end)
+        assert h.shape[0] == end - start, f"{self.captured} holds rows up to {start + h.shape[0]}, need {end}"
+        return rms_norm(h, self._input_norm, config.rms_norm_eps).to(torch.bfloat16).reshape(1, 1, end - start, -1)
+
+    @functools.cached_property
+    def _weight_map(self) -> dict:
+        return json.loads((self.checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
+
+    def _shards(self, prefix: str) -> list[str]:
+        return sorted({str(self.checkpoint / f) for k, f in self._weight_map.items() if k.startswith(prefix)})
+
+    @functools.cached_property
+    def _input_norm(self) -> torch.Tensor:
+        key = f"model.layers.{self.layer}.input_layernorm.weight"
+        with safe_open(self._shards(key)[0], framework="pt") as f:
+            return f.get_tensor(key)
 
 
 @dataclass(frozen=True)
@@ -118,9 +189,13 @@ class SparsePerfCase:
     input_shard_dims: tuple
     # A GLM-5.3 shared layer runs no indexer: it takes a full layer's top-k indices.
     indexer_indices: ttnn.Tensor | None = None
+    # The previous layer's record of the prefix it pushed for this layer (timed in the full-layer case).
+    prefix_entry: tuple | None = None
 
     def forward(self, start: int) -> ttnn.Tensor:
         """One chunk forward at `start`; the caller owns (and deallocates) the output."""
+        if self.prefix_entry is not None:  # restored each forward, so this layer pushes only the rest
+            self.mla.tt_ccl.sparse_kv_push_planner.prefetched[self.mla.layer_idx] = self.prefix_entry
         return self.mla.forward(
             self.x,
             self.rope,
@@ -145,13 +220,19 @@ def build_sparse_perf_case(
     tp_shard_kv: bool = True,
     shared_layer: bool = False,
     sp_axis: int = 0,
+    real_data: RealData | None = None,
 ) -> SparsePerfCase:
     """ttMLA, its caches and one chunk of input for forwards over a `cache + chunk` prefix.
 
     sparse: DSA indexer + sparse SDPA over `kv_cache_format`, caches SPxTP-sharded when `tp_shard_kv`.
     dense: the v3.1 baseline, no indexer, full-prefix ring MLA over the tiled BFP8 cache.
-    shared_layer (GLM-5.3, sparse): the last shared layer, which runs no indexer and reuses the top-k indices of a
-    full layer's forward at `cache`.
+    GLM-5.3 sparse layers run inside a stage, as in the model: the full layer builds the push plan and pushes the next
+    layer's prefix beside its sparse SDPA.
+    shared_layer (GLM-5.3, sparse): the shared layer after it; it reuses the full layer's top-k, pushes only the rest of
+    its KV and pushes the next layer's prefix beside its sparse SDPA.
+    real_data (GLM-5.3, sparse): that full layer, with its pretrained weights on the real prompt, one forward per earlier
+    chunk filling its caches, so its top-k (which the shared layer reuses) is the model's. The shared layer keeps random
+    weights: it runs no indexer, so they don't change which rows it reads.
     """
     has_indexer = attn_mode == "sparse"
     tp_axis = 1 - sp_axis
@@ -173,17 +254,21 @@ def build_sparse_perf_case(
 
     config = copy.deepcopy(config_only)
     config.max_seq_len = total
-    # GLM-5.3 packs its index-K cache by full indexer layers (21 slots): build the last full layer (74 -> slot
-    # 20) so the ring score selects a real slot, not slot 0 of a one-slot proxy.
     full_indexer_layers = num_full_indexer_layers(config) if has_indexer else None
-    index_cache_layers = full_indexer_layers or 1
-    mla_layer_idx = 0
+    index_cache_layers = 1
+    mla_layer_idx, mla_layer_num, cache_layer_idx, first_layer_idx = 0, 1, 0, None
+    assert real_data is None or full_indexer_layers, f"real_data needs a GLM-5.3 sparse layer, got {variant.name}"
     if full_indexer_layers:
         full_layer_indices = [i for i, mode in enumerate(config.indexer_types) if mode == "full"]
         assert len(full_layer_indices) == full_indexer_layers
-        mla_layer_idx = full_layer_indices[-1]
+        # GLM-5.3: a full layer (real_data's, else the last) in a stage from the previous full layer to its successor,
+        # so the ring score reads a real index-K slot (1 of 2) and the layer pushes its successor's prefix.
+        pos = full_layer_indices.index(real_data.layer) if real_data else len(full_layer_indices) - 1
+        assert pos > 0, f"full layer {full_layer_indices[pos]} has no earlier full layer to start its stage"
+        first_layer_idx, mla_layer_idx = full_layer_indices[pos - 1 : pos + 1]
+        cache_layer_idx = mla_layer_idx - first_layer_idx
+        mla_layer_num, index_cache_layers = cache_layer_idx + 2, 2
     # Kimi-K3.1: the last DSA layer's slot of a 24-slot cache.
-    mla_layer_num, cache_layer_idx = 1, 0
     if variant.name == "kimi_k3_1" and has_indexer:
         mla_layer_ids = variant.model_config.mla_layer_ids()
         mla_layer_num, mla_layer_idx = len(mla_layer_ids), mla_layer_ids[-1]
@@ -192,7 +277,7 @@ def build_sparse_perf_case(
 
     mla = ttMLA(
         config,
-        dict(random_mla_weights(config)),
+        dict(real_data.weights(config) if real_data else random_mla_weights(config)),
         mesh_device,
         topology=topology,
         layer_idx=mla_layer_idx,
@@ -202,6 +287,7 @@ def build_sparse_perf_case(
         is_chunked=True,
         active_seq_len=chunk,
         layer_num=mla_layer_num,
+        first_layer_idx=first_layer_idx,
         has_indexer=has_indexer,
         sparse_kv_cache_format=kv_cache_format if has_indexer else MlaKvCacheFormat.BF16_RM,
     )
@@ -233,14 +319,35 @@ def build_sparse_perf_case(
         )
     shard_dims = [None, None]
     shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
-    x = ttnn.from_torch(
-        make_hidden(chunk, config.hidden_size, seed=42)[:, :chunk].unsqueeze(0),
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
-    )
+
+    def to_device(hidden):
+        return ttnn.from_torch(
+            hidden,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        )
+
+    if real_data is None:
+        x = to_device(make_hidden(chunk, config.hidden_size, seed=42)[:, :chunk].unsqueeze(0))
+    else:
+        # Fill the caches the way the prompt did; the timed chunk comes next.
+        for start in range(0, cache, chunk):
+            x = to_device(real_data.layer_input(config, start, start + chunk))
+            ttnn.deallocate(
+                mla.forward(
+                    x,
+                    rope,
+                    kvpe_cache,
+                    actual_start=start,
+                    cache_layer_idx=cache_layer_idx,
+                    index_kv_cache=index_kv_cache,
+                )
+            )
+            ttnn.deallocate(x)
+        x = to_device(real_data.layer_input(config, cache, cache + chunk))
     case = SparsePerfCase(mla, x, rope, kvpe_cache, index_kv_cache, cache_layer_idx, tuple(shard_dims))
     if not shared_layer:
         return case
@@ -256,28 +363,29 @@ def build_sparse_perf_case(
         return_indexer_indices=True,
     )
     ttnn.deallocate(out)
+    planner = mla.tt_ccl.sparse_kv_push_planner  # None where the push is off: the shared layer gathers
+    prefix_entry = planner.prefetched.get(mla_layer_idx + 1) if planner is not None else None
     # Free the full layer before building the shared one: ttMLA holds reference cycles, so without a collection its
     # buffers would linger and could be freed mid-measurement.
     ttnn.deallocate(index_kv_cache)
     ttnn.deallocate(kvpe_cache.storage)
     del case, mla, kvpe_cache, index_kv_cache
     gc.collect()
-    # Inside a stage a shared layer reuses the sparse KV push plan its full layer built; only a stage's first layer
-    # rebuilds it. This standalone layer is not marked first, so it builds the plan in warm-up and then reuses it: the
-    # in-stage case. Plan construction is outside its timing and determinism checks.
-    shared_layer_idx = [i for i, mode in enumerate(config.indexer_types) if mode == "shared"][-1]
+    # The shared layer after the full layer, in the same stage extended by one layer, so it has a shared successor.
+    assert config.indexer_types[mla_layer_idx + 1 : mla_layer_idx + 3] == ["shared"] * 2
     shared = ttMLA(
         config,
         dict(random_mla_weights(config)),
         mesh_device,
         topology=topology,
-        layer_idx=shared_layer_idx,
+        layer_idx=mla_layer_idx + 1,
         seq_len=total,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_chunked=True,
         active_seq_len=chunk,
-        layer_num=1,
+        layer_num=mla_layer_num + 1,
+        first_layer_idx=first_layer_idx,
         has_indexer=True,
         sparse_kv_cache_format=kv_cache_format,
     )
@@ -288,10 +396,20 @@ def build_sparse_perf_case(
         seq_len=total,
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
-        num_kvpe_cache_layers=1,
+        num_kvpe_cache_layers=mla_layer_num + 1,
         tp_axis=kv_tp_axis,
     )
-    return SparsePerfCase(shared, x, rope, shared_kvpe_cache, None, 0, tuple(shard_dims), indexer_indices=indices)
+    return SparsePerfCase(
+        shared,
+        x,
+        rope,
+        shared_kvpe_cache,
+        None,
+        cache_layer_idx + 1,
+        tuple(shard_dims),
+        indexer_indices=indices,
+        prefix_entry=prefix_entry,
+    )
 
 
 BOX = detect_box(detect_num_devices())
@@ -317,3 +435,26 @@ def gate_params():
         )
         params.append(pytest.param(BOX.mesh, dp, variant, case, id=f"{BOX.id}-{case}"))
     return params
+
+
+def real_data_params():
+    """GLM-5.3 gate cases x REAL_DATA_LAYERS x REAL_DATA_CASES, on the Galaxy 8x4 only: the capture holds its positions."""
+    if BOX is None or BOX.name != "Galaxy":
+        return [
+            pytest.param(
+                (8, 4),
+                {},
+                "glm_5_3",
+                "glm_5_3",
+                next(iter(REAL_DATA_LAYERS)),
+                next(iter(REAL_DATA_CASES)),
+                marks=pytest.mark.skip(reason="real-data sparse MLA perf runs on the Blackhole Galaxy 8x4 only"),
+            )
+        ]
+    return [
+        pytest.param(*p.values, layer, data, id=f"{p.id}-{layer}-{data}")
+        for p in gate_params()
+        if GATE_CASES[p.values[3]][0] == "glm_5_3"
+        for layer in REAL_DATA_LAYERS
+        for data in REAL_DATA_CASES
+    ]

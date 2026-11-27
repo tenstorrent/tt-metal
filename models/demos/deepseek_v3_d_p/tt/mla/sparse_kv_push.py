@@ -64,10 +64,10 @@ def packed_push_targets(nonempty: list[bool]) -> dict[int, tuple[int, int]]:
     return targets
 
 
-def sparse_kv_push_supported(mesh_device, stripe_chunk: int, max_rows: int) -> bool:
-    """Whether the push can serve a cache of `max_rows` rows in blocks of `stripe_chunk` rows on this mesh (the ops'
-    own check); otherwise shared layers gather the whole prefix."""
-    return ttnn.experimental.is_sparse_kv_push_supported(mesh_device, stripe_chunk, max_rows)
+def sparse_kv_push_supported(mesh_device, stripe_chunk: int, max_rows: int, links: int) -> bool:
+    """Whether the push can serve a cache of `max_rows` rows in blocks of `stripe_chunk` rows on this mesh with `links`
+    fabric links (the ops' own check); otherwise shared layers gather the whole prefix."""
+    return ttnn.experimental.is_sparse_kv_push_supported(mesh_device, stripe_chunk, max_rows, links)
 
 
 def _replicated(mesh_device, host, dtype, layout):
@@ -85,9 +85,10 @@ class SparseKvPushPlanner:
     """Plans, buffers, semaphores and sub-device managers of the push, shared by every MLA layer of a mesh.
 
     Trace-safe: on the metadata path (PREFILL_USE_TRACE=1) nothing depends on a host value that changes per chunk or
-    request. The plan reads the chunk start from metadata[1] on device and it is not part of the plan's cache key (a
-    layer that computes its own indices calls invalidate()); the push reads the cache slot from metadata[0]. Buffers,
-    semaphores and sub-device managers are created on first use, which the warm pass does before any trace capture."""
+    request. The plan reads the chunk start from metadata[1] on device, so the cache key holds that tensor's address,
+    not its value (a layer that computes its own indices calls invalidate()); the push reads the cache slot from
+    metadata[0]. Buffers, semaphores and sub-device managers are created on first use, which the warm pass does before
+    any trace capture."""
 
     def __init__(self, mesh_device, links: int):
         self.mesh_device = mesh_device
@@ -100,9 +101,14 @@ class SparseKvPushPlanner:
             ttnn.create_global_semaphore(mesh_device, cores, 0, buffer_type) for _ in range(2)
         )
         ttnn.synchronize_device(mesh_device)
-        self._plan: SparseKvPushPlan | None = None
-        self._plan_key = None
-        self._tables = None
+        # Plan key -> plan, for every distinct (indices, chunk start) since the last invalidate(): one per chunk of a
+        # packed forward, so each shared layer reuses all of them instead of rebuilding them chunk after chunk.
+        self._plans: dict = {}
+        # Gathered plan tables, one per cached plan (a live plan's table must not be overwritten by the next build).
+        # Kept across invalidate() so the warm pass allocates them and traced replays reuse them.
+        self._tables: list = []
+        # Plans built (sparse_push_plan + all-gather), counted on the host.
+        self.builds = 0
         self._buffers = {}
         self._managers = {}  # query rows -> sub-device manager of grids(query rows)
         # layer index -> (plan, buffer parity): the plan whose prefix rows the previous attention step already pushed,
@@ -188,9 +194,9 @@ class SparseKvPushPlanner:
         return self._buffers[key]
 
     def invalidate(self):
-        """Drop the cached plan: new indices arrived in the same buffer (the indexer rewrote it, or the previous
-        pipeline stage sent them)."""
-        self._plan = None
+        """Drop the cached plans: new indices arrived in the same buffers (the indexer rewrote them, or the previous
+        pipeline stage sent them). The gathered-table pool is kept."""
+        self._plans.clear()
         self.prefetched.clear()
 
     def plan(
@@ -203,19 +209,22 @@ class SparseKvPushPlanner:
         chunk_start: int = 0,
         chunk_start_tensor: ttnn.Tensor | None = None,
     ) -> SparseKvPushPlan:
-        """The plan for `indices`, cached across the layers that reuse them. On a traced replay the plan op reads the
-        chunk start from chunk_start_tensor on device, so one cached plan serves any chunk; eagerly it takes
-        chunk_start as a runtime arg."""
+        """The plan for `indices`, cached across the layers that reuse them, one per chunk of a packed forward. On a
+        traced replay the plan op reads the chunk start from chunk_start_tensor on device, so one cached plan serves
+        any chunk at that metadata slot; eagerly it takes chunk_start as a runtime arg."""
         # Keyed by buffer address: full layers rewrite the shared indices buffer in place and call invalidate(), as
         # does a pipeline stage's first layer, so an unchanged address means the same indices.
         start_key = chunk_start_tensor.buffer_address() if chunk_start_tensor is not None else chunk_start
         key = (indices.buffer_address(), stripe_chunk, page_bytes, max_rows, start_key)
-        if self._plan is None or self._plan_key != key:
-            self._plan_key = key
-            self._plan = self._build(indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor)
-        return self._plan
+        plan = self._plans.get(key)
+        if plan is None:
+            plan = self._build(
+                len(self._plans), indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor
+            )
+            self._plans[key] = plan
+        return plan
 
-    def _build(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor):
+    def _build(self, slot, indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor):
         n = self.mesh_device.get_num_devices()
         table, compact_indices = ttnn.experimental.sparse_push_plan(
             indices,
@@ -225,18 +234,22 @@ class SparseKvPushPlanner:
             chunk_start=None if chunk_start_tensor is not None else chunk_start,
             chunk_start_tensor=chunk_start_tensor,
         )
+        self.builds += 1
         gathered_rows = table.shape[2] * n
-        if self._tables is None or self._tables.shape[2] != gathered_rows:
-            self._tables = _replicated(
+        if slot == len(self._tables):
+            self._tables.append(None)
+        tables = self._tables[slot]
+        if tables is None or tables.shape[2] != gathered_rows:
+            tables = self._tables[slot] = _replicated(
                 self.mesh_device,
                 torch.zeros(1, 1, gathered_rows, table.shape[3], dtype=torch.int32),
                 ttnn.uint32,
                 ttnn.ROW_MAJOR_LAYOUT,
             )
         ttnn.experimental.high_bw_all_gather(
-            table, dim=2, output_tensor=self._tables, cluster_axis=None, num_links=self.links
+            table, dim=2, output_tensor=tables, cluster_axis=None, num_links=self.links
         )
         ttnn.deallocate(table)
         return SparseKvPushPlan(
-            table=self._tables, compact_indices=compact_indices, stripe_chunk=stripe_chunk, max_rows=max_rows
+            table=tables, compact_indices=compact_indices, stripe_chunk=stripe_chunk, max_rows=max_rows
         )

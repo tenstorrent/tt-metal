@@ -103,11 +103,11 @@ ALWI void max_util_unpack(
     ckernel_unpack_template tmp = ckernel_unpack_template(
         false,                    // src B
         false,                    // halo - just used for 4 unpacks
-        lltt::replay_insn(0, 6),  // runs when context is 0
+        TT_OP_REPLAY(0, 6, 0, 0),  // runs when context is 0
         0,
         0,
         0,
-        lltt::replay_insn(6, 6),  // runs when context is 1
+        TT_OP_REPLAY(6, 6, 0, 0),  // runs when context is 1
         0,
         0);
 
@@ -290,7 +290,7 @@ ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
             // (addr_mod_5), clear src A
         });
     ckernel_template tmp(
-        8, 1, lltt::replay_insn(ckernel::math::replay_buf_offset, 15), TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_5, 0));
+        8, 1, TT_OP_REPLAY(ckernel::math::replay_buf_offset, 15, 0, 0), TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_5, 0));
     tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0));
     tmp.program();
 

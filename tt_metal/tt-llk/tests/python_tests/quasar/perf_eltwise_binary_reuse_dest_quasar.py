@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.constraints import get_valid_math_fidelities
+from helpers.constraints import REUSE_DEST_MATH_OPS, get_valid_math_fidelities
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
@@ -10,9 +10,9 @@ from helpers.llk_params import (
 )
 from helpers.param_config import parametrize, quasar_dest_sync_modes, runtime
 from quasar.test_eltwise_binary_reuse_dest_quasar import (
-    INPUT_DIMENSIONS,
+    BASELINE_TILE_DIMENSIONS,
     REUSE_DEST_FORMATS,
-    reuse_dest_mathops,
+    reuse_dest_input_dimensions,
 )
 from quasar.test_eltwise_binary_reuse_dest_quasar import (
     test_eltwise_binary_reuse_dest_quasar as run_eltwise_binary_reuse_dest,
@@ -26,14 +26,16 @@ from quasar.test_eltwise_binary_reuse_dest_quasar import (
 @pytest.mark.quasar
 @parametrize(
     formats=REUSE_DEST_FORMATS,
-    mathop=lambda formats: reuse_dest_mathops(formats, is_perf=True),
+    mathop=REUSE_DEST_MATH_OPS,
     math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
     dest_sync=lambda: quasar_dest_sync_modes(is_perf=True),
-    input_dimensions=runtime(INPUT_DIMENSIONS),
+    # Perf compares against the 32x32 baseline only; the correctness module owns the shape sweep.
+    tile_dimensions=runtime(lambda: [BASELINE_TILE_DIMENSIONS]),
+    input_dimensions=runtime(reuse_dest_input_dimensions),
     output_dimensions=runtime(valid_output_dimensions),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
@@ -46,6 +48,7 @@ def test_perf_eltwise_binary_reuse_dest_quasar(
     reuse_dest_type,
     math_fidelity,
     dest_sync,
+    tile_dimensions,
     input_dimensions,
     output_dimensions,
     run_types,
@@ -58,6 +61,7 @@ def test_perf_eltwise_binary_reuse_dest_quasar(
         reuse_dest_type,
         math_fidelity,
         dest_sync,
+        tile_dimensions,
         input_dimensions,
         output_dimensions,
         run_types=run_types,

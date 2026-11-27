@@ -4,6 +4,7 @@
 from typing import List
 
 import pytest
+from helpers.constraints import is_valid_quasar_dest_mode_conversion
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
@@ -46,6 +47,24 @@ PACK_UNTILIZE_TILE_SIZES = [
     (1, 32),
     (2, 32),
 ]
+
+# Largest magnitude a sign-magnitude Int8 holds. The packer clamps to +/- this.
+INT8_SATURATION_BOUND = 127
+
+
+def stimuli_spec_for(formats: FormatConfig) -> StimuliSpec:
+    """Stimuli that stay distinct across the whole tile for this format pair.
+
+    The default 1, 2, 3, ... ramp clamps at 127 for an Int8 endpoint, so every datum past the
+    127th comes back equal and the comparison stops being able to see a misplaced row, face or
+    tile. Sweep the signed 8-bit range at random instead, and overshoot it when the pack narrows
+    so the saturation at both ends is exercised as well.
+    """
+    if DataFormat.Int8 not in (formats.input_format, formats.output_format):
+        return StimuliSpec.sequential()
+    narrowing = formats.input_format.is_32_bit()
+    bound = float(INT8_SATURATION_BOUND) * (1.5 if narrowing else 1.0)
+    return StimuliSpec.uniform(low=-bound, high=bound)
 
 
 def pack_untilize_perf_input_dimensions(dest_acc, dest_sync, tile_shape):
@@ -101,6 +120,10 @@ def generate_pack_untilize_combinations(
             continue
 
         for dest_acc in get_dest_acc_modes(in_fmt):
+            # A 16-bit Dest cannot feed a 32-bit output: pack_in stays narrow and the packer has
+            # no narrow-to-32-bit conversion, so data_format_inference refuses the pair outright.
+            if not is_valid_quasar_dest_mode_conversion(in_fmt, out_fmt, dest_acc):
+                continue
             for dest_sync in dest_sync_modes:
                 tile_sizes = (
                     select_perf_tile_sizes(PACK_UNTILIZE_TILE_SIZES)
@@ -142,6 +165,7 @@ def generate_pack_untilize_combinations(
 PACK_UNTILIZE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
+        DataFormat.Int8,
         DataFormat.Int16,
         DataFormat.Int32,
         DataFormat.MxFp4,
@@ -194,15 +218,15 @@ def test_pack_untilize_quasar(
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
 
-    sequential_spec = StimuliSpec.sequential()
+    spec = stimuli_spec_for(formats)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
         tile_dimensions=tile_dimensions,
-        spec_A=sequential_spec,
-        spec_B=sequential_spec,
+        spec_A=spec,
+        spec_B=spec,
     )
 
     generate_golden = get_golden_generator(UntilizeGolden)

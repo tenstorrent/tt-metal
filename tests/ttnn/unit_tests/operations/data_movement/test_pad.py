@@ -21,7 +21,12 @@ from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    block_shards,
+    contiguous_1d_shards,
+    full_range_input,
+)
 import ttnn
 
 torch.manual_seed(0)
@@ -638,9 +643,9 @@ def test_pad_rm_sharded_height_only_override_addr_change(device):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-@pytest.mark.parametrize("padding,torch_padding", [(((0, 64),), (0, 64)), (((16, 16), (0, 32)), (0, 32, 0, 32))])
+@pytest.mark.parametrize("padding,torch_padding", [(((0, 64),), (0, 64)), (((0, 32), (0, 32)), (0, 32, 0, 32))])
 @pytest.mark.parametrize("value", [0])
-def test_pad(device, h, w, padding, torch_padding, value):
+def test_pad_tile_2d(device, h, w, padding, torch_padding, value):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -685,12 +690,11 @@ def test_pad_padding_validation_length(device, h, w, padding, torch_padding, val
     return
 
 
-@pytest.mark.skip(reason="ttnn.pad does not support row_major tensors because the kernel currently causes a PCC error")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 2)), (0, 2, 0, 1)), (((1, 1), (4, 2)), (4, 2, 1, 1))])
 @pytest.mark.parametrize("value", [0])
-def test_pad(device, h, w, padding, torch_padding, value):
+def test_pad_rm_2d(device, h, w, padding, torch_padding, value):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -709,7 +713,6 @@ def test_pad(device, h, w, padding, torch_padding, value):
     assert torch.equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.skip(reason="ttnn.pad does not support row_major tensors because the kernel currently causes a PCC error")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 2)), (0, 2, 0, 1)), (((1, 1), (4, 2)), (4, 2, 1, 1))])
@@ -719,6 +722,7 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+    torch_output_tensor = torch.nn.functional.pad(torch_output_tensor, torch_padding, mode="constant", value=value)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
@@ -736,7 +740,6 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
     assert torch.equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.skip(reason="ttnn.pad requires pad to start at 0")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding", [((0, 32), (0, 32)), ((1, 64), (0, 96)), ((0, 64), (0, 43)), ((32, 64), (64, 96))])
@@ -750,17 +753,11 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value, expect_erro
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
-    if (
-        padding[0][0] % ttnn.TILE_SIZE != 0
-        or padding[0][1] % ttnn.TILE_SIZE != 0
-        or padding[1][0] % ttnn.TILE_SIZE != 0
-        or padding[1][1] % ttnn.TILE_SIZE != 0
-    ):
-        with expect_error(RuntimeError, "must be a multiple of the tile size on height and width"):
+    if padding[0][0] != 0 or padding[1][0] != 0:
+        with expect_error(RuntimeError, "ttnn.pad: on device tile padding does not support front padding"):
             ttnn.pad(input_tensor, padding=padding, value=value)
         return
-    else:
-        output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
 
     assert output_tensor.shape == ttnn.Shape((h + padding[0][0] + padding[0][1], w + padding[1][0] + padding[1][1]))
 
@@ -769,6 +766,30 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value, expect_erro
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape, padding",
+    [
+        ((1, 1, 2, 4), ((0, 0), (0, 0), (0, 0), (0, 1))),
+        ((1, 1, 2, 4), ((0, 0), (0, 0), (0, 0), (1, 0))),
+        ((1, 1, 2, 4), ((0, 0), (0, 0), (1, 1), (1, 1))),
+        ((1, 2, 4), ((0, 0), (0, 0), (0, 1))),
+        ((1, 1, 1, 2, 4), ((0, 0),) * 4 + ((0, 1),)),
+    ],
+    ids=["rank4_after", "rank4_before", "rank4_both", "rank3_after", "rank5_after"],
+)
+def test_pad_host_tensor(shape, padding):
+    # Host ttnn.pad returns the padded shape as the logical shape, like on device.
+    torch_input_tensor = (torch.arange(prod(shape)) / 8 + 1).reshape(shape).bfloat16()
+    torch_padding = [p for dim in reversed(padding) for p in dim]
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=-1.0)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=-1.0)
+
+    assert list(output_tensor.padded_shape) == list(torch_output_tensor.shape)
+    assert_tensors_equal(torch_output_tensor, ttnn.to_torch(output_tensor))
 
 
 @skip_for_blackhole("Fails on Blackhole. Issue #20698")
@@ -2348,3 +2369,105 @@ def test_pad_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert output.memory_config().buffer_type == buffer_type
     expected = torch.nn.functional.pad(ttnn.to_torch(input_tensor).to(torch.float64), (0, 32, 0, 32), value=0.0)
     assert_exact(expected, ttnn.to_torch(output))
+
+
+# Row-major tensors whose rows span several shards, with a shard row that is not a multiple of the buffer alignment
+# (L1: 16 B; DRAM: 32 B on Wormhole, 64 B on Blackhole). The sharded reads and writes cannot split such rows, so pad
+# stages these tensors through interleaved memory.
+def _ramp_bf16(shape):
+    # Multiples of 1/8 in [-6, 6], exact in bfloat16, with a period that does not divide the row lengths used here.
+    return ((torch.arange(torch.Size(shape).numel()) % 97 - 48) / 8).reshape(shape).to(torch.bfloat16)
+
+
+def _width_shards(buffer_type, shard_shape):
+    # Two shards, on cores (0, 0) and (1, 0) or on DRAM banks 0 and 1.
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    spec = ttnn.ShardSpec(cores, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, spec)
+
+
+def test_pad_rm_into_dram_width_shards_with_subaligned_rows(device):
+    # DRAM shard rows that are 16-byte multiples but not multiples of the DRAM alignment.
+    e = 8 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 16
+    x = _ramp_bf16([1, 1, 2, 2 * e - 4])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    output = ttnn.pad(t, [1, 1, 2, 2 * e], [0, 0, 0, 0], 1.0, memory_config=_width_shards(ttnn.BufferType.DRAM, [2, e]))
+
+    assert_tensors_equal(torch.nn.functional.pad(x, (0, 4), value=1.0), ttnn.to_torch(output))
+
+
+def test_pad_rm_single_core_width_sharded_subaligned_input(device):
+    # use_multicore=False with 24-byte input shard rows: the input moves to interleaved memory, and its padded output,
+    # in [2, 16] shards, must still take a multicore factory.
+    x = _ramp_bf16([1, 1, 2, 24])
+    t = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_width_shards(ttnn.BufferType.L1, [2, 12])
+    )
+
+    output = ttnn.pad(
+        t,
+        [(0, 0), (0, 0), (0, 0), (0, 8)],
+        0.0,
+        use_multicore=False,
+        memory_config=_width_shards(ttnn.BufferType.L1, [2, 16]),
+    )
+
+    assert_tensors_equal(torch.nn.functional.pad(x, (0, 8)), ttnn.to_torch(output))
+
+
+# ROW_MAJOR block shards one row high on two or more shard columns: pad stages them through interleaved memory (#67023).
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shard_cols", [2, 4])
+@pytest.mark.parametrize("rows", [2, 3, 4])
+@pytest.mark.parametrize("shard_h", [1, 2], ids=["one_row_shard", "two_row_shard"])
+def test_pad_rm_into_block_shard_rows(device, shard_h, rows, shard_cols, dtype):
+    out_rows = rows * shard_h
+    x = full_range_input([1, 1, out_rows - 1, 16 * shard_cols], dtype)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.pad(
+        t,
+        padding=((0, 0), (0, 0), (0, 1), (0, 0)),
+        value=7.0,
+        memory_config=block_shards((shard_h, 16), rows, shard_cols),
+    )
+
+    assert_exact(torch.nn.functional.pad(x, (0, 0, 0, 1), value=7.0), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shard_cols", [2, 4])
+@pytest.mark.parametrize("rows", [2, 3, 4])
+@pytest.mark.parametrize("shard_h", [1, 2], ids=["one_row_shard", "two_row_shard"])
+def test_pad_rm_from_block_shard_rows(device, shard_h, rows, shard_cols, dtype):
+    in_rows = rows * shard_h
+    x = full_range_input([1, 1, in_rows, 16 * shard_cols], dtype)
+    t = ttnn.from_torch(
+        x,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=block_shards((shard_h, 16), rows, shard_cols),
+    )
+
+    output = ttnn.pad(t, padding=((0, 0), (0, 0), (0, 2), (0, 0)), value=7.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert_exact(torch.nn.functional.pad(x, (0, 0, 0, 2), value=7.0), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("sharded_input", [False, True], ids=["nd_output", "nd_input"])
+def test_pad_rm_folded_nd_shard_rows(device, dtype, sharded_input):
+    # [1, 1, 1, 16] ND shards of 64-wide rows fold the same way as a one-row BLOCK shard.
+    config = contiguous_1d_shards([1, 1, 1, 16], num_cores=4)
+    input_config = config if sharded_input else ttnn.DRAM_MEMORY_CONFIG
+    output_config = ttnn.DRAM_MEMORY_CONFIG if sharded_input else config
+    x = full_range_input([1, 1, 16 if sharded_input else 15, 64], dtype)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_config)
+    rows = 2 if sharded_input else 1
+
+    output = ttnn.pad(t, padding=((0, 0), (0, 0), (0, rows), (0, 0)), value=7.0, memory_config=output_config)
+
+    assert output.memory_config() == output_config, "pad changed the requested output configuration"
+    assert_exact(torch.nn.functional.pad(x, (0, 0, 0, rows), value=7.0), ttnn.to_torch(output))

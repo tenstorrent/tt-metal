@@ -120,6 +120,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/__init__.cpp
     cpp/ttnn-nanobind/activation.cpp
     cpp/ttnn-nanobind/cluster.cpp
+    cpp/ttnn-nanobind/compiled_program.cpp
     cpp/ttnn-nanobind/core.cpp
     cpp/ttnn-nanobind/device.cpp
     cpp/ttnn-nanobind/events.cpp
@@ -133,6 +134,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/d2d_stream_service.cpp
     cpp/ttnn-nanobind/h2d_stream_service.cpp
     cpp/ttnn-nanobind/d2h_stream_service.cpp
+    cpp/ttnn-nanobind/jit_telemetry.cpp
     cpp/ttnn-nanobind/layer_ack_service.cpp
     cpp/ttnn-nanobind/layer_completion.cpp
     cpp/ttnn-nanobind/mesh_socket.cpp
@@ -200,6 +202,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/common/constants.hpp
     api/ttnn/common/guard.hpp
     api/ttnn/common/queue_id.hpp
+    api/ttnn/compiled_program.hpp
     api/ttnn/config.hpp
     api/ttnn/core.hpp
     api/ttnn/device.hpp

@@ -5,8 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::experimental::core_subset_write {

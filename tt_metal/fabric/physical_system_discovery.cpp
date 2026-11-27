@@ -28,7 +28,7 @@
 
 #include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/soc_descriptor.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
@@ -340,25 +340,6 @@ void validate_fw_bundle_versions(
         psd.get_firmware_bundle_version()->to_string(),
         peer_host_name,
         peer_firmware_bundle_version->to_string());
-}
-
-void remove_unresolved_nodes(PhysicalSystemDescriptor& psd) {
-    auto& asic_descriptors = psd.get_asic_descriptors();
-    auto& system_graph = psd.get_system_graph();
-    auto& exit_node_connection_table = psd.get_exit_node_connection_table();
-
-    for (auto& [host, asic_group] : system_graph.asic_connectivity_graph) {
-        for (auto& [src_asic, edges] : asic_group) {
-            std::erase_if(edges, [&](const auto& pair) { return not asic_descriptors.contains(pair.first); });
-        }
-    }
-
-    for (auto& [host, exit_nodes] : exit_node_connection_table) {
-        std::erase_if(exit_nodes, [&](const auto& exit_node) {
-            return asic_descriptors.find(exit_node.src_exit_node) == asic_descriptors.end() ||
-                   asic_descriptors.find(exit_node.dst_exit_node) == asic_descriptors.end();
-        });
-    }
 }
 
 void generate_cross_host_connections(PhysicalSystemDescriptor& psd) {
@@ -866,18 +847,26 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
     psd.set_discovery_data(get_local_discovery_hostname(cluster_desc), my_rank, all_hostnames_unique);
+    auto local_exit_nodes = psd.get_exit_node_connection_table()[get_local_discovery_hostname(cluster_desc)];
 
     if (run_global_discovery) {
         exchange_metadata(psd, distributed_context, true);
         auto my_rank_val = *(distributed_context->rank());
         constexpr uint32_t controller_rank = 0;
         if (my_rank_val == controller_rank) {
-            remove_unresolved_nodes(psd);
+            const auto pruned_links = psd.prune_unresolved_links();
+            log_debug(
+                tt::LogMetal,
+                "Physical Discovery: pruned {} eth link(s) to ASIC(s) outside the discovered system",
+                pruned_links);
             generate_cross_host_connections(psd);
             validate_graphs(psd);
         }
         exchange_metadata(psd, distributed_context, false);
+        // merge appends exit-node tables, so a peer still holds its own unpruned local entries.
+        psd.prune_unresolved_links();
     }
+    psd.get_local_exit_nodes() = std::move(local_exit_nodes);
 
     return psd;
 }

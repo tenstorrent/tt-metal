@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast_sharded_program_factory.hpp"
+#include "typecast_kernel_format.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -190,8 +191,12 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         .compile_time_args =
             {{"per_core_block_cnt", 1u},
              {"per_core_block_dim", num_tile_per_core},
-             {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
-             {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
+             {"in_data_format",
+              typecast_kernel_data_format(
+                  datatype_to_dataformat_converter(input.dtype()), input.device()->arch() == tt::ARCH::QUASAR)},
+             {"out_data_format",
+              typecast_kernel_data_format(
+                  datatype_to_dataformat_converter(output.dtype()), input.device()->arch() == tt::ARCH::QUASAR)}},
         // No bfp_pack_precision_mode on Quasar (TT-2.x.x; MXFP replaces BFP). WH/BH keep the
         // byte-identical legacy config, with the BFP pack knob in config_1xx.
         .hw_config = [&]() -> ComputeHardwareConfig {

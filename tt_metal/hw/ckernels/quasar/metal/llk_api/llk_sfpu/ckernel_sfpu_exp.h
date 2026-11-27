@@ -11,6 +11,7 @@
 
 #include "ckernel.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_dest.h"
 #include "ckernel_sfpu_srcs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
@@ -213,10 +214,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 // Non-finite behaviour of this path:
-//   +NaN -> NaN    -NaN -> 0    +Inf -> +Inf    -Inf -> 0
-// -NaN diverges from Blackhole, which returns NaN for either sign: a negative-signed NaN drives i
-// negative, so the lane lands in the underflow arm. Derived from simulation of this routine, NOT
-// silicon-verified -- no Quasar target available.
+//   +-NaN -> NaN    +Inf -> +Inf    -Inf -> 0
 // unsafe = true drops the overflow/underflow guards, as the Blackhole template of the same name does;
 // only for callers that already bound the argument inside exp's finite range.
 //
@@ -285,8 +283,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
 
-// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN. As in base e
-// above, -NaN lands in the underflow arm (0). The only caller, logaddexp2, zeroes NaN gaps first.
+// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN. The only caller,
+// logaddexp2, zeroes NaN gaps first.
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
     return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
 }
@@ -319,11 +317,11 @@ struct ExpFp32Accurate {
 template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
-/**
- * @brief EXP over a Dest span.
- *
- * The fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE; otherwise the HW LUT.
- */
+/** @brief Dest EXP op type; the fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE. */
+template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST, sfpi::DataLayout LAYOUT, int ITERATIONS = SFPU_ITERATIONS>
+using ExpDest = DestUnary<ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>, LAYOUT, ITERATIONS>;
+
+/** @brief EXP over a Dest span; macro-path entry, HW-implied layout. */
 template <
     bool APPROXIMATION_MODE,
     bool EN_32BIT_DEST,
@@ -336,13 +334,7 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
     LLK_ASSERT(
         exp_base_scale_factor == p_sfpu::kCONST_1_FP16B,
         "Scaling is not supported in the current version of exp on Quasar.");
-    using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
-    using Algo = ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>;
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        calculate_unary_operands<Algo, 1 /*ITERATIONS*/>(Operand{}, Operand{});
-        sfpi::dst_reg++;
-    }
+    ExpDest<APPROXIMATION_MODE, EN_32BIT_DEST, sfpi::DataLayout::Default, ITERATIONS>::calculate();
 }
 
 template <

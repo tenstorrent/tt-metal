@@ -12,15 +12,15 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>    // tt::tile_size
-#include <tt-metalium/work_split.hpp>  // corerange_to_cores
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>  // tt::tile_size
+#include <tt-metalium/utils/work_split.hpp>          // corerange_to_cores
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/small_vector.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
@@ -183,7 +183,7 @@ ProgramDescriptor build_ring_program_descriptor(
     // A zero-band core is harmless for a single group phase, and retaining the ring-wide basis preserves the
     // measured production and partial-readiness receiver grids. With multiple phases, however, its compute
     // kernel returns while its reader can block on the next single-buffered q/w multicast. Size that geometry
-    // from one shard so every participating lane has work in every arrival schedule.
+    // from one shard so every participating lane has at least one unit in every wave.
     const uint32_t lane_sizing_units = num_groups > 1 ? units_per_shard : work_unit_count;
     const uint32_t cols_used = cols_for_bands(lane_sizing_units, compute_cols_x);
     const uint32_t num_blocks =
@@ -202,13 +202,7 @@ ProgramDescriptor build_ring_program_descriptor(
     }
     // Only the largest lane count is needed on the host; kernels reconstruct physical starts.
     const indexer_ring_schedule::Geometry schedule_geometry{
-        ring_size,
-        units_per_shard,
-        sll_t,
-        KC,
-        num_blocks,
-        cols_used,
-        ring_schedule::rotation_enabled(fused.topology, ring_size)};
+        ring_size, units_per_shard, sll_t, KC, num_blocks, cols_used};
     uint32_t max_bands = 0;
     for (uint32_t lane = 0; lane < num_blocks * cols_used; ++lane) {
         max_bands = std::max(max_bands, indexer_ring_schedule::band_count(schedule_geometry, lane));
@@ -500,8 +494,7 @@ ProgramDescriptor build_ring_program_descriptor(
         {"schedule_max_bands", max_bands},
         {"schedule_ring_size", ring_size},
         {"schedule_units", units_per_shard},
-        {"schedule_cols", cols_used},
-        {"schedule_rotate", ring_schedule::rotation_enabled(fused.topology, ring_size) ? 1u : 0u}};
+        {"schedule_cols", cols_used}};
     reader_kernel.named_compile_time_args = schedule_args;
     writer_kernel.named_compile_time_args = schedule_args;
     compute_kernel.named_compile_time_args = schedule_args;

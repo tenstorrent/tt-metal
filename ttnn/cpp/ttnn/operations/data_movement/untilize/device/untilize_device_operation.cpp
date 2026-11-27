@@ -7,7 +7,7 @@
 
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "factories/untilize_single_core_program_factory.hpp"
@@ -20,7 +20,7 @@
 #include "factories/untilize_multi_core_nd_shard_input_program_factory.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/common/constants.hpp"
-#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
@@ -50,7 +50,7 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     auto* device = tensor.device();
     uint32_t max_l1_size =
         (device->l1_size_per_core() / 2) - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::cb_dataformat_for(tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(input_cb_data_format);
     // Determine the max number of tiles that can be in any CB at a given time (1 input CB + 1 output CB = 2 total CBs)
     uint32_t max_tiles_per_cb = max_l1_size / (2 * single_tile_size);
@@ -178,7 +178,8 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         // Use the effective output element size for alignment checks.
         // Untilize converts BFLOAT8_B inputs to BFLOAT16 outputs, so the element size becomes 2 bytes.
         uint32_t output_element_size_in_bytes = input_tensor_a.element_size();
-        if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B) {
+        if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+            tt::tt_metal::is_mx(input_tensor_a.dtype())) {
             output_element_size_in_bytes = 2;
         }
         const uint32_t output_row_size_bytes = output_shard_width * output_element_size_in_bytes;

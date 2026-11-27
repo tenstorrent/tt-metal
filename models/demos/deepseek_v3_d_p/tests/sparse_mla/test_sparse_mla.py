@@ -1056,8 +1056,9 @@ def run_sparse_mla_indexer_reuse_case(
     """GLM-5.3 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
     produce the SAME output as computing them itself — validates the MLA return + accept path. Same
     weights + input + selection -> identical sparse attention, so the two outputs match bit-for-bit.
-    On the 8x4 TorusXY mesh run B receives its KV rows through the sparse KV push (sparse_kv_push.py) where run A
-    gathers the whole prefix, so this also checks the push against the gather, for one layer and one chunk.
+    Where the push runs (any 2D fabric, see sparse_kv_push_supported) run B receives its KV rows through the sparse KV
+    push (sparse_kv_push.py) where run A gathers the whole prefix, so this also checks the push against the gather, for
+    one layer and one chunk.
     test_sparse_mla_push_layers_chunked covers the push across layers and chunks."""
     config = config_only
     config.max_seq_len = seq_len
@@ -1128,7 +1129,7 @@ def test_sparse_mla_indexer_reuse_chunked(
     )
 
 
-# Two production-size chunks (5120) on the 8x4 TorusXY mesh, where the sparse KV push runs.
+# Two production-size chunks (5120) on the production 8x4 TorusXY mesh (the push runs on any 2D fabric).
 SPARSE_PUSH_LAYERS_CASES = [
     c for c in _sparse_cases([10240], anchor_only=True) if "glm_5_3" in c.id and "shape-8x4" in c.id
 ]
@@ -1324,6 +1325,13 @@ SPARSE_SP1_MESH_CASES = [
         )
         for variant_name in SPARSE_VARIANTS
     ],
+    pytest.param(
+        "glm_5_3",
+        (4, 4),
+        torus_xy_device_params(worker_l1_size=_worker_l1_size()),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="glm_5_3-shape-xy4-sp1",
+    ),
 ]
 
 
@@ -1372,7 +1380,15 @@ def test_sparse_mla_chunked_sp_axis_1(
 # test_sparse_mla_determinism.py owns at production shapes (8x4 and the 4x4 stage). The rest are GLM's alone:
 # indexer reuse needs a shared indexer layer, and kv_only and rotated run GLM only at SP on axis 0 too.
 SPARSE_SP1_CASES = {
-    "glm_5_3": ("accuracy", "determinism", "indexer_reuse", "kv_only", "pad_overflow", "rotated"),
+    "glm_5_3": (
+        "accuracy",
+        "determinism",
+        "indexer_reuse",
+        "indexer_reuse_push_off",
+        "kv_only",
+        "pad_overflow",
+        "rotated",
+    ),
     "kimi_k3_1": ("accuracy", "pad_overflow"),
 }
 
@@ -1389,7 +1405,7 @@ SPARSE_SP1_CASES = {
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_sp_axis_1(
-    mesh_device, device_params, case, variant, config_only, ds_layer, ds_checkpoint, ds_repo, ds_input
+    mesh_device, device_params, case, variant, config_only, ds_layer, ds_checkpoint, ds_repo, ds_input, monkeypatch
 ):
     seq_len, chunk, fmt = 5120, 1024, SPARSE_MAIN_KV_FORMAT[variant.name]
     topology = per_axis_topology(device_params["fabric_config"])
@@ -1399,6 +1415,11 @@ def test_sparse_mla_sp_axis_1(
     elif case == "determinism":
         run_sparse_mla_determinism_case(variant, config_only, mesh_device, seq_len, 3, topology, *ds, sp_axis=1)
     elif case == "indexer_reuse":
+        run_sparse_mla_indexer_reuse_case(variant, config_only, mesh_device, seq_len, device_params, *ds, sp_axis=1)
+    elif case == "indexer_reuse_push_off":
+        # The same compute-vs-inject check with shared layers gathering the whole prefix instead of receiving it
+        # through the sparse KV push, which isolates the push on meshes that enable it.
+        monkeypatch.setattr(mla_module, "sparse_kv_push_supported", lambda *_: False)
         run_sparse_mla_indexer_reuse_case(variant, config_only, mesh_device, seq_len, device_params, *ds, sp_axis=1)
     elif case == "kv_only":
         run_sparse_mla_kv_only_case(variant, config_only, mesh_device, seq_len, chunk, fmt, *ds, sp_axis=1)

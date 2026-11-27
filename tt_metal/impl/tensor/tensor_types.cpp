@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
@@ -103,20 +103,6 @@ bool is_block_float(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return true;
-        default: return false;
-    }
-}
-
-bool is_mx(DataType dtype) {
-    switch (dtype) {
-        case DataType::MXFP8_E4M3:
-        case DataType::MXFP8_E5M2:
-        case DataType::MXFP6_E2M3:
-        case DataType::MXFP6_E3M2:
-        case DataType::MXFP4:
-        case DataType::MXINT8:
-        case DataType::MXINT4:
-        case DataType::MXINT2: return true;
         default: return false;
     }
 }

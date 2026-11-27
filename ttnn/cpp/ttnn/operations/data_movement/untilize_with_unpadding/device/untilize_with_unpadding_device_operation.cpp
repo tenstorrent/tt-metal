@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 using namespace tt::tt_metal;
@@ -394,7 +394,8 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         operation_attributes.output_mem_config.nd_shard_spec().has_value(),
                     "Output memory config is sharded but no shard spec or nd shard spec is provided");
                 uint32_t output_dtype_size = input_tensor_a.element_size();
-                if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B) {
+                if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+                    tt::tt_metal::is_mx(input_tensor_a.dtype())) {
                     output_dtype_size = 2;
                 }
                 uint32_t output_shard_width;
@@ -627,7 +628,7 @@ Tensor untilize_with_unpadding(
 }
 
 tt::DataFormat get_untilize_with_unpadding_dfb_data_format(tt::tt_metal::DataType dtype, tt::ARCH arch) {
-    const tt::DataFormat format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+    const tt::DataFormat format = tt::tt_metal::cb_dataformat_for(dtype);
     // Quasar rejects UInt16 as a DFB format. The untilize kernels only move the 16-bit values, so Int16 holds
     // them bit for bit.
     if (arch == tt::ARCH::QUASAR && format == tt::DataFormat::UInt16) {

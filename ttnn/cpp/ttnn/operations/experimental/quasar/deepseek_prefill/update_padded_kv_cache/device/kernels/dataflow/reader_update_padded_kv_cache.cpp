@@ -39,8 +39,8 @@ inline void read_pages(
 }  // namespace
 
 // `kv_actual_global` reaches this kernel the same two ways the writer's does, selected by the
-// `has_metadata` compile-time flag: read on-device from the 1-element uint32 tensor whose raw address is
-// common arg 7 (metadata/traceable path), or straight out of common arg 7 as a value (scalar path). The
+// `has_metadata` compile-time flag: read on-device from the 1-element uint32 tensor whose base address is
+// bound to common arg 7 (metadata/traceable path), or straight out of common arg 7 as a value (scalar path). The
 // reader NEEDS the real value even under tp_axis -- its source-row mapping is derived from the chunk
 // start -- which is why the metadata path had to grow this read before tp_axis could be allowed on it.
 //

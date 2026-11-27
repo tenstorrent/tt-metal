@@ -12,6 +12,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.kda import tp_gather_mux_buffers, tp_gather_resources
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     NullIndexer,
     ReuseIndexer,
@@ -19,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     indexer_layer_is_reused,
     resolve_has_indexer,
 )
-from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
+from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_AGMM_CONFIG, MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.rope import identity_rope_tensors_indexed
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import (
     SAME_CHUNK_NEXT_LAYER,
@@ -27,7 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import (
     SparseKvPushPart,
     sparse_kv_push_supported,
 )
-from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
+from models.demos.deepseek_v3_d_p.tt.mla.utils import block_norm_program_config, l1_if_fits, llama4_scale_host
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
@@ -54,6 +55,11 @@ class ttMLA:
         "wkv_b2",
         "o_proj",
     ]
+    # The KV branch, all a kv_only layer loads (_convert_and_cache_weights), pinned to the dtype and layout it loads at.
+    KV_WEIGHT_GLOBS = {
+        "kv_a_layernorm": "_dtype_BFLOAT16_layout_ROW_MAJOR",
+        "kv_a_proj_with_mqa": "_dtype_BFLOAT8_B_layout_TILE",
+    }
 
     @staticmethod
     def weight_names(has_output_gate: bool = False) -> list[str]:
@@ -99,7 +105,12 @@ class ttMLA:
 
     @staticmethod
     def check_cache_complete(
-        cache_path: Path, cache_name_prefix: str, has_indexer: bool = False, has_output_gate: bool = False
+        cache_path: Path,
+        cache_name_prefix: str,
+        has_indexer: bool = False,
+        has_output_gate: bool = False,
+        kv_only: bool = False,
+        indexer_key_only: bool = False,
     ) -> bool:
         """Check that the dense MLA weight cache files exist, plus the indexer tensorbins when sparse.
 
@@ -107,14 +118,20 @@ class ttMLA:
         (``{prefix}.indexer_*``) must also be complete — a disjoint prefix space from the dense MLA
         names, so the dense loop here never matches indexer files and vice versa
         (see ``TtIndexer.check_cache_complete``). ``has_output_gate=True`` additionally requires
-        ``g_proj`` (Kimi-K3)."""
+        ``g_proj`` (Kimi-K3). ``kv_only`` checks only the KV branch a kv_only build loads; ``indexer_key_only`` checks
+        only the indexer's key side (a layer built with ``indexer_key_only``)."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
-        for name in ttMLA.weight_names(has_output_gate):
-            if not pattern_exists(f"{cache_name_prefix}.{name}*.tensorbin", "MLA"):
-                logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}")
+        globs = (
+            {name: pin + ".tensorbin" for name, pin in ttMLA.KV_WEIGHT_GLOBS.items()}
+            if kv_only
+            else {name: "*.tensorbin" for name in ttMLA.weight_names(has_output_gate)}
+        )
+        for name, suffix in globs.items():
+            if not pattern_exists(f"{cache_name_prefix}.{name}{suffix}", "MLA"):
+                logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}{suffix}")
                 return False
-        if has_indexer and not TtIndexer.check_cache_complete(cache_path, cache_name_prefix):
+        if has_indexer and not TtIndexer.check_cache_complete(cache_path, cache_name_prefix, key_only=indexer_key_only):
             return False
         return True
 
@@ -427,6 +444,7 @@ class ttMLA:
         layer_num: int = 61,
         kv_only: bool = False,
         next_kv_only: bool = False,
+        indexer_key_only: bool = False,
         has_indexer: bool | None = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         active_seq_len: Optional[int] = None,
@@ -451,6 +469,7 @@ class ttMLA:
         self.layer_idx = layer_idx
         self._first_layer_idx = first_layer_idx or 0  # this pipeline stage's first layer
         self.kv_only = kv_only
+        assert not indexer_key_only or kv_only, "indexer_key_only needs a kv_only layer (only write_k runs)"
         self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
         self.is_chunked = is_chunked
@@ -613,6 +632,7 @@ class ttMLA:
         self._q_a_latent_gather_output = None
         self._kv_stem_gather_output = None
         self._output_gate_gather_output = None
+        self._gate_agmm_kwargs = None
         # q_a and kv_a as one matmul + one all-reduce over [q_a_proj | kv_a_proj_with_mqa | pad].
         self._merge_qkv_a = ttMLA.merges_qkv_a(config, self.tp_factor, self.kv_only, self._has_indexer)
         if self._merge_qkv_a:
@@ -642,13 +662,6 @@ class ttMLA:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
-            if self._use_gate and not self.kv_only:
-                self._output_gate_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
-                    name="output_gate",
-                    shape=[1, 1, self.active_seq_len_local, self.hidden_size],
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                )
 
         # Per-axis CCL topology, named symmetrically by axis. The q/kv/wo collectives run on the TP
         # axis (cluster_axis=tp_axis) and use tp_ccl_topology; the ring-attention SDPA (ring_mla /
@@ -734,8 +747,10 @@ class ttMLA:
             self.o_proj_weight = weights["o_proj"]
             if self._use_gate:
                 self.g_proj_weight = weights["g_proj"]
+                self._setup_output_gate(mesh_device)
             if self._q_distnorm:
                 self._q_a_norm_weight_tp = weights["q_a_layernorm_tp"]
+                self._q_a_norm_resources_memo = [None, None, None]  # see TT_CCL.get_fused_rmsnorm_resources
                 self.tt_ccl.preallocate_fused_rmsnorm_resources(
                     [1, 1, self.active_seq_len_local, self.q_lora_rank // self.tp_factor],
                     ttnn.bfloat16,
@@ -794,7 +809,7 @@ class ttMLA:
         # One chip's rows of a chunk: the cache's block-cyclic block.
         push_stripe_chunk = self.active_seq_len_local // self.tp_factor
         if self._sparse_kv_gather_buffer is not None and sparse_kv_push_supported(
-            mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2]
+            mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2], self.ccl_num_links
         ):
             dense = self._sparse_kv_gather_buffer
             self._push = self.tt_ccl.get_sparse_kv_push_planner(self.ccl_num_links)
@@ -892,6 +907,8 @@ class ttMLA:
                     layer_num=self.layer_num,
                     first_layer_idx=first_layer_idx,
                     output_tp_sequence_sharded=self._needs_head_to_seq_reshard,
+                    # Opt-in for a kv_only layer, which only writes index keys (_forward_kv_only -> write_k).
+                    key_only=indexer_key_only,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
@@ -1209,6 +1226,7 @@ class ttMLA:
         seq_subshard_axis: Optional[int] = None,
         row_major_output: bool = False,
         compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
+        memory_config: Optional[ttnn.MemoryConfig] = None,
     ) -> ttnn.Tensor:
         """Chunked rotated RoPE via the indexed op. rope_tensors carry the whole-cache,
         block-cyclic-sharded cos/sin (or NoPE's one-slab identity tables, read at start 0); the op
@@ -1229,6 +1247,7 @@ class ttMLA:
             seq_subshard_axis=seq_subshard_axis,
             row_major_output=row_major_output,
             compute_kernel_config=compute_kernel_config,
+            memory_config=memory_config,
         )
 
     def _apply_rope_none(
@@ -1435,24 +1454,34 @@ class ttMLA:
             scatter_dim=-2,
             topology=self.tp_ccl_topology,
             num_links=self.ccl_num_links,
+            # The norm reads it right away.
+            memory_config=l1_if_fits((rows, self.q_lora_rank), 2, self._Q_A_NORM_L1_MAX_BYTES),
         )
 
-    def _q_a_latent_from_tp_rows(
-        self, qr_rows: ttnn.Tensor, seq_len_local: int, norm_memory_config: ttnn.MemoryConfig
-    ) -> ttnn.Tensor:
-        """All-gather the TP ranks' q_a rows and normalize: the same qr _q_a_latent returns."""
+    def _gather_tp_rows(self, qr_local: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        """All-gather the TP ranks' normalized q_a rows: the same qr _q_a_latent returns, in the persistent (borrowed)
+        gather buffer."""
         assert (
             seq_len_local == self.active_seq_len_local
         ), f"TP gather was preallocated for {self.active_seq_len_local} local tokens, got {seq_len_local}"
-        qr = ttnn.experimental.high_bw_all_gather(
-            qr_rows,
+        return ttnn.experimental.high_bw_all_gather(
+            qr_local,
             dim=2,
             output_tensor=self._q_a_latent_gather_output,
             cluster_axis=self.tp_axis,
             num_links=self.ccl_num_links,
             **self._tp_gather_semaphores,
         )
-        return self._q_a_norm(qr, norm_memory_config)
+
+    def _is_q_gather_buffer(self, qr: ttnn.Tensor) -> bool:
+        """True when qr is the persistent q_a gather buffer, shared across layers: borrowed, never deallocated."""
+        gather = self._q_a_latent_gather_output
+        # Addresses are per buffer type: an L1 tensor can share the DRAM gather buffer's numeric address.
+        return (
+            gather is not None
+            and qr.memory_config().buffer_type == gather.memory_config().buffer_type
+            and qr.buffer_address() == gather.buffer_address()
+        )
 
     def _tp_all_reduce(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         x = ttnn.experimental.reduce_scatter_minimal_async(
@@ -1485,7 +1514,7 @@ class ttMLA:
     def _q_a_latent_distnorm(self, x: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         """Distributed RMSNorm of this chip's q_a slice, then TP all-gather; returns the persistent gather buffer."""
         semaphores, stats = self.tt_ccl.get_fused_rmsnorm_resources(
-            x, self._q_a_norm_weight_tp, self.tp_axis, self.ccl_num_links
+            x, self._q_a_norm_weight_tp, self.tp_axis, self.ccl_num_links, memo=self._q_a_norm_resources_memo
         )
         normed = ttnn.experimental.dit_fused_distributed_rmsnorm(
             x,
@@ -1504,6 +1533,31 @@ class ttMLA:
         out = self._tp_all_gather(normed, self._q_a_latent_gather_output, seq_len_local)
         ttnn.deallocate(normed)
         return out
+
+    # Up to this many bytes of q_a rows per chip, the reduce-scatter writes them to L1 for the norm.
+    _Q_A_NORM_L1_MAX_BYTES = 4 << 20
+    # Largest sparse_sdpa output (per chip) written to L1 (K3.1 warm: 15 MiB).
+    _SDPA_OUT_L1_MAX_BYTES = 16 << 20
+
+    def _q_a_norm_rows(self, qr: ttnn.Tensor) -> ttnn.Tensor:
+        """_q_a_norm of this TP rank's q_a rows, into DRAM (the TP gather streams from DRAM). The interleaved program
+        runs one core per row tile (5 for GLM-5.3's 160 local rows, about 30 us); the sharded program over the same
+        interleaved tensors splits the width as well (40 cores, about 6 us)."""
+        return ttnn.rms_norm(
+            qr,
+            weight=self.q_a_layernorm_weight,
+            epsilon=self.config.rms_norm_eps,
+            program_config=self._block_norm_config(qr.shape),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.default_compute_kernel_config,
+        )
+
+    def _block_norm_config(self, shape) -> "ttnn.LayerNormShardedMultiCoreProgramConfig | None":
+        cache = self.__dict__.setdefault("_block_norm_config_cache", {})
+        key = tuple(shape)
+        if key not in cache:
+            cache[key] = block_norm_program_config(shape, self.mesh_device.compute_with_storage_grid_size())
+        return cache[key]
 
     def _q_a_norm(self, qr: ttnn.Tensor, norm_memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
         return ttnn.rms_norm(
@@ -1564,9 +1618,11 @@ class ttMLA:
         kv_actual_isl: Optional[int],
         seq_len_local: int,
         metadata: Optional[ttnn.Tensor] = None,
+        qr_borrowed: bool = False,
     ) -> ttnn.Tensor:
         """Absorbed-Q stem from the q_a latent: q_b_proj → heads → split → wkv_b1(nope) → RoPE(rope)
-        → query assembly. Consumes qr (the indexer, if any, has already read it by this point)."""
+        → query assembly. Consumes qr (the indexer, if any, has already read it by this point) unless it is borrowed:
+        the persistent q_a gather buffer, which must stay allocated."""
         num_heads_local = self.num_heads // self.tp_factor
         if self._llama4_beta is not None:
             # Mistral's per-position query temperature, applied to the normed q_a latent rather than to
@@ -1576,15 +1632,19 @@ class ttMLA:
             scaled = ttnn.multiply(
                 qr, self._llama4_scale(kv_actual_isl, seq_len_local, metadata), memory_config=qr.memory_config()
             )
-            ttnn.deallocate(qr)
-            qr = scaled
+            if not qr_borrowed:
+                ttnn.deallocate(qr)
+            qr, qr_borrowed = scaled, False
         tt_q = ttnn.linear(
             qr,
             self.q_b_proj_weight,
             **self._get_mm_kwargs("q_b_proj", seq_len_local),
         )
-        if not self._q_distnorm or qr.memory_config().buffer_type == ttnn.BufferType.L1:
+        if not qr_borrowed:
             ttnn.deallocate(qr)
+
+        if self._early_q_reshard:
+            return self._q_stem_seq_sharded(tt_q, rope_tensors, kv_actual_isl, seq_len_local, metadata)
 
         # The Q stem uses interleaved head creation. Write the two channel regions directly.
         tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
@@ -1594,8 +1654,6 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(tt_q)
-        if self._early_q_reshard:
-            return self._q_stem_seq_sharded(tt_q_nope, tt_q_rope, rope_tensors, kv_actual_isl, seq_len_local, metadata)
 
         tt_q_nope = ttnn.linear(
             tt_q_nope,
@@ -1623,20 +1681,29 @@ class ttMLA:
         qk_nope + qk_rope wide instead of 576; RoPE writes it row-major for sparse_sdpa. Needs wkv_b1 replicated."""
         return ttMLA.replicates_wkv_b1(self.config, self.tp_factor, self._has_indexer)
 
-    def _q_stem_seq_sharded(self, tt_q_nope, tt_q_rope, rope_tensors, kv_actual_isl, seq_len_local, metadata):
-        """_q_stem after the head split, for _early_q_reshard: all-to-all heads -> sequence, wkv_b1 over all heads on
-        this chip's quarter of the rows, then RoPE with the prefix, row-major. Returns [1, H, S/(sp*tp), 576]."""
-        a2a = lambda t: ttnn.experimental.all_to_all_async_generic(
-            t,
-            in_dim=1,
+    def _q_stem_seq_sharded(self, tt_q, rope_tensors, kv_actual_isl, seq_len_local, metadata):
+        """_q_stem after q_b_proj, for _early_q_reshard: one all-to-all heads -> sequence on the projected rows, the
+        head split over all heads, wkv_b1 over all heads on this chip's 1/tp of the rows, then RoPE with the
+        prefix, row-major (into L1 when it fits). Returns [1, H, S/(sp*tp), 576]."""
+        # [1, 1, S/sp, H/tp*qk] -> [1, 1, S/(sp*tp), H*qk]: each TP rank's head columns are contiguous, so the
+        # concatenation is in global head order.
+        q_seq = ttnn.experimental.all_to_all_async_generic(
+            tt_q,
+            in_dim=3,
             out_dim=2,
             num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # It and its head split live for one op each: L1 when small (GLM-5.3 640 rows: 5.2 MB).
+            memory_config=(q_stem_mem := l1_if_fits(tt_q.shape, 2, 16 << 20)),
             cluster_axis=self.tp_axis,
         )
-        nope_seq, rope_seq = a2a(tt_q_nope), a2a(tt_q_rope)
-        ttnn.deallocate(tt_q_nope)
-        ttnn.deallocate(tt_q_rope)
+        ttnn.deallocate(tt_q)
+        nope_seq, rope_seq = ttnn.experimental.nlp_create_q_heads_split(
+            q_seq,
+            num_heads=self.num_heads,
+            split_head_dim=self.qk_nope_head_dim,
+            memory_config=q_stem_mem,
+        )
+        ttnn.deallocate(q_seq)
         # wkv_b1 holds every head here (replicate_wkv_b1).
         prefix = ttnn.linear(nope_seq, self.wkv_b1_weight, **self._early_q_wkv_b1_kwargs(seq_len_local))
         ttnn.deallocate(nope_seq)
@@ -1650,11 +1717,16 @@ class ttMLA:
             )
         else:
             rope_kwargs = dict(rope_tensors=rope_tensors, kv_actual_isl=kv_actual_isl, metadata=metadata)
+        # q in L1: sparse_sdpa reads it one (head, token) row at a time, and from DRAM those reads stall its start.
+        # Up to K3.1's 160-row case (16.9 MiB, measured); q above 18 MiB stays in DRAM.
+        q_bytes = rope_seq.shape[1] * rope_seq.shape[2] * (prefix.shape[-1] + rope_seq.shape[-1]) * 2
+        q_memory_config = ttnn.L1_MEMORY_CONFIG if q_bytes <= 18 << 20 else ttnn.DRAM_MEMORY_CONFIG
         tt_q = self._apply_rope_padded(
             rope_seq,
             concat_prefix=prefix,
             seq_subshard_axis=self.tp_axis,
             row_major_output=True,
+            memory_config=q_memory_config,
             **rope_kwargs,
         )
         ttnn.deallocate(prefix)
@@ -1790,7 +1862,6 @@ class ttMLA:
         """
         tt_kv = self._kv_a_proj(hidden_states, seq_len_local) if kv_a is None else None
         kv_mem = ttnn.L1_MEMORY_CONFIG if self._has_indexer and not return_kv_intermediates else ttnn.DRAM_MEMORY_CONFIG
-        latent_mem = ttnn.DRAM_MEMORY_CONFIG if kvpe_cache.format == MlaKvCacheFormat.SCALED_FP8 else kv_mem
         if kv_a is not None:
             tt_kv_nope, tt_kv_rope = kv_a
             kv_intermediates = (
@@ -1834,7 +1905,9 @@ class ttMLA:
             tt_kv_nope,
             weight=self.kv_a_layernorm_weight,
             epsilon=self.config.rms_norm_eps,
-            memory_config=latent_mem,
+            # per_token_cast_to_fp8 (scaled-FP8 cache) reads L1 too
+            memory_config=l1_if_fits(tt_kv_nope.shape, 2, 4 << 20) if kv_mem == ttnn.L1_MEMORY_CONFIG else kv_mem,
+            program_config=self._block_norm_config(tt_kv_nope.shape),
             compute_kernel_config=self.default_compute_kernel_config,
         )
 
@@ -1942,6 +2015,55 @@ class ttMLA:
                 scales=scales,
             )
 
+    def _setup_output_gate(self, mesh_device) -> None:
+        """Fuse the output gate's TP all-gather into g_proj (all_gather_minimal_matmul_async, gathering K, sigmoid fused)
+        when a tuned MLA_AGMM_CONFIG entry applies, a column beside its grid is free for the fabric muxes, and the
+        fabric is 2D; else allocate the standalone gather's output. The fused gather shares its input buffer and
+        semaphores with KDA and the dense FFN (tp_gather_resources)."""
+        if self.tp_factor == 1:
+            return
+        cfg = None
+        if self._is_blackhole:
+            cfg = self._select_cfg(MLA_AGMM_CONFIG["g_proj"].get(self.active_seq_len_local), "g_proj")
+        grid = mesh_device.compute_with_storage_grid_size()
+        topology = ttnn.get_usable_topology(self.g_proj_weight, self.tp_ccl_topology, self.tp_axis)
+        fuse = False
+        if cfg is not None:
+            mm = cfg["config"]
+            matmul_grid = ttnn.CoreCoord(*mm["compute_with_storage_grid_size"])
+            local_k_tiles = self.g_proj_weight.shape[-2] // self.tp_factor // ttnn.TILE_SIZE
+            fuse = (
+                matmul_grid.x < grid.x
+                and ttnn.get_fabric_config(mesh_device).name.startswith("FABRIC_2D")
+                and mm["K_block_size"] <= local_k_tiles
+                # A Ring needs the K block to divide the local K shard (no tail block).
+                and (topology == ttnn.Topology.Linear or local_k_tiles % mm["K_block_size"] == 0)
+            )
+        if not fuse:
+            self._output_gate_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                name="output_gate",
+                shape=[1, 1, self.active_seq_len_local, self.hidden_size],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            return
+        links = max(1, min(self.ccl_num_links, matmul_grid.y // 2))
+        self._gate_agmm_kwargs = dict(
+            tp_gather_resources(mesh_device, self.active_seq_len_local, self.hidden_size),
+            config=ttnn.MinimalMatmulConfig(**{**mm, "compute_with_storage_grid_size": matmul_grid}),
+            fused_activation=cfg["fused_activation"],
+            compute_kernel_config=self._tuned_compute_kernel_config(cfg),
+            memory_config=cfg["out_mem_config"],
+            dtype=cfg["out_dtype"],
+            topology=topology,
+            cluster_axis=self.tp_axis,
+            num_links=links,
+            num_workers_per_link=-(-matmul_grid.y // links),
+            num_buffers_per_channel=tp_gather_mux_buffers(mesh_device),
+            force_transpose=False,
+            use_mcast=True,
+        )
+
     def _output_gate(self, hidden_states: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         """Kimi-K3 gated MLA: sigmoid(g_proj(hidden_states)), head-sharded to match concat_heads.
 
@@ -1950,6 +2072,19 @@ class ttMLA:
         12288-wide partial: less traffic, no wide intermediate, and g is complete per device so sigmoid
         can fuse into the matmul (measured ~292 us less collective at FABRIC_2D).
         """
+        if self._gate_agmm_kwargs is not None:
+            assert seq_len_local == self.active_seq_len_local, (
+                f"output-gate gather was preallocated for {self.active_seq_len_local} local tokens, "
+                f"got {seq_len_local}"
+            )
+            assert hidden_states.dtype == ttnn.bfloat16, f"the fused gate gathers BF16, got {hidden_states.dtype}"
+            rows, width = seq_len_local, hidden_states.shape[-1]
+            g = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=ttnn.reshape(hidden_states, (1, rows, width)),
+                weight_tensor=self.g_proj_weight,
+                **self._gate_agmm_kwargs,
+            )[0]
+            return ttnn.reshape(g, (1, 1, rows, g.shape[-1]))
         if self.tp_factor > 1:
             assert self._output_gate_gather_output is not None
             assert seq_len_local == self.active_seq_len_local, (
@@ -1995,13 +2130,20 @@ class ttMLA:
         The gate multiply sits after nlp_concat_heads so g needs no head split, and cannot move before
         wkv_b2: it acts in v_head_dim space, and g*(attn @ W_b2) != (g*attn) @ W_b2.
         """
-        v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # o_proj reads it right away (after K3's gate): L1 when small (GLM-5.3 640 rows, bf8: 2.6 MB; K3.1: 3.9 MB;
+        # sized as bf16, an upper bound).
+        v_out_mem = l1_if_fits(attn_out.shape, 2, 8 << 20)
+        v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=v_out_mem)
         if self._use_gate:
             assert hidden_states is not None, "gated MLA needs hidden_states to compute g_proj"
             g = self._output_gate(hidden_states, seq_len_local)
-            v_out = ttnn.multiply(v_out, g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gated = ttnn.multiply(v_out, g, memory_config=v_out_mem)
+            ttnn.deallocate(v_out)
             ttnn.deallocate(g)
+            v_out = gated
         if self.tp_factor > 1:
+            # CCL ports in the last grid column: the matmul keeps every row (GLM-5.3: 10x10 = 100 cores instead of
+            # 10x8 = 80, 12 -> 10 output tiles per core).
             return ttnn.experimental.matmul_reduce_scatter_prefill(
                 v_out,
                 self.o_proj_weight,
@@ -2009,6 +2151,7 @@ class ttMLA:
                 scatter_dim=-1,
                 topology=self.tp_ccl_topology,
                 num_links=self.ccl_num_links,
+                use_column_major_ccl=True,
             )
         return ttnn.linear(
             v_out,
@@ -2103,9 +2246,13 @@ class ttMLA:
         else:
             qr, kv_a = self._q_a_latent(hidden_states, seq_len_local, q_norm_mem_config), None
         indexer_qr, indexer_qr_kwargs = qr, {}
-        if qr_rows is not None and indexer_indices is None:
-            qr_local = self._q_a_norm(qr_rows, ttnn.DRAM_MEMORY_CONFIG)
-            indexer_qr, indexer_qr_kwargs = qr_local, {"qr_tp_local": True}
+        if qr_rows is not None:
+            # RMSNorm is per row, so each rank normalizes only its own rows: the indexer (if it runs) reads them, and the
+            # same tensor is gathered for _q_stem afterwards instead of gathering raw rows and normalizing all of them.
+            qr_local = self._q_a_norm_rows(qr_rows)
+            ttnn.deallocate(qr_rows)
+            if indexer_indices is None:
+                indexer_qr, indexer_qr_kwargs = qr_local, {"qr_tp_local": True}
 
         # DSA dispatch (v3.2 / GLM): the op graph is fixed by CONFIG — self._indexer and self._attention
         # are bound once at construction (sparsity × chunking), never by the runtime sequence length.
@@ -2156,12 +2303,12 @@ class ttMLA:
                 **indexer_qr_kwargs,
             )
 
-        if qr_rows is not None:
-            if qr_local is not None:
-                ttnn.deallocate(qr_local)
-            qr = self._q_a_latent_from_tp_rows(qr_rows, seq_len_local, q_norm_mem_config)
-            ttnn.deallocate(qr_rows)
-        tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata)
+        if qr_local is not None:
+            qr = self._gather_tp_rows(qr_local, seq_len_local)
+            ttnn.deallocate(qr_local)
+        tt_q = self._q_stem(
+            qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata, qr_borrowed=self._is_q_gather_buffer(qr)
+        )
         tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
             hidden_states,
             rope_tensors,
@@ -2384,6 +2531,7 @@ class ttMLA:
             max_rows=plan.max_rows,
             part=part,
             num_links=self.ccl_num_links,
+            sp_axis=self.sp_axis,
             **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
             ready_semaphore=self._push.ready_semaphore,
             done_semaphore=self._push.done_semaphore,
@@ -2522,6 +2670,7 @@ class ttMLA:
             max_rows=plan.max_rows,
             part=SparseKvPushPart.PREFIX,
             num_links=self.ccl_num_links,
+            sp_axis=self.sp_axis,
             **slot,
             ready_semaphore=self._push.ready_semaphore,
             done_semaphore=self._push.done_semaphore,
@@ -2988,6 +3137,13 @@ class ttMLA:
                 block_cyclic_cache_tp_sharded=True,
             )
         )
+        # Attention reads its selected KV rows from DRAM. When the all-to-all back to heads reads its output directly
+        # (early Q reshard), the output goes to L1 when it fits, so that DRAM traffic is only those reads.
+        out_mem = (
+            l1_if_fits((q_rm.shape[1], q_rm.shape[2], self.kv_lora_rank), 2, self._SDPA_OUT_L1_MAX_BYTES)
+            if self._early_q_reshard
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
         attention = lambda: ttnn.transformer.sparse_sdpa(
             q_rm,
             kvpe.storage,
@@ -2997,6 +3153,7 @@ class ttMLA:
             scale=self.scale,
             k_chunk_size=k_chunk,
             cache_batch_idx=cache_batch_idx,
+            memory_config=out_mem,
             **block_cyclic,
         )
         out = attention() if prefetch is None else self._beside_prefetch(prefetch, attention)

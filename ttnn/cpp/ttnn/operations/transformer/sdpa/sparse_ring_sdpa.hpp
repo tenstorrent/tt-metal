@@ -26,6 +26,7 @@ namespace ttnn::transformer {
 //   block_mask    [1, H, nqb_pad, ring_size * nb_pad]  uint32 ROW_MAJOR
 //   pooled_k / v  optional [1, H, ring_size * nb_pad, D]  TILE, k's dtype
 //   block_counts  optional [1, 1, 1, ring_size * nb_pad]  uint32 ROW_MAJOR, real tokens per block
+//   logical_n_tensor  optional [1, 1, 1, 1]  uint32 DRAM, the logical length read on device (replaces logical_n)
 // Returns [1, H, N/ring_size, D], same layout as q.
 ttnn::Tensor sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_q,
@@ -51,6 +52,7 @@ ttnn::Tensor sparse_ring_sdpa(
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     uint32_t block_size = 64,
     std::optional<uint32_t> q_blocks_per_pass = std::nullopt,
-    const std::optional<ttnn::Tensor>& block_counts = std::nullopt);
+    const std::optional<ttnn::Tensor>& block_counts = std::nullopt,
+    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt);
 
 }  // namespace ttnn::transformer

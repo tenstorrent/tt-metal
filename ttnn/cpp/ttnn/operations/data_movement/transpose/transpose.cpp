@@ -12,8 +12,9 @@
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 #include <variant>
 
 namespace ttnn::operations::data_movement::transpose {
@@ -341,17 +342,45 @@ ttnn::Tensor transpose_impl(
     const bool wh = 5 == (normalized_dim1 + normalized_dim2);  // 2+3=5
     const bool cn = 1 == (normalized_dim1 + normalized_dim2);  // 0+1
     const bool bfloat8_supported = wh || cn;
-    const bool typecast = input_unsqueezed.dtype() == DataType::BFLOAT8_B and !bfloat8_supported;
-    Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
+    // Only the WH and CN kernels handle block-float tiles; the others move flat face lines, so bfloat8_b and
+    // bfloat4_b go through bfloat16 there.
+    const DataType input_dtype = input_unsqueezed.dtype();
+    // An MX tile (Quasar) is not a flat element array either. Only the CN kernel moves whole tiles with no compute, so
+    // every other MX transpose that moves data (and the padding it can need) runs in bfloat16 and is packed back to MX
+    // afterwards. No-op transposes (same dim, or both dims of extent 1) never take the detour.
+    const bool mx_noop = normalized_dim1 == normalized_dim2 || (input_unsqueezed.padded_shape()[normalized_dim1] == 1 &&
+                                                                input_unsqueezed.padded_shape()[normalized_dim2] == 1);
+    const bool mx_via_bf16 = tt::tt_metal::is_mx(input_dtype) and !cn and !mx_noop;
+    // The bfloat16 copy of an MX tensor is 2x its size (more with a padded dim), so for MX it and the transposed result
+    // are staged in DRAM instead of the L1 the caller asked for; only the final pack back to MX lands in that config.
+    // The detour is interleaved, so a sharded input or output would silently change placement: reject it.
+    if (mx_via_bf16) {
+        TT_FATAL(
+            !input_tensor.is_sharded() && !(memory_config_arg.has_value() && memory_config_arg->is_sharded()),
+            "transpose of an MX tensor ({}) over these dims supports interleaved input and output only; convert with "
+            "ttnn.to_memory_config first.",
+            input_dtype);
+    }
+    const bool typecast =
+        ((input_dtype == DataType::BFLOAT8_B || input_dtype == DataType::BFLOAT4_B) and !bfloat8_supported) ||
+        mx_via_bf16;
+    const std::optional<MemoryConfig> work_memory_config =
+        mx_via_bf16 ? std::optional<MemoryConfig>(ttnn::DRAM_MEMORY_CONFIG) : memory_config_arg;
+    Tensor input_typecasted = typecast
+                                  ? ttnn::typecast(
+                                        input_unsqueezed,
+                                        DataType::BFLOAT16,
+                                        mx_via_bf16 ? work_memory_config : std::optional<MemoryConfig>(std::nullopt))
+                                  : input_unsqueezed;
 
     Tensor output;
     if ((normalized_dim1 == normalized_dim2) || (input_typecasted.padded_shape()[normalized_dim1] == 1 &&
                                                  input_typecasted.padded_shape()[normalized_dim2] == 1)) {
-        if (memory_config_arg.has_value() && input_typecasted.memory_config() != memory_config_arg.value()) {
+        if (work_memory_config.has_value() && input_typecasted.memory_config() != work_memory_config.value()) {
             output = ttnn::clone(
                 input_typecasted,
                 std::nullopt,
-                memory_config_arg.value_or(input_typecasted.memory_config()),
+                work_memory_config.value_or(input_typecasted.memory_config()),
                 std::nullopt);
         } else {
             output = input_typecasted;
@@ -371,10 +400,14 @@ ttnn::Tensor transpose_impl(
         };
 
         output = detail::transpose_(
-            input_typecasted, transpose_dims[normalized_dim1][normalized_dim2], memory_config_arg, pad_value);
+            input_typecasted, transpose_dims[normalized_dim1][normalized_dim2], work_memory_config, pad_value);
     }
     output = initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
-    return typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
+    if (mx_via_bf16) {
+        // Both the input and the requested output are interleaved (checked above), so pack straight into the target.
+        return ttnn::typecast(output, input_dtype, memory_config_arg.value_or(input_tensor.memory_config()));
+    }
+    return typecast ? ttnn::typecast(output, input_dtype) : output;
 }
 
 }  // namespace ttnn::operations::data_movement::transpose

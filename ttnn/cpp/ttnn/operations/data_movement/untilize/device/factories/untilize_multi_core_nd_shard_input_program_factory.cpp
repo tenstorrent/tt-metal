@@ -10,10 +10,10 @@
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
@@ -47,9 +47,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
         "untilize_variable_num_blocks_metal2.cpp";
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_data_format = cb_dataformat_for(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_data_format);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_data_format = cb_dataformat_for(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");

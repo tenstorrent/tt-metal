@@ -8,10 +8,10 @@
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <algorithm>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -446,6 +446,16 @@ tt::tt_metal::ProgramRunArgs make_run_args(
     }
     compute_run_args.common_runtime_arg_values["packed_scalar1"] = packed_scalar1;
     compute_run_args.common_runtime_arg_values["packed_scalar2"] = packed_scalar2;
+    if (std::ranges::any_of(operation_attributes.op_chain, [](const EltwiseUnaryWithParam& op) {
+            return takes_runtime_scalars(op.type());
+        })) {
+        // Generating the defines also validates the scalars, which a cache hit with new values needs.
+        std::vector<uint32_t> chain_scalars;
+        get_unary_chain_defines(operation_attributes.op_chain, input.dtype(), chain_scalars);
+        for (uint32_t i = 0; i < chain_scalars.size(); ++i) {
+            compute_run_args.common_runtime_arg_values[unary_runtime_scalar_name(i)] = chain_scalars[i];
+        }
+    }
 
     for (const auto& [name, value] : dram_read_args(plan, input, operation_attributes.worker_grid)) {
         reader_run_args.common_runtime_arg_values[name] = value;
@@ -498,11 +508,18 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         require_buffer_distribution_matches_spec(output, "output");
     }
 
-    // For ROW_MAJOR interleaved: use tile_size DFB entries and group/chunk rows.
-    // For sharded ROW_MAJOR or TILE layout: DFB entry is always tile_size.
+    // ROW_MAJOR (interleaved or sharded): DFB entries are 32x32 tile_size, and interleaved rows are grouped/chunked.
+    // TILE layout: a DFB entry is one tensor page, i.e. one of the tensor's own tiles, which is not always 32x32
+    // (FILL accepts any tile shape). The reader and writer move get_entry_size() bytes per page.
     const bool rm_interleaved = is_row_major && !has_sharding;
-    const uint32_t input_dfb_page_size = single_tile_size;
-    const uint32_t output_dfb_page_size = single_tile_size_output;
+    const std::optional<tt::tt_metal::Tile> input_dfb_tile =
+        is_row_major ? std::nullopt : std::optional<tt::tt_metal::Tile>(input.tensor_spec().tile());
+    const std::optional<tt::tt_metal::Tile> output_dfb_tile =
+        is_row_major ? std::nullopt : std::optional<tt::tt_metal::Tile>(output.tensor_spec().tile());
+    const uint32_t input_dfb_page_size =
+        input_dfb_tile ? input_dfb_tile->get_tile_size(dfb_data_format) : single_tile_size;
+    const uint32_t output_dfb_page_size =
+        output_dfb_tile ? output_dfb_tile->get_tile_size(dfb_data_format_output) : single_tile_size_output;
 
     auto shard_pages = [](const tt::tt_metal::ShardSpec& spec, const Tensor& t, bool rm) -> uint32_t {
         if (rm) {
@@ -536,7 +553,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     const bool work_queue = plan.flow == DramReadFlow::WorkQueue;
 
     const bool math_approx_mode = false;
-    std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
+    std::vector<uint32_t> chain_scalars;
+    std::map<std::string, std::string> unary_defines = get_unary_chain_defines(ops_chain, input.dtype(), chain_scalars);
     if (bf16_kernel_defines) {
         unary_defines = *bf16_kernel_defines;
     }
@@ -570,6 +588,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         // Two bursts, so the next burst moves while compute works on the last one.
         .num_entries = src_num_tiles_per_shard.value_or(2 * read_burst(plan.flow)),
         .data_format_metadata = dfb_data_format_for_input,
+        .tile_format_metadata = input_dfb_tile,
         .borrowed_from = src_sharded ? std::optional<TensorParamName>(INPUT) : std::nullopt,
     });
 
@@ -579,6 +598,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             .entry_size = input_dfb_page_size,
             .num_entries = 2,
             .data_format_metadata = dfb_data_format,
+            .tile_format_metadata = input_dfb_tile,
         });
     }
 
@@ -587,6 +607,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         .entry_size = output_dfb_page_size,
         .num_entries = dst_num_tiles_per_shard.value_or(2 * write_burst(plan.flow)),
         .data_format_metadata = dfb_data_format_output,
+        .tile_format_metadata = output_dfb_tile,
         .borrowed_from = dst_sharded ? std::optional<TensorParamName>(OUTPUT) : std::nullopt,
     });
 
@@ -752,16 +773,20 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         });
     }
 
-    // Legacy set UnpackToDestFp32 on the input and temporary buffers under preserve_fp32_precision and
-    // left them at Default otherwise. Metal 2.0 additionally requires an explicit entry for a consumed
-    // Float32 buffer under a 32-bit Dest, where legacy silently defaulted; Default is UnpackToSrc.
+    // Preserve Float32 input precision and every buffer a bitcast interprets as Float32. Bitcast formats
+    // its input buffer as the output dtype, so for the supported pairs UINT32 -> FLOAT32 and INT32 -> FLOAT32
+    // that buffer must carry all 32 bits of each word. ttnn::bitcast does not check widths, so unsupported
+    // pairs such as BFLOAT16 -> FLOAT32 also reach this branch; they remain unsupported.
+    // Any other Float32 buffer under a 32-bit Dest keeps the explicit UnpackToSrc mode Metal 2.0 requires.
     //
     // UnpackToDest also requires fp32_dest_acc_en since the validator rejects UnpackToDest into a
     // 16-bit Dest. ttnn::unary already implies one from the other. A caller that breaks that gets
     // legacy's silent UnpackToSrc instead of a TT_FATAL.
     ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     auto set_unpack_mode = [&](const DFBSpecName& dfb, DataFormat df) {
-        if (operation_attributes.preserve_fp32_precision && operation_attributes.fp32_dest_acc_en) {
+        const bool bitcast_to_float32 = ops_chain[0].type() == unary::UnaryOpType::BITCAST && df == DataFormat::Float32;
+        if (operation_attributes.fp32_dest_acc_en &&
+            (operation_attributes.preserve_fp32_precision || bitcast_to_float32)) {
             unpack_modes.emplace(dfb, UnpackMode::UnpackToDest);
         } else if (operation_attributes.fp32_dest_acc_en && df == DataFormat::Float32) {
             unpack_modes.emplace(dfb, UnpackMode::UnpackToSrc);
@@ -791,6 +816,11 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         };
     }
 
+    Group<std::string> compute_common_runtime_arg_names = {"packed_scalar1", "packed_scalar2"};
+    for (uint32_t i = 0; i < chain_scalars.size(); ++i) {
+        compute_common_runtime_arg_names.push_back(unary_runtime_scalar_name(i));
+    }
+
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = compute_path,
@@ -802,7 +832,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args = std::move(compute_compile_time_args),
         .runtime_arg_schema =
-            {.runtime_arg_names = {"num_tiles"}, .common_runtime_arg_names = {"packed_scalar1", "packed_scalar2"}},
+            {.runtime_arg_names = {"num_tiles"},
+             .common_runtime_arg_names = std::move(compute_common_runtime_arg_names)},
         .hw_config = std::move(compute_hw_config),
     };
 

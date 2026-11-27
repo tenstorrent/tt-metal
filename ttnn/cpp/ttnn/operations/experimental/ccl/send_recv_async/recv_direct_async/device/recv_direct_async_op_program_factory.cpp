@@ -11,11 +11,11 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <internal/mesh_device.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
