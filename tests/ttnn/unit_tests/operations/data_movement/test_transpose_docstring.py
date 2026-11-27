@@ -101,13 +101,13 @@ def test_transpose_docstring_supported_inputs(dtype, layout, buffer_type, dims, 
     memory_config = interleaved_memory_config(buffer_type)
     shape = (2, 3, 32, 64)
     # A swap with the last dim runs a compute kernel that holds BFLOAT16 zeros by value: a BFLOAT16 input leaves out
-    # NaN, as the docstring requires, and its zeros are compared by value. Values also move into new blocks, so block
+    # NaN, as the docstring requires, and -0.0 as well. Values also move into new blocks, so block
     # floats get values with one exponent.
     last_dim_bfloat16 = 3 in dims and dtype == ttnn.bfloat16
     if 3 in dims and dtype in _BLOCK_FLOATS:
         x = _one_exponent_input(shape)
     else:
-        x = full_range_input(shape, dtype, nan=not last_dim_bfloat16)
+        x = full_range_input(shape, dtype, nan=not last_dim_bfloat16, negative_zero=not last_dim_bfloat16)
     input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
     expected = ttnn.to_torch(input_tensor).transpose(*dims)
 
@@ -115,7 +115,7 @@ def test_transpose_docstring_supported_inputs(dtype, layout, buffer_type, dims, 
     assert output.dtype == dtype
     assert output.layout == layout
     assert output.memory_config() == memory_config
-    assert_exact(expected, ttnn.to_torch(output), signed_zeros=not last_dim_bfloat16)
+    assert_exact(expected, ttnn.to_torch(output))
 
     # A given memory_config sets the output's: here the other interleaved buffer type.
     other_memory_config = interleaved_memory_config(
@@ -123,14 +123,14 @@ def test_transpose_docstring_supported_inputs(dtype, layout, buffer_type, dims, 
     )
     output = ttnn.transpose(input_tensor, dims[1] - 4, dims[0] - 4, memory_config=other_memory_config)
     assert output.memory_config() == other_memory_config
-    assert_exact(expected, ttnn.to_torch(output), signed_zeros=not last_dim_bfloat16)
+    assert_exact(expected, ttnn.to_torch(output))
 
     if (dims[0] >= 2) != (dims[1] >= 2):
         # The swapped dim of size 2 or 3 lands in the last two dims, so a TILE output has tile padding to fill.
         # The docstring asks for a pad_value of 0.0 for an INT32 TILE output.
         pad_value = 0.0 if dtype == ttnn.int32 and layout == ttnn.TILE_LAYOUT else 7.0
         output = ttnn.transpose(input_tensor, *dims, memory_config=memory_config, pad_value=pad_value)
-        assert_exact(expected, ttnn.to_torch(output), signed_zeros=not last_dim_bfloat16)
+        assert_exact(expected, ttnn.to_torch(output))
         if layout == ttnn.ROW_MAJOR_LAYOUT:
             assert list(output.padded_shape) == list(output.shape)
         elif dtype in pad_value_dtypes or dtype == ttnn.int32:
@@ -170,9 +170,9 @@ def test_transpose_docstring_sharded_inputs(dtype, layout, memory_layout, sharde
     output_shape = list(shape)
     output_shape[dims[0]], output_shape[dims[1]] = shape[dims[1]], shape[dims[0]]
     core_grid, strategy = _SHARD_GRIDS[memory_layout]
-    # A swap with the last dim holds BFLOAT16 zeros by value and needs input values that are not NaN.
+    # A swap with the last dim holds BFLOAT16 zeros by value and needs input values that are not NaN or -0.0.
     last_dim_bfloat16 = 3 in dims and dtype == ttnn.bfloat16
-    x = full_range_input(shape, dtype, nan=not last_dim_bfloat16)
+    x = full_range_input(shape, dtype, nan=not last_dim_bfloat16, negative_zero=not last_dim_bfloat16)
 
     if sharded == "input":
         input_config = ttnn.create_sharded_memory_config(shape, core_grid, strategy, ttnn.ShardOrientation.ROW_MAJOR)
@@ -193,4 +193,4 @@ def test_transpose_docstring_sharded_inputs(dtype, layout, memory_layout, sharde
     assert output.dtype == dtype
     assert output.layout == layout
     expected = ttnn.to_torch(input_tensor).transpose(*dims)
-    assert_exact(expected, ttnn.to_torch(output), signed_zeros=not last_dim_bfloat16)
+    assert_exact(expected, ttnn.to_torch(output))
