@@ -73,7 +73,7 @@ class SolSchedule:
     target video (text, condition and audio rows) exact for every query; without it only the routing rule decides."""
 
     tau: float = 1.0
-    dense_steps: int = 1
+    dense_steps: int = 2
     dense_layers: int = 2
     sinks: bool = True
 
@@ -85,14 +85,14 @@ def sol_schedule(env: Mapping[str, str]) -> SolSchedule | None:
     """The Sol-Attn schedule `env` asks for, or None for dense ring attention.
 
     `H3_SOL_ATTN=1` turns it on (default off; anything else is the off switch). `H3_SOL_TAU` (default 1.0),
-    `H3_SOL_DENSE_STEPS` (default 1) and `H3_SOL_DENSE_LAYERS` (default 2) set the schedule; `H3_SOL_SINKS=0`
-    drops the dense prefix.
+    `H3_SOL_DENSE_STEPS` (default 2) and `H3_SOL_DENSE_LAYERS` (default 2) set the schedule; `H3_SOL_SINKS=0`
+    drops the dense prefix. One dense step costs 4-step models their picture and sound against dense.
     """
     if env.get("H3_SOL_ATTN", "0") != "1":
         return None
     schedule = SolSchedule(
         tau=float(env.get("H3_SOL_TAU", "1.0")),
-        dense_steps=int(env.get("H3_SOL_DENSE_STEPS", "1")),
+        dense_steps=int(env.get("H3_SOL_DENSE_STEPS", "2")),
         dense_layers=int(env.get("H3_SOL_DENSE_LAYERS", "2")),
         sinks=env.get("H3_SOL_SINKS", "1") != "0",
     )

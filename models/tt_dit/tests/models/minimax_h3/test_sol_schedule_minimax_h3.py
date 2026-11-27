@@ -21,17 +21,17 @@ def test_off_switch_is_dense(env):
     assert sol_schedule(env) is None
 
 
-def test_defaults_keep_first_step_and_two_layers_dense():
+def test_defaults_keep_two_steps_and_two_layers_dense():
     schedule = sol_schedule({"H3_SOL_ATTN": "1"})
-    assert schedule == SolSchedule(tau=1.0, dense_steps=1, dense_layers=2, sinks=True)
-    assert [schedule.is_dense_step(i) for i in range(4)] == [True, False, False, False]
+    assert schedule == SolSchedule(tau=1.0, dense_steps=2, dense_layers=2, sinks=True)
+    assert [schedule.is_dense_step(i) for i in range(4)] == [True, True, False, False]
 
 
 def test_env_sets_the_schedule():
-    env = {"H3_SOL_ATTN": "1", "H3_SOL_TAU": "0.5", "H3_SOL_DENSE_STEPS": "2", "H3_SOL_DENSE_LAYERS": "0"}
+    env = {"H3_SOL_ATTN": "1", "H3_SOL_TAU": "0.5", "H3_SOL_DENSE_STEPS": "1", "H3_SOL_DENSE_LAYERS": "0"}
     schedule = sol_schedule(env)
-    assert schedule == SolSchedule(tau=0.5, dense_steps=2, dense_layers=0)
-    assert [schedule.is_dense_step(i) for i in range(4)] == [True, True, False, False]
+    assert schedule == SolSchedule(tau=0.5, dense_steps=1, dense_layers=0)
+    assert [schedule.is_dense_step(i) for i in range(4)] == [True, False, False, False]
     assert not any(SolSchedule(dense_steps=0).is_dense_step(i) for i in range(4))
 
 
@@ -109,9 +109,9 @@ def test_pipeline_sets_the_request_once_and_marks_buckets_cold(monkeypatch):
     pipeline._release_denoise_traces.assert_called_once()
 
     # A new schedule on the same request is a new key: the traces go and the buckets turn cold again.
-    monkeypatch.setenv("H3_SOL_DENSE_STEPS", "2")
+    monkeypatch.setenv("H3_SOL_DENSE_STEPS", "1")
     pipeline._set_sol_attention(transformer, 76800, 73419, 843)
-    assert pipeline._sol_schedule.dense_steps == 2
+    assert pipeline._sol_schedule.dense_steps == 1
     assert pipeline._release_denoise_traces.call_count == 2
 
     # Sinks on: the prefix length enters the request.
@@ -124,9 +124,9 @@ def test_pipeline_sets_the_request_once_and_marks_buckets_cold(monkeypatch):
     "env, steps",
     [
         ({}, 2),
-        ({"H3_SOL_ATTN": "1"}, 2),
+        ({"H3_SOL_ATTN": "1"}, 3),
         ({"H3_SOL_ATTN": "1", "H3_SOL_DENSE_STEPS": "0"}, 2),
-        ({"H3_SOL_ATTN": "1", "H3_SOL_DENSE_STEPS": "2"}, 3),
+        ({"H3_SOL_ATTN": "1", "H3_SOL_DENSE_STEPS": "1"}, 2),
         ({"H3_SOL_ATTN": "0", "H3_SOL_DENSE_STEPS": "2"}, 2),
     ],
 )
