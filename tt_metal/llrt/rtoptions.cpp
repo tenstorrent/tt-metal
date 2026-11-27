@@ -112,6 +112,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_FABRIC_HOST_RDMA,                   // Enable the host_rdma sender channel (host-injected traffic)
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
     TT_METAL_FABRIC_GRAPH_BUILDER,                      // Build fabric routers from the fabric graph
+    TT_METAL_FABRIC_INTER_DOMAIN,                       // Inter-domain routers on unused links leaving the domain
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
@@ -498,7 +499,7 @@ const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->
 // Uses switch statement for efficient dispatch
 //
 // IMPORTANT: Most cases assume 'value' is non-null (enforced by InitializeFromEnvVars loop guard).
-// Only TT_METAL_RISCV_DEBUG_INFO explicitly handle nullptr
+// Only TT_METAL_JIT_ANALYTICS explicitly handles nullptr
 // for default value initialization.
 
 void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
@@ -871,6 +872,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_FABRIC_GRAPH_BUILDER=1
         case EnvVarID::TT_METAL_FABRIC_GRAPH_BUILDER: this->fabric_graph_builder = true; break;
+
+        // TT_METAL_FABRIC_INTER_DOMAIN
+        // EXPERIMENTAL: Inter-domain routers on unused eth links that leave the domain.
+        // Needs TT_METAL_FABRIC_GRAPH_BUILDER=1.
+        // Default: false
+        // Usage: export TT_METAL_FABRIC_INTER_DOMAIN=1
+        case EnvVarID::TT_METAL_FABRIC_INTER_DOMAIN: this->fabric_inter_domain = is_env_enabled(value); break;
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
@@ -1661,20 +1669,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_RISCV_DEBUG_INFO
-        // Enable RISC-V debug info. Defaults to inspector setting, override with 0/1.
-        // Default: Inherits from inspector setting
+        // Enable RISC-V debug info (-g). Any value but 0 enables it.
+        // Default: the Inspector setting; on a simulator, off unless DPRINT is on or
+        // TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1 (get_riscv_debug_info_enabled())
         // Usage: export TT_METAL_RISCV_DEBUG_INFO=1  # or =0 to disable
-        case EnvVarID::TT_METAL_RISCV_DEBUG_INFO: {
-            bool enable_riscv_debug_info = this->get_inspector_enabled();  // Default from inspector
-            if (value) {
-                enable_riscv_debug_info = true;  // Default to true if set
-                if (strcmp(value, "0") == 0) {
-                    enable_riscv_debug_info = false;  // Only "0" = false
-                }
-            }
-            this->set_riscv_debug_info_enabled(enable_riscv_debug_info);
-            break;
-        }
+        case EnvVarID::TT_METAL_RISCV_DEBUG_INFO: this->set_riscv_debug_info_enabled(strcmp(value, "0") != 0); break;
 
         // TT_METAL_JIT_ANALYTICS_
         // Enable JIT compiler state information. Disable state by default; override with 1.
@@ -2143,11 +2142,6 @@ void RunTimeOptions::InitializeFromEnvVars() {
 
     // Set inspector log path
     this->inspector_settings.log_path = std::filesystem::path(this->get_logs_dir()) / "generated/inspector";
-
-    // TT_METAL_RISCV_DEBUG_INFO: Inherit from inspector if not explicitly set
-    if (std::getenv("TT_METAL_RISCV_DEBUG_INFO") == nullptr) {
-        HandleEnvVar(EnvVarID::TT_METAL_RISCV_DEBUG_INFO, nullptr);
-    }
 
     // TT_METAL_JIT_ANALYTICS: Inherit from inspector if not explicitly set
     if (std::getenv("TT_METAL_JIT_ANALYTICS") == nullptr) {

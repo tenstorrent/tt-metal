@@ -37,11 +37,7 @@ constexpr std::uint8_t TENSIX_MATH_SEMAPHORE = p_stall::SEMAPHORE_1;
 constexpr std::uint8_t TENSIX_PERF_SEMAPHORE = p_stall::SEMAPHORE_2;
 constexpr std::uint8_t MATH_SEMAPHORE        = 1;
 constexpr std::uint8_t PC_BUF_SEMAPHORE_BASE = 32; // base address for semaphores in PC buffer. FIXME: must be kept in sync with SEM_COUNT parameter... ugly...
-constexpr std::uint8_t STREAM_SEMAPHORE      = 5;  // semaphore used by unpack thread to sync between trisc and unpacker
-constexpr std::uint8_t TENSIX_STREAM_SEMAPHORE      = p_stall::SEMAPHORE_5; // semaphore used by unpack thread to sync between trisc and unpacker
-constexpr std::uint8_t PARAM_ITERATIONS             = 0;
-constexpr std::uint8_t TENSIX_PACK_STREAM_SEMAPHORE = p_stall::SEMAPHORE_6;
-constexpr std::uint8_t PACK_STREAM_SEMAPHORE        = 6;
+constexpr std::uint8_t PARAM_ITERATIONS      = 0;
 
 volatile std::uint32_t *const reg_base        = reinterpret_cast<volatile std::uint32_t *>(0xFFB10000);
 volatile std::uint32_t *const pc_buf_base     = reinterpret_cast<volatile std::uint32_t *>(PC_BUF_BASE);

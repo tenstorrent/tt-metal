@@ -427,7 +427,11 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, sp_axis, chunk, mode
     from models.demos.common.prefill.runners.migration import setup_kv_chunk_table
     from models.demos.common.prefill.runners.prefill_producer import _decode_kv_chunk
     from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_bit_identical
-    from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_state_patterns, native_state_from_global, upload_slab
+    from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+        kda_state_patterns,
+        native_state_from_global,
+        write_slab_layer,
+    )
     from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
         assemble_convolution,
         assemble_recurrent,
@@ -513,13 +517,9 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, sp_axis, chunk, mode
         key: native_state_from_global(mesh_device, geometry, recurrent, convolution, tp_axis)
         for key, (recurrent, convolution) in patterns.items()
     }
-    mesh_rows, mesh_cols = tuple(mesh_device.shape)
-    for slab, part in ((kda.recurrent, "recurrent"), (kda.convolution, "convolution")):
-        shards = [torch.zeros(tuple(slab.shape)) for _ in range(mesh_rows * mesh_cols)]
-        for (slot, layer), state in natives.items():
-            for shard, piece in zip(shards, ttnn.get_device_tensors(getattr(state, part)), strict=True):
-                shard[kda.batch_index(slot, layer)] = ttnn.to_torch(piece)[0]
-        upload_slab(slab, shards)
+    # The slabs store each head once on the mesh: each chip keeps its heads of the (SP-replicated) native carry.
+    for (slot, layer), state in natives.items():
+        write_slab_layer(mesh_device, kda, state, slot, layer)
     for state in natives.values():
         ttnn.deallocate(state.recurrent)
         ttnn.deallocate(state.convolution)

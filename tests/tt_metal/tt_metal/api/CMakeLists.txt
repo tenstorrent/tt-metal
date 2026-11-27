@@ -75,6 +75,8 @@ add_executable(
     allocator/test_per_core_allocation.cpp
     allocator/test_range_lockstep_allocation.cpp
     allocator/test_range_lockstep_allocation_host.cpp
+    custom_kernel_config_buffer_tests/test_create_buffer.cpp
+    custom_kernel_config_buffer_tests/test_dispatch.cpp
     metal2_host_api/integration_tests/per_node_tensor_bindings.cpp
 )
 target_include_directories(

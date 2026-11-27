@@ -10,7 +10,6 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
-#include "lltt.h"
 
 using namespace sfpi;
 
@@ -66,13 +65,14 @@ inline void calculate_tiled_prod() {
     // The first multiply reads 1.0 from vConstFloatPrgm0, not a literal: sfpi folds `1.0f * v` to `v`,
     // which would store a -0.0 first element as -0.0 where SFPMUL gives +0.0.
     //
-    // The empty asm statements stop sfpi's own replay recording from spanning lltt::record when calls
-    // are back to back; a nested recording hangs the core.
+    // The empty asm statements stop sfpi's own replay recording from spanning TT_REPLAY when calls
+    // are back to back; a nested recording hangs the core. FIXME:
+    // This is a bug #67125
     asm volatile("" ::: "memory");
     vFloat v = dst_reg[0];
     vFloat result = vConstFloatPrgm0 * v;
     asm volatile("" ::: "memory");
-    lltt::record<lltt::NoExec>(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN);
+    TTI_REPLAY(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN, 0, 0, 0, 1);
 #pragma GCC unroll TILED_PROD_ELEMENTS_PER_REPLAY
     for (int k = 0; k < TILED_PROD_ELEMENTS_PER_REPLAY; k++) {
         v = dst_reg[1];
@@ -81,7 +81,7 @@ inline void calculate_tiled_prod() {
     }
 #pragma GCC unroll TILED_PROD_REPLAYS
     for (int i = 0; i < TILED_PROD_REPLAYS; i++) {
-        lltt::replay(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN);
+        TTI_REPLAY(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN, 0, 0, 0, 0);
     }
     v = dst_reg[1];
     dst_reg[0].mode(ADDR_MOD_6) = result;

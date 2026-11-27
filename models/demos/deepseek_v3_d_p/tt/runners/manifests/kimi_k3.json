@@ -1,6 +1,7 @@
 {
   "env": {
     "PREFILL_MODEL": "kimi_k3",
+    "PREFILL_HF_MODEL": "/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized",
     "PREFILL_NUM_LAYERS": "93",
     "PREFILL_MAX_SEQ_LEN": "1064960",
     "PREFILL_NUM_USERS": "127",
