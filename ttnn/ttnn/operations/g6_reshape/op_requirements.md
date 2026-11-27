@@ -24,7 +24,7 @@
 - **Compute config**: none. There is no compute kernel, and the spec forbids `compute_kernel_config`.
 - **Golden baseline**: with `EVAL_CAPTURE_L1=0`, 28 / 28 supported cells pass. The graded default run passes 27, plus the trace case (harness H1). 25 `xfail_expected`, 0 drift, 0 wrong-mode.
 
-### [ ] Refinement 1 — Integer ROW_MAJOR regime (int32, uint32; ROW_MAJOR)
+### [x] Refinement 1 — Integer ROW_MAJOR regime (int32, uint32; ROW_MAJOR)
 
 **Goal**: add `ttnn.int32` and `ttnn.uint32` to `SUPPORTED["dtype"]` and `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]`, in one change. Build the design's deferred `rm_row_gather` regime (`op_design.md` → Regimes) natively in the mover skeleton:
 - page = one logical row;
@@ -60,6 +60,7 @@ Rank-1 inputs are included. Cells moved xfail → pass (25): 15 int32 and 5 uint
 - `describe_plan()` reports `regime == "rm_row_gather"` with `num_cores > 1` and `l1_bytes_per_core ≤ 1347776` for `[1,4096]→[4096,1]` int32. The acceptance test pins this.
 - The acceptance suite passes in plain and `--dev` mode.
 - The flagged shape's device-ns is recorded in `changelog.md` as the baseline for Refinement 2.
+- **Outcome**: landed. Flagged `[1,4096]→[4096,1]` int32 = 4610 device-ns on 110 cores (`[1,3844]→[3844,1]` 4280 ns), incumbent 362.12 µs. Harness gate run (`eval_test_runner.sh`, graded default): 54/59, 0 hangs; the 5 failures are H1 (trace) + H2 (4 validation tests), as at Phase 0.
 
 ### [ ] Refinement 2 — Speed up the perf-flagged int32 row-to-column profile (knob co-tune)
 

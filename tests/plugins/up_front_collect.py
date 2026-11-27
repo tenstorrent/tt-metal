@@ -441,9 +441,28 @@ def _boundary_patches(stats):
     ]
 
 
+def _capture_guard_patches():
+    """Trace capture -> refused inside the collect window. _drives_capture only sees the test
+    function's own source, so a body reaching begin_trace_capture through a helper (e.g. a golden
+    suite's run_<op>(extras={"trace": True})) would otherwise capture an EMPTY trace under
+    NO_DISPATCH and execute_trace it, which hangs the device (dispatch waits on a trace that holds
+    no programs) and poisons every later test of the session. Raising here aborts the body after
+    the eager ops are already stashed; the exception is swallowed at report time like any other
+    collect-pass body failure, and the capture itself still cold-compiles in the real pass."""
+    import ttnn
+
+    def _refuse(_orig):
+        def _refused(*a, **k):
+            raise RuntimeError("up_front_collect: trace capture is not collectable under NO_DISPATCH")
+
+        return _refused
+
+    return [_AttrPatch(ttnn, name, _refuse) for name in _CAPTURE_MARKERS if hasattr(ttnn, name)]
+
+
 def _collect_patches(stats):
-    """The patch set active during the collect window (empty unless fast collect is on)."""
-    patches = []
+    """The patch set active during the collect window (only the capture guard unless fast collect is on)."""
+    patches = _capture_guard_patches()
     if _FAST_COLLECT:
         patches += _reference_op_patches()
         patches += _verifier_patches()

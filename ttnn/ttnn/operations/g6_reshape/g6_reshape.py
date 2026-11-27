@@ -6,8 +6,10 @@
 
 One generic_op dispatch, data-movement kernels only. Output-stationary: each mover owns whole output
 atoms, gathers their input face-rows into L1 staging with coalesced reads, permutes them into an
-image in output byte order with RISC-V copies, and writes contiguous output runs. Design:
-op_design.md; L1 accounting: l1_ledger.md.
+image in output byte order with RISC-V copies, and writes contiguous output runs. TILE inputs take
+tile_face_row / tile_element_run (g6_reshape_mover.cpp); ROW_MAJOR inputs take rm_row_gather
+(g6_reshape_rm_mover.cpp: atom = one DRAM-alignment chunk of an output page slot, folded bank-affine so a
+block stores as one write per bank). Design: op_design.md; L1 accounting: l1_ledger.md.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 KERNEL = Path(__file__).parent / "kernels" / "g6_reshape_mover.cpp"
+RM_KERNEL = Path(__file__).parent / "kernels" / "g6_reshape_rm_mover.cpp"
 
 
 # ---------------------------------------------------------------------------
@@ -41,8 +44,8 @@ INPUT_TAGGERS = {
 }
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16, ttnn.float32],
-    "layout": [ttnn.TILE_LAYOUT],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
 }
 
 EXCLUSIONS = []
@@ -57,6 +60,10 @@ MOVERS_PER_CORE = 2
 MAX_BLOCK_ATOMS = None  # None: the coarsest block that fits (one block per mover unless L1 caps it)
 STAGE_DEPTH = 1
 IMAGE_DEPTH = 1
+# rm_row_gather: a covering read run reads through a gap of up to this many bytes inside one input page
+# instead of opening a new run (None: one DRAM alignment word). Bounded by the DRAM alignment so the
+# per-piece staging bound below stays 3·A.
+RM_READ_GAP_BYTES = None
 
 # BB-05: L1 the model leaves to the op on every core.
 L1_OP_BUDGET = 1347776
@@ -78,7 +85,7 @@ assert 1 <= MOVERS_PER_CORE <= len(MOVERS)
 
 def _knobs():
     """Every module-level knob that changes the program; part of the descriptor cache key."""
-    return (MAX_CORES, MOVERS_PER_CORE, MAX_BLOCK_ATOMS, STAGE_DEPTH, IMAGE_DEPTH, L1_OP_BUDGET)
+    return (MAX_CORES, MOVERS_PER_CORE, MAX_BLOCK_ATOMS, STAGE_DEPTH, IMAGE_DEPTH, RM_READ_GAP_BYTES, L1_OP_BUDGET)
 
 
 # ---------------------------------------------------------------------------
@@ -157,8 +164,27 @@ class _Geometry:
         return self.B * self.Ht * self.Wt
 
 
+class _CoreRangesMixin:
+    def core_ranges(self):
+        full_rows, rem = divmod(self.num_cores, self.grid_x)
+        ranges = []
+        if full_rows:
+            ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.grid_x - 1, full_rows - 1)))
+        if rem:
+            ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(rem - 1, full_rows)))
+        return ttnn.CoreRangeSet(ranges)
+
+    @property
+    def stage_bytes(self):
+        return STAGE_DEPTH * self.stage_slot_bytes
+
+    @property
+    def image_bytes(self):
+        return IMAGE_DEPTH * self.image_slot_bytes
+
+
 @dataclass(frozen=True)
-class _Plan:
+class _Plan(_CoreRangesMixin):
     elem: int
     src: _Geometry
     dst: _Geometry
@@ -177,25 +203,12 @@ class _Plan:
     roles: tuple  # per mover: tuple of ((x, y), atom_begin, atom_count)
 
     @property
-    def stage_bytes(self):
-        return STAGE_DEPTH * self.stage_slot_bytes
-
-    @property
-    def image_bytes(self):
-        return IMAGE_DEPTH * self.image_slot_bytes
-
-    @property
     def l1_bytes_per_core(self):
         return _core_bytes(self.stage_slot_bytes, self.image_slot_bytes, self.plan_bytes)
 
-    def core_ranges(self):
-        full_rows, rem = divmod(self.num_cores, self.grid_x)
-        ranges = []
-        if full_rows:
-            ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.grid_x - 1, full_rows - 1)))
-        if rem:
-            ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(rem - 1, full_rows)))
-        return ttnn.CoreRangeSet(ranges)
+    @property
+    def out_pages(self):
+        return self.dst.num_pages
 
 
 def _round_up(x, m):
@@ -225,6 +238,47 @@ def _core_bytes(stage_slot, image_slot, plan):
     return MOVERS_PER_CORE * (STAGE_DEPTH * stage_slot + IMAGE_DEPTH * image_slot + plan)
 
 
+def _split_atoms(atoms_total, grid):
+    """Atoms [0, atoms_total) over min(max_cores, atoms_total) cores taken row-major from the grid, each
+    core's range split over its movers. Returns (num_cores, roles per mover, max atoms of any mover)."""
+    max_cores = grid.x * grid.y if MAX_CORES is None else min(MAX_CORES, grid.x * grid.y)
+    num_cores = min(max_cores, atoms_total)
+    roles = [[] for _ in range(MOVERS_PER_CORE)]
+    max_mover_atoms = 0
+    for i in range(num_cores):
+        begin = i * atoms_total // num_cores
+        count = (i + 1) * atoms_total // num_cores - begin
+        xy = (i % grid.x, i // grid.x)
+        for m in range(MOVERS_PER_CORE):
+            share = count // MOVERS_PER_CORE + (1 if m < count % MOVERS_PER_CORE else 0)
+            roles[m].append((xy, begin, share))
+            begin += share
+            max_mover_atoms = max(max_mover_atoms, share)
+    return num_cores, tuple(tuple(r) for r in roles), max_mover_atoms
+
+
+def _fit_block_atoms(max_mover_atoms, slot_bytes_fn):
+    """The coarsest block (≤ the largest mover's share, ≤ MAX_BLOCK_ATOMS) whose CB_ALIGN-rounded
+    footprint fits L1_OP_BUDGET. slot_bytes_fn(atoms) -> unrounded (stage slot, image slot, plan) bytes,
+    linear in atoms. Returns (block_atoms, rounded slot bytes)."""
+    bytes_per_atom = _core_bytes(*slot_bytes_fn(1))
+    l1_cap_atoms = L1_OP_BUDGET // bytes_per_atom
+    if l1_cap_atoms < 1:
+        raise ValueError(f"g6_reshape: one atom needs more than {L1_OP_BUDGET} B of L1 per core")
+    block_atoms = max(1, min(max_mover_atoms, l1_cap_atoms))
+    if MAX_BLOCK_ATOMS is not None:
+        block_atoms = max(1, min(block_atoms, MAX_BLOCK_ATOMS))
+    while True:
+        slots = tuple(_round_up(b, CB_ALIGN) for b in slot_bytes_fn(block_atoms))
+        total = _core_bytes(*slots)
+        if total <= L1_OP_BUDGET or block_atoms == 1:
+            break
+        block_atoms -= 1
+    if total > L1_OP_BUDGET:
+        raise ValueError(f"g6_reshape: {total} B of L1 per core exceeds the {L1_OP_BUDGET} B budget")
+    return block_atoms, slots
+
+
 def _make_plan(in_shape, out_shape, elem, grid, dram_align):
     src, dst = _Geometry.of(in_shape), _Geometry.of(out_shape)
     face_row_bytes = FACE * elem
@@ -242,41 +296,13 @@ def _make_plan(in_shape, out_shape, elem, grid, dram_align):
     atom_rows = max(1, dram_align // face_row_bytes)
     atoms_total = dst.Wt * dst.B * -(-dst.H // atom_rows)
 
-    max_cores = grid.x * grid.y if MAX_CORES is None else min(MAX_CORES, grid.x * grid.y)
-    num_cores = min(max_cores, atoms_total)
-    roles = [[] for _ in range(MOVERS_PER_CORE)]
-    max_mover_atoms = 0
-    for i in range(num_cores):
-        begin = i * atoms_total // num_cores
-        count = (i + 1) * atoms_total // num_cores - begin
-        xy = (i % grid.x, i // grid.x)
-        for m in range(MOVERS_PER_CORE):
-            share = count // MOVERS_PER_CORE + (1 if m < count % MOVERS_PER_CORE else 0)
-            roles[m].append((xy, begin, share))
-            begin += share
-            max_mover_atoms = max(max_mover_atoms, share)
+    num_cores, roles, max_mover_atoms = _split_atoms(atoms_total, grid)
 
     # Unrounded footprint is linear in atoms, so one atom gives the BB-05 cap on block_atoms.
-    bytes_per_atom = _core_bytes(*_slot_bytes(1, atom_rows, s_bound, face_row_bytes, dram_align))
-    l1_cap_atoms = L1_OP_BUDGET // bytes_per_atom
-    if l1_cap_atoms < 1:
-        raise ValueError(f"g6_reshape: one atom needs more than {L1_OP_BUDGET} B of L1 per core")
-    block_atoms = min(max_mover_atoms, l1_cap_atoms)
-    if MAX_BLOCK_ATOMS is not None:
-        block_atoms = max(1, min(block_atoms, MAX_BLOCK_ATOMS))
-    # The CB rounding to CB_ALIGN can push the total over the budget; take one atom less until it fits.
-    while True:
-        trs = block_atoms * atom_rows
-        max_copies = _max_copies(trs, s_bound)
-        stage_slot, image_slot, plan_bytes = (
-            _round_up(b, CB_ALIGN) for b in _slot_bytes(block_atoms, atom_rows, s_bound, face_row_bytes, dram_align)
-        )
-        total = _core_bytes(stage_slot, image_slot, plan_bytes)
-        if total <= L1_OP_BUDGET or block_atoms == 1:
-            break
-        block_atoms -= 1
-    if total > L1_OP_BUDGET:
-        raise ValueError(f"g6_reshape: {total} B of L1 per core exceeds the {L1_OP_BUDGET} B budget")
+    block_atoms, (stage_slot, image_slot, plan_bytes) = _fit_block_atoms(
+        max_mover_atoms, lambda n: _slot_bytes(n, atom_rows, s_bound, face_row_bytes, dram_align)
+    )
+    max_copies = _max_copies(block_atoms * atom_rows, s_bound)
 
     return _Plan(
         elem=elem,
@@ -294,13 +320,116 @@ def _make_plan(in_shape, out_shape, elem, grid, dram_align):
         max_copies=max_copies,
         grid_x=grid.x,
         num_cores=num_cores,
-        roles=tuple(tuple(r) for r in roles),
+        roles=roles,
+    )
+
+
+@dataclass(frozen=True)
+class _RmPlan(_CoreRangesMixin):
+    """rm_row_gather: page = one logical row; atom = one A-byte chunk of an output page slot
+    (align(W_out·e, A) bytes), folded bank-affine on the device (see g6_reshape_rm_mover.cpp)."""
+
+    elem: int
+    w_in: int
+    rows_in: int
+    w_out: int
+    rows_out: int
+    atoms_per_page: int
+    atoms_total: int
+    block_atoms: int
+    src_face_rows_bound: int  # input pieces one atom can touch (the regime's S)
+    dram_align: int
+    read_gap: int
+    stage_slot_bytes: int
+    image_slot_bytes: int
+    plan_bytes: int
+    max_copies: int
+    grid_x: int
+    num_cores: int
+    roles: tuple
+
+    regime = "rm_row_gather"
+    atom_rows = 1
+
+    @property
+    def out_pages(self):
+        return self.rows_out
+
+    @property
+    def l1_bytes_per_core(self):
+        return _core_bytes(self.stage_slot_bytes, self.image_slot_bytes, self.plan_bytes)
+
+
+def _rm_slot_bytes(atoms, s_bound, dram_align, read_gap):
+    """Unrounded (staging slot, image slot, plan) bytes of one rm_row_gather mover for a block of `atoms`.
+    A piece is <= A bytes; it opens an A-aligned run (< 3A staged) or extends the open one by at most
+    gap + piece + A. The image is A bytes per atom. Staging and image carry A bytes of slack so the kernel
+    can start them DRAM-aligned."""
+    per_piece = 2 * dram_align + max(dram_align, read_gap)
+    return (
+        atoms * s_bound * per_piece + dram_align,
+        atoms * dram_align + dram_align,
+        atoms * s_bound * COPY_ENTRY_BYTES,
+    )
+
+
+def _make_rm_plan(in_shape, out_shape, elem, grid, dram_align):
+    numel = math.prod(in_shape)
+    w_in, w_out = in_shape[-1], out_shape[-1]
+    atom_elems = dram_align // elem
+    atoms_per_page = -(-(w_out * elem) // dram_align)
+    rows_out = numel // w_out
+    atoms_total = rows_out * atoms_per_page
+    # Input pieces of one atom: atom_elems consecutive stream elements cross at most this many input rows.
+    s_bound = min(atom_elems, -(-(atom_elems - 1) // w_in) + 1)
+    read_gap = dram_align if RM_READ_GAP_BYTES is None else RM_READ_GAP_BYTES
+    if not 0 <= read_gap <= dram_align:
+        raise ValueError(f"g6_reshape: RM_READ_GAP_BYTES must be in [0, {dram_align}], got {read_gap}")
+
+    num_cores, roles, max_mover_atoms = _split_atoms(atoms_total, grid)
+    block_atoms, (stage_slot, image_slot, plan_bytes) = _fit_block_atoms(
+        max_mover_atoms, lambda n: _rm_slot_bytes(n, s_bound, dram_align, read_gap)
+    )
+    return _RmPlan(
+        elem=elem,
+        w_in=w_in,
+        rows_in=numel // w_in,
+        w_out=w_out,
+        rows_out=rows_out,
+        atoms_per_page=atoms_per_page,
+        atoms_total=atoms_total,
+        block_atoms=block_atoms,
+        src_face_rows_bound=s_bound,
+        dram_align=dram_align,
+        read_gap=read_gap,
+        stage_slot_bytes=stage_slot,
+        image_slot_bytes=image_slot,
+        plan_bytes=plan_bytes,
+        max_copies=block_atoms * s_bound,
+        grid_x=grid.x,
+        num_cores=num_cores,
+        roles=roles,
     )
 
 
 def _plan_for(input_tensor, out_shape):
     device = input_tensor.device()
     in_shape = tuple(int(d) for d in input_tensor.shape)
+    if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
+        if tuple(int(d) for d in input_tensor.padded_shape) != in_shape:
+            raise RuntimeError(f"g6_reshape: ROW_MAJOR input with padding {input_tensor.padded_shape} is not supported")
+        plan = _make_rm_plan(
+            in_shape,
+            out_shape,
+            input_tensor.element_size(),
+            device.compute_with_storage_grid_size(),
+            ttnn.get_dram_alignment(),
+        )
+        if input_tensor.buffer_num_pages() != plan.rows_in:
+            raise RuntimeError(
+                f"g6_reshape: input holds {input_tensor.buffer_num_pages()} pages, geometry expects {plan.rows_in}"
+            )
+        return plan
     plan = _make_plan(
         in_shape,
         out_shape,
@@ -320,50 +449,76 @@ def _plan_for(input_tensor, out_shape):
 # ---------------------------------------------------------------------------
 
 
+def _tile_compile_args(plan, cb_stage, cb_image, cb_plan):
+    src, dst = plan.src, plan.dst
+    return [
+        plan.elem,
+        src.W,
+        src.H,
+        src.Wt,
+        src.Ht,
+        dst.W,
+        dst.H,
+        dst.B,
+        dst.Wt,
+        dst.Ht,
+        int(plan.regime == "tile_face_row"),
+        plan.atom_rows,
+        plan.block_atoms,
+        plan.dram_align,
+        STAGE_DEPTH,
+        IMAGE_DEPTH,
+        plan.stage_slot_bytes,
+        plan.image_slot_bytes,
+        plan.max_copies,
+        cb_stage,
+        cb_image,
+        cb_plan,
+    ]
+
+
+def _rm_compile_args(plan, cb_stage, cb_image, cb_plan):
+    return [
+        plan.elem,
+        plan.w_in,
+        plan.w_out,
+        plan.rows_out,
+        plan.atoms_per_page,
+        plan.block_atoms,
+        plan.dram_align,
+        plan.read_gap,
+        STAGE_DEPTH,
+        IMAGE_DEPTH,
+        plan.stage_slot_bytes,
+        plan.image_slot_bytes,
+        plan.max_copies,
+        cb_stage,
+        cb_image,
+        cb_plan,
+    ]
+
+
 def _build_descriptor(plan, input_tensor, output_tensor):
     core_ranges = plan.core_ranges()
     in_accessor = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     out_accessor = ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
     common_args = [input_tensor.buffer_address(), output_tensor.buffer_address()]
-    src, dst = plan.src, plan.dst
+    row_major = plan.regime == "rm_row_gather"
+    kernel_source = RM_KERNEL if row_major else KERNEL
+    compile_args_fn = _rm_compile_args if row_major else _tile_compile_args
 
     kernels = []
     cbs = []
     for mover in range(MOVERS_PER_CORE):
         (cb_stage, cb_image, cb_plan), processor, noc = MOVERS[mover]
-        compile_args = [
-            plan.elem,
-            src.W,
-            src.H,
-            src.Wt,
-            src.Ht,
-            dst.W,
-            dst.H,
-            dst.B,
-            dst.Wt,
-            dst.Ht,
-            int(plan.regime == "tile_face_row"),
-            plan.atom_rows,
-            plan.block_atoms,
-            plan.dram_align,
-            STAGE_DEPTH,
-            IMAGE_DEPTH,
-            plan.stage_slot_bytes,
-            plan.image_slot_bytes,
-            plan.max_copies,
-            cb_stage,
-            cb_image,
-            cb_plan,
-            *in_accessor,
-            *out_accessor,
-        ]
+        compile_args = [*compile_args_fn(plan, cb_stage, cb_image, cb_plan), *in_accessor, *out_accessor]
         runtime_args = ttnn.RuntimeArgs()
         for (x, y), begin, count in plan.roles[mover]:
             runtime_args[x][y] = [begin, count]
         config = ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc)
         kernels.append(
             ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL),
+                kernel_source=str(kernel_source),
                 core_ranges=core_ranges,
                 compile_time_args=compile_args,
                 runtime_args=runtime_args,
@@ -427,10 +582,16 @@ def g6_reshape(input_tensor: ttnn.Tensor, shape) -> ttnn.Tensor:
     descriptor = _DESCRIPTOR_CACHE.get(key)
     if descriptor is None:
         plan = _plan_for(input_tensor, out_shape)
-        if output_tensor.buffer_num_pages() != plan.dst.num_pages:
+        if output_tensor.buffer_num_pages() != plan.out_pages:
             raise RuntimeError(
-                f"g6_reshape: output holds {output_tensor.buffer_num_pages()} pages, "
-                f"geometry expects {plan.dst.num_pages}"
+                f"g6_reshape: output holds {output_tensor.buffer_num_pages()} pages, geometry expects {plan.out_pages}"
+            )
+        if plan.regime == "rm_row_gather" and output_tensor.buffer_aligned_page_size() != (
+            plan.atoms_per_page * plan.dram_align
+        ):
+            raise RuntimeError(
+                f"g6_reshape: output page slot is {output_tensor.buffer_aligned_page_size()} B, "
+                f"rm_row_gather assumes {plan.atoms_per_page * plan.dram_align} B"
             )
         descriptor = _build_descriptor(plan, input_tensor, output_tensor)
         _DESCRIPTOR_CACHE[key] = descriptor

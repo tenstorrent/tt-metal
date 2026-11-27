@@ -76,3 +76,27 @@ coalesced input face-column run, one write per merged output face run.
 > Cheapest-traffic split considered: output atoms, column-major fold (tile column outer, logical row
 > inner) — 0 B delta on every tier versus any other non-rejected split, and the fewest transactions.
 > Implemented: the same split. It is the cheapest; no split is deferred for traffic reasons.
+
+## rm_row_gather (Refinement 1: ROW_MAJOR, any of bf16 / fp32 / int32 / uint32)
+
+Same three buffers per mover, same CB slots (0..5), same forcing mechanisms; only the geometry changes.
+Atom = one `A`-byte chunk of an output page slot (`align(W_out·e, A)` bytes); `EA = A/e` elements.
+`S_rm = min(EA, ceil((EA − 1)/W_in) + 1)` input pieces per atom (1 for `[1,W]→[W,1]`, 16 for int32 `W_in = 1`).
+`G = RM_READ_GAP_BYTES` (default `A`, bounded to `[0, A]`). One host helper (`_rm_slot_bytes`) feeds the BB-05
+cap (via the shared `_fit_block_atoms`), the CB sizes and `describe_plan()["l1_bytes_per_core"]`.
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_src_stage_m{0,1}` | 1 page of `stage_depth · align_up(block_atoms·S_rm·(2A + max(A, G)) + A, 64)` B | the block's A-aligned covering read runs: a new run stages `< 3A` per piece, an extension `≤ G + 2A`; `+A` slack so the kernel can start the slot DRAM-aligned | `{out_atom: spans → block_atoms, elem: streams (one piece = one input-row run), movers: one per mover}` | input dtype (dataflow-only) | mover m (NoC reads) | mover m (CPU loads) | gather → end of permute, every block | cannot alias image (both live in permute) or plan (written while reads land); capacity > live set by the A-rounding of runs and the gap read-through |
+| `cb_dst_image_m{0,1}` | 1 page of `image_depth · align_up(block_atoms·A + A, 64)` B | exactly `block_atoms` A-byte slot chunks in DRAM byte order (valid bytes + the slot's alignment padding, written as-is) + `A` alignment slack | `{out_atom: spans → block_atoms, movers: one per mover}` | input dtype | mover m (CPU stores) | mover m (NoC writes, one per (block, bank)) | permute → writes_flushed at the next block's permute | cannot alias staging (concurrent in permute); capacity = live set + slack |
+| `cb_move_plan_m{0,1}` | 1 page of `align_up(8·S_rm·block_atoms, 64)` B | one copy entry per piece; no tile table (the store re-walks the bank-affine cursor) | `{out_atom: spans → block_atoms, elem: one entry per piece}` | UInt32 | mover m | mover m | gather → permute | cannot share with staging (written while reads land) |
+
+Worked values (Blackhole, `A = 64`, 110 cores, `G = A`): `[1,4096]→[4096,1]` int32: 4096 atoms, ≤ 19 per mover,
+`S_rm = 1` → 17920 B per core. `[1,3844]→[3844,1]`: 17024 B. `[8,1]→[8]` int32 (`S_rm = 16`, one atom): 6784 B.
+`[4096,1]→[1,4096]` int32: 13312 B. All ≥ 75× under 1347776.
+
+Data-movement budget (rm_row_gather): input — each needed input byte crosses DRAM once per covering run,
+plus `< 2A` of rounding per run and up to `G` per read-through gap (for `[1,W]→[W,1]` a mover reads its
+strided elements as ONE run: `≈ 8·e·atoms` bytes, i.e. every input byte is read once across the NB movers
+sharing a bank stride); output — every output slot byte (valid + alignment padding) crosses DRAM exactly
+once, one write per (block, bank). Cross-core traffic 0.

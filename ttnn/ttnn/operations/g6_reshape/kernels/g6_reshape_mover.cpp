@@ -14,6 +14,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ckernel.h"
+#include "g6_reshape_permute.hpp"
 
 namespace {
 
@@ -257,35 +258,8 @@ void kernel_main() {
 
         {
             DeviceZoneScopedN("g6.permute");
-            // The previous block's writes still source the image; staging lines the RISC-V cached for an
-            // earlier block are stale after the NoC refilled them.
-            noc_async_writes_flushed(noc);
-            invalidate_l1_cache();
-            uint32_t last_word = image_base;
-            for (uint32_t i = 0; i < num_copies; ++i) {
-                const uint32_t src = copies[2 * i];
-                const uint32_t packed = copies[2 * i + 1];
-                const uint32_t dst = image_base + (packed >> 8);
-                const uint32_t bytes = packed & 0xFF;
-                if (kFaceRowAligned || kElem == 4 || ((src | dst | bytes) & 3) == 0) {
-                    volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
-                    volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
-                    const uint32_t words = kFaceRowAligned ? kFaceRowBytes / 4 : bytes / 4;
-#pragma GCC unroll 16
-                    for (uint32_t w = 0; w < words; ++w) {
-                        d[w] = s[w];
-                    }
-                } else {
-                    volatile tt_l1_ptr uint16_t* s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src);
-                    volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst);
-                    for (uint32_t w = 0; w < bytes / 2; ++w) {
-                        d[w] = s[w];
-                    }
-                }
-                last_word = (dst + bytes - 1) & ~3u;
-            }
-            // CPU stores can retire before they land in L1; the NoC reads the image as a separate client.
-            (void)ckernel::load_blocking(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(last_word));
+            g6_reshape::permute_block<kElem, kFaceRowAligned ? kFaceRowBytes / 4 : 0>(
+                copies, num_copies, image_base, noc);
         }
 
         {
