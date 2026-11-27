@@ -3,7 +3,7 @@
 """Host contracts of ``moe/scorer.MoeScorer``, with hand-computed values: a scored chunk reports the absolute and
 relative error, recall, dropped weight, miss ranks and gain the hand case has, in the metric tiers its docstring names
 (one tier per metric name); misses land in the window of their absolute row; ``check_chunk`` reports non-finite
-output, a row routed to one expert twice and a chunk over its bars. CPU only."""
+output and a row routed to one expert twice, and refuses chunk bars. CPU only."""
 
 from __future__ import annotations
 
@@ -129,26 +129,25 @@ def test_misses_land_in_the_window_of_their_absolute_row() -> None:
     assert check(windows[:1], BARS) == []
 
 
-def test_check_chunk_reports_contract_breaks_and_a_chunk_over_its_bars() -> None:
+def test_check_chunk_reports_contract_breaks_and_refuses_chunk_bars(expect_error) -> None:
     scorer = _scorer()
     good = [[1.0, 2.0], [3.0, 4.0]]
     rows = _golden_rows(good, [[0, 1], [2, 3]], [[0.5, 0.5]] * 2)
     exact = _outputs(good, [[1, 0], [3, 2]], [[0.5, 0.5]] * 2)  # (the golden's sets, in another order)
     scorer.score_chunk(0, exact, rows)
-    assert scorer.check_chunk(0, exact, rows, BARS) == []
+    assert scorer.check_chunk(0, exact, rows, ()) == []
 
     nan = _outputs([[1.0, float("nan")], [3.0, 4.0]], [[0, 1], [2, 3]], [[0.5, 0.5]] * 2)
     scorer.score_chunk(2, nan, rows)
-    assert scorer.check_chunk(2, nan, rows, BARS) == ["non-finite MoE output"]
+    assert scorer.check_chunk(2, nan, rows, ()) == ["non-finite MoE output"]
 
     twice = _outputs(good, [[0, 1], [2, 2]], [[0.5, 0.5]] * 2)
     scorer.score_chunk(4, twice, rows)
-    assert scorer.check_chunk(4, twice, rows, BARS) == ["a row routed to one expert twice"]
+    assert scorer.check_chunk(4, twice, rows, ()) == ["a row routed to one expert twice"]
 
-    # row 1 misses golden rank 0 (of 2): recall 0.75, dropped weight 0.25 / 2, its one miss in the top half
+    # (a routing miss is no contract break: the window bars judge it)
     missing = _outputs(good, [[0, 1], [3, 9]], [[0.5, 0.5]] * 2)
     scorer.score_chunk(6, missing, rows)
-    failures = scorer.check_chunk(6, missing, rows, BARS)
-    assert [f.split()[0] for f in failures] == ["recall_mean", "miss_top_half_fraction", "dropped_weight_mean"]
-    assert all(f.endswith("in [6, 8)") for f in failures)
     assert scorer.check_chunk(6, missing, rows, ()) == []
+    with expect_error(ValueError, "MoE has no per-chunk bars"):
+        scorer.check_chunk(6, missing, rows, BARS)

@@ -17,8 +17,8 @@ Every window measure (``measure``) has its metric name; the same measure over th
   (``run_miss_rank_histogram``), and the windows' trends (``<metric>_trend``, ``windowed_errors.trend``): the
   absolute error against the reference's own growth, the NRMSE, row NRMSE median, recall and dropped weight.
 
-``check_chunk``: the Block's contracts (finite output; no row routed to one expert twice), then the chunk bars on the
-chunk's rows, measured as a window is but with the per-row NRMSE floored at the chunk's own ``golden_floor``.
+``check_chunk``: the Block's contracts only (finite output; no row routed to one expert twice). The bars are per
+window (``run`` bars); a chunk bar is refused, since the window values do not hold on a chunk's smaller sample.
 
 Device outputs (``BlockOutputs``): ``output`` ``[rows, hidden]``; ``extras["expert_ids"]`` ``[rows, k]`` (the
 golden's expert numbering) and ``extras["expert_weights"]`` ``[rows, k]``.
@@ -30,7 +30,7 @@ from collections.abc import Callable, Mapping, Sequence
 
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar, check
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar
 from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs, MetricTiers
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden
 from models.demos.common.prefill.long_context_accuracy.moe.routing_error import routing_rows
@@ -108,7 +108,6 @@ class MoeScorer:
         self.output, self.expert_ids, self.expert_weights, self.window = output, expert_ids, expert_weights, window
         self.golden_tensors = (output, expert_ids, expert_weights)
         self.series = WindowedErrors()
-        self._chunk: Window | None = None  # (the last scored chunk's rows, for check_chunk)
         self._top_k = 0
 
     def score_chunk(self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor]) -> None:
@@ -124,26 +123,19 @@ class MoeScorer:
         sums = row_sums(rows[self.output], outputs.output)
         self.series.append(lo, sums=sums, recall=r["recall"], dropped=r["dropped"])
         self.series.add_events("misses", **{**r["misses"], "row": r["misses"]["row"] + lo})
-        hi = lo + sums.shape[0]
-        self._chunk = Window(
-            lo, hi, {"sums": sums, "recall": r["recall"], "dropped": r["dropped"], "misses": r["misses"]}
-        )
         self._top_k = want_ids.shape[1]
 
     def check_chunk(
         self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor], bars: Sequence[AcceptanceBar]
     ) -> list[str]:
+        if bars:
+            raise ValueError(f"MoE has no per-chunk bars (its bars are per {self.window}-row window), got {list(bars)}")
         violations = []
         if not torch.isfinite(outputs.output).all():
             violations.append("non-finite MoE output")
         if not (torch.sort(outputs.extras["expert_ids"], dim=1).values.diff(dim=1) > 0).all():
             violations.append("a row routed to one expert twice")
-        if violations or not bars:
-            return violations
-        w = self._chunk
-        assert w is not None and w.start == lo, f"check_chunk({lo}) is not of the chunk just scored"
-        floor = golden_floor(w["sums"][:, SUM_YY].sqrt())
-        return check([{"start": w.start, "end": w.end, "rows": w.end - w.start, **measure(floor)(w)}], bars)
+        return violations
 
     def score_run(self, carried_state: Mapping[str, torch.Tensor], golden: Fp64Golden) -> MetricTiers:
         """The tiers (module docstring); ``carried_state`` and ``golden`` are unused (no state; every product is

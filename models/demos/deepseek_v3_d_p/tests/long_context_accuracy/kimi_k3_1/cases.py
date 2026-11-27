@@ -22,15 +22,15 @@ from models.demos.common.prefill.long_context_accuracy.block import LongContextC
 # pair from (``moe_block_checkpoint``) must be the golden's ``layers.L``. The routed experts come from the TTNN weight
 # cache and stay unchecked: the chain's ``layers.L.experts`` digest covers the checkpoint's experts, not the cache.
 #
-# Bars (``MOE_BARS``), on every 16K window of the run and on every chunk: the study's MoE teacher-feed bars
+# Bars (``MOE_BARS``), on every 16K window of the run (none per chunk: a chunk's 2560 rows are a smaller sample, so
+# the window values would stop runs whose windows pass; ``check_chunk`` stops only on a broken contract): the study's MoE teacher-feed bars
 # (``moe_teacher_feed.BARS``, branch ``mvasilijevic/k31/accuracy-harness-consumers``), proposed there against the vLLM
 # trace over 9 layers at 128K. Its growth bar is left out: the MoE carries no state across chunks (a reverse-order run
 # is bit-identical), so its error versus position follows the input statistics, not accumulation; it is gated by the
 # absolute per-window bars instead. Measured at 1M (commit 9bf2a291b5b, one 4x4 tray half), layer 1 / layer 2: pooled
 # NRMSE 0.088 / 0.078, median row NRMSE 0.083 / 0.071, mean recall 0.994 / 0.992 (worst 16K window 0.9939 / 0.9916),
 # mean dropped weight 0.0038 / 0.0053 (worst window 0.0041 / 0.0059), no missed expert in the top half; the RMS error's
-# worst window is 1.02x / 1.03x its first. A chunk (2560 rows) is a smaller sample than a window, so the same bars on
-# it stop only a run well past them.
+# worst window is 1.02x / 1.03x its first.
 from pathlib import Path
 
 import pytest
@@ -94,7 +94,7 @@ def moe_case(layer: int) -> LongContextCase:
         golden_reader=KimiK31ChainGolden,
         placement=MOE_PLACEMENT,
         chunk=k31_stage.STAGE_LAYOUTS[k31_stage.MESH_4X4].chunk,
-        bars={n: ContextBars(chunk=MOE_BARS, run=MOE_BARS) for n in MOE_CONTEXT_LENGTHS},
+        bars={n: ContextBars(run=MOE_BARS) for n in MOE_CONTEXT_LENGTHS},
         checkpoint=moe_checkpoint,
         prepare=lambda golden, checkpoint, context_len: _prepare_moe(layer, golden, checkpoint, context_len),
     )
