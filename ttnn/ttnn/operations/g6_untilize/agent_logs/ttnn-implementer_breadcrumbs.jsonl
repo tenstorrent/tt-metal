@@ -1,1 +1,5 @@
 {"event":"test_run","result":"pass","detail":"acceptance 13/13 dev+non-dev, golden 6/6; row_gather single DM kernel on RISCV_0/NOC_0","ts":"2026-11-26T23:05:47+00:00"}
+{"event":"test_run","result":"pass","mode":"dev+plain","tests":"acceptance 13/13, golden 6/6","ts":"2026-11-26T19:09:29-05:00"}
+{"event":"device_print_observation","note":"none needed; probe of 6 knob/shape cases bit-exact (ring, ragged row/col blocks, non-32 H/W)","ts":"2026-11-26T19:09:29-05:00"}
+{"event":"test_run","result":"profile","device_kernel_ns":2185,"cores":32,"zones_median_ns":{"gather_issue":252,"gather_wait":987,"store_issue":72,"drain":211},"start_spread_ns":394,"ts":"2026-11-26T19:09:29-05:00"}
+{"event":"env","note":"host lost /opt/openmpi-v5.0.7-ulfm on reboot; LD_PRELOAD stub generated/ulfm_stub/libulfm_stub.so supplies MPIX_Comm_shrink/revoke so ttnn imports","ts":"2026-11-26T19:09:29-05:00"}

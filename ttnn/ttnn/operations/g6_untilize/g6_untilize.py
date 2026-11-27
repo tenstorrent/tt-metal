@@ -1,21 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_untilize: uint32 TILE -> ROW_MAJOR, bit-identical, one device program per call.
+"""g6_untilize: uint32 TILE -> ROW_MAJOR, every logical element bit-identical, one device program.
 
-The reorder is a NoC gather of 64 B face-row pieces into row order in L1, followed by whole-page
-writes (row_gather regime, op_design.md). No compute kernel touches the values.
+Registry model (eval/op_template.py): INPUT_TAGGERS, SUPPORTED, EXCLUSIONS, validate().
+INVALID lives in eval/golden_tests/g6_untilize/feature_spec.py, not here.
 """
 
 from __future__ import annotations
 
 import ttnn
-
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from . import g6_untilize_program_descriptor as pd
 
-_OP = "g6_untilize"
+OP_NAME = "g6_untilize"
 
 
 # ---------------------------------------------------------------------------
@@ -69,38 +68,34 @@ def _scenario(input_tensor):
 
 def validate(input_tensor, *, use_multicore=True, sub_core_grids=None):
     if use_multicore is not True:
-        raise ValueError(f"{_OP}: use_multicore must be True, got {use_multicore!r}")
+        raise ValueError(f"{OP_NAME}: use_multicore must be True, got {use_multicore!r}")
     if sub_core_grids is not None:
-        raise ValueError(f"{_OP}: sub_core_grids must be None, got {sub_core_grids!r}")
-    if not ttnn.is_tensor_storage_on_device(input_tensor):
-        raise ValueError(f"{_OP}: input_tensor must be a device tensor (storage {input_tensor.storage_type()!r})")
-    if len(input_tensor.shape) != 4:
-        raise ValueError(f"{_OP}: input_tensor must have rank 4, got shape {list(input_tensor.shape)}")
+        raise ValueError(f"{OP_NAME}: sub_core_grids must be None, got {sub_core_grids!r}")
+    if not isinstance(input_tensor, ttnn.Tensor) or not ttnn.is_tensor_storage_on_device(input_tensor):
+        raise ValueError(f"{OP_NAME}: input_tensor must be a device tensor")
+    shape = tuple(input_tensor.shape)
+    if len(shape) != 4:
+        raise ValueError(f"{OP_NAME}: input_tensor must have rank 4, got shape {shape}")
     mc = input_tensor.memory_config()
     if mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED or mc.buffer_type != ttnn.BufferType.DRAM:
-        raise ValueError(f"{_OP}: input_tensor must be DRAM interleaved, got {mc}")
+        raise ValueError(f"{OP_NAME}: input_tensor must be DRAM interleaved, got {mc}")
 
-    scenario = _scenario(input_tensor)
+    scenario = (_scenario(input_tensor),)
     axes = {}
     for axis, tagger in INPUT_TAGGERS.items():
-        axes[axis] = tagger((scenario,), axes)
+        axes[axis] = tagger(scenario, axes)
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
-            raise UnsupportedAxisValue(f"{_OP}: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
-
+            raise UnsupportedAxisValue(f"{OP_NAME}: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
     for exc in EXCLUSIONS:
         if all(axes.get(k) == v for k, v in exc.items()):
-            raise ExcludedCell(f"{_OP}: unsupported combination (refinement candidate): {exc}")
-
-    # Not an axis: the face-row offsets assume the standard 32x32 tile of four 16x16 faces.
-    tile_shape = tuple(input_tensor.tile.tile_shape)
-    if tile_shape != (pd.TILE_HEIGHT, pd.TILE_WIDTH):
-        raise ValueError(f"{_OP}: tile shape {tile_shape} is not ({pd.TILE_HEIGHT}, {pd.TILE_WIDTH})")
+            raise ExcludedCell(f"{OP_NAME}: unsupported combination (refinement candidate): {exc}")
 
 
 # ---------------------------------------------------------------------------
-# Program cache (BB-07): one built descriptor per program-shaping key.
+# Program cache (BB-07): one plan + descriptor parts per program-relevant key.
+# A hit rewrites only the two buffer-address common runtime args.
 # ---------------------------------------------------------------------------
 
 _PROGRAM_CACHE = {}
@@ -117,32 +112,54 @@ def _cache_key(input_tensor, grid):
         mc.buffer_type,
         grid.x,
         grid.y,
-        # knobs, so that turning one at runtime builds a new program
-        pd.BLOCK_TILE_COLS_REQ,
-        pd.SCRATCH_DEPTH,
-        pd.CORE_BUDGET_REQ,
-        pd.CORE_ORIGIN,
-        pd.KERNEL_PROCESSOR,
-        pd.KERNEL_NOC,
+        pd.knob_values(),
     )
 
 
-def _plan_for(input_tensor):
+class _CachedProgram:
+    __slots__ = ("plan", "kernel", "cbs", "program_hash")
+
+    def __init__(self, plan, kernel, cbs, program_hash):
+        self.plan = plan
+        self.kernel = kernel
+        self.cbs = cbs
+        self.program_hash = program_hash
+
+
+def _plan_for(input_tensor, grid):
+    return pd.make_plan(input_tensor.shape, input_tensor.element_size(), grid.x, grid.y)
+
+
+def _cached_program(input_tensor, output_tensor):
     grid = input_tensor.device().compute_with_storage_grid_size()
     key = _cache_key(input_tensor, grid)
     entry = _PROGRAM_CACHE.get(key)
-    plan = (
-        entry.plan
-        if entry is not None
-        else pd.make_plan(input_tensor.shape, input_tensor.element_size(), grid.x, grid.y)
-    )
-    return key, entry, plan
+    if entry is None:
+        plan = _plan_for(input_tensor, grid)
+        kernel, cb = pd.create_program_parts(input_tensor, output_tensor, plan)
+        descriptor = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb])
+        entry = _CachedProgram(plan, kernel, [cb], ttnn.compute_program_descriptor_hash(descriptor))
+        _PROGRAM_CACHE[key] = entry
+    return entry
 
 
 def describe_plan(input_tensor) -> dict:
-    """The plan the entry point runs for this input (regime, cores, block knobs, per-core role)."""
-    _, _, plan = _plan_for(input_tensor)
-    return pd.describe(plan)
+    """The plan a call with this input selects (BB-08 / BB-21): the same cached plan the entry point uses."""
+    grid = input_tensor.device().compute_with_storage_grid_size()
+    entry = _PROGRAM_CACHE.get(_cache_key(input_tensor, grid))
+    plan = entry.plan if entry is not None else _plan_for(input_tensor, grid)
+    q_min, q_max = plan.blocks_per_core
+    return {
+        "regime": plan.regime,
+        "core_ranges": [((x0, y0), (x1, y1)) for x0, y0, x1, y1 in plan.core_ranges],
+        "num_cores": plan.num_cores,
+        "block_rows": plan.block_rows,
+        "block_tile_cols": plan.block_tile_cols,
+        "scratch_slots": plan.scratch_slots,
+        "blocks_per_core": {"min": q_min, "max": q_max},
+        "staging_bytes_per_core": plan.staging_bytes,
+        "roles": {"row_gather": [((x0, y0), (x1, y1)) for x0, y0, x1, y1 in plan.core_ranges]},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +167,7 @@ def describe_plan(input_tensor) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def g6_untilize(input_tensor, *, use_multicore=True, sub_core_grids=None):
+def g6_untilize(input_tensor: ttnn.Tensor, *, use_multicore: bool = True, sub_core_grids=None) -> ttnn.Tensor:
     validate(input_tensor, use_multicore=use_multicore, sub_core_grids=sub_core_grids)
 
     output_tensor = ttnn.allocate_tensor_on_device(
@@ -161,9 +178,8 @@ def g6_untilize(input_tensor, *, use_multicore=True, sub_core_grids=None):
         input_tensor.memory_config(),
     )
 
-    key, entry, plan = _plan_for(input_tensor)
-    if entry is None:
-        entry = pd.create_program(input_tensor, output_tensor, plan)
-        _PROGRAM_CACHE[key] = entry
-    descriptor = entry.bind(input_tensor.buffer_address(), output_tensor.buffer_address())
+    entry = _cached_program(input_tensor, output_tensor)
+    entry.kernel.common_runtime_args = [input_tensor.buffer_address(), output_tensor.buffer_address()]
+    descriptor = ttnn.ProgramDescriptor(kernels=[entry.kernel], semaphores=[], cbs=entry.cbs)
+    descriptor.custom_program_hash = entry.program_hash
     return ttnn.generic_op([input_tensor, output_tensor], descriptor)
