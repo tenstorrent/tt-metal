@@ -242,3 +242,13 @@ def test_view_rejects_over_padded_tile_input(device, expect_error):
     over_padded = ttnn.tilize_with_val_padding(input_tensor, [2, 64, 64], 0.0)
     with expect_error(RuntimeError, "padded only up to the next tile multiple"):
         ttnn.view(over_padded, (1, 2, 16, 64))
+
+
+def test_view_rejects_a_16x32_tile_input_it_cannot_view(device, expect_error):
+    """A 16x32-tile input whose second-to-last dim is not a multiple of 16 is outside the ttnn.view docstring, which
+    documents 32x32 tiles. Its view would need a larger buffer, so it raises instead of reading the wrong tiles."""
+    input_tensor = ttnn.from_torch(
+        torch.ones(2, 8, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile((16, 32))
+    )
+    with expect_error(RuntimeError, "MeshBuffer must be large enough"):
+        ttnn.view(input_tensor, (1, 2, 8, 32))
