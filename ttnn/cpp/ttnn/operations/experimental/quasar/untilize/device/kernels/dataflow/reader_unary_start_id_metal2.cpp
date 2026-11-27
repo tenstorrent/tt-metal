@@ -23,7 +23,7 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer cb_in(dfb::in);
 
-    const uint32_t tile_bytes = cb_in.get_tile_size();
+    const uint32_t tile_bytes = cb_in.get_entry_size();  // == tile_size() (MX tiles carry their exponents)
 
     const auto s = TensorAccessor(tensor::input);
 

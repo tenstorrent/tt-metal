@@ -97,7 +97,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
     uint32_t row_size_bytes;
 
     uint32_t el_size = a.element_size();
-    if (a.dtype() == DataType::BFLOAT8_B) {
+    if (a.dtype() == DataType::BFLOAT8_B || is_mx(a.dtype())) {  // BFP / MX untilize to bf16
         row_size_bytes = input_shape[-1] * output.element_size();
         el_size = output.element_size();
     } else {

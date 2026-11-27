@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel.h"
 #include "llk_defs.h"
@@ -134,6 +135,8 @@
 // 2. Add the SfpuType enumerator if it is not there.
 // 3. Add the `if constexpr` branch in call_ternary_sfpu_operation_quasar()
 //    and init_ternary_sfpu_operation_quasar().
+#include "llk_sfpu/ckernel_sfpu_lerp.h"
+#include "llk_sfpu/ckernel_sfpu_mac.h"
 #include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 
@@ -150,12 +153,54 @@
 
 namespace test_utils
 {
+
 using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
 template <auto>
 inline constexpr bool unhandled_op = false;
+
+template <sfpi::DataLayout L>
+using layout_c = std::integral_constant<sfpi::DataLayout, L>;
+
+// Calls fn(layout_c<L>{}) with the explicit SFPLOAD/SFPSTORE layout of a float Dest. A 32-bit Dest is F32 whatever
+// the family; a 16-bit Dest follows the family's exponent width: F16a for Float16 and MxFp4_2x_A (5-bit), F16b for
+// Float16_b and MxFp4_2x_B (8-bit). Any other family has no explicit layout: HW-implied.
+template <bool EN_32BIT_DEST, typename Fn>
+inline void dispatch_dest_float_layout(const DataFormat family, Fn&& fn)
+{
+    if constexpr (EN_32BIT_DEST)
+    {
+        fn(layout_c<sfpi::DataLayout::F32> {});
+    }
+    else
+    {
+        switch (family)
+        {
+            case DataFormat::Float16:
+            case DataFormat::MxFp4_2x_A:
+                fn(layout_c<sfpi::DataLayout::F16a> {});
+                break;
+            case DataFormat::Float16_b:
+            case DataFormat::MxFp4_2x_B:
+                fn(layout_c<sfpi::DataLayout::F16b> {});
+                break;
+            default:
+                fn(layout_c<sfpi::DataLayout::Default> {});
+                break;
+        }
+    }
+}
+
+// SFPU_COMPUTE_API_KERNELS (set by the test) sends exp and float ADD through calculate_exponential /
+// calculate_sfpu_binary, the kernels exp_tile / add_binary_tile call, which take the HW-implied (Default) Dest
+// format. Without it they go through the op types with an explicit layout.
+#ifdef SFPU_COMPUTE_API_KERNELS
+inline constexpr bool kComputeApiKernels = true;
+#else
+inline constexpr bool kComputeApiKernels = false;
+#endif
 
 // Mirrored by EMA_ALPHA_BITS / EMA_BETA_BITS in helpers/sfpu_dispatch_constants.py.
 inline constexpr std::uint32_t kEmaAlphaBits = 0x3F19999Au; // 0.6f
@@ -428,7 +473,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::power_iterative)
     {
-        power_init();
+        // What SFPU_UNARY_INIT(power) expands to in the Compute API's power_iterative_tile_init, so the bare init's dispatch to power_init is what runs.
+        ::ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::power>();
     }
     else if constexpr (OPERATION == SfpuType::log || OPERATION == SfpuType::log_with_base || OPERATION == SfpuType::log10)
     {
@@ -790,15 +836,29 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
-        SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            TILE_SHAPE,
-            calculate_exponential,
-            (APPROX, is_fp32_dest_acc_en, false, ITERATIONS),
-            dst_index,
-            vector_mode,
-            p_sfpu::kCONST_1_FP16B);
+        if constexpr (kComputeApiKernels)
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                calculate_exponential,
+                (APPROX, is_fp32_dest_acc_en, false /*SCALE_EN*/, ITERATIONS),
+                dst_index,
+                vector_mode,
+                p_sfpu::kCONST_1_FP16B);
+        }
+        else
+        {
+            // sfpu_format is the Dest family; pick the explicit SFPLOAD/SFPSTORE layout for it.
+            dispatch_dest_float_layout<is_fp32_dest_acc_en>(
+                sfpu_format,
+                [&](auto l)
+                {
+                    ckernel::sfpu::ExpDest<APPROX, is_fp32_dest_acc_en, decltype(l)::value, ITERATIONS>::
+                        template run<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode);
+                });
+        }
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
@@ -865,7 +925,10 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_square, (ITERATIONS), dst_index, vector_mode);
+        dispatch_dest_float_layout<is_fp32_dest_acc_en>(
+            sfpu_format,
+            [&](auto l)
+            { ckernel::sfpu::SquareDest<decltype(l)::value, ITERATIONS>::template run<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode); });
     }
     else if constexpr (is_trig_op(OPERATION))
     {
@@ -1242,8 +1305,21 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::power_iterative)
     {
+#ifdef SFPU_POWER_ITERATIVE_EXPONENT
+        constexpr std::uint32_t POWER_ITERATIVE_EXPONENT = SFPU_POWER_ITERATIVE_EXPONENT;
+#else
+        constexpr std::uint32_t POWER_ITERATIVE_EXPONENT = 3u;
+#endif
+#ifdef SFPU_POWER_ITERATIVE_RUNTIME_EXPONENT
+        // Read back through a volatile, so the kernel cannot fold the exponent and takes the path a
+        // runtime exponent takes.
+        volatile std::uint32_t runtime_exponent = POWER_ITERATIVE_EXPONENT;
+        const std::uint32_t exponent            = runtime_exponent;
+#else
+        constexpr std::uint32_t exponent = POWER_ITERATIVE_EXPONENT;
+#endif
         SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_unary_power_iterative, (APPROX, ITERATIONS), dst_index, vector_mode, 3u /* exponent */);
+            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_unary_power_iterative, (APPROX, ITERATIONS), dst_index, vector_mode, exponent);
     }
     else if constexpr (OPERATION == SfpuType::log)
     {
@@ -1795,18 +1871,10 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     {
         if (math_format == DataFormat::Int32)
         {
-            SFPU_BINARY_CALL_TINY_TILE(
-                DST_SYNC,
-                is_fp32_dest_acc_en,
-                TILE_SHAPE,
-                calculate_add_int,
-                (false, ITERATIONS, DataFormat::Int32, 0, SIGN_MAGNITUDE_FORMAT),
-                src0_tile,
-                src1_tile,
-                dst_tile,
-                vector_mode);
+            ckernel::sfpu::AddIntDest<SIGN_MAGNITUDE_FORMAT, ITERATIONS, TILE_SHAPE>::template run<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(
+                src0_tile, src1_tile, dst_tile, vector_mode);
         }
-        else
+        else if constexpr (kComputeApiKernels)
         {
             SFPU_BINARY_CALL_TINY_TILE(
                 DST_SYNC,
@@ -1818,6 +1886,16 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                 src1_tile,
                 dst_tile,
                 vector_mode);
+        }
+        else
+        {
+            dispatch_dest_float_layout<is_fp32_dest_acc_en>(
+                math_format,
+                [&](auto l)
+                {
+                    ckernel::sfpu::AddDest<is_fp32_dest_acc_en, dst_rounding_mode, decltype(l)::value, ITERATIONS, TILE_SHAPE>::
+                        template run<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
+                });
         }
     }
     else if constexpr (OP == BinaryOp::SUB)
@@ -2406,6 +2484,11 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     }
 }
 
+// lerp and mac take the Dest float format as a template argument and accept Float32 and Float16_b only; the
+// kernels branch on is_fp32_dest_acc_en, so the format follows the Dest precision.
+template <bool is_fp32_dest_acc_en>
+inline constexpr DataFormat ternary_float_format = is_fp32_dest_acc_en ? DataFormat::Float32 : DataFormat::Float16_b;
+
 /**
  * @brief Initialize shared SFPU state and the selected Quasar ternary operation.
  *
@@ -2420,6 +2503,17 @@ void init_ternary_sfpu_operation_quasar()
     if constexpr (OPERATION == SfpuType::where)
     {
         _llk_math_eltwise_ternary_sfpu_init_<OPERATION>();
+    }
+    else if constexpr (OPERATION == SfpuType::lerp)
+    {
+        // The Compute API's lerp_tile_init expression.
+        SFPU_TERNARY_INIT_FN(lerp, sfpu::lerp_init, (APPROX));
+    }
+    else if constexpr (OPERATION == SfpuType::mac)
+    {
+        // The Compute API's mac_tile_init expression. Its recording starts at replay slot 0, which the bank-0 FPU
+        // recordings and sfpi's own replay also use, so it must run immediately before the calculate step.
+        SFPU_TERNARY_INIT_FN(mac, sfpu::mac_init, (APPROX, is_fp32_dest_acc_en, ternary_float_format<is_fp32_dest_acc_en>));
     }
     else
     {
@@ -2457,6 +2551,37 @@ void call_ternary_sfpu_operation_quasar(
     {
         SFPU_TERNARY_CALL_TINY_TILE(
             DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_where, (APPROX, ITERATIONS), src0_tile, src1_tile, src2_tile, dst_tile, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::lerp)
+    {
+        // The Compute API's lerp_tile expression: out = src0 + src2 * (src1 - src0).
+        static_assert(TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32, "lerp addresses Dest in 32x32 tiles");
+        SFPU_TERNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_lerp,
+            (APPROX, is_fp32_dest_acc_en, ternary_float_format<is_fp32_dest_acc_en>, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            src2_tile,
+            dst_tile,
+            vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::mac)
+    {
+        // The Compute API's mac_tile expression: out = src0 * src1 + src2. The recorded body fixes the tiles to
+        // (0, 1, 2) -> 0, so the indices are checked but otherwise ignored by the kernel.
+        static_assert(TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32, "mac addresses Dest in 32x32 tiles");
+        SFPU_TERNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_mac,
+            (APPROX, is_fp32_dest_acc_en, ternary_float_format<is_fp32_dest_acc_en>, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            src2_tile,
+            dst_tile,
+            vector_mode);
     }
     else
     {

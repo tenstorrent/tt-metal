@@ -210,6 +210,14 @@ class EN_DEST_REUSE(TemplateParameter):
 
 
 @dataclass
+class INP_FLOAT32(TemplateParameter):
+    """ttnn's float32-input tag: kernels that branch on it (erf, gelu, ...) build their float32 arm."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define INP_FLOAT32 1"
+
+
+@dataclass
 class SFPU_INT_OP(TemplateParameter):
     """Emit a #define to select the integer SFPU operation in a shared C++ test source.
 
@@ -528,6 +536,43 @@ class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
         if not self.max_min_sign_magnitude:
             return ""
         return "#define SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE 1"
+
+
+@dataclass
+class SFPU_COMPUTE_API_KERNELS(TemplateParameter):
+    """Quasar: run exp / float ADD through ``calculate_exponential`` / ``calculate_sfpu_binary``, the
+    kernels ``exp_tile`` / ``add_binary_tile`` call (HW-implied Dest format), not the op types.
+
+    A macro because sfpu_operations_quasar.h selects on ``#ifdef``, like SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE.
+    """
+
+    compute_api_kernels: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if not self.compute_api_kernels:
+            return ""
+        return "#define SFPU_COMPUTE_API_KERNELS 1"
+
+
+@dataclass
+class SFPU_POWER_ITERATIVE_EXPONENT(TemplateParameter):
+    """Exponent for power_iterative on Quasar; ``power_iterative_runtime`` has the harness pass it
+    through a volatile, so the kernel takes its runtime-exponent path."""
+
+    power_iterative_exponent: int = 3
+    power_iterative_runtime: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if self.power_iterative_exponent < 0:
+            raise ValueError(
+                f"power_iterative takes a non-negative exponent, got {self.power_iterative_exponent}"
+            )
+        lines = [
+            f"#define SFPU_POWER_ITERATIVE_EXPONENT {self.power_iterative_exponent}u"
+        ]
+        if self.power_iterative_runtime:
+            lines.append("#define SFPU_POWER_ITERATIVE_RUNTIME_EXPONENT 1")
+        return "\n".join(lines)
 
 
 @dataclass

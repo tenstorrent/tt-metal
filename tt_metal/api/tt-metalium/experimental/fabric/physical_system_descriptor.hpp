@@ -188,6 +188,11 @@ public:
     // Fatal when a different ASIC already occupies the address: the two would be one solver node.
     void add_asic_descriptor(AsicID asic_id, ASICDescriptor descriptor);
 
+    // Drops every link with an endpoint that has no ASIC descriptor, from the ASIC graph, the exit-node
+    // table and the host graph. Such a link leaves the described system, so nothing can be placed on its
+    // far end. Returns the number of eth links dropped from the ASIC graph.
+    std::size_t prune_unresolved_links();
+
     // Discovery setter interface - allows discovery functions to set internal state
     // without requiring friend declarations with MPI types in public header
     void set_discovery_data(const std::string& local_hostname, uint32_t local_rank, bool all_hostnames_unique = false);
