@@ -9,6 +9,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "reshard_writer.hpp"
+#include "interleaved_block_io.hpp"
 #include "api/tensor/noc_traits.h"
 #ifdef DO_COL_MASK
 #include "col_mask_dataflow.h"
@@ -48,6 +49,19 @@ void kernel_main() {
 #endif
 
     const Noc noc;
+
+    // Interleaved input/output (sharded program config over interleaved tensors): this core's block starts at tile row
+    // tile_row_start and tile column width_shard_tile_start_id of the [Mt, Kt] tile grid.
+    constexpr bool in0_interleaved = get_arg(args::in0_interleaved) == 1;
+    constexpr bool out_interleaved = get_arg(args::out_interleaved) == 1;
+    constexpr auto io_Kt = get_arg(args::io_Kt);
+    constexpr auto io_block_ht = get_arg(args::io_block_ht);
+    const uint32_t io_first_tile_id = (get_arg(args::tile_row_start) * io_Kt) + width_shard_tile_start_id;
+    if constexpr (in0_interleaved) {
+        // The input is not resident in this core's L1: read the block into in0, which compute waits on.
+        read_interleaved_block<io_block_ht, block_w, io_Kt>(
+            noc, *dfb::get_token_if_present<"in0">(), *tensor::get_token_if_present<"src">(), io_first_tile_id);
+    }
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma_obj(dfb::gamma);
 #endif
@@ -145,6 +159,11 @@ void kernel_main() {
         storage_core_stride_w_bytes,
         block_ht);
 #endif
+
+    if constexpr (out_interleaved) {
+        write_interleaved_block<io_block_ht, block_w, io_Kt>(
+            noc, *dfb::get_token_if_present<"out">(), *tensor::get_token_if_present<"dst">(), io_first_tile_id);
+    }
 
 #endif  // IDLE_CORE
 }

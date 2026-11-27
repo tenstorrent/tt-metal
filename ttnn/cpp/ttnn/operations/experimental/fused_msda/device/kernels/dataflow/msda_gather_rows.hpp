@@ -29,6 +29,7 @@
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_corner_word.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tile_layout.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_value_layout.hpp"
 
 namespace fused_msda_gather {
 
@@ -52,6 +53,46 @@ struct PointArgs {
     uint32_t head;
 };
 constexpr uint32_t POINT_ARGS_WORDS = sizeof(PointArgs) / sizeof(uint32_t);
+
+using fused_msda_value_layout::HEAD_MAJOR_KEYS_PER_PAGE;
+using fused_msda_value_layout::head_major_pages_per_head;
+using fused_msda_value_layout::ValueLayout;
+
+struct ValueLoc {
+    uint32_t page;
+    uint32_t offset_bytes;
+};
+
+// Where key s of head h in batch b lives. Cfg carries VALUE_LAYOUT, D, NUM_KEYS
+// and NUM_HEADS as static constexpr members.
+template <typename Cfg>
+inline ValueLoc value_loc(uint32_t b, uint32_t s, uint32_t h) {
+    static_assert(
+        Cfg::VALUE_LAYOUT == ValueLayout::Canonical || Cfg::VALUE_LAYOUT == ValueLayout::Packed ||
+            Cfg::VALUE_LAYOUT == ValueLayout::HeadMajor,
+        "unknown value layout");
+    if constexpr (Cfg::VALUE_LAYOUT == ValueLayout::Packed) {
+        return {b * Cfg::NUM_KEYS + s, h * (Cfg::D * 2u)};
+    } else if constexpr (Cfg::VALUE_LAYOUT == ValueLayout::HeadMajor) {
+        constexpr uint32_t PAGES_PER_HEAD = head_major_pages_per_head(Cfg::NUM_KEYS);
+        return {
+            (b * Cfg::NUM_HEADS + h) * PAGES_PER_HEAD + s / HEAD_MAJOR_KEYS_PER_PAGE,
+            (s % HEAD_MAJOR_KEYS_PER_PAGE) * (Cfg::D * 2u)};
+    } else {
+        return {(b * Cfg::NUM_KEYS + s) * Cfg::NUM_HEADS + h, 0};
+    }
+}
+
+// Whether keys s and s+1 of a head sit back to back in one page, so the pair
+// can be one read. Only head-major value stores a head's keys contiguously.
+template <typename Cfg>
+inline bool pair_contiguous(uint32_t s) {
+    if constexpr (Cfg::VALUE_LAYOUT == ValueLayout::HeadMajor) {
+        return (s % HEAD_MAJOR_KEYS_PER_PAGE) != HEAD_MAJOR_KEYS_PER_PAGE - 1;
+    } else {
+        return false;
+    }
+}
 
 // Split gather: the reader takes rows [0, SPLIT_ROW), the writer the rest. A
 // tail block with v_rows <= SPLIT_ROW leaves the writer nothing to read.
@@ -116,9 +157,12 @@ inline void zero_words(uint32_t l1_addr, uint32_t words) {
 }
 
 // Cfg carries the value layout as static constexpr members: D, NUM_KEYS,
-// NUM_HEADS, VALUE_PACKED (packed (B, S, H*D) vs canonical (B, S, H, D)) and
-// STICK_NBYTES. The stick must be exactly D*2 bytes (row-major staging packs
-// the four slots back to back).
+// NUM_HEADS, VALUE_LAYOUT and STICK_NBYTES. The stick must be exactly D*2 bytes
+// (row-major staging packs the four slots back to back).
+//
+// With head-major value a horizontal corner pair (NW+NE, SW+SE) is one read of
+// two sticks: the two keys are adjacent in the same page unless x0 is the last
+// key of a page, and the two slots are adjacent in the staging row.
 //
 // Kept out of line: the reader's main loop keeps far more values live than the
 // writer's, and inlined there the corner loop spills its NoC register pointers
@@ -135,14 +179,14 @@ __attribute__((noinline)) void gather_rows(
     const uint32_t v_rows = a.v_rows;
     const uint32_t width = a.width;
     const uint32_t head = a.head;
+    const uint32_t batch = a.batch;
     constexpr uint32_t STICK = Cfg::STICK_NBYTES;
     constexpr uint32_t ROW_NBYTES = 4 * STICK;
-    constexpr bool PACKED = Cfg::VALUE_PACKED;
 
     namespace cw = fused_msda_corner_word;
-    // (b, s) row of the NW corner is nw_base + index. It wraps below zero only
-    // for an out-of-bounds NW, which is never read.
-    const uint32_t nw_base = a.batch * Cfg::NUM_KEYS + a.start_index - (width + 1);
+    // Key of the NW corner is nw_base + index. It wraps below zero only for an
+    // out-of-bounds NW, which is never read.
+    const uint32_t nw_base = a.start_index - (width + 1);
 
     // Rows >= v_rows never reach the output.
     const uint32_t r_last = r_end < v_rows ? r_end : v_rows;
@@ -162,6 +206,18 @@ __attribute__((noinline)) void gather_rows(
                 continue;
             }
             const uint32_t pair_l1 = row_l1 + 2u * dy * STICK;
+            const uint32_t s_west = nw + dy * width;
+            constexpr uint32_t BOTH_X = cw::FLAG_X0 | cw::FLAG_X1;
+            if ((c.flags & BOTH_X) == BOTH_X && pair_contiguous<Cfg>(s_west)) {
+                const ValueLoc loc = value_loc<Cfg>(batch, s_west, head);
+                noc.async_read(
+                    value_acc,
+                    CoreLocalMem<uint32_t>(pair_l1),
+                    2 * STICK,
+                    {.page_id = loc.page, .offset_bytes = loc.offset_bytes},
+                    {.offset_bytes = 0});
+                continue;
+            }
             for (uint32_t dx = 0; dx < 2; ++dx) {
                 if (!(c.flags & (cw::FLAG_X0 << dx))) {
                     if constexpr (ZERO_SKIPPED_SLOTS) {
@@ -170,21 +226,12 @@ __attribute__((noinline)) void gather_rows(
                     continue;
                 }
                 const uint32_t slot_l1 = pair_l1 + dx * STICK;
-                const uint32_t bs = nw + dy * width + dx;
-                uint32_t page;
-                uint32_t offset_bytes;
-                if constexpr (PACKED) {
-                    page = bs;
-                    offset_bytes = head * (Cfg::D * 2u);
-                } else {
-                    page = bs * Cfg::NUM_HEADS + head;
-                    offset_bytes = 0;
-                }
+                const ValueLoc loc = value_loc<Cfg>(batch, s_west + dx, head);
                 noc.async_read(
                     value_acc,
                     CoreLocalMem<uint32_t>(slot_l1),
                     STICK,
-                    {.page_id = page, .offset_bytes = offset_bytes},
+                    {.page_id = loc.page, .offset_bytes = loc.offset_bytes},
                     {.offset_bytes = 0});
             }
         }

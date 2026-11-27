@@ -96,11 +96,13 @@ TIERS: dict[str, Tier] = {
     # Quick ETH link health, based on Veljko Cankovic's script: the unit read as
     # found, the snapshot and two ETH status reads 30 s apart. No resets and no
     # tests, so nothing changes the state being read, and a fault is still
-    # there for whoever picks it up. The one tier anyone may run by hand, so it
-    # ends with the ETH link summary.
+    # there for whoever picks it up. The sys-triage bundle comes last, with the
+    # unit still as found. The one tier anyone may run by hand, so it ends with
+    # the ETH link summary.
     "flash": Tier(
         eth_status=True,
         eth_summary=True,
+        sys_triage=True,
     ),
     # The scheduled run.
     "daily": Tier(
