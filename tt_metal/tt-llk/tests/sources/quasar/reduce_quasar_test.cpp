@@ -44,9 +44,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr bool data_in_srcb = reduce_swaps_operands<POOL_TYPE, REDUCE_DIM>();
     const auto data_format      = static_cast<DataFormat>(formats.unpack_A_dst);
     const auto scaler_format    = static_cast<DataFormat>(formats.unpack_B_dst);
-    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(data_in_srcb ? scaler_format : data_format, data_in_srcb ? data_format : scaler_format);
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(data_format, scaler_format);
     {
         START_PERF_MEASURE("INIT")
+        if constexpr (data_in_srcb)
+        {
+            // Row SUM/AVG swaps the operands: reduce_init requires reconfig_data_format(icb_scaler, icb) first.
+            _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, is_fp32_dest_acc_en>(formats.unpack_B_src, formats.unpack_B_dst);
+            _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, is_fp32_dest_acc_en>(formats.unpack_A_src, formats.unpack_A_dst);
+        }
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape_A, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
