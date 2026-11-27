@@ -73,6 +73,13 @@ GTEST_OK = re.compile(r"\[\s+OK \] (\S+)")
 GTEST_FAILED = re.compile(r"\[\s+FAILED\s+\] (\S+)")
 PYTEST_FAILED = re.compile(r"^(?:FAILED|ERROR) (\S+::\S+)")
 
+# Where a point hung. All of them count as a hang at that point; the label says which part of it hung.
+HANG_KINDS = {
+    "HANG(force)": "hung while AICLK/VDD were being forced, before the workload ran at that point",
+    "HANG(ref)": "hung in the first (reference) runs of the workload, after AICLK/VDD were set",
+    "HANG": "hung during the checked iterations",
+}
+
 
 def selection_args(spec, node=None, k=None):
     """pytest arguments that select the test to sweep: an exact node id, a -k expression, or the kind's default."""
@@ -290,13 +297,12 @@ def run_sweep(a, out):
         if outcome == "done":
             break
         if not started and ref_started and not ref_done and hung:
-            # The reference run hung at this step's clock and VDD: that is the failure under test, at this point.
-            # HANG* = it hung while AICLK/VDD were being forced, before the workload ran there.
+            # A hang at this step's clock and VDD, counted like any other hang. Where it hung is kept apart:
+            # HANG(force) while AICLK/VDD were being forced, HANG(ref) in the first (reference) runs of the workload.
             current = ref_started[-1]["step"]
-            status[current] = "HANG" if ref_set else "HANG*"
+            status[current] = "HANG(ref)" if ref_set else "HANG(force)"
             startup_failures = 0
-            where = "taking the reference outputs" if ref_set else "forcing AICLK/VDD for the reference outputs"
-            log(f"step {current} {steps[current]} marked {status[current]} (hung while {where})", out)
+            log(f"step {current} {steps[current]} marked {status[current]} ({HANG_KINDS[status[current]]})", out)
             start = current + 1
             if not reset_boards(a.reset_cmd, out):
                 return steps, status, "could not reset the boards after a failed step"
@@ -317,13 +323,11 @@ def run_sweep(a, out):
             current_status = None
         else:
             if hung:
-                current_status = "HANG" if current in set_steps else "HANG*"
+                current_status = "HANG" if current in set_steps else "HANG(force)"
             else:
                 current_status = "ERROR"
             status[current] = current_status
-            where = {"HANG": " (hung while running)", "HANG*": " (hung while forcing AICLK/VDD)"}.get(
-                current_status, ""
-            )
+            where = f" ({HANG_KINDS[current_status]})" if current_status in HANG_KINDS else ""
             log(f"step {current} {steps[current]} marked {current_status}{where}", out)
         start = current + 1
         if not reset_boards(a.reset_cmd, out):
@@ -380,11 +384,10 @@ def summarize(a, steps, status, abort_reason, out):
     widths = [max(len(r[c]) for r in rows + [header]) for c in range(len(header))]
     fmt = lambda r: "  " + " | ".join(v.ljust(w) for v, w in zip(r, widths))
     lines += ["", "Points (PASS = every check bit-exact on every chip, no hang):", fmt(header)] + [fmt(r) for r in rows]
-    forced_hangs = [idx for idx, s in status.items() if s == "HANG*"]
-    if forced_hangs:
-        lines.append(
-            "  HANG* = a chip stopped answering while AICLK/VDD were being forced, before the workload ran there"
-        )
+    hang_counts = {kind: sum(1 for s in status.values() if s == kind) for kind in HANG_KINDS}
+    for kind, n in hang_counts.items():
+        if n:
+            lines.append(f"  {kind} = {HANG_KINDS[kind]}")
     for idx, devs in sorted(ref_failed.items()):
         if idx < len(steps):
             mhz, off = steps[idx]
@@ -412,22 +415,17 @@ def summarize(a, steps, status, abort_reason, out):
         working.append((mhz, off))
 
     passing = [k for k, p in points.items() if p["verdict"] == "PASS"]
-    workload_failed = any(p["verdict"] == "FAIL" or p["text"] == "HANG" for p in points.values())
     if passing:
         verdict = "FIXED"
         detail = f"failure gone at {len(passing)}/{len(points)} points"
-    elif forced_hangs and not workload_failed:
-        verdict = "INCONCLUSIVE"
-        detail = (
-            f"forcing AICLK/VDD made a chip stop answering at {len(forced_hangs)} point(s); "
-            "the workload never ran at a forced point"
-        )
     elif abort_reason and not any(p["verdict"] in ("FAIL", "HANG") for p in points.values()):
         verdict = "INCONCLUSIVE"
         detail = abort_reason
     else:
         verdict = "NOT FIXED"
         detail = "the failure remained at every tested point"
+    if any(hang_counts.values()):  # every kind counts as a hang; say where they happened
+        detail += "; hangs: " + ", ".join(f"{n} {kind}" for kind, n in hang_counts.items() if n)
     lines += ["", f"VF SWEEP VERDICT: {verdict} ({detail})", "=" * 78]
     for l in lines:
         log(l, out)
