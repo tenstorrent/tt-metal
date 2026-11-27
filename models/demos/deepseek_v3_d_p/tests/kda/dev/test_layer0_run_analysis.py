@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""CPU checks of the run-sum metrics with hand-verifiable values."""
+"""CPU checks of the run files, the report and the trace converter with hand-verifiable values. The tier definitions
+are tested with ``common/prefill/long_context_accuracy/kda/scorer.kda_tiers``."""
 
 from __future__ import annotations
 
@@ -18,9 +19,9 @@ from models.demos.deepseek_v3_d_p.tests.kda.dev.layer0_run_analysis import (
     from_trace,
     golden_token_floor,
     load_run,
+    metric,
     report,
     sums_token_floor,
-    tiers,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, token_ids_sha256
 
@@ -51,11 +52,11 @@ def test_half_scale_output_through_the_run_files(tmp_path) -> None:
     (tmp_path / "DONE").write_text("")
     result = analyze(load_run(tmp_path))
     assert (result["tokens"], result["complete"], result["fabric_config"]) == (tokens, True, "FABRIC_2D")
-    assert result["tiers"]["tier0"]["output_nrmse"] == pytest.approx(0.5)
-    assert result["tiers"]["tier2"]["output_gain"] == pytest.approx(0.5)
+    assert metric(result, "output_nrmse") == pytest.approx(0.5)
+    assert metric(result, "output_gain") == pytest.approx(0.5)
     assert result["series"]["window_nrmse"] == pytest.approx([0.5, 0.5])
     assert result["series"]["state_head_nrmse"][0][6] == pytest.approx(0.1)
-    assert result["tiers"]["tier2"]["state_head_gain_final"]["worst_gain"] == pytest.approx(0.9)
+    assert metric(result, "state_head_gain_final_worst_gain") == pytest.approx(0.9)
 
 
 def test_interrupted_run_reports_only_finished_calls_and_keeps_non_finite_rows(tmp_path) -> None:
@@ -66,49 +67,6 @@ def test_interrupted_run_reports_only_finished_calls_and_keeps_non_finite_rows(t
     run = load_run(tmp_path)
     assert len(run["token_sums"]) == 2048 and len(run["state_sums"]) == 1 and not run["complete"]
     assert np.isnan(run["token_sums"][-1, 0])
-
-
-def test_tiers_hand_values() -> None:
-    # Output: two 1,024-token windows, every token golden norm 1; window 0 errors 0.2, window 1 errors 0.1; cross 0.9.
-    t = np.zeros((2048, 3))
-    t[:, 1] = 1.0
-    t[:, 2] = 0.9
-    t[:1024, 0] = 0.2**2
-    t[1024:, 0] = 0.1**2
-    # State: two snapshots, golden norm 1 per head. Snapshot 0: every head 0.1. Snapshot 1: exact except head 6 (0.5,
-    # gain 0.8) and head 7 (0.3).
-    s = np.zeros((2, HEADS, 3))
-    s[..., 1] = 1.0
-    s[..., 2] = 1.0
-    s[0, :, 0] = 0.1**2
-    s[1, 6] = [0.5**2, 1.0, 0.8]
-    s[1, 7, 0] = 0.3**2
-    got = tiers(t, s, [1024, 2048], floor=1e-9)
-    assert got["tier0"]["output_nrmse"] == pytest.approx(np.sqrt(0.025))
-    assert got["tier0"]["state_final_nrmse"] == pytest.approx(np.sqrt(0.34 / HEADS))
-    token = got["tier1"]["output_token"]  # 1,024 x 0.1 then 1,024 x 0.2: the median interpolates between them
-    assert (token["p50"], token["p95"], token["p99"]) == pytest.approx((0.15, 0.2, 0.2))
-    assert (token["worst"], token["worst_at"]) == (pytest.approx(0.2), 0)
-    window = got["tier1"]["output_window"]
-    assert (window["p50"], window["worst"], window["worst_at"]) == (pytest.approx(0.15), pytest.approx(0.2), 0)
-    head = got["tier1"]["state_head_final"]  # 94 x 0, 0.3, 0.5: p99 sits 5% of the way from 0.3 to 0.5
-    assert (head["p50"], head["p95"], head["p99"]) == pytest.approx((0.0, 0.0, 0.31))
-    assert (head["worst"], head["worst_at"]) == (pytest.approx(0.5), 6)
-    call = got["tier1"]["state_window"]
-    assert (call["worst"], call["worst_at"]) == (pytest.approx(0.1), 1024)
-    assert got["tier2"]["output_gain"] == pytest.approx(0.9)
-    assert got["tier2"]["state_gain_final"] == pytest.approx((95 + 0.8) / HEADS)
-    gain = got["tier2"]["state_head_gain_final"]  # |1 - gain|: 95 x 0, 0.2; p99 sits 5% of the way to 0.2
-    assert (gain["p50"], gain["p95"], gain["p99"]) == pytest.approx((0.0, 0.0, 0.01))
-    assert (gain["worst"], gain["worst_at"], gain["worst_gain"]) == (pytest.approx(0.2), 6, pytest.approx(0.8))
-    per_head = got["tier2"]["state_head_window"]  # 94 x 0, 96 x 0.1, 0.3, 0.5
-    assert per_head["p50"] == pytest.approx(0.1)
-    assert (per_head["worst"], per_head["worst_at"]) == (pytest.approx(0.5), [2048, 6])
-
-
-def test_token_floor_floors_small_golden_tokens() -> None:
-    t = np.array([[0.01, 1e-6, 0.0], [0.01, 1.0, 0.0]])  # error 0.1 on a near-zero and on a unit golden token
-    assert tiers(t, np.ones((1, HEADS, 3)), [2], floor=0.5)["tier1"]["output_token"]["worst"] == pytest.approx(0.2)
 
 
 def test_report_has_every_tier_and_well_formed_rows(tmp_path) -> None:
@@ -154,8 +112,8 @@ def test_from_trace_scores_a_transposed_half_scale_trace(tmp_path) -> None:
     assert run["state_tokens"] == [4, 8] and run["complete"]
     assert json.loads((tmp_path / "run" / "run.json").read_text())["state_orientation"] == "transposed"
     result = analyze(run)
-    assert result["tiers"]["tier0"]["output_nrmse"] == pytest.approx(0.5)
-    assert result["tiers"]["tier0"]["state_final_nrmse"] == 0.0
+    assert metric(result, "output_nrmse") == pytest.approx(0.5)
+    assert metric(result, "state_final_nrmse") == 0.0
     assert run["token_floor"] == golden_token_floor(golden) == sums_token_floor(run["token_sums"])
 
 

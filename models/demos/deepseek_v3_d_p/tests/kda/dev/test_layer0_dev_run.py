@@ -246,13 +246,13 @@ def test_kimi_k3_layer0_dev_run(mesh_device: ttnn.MeshDevice, tensor_parallel_ax
             state_sums = error_sums(golden_state, recurrent, dim=(-2, -1))
             writer.write_call(start, start + _CALL, token_sums, state_sums)
             call = tiers(token_sums.numpy(), state_sums.numpy()[None], [start + _CALL], floor=0.0)
-            worst = call["tier1"]["state_head_final"]
+            tier0, tier1, tier2 = (call[tier][0] for tier in (0, 1, 2))
             elapsed = time.perf_counter() - began
             log(
                 f"call {index + 1}/{calls} [{start},{start + _CALL}) {time.perf_counter() - step:.2f} s, "
-                f"ETA {elapsed / (index + 1) * (calls - index - 1):.0f} s | out {call['tier0']['output_nrmse']:.4%} "
-                f"gain {call['tier2']['output_gain']:.4f} | state {call['tier0']['state_final_nrmse']:.3%} | "
-                f"worst head h{worst['worst_at']} {worst['worst']:.3%}"
+                f"ETA {elapsed / (index + 1) * (calls - index - 1):.0f} s | out {tier0['output_nrmse']:.4%} "
+                f"gain {tier2['output_gain']:.4f} | state {tier0['state_final_nrmse']:.3%} | "
+                f"worst head h{tier1['state_head_final_worst_at']} {tier1['state_head_final_worst']:.3%}"
             )
     if meta["token_floor"] is None and tokens == available:  # the run's golden sums cover the whole golden
         meta["token_floor"] = sums_token_floor(writer.token_sums)

@@ -11,9 +11,10 @@ same definitions (``tiers``):
   scale of the golden in the actual output, below 1 when the output is too small (PCC is blind to it);
 * per-token NRMSE with the golden's token floor (``golden_floor`` over every token of the golden), so runs of any
   length share one floor;
-* tier 0: output NRMSE over the run, pooled state NRMSE after the last call; tier 1: p50/p95/p99/worst of output per
-  token and per 1,024-token window, final state per head, pooled state per call; tier 2: output gain, final pooled
-  state gain and per-head gain, state per head per call.
+* the tiers are ``common/prefill/long_context_accuracy/kda/scorer.kda_tiers``, the definition the CI long-context
+  test reports too: tier 0 output NRMSE over the run, pooled state NRMSE after the last call; tier 1 p50/p95/p99/worst
+  of output per token and per 1,024-token window, final state per head, pooled state per call; tier 2 output gain,
+  final pooled state gain and per-head gain, state per head per call.
 
 Run directory layout::
 
@@ -45,11 +46,11 @@ import torch
 from safetensors import safe_open
 
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import MANIFEST, token_ids_sha256
+from models.demos.common.prefill.long_context_accuracy.kda.scorer import TAIL_PERCENTILES, WINDOW, kda_tiers
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import load_window, state_after
 
-WINDOW = 1024
 _FLOOR_READ_SEGMENTS = 16  # golden segments per read when computing the token floor (~1 GB at 1,024 x 7,168 FP64)
 
 
@@ -144,6 +145,21 @@ def load_run(run_dir: Path) -> dict:
     }
 
 
+def tiers(token_sums: np.ndarray, state_sums: np.ndarray, state_tokens: list[int], floor: float) -> dict:
+    """``kda_tiers`` of run sums: ``token_sums`` ``[tokens, 3]``, ``state_sums`` ``[snapshots, heads, 3]``. Older run
+    directories hold a fourth column in both; the tiers read the first three."""
+    t = torch.from_numpy(np.array(token_sums[:, :3], dtype=np.float64))
+    return kda_tiers(t[:, 0], t[:, 1], t[:, 2], np.asarray(state_sums[..., :3], dtype=np.float64), state_tokens, floor)
+
+
+def metric(analysis: dict, name: str):
+    """The value of metric ``name`` in an ``analyze`` result, whichever tier holds it."""
+    for measurements in analysis["tiers"].values():
+        if name in measurements[0]:
+            return measurements[0][name]
+    raise KeyError(name)
+
+
 def analyze(run: dict) -> dict:
     """The tiers of one run, its provenance, and the per-position series the plots use; JSON-serializable."""
     t = run["token_sums"]
@@ -167,67 +183,18 @@ def analyze(run: dict) -> dict:
     }
 
 
-TIER_PERCENTILES = (50, 95, 99)
-
-
-def _tail(values: np.ndarray, positions: list) -> dict:
-    """p50/p95/p99 (linear interpolation) and the worst value with its position."""
-    worst = int(values.argmax())
-    out = {f"p{p}": float(np.percentile(values, p)) for p in TIER_PERCENTILES}
-    out.update(worst=float(values[worst]), worst_at=positions[worst])
-    return out
-
-
-def tiers(t: np.ndarray, s: np.ndarray, state_tokens: list[int], floor: float) -> dict:
-    """The decided accuracy metric set, in zoom-in tiers.
-
-    Tier 0: output NRMSE over the run; pooled state NRMSE after the last call. Tier 1: output per token (own norm,
-    floored at ``floor``) and per 1,024-token window; state per head at the final snapshot and pooled per call-end
-    snapshot. Tier 2: output gain; pooled state gain after the last call, and each head's distance from gain 1 there
-    (with the worst head's signed gain); state per head per snapshot. Positions are token indices (window start,
-    snapshot end) or head ids.
-    """
-    whole = t.sum(0)
-    window_starts = np.arange(0, len(t), WINDOW)
-    window_sums = np.add.reduceat(t, window_starts, axis=0)
-    token_nrmse = np.sqrt(t[:, 0]) / np.maximum(np.sqrt(t[:, 1]), floor)
-    head = _nrmse(s[..., 0], s[..., 1])  # [snapshots, heads]
-    pooled = _nrmse(s[..., 0].sum(-1), s[..., 1].sum(-1))
-    final_gain = s[-1, :, 2] / s[-1, :, 1]
-    heads = list(range(s.shape[1]))
-    head_gain_final = _tail(np.abs(final_gain - 1), heads)
-    head_gain_final["worst_gain"] = float(final_gain[head_gain_final["worst_at"]])
-    return {
-        "tier0": {"output_nrmse": float(_nrmse(whole[0], whole[1])), "state_final_nrmse": float(pooled[-1])},
-        "tier1": {
-            "output_token": _tail(token_nrmse, list(range(len(t)))),
-            "output_window": _tail(_nrmse(window_sums[:, 0], window_sums[:, 1]), window_starts.tolist()),
-            "state_head_final": _tail(head[-1], heads),
-            "state_window": _tail(pooled, list(state_tokens)),
-        },
-        "tier2": {
-            "output_gain": float(whole[2] / whole[1]),
-            "state_gain_final": float(s[-1, :, 2].sum() / s[-1, :, 1].sum()),
-            "state_head_gain_final": head_gain_final,
-            "state_head_window": _tail(
-                head.ravel(), [[state_tokens[i], h] for i in range(len(state_tokens)) for h in heads]
-            ),
-        },
-    }
-
-
 def _pct(value: float) -> str:
     return f"{value * 100:.3f}%"
 
 
-def _tail_rows(label: str, key: str, tier: str, where: str) -> list[tuple]:
-    rows = [(f"{label} p{p}", lambda a, k=key, p=p: _pct(a["tiers"][tier][k][f"p{p}"])) for p in TIER_PERCENTILES]
-    rows.append(
-        (
-            f"{label} worst ({where})",
-            lambda a, k=key: f"{_pct(a['tiers'][tier][k]['worst'])} @ {a['tiers'][tier][k]['worst_at']}",
-        )
-    )
+def _tail_rows(label: str, key: str, where: str, at: tuple[str, ...] = ("worst_at",)) -> list[tuple]:
+    rows = [(f"{label} p{p}", lambda a, k=key, p=p: _pct(metric(a, f"{k}_p{p}"))) for p in TAIL_PERCENTILES]
+
+    def worst(a: dict, k: str = key) -> str:
+        position = [metric(a, f"{k}_{field}") for field in at]
+        return f"{_pct(metric(a, f'{k}_worst'))} @ {position[0] if len(position) == 1 else position}"
+
+    rows.append((f"{label} worst ({where})", worst))
     return rows
 
 
@@ -240,20 +207,20 @@ REPORT_ROWS = {
         ("token floor", lambda a: f"{a['token_floor']:.6g}"),
     ],
     "tier 0": [
-        ("output NRMSE", lambda a: _pct(a["tiers"]["tier0"]["output_nrmse"])),
-        ("final state NRMSE", lambda a: _pct(a["tiers"]["tier0"]["state_final_nrmse"])),
+        ("output NRMSE", lambda a: _pct(metric(a, "output_nrmse"))),
+        ("final state NRMSE", lambda a: _pct(metric(a, "state_final_nrmse"))),
     ],
     "tier 1": [
-        *_tail_rows("output per token", "output_token", "tier1", "token"),
-        *_tail_rows("output per 1k window", "output_window", "tier1", "window start"),
-        *_tail_rows("final state per head", "state_head_final", "tier1", "head"),
-        *_tail_rows("state per call", "state_window", "tier1", "token"),
+        *_tail_rows("output per token", "output_token", "token"),
+        *_tail_rows("output per 1k window", "output_window", "window start"),
+        *_tail_rows("final state per head", "state_head_final", "head"),
+        *_tail_rows("state per call", "state_window", "token"),
     ],
     "tier 2": [
-        ("output gain", lambda a: f"{a['tiers']['tier2']['output_gain']:.5f}"),
-        ("final state gain", lambda a: f"{a['tiers']['tier2']['state_gain_final']:.5f}"),
-        *_tail_rows("final state per head distance from gain 1", "state_head_gain_final", "tier2", "head"),
-        *_tail_rows("state per head per call", "state_head_window", "tier2", "[token, head]"),
+        ("output gain", lambda a: f"{metric(a, 'output_gain'):.5f}"),
+        ("final state gain", lambda a: f"{metric(a, 'state_gain_final'):.5f}"),
+        *_tail_rows("final state per head distance from gain 1", "state_head_gain_final", "head"),
+        *_tail_rows("state per head per call", "state_head_window", "[token, head]", ("worst_row", "worst_head")),
     ],
 }
 
