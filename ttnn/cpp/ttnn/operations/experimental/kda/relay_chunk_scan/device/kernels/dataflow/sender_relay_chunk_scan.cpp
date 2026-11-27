@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
@@ -26,11 +27,25 @@ constexpr uint32_t first_ack_semaphore_id = get_compile_time_arg_val(8);
 constexpr uint32_t relay_heads = get_compile_time_arg_val(9);  // a relay core's head slots
 constexpr auto start_args = TensorAccessorArgs<10>();
 // On a 2D fabric whose SP axis turns, a multicast cannot follow the axis: the carry goes to each rank this sender
-// serves as a 2D unicast (per rank after the connection args: the connection its route leaves on, its chip and mesh),
-// carry_range ranks in all.
+// serves as a 2D unicast along its route (runtime args), carry_range ranks in all.
 constexpr bool unicast_peers = get_compile_time_arg_val(start_args.next_compile_time_args_offset());
+// Slab (slab_kernel_args, then its entry's tiles and the word of the stage the slab index lands at, a DRAM-aligned
+// offset): the state is an SP-sharded slab, whose entry on this rank holds
+// heads [sp_rank * stored_heads, +stored_heads). Before the relay, a rank other than the first sends the first rank its
+// heads of the entry; on the first rank the final carry of each head goes to the rank holding it only. Both go as
+// unicasts along this sender's routes (runtime args).
+constexpr uint32_t slab_ct = start_args.next_compile_time_args_offset() + 1;
+constexpr bool slab = get_compile_time_arg_val(slab_ct);
+constexpr uint32_t slab_index_limit = get_compile_time_arg_val(slab_ct + 1);
+constexpr uint32_t slab_scale = get_compile_time_arg_val(slab_ct + 2);
+constexpr uint32_t slab_offset = get_compile_time_arg_val(slab_ct + 3);
+constexpr uint32_t entry_tiles = get_compile_time_arg_val(slab_ct + 4);
+constexpr uint32_t slab_index_word = get_compile_time_arg_val(slab_ct + 5);
+constexpr auto slab_index_args = TensorAccessorArgs<slab_ct + 6>();
+constexpr auto entry_args = TensorAccessorArgs<slab_index_args.next_compile_time_args_offset()>();
 constexpr uint32_t chunks = (unit_bytes + chunk_bytes - 1) / chunk_bytes;
 constexpr uint32_t state_bytes = kt * unit_bytes;
+constexpr uint32_t stored_heads = entry_tiles / (kt * kt);
 // One packet header per packet of each slot, out of this RISC's share of the pool.
 static_assert(
     slots * chunks <= MEM_PACKET_HEADER_POOL_SIZE / MaxDMProcessorsPerCoreType / PACKET_HEADER_MAX_SIZE,
@@ -40,7 +55,9 @@ static_assert(
 // it into the head's slot of the successor's landing buffer (the first rank's final-state slot, from the last rank)
 // over the fabric. On the chronologically first rank, every sender then multicasts the final carry the relay cores
 // form, carry_range ranks along its one connection (or unicasts it to each of them), into the head's final-state slot
-// of every rank's relay core, which writes it out; together a link's senders reach every other rank once.
+// of every rank's relay core, which writes it out; together a link's senders reach every other rank once. With the
+// SP-sharded slab the sender first sends the first rank this rank's heads of the entry state (unless it is the first
+// rank), and the first rank's senders carry each head only to its rank.
 void kernel_main() {
     size_t arg = 0;
     const uint32_t start_address = get_common_arg_val<uint32_t>(0);
@@ -65,24 +82,68 @@ void kernel_main() {
     arg += num_heads;
     const size_t carries_args = arg;  // then whether this sender carries each head's final carry
     arg += num_heads;
+    const size_t index_args = arg;  // then each head's index
+    arg += num_heads;
     // The relay's own sender, else the link's second carry sender, which sends towards the predecessor.
     const bool relay = get_arg_val<uint32_t>(arg++);
     const uint8_t carry_range = get_arg_val<uint32_t>(arg++);
     // A second carry sender without ranks behind its rank holds no connection.
     const uint32_t connections = get_arg_val<uint32_t>(arg++);
+    // Per rank this sender reaches as a unicast (a turning SP axis, or the slab): its step (rank - sp_rank) mod
+    // sp_size, connection, chip, mesh and 1D hops; before the connection args, so no offset depends on how many
+    // connections are opened. None on a sender without connections.
+    const uint32_t routes = get_arg_val<uint32_t>(arg++);
+    const size_t route_args = arg;
+    arg += 5 * routes;
 
     cb_reserve_back(cb_stage, 1);
     const uint32_t stage = get_write_ptr(cb_stage);
+    auto* stage_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
     noc_async_read(TensorAccessor(start_args, start_address).get_noc_addr(0), stage, sizeof(uint32_t));
+    if constexpr (slab) {
+        noc_async_read(
+            TensorAccessor(slab_index_args, get_common_arg_val<uint32_t>(2)).get_noc_addr(0),
+            stage + slab_index_word * sizeof(uint32_t),
+            sizeof(uint32_t));
+    }
     noc_async_read_barrier();
-    const auto topology =
-        kda_chronology::derive(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[0], sp_rank, sp_size, local_rows);
+    const uint32_t actual_start = stage_words[0];
+    const uint32_t index = slab ? stage_words[slab_index_word] : 0;
+    const auto topology = kda_chronology::derive(actual_start, sp_rank, sp_size, local_rows);
     const uint32_t position = (topology.rank + sp_size - topology.first_rank) % sp_size;
     const bool last = position == sp_size - 1;
+    // A request's head (or no slab entry): every rank starts from zeros and no entry state moves.
+    const bool zero_entry = slab && (actual_start == 0 || index >= slab_index_limit);
 
     RoutingPlaneConnectionManager fabric;
     open_connections(fabric, connections, arg);
-    const size_t peer_args = arg;
+    const auto route_word = [&](uint32_t route, uint32_t word) {
+        return get_arg_val<uint32_t>(route_args + 5 * route + word);
+    };
+    // The route table (watcher builds only): fewer routes than ranks, none without a connection, and each route a step
+    // of 1..sp_size-1 on an opened connection.
+    ASSERT(routes < sp_size && (connections != 0 || routes == 0));
+    for (uint32_t route = 0; route < routes; ++route) {
+        ASSERT(route_word(route, 0) - 1 < sp_size - 1 && route_word(route, 1) < connections);
+    }
+    // The route to the rank `step` ranks on, or `routes` if this sender does not reach it.
+    const auto find_route = [&](uint32_t step) {
+        uint32_t route = 0;
+        while (route < routes && route_word(route, 0) != step) {
+            ++route;
+        }
+        return route;
+    };
+    const auto route_sender = [&](uint32_t route) { return &fabric.get(route_word(route, 1)).sender; };
+    const auto set_route = [&](volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint32_t route) {
+#if defined(FABRIC_2D)
+        fabric_set_unicast_route(
+            hdr, static_cast<uint16_t>(route_word(route, 2)), static_cast<uint16_t>(route_word(route, 3)));
+#else
+        (void)hdr;
+        (void)route;
+#endif
+    };
     // A unit is one tile column of a head's state (column-major storage): a relay core computes that column of the
     // next state as soon as it lands. Units go through `slots` buffers: unit u + slots - 1 is read out of its relay
     // core while earlier units' packets are on the link, and a slot (and its packet headers) is reused only after its
@@ -153,6 +214,73 @@ void kernel_main() {
     };
     // A unit's packets, each `chunk_bytes` but the last.
     const auto chunk_size = [](uint32_t c) { return c + 1 == chunks ? unit_bytes - c * chunk_bytes : chunk_bytes; };
+    // Unit u's column, `buffer`, into `column` on its head's relay core a fabric packet at a time (slot `slot`'s
+    // headers), along `to` (1D: `hops` hops); the last packet increments `semaphore` there once the column has landed.
+    const auto send_column =
+        [&](auto* to, uint32_t u, uint32_t slot, uint32_t buffer, uint32_t column, uint32_t semaphore, uint32_t hops) {
+            const uint32_t xy = head_xy(u);
+            for (uint32_t c = 0; c < chunks; ++c) {
+                const uint64_t dst = get_noc_addr(xy & 0xFFFF, xy >> 16, column + c * chunk_bytes);
+                if (c + 1 == chunks) {
+                    fabric_unicast_noc_fused_unicast_with_atomic_inc(
+                        to,
+                        hdrs[slot][c],
+                        buffer + c * chunk_bytes,
+                        chunk_size(c),
+                        NocUnicastAtomicIncFusedCommandHeader{
+                            dst, get_noc_addr(xy & 0xFFFF, xy >> 16, semaphore), 1, true},
+                        hops);
+                } else {
+                    fabric_unicast_noc_unicast_write(
+                        to, hdrs[slot][c], buffer + c * chunk_bytes, chunk_size(c), NocUnicastCommandHeader{dst}, hops);
+                }
+            }
+        };
+    const auto head_index = [&](uint32_t u) { return get_arg_val<uint32_t>(index_args + u / kt); };
+
+    if constexpr (slab) {
+        // This rank's heads of the slot's entry state, straight from the slab into their slots of the first rank's
+        // landing buffer, a tile column per unit, counted in the arrival counter of the head's relay core there (the
+        // first rank's reader waits for them as for a predecessor's columns). Nothing here waits on another rank; the
+        // one sender of a link with a route to the first rank sends them.
+        const uint32_t route = position != 0 && !zero_entry ? find_route(sp_size - position) : routes;
+        if (route < routes) {
+            const auto entry = TensorAccessor(entry_args, get_common_arg_val<uint32_t>(3));
+            const uint32_t entry_base = (index * slab_scale + slab_offset) * entry_tiles;
+            constexpr uint32_t tile_bytes = unit_bytes / kt;
+            uint32_t sent = 0;
+            for (uint32_t u = 0; u < num_heads * kt; ++u) {
+                const uint32_t head = head_index(u);
+                if (head / stored_heads != sp_rank) {
+                    continue;
+                }
+                const uint32_t slot = sent % slots;
+                if (sent >= slots) {
+                    // The slot's previous packets must have left L1.
+                    noc_async_writes_flushed();
+                }
+                const uint32_t buffer = stage + slot * unit_bytes;
+                for (uint32_t r = 0; r < kt; ++r) {
+                    noc_async_read_page(
+                        entry_base + (head % stored_heads) * kt * kt + r * kt + u % kt, entry, buffer + r * tile_bytes);
+                }
+                noc_async_read_barrier();
+                for (uint32_t c = 0; c < chunks; ++c) {
+                    set_route(hdrs[slot][c], route);
+                }
+                send_column(
+                    route_sender(route),
+                    u,
+                    slot,
+                    buffer,
+                    ein_landing + column_offset(u),
+                    arrival_semaphore,
+                    route_word(route, 4));
+                ++sent;
+            }
+            noc_async_writes_flushed();
+        }
+    }
 
     if (relay) {
         auto* to_successor = &fabric.get(0).sender;
@@ -170,39 +298,18 @@ void kernel_main() {
         }
         const uint32_t landing = last ? final_landing : ein_landing;
         const uint32_t landed_semaphore = last ? final_semaphore : arrival_semaphore;
+        // 1D routing: the connection leaves towards the successor's side of the line (2D ignores the hops).
         stream(
             0,
             [](uint32_t) { return true; },
             [&](uint32_t u, uint32_t slot, uint32_t buffer) {
-                const uint32_t xy = head_xy(u);
-                const uint32_t column = landing + column_offset(u);
-                for (uint32_t c = 0; c < chunks; ++c) {
-                    const uint64_t dst = get_noc_addr(xy & 0xFFFF, xy >> 16, column + c * chunk_bytes);
-                    // 1D routing: the connection leaves towards the successor's side of the line (2D ignores the hops).
-                    if (c + 1 == chunks) {
-                        fabric_unicast_noc_fused_unicast_with_atomic_inc(
-                            to_successor,
-                            hdrs[slot][c],
-                            buffer + c * chunk_bytes,
-                            chunk_size(c),
-                            NocUnicastAtomicIncFusedCommandHeader{
-                                dst, get_noc_addr(xy & 0xFFFF, xy >> 16, landed_semaphore), 1, true},
-                            successor_hops);
-                    } else {
-                        fabric_unicast_noc_unicast_write(
-                            to_successor,
-                            hdrs[slot][c],
-                            buffer + c * chunk_bytes,
-                            chunk_size(c),
-                            NocUnicastCommandHeader{dst},
-                            successor_hops);
-                    }
-                }
+                send_column(
+                    to_successor, u, slot, buffer, landing + column_offset(u), landed_semaphore, successor_hops);
             });
     }
 
     const auto carries = [&](uint32_t h) { return get_arg_val<uint32_t>(carries_args + h) != 0; };
-    if (position == 0 && carry_range != 0) {
+    if (position == 0 && (slab ? routes != 0 : carry_range != 0)) {
         // The final carry, a head's columns after its relay's on the relay's sender: each column into the head's
         // final-state slot of its relay core on every rank this sender reaches (the same core everywhere), counted
         // there in the final semaphore with the column's last packet.
@@ -214,7 +321,25 @@ void kernel_main() {
                 1,
                 true};
         };
-        if constexpr (unicast_peers) {
+        if constexpr (slab) {
+            // Each head's carry to the rank holding it only (the heads this sender carries are another rank's, on its
+            // routes), one column per unit, along that rank's route.
+            stream(relay ? kt : 0, carries, [&](uint32_t u, uint32_t slot, uint32_t buffer) {
+                const uint32_t route = find_route((head_index(u) / stored_heads + sp_size - sp_rank) % sp_size);
+                ASSERT(route < routes);
+                for (uint32_t c = 0; c < chunks; ++c) {
+                    set_route(hdrs[slot][c], route);
+                }
+                send_column(
+                    route_sender(route),
+                    u,
+                    slot,
+                    buffer,
+                    final_landing + column_offset(u),
+                    final_semaphore,
+                    route_word(route, 4));
+            });
+        } else if constexpr (unicast_peers) {
             // Unicast: a slot's headers per unit and rank in flight, rerouted to the next rank once flushed.
             uint32_t group = 0;
             stream(relay ? kt : 0, carries, [&](uint32_t u, uint32_t slot, uint32_t buffer) {
@@ -222,15 +347,10 @@ void kernel_main() {
                     if (group != 0 && group % slots == 0) {
                         noc_async_writes_flushed();
                     }
-                    auto* sender = &fabric.get(get_arg_val<uint32_t>(peer_args + 3 * peer)).sender;
+                    auto* sender = route_sender(peer);
                     for (uint32_t c = 0; c < chunks; ++c) {
                         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[group % slots][c];
-#if defined(FABRIC_2D)
-                        fabric_set_unicast_route(
-                            hdr,
-                            static_cast<uint16_t>(get_arg_val<uint32_t>(peer_args + 3 * peer + 1)),
-                            static_cast<uint16_t>(get_arg_val<uint32_t>(peer_args + 3 * peer + 2)));
-#endif
+                        set_route(hdr, peer);
                         const auto command = destination(u, c);
                         if (c + 1 == chunks) {
                             fabric_unicast_noc_fused_unicast_with_atomic_inc(

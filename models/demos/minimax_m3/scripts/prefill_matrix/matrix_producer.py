@@ -48,6 +48,7 @@ from loguru import logger  # noqa: E402
 from matrix_math import AckLedger, steady_state, ttft_stats  # noqa: E402  (same directory)
 
 import ttnn  # noqa: E402
+from models.demos.common.prefill.prefill_chunk import PrefillChunk  # noqa: E402
 from models.demos.common.prefill.runners import prefill_producer as pp  # noqa: E402  (reads PREFILL_* env at import)
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (  # noqa: E402
     Completion,
@@ -133,7 +134,7 @@ def main() -> int:
         assert arr.nbytes == payload_bytes
         ledger.push(next_c, (slot, actual_start, actual_end))
         t = time.perf_counter()
-        service.forward_to_tensor_bytes(arr, metadata=pp._pack_metadata(slot, actual_start, actual_end))
+        service.forward_to_tensor_bytes(arr, metadata=pp._pack_metadata([PrefillChunk(slot, actual_start, actual_end)]))
         new_tokens[next_c] = actual_end - actual_start
         next_c += 1
         return t
