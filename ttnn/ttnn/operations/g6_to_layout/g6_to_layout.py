@@ -3,7 +3,8 @@
 
 """g6_to_layout: return input_tensor's logical values in the other layout, in one device program.
 
-Phase 0: TILE -> ROW_MAJOR, bfloat16, interleaved DRAM/L1 in and out (regime R1).
+Phase 0: TILE -> ROW_MAJOR, bfloat16, interleaved DRAM/L1 in and out (regimes staged_reorder
+and face_direct, see g6_to_layout_program_descriptor.py).
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_to_layout_program_descriptor import compute_plan, create_program
+from .g6_to_layout_program_descriptor import G6ToLayoutProgram, compute_plan
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +165,11 @@ def _output_memory_config(input_tensor, memory_config):
     return memory_config if memory_config is not None else input_tensor.memory_config()
 
 
+def _grid_of(device):
+    grid = device.compute_with_storage_grid_size()
+    return (int(grid.x), int(grid.y))
+
+
 def _cache_key(input_tensor, layout, out_dtype, out_memory_config, grid):
     in_memory = input_tensor.memory_config()
     return (
@@ -180,35 +186,30 @@ def _cache_key(input_tensor, layout, out_dtype, out_memory_config, grid):
     )
 
 
-def _plan(input_tensor, layout, out_dtype, out_memory_config, grid):
+def _plan(input_tensor, layout, out_dtype, out_memory_config):
+    device = input_tensor.device()
+    grid = _grid_of(device)
     key = _cache_key(input_tensor, layout, out_dtype, out_memory_config, grid)
     cached = _PLAN_CACHE.get(key)
     if cached is None:
-        device = input_tensor.device()
         output_in_l1 = out_memory_config.buffer_type == ttnn.BufferType.L1
         cached = compute_plan(
             tuple(input_tensor.shape),
             grid,
             output_in_l1=output_in_l1,
             num_l1_banks=ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks if output_in_l1 else 1,
-            l1_alignment=ttnn.get_l1_alignment(),
+            out_alignment=ttnn.get_l1_alignment() if output_in_l1 else ttnn.get_dram_alignment(),
         )
         _PLAN_CACHE[key] = cached
     return key, cached
 
 
-def _grid_of(device, grid):
-    if grid is None:
-        grid = device.compute_with_storage_grid_size()
-    return (int(grid.x), int(grid.y)) if hasattr(grid, "x") else tuple(int(g) for g in grid)
-
-
-def plan(input_tensor, layout, *, dtype=None, memory_config=None, grid=None) -> dict:
-    """Report the plan a call selects (BB-08); the entry point dispatches from the same plan."""
+def select_plan(input_tensor, layout, *, dtype=None, memory_config=None) -> dict:
+    """The plan a call selects (BB-08), with every core's roles (BB-21); dispatches nothing."""
     validate(input_tensor, layout, dtype=dtype, memory_config=memory_config)
     out_dtype = _output_dtype(input_tensor, layout, dtype)
     out_memory_config = _output_memory_config(input_tensor, memory_config)
-    _, selected = _plan(input_tensor, layout, out_dtype, out_memory_config, _grid_of(input_tensor.device(), grid))
+    _, selected = _plan(input_tensor, layout, out_dtype, out_memory_config)
     return selected.report()
 
 
@@ -226,21 +227,20 @@ def g6_to_layout(
 ) -> ttnn.Tensor:
     validate(input_tensor, layout, dtype=dtype, memory_config=memory_config)
 
-    device = input_tensor.device()
     out_dtype = _output_dtype(input_tensor, layout, dtype)
     out_memory_config = _output_memory_config(input_tensor, memory_config)
-    key, selected = _plan(input_tensor, layout, out_dtype, out_memory_config, _grid_of(device, None))
+    key, selected = _plan(input_tensor, layout, out_dtype, out_memory_config)
 
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(input_tensor.shape)),
         out_dtype,
         layout,
-        device,
+        input_tensor.device(),
         out_memory_config,
     )
 
     program = _PROGRAM_CACHE.get(key)
     if program is None:
-        program = create_program(selected, input_tensor, output_tensor)
+        program = G6ToLayoutProgram(selected, input_tensor, output_tensor)
         _PROGRAM_CACHE[key] = program
     return ttnn.generic_op([input_tensor, output_tensor], program.descriptor_for(input_tensor, output_tensor))

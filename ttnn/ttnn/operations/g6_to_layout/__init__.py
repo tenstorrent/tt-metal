@@ -6,8 +6,8 @@ from .g6_to_layout import (
     INPUT_TAGGERS,
     SUPPORTED,
     g6_to_layout,
-    plan,
+    select_plan,
     validate,
 )
 
-__all__ = ["g6_to_layout", "plan", "validate", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS"]
+__all__ = ["g6_to_layout", "select_plan", "validate", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS"]

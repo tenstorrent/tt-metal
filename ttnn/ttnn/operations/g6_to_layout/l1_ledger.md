@@ -6,7 +6,7 @@ R1 `staged_reorder` and R2 `face_direct` are different programs: their CBs never
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_tile_window` (R1, idx 0) | `tile_window_depth · read_batch_tiles` pages × 2048 B (Phase 0: 16 pages, 32768 B) | `tile_window_depth · read_batch_tiles`: one batch landing from DRAM while the previous one is reordered | `{tile_row: streams → read_batch_tiles window, tile_col: streams → read_batch_tiles window}` | Float16_b, raw bytes — a dataflow-only payload that never reaches DEST | reader | reader | whole R1 reader kernel | none: live at the same time as `cb_row_block` (the reorder reads the window while writing the row block), so no alias; reader-private (no handshake) |
+| `cb_tile_window` (R1, idx 0) | `tile_window_depth · read_batch_tiles` pages × 2048 B (Phase 0: 16 pages, 32768 B) | `tile_window_depth · read_batch_tiles`: one batch landing from DRAM while the previous one is reordered | `{tile_row: streams → read_batch_tiles window, tile_col: streams → read_batch_tiles window}` | Float16_b, raw bytes — a dataflow-only payload that never reaches DEST | reader | reader | whole R1 reader kernel | none: live at the same time as `cb_row_block` (the reorder reads the window while writing the row block), so no alias; reader-private (no handshake). Slot = a whole 2048-B tile so every face lands at its source offset (DRAM reads need `dst % 64 == src % 64`) and adjacent faces merge into one read; for `H ≤ 16` only face-row prefixes of faces 0/1 land, so most of the 32 KB is unused — a fixed window, never scaled by an op dimension, kept for the uniform read path |
 | `cb_row_block` (R1, idx 1) | `row_depth` pages × `block_rows_tiles · tile_row_stage_rows · block_cols_tiles · 64` B | `row_depth` pages: the reader reorders into one while the writer drains the other | `{tile_row: spans → block_rows_tiles (× tile_row_stage_rows rows), tile_col: spans → block_cols_tiles (× 64 B)}` | Float16_b, raw bytes | reader | writer | whole R1 kernels; one page per block | none: its two pages are concurrently live by the explicit double-buffering decision, and it is concurrent with `cb_tile_window`. Capacity exceeds the live bytes only on ragged blocks (partial head/tail span, short last block, last tile-row of an image with `live_rows < 32`): they use a prefix of the nominal page so every push/pop stays 1 page (ring-wrap invariant) |
 | `cb_left_faces` (R2, idx 2) | `row_depth` pages × `block_rows_tiles · 1024` B | `row_depth` pages: reader loads one, writer drains the other | `{tile_row: spans → block_rows_tiles, tile_col: spans → 1 (pinned by the R2 predicate tensor_cols_tiles == 1)}` | Float16_b, raw bytes | reader | writer | whole R2 kernels; one page per block | none: the only CB of R2 (no window — the writer reads face rows in place). Faces 1/3 are not allocated (all padding when `W ≤ 16`); the face-2 half of a slot is unused only for an image's last tile-row with `live_rows ≤ 16` — the transfer quantum is the fixed 1024-B slot |
 
@@ -16,8 +16,8 @@ R1 `staged_reorder` and R2 `face_direct` are different programs: their CBs never
 |--------|--------------------|-------|-------------------------------|
 | `block_rows_tiles` | see `op_design.md` Axes | `1 ≤ · ≤ floor(max_block_tiles / block_cols_tiles)` | host clamp in `_choose_blocking()` |
 | `block_cols_tiles` | `min(tensor_cols_tiles, core_tiles_max, max_block_tiles)` | `1 ≤ · ≤ max_block_tiles` | host clamp |
-| `read_batch_tiles` | 8 | constant | host constant (single source) |
-| `tile_window_depth` | 2 | `≤ 14` | transaction ids 1…15 (`noc_parameters.h:15`), one reserved for the reorder copies |
+| `read_batch_tiles` | 8 | `≤ 127` | host constant (single source); ≤ 2 DRAM reads per tile per batch id, so `2·read_batch_tiles ≤ 255` (kernel `static_assert`) |
+| `tile_window_depth` | 2 | `≤ 13` | transaction ids 1…15 (`noc_parameters.h:15`): ids 1…`tile_window_depth` tag DRAM batches, two more alternate per tile over the reorder copies so no id holds more than one tile's 64 copies (per-id outstanding counter ≤ 255, `NOC_MAX_TRANSACTION_ID_COUNT`); kernel `static_assert` |
 | `row_depth` | 2 | constant | host constant |
 | `tile_row_stage_rows` | `min(32, H)` | `≤ 32` | definition (for `H < 32` every tile-row has exactly `H` live rows) |
 | `core_tiles_max` | `ceil(tensor_tiles / num_cores)` (`n1` of `split_work_to_cores`) | `≤ tensor_tiles` | work split |
@@ -33,6 +33,18 @@ R1 `staged_reorder` and R2 `face_direct` are different programs: their CBs never
 | R2 | `row_depth · block_rows_tiles · 1024 + out_l1_share ≤ 1347776` | `block_rows_tiles`, `row_depth` | 153600 B (case 308) |
 
 Audit notes: no Float32 page (no DEST, audit 2 n/a); no disjoint-lifetime pair (audit 3); every capacity symbol is bounded above (audit 4).
+
+## Block-size default: departure and its measurement
+
+The interleaved default is the coarsest block that fits (`block_rows_tiles` at `floor(max_block_tiles / block_cols_tiles)`). Phase 0 departs from it on full-row blocks: `block_rows_tiles = ceil(core_full_rows_max / pipeline_blocks_per_core)` with `pipeline_blocks_per_core = 16`. Column-chunked blocks (`block_cols_tiles < tensor_cols_tiles`) are one tile-row tall and unaffected. Device kernel time, 2 runs each (verifier sweep, `probes/test_probe_verifier_pbpc.py`, BH, 110 cores):
+
+| Case | `pipeline_blocks_per_core = 1` (L1 cap) | 4 | **16 (shipped)** | 64 |
+|------|------------------------------------------|---|------------------|----|
+| 304 `[1,1024,2048,128]` (R1) | 3083 / 3081 µs (80 rows, 1343488 B) | 3093 / 3084 µs | **2949 / 2933 µs** (38 rows, 655360 B) | 2925 / 2926 µs |
+| 1978 `[16,4096,2560]` (R1) | 1906 / 1906 µs (4 rows, 1343488 B) | 1902 / 1904 µs | **1789 / 1779 µs** (2 rows, 688128 B) | 1898 / 1899 µs |
+| 308 `[1,2048,2048,3]` (R2) | 3217 / 3215 µs (658 rows, 1347584 B) | 3522 / 3472 µs | **3407 / 3275 µs** (75 rows, 153600 B) | 3408 / 3313 µs |
+
+16 is the measured best (or tied, 304 at 64) on R1, 5–6% ahead of the L1-cap block, at half its L1. On R2 the spread between repeats of one setting (4%) is as large as the spread between settings: 308 is bound by DRAM write transactions (writes alone 2167 µs, reads alone 517 µs, verifier ablation), not by the block.
 
 ## Data-movement budget (chosen split: S1, flattened row-major tile range)
 
