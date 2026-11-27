@@ -587,11 +587,17 @@ class SolPrepass(Module):
         ttnn.generic_op([*ins, st["shsel"], mask], prog)
         return mask
 
-    def _gather(self, t: ttnn.Tensor) -> ttnn.Tensor:
+    def _gather(self, t: ttnn.Tensor, *, barrier: bool = False) -> ttnn.Tensor:
         """All-gather a pooled [1, H, nb_pad, D] tensor along dim 2 over the SP ring.
 
-        One worker per link direction (more workers go through a mux core that serialises them) and no ring-wide
-        barrier semaphore before the gather (measured 2026-10-28: 130 -> 72 us per gather at 5 s).
+        One worker per link direction (more workers go through a mux core that serialises them).
+
+        barrier: every chip waits until the whole ring has reached this gather before it sends. The K gather needs
+        it: it is the first cross-chip write of a call and lands in a fresh buffer, which the allocator may place
+        where the previous call's mask and pooled K/V were (the caller frees them as soon as the sparse op is
+        enqueued). Without it a chip that finished that sparse op early overwrites them under a chip still running
+        it, and the output changes from run to run (10 s clips, task #794). The V gather runs without one (measured
+        2026-10-28: 130 -> 72 us per gather at 5 s): a chip finishes the K gather only once every chip has started it.
         """
         ccl = self.ccl_manager
         if self._ag_sems is None:
@@ -608,7 +614,7 @@ class SolPrepass(Module):
             num_links=ccl.num_links,
             topology=ccl.topology,
             cluster_axis=self.sp_axis,
-            barrier_semaphore=None,
+            barrier_semaphore=ccl.get_barrier_semaphore(self.sp_axis) if barrier else None,
             num_workers_per_link=1,
         )
 
@@ -622,7 +628,7 @@ class SolPrepass(Module):
         q_bar, kc_local, vc_local = self._run_pool(q, k, v)
         out_dtype = k.dtype if self.pooled_dtype is None else self.pooled_dtype
         cast = out_dtype != ttnn.bfloat16
-        kc = self._gather(kc_local)  # bf16: the route program scores against it
+        kc = self._gather(kc_local, barrier=True)  # bf16: the route program scores against it
         if cast:  # V is only returned: cast the local shard, so the gather moves the smaller tiles
             vc_local_cast = ttnn.typecast(vc_local, out_dtype)
             vc = self._gather(vc_local_cast)
