@@ -10,13 +10,13 @@
 #include <thread>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>  // tt::tt_metal::experimental::CompileProgram
 
 #include "ttnn/graph/graph_processor.hpp"
-#include <tt-metalium/graph_tracking.hpp>  // GraphTracker (for real-alloc hook tweak)
+#include <tt-metalium/observability/capture_hooks.hpp>  // GraphTracker (for real-alloc hook tweak)
 
 namespace ttnn::up_front_compile {
 

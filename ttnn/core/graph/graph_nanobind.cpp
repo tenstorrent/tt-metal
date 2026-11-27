@@ -24,7 +24,7 @@
 #include <tt-metalium/observability/capture_hooks.hpp>
 #include "ttnn/up_front_compile.hpp"
 #include <internal/graph_function_abort.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 namespace ttnn::graph {
 

@@ -78,10 +78,10 @@
 #include "ttnn/global_semaphore.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 
 namespace ttnn::ccl::dataflow {
 

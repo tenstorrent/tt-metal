@@ -29,7 +29,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-#include "profiler_paths.hpp"
+#include "impl/profiler/profiler_paths.hpp"
 
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
