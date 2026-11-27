@@ -461,51 +461,53 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         .accessor_name = "out",
         .endpoint_type = DFBEndpointType::CONSUMER,
     };
-    KernelSpec writer =
-        pad_output_row
-            ? KernelSpec{
-                  .unique_id = WRITER,
-                  .source =
-                      "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
-                      "writer_unary_sharded_padded_rm.cpp",
-                  .dfb_bindings =
-                      {
-                          writer_out_binding,
-                          // The pad writer alone zero-fills the pad row and NoC-reads from it, so it
-                          // binds both ends.
-                          DFBBinding{
-                              .dfb_spec_name = TEMP_PAD,
-                              .accessor_name = "temp_pad",
-                              .endpoint_type = DFBEndpointType::PRODUCER,
-                          },
-                          DFBBinding{
-                              .dfb_spec_name = TEMP_PAD,
-                              .accessor_name = "temp_pad",
-                              .endpoint_type = DFBEndpointType::CONSUMER,
-                          },
-                      },
-                  .compile_time_args = {{"output_elem_size", output.element_size()}},
-                  .runtime_arg_schema =
-                      {
-                          .runtime_arg_names =
-                              {
-                                  "num_units",
-                                  "num_elements_per_row",
-                                  "unpadded_row_size_bytes",
-                                  "padded_row_size_bytes",
-                              },
-                      },
-                  .hw_config = ttnn::create_writer_datamovement_config(),
-              }
-            : KernelSpec{
-                  .unique_id = WRITER,
-                  .source =
-                      "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-                      "writer_unary_sharded_metal2.cpp",
-                  .dfb_bindings = {writer_out_binding},
-                  .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-                  .hw_config = ttnn::create_writer_datamovement_config(),
-              };
+    KernelSpec writer;
+    if (pad_output_row) {
+        writer = KernelSpec{
+            .unique_id = WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
+                "writer_unary_sharded_padded_rm.cpp",
+            .dfb_bindings =
+                {
+                    writer_out_binding,
+                    // The pad writer alone zero-fills the pad row and NoC-reads from it, so it
+                    // binds both ends.
+                    DFBBinding{
+                        .dfb_spec_name = TEMP_PAD,
+                        .accessor_name = "temp_pad",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = TEMP_PAD,
+                        .accessor_name = "temp_pad",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                },
+            .compile_time_args = {{"output_elem_size", output.element_size()}},
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names =
+                        {
+                            "num_units",
+                            "num_elements_per_row",
+                            "unpadded_row_size_bytes",
+                            "padded_row_size_bytes",
+                        },
+                },
+            .hw_config = ttnn::create_writer_datamovement_config(),
+        };
+    } else {
+        writer = KernelSpec{
+            .unique_id = WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                "writer_unary_sharded_metal2.cpp",
+            .dfb_bindings = {writer_out_binding},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
+            .hw_config = ttnn::create_writer_datamovement_config(),
+        };
+    }
 
     // ---- Per-core runtime args ----
     auto all_runtime_args = get_padded_slice_runtime_args_rm_sharded_output(
