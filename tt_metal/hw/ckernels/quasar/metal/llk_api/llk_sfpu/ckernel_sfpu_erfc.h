@@ -60,10 +60,7 @@ constexpr std::array<float, ERFC_LUT_SIZE> ERFC_LUT = {{// Breakpoints
                                              1.2677097321e-01f,
                                              -2.1375391632e-02f}};
 
-// Whether BF16 DEST runs the generated erfc kernel as one call over the whole tile.
-inline constexpr bool erfc_bf16_whole_tile = false;
-
-template <int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
+template <int ITERATIONS = 8>
 inline void calculate_erfc() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
