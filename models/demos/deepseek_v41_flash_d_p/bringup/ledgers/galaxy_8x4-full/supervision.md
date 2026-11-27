@@ -1466,3 +1466,23 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   measure the bank-local reader on today's 8 x 11 rectangle (row g reads bank g) vs the clusters, device + host us; wire the
   rectangle if it keeps the gain; take the per-call str(memory_config) / shard asserts off the call path.
 - 16:52 orchestrator resume --until WA.5 (WA.2 accept gate, then WA.3).
+- 17:10 OWNER: try tt_ops_code_gen's native_migrate (Python generic_op -> C++ device op / program factory, no prepared
+  program) on ttnn.bringup.grouped_matmul, now. Cloned tt_ops_code_gen to ~/repos/tt_ops_code_gen (b1c98579, gh access
+  restored). native-migrate cuts its own branch and runs build_metal.sh in its checkout, so it gets a SEPARATE checkout:
+  worktree /scratch/dnijemcevic/native/tt-metal on branch dnijemcevic/native_gmm (from 5cdc234a34d), own build + venv,
+  nice 19 on cores 40-63 (setup log /scratch/dnijemcevic/native/setup.log). Its device phases (golden baseline, rounds)
+  share the box with the WA run: started only when the WA run is not on the device. Worktree removed when done.
+- 16:42 (correction: the 17:10 entry above was ~16:30) native checkout ready: worktree /scratch/dnijemcevic/native/tt-metal
+  (dnijemcevic/native_gmm @ 5cdc234a34d), submodules (protocol.file.allow), build + venv in ~7 min. native-migrate init
+  grouped_matmul: C++ to ttnn/cpp/ttnn/operations/grouped_matmul (ttnn.grouped_matmul), golden = the fork's unit tests
+  (whole mesh). Its startup needs the device at once (acceptance + golden baseline on the untouched op) while WA.3's agent
+  is on the runner: orchestrator PAUSE (stops after WA.3, before WA.4); the port runs in that gap (then WA.4 can measure
+  the C++ op if it lands).
+- 16:50 OWNER plan (if the grouped_matmul native port works): port every other prepared-program op the model uses to a
+  C++ device op the same way; verify each at op + layer level only (exact vs the Python op, no rebuild, host / device us
+  a call, the layers that use it); ONE model-wide check (40-layer accuracy + determinism, ladder, cold no-rebuild) at the
+  very end. Scope found: 6 forks on prepare_program (grouped_matmul, block_select, ckv_bfp4, fabric_reduce_scatter,
+  fp8_rows, pair_pool) + ~16 model tt/ files building their own prepared programs (glued_derive, lane_rows, owned_gather,
+  gather_hide, page_copy, snapshot / window / tail sends, index_keys, engram_device, ...). Tasks written after the
+  grouped_matmul result.
+- 16:51 heartbeat: WA.3 agent active (transcript live); a model load on the runner holds the host (RAM used 248 GB, avail 122). Orchestrator paused-on-boundary (stops after WA.3). / 74 GB free, /scratch 130 GB.

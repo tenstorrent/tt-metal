@@ -120,7 +120,7 @@ def _reserve_attention(model) -> None:
     # _out_proj: the grouped heads as wo_a's input, wo_a's output
     ccl.reserve(mesh, "attn.oa", [1, att.g_l, q, att.hpg * att.d], gdt, tile)
     ydt = gdt if (att.glue and bf16_activations()) else ttnn.float32
-    ccl.reserve(mesh, "attn.wo_a", [1, att.g_l, q, int(att.wo_a.shape[-1])], ydt, tile)
+    ccl.reserve(mesh, "attn.wo_a", [1, att.g_l, q, int(att.wo_a_shape[-1])], ydt, tile)  # (WOA_BANK: either copy)
     if lean_on() and att.keep_rows:  # LEAN_PY=on (P.66, OWN_ROWS): wo_b's output, the attention output
         ccl.reserve(mesh, "attn.wo_b_out", [1, 1, q, int(att.wo_b.shape[-1])], act_dtype(), tile)
     # _window_packed's carry from the served cache (CKV_PACK_BEFORE_GATHER, carry_owner): the 128 local rows it packs,

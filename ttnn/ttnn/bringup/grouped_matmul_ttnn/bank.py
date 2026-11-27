@@ -37,6 +37,9 @@ from ttnn.bringup.moe_block_ttnn.flat_routed_expert.flat_routed_expert_weights i
 from .grouped_matmul import column_split
 
 
+SHAPES = ("band", "row", "rect")
+
+
 @dataclass(frozen=True)
 class Slot:
     """One core of the bank path: its bank, its logical core, its group and columns, its region's first tile, its
@@ -86,13 +89,19 @@ class BankLayout:
         return _bank_memory_config(self.tiles_per_bank * 32, self.banks)
 
 
-def _bands(anchor_ys: list, n_bands: int, height: int) -> tuple | None:
+def _bands(anchor_ys: list, n_bands: int, height: int, contiguous: bool = False) -> tuple | None:
     """Band indices (rows [i * height, (i + 1) * height)) for anchors sorted by y, increasing, distinct, nearest in
-    sum of |band centre - anchor y|."""
+    sum of |band centre - anchor y|; ``contiguous``: consecutive bands only (no gap between a side's bands)."""
     if len(anchor_ys) > n_bands:
         return None
     best = None
-    for pick in itertools.combinations(range(n_bands), len(anchor_ys)):
+    n = len(anchor_ys)
+    picks = (
+        (tuple(range(i, i + n)) for i in range(n_bands - n + 1))
+        if contiguous
+        else itertools.combinations(range(n_bands), n)
+    )
+    for pick in picks:
         cost = sum(abs(i * height + (height - 1) / 2 - y) for i, y in zip(pick, anchor_ys))
         if best is None or cost < best[0]:
             best = (cost, pick)
@@ -100,16 +109,37 @@ def _bands(anchor_ys: list, n_bands: int, height: int) -> tuple | None:
 
 
 def plan(
-    device, G: int, K: int, N: int, max_cores: int, cores_per_bank: int = 12, shape: str = "band", sender: str = "start"
+    device,
+    G: int,
+    K: int,
+    N: int,
+    max_cores: int,
+    cores_per_bank: int = 12,
+    shape: str = "band",
+    sender: str = "start",
+    order: str = "row",
+    contiguous: bool = False,
+    grid=None,
 ) -> BankLayout | None:
     """The bank layout of w [1, G, K, N] on ``device``'s grid, or None (no even split over the banks, odd
     cores_per_bank, a band that does not fit, a bank's group share not a whole number of rectangle columns, more cores
     than ``max_cores``: the matmul core cap, agent rule 18). ``shape``: "band" (a cores_per_bank / 2 x 2 rectangle a
-    bank on its anchor's side) or "row" (one grid row a bank, cores_per_bank wide, on its anchor's side, the rows
-    nearest the anchors). ``sender``: the cluster's x sender, "start" (default: the rectangle's first core, (x0, y0):
+    bank on its anchor's side), "row" (one grid row a bank, cores_per_bank wide, on its anchor's side, the rows
+    nearest the anchors) or "rect" (today's interleaved path's core set: grid row b = bank b, columns 0 ..
+    cores_per_bank - 1, one rectangle from (0, 0); WA.3, OV-79). ``sender``: the cluster's x sender, "start" (default: the rectangle's first core, (x0, y0):
     every multicast leaves it eastward / southward on NoC 0, as today's rows) or "anchor" (the core nearest the bank's
-    anchor: a NoC-0 multicast from inside the rectangle wraps around the chip, 2x slower x stream on the 8x4, WA.2)."""
-    if K % 32 or N % 32 or cores_per_bank < 2 or shape not in ("band", "row") or sender not in ("anchor", "start"):
+    anchor: a NoC-0 multicast from inside the rectangle wraps around the chip, 2x slower x stream on the 8x4, WA.2).
+    ``order``: the order a rectangle's cores take its columns (the wider cores first), "row" (default: row by row, the
+    order before WA.3) or "col" (column by column: the wider cores of every band then share the rectangles' first
+    grid column, so a kernel group's cores merge into a few core ranges: fewer dispatch writes a launch, WA.3 / OV-78).
+    ``contiguous`` (band / row): a side's bands are consecutive rows (the window of bands nearest its anchors) instead
+    of each band nearest its own anchor, so a side's cores form one rectangle (with order "col": one core range a side
+    and kernel group). ``grid`` (CoreCoord or (x, y), default the device's compute grid): the cores the layout may use,
+    from (0, 0) (a caller whose ops run inside a sub-device, e.g. a model's matmul-capped 11 x 10 compute sub-device
+    next to a gather column, passes its grid: WA.3, DS41-382)."""
+    if K % 32 or N % 32 or cores_per_bank < 2 or shape not in SHAPES or sender not in ("anchor", "start"):
+        return None
+    if order not in ("row", "col"):
         return None
     if shape == "band" and cores_per_bank % 2:
         return None
@@ -119,10 +149,13 @@ def plan(
     if units % banks or banks * cores_per_bank > max_cores:
         return None
     per_bank = units // banks
-    grid = device.compute_with_storage_grid_size()
-    gx, gy = grid.x, grid.y
+    full = device.compute_with_storage_grid_size()
+    gx, gy = full.x, full.y
+    if grid is not None:
+        mx, my = (grid.x, grid.y) if hasattr(grid, "x") else tuple(grid)
+        gx, gy = min(gx, int(mx)), min(gy, int(my))
     h, w = (2, cores_per_bank // 2) if shape == "band" else (1, cores_per_bank)
-    if (2 * w if shape == "band" else w) > gx:
+    if (2 * w if shape == "band" else w) > gx or (shape == "rect" and banks > gy):
         return None
     anchors = [(c.x, c.y) for c in device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)]
     if len(anchors) != banks:
@@ -130,17 +163,17 @@ def plan(
     sides = {0: [], 1: []}  # 0 west (columns 0 .. w-1), 1 east (gx-w .. gx-1)
     for b, (ax, _) in enumerate(anchors):
         sides[0 if ax < gx / 2 else 1].append(b)
-    band_of = {}
+    band_of = {b: b for b in range(banks)} if shape == "rect" else {}  # (rect: grid row b = bank b, from column 0)
     # (band: each side its own bands; row: one grid row a bank, the rows shared by both sides)
-    for bs in sides.values() if shape == "band" else [sides[0] + sides[1]]:
+    for bs in () if shape == "rect" else sides.values() if shape == "band" else [sides[0] + sides[1]]:
         bs.sort(key=lambda b: anchors[b][1])
-        pick = _bands([anchors[b][1] for b in bs], gy // h, h)
+        pick = _bands([anchors[b][1] for b in bs], gy // h, h, contiguous)
         if pick is None:
             return None
         band_of.update(zip(bs, pick))
     slots, rect, senders = [], [], []
     for b in range(banks):
-        x0 = 0 if b in sides[0] else gx - w
+        x0 = 0 if shape == "rect" or b in sides[0] else gx - w
         y0 = band_of[b] * h
         ax, ay = anchors[b]
         by_g: dict = {}
@@ -152,7 +185,10 @@ def plan(
             wg = w * len(ns) // per_bank
             if wg * per_bank != w * len(ns) or wg == 0:
                 return None
-            cores = [(x, y) for y in range(y0, y0 + h) for x in range(cx, cx + wg)]
+            if order == "col":
+                cores = [(x, y) for x in range(cx, cx + wg) for y in range(y0, y0 + h)]
+            else:
+                cores = [(x, y) for y in range(y0, y0 + h) for x in range(cx, cx + wg)]
             if sender == "anchor":
                 snd = min(cores, key=lambda c: (abs(c[0] - ax) + abs(c[1] - ay), c))
             else:

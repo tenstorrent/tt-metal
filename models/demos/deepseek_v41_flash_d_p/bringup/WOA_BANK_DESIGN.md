@@ -207,3 +207,13 @@ Extend the fork (constraint 3), defaults = today's behaviour:
   route re-quantizes bfp8); 10 cores a bank (5 x 2) beat 12; the sweep ran as one mesh program with a knob set a chip.
 - Result: 151.3 -> 125.0 us (256 rows), 131.5 -> 106.9 us (160 rows), bit-identical; gain 0.552 / 0.517 ms a chunk at
   21 calls vs the KILL line 0.595 / 0.50: killed at 8192 by 3.8 us a call, passes at 5120.
+
+## WA.3: in the model (2026-11-27; results/WA.3_offon.md)
+
+- Departures from sections 3-6, each measured: the bank cores stay in the matmul-capped 11 x 10 grid (bank.plan
+  `grid`; a packed chunk's wo_a runs in the gather-hide region's compute sub-device, DS41-382): 130.3 / 114.2 us a call
+  instead of WA.2's 124.9 / 104.1; one kernel group (`one_group`: the column tiles a runtime arg) so the launch has 4
+  core ranges, not 24 (the host delta, DS41-394); today's core set ("rect") measured and not used (147.7 / 121.2 us).
+- Switch: WOA_BANK call-time; WOA_BANK_COPIES=selected (one copy, the shipped load) | both (A/B) per OV-77.
+- Result: off == on bit-identical (single 8192, packed 4 x 2k, single 5120, real-input 160 rows), repeats exact, cold
+  no-rebuild PASS; wo_a 3.06 -> 2.65-2.74 ms a chunk; host a call unchanged; load +1.39 s (21 layers).

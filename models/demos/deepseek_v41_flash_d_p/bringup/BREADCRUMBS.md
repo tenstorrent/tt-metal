@@ -1723,3 +1723,39 @@
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate WA.2 --spec $BRINGUP_SPEC --check`; fork tests
   alone: resident submit of `scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_fork_bank.py`.
+
+## WA.3 perf (attempt 1): wo_a bank-local reads in the model (DS41_WOA_BANK off | on)
+
+- Expected saving before any change (perf_guide section 2): device, from WA.2's op probe, 26.3 us a call x 21 wo_a
+  calls = ~0.55 ms a 8192 chunk (single and packed: the call is 256 rows a chip either way), ~0.5 ms a 5120 chunk
+  (24.6 us x 21); host: 0 a chunk at best (OV-78: the bank call must cost no more host than today's; WA.2 measured
+  +24-34 us a call = +0.5-0.7 ms a chunk on a host-bound span until trimmed).
+- Loads: the OV-79 layout probe needs no model ("mesh only: random tensors of wo_a's shapes"); test_woa_offon needs
+  the executed layers 0-20 once ("needs the model because off == on must hold on real chunks, DS41-390").
+- OV-79 first (op level, tests/woa/test_woa_layout_probe.py, 0 model loads): today's core set with the bank reader
+  ("rect" 11: 8 x 11 from (0, 0), row g = bank g) 147.7 / 121.2 us vs band 10 130.3 / 114.2 vs today 151.1 / 131.7 us
+  (256 / 160 rows): the clusters are the gain -> band wired, rect kept selectable (WOA_BANK_SHAPE).
+- OV-78 host split: Python wrapper equal on both paths (18 / 11 us; str() of a memory config only 1-2 us, still
+  dropped from the key); the delta was run_prepared's enqueue growing with core ranges (24 vs 2): DS41-394. Fix: fork
+  option one_group (GMM_PN_RT, PN a runtime arg): 4 ranges, host = today's within noise, device unchanged. order="col"
+  (8 ranges) and contiguous bands (4 ranges, but 128-140 us device) measured and not used.
+- Gotcha: the first gate run failed in the packed 4x2k chunk, "sub_device_ids.size() == 1": the packed wo_a runs inside
+  the gather-hide region (compute sub-device 11 x 10, DS41-382) and WA.2's band layout put east cores in column 11.
+  bank.plan(grid=max_grid): east bands in columns 6-10; costs 5-10 us a call of WA.2's numbers (124.9 -> 130.3 at 256
+  rows). Knobs re-swept there (35 configs a row count): WA.2's stay.
+- Model wiring: tt/settings WOA_BANK (call-time, default off), WOA_BANK_COPIES (selected | both, load-time, OV-77),
+  WOA_BANK_SHAPE / _CORES / _ONE_GROUP; mm_configs.WOA_BANK_KNOBS (depth, w_inflight, x_ahead by rows; block_w / rt
+  stay gmm_knobs' so the K order is today's); tt/attention: wo_a copies (_woa_attach, woa_ensure, woa_drop, woa_layout;
+  a missing layout raises), host_alloc reads wo_a_shape; tt/model sets each attention's woa_src (checkpoint re-read);
+  hooks: WOA_BANK in batch_call_settings, batch_call_apply refreshes it and adds a held model's missing copy.
+- Gate (PASS): off == on 0.0 on single8192 / 4x2k / single5120 (20 layer outputs + every served record), repeats 0.0,
+  real160 0.0 (20 real calls); wo_a 3.064 -> 2.655 / 2.737 / 2.653 ms a chunk; host a wo_a call off / on 105.5 / 110.4,
+  131.3 / 127.1, 105.7 / 104.9 us; load delta +1.39 s (21 layers), ~+2.6 s at 40: no cache. Cold no-rebuild with
+  WOA_BANK=on PASS, determinism 0. Report: ledgers/galaxy_8x4-full/results/WA.3_offon.md.
+- Expected vs measured: device 0.55 ms a chunk expected (WA.2's full-grid number) -> 0.33-0.41 ms measured (the 11-wide
+  grid); host 0 expected -> 0 within noise.
+- `orchestrator measure --task WA.3` stopped at the run's pause file ("paused before A/B on"); not resumed (owner /
+  overseer's).
+- Per-chunk values (rule 20): none touched. WOA_BANK is a per-call host branch; x / w / y addresses are prepared-program
+  patches; layout, knobs, core set load- / compile-time.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate WA.3 --spec $BRINGUP_SPEC --check`.

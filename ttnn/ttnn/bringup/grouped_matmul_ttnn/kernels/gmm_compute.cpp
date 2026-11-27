@@ -12,6 +12,7 @@
 // in1 blocks are BW x PNX tiles (row stride PNX >= PN, the reader's layout).
 // Diagnostic define (WA.2 step 0, never set by a model): GMM_DIAG_NO_COMPUTE skips the K-block products (the CBs
 // still advance; the output is garbage).
+// GMM_PN_RT (the bank path's one kernel group, WA.3): PN is per-core runtime arg 0 (compile-time arg 2 unused).
 // compile-time args: MT, BW, PN, NBLK, CB_IN0, CB_IN1, CB_PART, CB_OUT, RT, PNX
 
 #include <cstdint>
@@ -26,7 +27,12 @@
 void kernel_main() {
     constexpr uint32_t MT = get_compile_time_arg_val(0);
     constexpr uint32_t BW = get_compile_time_arg_val(1);
+#ifdef GMM_PN_RT
+    // (bank path, one kernel group: the core's column tiles a runtime arg)
+    const uint32_t PN = get_arg_val<uint32_t>(0);
+#else
     constexpr uint32_t PN = get_compile_time_arg_val(2);
+#endif
     constexpr uint32_t NBLK = get_compile_time_arg_val(3);
     constexpr uint32_t CB_IN0 = get_compile_time_arg_val(4);
     constexpr uint32_t CB_IN1 = get_compile_time_arg_val(5);
@@ -34,7 +40,7 @@ void kernel_main() {
     constexpr uint32_t CB_OUT = get_compile_time_arg_val(7);
     constexpr uint32_t RT = get_compile_time_arg_val(8);
     constexpr uint32_t PNX = get_compile_time_arg_val(9);
-    constexpr uint32_t OUT_TILES = MT * PN;
+    const uint32_t OUT_TILES = MT * PN;
     constexpr uint32_t RT_LAST = MT % RT;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(CB_IN0, CB_IN1, CB_PART);  // (matmul: in1 -> SrcA, in0 -> SrcB)

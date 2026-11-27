@@ -1,0 +1,116 @@
+{
+ "used": [
+  {
+   "id": "DS41-390",
+   "how": "kept today's block_w / rt (gmm_knobs) on the bank path so off == on can be bitwise, and added a real-input 160-row check (real160) instead of trusting random-input exactness",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-392",
+   "how": "the bank copy goes through bank.upload (plain host conversion, then the sharded placement): off == on 0.0",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-393",
+   "how": "kept the sender at each rectangle's first core (start) in every layout measured",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-382",
+   "how": "diagnosed the first gate failure (sub_device_ids.size() == 1 in the packed chunk): the bank cores now stay in max_grid (bank.plan grid=)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-311",
+   "how": "kept every fork / kernel change in one batch before each probe run (each restarts the resident runner)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-380",
+   "how": "test_woa_offon patches ttnn.bringup.grouped_matmul (looked up at call time) rather than a module-level hook of the held model",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-314",
+   "how": "WOA_BANK refreshed in batch_call_apply's snapshot and switched in tests with packed_common.switch (snapshot + env)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-385",
+   "how": "compared every layout only against today's call timed in the same run, host as medians of alternating rounds",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a prepared program's per-launch host cost grows with its core ranges x kernel groups (now DS41-394)",
+  "an op that may run inside a gather-hide region must keep its cores in the matmul-capped grid, including a fork's own placement (DS41-382 says it for stock ops only)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding: bank.plan refuses shapes that do not split evenly; one copy a layer, same tile count"
+  },
+  {
+   "id": "OV-77",
+   "answer": "done",
+   "evidence": "WOA_BANK_COPIES=selected (default) uploads only WOA_BANK's copy; both for the A/B; a missing layout raises in _out_wo; test_woa_offon adds the bank copy to the held model and drops it after; DRAM a chip in results/WA.3_offon.md"
+  },
+  {
+   "id": "OV-78",
+   "answer": "done",
+   "evidence": "cause: run_prepared enqueue grew with 24 core ranges (Python equal); fix one_group (4 ranges): host a call 84.3 / 53.9 vs today 80.2 / 51.2 us (op), in the model woa_host_us off/on 105.5/110.4, 131.3/127.1, 105.7/104.9; recorded in test_woa_offon"
+  },
+  {
+   "id": "OV-79",
+   "answer": "done",
+   "evidence": "today's core set (rect 11) 147.7 / 121.2 us vs band 10 130.3 / 114.2 vs today 151.1 / 131.7: not within noise, band wired; str() / shard asserts removed from the per-call path (1-2 us each, not the cause); split reported in WA.3_offon.md"
+  }
+ ],
+ "cited_only": [
+  "DS41-394"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "WA.3",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-27T17:17:27",
+  "head": "5cdc234a34d",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/WOA_BANK_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.3.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.3_offon.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/WA.3.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_layout_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/host_alloc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/README.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/bank.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/grouped_matmul.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_bank_reader.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_compute.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_writer.cpp"
+  ]
+ }
+}

@@ -63,3 +63,30 @@ Source: none (new op), deepseek_v41_flash_d_p P.81 (OWNER 2026-11-18: attention 
 - Needed by: deepseek_v41_flash_d_p WA.2 (probe only; not called by the model yet: WA.3)
 - Files: bank.py, grouped_matmul.py, __init__.py, kernels/gmm_bank_reader.cpp, kernels/gmm_reader.cpp,
   kernels/gmm_compute.cpp, tests/unit/test_grouped_matmul_bank.py, README.md; ../INDEX.md
+
+## 2026-11-27: bank path host cost and core sets (deepseek_v41_flash_d_p WA.3)
+- What: (1) option `one_group` (default False: the behaviour before): the bank program as one kernel group for every
+  core width, the core's column tiles a runtime arg of the reader, writer and compute kernels (compile-time define
+  GMM_PN_RT; without it every kernel is unchanged). (2) `bank.plan` shape "rect" (today's interleaved path's core set:
+  one rectangle from (0, 0), grid row b = bank b), `order` ("row" default | "col") and `contiguous` (default False).
+  `bank.plan(grid=...)` (default None: the device's grid, as before): the cores a layout may use from (0, 0) (the
+  model's bank cores must stay in its matmul-capped 11 x 10 compute sub-device: a packed chunk's wo_a runs inside a
+  gather-hide region, where a core in column 11 fails "Programs must be executed on a single sub-device"; 11 wide:
+  band 10 one group 130.3 / 114.2 us vs 124.9 / 104.1 on the full 12-wide grid).
+  (3) The prepared-program key no longer carries str() of the three memory configs (x and out are checked
+  INTERLEAVED DRAM, w INTERLEAVED or the layout's bank tensor, so they add nothing) and keys the dtypes as values; the
+  ckc key is cached per config object; the bank weight's shard check runs once a tensor object (`_check_bank_w`).
+  Same programs, same cache hits.
+- Why: OV-78 / OV-79 (owner 2026-11-27): the bank call cost +24-34 us host a call in WA.2; the owner asked whether
+  today's core set would do. Measured split (tests/woa/test_woa_layout_probe.py, 8x4): the Python wrapper is equal
+  (18 / 11 us at 256 / 160 rows), str() of a memory config only ~1-2 us; the delta is run_prepared's enqueue, which
+  grows with the core ranges: band 10 as two kernel groups = 24 core ranges, +23-45 us; `one_group`: 4 ranges, 81.0 /
+  52.9 us vs the interleaved path's 77.3 / 54.8 (noise ~+-8 us). Device: band 10 one group 124.9 / 104.1 us (two
+  groups 125.2 / 106.1); "rect" 11 147.8 / 121.1 us (today 151.4 / 131.8): the clusters are what buys the gain.
+  `order="col"` 8 ranges, host between; `contiguous` bands 4 ranges but 128 / 123-128 us device (worse).
+- Tests: tests/woa/test_woa_layout_probe.py (every config bit-identical vs today's call at 256 and 160 rows, a repeat
+  bit-identical); the model's off == on test tests/woa/test_woa_offon.py (WA.3 gate). Fork regression suites not run
+  on the 8x4 (brief); the interleaved path's kernels are unchanged without GMM_PN_RT.
+- Cores: unchanged (bank path banks x cores_per_bank: 80 on the 8x4 with 10 a bank, <= 110).
+- Files: grouped_matmul.py, bank.py, kernels/gmm_bank_reader.cpp, kernels/gmm_compute.cpp, kernels/gmm_writer.cpp,
+  README.md; ../INDEX.md. Used by: deepseek_v41_flash_d_p tt/attention.py `_out_wo` under WOA_BANK=on.

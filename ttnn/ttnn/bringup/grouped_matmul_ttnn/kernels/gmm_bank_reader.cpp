@@ -20,7 +20,8 @@
 // and the multicast handshake (every core then runs on its own).
 // compile-time args: MT, KT, BW, PN, PNX, CB_IN0, CB_IN1, IN0_TB, IN1_TB, DEPTH, W_INFLIGHT, X_AHEAD, x accessor
 // common args: x address, w address (the bank-local base); per-core args: g, tile0, bank, sender, mc_x0, mc_y0, mc_x1,
-// mc_y1, ndest (cores of the rectangle, sender included), sender_x, sender_y
+// mc_y1, ndest (cores of the rectangle, sender included), sender_x, sender_y (and PN under GMM_PN_RT: one kernel group
+// for every core width, WA.3: fewer core ranges, less host time a launch)
 
 #include <cstdint>
 
@@ -43,7 +44,11 @@ void kernel_main() {
     constexpr uint32_t MT = get_compile_time_arg_val(0);
     constexpr uint32_t KT = get_compile_time_arg_val(1);
     constexpr uint32_t BW = get_compile_time_arg_val(2);
+#ifdef GMM_PN_RT
+    const uint32_t PN = get_arg_val<uint32_t>(11);  // (one kernel group for every core width, WA.3)
+#else
     constexpr uint32_t PN = get_compile_time_arg_val(3);
+#endif
     constexpr uint32_t PNX = get_compile_time_arg_val(4);
     constexpr uint32_t CB_IN0 = get_compile_time_arg_val(5);
     constexpr uint32_t CB_IN1 = get_compile_time_arg_val(6);
@@ -95,7 +100,7 @@ void kernel_main() {
         noc_async_read_set_trid(TRID_W0 + kb % W_INFLIGHT);
         const uint32_t src = w_src0 + kb * BW * PN * IN1_TB;
         const uint32_t dst = in1_base + (kb % DEPTH) * IN1_BLOCK;
-        if constexpr (PN == PNX) {
+        if (PN == PNX) {
             noc_async_read(get_noc_addr_from_bank_id<true>(bank, src), dst, BW * PN * IN1_TB);
         } else {
             for (uint32_t k = 0; k < BW; ++k) {

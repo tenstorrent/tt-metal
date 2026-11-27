@@ -643,6 +643,9 @@ class TtDS41Block:
             self.attention = TtSparseAttention(mesh, cfg, w, rope, model.tables, model.sparse_tables())
         else:
             self.attention = TtWindowAttention(mesh, cfg, w, rope, model.tables)
+        # WOA_BANK (WA.3, OV-77): a held model given a wo_a copy its load did not upload (tests / the A/B only,
+        # tt/attention.woa_ensure) re-reads the checkpoint's wo_a (memory-mapped)
+        self.attention.woa_src = lambda ck=ck, name=f"layers.{i}.attn.wo_a.weight": ck.weight(name, torch.float32)
         if self.own:  # OWN_ROWS=on (P.23): attn_out stays on the chip's rows (no exit all_to_all)
             assert self.attention.sp32, "OWN_ROWS needs ATTN_SP32_PROJ=on"
             self.attention.keep_rows = True

@@ -217,7 +217,7 @@ def _merged(cores) -> ttnn.CoreRangeSet:
 
 
 def bank_program(
-    x, w, out, ckc, layout, block_w=None, depth=2, rt=1, w_inflight=1, x_ahead=1, diag=()
+    x, w, out, ckc, layout, block_w=None, depth=2, rt=1, w_inflight=1, x_ahead=1, diag=(), one_group=False
 ) -> ttnn.ProgramDescriptor:
     """The bank path's program (option ``w_layout``, bank.py): today's compute and writer kernels on the layout's
     cores; the reader gmm_bank_reader.cpp (each core reads only its own bank, ``w_inflight`` K blocks in flight; the
@@ -272,7 +272,8 @@ def bank_program(
         cfg.unpack_to_dest_mode = modes
     by_pn = {}
     for s in layout.slots:
-        by_pn.setdefault(s.pn, []).append(s)
+        by_pn.setdefault(0 if one_group else s.pn, []).append(s)
+    pn_rt = [("GMM_PN_RT", "1")] if one_group else []
     kernels = []
     for pn, slots in by_pn.items():
         crs = _merged([s.core for s in slots])
@@ -285,6 +286,10 @@ def bank_program(
             rd[cx][cy] = [s.g, s.tile0, s.bank, int(s.sender), lo.x, lo.y, hi.x, hi.y, ndest, snd.x, snd.y]
             wr[cx][cy] = [s.g, s.n0]
             cp[cx][cy] = []
+            if one_group:  # (GMM_PN_RT: the core's column tiles a runtime arg of each kernel)
+                rd[cx][cy].append(s.pn)
+                wr[cx][cy].append(s.pn)
+                cp[cx][cy] = [s.pn]
         kernels += [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNELS / "gmm_bank_reader.cpp"),
@@ -292,7 +297,7 @@ def bank_program(
                 compile_time_args=[MT, KT, BW, pn, pn_max, CB_IN0, CB_IN1, a, b, depth, w_inflight, x_ahead] + x_ct,
                 runtime_args=rd,
                 common_runtime_args=[x.buffer_address(), w.buffer_address()],
-                defines=_defines(diag, ("GMM_DIAG_NO_W", "GMM_DIAG_NO_X")),
+                defines=_defines(diag, ("GMM_DIAG_NO_W", "GMM_DIAG_NO_X")) + pn_rt,
                 config=ttnn.ReaderConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
@@ -301,6 +306,7 @@ def bank_program(
                 compile_time_args=[MT, NT, pn, CB_OUT, o] + y_ct,
                 runtime_args=wr,
                 common_runtime_args=[out.buffer_address()],
+                defines=pn_rt,
                 config=ttnn.WriterConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
@@ -308,37 +314,65 @@ def bank_program(
                 core_ranges=crs,
                 compile_time_args=[MT, BW, pn, KT // BW, CB_IN0, CB_IN1, CB_PART, CB_OUT, rt, pn_max],
                 runtime_args=cp,
-                defines=_defines(diag, ("GMM_DIAG_NO_COMPUTE",)),
+                defines=_defines(diag, ("GMM_DIAG_NO_COMPUTE",)) + pn_rt,
                 config=cfg,
             ),
         ]
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
 
 
+_CKC_KEYS = {}  # id(ckc) -> (ckc, key): a model passes the same config object on every call (the ref keeps the id)
+
+
 def _ckc_key(ckc):
-    return tuple(str(getattr(ckc, k, None)) for k in ("math_fidelity", "fp32_dest_acc_en", "math_approx_mode"))
+    hit = _CKC_KEYS.get(id(ckc))
+    if hit is not None and hit[0] is ckc:
+        return hit[1]
+    key = tuple(str(getattr(ckc, k, None)) for k in ("math_fidelity", "fp32_dest_acc_en", "math_approx_mode"))
+    if len(_CKC_KEYS) >= _PREPARED_CAP:
+        _CKC_KEYS.clear()
+    _CKC_KEYS[id(ckc)] = (ckc, key)
+    return key
+
+
+_BANK_W_OK = {}  # id(w) -> (w, layout key): a bank weight whose memory config was checked once (WA.3, OV-79)
+
+
+def _check_bank_w(w, layout) -> None:
+    """The bank weight's layout and WIDTH_SHARDED DRAM shard checked on its first call only: the memory config's
+    shard spec read on every call cost host time (WA.2: +24-34 us a call). Keyed by the tensor object (kept referenced:
+    its id is not reused while cached)."""
+    hit = _BANK_W_OK.get(id(w))
+    if hit is not None and hit[0] is w and hit[1] == layout.key():
+        return
+    mc = w.memory_config()
+    assert w.layout == ttnn.TILE_LAYOUT and mc.buffer_type == ttnn.BufferType.DRAM, (w.layout, mc)
+    assert mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED, f"w_layout needs the bank tensor, got {mc}"
+    assert tuple(mc.shard_spec.shape) == (layout.tiles_per_bank * 32, 32), f"w_layout: shard {mc.shard_spec}"
+    if len(_BANK_W_OK) >= 4 * _PREPARED_CAP:
+        _BANK_W_OK.clear()
+    _BANK_W_OK[id(w)] = (w, layout.key())
 
 
 def _prepared(x, w, out, ckc, max_grid=None, block_w=None, depth=2, rt=1, diag=(), bank=None):
     mesh = x.device()
     mg = None if max_grid is None else ((max_grid.x, max_grid.y) if hasattr(max_grid, "x") else tuple(max_grid))
+    # (memory configs: x and out are INTERLEAVED DRAM and w is INTERLEAVED DRAM or the bank layout's sharded tensor,
+    # checked by the caller, so they add nothing to the key; their str() cost ~10-40 us a call, WA.3 / OV-79)
     key = (
         mesh.id(),
         tuple(x.shape),
         tuple(w.shape),
-        str(x.dtype),
-        str(w.dtype),
-        str(out.dtype),
-        str(x.memory_config()),
-        str(w.memory_config()),
-        str(out.memory_config()),
+        x.dtype,
+        w.dtype,
+        out.dtype,
         mg,
         block_w,
         depth,
         rt,
         _ckc_key(ckc),
         tuple(diag),
-        None if bank is None else (bank[0].key(), bank[1], bank[2]),
+        None if bank is None else (bank[0].key(), bank[1], bank[2], bank[3]),
     )
     hit = _PREPARED.get(key)
     if hit is not None:
@@ -347,7 +381,7 @@ def _prepared(x, w, out, ckc, max_grid=None, block_w=None, depth=2, rt=1, diag=(
     if bank is None:
         desc = program(x, w, out, ckc, max_grid, block_w, depth, rt, diag)
     else:
-        desc = bank_program(x, w, out, ckc, bank[0], block_w, depth, rt, bank[1], bank[2], diag)
+        desc = bank_program(x, w, out, ckc, bank[0], block_w, depth, rt, bank[1], bank[2], diag, bank[3])
     shape = mesh.shape
     md = ttnn.MeshProgramDescriptor()
     md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(shape[0] - 1, shape[1] - 1))] = desc
@@ -376,6 +410,7 @@ def grouped_matmul(
     w_layout=None,
     w_inflight: int = 1,
     x_ahead: int = 1,
+    one_group: bool = False,
     diag: tuple = (),
 ) -> ttnn.Tensor:
     """x [1, G, M, K] @ w [1, G, K, N] -> [1, G, M, N] (TILE, DRAM interleaved; any tile dtypes, e.g. bfloat8_b
@@ -390,17 +425,16 @@ def grouped_matmul(
     the layout's WIDTH_SHARDED DRAM weight (bank.upload) and every core reads only its own bank (bank.py): same tiles,
     K order and output as today's path; ``w_inflight`` (default 1) K blocks of weights in flight a core ahead of the one
     consumed, ``x_ahead`` (default 1, <= min(3, depth - 1)) x blocks the sender reads ahead when their slots are free
-    (bank path only). Needs G <= the grid's rows
+    (bank path only); ``one_group`` (default False, bank path only; WA.3): one kernel group for every core width
+    (the core's column tiles a runtime arg, compile-time define GMM_PN_RT) instead of one a width: fewer core ranges,
+    less host time a launch. Needs G <= the grid's rows
         (``supported``)."""
     for t in (x, w) if w_layout is None else (x,):
         assert t.layout == ttnn.TILE_LAYOUT, t.layout
         mc = t.memory_config()
         assert mc.buffer_type == ttnn.BufferType.DRAM and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED, mc
     if w_layout is not None:
-        mc = w.memory_config()
-        assert w.layout == ttnn.TILE_LAYOUT and mc.buffer_type == ttnn.BufferType.DRAM, (w.layout, mc)
-        assert mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED, f"w_layout needs the bank tensor, got {mc}"
-        assert tuple(mc.shard_spec.shape) == (w_layout.tiles_per_bank * 32, 32), f"w_layout: shard {mc.shard_spec}"
+        _check_bank_w(w, w_layout)
     odt = dtype or x.dtype
     shape = [1, x.shape[1], x.shape[2], w.shape[3] if w_layout is None else w_layout.NT * 32]
     if output_tensor is None:
@@ -412,7 +446,7 @@ def grouped_matmul(
         assert o.dtype == odt and o.layout == ttnn.TILE_LAYOUT and list(o.shape) == shape, (o.dtype, o.shape)
         assert o.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED, o.memory_config()
     assert all(d in DIAG_STUBS for d in diag), diag
-    bank = None if w_layout is None else (w_layout, w_inflight, x_ahead)
+    bank = None if w_layout is None else (w_layout, w_inflight, x_ahead, bool(one_group))
     pp = _prepared(x, w, output_tensor, compute_kernel_config, max_grid, block_w, depth, rt, tuple(diag), bank)
     ttnn.bringup.run_prepared(pp, [x, w, output_tensor])
     return output_tensor

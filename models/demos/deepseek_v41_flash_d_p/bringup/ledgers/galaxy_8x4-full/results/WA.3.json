@@ -1,0 +1,1027 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-27T17:15:33",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-27T17:15:33",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-27T17:15:33",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-27T17:15:33",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-27T17:15:33",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-27T17:15:33",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-27T17:15:33",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-27T17:15:33",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-27T17:15:33",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-27T17:15:33",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-27T17:15:33",
+   "value": 148.3
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-27T17:15:33",
+   "value": 0.0
+  },
+  "gate_model_loads": {
+   "t": "2026-11-27T17:15:38",
+   "value": 2
+  },
+  "ids_uploads_per_chunk": {
+   "t": "2026-11-27T17:09:39",
+   "value": 0.0
+  },
+  "ids_uploads_per_chunk_tagentic_cc": {
+   "t": "2026-11-27T17:09:39",
+   "value": 0.0
+  },
+  "model_loads": {
+   "by": "run0",
+   "ns": 1795799584213202652,
+   "pid": 1563856,
+   "t": "2026-11-27T17:13:04",
+   "total": 1,
+   "value": 1
+  },
+  "model_loads_tagentic_cc": {
+   "by": "WA.3#test_no_rebuild.0",
+   "ns": 1795799297249512921,
+   "pid": 1555308,
+   "t": "2026-11-27T17:08:17",
+   "total": 1,
+   "value": 1
+  },
+  "model_shared": {
+   "t": "2026-11-27T17:13:04",
+   "value": 0
+  },
+  "model_shared_tagentic_cc": {
+   "t": "2026-11-27T17:08:17",
+   "value": 0
+  },
+  "no_rebuild_cache_entries_tagentic_cc": {
+   "t": "2026-11-27T17:09:39",
+   "value": 0
+  },
+  "no_rebuild_chunks_tagentic_cc": {
+   "t": "2026-11-27T17:09:39",
+   "value": 16
+  },
+  "no_rebuild_on_off_max_abs_diff_tagentic_cc": {
+   "t": "2026-11-27T17:09:48",
+   "value": 0.0
+  },
+  "no_rebuild_pass_lanes2x3k": {
+   "t": "2026-11-27T17:09:45",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-27T17:09:45",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x1600s": {
+   "t": "2026-11-27T17:09:41",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-27T17:09:41",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x2k": {
+   "t": "2026-11-27T17:09:40",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-27T17:09:40",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes6mix": {
+   "t": "2026-11-27T17:09:42",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes6mix_tagentic_cc": {
+   "t": "2026-11-27T17:09:42",
+   "value": 1
+  },
+  "no_rebuild_pass_one1600": {
+   "t": "2026-11-27T17:09:44",
+   "value": 1
+  },
+  "no_rebuild_pass_one1600_tagentic_cc": {
+   "t": "2026-11-27T17:09:44",
+   "value": 1
+  },
+  "no_rebuild_pass_one4k": {
+   "t": "2026-11-27T17:09:43",
+   "value": 1
+  },
+  "no_rebuild_pass_one4k_tagentic_cc": {
+   "t": "2026-11-27T17:09:43",
+   "value": 1
+  },
+  "no_rebuild_pass_single8192": {
+   "t": "2026-11-27T17:09:39",
+   "value": 1
+  },
+  "no_rebuild_pass_single8192_tagentic_cc": {
+   "t": "2026-11-27T17:09:39",
+   "value": 1
+  },
+  "no_rebuild_prepares_tagentic_cc": {
+   "t": "2026-11-27T17:09:39",
+   "value": 0
+  },
+  "no_rebuild_probe_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-27T17:09:45",
+   "value": []
+  },
+  "no_rebuild_probe_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-27T17:09:41",
+   "value": []
+  },
+  "no_rebuild_probe_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-27T17:09:40",
+   "value": []
+  },
+  "no_rebuild_probe_lanes6mix_tagentic_cc": {
+   "t": "2026-11-27T17:09:42",
+   "value": []
+  },
+  "no_rebuild_probe_one1600_tagentic_cc": {
+   "t": "2026-11-27T17:09:44",
+   "value": []
+  },
+  "no_rebuild_probe_one4k_tagentic_cc": {
+   "t": "2026-11-27T17:09:43",
+   "value": []
+  },
+  "no_rebuild_probe_tagentic_cc": {
+   "t": "2026-11-27T17:09:39",
+   "value": []
+  },
+  "no_rebuild_rows_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-27T17:09:45",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      239104,
+      393024
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      15,
+      13
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      781440,
+      12800
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      15,
+      11
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      20096,
+      360832
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12,
+      18
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-27T17:09:41",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      31680,
+      85760,
+      104576,
+      327552,
+      304704
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12,
+      16,
+      11,
+      14,
+      13
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      157056,
+      61440,
+      13504,
+      137472,
+      42304
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      19,
+      15,
+      17,
+      11,
+      14
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      12544,
+      272768,
+      329728,
+      46912,
+      212224
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      14,
+      16,
+      17,
+      12
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-27T17:09:40",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      6912,
+      69888,
+      34304,
+      191744
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      15,
+      12,
+      17
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      82688,
+      184512,
+      506560,
+      110336
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      16,
+      17,
+      11,
+      13
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      124672,
+      229824,
+      132224,
+      930496
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      18,
+      11,
+      16,
+      14
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes6mix_tagentic_cc": {
+   "t": "2026-11-27T17:09:42",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      27584,
+      101376,
+      255552,
+      582784,
+      177856,
+      117568
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12,
+      17,
+      15,
+      16,
+      11,
+      19
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      134848,
+      494336,
+      217216,
+      133952,
+      7488,
+      150080
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      18,
+      12,
+      15,
+      17,
+      14,
+      11
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      6720,
+      192704,
+      244736,
+      100416,
+      171840,
+      92480
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      17,
+      16,
+      14,
+      18,
+      13
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_one1600_tagentic_cc": {
+   "t": "2026-11-27T17:09:44",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      122816
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      18
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      251328
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      12
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      21632
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_one4k_tagentic_cc": {
+   "t": "2026-11-27T17:09:43",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      24000
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      50240
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      14
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      804224
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      16
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_tagentic_cc": {
+   "t": "2026-11-27T17:09:39",
+   "value": [
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       90112,
+       98304,
+       null
+      ],
+      [
+       98304,
+       106496,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "aligned",
+     "prepared": 0,
+     "slot": 1
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       20160,
+       28352,
+       null
+      ],
+      [
+       28352,
+       36544,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 2
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       525696,
+       533888,
+       null
+      ],
+      [
+       533888,
+       542080,
+       534016
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slot": 3
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       261312,
+       269504,
+       null
+      ],
+      [
+       269504,
+       269604,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 4
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       111360,
+       119552,
+       null
+      ],
+      [
+       113664,
+       121843,
+       119552
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "pulled",
+     "prepared": 0,
+     "slot": 5
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       79488,
+       87680,
+       null
+      ],
+      [
+       87680,
+       87700,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "acks_only",
+     "prepared": 0,
+     "slot": 6
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       220480,
+       228672,
+       null
+      ],
+      [
+       228672,
+       236864,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 7
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       6336,
+       14528,
+       null
+      ],
+      [
+       14528,
+       19276,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 8
+    }
+   ]
+  },
+  "packed_fallback_chunks_lanes2x3k": {
+   "t": "2026-11-27T17:09:45",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-27T17:09:45",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x1600s": {
+   "t": "2026-11-27T17:09:41",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-27T17:09:41",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x2k": {
+   "t": "2026-11-27T17:09:40",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-27T17:09:40",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes6mix": {
+   "t": "2026-11-27T17:09:42",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes6mix_tagentic_cc": {
+   "t": "2026-11-27T17:09:42",
+   "value": 0
+  },
+  "packed_fallback_chunks_one1600": {
+   "t": "2026-11-27T17:09:44",
+   "value": 0
+  },
+  "packed_fallback_chunks_one1600_tagentic_cc": {
+   "t": "2026-11-27T17:09:44",
+   "value": 0
+  },
+  "packed_fallback_chunks_one4k": {
+   "t": "2026-11-27T17:09:43",
+   "value": 0
+  },
+  "packed_fallback_chunks_one4k_tagentic_cc": {
+   "t": "2026-11-27T17:09:43",
+   "value": 0
+  },
+  "packed_ids_uploads_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-27T17:09:45",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-27T17:09:41",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-27T17:09:40",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes6mix_tagentic_cc": {
+   "t": "2026-11-27T17:09:42",
+   "value": 0.0
+  },
+  "packed_ids_uploads_one1600_tagentic_cc": {
+   "t": "2026-11-27T17:09:44",
+   "value": 0.0
+  },
+  "packed_ids_uploads_one4k_tagentic_cc": {
+   "t": "2026-11-27T17:09:43",
+   "value": 0.0
+  },
+  "program_builds_after_warmup_lanes2x3k": {
+   "t": "2026-11-27T17:09:45",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-27T17:09:45",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x1600s": {
+   "t": "2026-11-27T17:09:41",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-27T17:09:41",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x2k": {
+   "t": "2026-11-27T17:09:40",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-27T17:09:40",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes6mix": {
+   "t": "2026-11-27T17:09:42",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes6mix_tagentic_cc": {
+   "t": "2026-11-27T17:09:42",
+   "value": 0
+  },
+  "program_builds_after_warmup_one1600": {
+   "t": "2026-11-27T17:09:44",
+   "value": 0
+  },
+  "program_builds_after_warmup_one1600_tagentic_cc": {
+   "t": "2026-11-27T17:09:44",
+   "value": 0
+  },
+  "program_builds_after_warmup_one4k": {
+   "t": "2026-11-27T17:09:43",
+   "value": 0
+  },
+  "program_builds_after_warmup_one4k_tagentic_cc": {
+   "t": "2026-11-27T17:09:43",
+   "value": 0
+  },
+  "program_builds_after_warmup_serving": {
+   "t": "2026-11-27T17:09:39",
+   "value": 0
+  },
+  "program_builds_after_warmup_serving_tagentic_cc": {
+   "t": "2026-11-27T17:09:39",
+   "value": 0
+  },
+  "program_builds_after_warmup_single8192": {
+   "t": "2026-11-27T17:09:39",
+   "value": 0
+  },
+  "program_builds_after_warmup_single8192_tagentic_cc": {
+   "t": "2026-11-27T17:09:39",
+   "value": 0
+  },
+  "resident_first_chunk_s": {
+   "t": "2026-11-27T17:15:35",
+   "value": 162.16
+  },
+  "resident_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-27T17:09:50",
+   "value": 101.56
+  },
+  "resident_model_loaded": {
+   "t": "2026-11-27T17:15:35",
+   "value": 1
+  },
+  "resident_model_loaded_tagentic_cc": {
+   "t": "2026-11-27T17:09:50",
+   "value": 1
+  },
+  "resident_model_s": {
+   "t": "2026-11-27T17:15:35",
+   "value": 159.55
+  },
+  "resident_model_s_tagentic_cc": {
+   "t": "2026-11-27T17:09:50",
+   "value": 99.03
+  },
+  "resident_request_first_chunk_s": {
+   "t": "2026-11-27T17:15:35",
+   "value": 162.32
+  },
+  "resident_request_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-27T17:09:50",
+   "value": 101.72
+  },
+  "woa_device_ms_4x2k_off_tagentic_cc": {
+   "t": "2026-11-27T17:04:55",
+   "value": 94.936
+  },
+  "woa_device_ms_4x2k_on_tagentic_cc": {
+   "t": "2026-11-27T17:04:55",
+   "value": 94.281
+  },
+  "woa_device_ms_single5120_off_tagentic_cc": {
+   "t": "2026-11-27T17:05:02",
+   "value": 98.414
+  },
+  "woa_device_ms_single5120_on_tagentic_cc": {
+   "t": "2026-11-27T17:05:02",
+   "value": 97.974
+  },
+  "woa_device_ms_single8192_off_tagentic_cc": {
+   "t": "2026-11-27T17:04:47",
+   "value": 85.525
+  },
+  "woa_device_ms_single8192_on_tagentic_cc": {
+   "t": "2026-11-27T17:04:47",
+   "value": 84.815
+  },
+  "woa_host_us_off_4x2k_tagentic_cc": {
+   "calls": 20,
+   "runs": [
+    159.4,
+    131.3
+   ],
+   "t": "2026-11-27T17:04:39",
+   "value": 131.3
+  },
+  "woa_host_us_off_single5120_tagentic_cc": {
+   "calls": 20,
+   "runs": [
+    105.7,
+    108.1
+   ],
+   "t": "2026-11-27T17:04:40",
+   "value": 105.7
+  },
+  "woa_host_us_off_single8192_tagentic_cc": {
+   "calls": 20,
+   "runs": [
+    105.7,
+    105.5
+   ],
+   "t": "2026-11-27T17:04:37",
+   "value": 105.5
+  },
+  "woa_host_us_on_4x2k_tagentic_cc": {
+   "calls": 20,
+   "runs": [
+    127.1,
+    137.8
+   ],
+   "t": "2026-11-27T17:04:39",
+   "value": 127.1
+  },
+  "woa_host_us_on_single5120_tagentic_cc": {
+   "calls": 20,
+   "runs": [
+    104.9,
+    136.8
+   ],
+   "t": "2026-11-27T17:04:40",
+   "value": 104.9
+  },
+  "woa_host_us_on_single8192_tagentic_cc": {
+   "calls": 20,
+   "runs": [
+    110.4,
+    112.1
+   ],
+   "t": "2026-11-27T17:04:37",
+   "value": 110.4
+  },
+  "woa_load_bank_s_tagentic_cc": {
+   "layers": 21,
+   "t": "2026-11-27T16:58:20",
+   "value": 2.766
+  },
+  "woa_load_delta_s_40_tagentic_cc": {
+   "estimate": "x 40 / layers",
+   "t": "2026-11-27T16:58:20",
+   "value": 2.643
+  },
+  "woa_load_delta_s_tagentic_cc": {
+   "bank_s": 2.766,
+   "layers": 21,
+   "t": "2026-11-27T16:58:20",
+   "value": 1.388
+  },
+  "woa_load_host_s_tagentic_cc": {
+   "layers": 21,
+   "t": "2026-11-27T16:58:20",
+   "value": 1.292
+  },
+  "woa_load_interleaved_s_tagentic_cc": {
+   "layers": 21,
+   "t": "2026-11-27T16:58:20",
+   "value": 1.379
+  },
+  "woa_offon_max_abs_diff_4x2k_tagentic_cc": {
+   "layers": 20,
+   "served_bad": 0,
+   "t": "2026-11-27T17:04:37",
+   "value": 0.0
+  },
+  "woa_offon_max_abs_diff_real160_tagentic_cc": {
+   "calls": 20,
+   "t": "2026-11-27T17:05:06",
+   "value": 0.0
+  },
+  "woa_offon_max_abs_diff_single5120_tagentic_cc": {
+   "layers": 20,
+   "served_bad": 0,
+   "t": "2026-11-27T17:04:37",
+   "value": 0.0
+  },
+  "woa_offon_max_abs_diff_single8192_tagentic_cc": {
+   "layers": 20,
+   "served_bad": 0,
+   "t": "2026-11-27T17:04:37",
+   "value": 0.0
+  },
+  "woa_repeat_max_abs_diff_4x2k_tagentic_cc": {
+   "layers": 20,
+   "served_bad": 0,
+   "t": "2026-11-27T17:04:37",
+   "value": 0.0
+  },
+  "woa_repeat_max_abs_diff_single5120_tagentic_cc": {
+   "layers": 20,
+   "served_bad": 0,
+   "t": "2026-11-27T17:04:37",
+   "value": 0.0
+  },
+  "woa_repeat_max_abs_diff_single8192_tagentic_cc": {
+   "layers": 20,
+   "served_bad": 0,
+   "t": "2026-11-27T17:04:37",
+   "value": 0.0
+  },
+  "woa_sec_ms_4x2k_off_tagentic_cc": {
+   "t": "2026-11-27T17:04:55",
+   "value": 3.064
+  },
+  "woa_sec_ms_4x2k_on_tagentic_cc": {
+   "t": "2026-11-27T17:04:55",
+   "value": 2.737
+  },
+  "woa_sec_ms_single5120_off_tagentic_cc": {
+   "t": "2026-11-27T17:05:02",
+   "value": 3.065
+  },
+  "woa_sec_ms_single5120_on_tagentic_cc": {
+   "t": "2026-11-27T17:05:02",
+   "value": 2.653
+  },
+  "woa_sec_ms_single8192_off_tagentic_cc": {
+   "t": "2026-11-27T17:04:47",
+   "value": 3.064
+  },
+  "woa_sec_ms_single8192_on_tagentic_cc": {
+   "t": "2026-11-27T17:04:47",
+   "value": 2.655
+  }
+ },
+ "task": "WA.3"
+}

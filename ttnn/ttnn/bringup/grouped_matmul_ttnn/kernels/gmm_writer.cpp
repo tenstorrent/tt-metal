@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ttnn.bringup.grouped_matmul writer (NCRISC, NoC 1): the core's MT x PN output tiles -> y[g, m, n0 + j].
-// compile-time args: MT, NT, PN, CB_OUT, OUT_TB, y accessor; common args: y address; per-core args: g, n0
+// compile-time args: MT, NT, PN, CB_OUT, OUT_TB, y accessor; common args: y address; per-core args: g, n0 (and PN
+// under GMM_PN_RT: the bank path's one kernel group, WA.3)
 
 #include <cstdint>
 
@@ -12,7 +13,11 @@
 void kernel_main() {
     constexpr uint32_t MT = get_compile_time_arg_val(0);
     constexpr uint32_t NT = get_compile_time_arg_val(1);
+#ifdef GMM_PN_RT
+    const uint32_t PN = get_arg_val<uint32_t>(2);  // (bank path, one kernel group, WA.3)
+#else
     constexpr uint32_t PN = get_compile_time_arg_val(2);
+#endif
     constexpr uint32_t CB_OUT = get_compile_time_arg_val(3);
     constexpr uint32_t OUT_TB = get_compile_time_arg_val(4);
     constexpr auto y_args = TensorAccessorArgs<5>();
