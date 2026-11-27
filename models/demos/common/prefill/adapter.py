@@ -31,6 +31,7 @@ properties that import lazily.
 from __future__ import annotations
 
 import importlib
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -152,6 +153,8 @@ class PrefillModelAdapter(ABC):
     # Stored drafter K layout used when comparing against half-split HF goldens.
     dflash_rope_convention: str = "interleaved"
     supports_mtp: bool = False
+    # The runtime's prefill_forward / prefill_chunk take media_refs on the first rank (PREFILL_MEDIA_MAX_REFS > 0).
+    supports_media: bool = False
     supports_tp_shard_kv: bool = False
     # Builds any missing TTNN weight-cache pieces from the HF checkpoint (PREFILL_HF_MODEL) at start-up.
     builds_missing_weight_cache: bool = False
@@ -242,6 +245,12 @@ class PrefillModelAdapter(ABC):
     def load_hf_config(self) -> "PretrainedConfig":
         """Load (and normalize) the HF config from PREFILL_HF_MODEL (falling back
         to ``hf_model_default``). The runner sets ``max_seq_len`` on the result."""
+
+    @property
+    def hf_model_path(self) -> str:
+        """The checkpoint this model serves from: PREFILL_HF_MODEL, else ``hf_model_default``. An adapter that
+        resolves its checkpoint another way overrides this with that precedence."""
+        return os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default
 
     @property
     def default_sparse_kv_cache_format(self) -> Optional[object]:

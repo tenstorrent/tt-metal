@@ -334,13 +334,16 @@
     )
 
     k3_kda() (
-      timeout -k 2m 18m mpirun --bind-to none --pernode --tag-output bash -lc '
+      # 18.1 min with an empty kernel cache, 16.2 min warm (one Galaxy, outside CI); 24 min bound.
+      timeout -k 2m 24m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
         models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP4xTP4" -vvv --tb=short
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_chunk_scan.py -k "SP8xTP4 and not perf" -vvv --tb=short
         models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_chunk_scan.py -k "not perf" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_sharded_slab_matches_replicated -k "SP8xTP4" -vvv --tb=short
+        models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_sharded_slab_matches_replicated -k "galaxy4x4" -vvv --tb=short
         export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_kimi_k3_layer_1_real_weights_accuracy -k "SP8xTP4" -vvv --tb=short
         models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_kimi_k3_layer_1_real_weights_accuracy -k "SP4xTP4" -vvv --tb=short
@@ -409,8 +412,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (12 + 18 + 7 + 7 + 10).
-      timeout: 54
+      # Exactly the sum of the per-section bounds (12 + 24 + 7 + 7 + 10).
+      timeout: 60
       tier: 2
       release_ready: false
   owner_id: U085GDCAZTN # Pavle Josipovic
@@ -479,7 +482,7 @@
 
 
 - name: "(Kimi-K3-2.8T, Kimi-K3.1) MoE block perf 8x4 5k, 4x4 2.5k"
-  # Host time (test_kimi_moe_perf) and per-op device time (test_moe_block_perf) of one MoE block layer: K3 on 8x4 at
+  # Host time (test_moe_block_host_perf) and per-op device time (test_moe_block_perf) of one MoE block layer: K3 on 8x4 at
   # 5,120 tokens, K3.1's 4x4 stage (top tray half) at 2,560. Stops at the first failure; a run that passes no test
   # (skipped) fails too.
   # Tagged k3_mla_perf: the dispatch is at GitHub's 25-input limit, so that checkbox selects every K3 perf leg.
@@ -497,9 +500,9 @@
         [ "$status" -eq 0 ] || exit "$status"
         grep -qE "[0-9]+ passed" /tmp/k3_moe_perf.out || { echo "::error::k3_moe_perf: no test passed (skipped?): $*"; exit 1; }
       }
-      gated python3 -m pytest $T/perf/test_kimi_moe_perf.py -k "kimi_k3-8x4-5120" -vvv --tb=short
+      gated python3 -m pytest $T/perf/test_moe_block_host_perf.py -k "kimi_k3-8x4-5120" -vvv --tb=short
       gated python3 -m pytest $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3-8x4-5120 and not weka and not real" -vvv --tb=short
-      gated $T/run_4x4_stage_tests.sh --half top -- $T/perf/test_kimi_moe_perf.py -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short
+      gated $T/run_4x4_stage_tests.sh --half top -- $T/perf/test_moe_block_host_perf.py -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short
       gated $T/run_4x4_stage_tests.sh --half top -- $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short
     '
   test_type: k3_moe_perf
@@ -878,10 +881,10 @@
 
     glm_moe() (
       export MESH_DEVICE=TG
-      # GLM-5.3 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
+      # GLM-5.3's MoE, the MoE block (its C++ ops), vs the CPU MoE reference; random weights.
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe -k "torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py -k "glm53-8x4-5120 and not eager" -vvv --tb=short
       '
     )
 
@@ -981,7 +984,7 @@
 # comparable and each is gated against its own baseline table / band (glm_chunked_perf_gate). Traced
 # replays one captured chunk forward instead of re-dispatching every op from host, so it needs less wall
 # time than its untraced twin.
-- name: "(GLM-5.3-744B) chunked prefill perf code_debug 55k@5k, no-trace and traced + sparse MLA perf 5k@50k, 5k@500k + 4x4 [RING, RING] carve CCL perf"
+- name: "(GLM-5.3-744B) chunked prefill perf code_debug 55k@5k, no-trace and traced + sparse MLA perf 5k@50k, 5k@500k + 4x4 [RING, RING] carve CCL perf + MoE block perf 8x4 5k, carve 2.5k, 5k, 10k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -999,19 +1002,28 @@
       models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
       # CCL perf gates of the 4x4 [RING, RING] carve (a 16-chip sub-torus of this Galaxy): the whole-mesh high_bw_all_gather
       # bandwidth floors, and the sparse KV push plan, table gather and push ceilings at the 1M cache of a stage. Their
-      # numbers depend on the host's power rating, so they run here and not in the 8 kW GLM components leg.
+      # numbers depend on the power rating of the host, so they run here and not in the 8 kW GLM components leg.
       models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 1 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k perf || exit $?
       models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 3 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k perf || exit $?
+      # MoE block perf: host time of one layer on 8x4 @5120, then host time and per-op device time on the carve
+      # in forwards of one, two and four packed 2,560-token chunks, in one process (one seeded weight build for the six
+      # cases). ~5 min.
+      # (the 8x4 step fails when its one test does not pass: a skip, say; the carve wrapper checks its own six)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py -k "glm53-8x4-5120" -vvv --tb=short 2>&1 | tee /tmp/glm_moe_host_perf.out
+      status=${PIPESTATUS[0]}
+      [ "$status" -eq 0 ] || exit "$status"
+      grep -qE "[0-9]+ passed" /tmp/glm_moe_host_perf.out && ! grep -qE "[0-9]+ skipped" /tmp/glm_moe_host_perf.out || { echo "::error::glm_moe_host_perf: glm53-8x4-5120 did not pass (skipped?)"; exit 1; }
+      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 6 models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py::test_moe_block_perf -k "glm53" || exit $?
       export DS_PREFILL_REUSE_MODEL=1
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
     '
   test_type: glm_chunked_perf_suite
-  test_tags: [glm_5_3, transformer, glm_chunked, glm_chunked_untraced_perf, sparse_mla, glm_sparse_mla_perf]
+  test_tags: [glm_5_3, transformer, glm_chunked, glm_chunked_untraced_perf, sparse_mla, glm_sparse_mla_perf, moe, glm_moe]
   test_group: module
   skus:
     bh_sc1_high_power:
-      # The slowest of the last 5 completed runs of this job is 51 min and the carve's CCL perf gates add about 3 min,
-      # so the bound only caps a hang.
+      # The slowest of the last 5 completed runs of this job is 51 min; the carve's CCL perf gates add about 3 min and the
+      # MoE block perf gates about 5, so the bound only caps a hang.
       timeout: 166
       tier: 2
       release_ready: false
@@ -2395,7 +2407,9 @@
 
 # [2/2] runs the same 1M request packed: two 5,120-token chunks per forward (glm53_packed.json), traced with D2H acks,
 # against the same golden tail; its KV table and evidence go to their own _packed dirs. [1/2] alone measured 15-19 min
-# in nightly CI and the packed run ~13 min on galaxy 8x4, inside the 80 min bound.
+# in nightly CI and the packed run ~13 min on galaxy 8x4, inside the 60 min bound (20 min of the old 80 went to the
+# GLM-5.3 2x[4,4] and the Kimi-K3.1 L24 SC1 jobs, which each gained a packed run). PREFILL_JOB_DEADLINE keeps each
+# launch's bringup wait inside the job's remaining time.
 - name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2404,6 +2418,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
+    export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 60 * 60 ))  # the bh_sc1_high_power timeout below
     echo "===== [1/2] (GLM-5.3-744B) prefill KV accuracy 1M tail@5k + perf 1M@5k, one chunk per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 || exit $?
     echo "===== [2/2] (GLM-5.3-744B) packed prefill KV accuracy 1M tail@5k + perf 1M@5k, two chunks per forward ====="
@@ -2414,7 +2429,7 @@
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
-      timeout: 80
+      timeout: 60
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   budget_type: demo
@@ -2425,6 +2440,10 @@
 # bound by tt-run discovery on the intragalaxy descriptor, at one slot (glm53_4x4.json's layout, 2560-token
 # chunks). It tracks the 4x4 layout against the 8x4 SC1 leg above until 4x4 runs in production; there is
 # no SC4 4x4 leg. run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4_sp1) first.
+# [2/2] runs the same request packed: two 2,560-token chunks per forward (glm53_4x4_packed.json), traced with D2H
+# acks, against the same golden tail; perf is gated on glm53/sc1_4x4_packed in perf_baselines.json once it has an
+# entry, and until then must still measure. It measured 8-10 min on exabox
+# (2026-11-20), so the bound grew 40 -> 50, taken from the 8x4 SC1 job above.
 - name: "(GLM-5.3-744B) disaggregated prefill 2x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2433,13 +2452,18 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4
+    export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 50 * 60 ))  # the bh_sc1_high_power timeout below
+    echo "===== [1/2] (GLM-5.3-744B) 2x[4,4] prefill KV accuracy 1M tail@2.5k + perf 1M@2.5k, one chunk per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 || exit $?
+    echo "===== [2/2] (GLM-5.3-744B) 2x[4,4] packed prefill KV accuracy 1M tail@2.5k, two chunks per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 --variant packed || exit $?
+    echo "===== both runs passed ====="
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
-      timeout: 40
+      timeout: 50
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   budget_type: demo
@@ -2512,9 +2536,10 @@
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
 
-# SC4 Kimi-K3: 93 layers as 8 stages of [4,4], two per galaxy; stage shape, chunk, KV dedup and slots come from
-# the kimi_k3 manifest. Own test_type, so the scarce 4-galaxy leg is dispatchable without a single-galaxy one.
-- name: "(Kimi-K3-2.8T) disaggregated prefill 8x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC4"
+# SC4 Kimi-K3.1: 93 layers as 8 stages of [4,4], two per galaxy; stage shape, chunk, KV dedup and slots come from
+# the kimi_k3_1 manifest. Replaces K3's SC4 leg (K3's own SC4 run stays reachable by hand: run_multirank_pcc.sh
+# kimi_k3). Own test_type, so the scarce 4-galaxy leg is dispatchable without a single-galaxy one.
+- name: "(Kimi-K3.1) disaggregated prefill 8x[4,4] KV accuracy 8k@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2522,13 +2547,13 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3
-  test_type: k3_prefill_runner_93l
-  test_tags: [kimi_k3, runner, kv_cache]
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1
+  test_type: k31_prefill_runner_93l
+  test_tags: [kimi_k3_1, k31_runner, runner, kv_cache]
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # The job takes about 19 min warm; 90 leaves room for a cold Weka cache of the 1.5 TB of weights.
+      # K3's leg took about 19 min warm; 90 leaves room for a cold Weka cache of the weights.
       # shield/demo bh_sc4 is a SUM over the team's legs on that SKU: 60 (GLM-5.3) + 25 (DSpark) + 90 of 380.
       timeout: 90
       tier: 1
@@ -2545,7 +2570,7 @@
 # accuracy gate rather than a smaller copy of sc4. sc4's 127 slots, traced like sc4, and timed to sc4's
 # 1M request (the capacity probe ran exactly this: stages 0+1 on one Galaxy, 129 traced); 24 layers are
 # no baseline for 93, so its numbers are gated against their own kimi_k3 sc1 baseline and reported in
-# this job's summary, kept out of the sc4 summary.
+# this job's summary. (K3's sc4 leg was replaced by K3.1's; the sc4 summary reports kimi_k3_1.)
 - name: "(Kimi-K3-2.8T) disaggregated prefill L24 2x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2571,10 +2596,14 @@
   sp_config: sc1
 
 # K3.1 mirror of the leg above: the same launcher and layout -- sc4's first two [4,4] stages, one per tray
-# half, 12 layers each, depth 24 (ends on a DSA layer) -- at the 96 slots measured for the first 4x4 stage.
-# Its golden is an 8192-token vLLM prompt: the request is four 2.5k chunks, the golden's 8k is PCC'd and
-# the tail timed, as K3 does at 55k of 1M. No perf baseline yet, so throughput is reported, not gated.
-- name: "(Kimi-K3.1) disaggregated prefill L24 2x[4,4] KV accuracy 8k@2.5k + perf 10k@2.5k, SC1"
+# half, 12 layers each, depth 24 (ends on a DSA layer) -- at sc4's 88 slots. 96 fit the first two stages but
+# ran stages 4-6 (more AttnRes history) out of DRAM by ~16 MB on the first chunk (run 45061518673).
+# K3's 1M request at 2.5k chunks; its golden is an 8192-token vLLM prompt, so the golden's 8k is PCC'd and the
+# rest of the 1M timed, as K3 does at 55k of 1M. Perf is gated against its own kimi_k3_1 sc1 baseline (24 layers are no baseline for 93).
+# [2/2] runs the same request packed: four 2,560-token chunks per forward, the production shape (kimi_k3_1_packed.json,
+# one slot fewer for the traced packed forward's scratch slot), traced with D2H acks, against the same golden, perf
+# gated on kimi_k3_1/sc1_packed in perf_baselines.json. The bound grew 60 -> 70, taken from the 8x4 GLM-5.3 SC1 job.
+- name: "(Kimi-K3.1) disaggregated prefill L24 2x[4,4] KV accuracy 8k@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2582,17 +2611,22 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    # Below the job timeout, as for K3's leg above.
+    # Below the job timeout, as for K3's leg above; the job deadline caps it further for the second launch.
     export TABLE_WAIT_SECS=2400
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1
+    export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 70 * 60 ))  # the bh_sc1_high_power timeout below
+    echo "===== [1/2] (Kimi-K3.1) L24 prefill KV accuracy 8k@2.5k + perf 1M@2.5k, one chunk per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1 || exit $?
+    echo "===== [2/2] (Kimi-K3.1) L24 packed prefill KV accuracy 8k@2.5k + perf 1M@2.5k, four chunks per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1 --variant packed || exit $?
+    echo "===== both runs passed ====="
   test_type: k31_prefill_runner_24l
-  test_tags: [kimi_k3_1, runner, kv_cache]
+  test_tags: [kimi_k3_1, k31_runner, runner, kv_cache, k31_packed]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
-      # K3's 60: its L24 leg was still in bringup at 38 min on CI (run 34831600450), where weight load
-      # is NFS-bound. Locally the whole launcher took about 6 min at 96 slots (four ~265 ms chunks).
-      timeout: 60
+      # K3's 60 (its L24 leg was still in bringup at 38 min on CI, run 34831600450, where weight load is
+      # NFS-bound, and it runs the same 1M request, 410 chunks), +10 for the packed run.
+      timeout: 70
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: shield
   budget_type: demo

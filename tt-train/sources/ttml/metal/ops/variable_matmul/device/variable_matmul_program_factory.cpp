@@ -7,13 +7,13 @@
 #include <map>
 #include <optional>
 #include <string>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <utility>
 #include <vector>
 
@@ -521,7 +521,8 @@ tt::tt_metal::ProgramDescriptor VariableMatmulProgramFactory::create_descriptor(
         fp32_dest_acc_en,
         /*unpack_to_dest_mode=*/{},
         math_fidelity,
-        math_approx_mode));
+        math_approx_mode,
+        dst_full_sync_en));
 
     // ----- Per-core runtime args -----
     // On a cache hit override_runtime_arguments() rewrites the k*Idx slots on every core.

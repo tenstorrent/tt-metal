@@ -46,14 +46,15 @@ def _expected(chip_inputs, num_devices, in_dim, out_dim):
     ],
     ids=["large", "odd_tile_rows", "small", "wide_rows"],
 )
-def test_all_to_all_async_generic_row_major_input(mesh_device, cluster_axis, heads, rows, width):
+@pytest.mark.parametrize("input_mem", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_in", "l1_in"])
+def test_all_to_all_async_generic_row_major_input(mesh_device, cluster_axis, heads, rows, width, input_mem):
     torch.manual_seed(0)
     num_devices = mesh_device.shape[cluster_axis]
     in_dim, out_dim = 2, 1  # concatenate along the rows, split the heads
     chips = [torch.randn(1, heads, rows, width).to(torch.bfloat16) for _ in range(mesh_device.get_num_devices())]
     x = ttnn.from_host_shards(
         [ttnn.from_torch(c, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for c in chips], mesh_device.shape
-    ).to(mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+    ).to(mesh_device, input_mem)
 
     out = ttnn.experimental.all_to_all_async_generic(
         x,

@@ -41,7 +41,7 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32, UINT16, UINT8
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32, UINT16, UINT8, INT8
                  - TILE
 
             ``BFLOAT16`` input values must not be NaN.

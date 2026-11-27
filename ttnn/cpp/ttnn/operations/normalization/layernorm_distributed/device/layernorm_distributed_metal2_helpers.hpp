@@ -11,7 +11,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-umd/types/arch.hpp>
 
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 #include <tt-metalium/workload/specification/compute_hardware_config.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>

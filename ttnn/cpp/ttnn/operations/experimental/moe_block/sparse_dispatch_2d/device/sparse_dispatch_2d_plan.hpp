@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include "ttnn/operations/experimental/moe_block/common/mesh_routing.hpp"
 #include "ttnn/operations/experimental/moe_block/common/port_placement.hpp"

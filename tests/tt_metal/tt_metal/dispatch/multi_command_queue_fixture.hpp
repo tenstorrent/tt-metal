@@ -7,9 +7,10 @@
 #include "gtest/gtest.h"
 #include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "impl/context/metal_context.hpp"
 
