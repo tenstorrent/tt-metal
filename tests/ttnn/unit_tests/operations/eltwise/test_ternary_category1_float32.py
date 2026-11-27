@@ -690,13 +690,7 @@ def test_where_full_mantissa(device):
     "predicate_value",
     [
         0.0,
-        pytest.param(
-            -0.0,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="#56522: the float32 kernel tests the raw bits against zero, so -0.0 selects the true branch",
-            ),
-        ),
+        -0.0,
         1.0,
         -1.0,
         float("nan"),
