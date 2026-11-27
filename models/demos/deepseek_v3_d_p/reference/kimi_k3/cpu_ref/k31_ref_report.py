@@ -14,6 +14,9 @@ state, sub-outputs where both saved them, routing).
 
 Panel runs (<out>/manifest.json from k31_cpu_ref.py --panel): KL / top-1 are reported per stratum, together with
 each side's next-token top-1 accuracy (the last row of every sequence has no next token and is left out of it).
+With the panel's token roles in tokens.pt they are also reported per role and for the scored rows (raw text and
+assistant tokens), overall and per stratum. Use the scored rows as the bar: on user, system and template positions
+a chat model's next-token distribution is not a trained target, and even bf16 vs fp32 differs there by KL ~0.4-1.
 """
 
 from __future__ import annotations
@@ -26,6 +29,8 @@ from pathlib import Path
 import torch
 
 TRACE = "/mnt/weka/model-weights/llm/ref-data/debug_traces/kimi_k31_pro_10k_v2/vllm-d06690a4-10240tok"
+ROLE_RAW, ROLE_ASSISTANT = 0, 3
+ROLE_NAMES = {0: "raw", 1: "user + template", 2: "effort system", 3: "assistant"}
 
 
 def metrics(path):
@@ -79,8 +84,25 @@ def row_groups(out, N):
             )
         tp = out / "tokens.pt"
         if tp.exists():
-            am = torch.load(tp).get("assistant_mask")
-            if am is not None and int(am.sum()):
+            tk = torch.load(tp)
+            am, roles = tk.get("assistant_mask"), tk.get("roles")
+            if roles is not None:
+                # Role codes of the panel render (render_mix256k.py). Chat models are trained to predict only
+                # what they emit, so user/system/template positions are not scored: their next-token
+                # distributions are unstable (bf16 vs fp32 KL ~0.4-1 there, ~3e-3 on raw and assistant rows).
+                roles = roles.long()
+                scored = (roles == ROLE_RAW) | (roles == ROLE_ASSISTANT)
+                for code, name in ROLE_NAMES.items():
+                    if int((roles == code).sum()):
+                        groups[f"role: {name}"] = (roles == code).nonzero().squeeze(1)
+                groups["scored (raw + assistant)"] = scored.nonzero().squeeze(1)
+                for e in man["sequences"]:
+                    a, b = e["rows"]
+                    rows = torch.arange(a, b)[scored[a:b]]
+                    name = f"scored: {e['stratum']}"
+                    if rows.numel():
+                        groups[name] = torch.cat([groups.get(name, torch.empty(0, dtype=torch.long)), rows])
+            elif am is not None and int(am.sum()):
                 groups["assistant tokens"] = am.nonzero().squeeze(1)
         return groups
     if N > 4096:
