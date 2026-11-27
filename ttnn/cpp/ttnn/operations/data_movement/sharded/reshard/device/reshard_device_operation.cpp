@@ -70,10 +70,11 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
             out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             if (out_mem_config.buffer_type() == BufferType::L1) {
                 bool has_padding = false;
-                CoreCoord input_shard_grid = input_tensor.buffer()->shard_spec().grid().ranges()[0].grid_size();
-                CoreCoord output_shard_grid = out_mem_config.shard_spec().value().grid.ranges()[0].grid_size();
-                uint32_t input_num_shard_cores = input_shard_grid.x == 1 ? input_shard_grid.y : input_shard_grid.x;
-                uint32_t output_num_shard_cores = output_shard_grid.x == 1 ? output_shard_grid.y : output_shard_grid.x;
+                // A width-sharded grid may span several core ranges (e.g. 22 shards laid out row-wise on an
+                // 8-wide or 11-wide grid wrap onto a second row). The padding test needs the number of shards,
+                // which is the core count of the whole CoreRangeSet, not the extent of its first range.
+                uint32_t input_num_shard_cores = input_tensor.buffer()->shard_spec().grid().num_cores();
+                uint32_t output_num_shard_cores = out_mem_config.shard_spec().value().grid.num_cores();
                 uint32_t input_shard_width = input_tensor.buffer()->shard_spec().shape()[1];
                 uint32_t output_shard_width = out_mem_config.shard_spec().value().shape[1];
                 has_padding = input_num_shard_cores * input_shard_width > input_tensor.logical_shape()[-1];
