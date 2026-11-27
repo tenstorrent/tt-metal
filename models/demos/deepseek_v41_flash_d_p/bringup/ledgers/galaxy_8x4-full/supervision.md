@@ -1423,3 +1423,10 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 15:02 DEVICE OPEN: test_box (WA.0 gate; reason: box check after the reboot). RAM used 43 -> 44 GB (avail 328). PASS,
   chips 32. Commit refused by a broken pre-commit env: virtualenv's app-data cache (~/.cache/virtualenv) held a truncated pip
   from the disk-full event (new venvs had no pip.__main__); cleared the cache (regenerates), commit-only.
+- 15:05 orchestrator resume --until WA.1 (tmux orch_wa); goldens / weight cache in sync. WA.1 precheck FAIL (no test yet,
+  expected); agent attempt 1 started.
+- 15:21 heartbeat: WA.1 agent active (transcript live); its design draft: upper bound 1.19 ms a 8192 chunk / 1.00 ms a 5120
+  chunk (20 wo_a calls under DECODER_SKIP=decode; today 151 / 133 us a call vs best case 91 / 83 us), realistic 0.73 / 0.58
+  ms. Above the 0.5 ms kill line (to confirm at its gate). WA.2's kill line is then < 0.6 ms measured at 8192. Agent's own
+  caveat: WA.2 first runs a no-weight-read stub; if that is within ~10 % of today, wo_a is compute-bound and the gain ~0.
+  RAM used 44 GB; / 81 GB free.

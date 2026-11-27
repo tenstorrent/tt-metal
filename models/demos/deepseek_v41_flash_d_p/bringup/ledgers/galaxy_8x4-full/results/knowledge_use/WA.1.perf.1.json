@@ -1,0 +1,75 @@
+{
+ "used": [
+  {
+   "id": "DS41-249",
+   "how": "512 GB/s as the DRAM rate bank-local reads reach (the experts' fit) for the floor and the best-case bound",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-320",
+   "how": "today's 160-row time (0.133 ms) and the 2-column core / PNX stride facts the bank layout keeps for bit identity",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-306",
+   "how": "P.81's stock DRAM-sharded result and the 410 GB/s floor it used: stated as the origin of the plan's 2.0x",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-319",
+   "how": "2 weight blocks in flight as the bank reader's default (w_inflight) instead of all-at-once",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-299",
+   "how": "84 % of peak on the flat expert cores as the realistic compute efficiency (0.8)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-390",
+   "how": "bit identity means same BW and K order; the layout is BW-independent so the GMM256 bw 2 and the 160-row bw 4 keep their order",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "which DRAM bank an interleaved page lands in for the model's weights (page % 8: wo_a tile (g,k,n) -> bank n % 8), and that each gmm core therefore reads 3 fixed banks",
+  "whether the grouped wo_a is reader- or compute-bound: no stub measurement exists"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "the layout pads nothing: every bank holds 4096 tiles (one group), the 2-column cores read BW rows of 2 tiles instead of a padded block (WOA_BANK_DESIGN.md section 3; tests/woa test_bank_layout_on_cpu checks equal bank sizes and every tile once)"
+  }
+ ],
+ "cited_only": [
+  "DS41-391"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "WA.1",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-27T15:20:27",
+  "head": "14431ec9616",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/WOA_BANK_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/WA.1.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/__init__.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_design.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/woa_roofline.py"
+  ]
+ }
+}

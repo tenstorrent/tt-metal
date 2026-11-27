@@ -4656,5 +4656,13 @@
  },
  "WA.0": {
   "chips": 32
+ },
+ "WA.1": {
+  "woa_floor_us_r160": 69.63,
+  "woa_floor_us_r256": 69.63,
+  "woa_today_us_r160": 133.0,
+  "woa_today_us_r256": 150.96,
+  "woa_upper_bound_ms_c5120": 0.995,
+  "woa_upper_bound_ms_c8192": 1.191
  }
 }

@@ -1658,3 +1658,25 @@
   rel L2 1.5e-3 at L19; 4x2k bit-identical. Report: results/PB.MM256_ladder.md.
 - Re-run: `gate PB.MM256 --check --unit PB.MM256#test_mm256_offon` (resident runner, perf load);
   `orchestrator measure --task PB.MM256`.
+
+## WA.1 perf (attempt 1): wo_a bank-local reads, design only (CPU, no device, no model / fork code)
+
+- Expected saving of THIS task: 0 ms device, 0 ms host (a design). The design's bound (WOA_BANK_DESIGN.md top): best
+  case 1.19 ms a 8192 chunk / 1.00 ms a 5120 chunk (layers 0-20, 20 wo_a calls), realistic 0.73 / 0.58 ms. KILL LINE
+  (< 0.5 ms at 8192): not killed.
+- Loads: none ("needs no load: shapes from the checkpoint's config / safetensors header, times from the ledger").
+- Today: 133.0 us (160 rows, P.81 op probe, bw 4 depth 4) / 150.96 us (256 rows, PB.MM256.json confirm, bw 2 depth 2)
+  vs weights at 512 GB/s 69.6 us: 1.91x / 2.17x. The plan's "2.0x" was P.81 attempt 1's stock program vs 410 GB/s.
+- Found from the code: an interleaved wo_a weight tile (g, k, n) is in bank n % 8 (4096 and 32 are multiples of 8), so
+  each gmm core reads 3 fixed banks one 1088 B tile at a time, one block in flight then a drain; x block kb's pages sit
+  on BW consecutive banks for all 8 senders. Existing data (bw sweeps) cannot separate reader-bound from compute-bound:
+  WA.2 step 0 (stubs) decides first; at 256 rows the compute floor is 72.8 us vs the 91.4 us DRAM best case.
+- Layout: bank b = group b (G = 8 = banks), 12 cores a bank in a 6 x 2 rectangle near the bank's anchor (96 cores;
+  11 -> 88 as an alternative), each core's PN columns K-major so any BW block is one contiguous read; reuses
+  bank_host_tensor / bank_sharded from the experts as is. CPU model in tests/woa/woa_roofline.py reproduces x @ w
+  exactly reading only bank regions (BW 1-8, 11 / 12 cores a bank). Host packing measured ~23-38 ms a layer.
+- Switch proposed: WOA_BANK off | on, call-time, both copies resident (+1.33 GiB at 40 layers; PB.8RP 1M packed
+  headroom 7.51 -> 6.18 GiB).
+- Per-chunk values touched (rule 20): none (no code path changed).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate WA.1 --spec $BRINGUP_SPEC --check`; numbers alone:
+  `python3 -m models.demos.deepseek_v41_flash_d_p.tests.woa.woa_roofline`.
