@@ -1303,6 +1303,62 @@ def test_agk_count_is_the_local_select_count(monkeypatch):
     monkeypatch.setenv("GLM53_KDA_VERIFY_FLAT", "2")
     with expect_error(ValueError, "GLM53_KDA_VERIFY_FLAT=2: 0 or 1"):
         SP.kda_verify_flat()
+    # GLM53_KDA_VERIFY_RSPLIT (kda_pre reader.cpp KDA_VERIFY_RSPLIT, on FLAT): the G groups on G row-group cores
+    # (SP.kda_verify_schedule "rsplit": each core's reads and builds on its local pages, every core's write-back after
+    # every core's reads -- the owner's P6) build the same windows and leave the same history as the knob-off GROUPS
+    # reader for any selector and any core order; a core writing back right after its own build ("rsplit_eager", the
+    # negative control) does not once a selector names an earlier core's rows, and never with own-group selectors.
+    # The pages: every pair on exactly one core, one whole group per core, its slot on the group's last page, selector
+    # word = the global group. The knob parses 0 / 1; kda_verify_rsplit_rows engages only verify-groups widths (G > 1)
+    rng, eager = random.Random(13), 0
+    for trial in range(400):
+        G, gp = rng.choice([(8, 1), (4, 2), (4, 1), (2, 2), (8, 2)])
+        rows = 2 * G * gp
+        selw = [rng.randrange(rows) if trial % 2 else 2 * gp * g + rng.randrange(2 * gp) for g in range(G)]
+        dead = {g for g in range(G) if rng.random() < 0.2}
+        active = [r // (2 * gp) not in dead for r in range(rows)]
+        ref = SP.kda_verify_schedule(G, gp, selw, "groups", active)
+        order = rng.sample(range(G), G)
+        assert SP.kda_verify_schedule(G, gp, selw, "rsplit", active, R=G, order=order) == ref, (G, gp, selw, order)
+        bad = SP.kda_verify_schedule(G, gp, selw, "rsplit_eager", active, R=G) != ref
+        assert not bad or trial % 2, (G, gp, selw)  # own-group selectors (the steady 8 x 1): no cross-core slot
+        eager += bad
+    assert eager > 20, eager
+    for G, gp in ((8, 1), (4, 2), (4, 1), (2, 2), (8, 2)):
+        seen = []
+        for rg in range(G):
+            pg = SP.kda_verify_rsplit_pages(G, gp, G, rg)
+            assert pg["ng"] == 1 and pg["p1"] - pg["p0"] == gp and pg["g0"] == rg, (G, gp, rg, pg)
+            assert [x[0] for x in pg["pages"]] == list(range(gp)), pg
+            assert all(u == pg["p0"] + lp and g == rg and land == gp - 1 for lp, u, g, land in pg["pages"]), pg
+            seen += [x[1] for x in pg["pages"]]
+        assert sorted(seen) == list(range(G * gp)), (G, gp)
+    monkeypatch.delenv("GLM53_KDA_VERIFY_RSPLIT", raising=False)
+    assert not SP.kda_verify_rsplit() and SP.kda_verify_rsplit_rows(8, 8, 64, pipe=True, flat=True) == 1
+    monkeypatch.setenv("GLM53_KDA_VERIFY_RSPLIT", "0")
+    assert not SP.kda_verify_rsplit()
+    monkeypatch.setenv("GLM53_KDA_VERIFY_RSPLIT", "1")
+    assert SP.kda_verify_rsplit()
+    on = dict(pipe=True, flat=True)
+    assert SP.kda_verify_rsplit_rows(8, 8, 64, **on) == 8  # the served 8 x 1 at TP 32: 8 groups x 8 column cores
+    assert SP.kda_verify_rsplit_rows(4, 8, 64, **on) == 4  # the 4 x 3
+    assert SP.kda_verify_rsplit_rows(1, 8, 64, **on) == SP.kda_verify_rsplit_rows(0, 8, 64, **on) == 1  # lone / plain
+    for kw, msg in ((dict(pipe=True), "needs GLM53_KDA_VERIFY_PIPE=1 and GLM53_KDA_VERIFY_FLAT=1"),
+                    (dict(rsplit=2, **on), "with GLM53_KDA_RSPLIT=2"),
+                    (dict(prefetch=True, **on), "with GLM53_KDA_PREFETCH=1"),
+                    (dict(n_cols=16, **on), "8 row groups x 16 column cores > 64 owner cores")):  # fmt: skip
+        args = dict(kw)
+        with expect_error(ValueError, msg):
+            SP.kda_verify_rsplit_rows(8, args.pop("n_cols", 8), 64, **args)
+    # KdaPre asks kda_verify_rsplit_rows before its verify's one-row-group assert: the knob with GLM53_KDA_RSPLIT > 1
+    # is the ValueError above, not that AssertionError (kda_pre.py imports ttnn: read its text)
+    with open(os.path.join(os.path.dirname(SP.KDIR), "kda_pre.py")) as fh:
+        src = fh.read()
+    assert src.index("self.vrsplit = kda_verify_rsplit_rows(") < src.index('"KDA_VERIFY: one row group"')
+    monkeypatch.setenv("GLM53_KDA_VERIFY_RSPLIT", "2")
+    with expect_error(ValueError, "GLM53_KDA_VERIFY_RSPLIT=2: 0 or 1"):
+        SP.kda_verify_rsplit()
+    monkeypatch.delenv("GLM53_KDA_VERIFY_RSPLIT")
     gen = torch.Generator().manual_seed(66)
     for p in (2051, 2052, 4095, 4096 + 127, 4096 + 128 + 3, 32767, 65535 - 128, 65535, 65535 + 129, 262143):
         keys = torch.randint(1, 1 << 31, ((p + 1) // 4,), generator=gen, dtype=torch.int64)

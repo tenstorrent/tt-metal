@@ -2852,7 +2852,55 @@ def kda_verify_flat() -> bool:
     return _flag("GLM53_KDA_VERIFY_FLAT")
 
 
-def kda_verify_schedule(G: int, gp: int, selw: list, variant: str, active=None) -> tuple:
+def kda_verify_rsplit() -> bool:
+    """GLM53_KDA_VERIFY_RSPLIT (default 0; on GLM53_KDA_VERIFY_FLAT): kernels/kda_pre/reader.cpp KDA_VERIFY_RSPLIT in the
+    speculative verify's kda_pre (KDA_VERIFY_GROUPS = G) -- the G groups over G row groups of the column cores, one group
+    per core, the history write-backs after P6 (kernels/mk/owner_dm0.cpp); see kda_verify_rsplit_rows"""
+    return _flag("GLM53_KDA_VERIFY_RSPLIT")
+
+
+def kda_verify_rsplit_rows(G: int, n_cols: int, n_cores: int, *, rsplit: int = 1, pipe: bool = False,
+                           flat: bool = False, prefetch: bool = False) -> int:  # fmt: skip
+    """tt/kda_pre.py KdaPre's row groups for a verify-groups width under GLM53_KDA_VERIFY_RSPLIT: G (the verify's user
+    groups, one per row group: row group g = user group g's row pairs, so no group straddles two cores) when the knob is
+    on and G > 1, else 1 (knob off, a lone verify, a plain width). n_cols = the kda_pre column cores (heads x spread),
+    n_cores = the owner cores the program places it on. ValueError: the knob without the FLAT reader (it is a FLAT
+    variant), with GLM53_KDA_RSPLIT (the plain row split), with GLM53_KDA_PREFETCH, or more row-group cores than owners
+    """
+    on = kda_verify_rsplit()
+    if not on or G <= 1:
+        return 1
+    if not (pipe and flat):
+        raise ValueError("GLM53_KDA_VERIFY_RSPLIT=1 needs GLM53_KDA_VERIFY_PIPE=1 and GLM53_KDA_VERIFY_FLAT=1 (it splits "
+                         "the FLAT verify reader)")  # fmt: skip
+    if rsplit != 1:
+        raise ValueError(f"GLM53_KDA_VERIFY_RSPLIT=1 with GLM53_KDA_RSPLIT={rsplit}: one row split at a time")
+    if prefetch:
+        raise ValueError("GLM53_KDA_VERIFY_RSPLIT=1 with GLM53_KDA_PREFETCH=1: not supported (kda_pre reader.cpp)")
+    if G * n_cols > n_cores:
+        raise ValueError(f"GLM53_KDA_VERIFY_RSPLIT=1: {G} row groups x {n_cols} column cores > {n_cores} owner cores")
+    return G
+
+
+def kda_verify_rsplit_pages(G: int, gp: int, R: int, rg: int) -> dict:
+    """reader.cpp KDA_VERIFY_RSPLIT's addressing on row group rg of R (G groups of gp row pairs; kda_pre_common.hpp
+    rsplit_range over the G gp pairs): pairs [p0, p1), groups g0 .. g0 + ng - 1, local page lp = gi gp + lu holds global
+    pair p0 + lp of local group gi, its slot pair lands on page gi gp + gp - 1 (selector word g0 + gi). -> dict(p0, p1,
+    g0, ng, pages [(lp, global pair, global group, landing page)])"""
+    pairs = G * gp
+    per = -(-pairs // R)
+    p0 = min(rg * per, pairs)
+    p1 = min(p0 + per, pairs)
+    units = p1 - p0
+    gp_k = pairs // G  # the kernel's gp = ((B + 1) / 2) / G
+    g0, ng = p0 // gp_k, units // gp_k
+    pages = [
+        (gi * gp_k + lu, p0 + gi * gp_k + lu, g0 + gi, gi * gp_k + gp_k - 1) for gi in range(ng) for lu in range(gp_k)
+    ]
+    return dict(p0=p0, p1=p1, g0=g0, ng=ng, pages=pages)
+
+
+def kda_verify_schedule(G: int, gp: int, selw: list, variant: str, active=None, R: int = 1, order=None) -> tuple:
     """kernels/kda_pre/reader.cpp's verify readers as an event schedule over the DRAM history, row by row: G groups of gp
     row pairs (rows 2 gp g .. of group g, one user's consecutive tokens), selw[g] = the absolute row whose 3 history rows
     are group g's window rows i < 0. A slot read takes hist[sl][sel] at the time it is issued; the window of group-local
@@ -2861,13 +2909,72 @@ def kda_verify_schedule(G: int, gp: int, selw: list, variant: str, active=None) 
     knob-off GROUPS reader: per group slot read + build, every write-back after the last group), "pipe" (PIPE: group it's
     slot read, then group it - 1's build + write-back, a write-back deferred to the end when a later group's slot lies in
     its rows), "flat" (KDA_VERIFY_FLAT: every slot read, then per group build + write-back), "pipe_no_late" (PIPE
-    without the deferral: the negative control). -> (windows {row: (H0, H1, H2)}, final hist)"""
-    assert variant in ("groups", "pipe", "flat", "pipe_no_late"), variant
+    without the deferral: the negative control), "rsplit" (KDA_VERIFY_RSPLIT on R row groups, one core each, run in
+    `order` (default 0 .. R - 1): each core's reads into its local pages (kda_verify_rsplit_pages), its builds there,
+    every core's write-back of its local pages to their global rows after every core's reads -- the owner's P6), and
+    "rsplit_eager" (the same cores writing back right after their own builds, in `order`: the negative control without
+    the deferral). -> (windows {row: (H0, H1, H2)}, final hist)"""
+    assert variant in ("groups", "pipe", "flat", "pipe_no_late", "rsplit", "rsplit_eager"), variant
     rows = 2 * G * gp
     hist = [[("h", sl, r) for r in range(rows)] for sl in range(3)]
     q = [("q", r) for r in range(rows)]
     act = [True] * rows if active is None else list(active)
     slot, win = {}, {}
+    if variant in ("rsplit", "rsplit_eager"):
+        # every core's pages: per local page lp the H0..H2 window rows and the qkv rows (2 per pair), its slot rows on the
+        # landing page -- the kernel's data flow (reads -> landing / qkv pages; builds from them; write-back from H1 /
+        # H2 / the qkv page of lp to the rows of global pair p0 + lp)
+        cores = [kda_verify_rsplit_pages(G, gp, R, rg) for rg in range(R)]
+        assert sorted(u for c in cores for _, u, _, _ in c["pages"]) == list(
+            range(G * gp)
+        ), "row groups cover the pairs"
+        pg = [{} for _ in range(R)]
+
+        def c_read(rg):
+            c, p = cores[rg], pg[rg]
+            for lp, u, g, land in c["pages"]:
+                p[("q", lp)] = (q[2 * u], q[2 * u + 1])
+                if lp == land:  # the landing page: the slot's 3 history rows (pair selw / 2, row selw & 1 below)
+                    p[("slot", lp)] = [hist[sl][selw[g]] for sl in range(3)]
+
+        def c_build(rg):
+            c, p = cores[rg], pg[rg]
+            for lp, u, g, land in c["pages"]:
+                lu = u - (u // gp) * gp
+                for j in (2 * lu, 2 * lu + 1):
+                    src = []
+                    for i in (j - 3, j - 2, j - 1):
+                        if i < 0:
+                            src.append(p[("slot", land)][3 + i])
+                        else:
+                            src.append(p[("q", lp - lu + i // 2)][i % 2])
+                    p[("w", lp, j % 2)] = tuple(src)
+                    win[2 * u + j % 2] = tuple(src)
+
+        def c_write_back(rg):  # reader.cpp kda_verify_write_back: a pair with an active row, both rows
+            c, p = cores[rg], pg[rg]
+            for lp, u, g, land in c["pages"]:
+                r0 = 2 * (c["p0"] + lp)  # global rows of local page lp (pair p0 + lp)
+                if not (act[r0] or act[r0 + 1]):
+                    continue
+                for jj in range(2):
+                    w = p[("w", lp, jj)]
+                    hist[0][r0 + jj], hist[1][r0 + jj], hist[2][r0 + jj] = w[1], w[2], p[("q", lp)][jj]
+
+        seq = list(range(R)) if order is None else list(order)
+        assert sorted(seq) == list(range(R)), order
+        if variant == "rsplit":
+            for rg in seq:
+                c_read(rg)
+                c_build(rg)
+            for rg in seq:
+                c_write_back(rg)
+        else:
+            for rg in seq:
+                c_read(rg)
+                c_build(rg)
+                c_write_back(rg)
+        return win, hist
 
     def read(g):
         slot[g] = [hist[sl][selw[g]] for sl in range(3)]

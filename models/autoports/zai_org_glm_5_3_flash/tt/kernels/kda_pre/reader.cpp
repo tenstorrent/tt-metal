@@ -21,12 +21,29 @@
 // pages pushed once built, the next group's reads in flight while a group is built, its write-back after the push.
 // KDA_VERIFY_FLAT (GLM53_KDA_VERIFY_FLAT=1, on KDA_VERIFY_PIPE): every group's reads behind one barrier, then the PIPE
 // windows / pushes / write-backs group by group without a read wait between groups.
+// KDA_VERIFY_RSPLIT (GLM53_KDA_VERIFY_RSPLIT=1, on KDA_VERIFY_FLAT, megakernel owners only; tt/shard_plan.py
+// kda_verify_rsplit_rows): the verify groups over KDA_RSPLIT row groups of the column cores, whole groups per row group
+// (the host takes one group per row group) -- a core reads, builds and pushes only its row group's windows, on local
+// pages (local page lp = global row pair p0 + lp); the taps and the selector page ride on the first barrier. Its
+// history write-backs wait: a group's selector may name another row group's rows (cross-group slots), and that row
+// group's write-back could land before the read. So every core writes its rows back from kernels/mk/owner_dm0.cpp after
+// P6's hand-off wait (kda_verify_write_back). The invariant: P6's SEM_A arrives only after every o_proj reader (or
+// all-reduce lane) passed its SEM_ON wait on every kda_rec core, and a kda_rec core raises SEM_ON only after its
+// SEM_KDA wait on its kda_pre writers, behind their reader's slot reads (slot reads -> push -> conv -> writer ->
+// SEM_KDA -> kda_rec -> SEM_ON -> o_proj [-> all-reduce] -> SEM_A; true on the 1-chip mesh too, where there is no
+// all-reduce). The same windows in the same pages, the same pushes per core, the same bytes to the same history rows.
 
 #if defined(KDA_VERIFY_PIPE) && !defined(KDA_VERIFY_GROUPS)
 #error "KDA_VERIFY_PIPE: the KDA_VERIFY_GROUPS reader only"
 #endif
 #if defined(KDA_VERIFY_FLAT) && !defined(KDA_VERIFY_PIPE)
 #error "KDA_VERIFY_FLAT: on the KDA_VERIFY_PIPE reader only"
+#endif
+#if defined(KDA_VERIFY_RSPLIT) && !(defined(KDA_VERIFY) && defined(KDA_VERIFY_FLAT) && defined(MK_PHASED))
+#error "KDA_VERIFY_RSPLIT: the KDA_VERIFY_FLAT reader of a megakernel owner (the write-backs run after P6)"
+#endif
+#if defined(KDA_VERIFY_RSPLIT) && defined(KDA_PREFETCH)
+#error "KDA_VERIFY_RSPLIT: not with KDA_PREFETCH (the taps and the selector ride on the first barrier)"
 #endif
 
 #include <cstdint>
@@ -76,6 +93,36 @@ FORCE_INLINE void assemble_pair(
 
 }  // namespace
 
+#if defined(KDA_VERIFY_RSPLIT)
+// this core's verify rows for the deferred write-back, set by kernel_main every layer (g_kvr_n = 0: nothing to write --
+// a core past the shard's heads, update_hist 0)
+uint32_t g_kvr_n = 0;                              // the core's row pairs: local pages 0 .. g_kvr_n - 1
+uint32_t g_kvr_p0 = 0;                             // the global row pair of local page 0
+uint32_t g_kvr_active = 0;                         // bit t: user row t active
+uint32_t g_kvr_hist = 0;                           // state.C's address (this layer's)
+uint32_t g_kvr_c0 = 0;                             // the core's first conv column tile
+uint32_t g_kvr_h1 = 0, g_kvr_h2 = 0, g_kvr_q = 0;  // CB_H1 / CB_H2 / CB_Q page 0 (the windows' H1, H2 and the qkv rows)
+
+// the FLAT reader's write-back of the saved rows: (H1, H2, Q) of every active pair -> its rows of state.C. Called by
+// the owner after P6 (see the header). The sources are this core's kda_pre CB pages, untouched until its next kda_pre
+// (no other phase uses CB_H0..2 / CB_Q); the owner's write barrier at the end of the layer covers the writes
+void kda_verify_write_back() {
+    const auto hist = TensorAccessor(TensorAccessorArgs<PH_CT0 + 1>(), g_kvr_hist);
+    for (uint32_t lp = 0; lp < g_kvr_n; ++lp) {
+        const uint32_t u = g_kvr_p0 + lp;
+        if (((g_kvr_active >> (2 * u)) & 3u) == 0) {
+            continue;  // KDA_PRE_REV 3: an inactive group's rows (verify mask 0) keep their history
+        }
+        for (uint32_t r = 0; r < CONV_PER_CORE; ++r) {
+            const uint32_t c = g_kvr_c0 + r;
+            write_pair_bf16(hist, c, u, g_kvr_h1 + lp * BF16_TILE, r);
+            write_pair_bf16(hist, QKV_TILES + c, u, g_kvr_h2 + lp * BF16_TILE, r);
+            write_pair_bf16(hist, 2 * QKV_TILES + c, u, g_kvr_q + lp * BF16_TILE, r);
+        }
+    }
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t ROWS = get_compile_time_arg_val(PH_CT0 + 0);
     constexpr auto hist_args = TensorAccessorArgs<PH_CT0 + 1>();
@@ -106,8 +153,17 @@ void kernel_main() {
     const uint32_t B = get_arg_val<uint32_t>(ph_rt0 + a++);
     const uint32_t update_hist = get_arg_val<uint32_t>(ph_rt0 + a++);
 #if defined(KDA_VERIFY)
+#if defined(KDA_VERIFY_RSPLIT)
+    static_assert(RSPLIT > 1 && ROWS && UP == 1, "KDA_VERIFY_RSPLIT: KDA_RSPLIT row groups, ROWS mode, pair layout");
+    // (the RSPLIT reader's g0 = p0 / gp and ng = units / gp: whole verify groups per row group)
+    static_assert(KDA_VERIFY_GROUPS % RSPLIT == 0, "KDA_VERIFY_RSPLIT: whole verify groups per row group");
+#else
     static_assert(RSPLIT == 1 && ROWS && UP == 1, "KDA_VERIFY: ROWS mode, one row group, pair layout (KDA_PACK 2)");
+#endif
     const uint32_t sel_addr = get_arg_val<uint32_t>(ph_rt0 + a++);
+#endif
+#if defined(KDA_VERIFY_RSPLIT)
+    g_kvr_n = 0;  // (set below once this layer's windows are pushed)
 #endif
     if (kk >= N_CORES * RSPLIT) {
         return;  // a core past the shard's heads (megakernel owner list): no kda_pre work
@@ -202,6 +258,20 @@ void kernel_main() {
         cb_reserve_back(CB_B, 1);
         noc_async_read_page(2 * K_TILES + k, lr, get_write_ptr(CB_B));
     }
+#if defined(KDA_VERIFY_RSPLIT)
+    // the taps and the selector page on this barrier (KDA_VERIFY_RSPLIT: the windows' slot reads need the selector).
+    // Each of a column core's RSPLIT row-group cores re-reads the column's 4 packed tap tiles (8 KB): RSPLIT x the
+    // taps traffic (8 x 1: 64 cores x 8 KB per layer instead of 8 x 8 KB), inside the measured net win (8 x 1 stamped
+    // A / B / A: the 12 KDA programs 13,775.0 / 12,992.1 / 13,778.8 us)
+    cb_reserve_back(CB_T, 4);
+    for (uint32_t j = 0; j < 4; ++j) {
+        noc_async_read_page(j * N_CORES + k, taps, get_write_ptr(CB_T) + j * BF16_TILE);
+    }
+    noc_async_read(
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), sel_addr, 128).get_noc_addr(0),
+        get_write_ptr(CB_SCR),
+        64);
+#endif
     noc_async_read_barrier();
     uint32_t active = 0;  // bit t: user row t active (cur_pos >= 0)
     {
@@ -228,7 +298,7 @@ void kernel_main() {
     // ---- conv units
     if constexpr (ROWS) {
         // packed tile per unit u: row KDA_PACK r + p = column tile c0 + r, user row KDA_PACK u + p (kda_pre_common.hpp)
-#if !defined(KDA_PREFETCH)  // (prefetched: requested before the hand-off, landed by the first barrier)
+#if !defined(KDA_PREFETCH) && !defined(KDA_VERIFY_RSPLIT)  // (both: requested before the first barrier)
         cb_reserve_back(CB_T, 4);
         for (uint32_t j = 0; j < 4; ++j) {
             noc_async_read_page(j * N_CORES + k, taps, get_write_ptr(CB_T) + j * BF16_TILE);
@@ -240,7 +310,103 @@ void kernel_main() {
         // mixed-pair history rows (3 targets x 2 face halves x 64 B) are assembled in L1 (CB_SCR, 64-B aligned: the
         // NoC cannot read the RISC's local memory)
         const uint32_t s0 = get_write_ptr(CB_SCR);
-#if defined(KDA_VERIFY) && defined(KDA_VERIFY_GROUPS) && defined(KDA_VERIFY_PIPE) && defined(KDA_VERIFY_FLAT)
+#if defined(KDA_VERIFY_RSPLIT)
+        {
+            // KDA_VERIFY_RSPLIT (GLM53_KDA_VERIFY_RSPLIT, on KDA_VERIFY_FLAT; see the header): the FLAT reader on this
+            // row group's groups g0 .. g0 + ng - 1 only -- their reads behind one barrier (the selector words landed
+            // with the first barrier, in s0), then group by group the same windows and pushes, on local pages: group
+            // gi's pairs on pages gi gp .. (global pair p0 + page), its slot pair on its last page. No write-back
+            // here (kda_verify_write_back after P6).
+            constexpr uint32_t G = KDA_VERIFY_GROUPS;
+            static_assert(G >= 1 && G <= 16, "KDA_VERIFY_GROUPS: 1..16 groups");
+            const uint32_t units = pairs;           // this row group's pairs p0 .. p1 - 1
+            const uint32_t gp = ((B + 1) / 2) / G;  // row pairs per group (the host: whole groups per row group)
+            const uint32_t g0 = p0 / gp, ng = units / gp;
+            cb_reserve_back(CB_H0, units + 1);
+            cb_reserve_back(CB_H1, units + 1);
+            cb_reserve_back(CB_H2, units + 1);
+            cb_reserve_back(CB_Q, units);
+            const uint32_t hb[3] = {get_write_ptr(CB_H0), get_write_ptr(CB_H1), get_write_ptr(CB_H2)};
+            const uint32_t qb = get_write_ptr(CB_Q);
+            uint32_t selw[G];
+            for (uint32_t gi = 0; gi < ng; ++gi) {
+                selw[gi] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s0)[g0 + gi];
+            }
+            // (FLAT's row copy: the 8 words of a half loaded before they are stored; a row onto itself skipped)
+            auto copy_row = [](uint32_t dst, uint32_t dr, uint32_t src, uint32_t sr) {
+                for (uint32_t hh = 0; hh < 2; ++hh) {
+                    const uint32_t da = dst + tile_off(dr, 16 * hh) * 2, sa = src + tile_off(sr, 16 * hh) * 2;
+                    if (da == sa) {
+                        continue;
+                    }
+                    volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(da);
+                    volatile tt_l1_ptr uint32_t* q = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sa);
+                    uint32_t w[8];
+#pragma GCC unroll 8
+                    for (uint32_t j = 0; j < 8; ++j) {
+                        w[j] = q[j];
+                    }
+#pragma GCC unroll 8
+                    for (uint32_t j = 0; j < 8; ++j) {
+                        d[j] = w[j];
+                    }
+                }
+            };
+            for (uint32_t gi = 0; gi < ng; ++gi) {
+                const uint32_t land = (gi * gp + gp - 1) * BF16_TILE;
+                for (uint32_t r = 0; r < CONV_PER_CORE; ++r) {
+                    for (uint32_t lu = 0; lu < gp; ++lu) {
+                        const uint32_t lp = gi * gp + lu;
+                        read_pair_bf16(qkv, c0 + r, p0 + lp, qb + lp * BF16_TILE, r);
+                    }
+                    for (uint32_t sl = 0; sl < HIST; ++sl) {
+                        read_pair_bf16(hist, sl * QKV_TILES + c0 + r, selw[gi] / 2, hb[sl] + land, r);
+                    }
+                }
+            }
+            noc_async_read_barrier();
+            // FLAT's build order (the landing page written last, H0 before H1 before H2, every row 2r before 2r + 1:
+            // each slot row is read before it is overwritten)
+#pragma GCC unroll 1
+            for (uint32_t gi = 0; gi < ng; ++gi) {
+                const uint32_t sel = selw[gi];
+                const uint32_t land = (gi * gp + gp - 1) * BF16_TILE;
+                for (uint32_t lu = 0; lu < gp; ++lu) {
+                    const uint32_t lp = gi * gp + lu;
+                    for (uint32_t sl = 0; sl < HIST; ++sl) {  // H_sl[j] = src(j - 3 + sl), j the group-local row
+                        for (uint32_t p = 0; p < 2; ++p) {
+                            const int32_t i = static_cast<int32_t>(2 * lu + p) - 3 + static_cast<int32_t>(sl);
+                            for (uint32_t r = 0; r < CONV_PER_CORE; ++r) {
+                                if (i < 0) {
+                                    copy_row(hb[sl] + lp * BF16_TILE, 2 * r + p, hb[3 + i] + land, 2 * r + (sel & 1u));
+                                } else {
+                                    copy_row(
+                                        hb[sl] + lp * BF16_TILE,
+                                        2 * r + p,
+                                        qb + (gi * gp + static_cast<uint32_t>(i) / 2) * BF16_TILE,
+                                        2 * r + (static_cast<uint32_t>(i) & 1u));
+                                }
+                            }
+                        }
+                    }
+                }
+                cb_push_back(CB_H0, gp);
+                cb_push_back(CB_H1, gp);
+                cb_push_back(CB_H2, gp);
+                cb_push_back(CB_Q, gp);
+            }
+            if (update_hist) {  // the rows kda_verify_write_back writes after P6
+                g_kvr_n = units;
+                g_kvr_p0 = p0;
+                g_kvr_active = active;
+                g_kvr_hist = get_arg_val<uint32_t>(ph_rt0 + 0);
+                g_kvr_c0 = c0;
+                g_kvr_h1 = hb[1];
+                g_kvr_h2 = hb[2];
+                g_kvr_q = qb;
+            }
+        }
+#elif defined(KDA_VERIFY) && defined(KDA_VERIFY_GROUPS) && defined(KDA_VERIFY_PIPE) && defined(KDA_VERIFY_FLAT)
         {
             // KDA_VERIFY_FLAT (GLM53_KDA_VERIFY_FLAT, on KDA_VERIFY_PIPE): the PIPE reader's reads for EVERY group
             // issued up front behind one barrier, then group by group the same windows, push and write-back. No two

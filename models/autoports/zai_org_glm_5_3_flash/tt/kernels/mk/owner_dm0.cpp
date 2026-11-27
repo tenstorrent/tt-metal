@@ -8,8 +8,12 @@
 //   [-> P4 kda_rec reader (it waits for the kda_pre writers' hand-off itself), when MK_P4_CT is defined]
 //   [-> P6 mhc_post reader (attention post-mix; waits for the o_proj readers before reading y), when MK_P6_CT].
 // Defines (host): MK_P3_CT / MK_P3_RT, MK_P4_CT / MK_P4_RT (argument bases), MK_SEM_QKV / MK_QKV_COUNT (hand-off),
-// plus the phases' own defines (MHC_K, KDA_CB0, REC_CB0, ...).
+// plus the phases' own defines (MHC_K, KDA_CB0, REC_CB0, ...). KDA_VERIFY_RSPLIT (P3's): the kda_pre history
+// write-backs run after P6 (kernels/kda_pre/reader.cpp kda_verify_write_back).
 #define MK_PHASED 1
+#if defined(KDA_VERIFY_RSPLIT) && !(defined(MK_P6_CT) && defined(MK_POST_WAIT_SEM))
+#error "KDA_VERIFY_RSPLIT: the deferred kda_pre write-backs run after P6's hand-off wait (MK_P6_CT, MK_POST_WAIT_SEM)"
+#endif
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mk/opt_size.hpp"
 #include <cstdint>
 
@@ -161,6 +165,15 @@ void kernel_main() {
         ph6::phase_main();
         MK_MARK();  // 6: mhc_post inputs read (incl. the o_proj hand-off wait)
 #endif
+#if defined(KDA_VERIFY_RSPLIT)
+        // GLM53_KDA_VERIFY_RSPLIT: this core's kda_pre history write-backs, held back from P3
+        // (kernels/kda_pre/reader.cpp). P6's SEM_A (MK_POST_WAIT_SEM) arrives only after every o_proj reader (or
+        // all-reduce lane) passed its SEM_ON wait on every kda_rec core; a kda_rec core raises SEM_ON only after its
+        // SEM_KDA wait on its kda_pre writers, which signal after their last write, behind their reader's slot reads.
+        // So every kda_pre core's slot reads on this chip landed before any write-back here (true on the 1-chip mesh
+        // too, where there is no all-reduce)
+        ph3::kda_verify_write_back();
+#endif
 #if defined(MK_P7_CT)
         mk::cb_rewind_range(0, 14);        // mhc_pre (K role) CBs back to their base for the FFN instance
         mk::cb_rewind_range(POST_CB0, 8);  // mhc_post CBs likewise
@@ -175,6 +188,9 @@ void kernel_main() {
         MK_MARK();  // 8: swiglu inputs read (incl. the gate_up hand-off wait)
         ph10::phase_main();
         MK_MARK();  // 9: FFN mhc_post inputs read (incl. the down hand-off wait)
+#endif
+#if defined(KDA_VERIFY_RSPLIT)
+        noc_async_write_barrier();  // the history writes landed before the next layer's kda_pre reuses their pages
 #endif
 #if defined(MK_PROBE_ARG)
         MK_FLUSH(get_write_ptr(MK_PROBE_CB));

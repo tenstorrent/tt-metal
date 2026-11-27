@@ -25,6 +25,13 @@ user groups) and user groups that do not divide the plain rows (GLM53_MK_VG_PLAI
     GLM53_MESH_SHAPE=8,4 GLM53_MK_VTP=32 GLM53_MK_VG_USERS=4 GLM53_MK_VG_K=1 GLM53_MK_VG_LAYERS=4,5 \
       GLM53_MK_VG_PLAIN_UGROUPS=3 GLM53_REC_SPLIT_VERIFY=2 \
       pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
+GLM53_MK_VG_KDA_RSPLIT=1 (a stack, U > 1): also the verify with GLM53_KDA_VERIFY_RSPLIT=1 (kda_pre's verify groups on
+their own row-group cores, the history write-backs after P6) at the verify's kda_rec spread, asserted BYTE-identical to
+the knob-off GLM53_KDA_VERIFY_FLAT verify on every chip (outputs, every layer's state and conv history) on the
+own-group selector and on a cross-group one (user u's slot = row 1 of user u + 1's group: a pair another row-group core
+writes back), after a determinism control (the knob-off verify twice on the cross-group selector):
+    GLM53_MESH_SHAPE=8,4 GLM53_MK_VTP=32 GLM53_MK_VG_USERS=8 GLM53_MK_VG_K=1 GLM53_MK_VG_LAYERS=4,5 \
+      GLM53_REC_SPLIT_VERIFY=2 GLM53_MK_VG_KDA_RSPLIT=1 pytest .../test_mk_layer_check.py::test_mk_layer_verify_groups -s
 """
 
 from __future__ import annotations
@@ -131,6 +138,8 @@ VG_PLAIN_SPLIT = os.environ.get("GLM53_MK_VG_PLAIN_SPLIT", "1") == "1"
 # GLM53_MK_VG_PLAIN_UGROUPS = u: the plain t = W programs (and plain_split) on u kda_rec user groups instead of
 # set_knobs' pick for the width -- a u that does not divide W gives a short (or an empty) last group
 VG_PLAIN_UG = os.environ.get("GLM53_MK_VG_PLAIN_UGROUPS")
+# GLM53_MK_VG_KDA_RSPLIT=1: the GLM53_KDA_VERIFY_RSPLIT A / B byte leg (module docstring); both arms on the FLAT reader
+VG_KDA_RSPLIT = os.environ.get("GLM53_MK_VG_KDA_RSPLIT", "0") == "1"
 
 
 def _snap(t) -> torch.Tensor:
@@ -165,7 +174,13 @@ def _same(a: tuple, b: tuple) -> tuple:
 )
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 def test_mk_layer_verify_groups(mesh_device):
-    from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import SHARED_ATTN_KNOBS, dram_rows, env, rec_split
+    from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import (
+        SHARED_ATTN_KNOBS,
+        dram_rows,
+        env,
+        rec_split,
+        write_rows,
+    )
 
     snapshot = default_snapshot_dir()
     cfg = load_hf_text_config(str(snapshot))
@@ -183,6 +198,10 @@ def test_mk_layer_verify_groups(mesh_device):
         set_knobs(sparse, VTP, W)
     if VG_PLAIN_UG:  # (after set_knobs: the layers' construction and first builds read it; the verify sets its own)
         os.environ["GLM53_REC_UGROUPS"] = VG_PLAIN_UG
+    # (the knob splits the FLAT reader: both arms FLAT, read at construction and build; the knob off but in the B arm)
+    if VG_KDA_RSPLIT:
+        assert stacked and U > 1, ("GLM53_MK_VG_KDA_RSPLIT: a verify-groups stack (U > 1, 2+ layers)", U, VG_LAYERS)
+        os.environ.update(GLM53_KDA_VERIFY_PIPE="1", GLM53_KDA_VERIFY_FLAT="1", GLM53_KDA_VERIFY_RSPLIT="0")
     source = RawHFSource(snapshot, VG_LAYERS)
     t0 = time.perf_counter()
     if sparse:
@@ -204,9 +223,10 @@ def test_mk_layer_verify_groups(mesh_device):
     layer = tps[0]
     sel = dram_rows(mesh_device, torch.tensor([[u * g for u in range(U)] + [0] * (32 - U)], dtype=torch.int32))
 
-    def variant(spread: int, verify: bool) -> list:
+    def variant(spread: int, verify: bool, **knobs) -> list:
         """the resident layers' programs at this kda_rec spread (verify: REC_CHAIN(_GROUPS) + KDA_VERIFY, U user groups;
-        else the plain t = W programs) — knobs set on the shared attention objects and restored, as spec_mtp does"""
+        else the plain t = W programs) — knobs set on the shared attention objects and restored, as spec_mtp does;
+        knobs: GLM53_* env around the construction (env)"""
         out = []
         for L, tp in zip(VG_LAYERS, tps):
             attn = tp.w.attn
@@ -217,7 +237,7 @@ def test_mk_layer_verify_groups(mesh_device):
                     attn.kda_verify_groups = U
             try:
                 attn.kda_rec_spread = spread
-                with env(GLM53_REC_UGROUPS=str(U) if verify else os.environ.get("GLM53_REC_UGROUPS", "1")):
+                with env(GLM53_REC_UGROUPS=str(U) if verify else os.environ.get("GLM53_REC_UGROUPS", "1"), **knobs):
                     out.append(make(L, weights=tp.w, fabric=layer.fabric))
             finally:
                 if verify:
@@ -234,6 +254,11 @@ def test_mk_layer_verify_groups(mesh_device):
         progs["verify_split"] = variant(split, True)
         if VG_PLAIN_SPLIT:
             progs["plain_split"] = variant(split, False)
+    rsplit_ref = "verify_split" if split > 1 else "verify"  # (the knob-off arm: the same kda_rec spread)
+    if VG_KDA_RSPLIT:
+        progs["verify_rsplit"] = variant(split, True, GLM53_KDA_VERIFY_RSPLIT="1")
+        vrs = {k: [tp.mk.kda.vrsplit for tp in progs[k]] for k in (rsplit_ref, "verify_rsplit")}
+        assert vrs == {rsplit_ref: [1] * len(VG_LAYERS), "verify_rsplit": [U] * len(VG_LAYERS)}, vrs
     ugs = {k: ls[0].mk.rec.ug for k, ls in progs.items()}  # (the kda_rec user groups of each program)
     logger.info(f"{sorted(kinds)} layers {VG_LAYERS} built in {time.perf_counter() - t0:.0f} s: {sorted(progs)}, "
                 f"kda_rec user groups {ugs}, rows {W}")  # fmt: skip
@@ -341,5 +366,30 @@ def test_mk_layer_verify_groups(mesh_device):
                             f"{'stack' if stacked else 'layer'}, every chip) identical {ok} {bad}")  # fmt: skip
                 verdicts.append((name, ok, bad))
         logger.info(f"MK_VERIFY_SPLIT_SUMMARY: {[(n, ok) for n, ok, _ in verdicts]}")
+    if VG_KDA_RSPLIT:  # (a stack: every program built before the first launch, so any launch order)
+        # the selector page rewritten in place (the programs read it per launch): own-group, then cross-group -- user
+        # u's slot = row 1 of user u + 1's group, a pair another row-group core writes back under the knob
+        cross, offs = [((u + 1) % U) * g + 1 for u in range(U)], {}
+        for what, words in (("own-group", [u * g for u in range(U)]), ("cross-group", cross)):
+            write_rows(mesh_device, sel, torch.tensor([words + [0] * (32 - U)], dtype=torch.int32))
+            off = offs[what] = launch(rsplit_ref, tok, all_on)
+            if what == "cross-group":
+                ok, bad = _same(off, launch(rsplit_ref, tok, all_on))
+                logger.info(
+                    f"MK_VERIFY_RSPLIT: control ({rsplit_ref} twice, {what} selector {words}) identical {ok} {bad}"
+                )
+                verdicts.append(("rsplit_control", ok, bad))
+            ok, bad = _same(off, launch("verify_rsplit", tok, all_on))
+            logger.info(f"MK_VERIFY_RSPLIT: verify_rsplit vs {rsplit_ref} ({what} selector {words}, U {U} K {K}, kda_rec "
+                        f"spread {split}, layers {VG_LAYERS}, every chip) identical {ok} {bad}")  # fmt: skip
+            verdicts.append((f"rsplit_{what}", ok, bad))
+        # (not vacuous: the rewritten selector took effect -- the knob-off cross-group windows differ from the own-group
+        # ones, so every layer's conv history does)
+        _, moved = _same(offs["own-group"], offs["cross-group"])
+        logger.info(f"MK_VERIFY_RSPLIT: own- vs cross-group selector ({rsplit_ref}) differ in {[n for n, _ in moved]}")
+        verdicts.append(
+            ("rsplit_selector_moves", {f"C{i}" for i in range(len(states))} <= {n for n, _ in moved}, moved)
+        )
+        logger.info(f"MK_VERIFY_RSPLIT_SUMMARY: {[(n, ok) for n, ok, _ in verdicts if n.startswith('rsplit')]}")
     assert worst > 0.9999, f"verify groups vs plain: worst pcc {worst}"
-    assert all(ok for _, ok, _ in verdicts), f"GLM53_REC_SPLIT_VERIFY={split}: not byte-identical {verdicts}"
+    assert all(ok for _, ok, _ in verdicts), f"failed verdicts (split {split}, rsplit {VG_KDA_RSPLIT}): {verdicts}"

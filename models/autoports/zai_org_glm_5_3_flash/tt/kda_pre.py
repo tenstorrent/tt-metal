@@ -37,6 +37,7 @@ import ttnn
 
 KERNEL_DIR = os.path.join("models", "autoports", "zai_org_glm_5_3_flash", "tt", "kernels", "kda_pre")
 _VFLAT_LOGGED: list = []  # GLM53_KDA_VERIFY_FLAT: its "active" line once per process
+_VRSPLIT_LOGGED: list = []  # GLM53_KDA_VERIFY_RSPLIT: likewise
 FP32, BF16 = ttnn.float32, ttnn.bfloat16
 DRAM, L1 = ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG
 TILE = 32
@@ -138,7 +139,25 @@ class KdaPre:
         self.verify_sel = getattr(kda, "kda_verify_sel", None)
         # GLM53_SPEC_MULTI (kda.kda_verify_groups = G users, set with kda_verify_sel): KDA_VERIFY_GROUPS
         self.verify_groups = int(getattr(kda, "kda_verify_groups", 0) or 0) if self.verify_sel is not None else 0
+        # GLM53_KDA_VERIFY_RSPLIT=1 (shard_plan.kda_verify_rsplit_rows; reader.cpp KDA_VERIFY_RSPLIT): a verify-groups
+        # width's G groups over G row groups of the column cores (the owners the column cores leave idle), one group
+        # each; 1 = off (the knob, a lone verify, a plain width). Refuses what it cannot run (ValueError) -- before the
+        # verify's one-row-group assert below, so the knob with GLM53_KDA_RSPLIT > 1 is the ValueError
+        from models.autoports.zai_org_glm_5_3_flash.tt.shard_plan import kda_verify_flat, kda_verify_rsplit_rows
+
+        self.vrsplit = kda_verify_rsplit_rows(
+            self.verify_groups,
+            self.n_cols,
+            N_CORES if cores is None else len(cores),
+            rsplit=self.rsplit,
+            pipe=os.environ.get("GLM53_KDA_VERIFY_PIPE", "0") == "1",
+            flat=kda_verify_flat(),
+            prefetch=os.environ.get("GLM53_KDA_PREFETCH") == "1",
+        )
         assert self.verify_sel is None or self.rsplit == 1, "KDA_VERIFY: one row group"
+        if self.vrsplit > 1:
+            self.rsplit = self.vrsplit
+            self.n_active = self.n_cols * self.rsplit
         self.pack = kda_pack(self.spread)  # 7a: ROWS-mode user rows per packed tile (kernels: KDA_PACK)
         assert self.verify_sel is None or self.pack == 2, "KDA_VERIFY: the pair layout (KDA_PACK 2)"
         self.defines = (
@@ -192,6 +211,8 @@ class KdaPre:
         return rt
 
     def __call__(self, qkv, lr, hist, active, *, rows: int, out_memory_config=L1):
+        if self.vrsplit > 1:
+            raise ValueError("GLM53_KDA_VERIFY_RSPLIT=1: megakernel owners only (the history write-backs run after P6)")
         roles, cbs, io, outs = self.parts(qkv, lr, hist, active, rows=rows, out_memory_config=out_memory_config)
         kernels = [
             ttnn.KernelDescriptor(kernel_source=os.path.join(KERNEL_DIR, f"{name}.cpp"),
@@ -283,13 +304,21 @@ class KdaPre:
             _VFLAT_LOGGED.append(True)
             print("GLM53_KDA_VERIFY_FLAT active (kda_pre reader.cpp KDA_VERIFY_FLAT: every verify group's reads behind "
                   "one barrier)", flush=True)  # fmt: skip
+        vrs = self.vrsplit > 1
+        if vrs and not vflat:  # (checked at construction; the build must see the same FLAT reader)
+            raise ValueError("GLM53_KDA_VERIFY_RSPLIT=1 needs GLM53_KDA_VERIFY_FLAT=1 on this verify build")
+        if vrs and not _VRSPLIT_LOGGED:
+            _VRSPLIT_LOGGED.append(True)
+            print(f"GLM53_KDA_VERIFY_RSPLIT active (kda_pre reader.cpp KDA_VERIFY_RSPLIT: {self.rsplit} verify groups on "
+                  f"{self.rsplit} row groups x {self.n_cols} column cores, the history write-backs after P6)", flush=True)  # fmt: skip
         reader = (reader_ct, self._rtd(lambda kk: addrs + [kk, b, int(roww or hist_tiles)]
                                        + ([vsel.buffer_address()] if vsel is not None else [])),
                   self.defines + ([("KDA_BATCH", "1")] if batch else []) + ([("KDA_TILES_HIST", "1")] if hist_tiles else [])
                   + ([("KDA_VERIFY", "1")] if vsel is not None else [])
                   + ([("KDA_VERIFY_GROUPS", str(self.verify_groups))] if vsel is not None and self.verify_groups > 1
                      else [])
-                  + ([("KDA_VERIFY_PIPE", "1")] if vpipe else []) + ([("KDA_VERIFY_FLAT", "1")] if vflat else []),
+                  + ([("KDA_VERIFY_PIPE", "1")] if vpipe else []) + ([("KDA_VERIFY_FLAT", "1")] if vflat else [])
+                  + ([("KDA_VERIFY_RSPLIT", "1")] if vrs else []),
                   ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0,
                                                     noc=ttnn.NOC.RISCV_0_default))  # fmt: skip
         writer_ct = [int(roww)]
