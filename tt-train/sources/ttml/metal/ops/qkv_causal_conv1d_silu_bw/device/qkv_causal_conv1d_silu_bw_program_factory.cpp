@@ -5,8 +5,8 @@
 #include "qkv_causal_conv1d_silu_bw_program_factory.hpp"
 
 #include <string>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/compute_hardware_config.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>

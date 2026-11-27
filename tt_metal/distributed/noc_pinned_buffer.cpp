@@ -5,9 +5,9 @@
 #include "tt_metal/distributed/noc_pinned_buffer.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 
 namespace tt::tt_metal::distributed {

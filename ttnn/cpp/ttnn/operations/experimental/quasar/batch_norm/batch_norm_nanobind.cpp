@@ -21,7 +21,7 @@ void bind_batch_norm(nb::module_& mod) {
         :func:`ttnn.batch_norm` with ``training=False``; see that op for the full description.
 
         Args:
-            input (ttnn.Tensor): the [N, C, H, W] input tensor (TILE layout, interleaved, bfloat16).
+            input (ttnn.Tensor): the [N, C, H, W] input tensor (TILE layout, interleaved, bfloat16 or an MX data type (any of ``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``)).
 
         Keyword args:
             running_mean (ttnn.Tensor): [1, C, 1, 1] per-channel mean. Required.
@@ -36,7 +36,11 @@ void bind_batch_norm(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.Tensor: the output tensor, in the input's data type.
+
+        Note:
+            Only the input may be an MX format. ``running_mean``, ``running_var``, ``weight`` and ``bias`` must be
+            bfloat16. The output is packed to the input's MX format.
         )doc";
 
     ttnn::bind_function<"batch_norm", "ttnn.experimental.quasar.">(

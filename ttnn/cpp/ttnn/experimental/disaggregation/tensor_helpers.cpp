@@ -7,9 +7,9 @@
 #include <cstring>
 #include <utility>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 

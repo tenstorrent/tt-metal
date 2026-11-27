@@ -1,13 +1,24 @@
 ---
-# Non-required shadow of the PR Gate, run on each merge-queue entry. Members
-# grow as PR Gate jobs are ported. Each `when` is the job's pr-gate.yaml
-# condition over .torrentci/path-groups.yaml (tenstorrent/torrentci#2809);
-# on main every member runs.
+# Non-required shadow of the PR Gate. Only the merge-queue trigger runs it
+# (triggers/merge-queue.yaml). Each member's `when` is its pr-gate.yaml
+# condition over .torrentci/path-groups.yaml (tenstorrent/torrentci#2809).
 dashboards:
   - id: shadow-pr-gate
     name: Shadow PR Gate
     description: "Shadow PR Gate: a non-blocking shadow of the PR Gate, run on each merge-queue entry; its checks are not required"
-    report: {check: true}
-    conditions: {apply-on: [pull-request, merge-queue]}
+    report:
+      check: true
+    conditions:
+      apply-on: [pull-request, merge-queue]
     members:
-      - {job: asan-build, when: {changed: [any-code, image]}}
+      - job: asan-build
+        when:
+          changed: [any-code, image]
+      # runtime-smoke-tests (cpu-only leg).
+      - job: smoke-cpu-asan
+        when:
+          changed: [cmake, tt-metalium, tt-metalium-tests, tt-nn-tests, image]
+      - job: llk-hardware-free
+        when:
+          changed: [llk-wormhole, llk-blackhole, llk-common, llk-sfpi, llk-tests, llk-ci, llk-perf, llk-hardware-free,
+                    llk-quasar]

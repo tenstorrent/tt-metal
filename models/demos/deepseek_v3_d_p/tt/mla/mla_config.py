@@ -427,7 +427,7 @@ MLA_MATMUL_CONFIG = {
                     per_core_M=5,
                     per_core_N=4,
                 ),
-                "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+                "act_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_dtype": ttnn.bfloat8_b,
             },

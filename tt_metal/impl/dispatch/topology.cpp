@@ -5,10 +5,10 @@
 #include "topology.hpp"
 
 #include "device/device_manager.hpp"
-#include <host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include <experimental/fabric/mesh_graph.hpp>
-#include <tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <cstdint>
 #include <map>
 #include <typeinfo>
@@ -20,13 +20,13 @@
 
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include "device.hpp"
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include "tt-metalium/mesh/legacy/device.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_config/tensor_prefetcher.hpp"
 #include "program/program_impl.hpp"
-#include "program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include <experimental/fabric/fabric.hpp>
 #include "system_memory_manager.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
@@ -729,6 +729,7 @@ void DispatchTopology::populate_cq_static_args(Device* device) {
         "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
     // First pass, add device/program to all kernels for this device and generate static configs.
     auto cq_program_ptr = std::make_unique<Program>(std::make_shared<detail::ProgramImpl>(device->get_context_id()));
+    cq_program_ptr->impl().set_runs_on_dispatch_cores();
     for (auto* node_and_kernel : node_id_to_kernel_) {
         // GetDeviceId() uses Id from topology as IDevice* is not present yet
         if (node_and_kernel->GetDeviceId() == device->id()) {
