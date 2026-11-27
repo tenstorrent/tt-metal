@@ -176,6 +176,7 @@ def _cache_key(input_tensor, dtype):
         _pd.BUFFER_DEPTH,
         _pd.BLOCK_TILES_CAP,
         _pd.STAGING_DEPTH,
+        _pd.RM_BLOCK_TILES,
         _pd.L1_OP_BUDGET_BYTES,
         _pd.L1_SLACK_BYTES,
     )

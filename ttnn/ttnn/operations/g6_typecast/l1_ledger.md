@@ -71,3 +71,16 @@ F322: core_rows_max = 38131 (110 cores), rows_per_block ≈ 8.8 K, 5 blocks/core
 Data-movement budget (R2): input ×1, output ×1 (logical bytes); physical DRAM traffic = aligned 64 B slot per
 row (F322: 4 194 304 × 64 B in and out — the slot is the DRAM transfer granule, the payload is 6 B / 3 B).
 One NoC transaction per bank run per block (≤ num_banks per block), not per row. No cross-core traffic.
+
+## Refinement 3 — R2 staging depth + block size (perf)
+
+| CB | Change | Shares with / why not |
+|----|--------|-----------------------|
+| `cb_input_staging` (2) | capacity `staging_depth · rows_per_block + ceil(64 / in_aligned)` aligned pages; `staging_depth = min(STAGING_DEPTH, blocks per core)` (default 2) | slot b+1 receives the bank-run DMA while slot b is compacted — the two slots are concurrently live, so they cannot alias each other or the dense CBs |
+| `cb_output_staging` (3) | capacity `staging_depth · rows_per_block + ceil(64 / out_aligned)` aligned pages | slot b is expanded while slot b−1's writes leave L1; the slot is reused after the flush that follows the next expansion |
+| `cb_input_tiles` / `cb_output_tiles` | unchanged formula; `block_tiles` now ≤ `RM_BLOCK_TILES` (2) on R2 | unchanged |
+
+`plan_rm_blocks`: `rows_per_block · STAGING_DEPTH · (in_aligned + out_aligned) + effective_depth · block_tiles · (in_tile + out_tile) ≤ L1_OP_BUDGET_BYTES − L1_SLACK_BYTES − out_l1_bytes_per_bank − 128`.
+F322 / F317 (bf16 → u8, 6 B / 3 B rows, 64 B slots): `rows_per_block = 682` (2 pseudo-tiles), staging 2 × 682 × 128 B ≈ 175 KB,
+dense CBs 2 × 2 × 3 KB = 12 KB per core. The L1 footprint fell (old single 8.8 K-row staging ≈ 1.1 MB).
+Data-movement budget unchanged: input ×1, output ×1, one NoC transaction per bank run per block, no cross-core traffic.

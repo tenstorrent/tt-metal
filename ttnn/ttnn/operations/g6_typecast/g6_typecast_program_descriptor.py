@@ -19,6 +19,7 @@ Knobs (single source each — every dependent quantity derives from them):
   BUFFER_DEPTH     — CB depth knob; effective depth = min(BUFFER_DEPTH, max blocks per core)
   BLOCK_TILES_CAP  — optional upper bound on block_tiles (None = coarsest block that fits L1)
   STAGING_DEPTH    — R2 only: staging slots per dataflow direction (2 = DMA / row-move overlap)
+  RM_BLOCK_TILES   — R2 only: target pseudo-tiles per block (min'd with BLOCK_TILES_CAP)
   L1_OP_BUDGET_BYTES / L1_SLACK_BYTES — L1 grant (BB-05) and allocator headroom
 """
 
@@ -36,6 +37,11 @@ BLOCK_TILES_CAP = None  # None: block = whole per-core range clamped to the L1 g
 # R2 staging slots per direction: 2 overlaps the bank-run DMA of one block with the RISC-V compaction /
 # expansion of the neighbouring block (reader and writer alike); 1 = serialized single staging zone.
 STAGING_DEPTH = 2
+# R2 block size in pseudo-tiles (None = coarsest block that fits L1). R2 is NoC/DRAM-bound (every RM row is
+# a 64 B-aligned DRAM page); a small block shortens the unoverlapped pipeline fill (first read) and drain
+# (last write). Sweep on F322/F317 (Blackhole, 110 cores): 1 -> 1568/384 us, 2 -> 1572/364 us,
+# 3 -> 1604/379 us, 4 -> 1631/394 us, None (14) -> 1673/438 us. Bank runs stay >= rows/nb aligned pages.
+RM_BLOCK_TILES = 2
 L1_OP_BUDGET_BYTES = 1347776
 L1_SLACK_BYTES = 65536
 
@@ -245,15 +251,16 @@ def plan_rm_blocks(
 ):
     """R2 block plan -> (rows_per_block, block_tiles, effective_depth).
 
-    `block_tiles` (pseudo-tiles per block) stays the single block knob: `BLOCK_TILES_CAP` caps it, and the
+    `block_tiles` (pseudo-tiles per block) stays the single block knob: `BLOCK_TILES_CAP` / `RM_BLOCK_TILES` cap it, and the
     rows of a block are the rows whose values fill at most `block_tiles` pseudo-tiles. Default: the coarsest
     block that fits the L1 grant. Per-row cost = STAGING_DEPTH x both staging slots (aligned pages); per-block cost =
     effective_depth x block_tiles x (in + out pseudo-tile bytes).
     """
     budget = L1_OP_BUDGET_BYTES - L1_SLACK_BYTES - fixed_bytes
     rows = core_rows_max
-    if BLOCK_TILES_CAP is not None:
-        rows = min(rows, max(1, (BLOCK_TILES_CAP * PSEUDO_TILE_VALUES) // values_per_row))
+    caps = [c for c in (BLOCK_TILES_CAP, RM_BLOCK_TILES) if c is not None]
+    if caps:
+        rows = min(rows, max(1, (min(caps) * PSEUDO_TILE_VALUES) // values_per_row))
     while True:
         block_tiles = _div_up(rows * values_per_row, PSEUDO_TILE_VALUES)
         depth = min(BUFFER_DEPTH, _div_up(core_rows_max, rows))

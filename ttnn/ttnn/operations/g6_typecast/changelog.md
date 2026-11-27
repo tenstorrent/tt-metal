@@ -68,3 +68,32 @@
   (Tensix flush-to-zero). No golden input contains them (randn + exact ties). Pinned as a non-strict xfail.
 - Tests added: tests/ttnn/unit_tests/operations/g6_typecast/test_g6_typecast_sources.py (fp32->bf16 with RNE
   tie witnesses, DRAM/L1, non-aligned; int32->bf16 with the two-rounding witnesses; uint16->int32; FTZ xfail).
+
+## Refinement 3 — Speed up the perf-flagged profile (F322, with F317)
+- Date: 2026-11-27
+- What was done: R2 (`rm_pseudo_tile_stream`) perf, both dataflow halves.
+  (1) Row movers rewritten as a shared header `kernels/g6_typecast_rm_rows.hpp`. They walk the dense order and
+  funnel groups of G rows (G·row_bytes ≡ 0 mod 4) through a 64-bit accumulator with compile-time shifts.
+  Only whole-word loads and stores are used: the reader compacts 2 bf16 rows into 3 words, the writer expands
+  3 words into 4 uint8 slots. Before, each byte was a separate load and store. Word-sized rows are plain word
+  copies; large odd rows and the leftover rows of a block keep the byte/halfword copy.
+  (2) `STAGING_DEPTH` knob (default 2): reader issues block b+1's bank-run reads into the other staging slot
+  before compacting block b; writer expands block b while block b−1's writes drain, flushes after the
+  expansion. Only one block is in flight per direction, so the plain barrier/flush retire exactly one block
+  (no trids).
+  (3) `RM_BLOCK_TILES` knob (default 2, sweep-chosen) caps the R2 block for a short pipeline fill/drain.
+  All knobs are in the program-cache key. Reused: reader/writer rm_mode branches, `plan_rm_blocks`,
+  staging CBs. Added: the shared row-mover header, two knobs, one CT arg per dataflow kernel.
+- Perf (device kernel ns, BH 110 cores): F322 2 320 µs → 1 562 µs; F317 958 µs → 361 µs. Q2185 35.9 µs and
+  P39 68.9 µs unchanged. F322 ablation: row moves only 782 µs, NoC only 1 476 µs, both stubbed 38 µs. The op
+  is now NoC/DRAM-bound on 537 MB of physical traffic (64 B-aligned page per 6 B / 3 B row; floor ≈ 1.05 ms
+  at the DRAM peak). The 110.59 µs target assumes logical bytes and is unreachable with this page geometry.
+  See the Outcome line in op_requirements.md.
+- Accuracy achieved: bit-exact (gate `exact`) on F322, F317, [1,7,13,3], [5,3], [1,333,77,3], [2,50,6], plus
+  every existing RM/TILE unit case.
+- Golden test progress: targeted slice (F322, F317, Q2189, F321, Q2185, P39, Q2228, F315) 12/12; unit dir 61
+  passed + 1 expected xfail.
+- Issues encountered: None (`--profile` on the golden harness emits no CSV; guard timings came from unit-test
+  equivalents of Q2185/P39).
+- Tests added: tests/ttnn/unit_tests/operations/g6_typecast/test_g6_typecast_perf.py (F322/F317 profile pins,
+  odd / tiny / ragged / 6 B-row shapes for the funnel and tail paths).

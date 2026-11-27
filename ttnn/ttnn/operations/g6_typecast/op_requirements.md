@@ -87,7 +87,7 @@ No new EXCLUSIONS (prompt rule).
 **Done when**: F315, F316, F318, F319, F320, F323, F324, Q2228, Q2231 pass bit-exact; golden suite has
 `xfail_expected = 0` and 0 in every loud category; prior cells still pass.
 
-### [ ] Refinement 3 — Speed up the perf-flagged profile (F322, with F317)
+### [x] Refinement 3 — Speed up the perf-flagged profile (F322, with F317)
 
 **Type**: perf
 
@@ -104,6 +104,21 @@ it alongside. No SUPPORTED change.
 **Done when**: measured device-ns on F322 improves toward ≤ 110.59 µs (and F317 improves), the exact gate still
 holds, the golden suite is green, and no regression across the config-spanning guard set (one representative
 per distinct kernel path × layout × placement: R1 TILE DRAM, R1 TILE L1, R2 ROW_MAJOR DRAM; one per arm family).
+
+**Outcome**: device kernel ns (Blackhole, 110 cores, one fresh run each): F322 2 320 µs → **1 562 µs** (1.49×),
+F317 958 µs → **361 µs** (2.65×); exact gate holds; TILE guards unchanged (Q2185 35.9 µs, P39 68.9 µs). Levers, all
+in the tree: (1) word-funnel row movers (`kernels/g6_typecast_rm_rows.hpp`, reader compaction and writer expansion
+alike), (2) `STAGING_DEPTH = 2` double staging so the bank-run DMA overlaps the row moves (reader and writer;
+alone at the default block it was 1 673 µs vs 1 780 µs; at the final block 1 562 µs vs 1 593 µs), (3)
+`RM_BLOCK_TILES = 2`, from a sweep of 1/2/3/4/None that measured 1 568/1 572/1 604/1 631/1 673 µs on F322 (shorter
+pipeline fill and drain). F322 ablation: the row moves alone take 782 µs and the NoC alone 1 476 µs, so the op
+is now **NoC/DRAM-bound**. Each 6 B / 3 B RM row is its own 64 B-aligned DRAM page, so F322 moves 4 194 304 ×
+(64 + 64) B = 537 MB physical, not the 36 MB the 81.92 µs roofline assumes. At the BH DRAM peak (~512 GB/s)
+the floor is ≈1.05 ms, so the 110.59 µs target is unreachable for an interleaved RM tensor with this page
+geometry; 1 562 µs ≈ 344 GB/s of physical traffic. Next, not tried: read only the needed 32 B
+granule of each slot / write only a 32 B partial slot. That needs per-row NoC transactions (≈38 K per core),
+which the transaction issue cost makes slower. Trid multi-block issue is not needed: one ≈43 KB block per
+core in flight already exceeds the per-core bandwidth Little's law asks for at this aggregate rate.
 
 ### [ ] Refinement 4 — Speed up the flagged TILE profiles (Q2185, P39): read/convert/write overlap
 
