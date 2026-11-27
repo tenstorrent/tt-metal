@@ -239,9 +239,9 @@ def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Pha
 
     Deliberately bare: reset_loop() is called without snapshot_out /
     post_reset_phases, so it takes no revalidation snapshot and stays out of
-    fold_post_reset_snapshots(). Adding revalidation here means reworking that
-    function, which assumes a single batch of snapshot_after_* phases judged by
-    normalize_health_report() on post[-1].
+    fold_post_reset_snapshots(). A snapshot_after_* phase here would become
+    post[-1], the one snapshot normalize_health_report() judges, and displace
+    the snapshot taken before the tests.
     """
     try:
         tt_smi = resolve_tt_smi(tt_smi_path)

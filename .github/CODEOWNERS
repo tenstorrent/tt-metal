@@ -122,6 +122,8 @@ tools/scaleout/src/generate_rank_bindings.cpp @tt-aho @tt-asaigal @aliuTT @Riddy
 tools/scaleout/sweep_rank_binding_solutions.py @Riddy21 @p1-0tr
 tools/scaleout/exabox/ @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT
 tools/scaleout/exabox/run_fabric_tests.sh @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT @nnyamagoudar-TT
+tools/scaleout/exabox/health_check_test_suite/diag/retest.py @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT @nmilicevicTT @avelickovTT @pavlepopovic @ianastasijevicTT @mbezuljTT
+tools/scaleout/exabox/tests/test_diag_retest.py @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT @nmilicevicTT @avelickovTT @pavlepopovic @ianastasijevicTT @mbezuljTT
 
 # Scaleout
 tests/scale_out/test_ccl_fabric_manager.py @tenstorrent/metalium-developers-metal-distributed
@@ -351,6 +353,7 @@ tt_py_test_utils_common/op_test_base.py @mbezuljTT @pavlepopovic @smohammadiTT @
 
 # Deployment tests
 tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT
+tests/dram/ @nmilicevicTT @avelickovTT @pavlepopovic @ianastasijevicTT @mbezuljTT @smohammadiTT @tcolacoTT @ctr-nradojevicTT
 
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core
@@ -444,6 +447,7 @@ ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-de
 ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/**/CMakeLists.txt @tenstorrent/metalium-developers-ds-prefill @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/deepseek/ @tenstorrent/cse-developer-ttnn
 ttnn/cpp/ttnn/operations/experimental/deepseek/**/CMakeLists.txt @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/diagnostics/ @nmilicevicTT @avelickovTT @pavlepopovic @ianastasijevicTT @mbezuljTT @smohammadiTT @tcolacoTT @ctr-nradojevicTT
 ttnn/cpp/ttnn/operations/experimental/experimental_nanobind.cpp @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ops-leads
 ttnn/cpp/ttnn/operations/experimental/fused_msda/ @ctr-mmicicTT @ctr-ikasicTT @ctr-mdukicTT
 ttnn/cpp/ttnn/operations/experimental/fused_msda/**/CMakeLists.txt @ctr-mmicicTT @ctr-ikasicTT @ctr-mdukicTT @tenstorrent/metalium-developers-infra
