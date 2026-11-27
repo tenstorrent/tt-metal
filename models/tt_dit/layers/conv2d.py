@@ -53,6 +53,13 @@ class Conv2d(Module):
     # height-sharded conv the area also counts halo rows, see _width_slices.
     dram_slice_area: int | None = None
 
+    # The output size (height, width) of fixed 2D DRAM slices, or None. When set, conv2d cuts the output into slices
+    # of this size, the last along each axis shifted back to the edge, so every slice of every input size has the same
+    # shape and the conv adds no program-cache entries at a new size (see ttnn.Conv2dSliceConfig.slice_height). The
+    # slice table and dram_slice_area then do not apply. Needs an interleaved row-major input; the width is whole
+    # tiles. Slices along an axis overlap where the output is not a whole number of them, which is computed twice.
+    fixed_slice_hw: tuple[int, int] | None = None
+
     # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
     # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
     # so ttnn picks the slicing from the L1 free at call time. Models can extend the table for their
@@ -575,16 +582,23 @@ class Conv2d(Module):
                 msg = f"expected input channel dimension to be {expected_c}, but got {c}"
                 raise ValueError(msg)
 
-        slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
-        num_slices = slice_params.get((h, w, self.in_channels, self.out_channels))
-        area_sliced = num_slices is None and self.dram_slice_area is not None
-        if area_sliced:
-            num_slices = self._width_slices(b, h, w)
-        slice_config = (
-            ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
-            if num_slices is not None
-            else None
-        )
+        fixed = self.fixed_slice_hw is not None
+        if fixed:
+            num_slices, area_sliced = None, False
+            slice_config = ttnn.Conv2dSliceConfig(
+                slice_height=self.fixed_slice_hw[0], slice_width=self.fixed_slice_hw[1]
+            )
+        else:
+            slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
+            num_slices = slice_params.get((h, w, self.in_channels, self.out_channels))
+            area_sliced = num_slices is None and self.dram_slice_area is not None
+            if area_sliced:
+                num_slices = self._width_slices(b, h, w)
+            slice_config = (
+                ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
+                if num_slices is not None
+                else None
+            )
 
         in_channels = self.in_channels // self.in_mesh_axis_size
         out_channels = self.weight.data.shape[0]
@@ -610,7 +624,8 @@ class Conv2d(Module):
         # The slice count dram_slice_area gives follows the size, so it stays out of the key, as the
         # count conv2d picks itself does. With a fixed scheme and an interleaved input the count only
         # sets how many cores share the rows, which the prepared weights do not depend on.
-        key_slices = None if area_sliced else num_slices
+        # With fixed slices every slice has the same shape at every size, so the prepared layout is one too.
+        key_slices = ("fixed", *self.fixed_slice_hw) if fixed else None if area_sliced else num_slices
         prepared_key = (key_slices,) if size_free else (b, h, w, key_slices)
         prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
         if prepared_weight is None:
@@ -717,6 +732,30 @@ def warm_dram_slice_flatten(mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType =
     ttnn.deallocate(x)
 
 
+def warm_fixed_slice_flatten(
+    mesh_device: ttnn.MeshDevice, channels: Sequence[int], dtype: ttnn.DataType = ttnn.bfloat16
+) -> None:
+    """Build, on small tensors, the program-cache entries of the flatten that ends conv2d's path with fixed 2D slices
+    (Conv2d.fixed_slice_hw), for each output channel count in ``channels``.
+
+    With fixed slices the flatten is a tiled reshape that serves every shape with the same channel count and at least
+    one output tile per core, but it runs only where the width is not whole tiles, so a model warmed at a size whose
+    widths are whole tiles would build its entries at the first new size. This one covers bfloat16 in DRAM."""
+    for c in dict.fromkeys(channels):
+        # 128 rows of 40 pixels: not whole tiles, and 160 output tile rows, at least one per core on any chip.
+        x = ttnn.from_torch(
+            torch.zeros(1, 128, 40, c),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        y = ttnn.reshape(x, (1, 1, 128 * 40, c), reshape_tile_mode=ttnn.TileReshapeMapMode.RUNTIME_SHAPES)
+        ttnn.deallocate(y)
+        ttnn.deallocate(x)
+
+
 def configure_conv2d(
     module: Module,
     *,
@@ -724,12 +763,14 @@ def configure_conv2d(
     config_tensors_in_dram: bool | None = None,
     shard_layout: ttnn.TensorMemoryLayout | None = None,
     dram_slice_area: int | None = None,
+    fixed_slice_hw: tuple[int, int] | None = None,
 ) -> None:
     """Configure every Conv2d in ``module``'s tree.
 
     ``slice_params`` (same layout as ``Conv2d.slice_params``) is added on top of the shared table for
-    each mesh shape it names, for these instances only. ``config_tensors_in_dram``, ``shard_layout``
-    and ``dram_slice_area`` override the class defaults for them.
+    each mesh shape it names, for these instances only. ``config_tensors_in_dram``, ``shard_layout``,
+    ``dram_slice_area`` and ``fixed_slice_hw`` override the class defaults for them; ``fixed_slice_hw``
+    of (0, 0) turns fixed slices off.
     """
     if isinstance(module, Conv2d):
         if slice_params is not None:
@@ -745,6 +786,11 @@ def configure_conv2d(
         if dram_slice_area is not None and dram_slice_area != module.dram_slice_area:
             module._release_prepared()
             module.dram_slice_area = dram_slice_area
+        if fixed_slice_hw is not None:
+            fixed = None if tuple(fixed_slice_hw) == (0, 0) else tuple(fixed_slice_hw)
+            if fixed != module.fixed_slice_hw:
+                module._release_prepared()
+                module.fixed_slice_hw = fixed
     for _, child in module.named_children():
         configure_conv2d(
             child,
@@ -752,4 +798,5 @@ def configure_conv2d(
             config_tensors_in_dram=config_tensors_in_dram,
             shard_layout=shard_layout,
             dram_slice_area=dram_slice_area,
+            fixed_slice_hw=fixed_slice_hw,
         )

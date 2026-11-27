@@ -11,7 +11,7 @@ import torch
 
 import ttnn
 
-from ...layers.conv2d import configure_conv2d, warm_dram_slice_flatten
+from ...layers.conv2d import configure_conv2d, warm_dram_slice_flatten, warm_fixed_slice_flatten
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import Flux2VaeParallelConfig
@@ -38,6 +38,11 @@ if TYPE_CHECKING:
 # https://github.com/black-forest-labs/flux2/blob/6bb103559da75b67d75bf77cebba0027ba412ebc/src/flux2/autoencoder.py#L271
 class Flux2VaeDecoder(Module):
     _PATCH_SIZE = 2
+
+    # The output size per chip (height, width) of the fixed 2D slices of the convs at each resolution, from the
+    # latent's (1/8 of the image) to the image's, or None for conv2d's own slicing, which adds program-cache entries
+    # at every new image size. See Conv2d.fixed_slice_hw.
+    fixed_slice_hw_per_level: tuple[tuple[int, int], ...] | None = ((32, 32), (32, 64), (64, 64), (128, 128))
 
     def __init__(
         self,
@@ -141,8 +146,27 @@ class Flux2VaeDecoder(Module):
         # The sliced convs end with a tiled reshape at every width per chip that is not whole tiles, which the
         # warm size (1024x1024) does not have at any level.
         warm_dram_slice_flatten(ctx.device)
+        # Fixed 2D slices for every conv, which supersede the slicing above: each conv then runs as slices of one
+        # output size per level at every image size, and adds no program-cache entries at a new size. Their
+        # flatten's entries are built here, one per channel count, as the warm size never runs it.
+        if self.fixed_slice_hw_per_level is not None:
+            for level, modules in enumerate(self._conv_levels()):
+                for module in modules:
+                    configure_conv2d(module, fixed_slice_hw=self.fixed_slice_hw_per_level[level])
+            warm_fixed_slice_flatten(ctx.device, [*channel_counts, out_channels])
         # So does the mid block's token gather where the token rows per chip are not whole tiles.
         warm_token_gather(ctx, channel_counts[0])
+
+    def _conv_levels(self) -> list[list[Module]]:
+        """The modules holding the convs at each resolution, from the latent's to the image's: each up block's
+        resnets run at the resolution its upsampler leaves, which the next block's resnets share."""
+        levels: list[list[Module]] = [[self.conv_in, self.mid_block]]
+        for block in self.up_blocks:
+            levels[-1].append(block.resnets)
+            if block.upsampler is not None:
+                levels.append([block.upsampler])
+        levels[-1].append(self.conv_out)
+        return levels
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # remove encoder state
