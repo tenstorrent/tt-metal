@@ -203,14 +203,13 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     float pad_value) {
     using OperationType = ttnn::operations::data_movement::PermuteDeviceOperation;
 
-    // BH 8-bit int RM permute (#61827): the 8-bit compute path turns INT8 -128 into 0, and the RM reader's
-    // alignment bounce covers interleaved input only, so sharded UINT8 can still make misaligned reads.
+    // BH sharded 8-bit int RM permute (#61827): the RM reader's alignment bounce covers interleaved input only,
+    // so sharded input can still make misaligned reads.
     // Workaround: stage via UInt32 in DRAM, permute, cast back. Lives in prim (not user API)
     // because fold/transpose/quasar call prim::permute directly; a user-API-only workaround
     // would need to be duplicated at every call site.
-    if ((input_tensor.dtype() == DataType::INT8 ||
-         (input_tensor.dtype() == DataType::UINT8 && input_tensor.is_sharded())) &&
-        input_tensor.layout() == Layout::ROW_MAJOR && input_tensor.device() != nullptr &&
+    if ((input_tensor.dtype() == DataType::UINT8 || input_tensor.dtype() == DataType::INT8) &&
+        input_tensor.is_sharded() && input_tensor.layout() == Layout::ROW_MAJOR && input_tensor.device() != nullptr &&
         input_tensor.device()->arch() == tt::ARCH::BLACKHOLE && !dims.empty() &&
         dims.back() != static_cast<uint32_t>(dims.size() - 1)) {
         const auto src_dtype = input_tensor.dtype();
