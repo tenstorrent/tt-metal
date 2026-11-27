@@ -119,9 +119,10 @@ class KDARecurrenceProgramConfig:
     # chunks in parallel (the entry correction). Matmul cores the relay may use (its correction and relay cores, so the
     # cores per head): their products count toward the Blackhole di/dt bound.
     relay_max_cores: int = 110
-    # Round the SP summary's and relay's fp32 FPU operands to the 9 mantissa bits the FPU multiplier reads, nearest-even,
-    # before they are packed, instead of the source registers' truncation (fpu_operand_round.hpp): K3_ACC_KDA_ROUND.
-    round_fp32_operands: bool = False
+    # The kernels ("prep", "summary", "relay": chunk preparation, the SP summary scan, the SP relay) that round their
+    # fp32 FPU operands to the 9 mantissa bits the FPU multiplier reads, nearest-even, before they are packed, instead
+    # of the source registers' truncation (fpu_operand_round.hpp): K3_ACC_KDA_ROUND.
+    round_fp32_operands: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if self.local_scan_strategy not in ("direct", "grouped"):

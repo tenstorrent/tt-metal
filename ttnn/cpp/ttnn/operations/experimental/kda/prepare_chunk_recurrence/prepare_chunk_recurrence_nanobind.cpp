@@ -57,6 +57,9 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
                 host product is itself exact in BF16. Defaults to 1.0.
             beta_logits_column_offset (int): Tile-aligned first column of the beta logits in ``beta``.
                 Defaults to 0.
+            round_fp32_operands (bool): Round every tile the kernel packs (its FLOAT32 intermediates and
+                outputs) to the 9 mantissa bits the FPU multiplier reads, nearest-even, instead of the source
+                registers' truncation. Defaults to False.
 
         Returns:
             list[ttnn.Tensor]: Seven new TILE-layout tensors, where ``N = T / 32``, in order:
@@ -89,7 +92,8 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         nb::arg("actual_end") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("gate_scale") = 1.0F,
-        nb::arg("beta_logits_column_offset") = 0);
+        nb::arg("beta_logits_column_offset") = 0,
+        nb::arg("round_fp32_operands") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::prepare_chunk_recurrence::detail

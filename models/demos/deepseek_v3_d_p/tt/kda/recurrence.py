@@ -113,6 +113,7 @@ def _prepare_chunk_terms(
     gate_scale: float,
     beta_logits_column_offset: int,
     memory_config: ttnn.MemoryConfig,
+    round_fp32_operands: bool = False,
 ) -> _PreparedChunks:
     # Chunk preparation reads each head's logit column in place from the token-major projection and activates it.
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
@@ -130,6 +131,7 @@ def _prepare_chunk_terms(
         sequence_parallel_axis=sequence_parallel_axis,
         gate_scale=gate_scale,
         beta_logits_column_offset=beta_logits_column_offset,
+        **({"round_fp32_operands": True} if round_fp32_operands else {}),
     )
     return _PreparedChunks(*outputs)
 
@@ -333,6 +335,7 @@ def _scan_sp_chunks(
     compute_config: _RecurrenceComputeConfig,
     affine_relay: RelayChunkScan,
     output_norm: OutputNorm,
+    round_summary: bool = False,
 ) -> RecurrenceResult:
     """One group per head: the summary writes the packed transform the relay carries (the identity for a rank without a
     head) and each chunk's output terms, from which the relay forms the outputs once it has delivered the rank's entry
@@ -350,8 +353,7 @@ def _scan_sp_chunks(
         compute_kernel_config=compute_config.preparation,
         emit_outputs=True,
         emit_memory_config=affine_relay.terms_memory_config,
-        # The relay's rounding of FP32 FPU operands covers the summary's too (K3_ACC_KDA_ROUND).
-        **({"round_fp32_operands": True} if affine_relay.round_fp32_operands else {}),
+        **({"round_fp32_operands": True} if round_summary else {}),  # (K3_ACC_KDA_ROUND)
     )
     # The summary is the chunk terms' last reader: free their L1 before the relay.
     for tensor in grouped.as_kernel_args():
@@ -384,6 +386,8 @@ class KDARecurrence:
     ) -> None:
         # Preparation multiplies the gate by gate_scale before its cumulative sum.
         self._gate_scale = gate_scale
+        # The kernels that round their fp32 FPU operands (K3_ACC_KDA_ROUND).
+        self._round_sites = frozenset(program_config.round_fp32_operands)
         preparation = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -464,7 +468,7 @@ class KDARecurrence:
                 local_rows=local_rows,
                 max_cores=program_config.relay_max_cores,
                 math_fidelity=program_config.affine_prefix_math_fidelity or ttnn.MathFidelity.HiFi3,
-                round_fp32_operands=getattr(program_config, "round_fp32_operands", False),
+                round_fp32_operands="relay" in self._round_sites,
             )
         # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
         # and chunk preparation's DRAM writes.
@@ -536,6 +540,7 @@ class KDARecurrence:
             gate_scale=self._gate_scale,
             beta_logits_column_offset=beta_logits_column_offset,
             memory_config=self._preparation_memory,
+            round_fp32_operands="prep" in self._round_sites,
         )
         # Only chunk preparation reads them; freeing them here lowers L1 use during the scans.
         for tensor in ((q, k, v, gate) if release_inputs else ()) + ((beta,) if release_beta else ()):
@@ -671,4 +676,5 @@ class KDARecurrence:
             sequence_parallel_axis=self._sequence_parallel_axis,
             affine_relay=self._affine_relay,
             output_norm=output_norm,
+            round_summary="summary" in self._round_sites,
         )

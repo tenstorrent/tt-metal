@@ -29,6 +29,7 @@ They are read from the environment each time a module asks, so set them before t
                              FPU multiplier reads before they are packed (SrcA / SrcB truncate fp32 operands, a
                              -0.5 % bias on every KDA output that the eps-dominated gated norm passes through): the
                              SP summary scan's products and state ring, and the relay's correction and gated norm
+                             ("1"), or a comma list of prep, summary, relay
     K3_ACC_COMBINE_SNAP      under K3_ACC_FIDELITY, the MoE combine's snap step instead of none: "1" or a step (on:
                              2^-24). The routed terms then sum as an int32 count of the step, bit-identical in any
                              arrival order, so K3_ACC runs are deterministic; exact while |routed sum| < 2^31 x step
@@ -122,10 +123,18 @@ def routed_fidelity():
     return getattr(ttnn.MathFidelity, _ON["ROUTED_FIDELITY"] if v == "1" else v)
 
 
-def kda_round() -> bool:
-    """K3_ACC_KDA_ROUND: nearest-even rounding of the KDA kernels' fp32 FPU operands to the multiplier's 9 mantissa
-    bits."""
-    return bool(knob("KDA_ROUND"))
+KDA_ROUND_SITES = ("prep", "summary", "relay")
+
+
+def kda_round() -> frozenset[str]:
+    """K3_ACC_KDA_ROUND: the KDA kernels whose fp32 FPU operands are rounded, nearest-even, to the multiplier's 9
+    mantissa bits: "1" means all of chunk preparation, the SP summary scan and the relay; a comma list picks some."""
+    v = knob("KDA_ROUND")
+    if not v:
+        return frozenset()
+    sites = frozenset(KDA_ROUND_SITES) if v == "1" else frozenset(s.strip() for s in v.split(","))
+    assert sites <= set(KDA_ROUND_SITES), f"K3_ACC_KDA_ROUND={v!r}: sites are {KDA_ROUND_SITES} or 1"
+    return sites
 
 
 def mla_fp32() -> bool:

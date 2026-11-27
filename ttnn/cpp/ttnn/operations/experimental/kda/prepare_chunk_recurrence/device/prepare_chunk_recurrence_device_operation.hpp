@@ -41,6 +41,7 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     float gate_scale,
-    uint32_t beta_logits_column_offset);
+    uint32_t beta_logits_column_offset,
+    bool round_fp32_operands = false);
 
 }  // namespace ttnn::experimental::prim

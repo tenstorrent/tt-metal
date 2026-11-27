@@ -211,7 +211,8 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     float gate_scale,
-    uint32_t beta_logits_column_offset) {
+    uint32_t beta_logits_column_offset,
+    bool round_fp32_operands) {
     TT_FATAL(std::isfinite(gate_scale), "prepare_chunk_recurrence: gate_scale must be finite");
     TT_FATAL(!actual_end || actual_start, "prepare_chunk_recurrence: actual_end requires actual_start");
     if (actual_start) {
@@ -246,7 +247,8 @@ std::vector<Tensor> prepare_chunk_recurrence(
             .gate_scale = gate_scale,
             .beta_logits_column_offset = beta_logits_column_offset,
             .output_mem_config = output_mem_config,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .round_fp32_operands = round_fp32_operands},
         PrepareChunkRecurrenceInputs{
             .q = q, .k = k, .v = v, .g = g, .beta = beta, .actual_start = actual_start, .actual_end = actual_end});
 }

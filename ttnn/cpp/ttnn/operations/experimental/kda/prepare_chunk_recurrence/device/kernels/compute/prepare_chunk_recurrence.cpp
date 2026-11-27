@@ -72,6 +72,20 @@
 #define KDA_PACK_OUTLINE inline
 #endif
 
+// K3_ACC_KDA_ROUND (round_fp32_operands): every tile is rounded to the 9 mantissa bits the FPU multiplier reads before
+// it is packed, and so are products that move from DST to a source register (fpu_operand_round.hpp). Compiled in only
+// when the factory defines KDA_ROUND_OPERANDS: the kernel sits at the kernel-config size limit. A matmul re-runs its
+// init after the rounding's SFPU init; eltwise FPU ops do not need to (disjoint state).
+#ifdef KDA_ROUND_OPERANDS
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/fpu_operand_round.hpp"
+KDA_MATH_OUTLINE void round_dst_tiles(uint32_t first, uint32_t count) { kda_round_operand_tiles<true>(first, count); }
+#define KDA_ROUND_DST(first, count) round_dst_tiles(first, count)
+#define KDA_ROUND_REINIT(init) init
+#else
+#define KDA_ROUND_DST(first, count)
+#define KDA_ROUND_REINIT(init)
+#endif
+
 // Pack destination tiles [dst, dst + count) to o's tiles [out, out + count), in order.
 KDA_PACK_OUTLINE void pack_tiles(uint32_t dst, uint32_t o_id, uint32_t out, uint32_t count) {
 #pragma GCC unroll 1
@@ -143,6 +157,7 @@ KDA_PREP_HELPER void matmul_blocks(DFB0& a, bool a_shared, DFB1& b, DFB2& o, uin
         b.wait_front(b_base + Kt * Nt);
         for (uint32_t mi = 0; mi < Mt; mi += subblock_rows) {
             for (uint32_t ni = 0; ni < Nt; ni += subblock_columns) {
+                KDA_ROUND_REINIT(matmul_tiles_block_init(a_id, b_id, Tr, subblock_columns, subblock_rows, Kt));
                 tile_regs_acquire();
                 for (uint32_t ki = 0; ki < Kt; ki++) {
                     // kt_dim describes operand geometry; each K slice is still issued explicitly. B^T is stored
@@ -159,6 +174,7 @@ KDA_PREP_HELPER void matmul_blocks(DFB0& a, bool a_shared, DFB1& b, DFB2& o, uin
                         subblock_rows,
                         Kt);
                 }
+                KDA_ROUND_DST(0, subblock_rows * subblock_columns);
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t row = 0; row < subblock_rows; row++) {
@@ -218,6 +234,7 @@ KDA_ITEMS_HELPER void binary_items(
                 mul_block(a_id, b_id, a_tile, b_tile, item, 1);
             }
         }
+        KDA_ROUND_DST(0, count);
         tile_regs_commit();
         tile_regs_wait();
         pack_tiles(0, o_id, first, count);
@@ -258,6 +275,7 @@ KDA_PREP_HELPER void doubled_expm1_tiles(DFB0& in, DFB1& o, uint32_t n) {
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             expm1_tile<false, DST_ACCUM_MODE, Iterations>(tile, Mode);
         }
+        KDA_ROUND_DST(0, block_tiles);
         tile_regs_commit();
         tile_regs_wait();
         pack_tiles(0, o_id, block_start, block_tiles);
@@ -287,6 +305,7 @@ KDA_PREP_HELPER void multiply_by_column(DFB0& a, DFB1& col, DFB2& o, uint32_t Mt
             const uint32_t input_tile = block_start + tile;
             mul_tiles_bcast_cols(a_id, col_id, input_tile, input_tile / Nt, tile);
         }
+        KDA_ROUND_DST(0, block_tiles);
         tile_regs_commit();
         tile_regs_wait();
         pack_tiles(0, o_id, block_start, block_tiles);
@@ -318,11 +337,13 @@ KDA_PREP_HELPER void multiply_by_column_then(DFB0& a, DFB1& col, DFB2& b, DFB3& 
             const uint32_t input_tile = block_start + tile;
             mul_tiles_bcast_cols(a_id, col_id, input_tile, input_tile / Nt, tile);
         }
+        KDA_ROUND_DST(0, block_tiles);
         reconfig_tracked(b_id, b_id);
         mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(b_id);
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(b_id, block_start + tile, tile);
         }
+        KDA_ROUND_DST(0, block_tiles);
         tile_regs_commit();
         tile_regs_wait();
         pack_tiles(0, o_id, block_start, block_tiles);
@@ -355,11 +376,13 @@ KDA_PREP_HELPER void matmul_transposed_masked(DFB0& a, DFB1& b, DFB2& mask, DFB3
                 matmul_tiles_block(a_id, b_id, base + k, base + k, item, true, 1, 1, Kt);
             }
         }
+        KDA_ROUND_DST(0, count);
         reconfig_tracked(mask_id, mask_id);
         mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(mask_id);
         for (uint32_t item = 0; item < count; ++item) {
             mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(mask_id, 0, item);
         }
+        KDA_ROUND_DST(0, count);
         tile_regs_commit();
         tile_regs_wait();
         pack_tiles(0, o_id, first, count);
@@ -386,6 +409,7 @@ KDA_PREP_HELPER void multiply_by_row(DFB0& a, DFB1& row, DFB2& o, uint32_t n) {
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             mul_tiles_bcast_rows(a_id, row_id, block_start + tile, block_start + tile, tile);
         }
+        KDA_ROUND_DST(0, block_tiles);
         tile_regs_commit();
         tile_regs_wait();
         pack_tiles(0, o_id, block_start, block_tiles);
@@ -407,10 +431,12 @@ KDA_ITEMS_HELPER void matmul_items(DFB0& a, DFB1& b, DFB2& o, uint32_t n, uint32
         const uint32_t count = n - first < block ? n - first : block;
         a.wait_front(first + count);
         b.wait_front(first + count);
+        KDA_ROUND_REINIT(matmul_tiles_block_init(a_id, b_id, false, 1, 1, 1));
         tile_regs_acquire();
         for (uint32_t item = 0; item < count; ++item) {
             matmul_tiles_block(a_id, b_id, first + item, first + item, item, false, 1, 1, 1);
         }
+        KDA_ROUND_DST(0, count);
         tile_regs_commit();
         tile_regs_wait();
         pack_tiles(0, o_id, first, count);
@@ -516,6 +542,10 @@ KDA_ITEMS_HELPER void reduce_squared_rows_to_inverse_norms(
             binop_with_scalar_tile_init();
             mul_unary_tile(dst, scale_bits, VectorMode::C);
         }
+#ifdef KDA_ROUND_OPERANDS
+        kda_round_operand_init();
+        kda_round_operand_tile(dst, VectorMode::C);
+#endif
     };
 
     // The squares and the ones share the FP32 format, and the packer is already in it.
@@ -581,11 +611,13 @@ KDA_PREP_HELPER void activate_beta(DFB0& logits, DFB1& beta_row, DFB2& beta, uin
     sigmoid_tile_init<false>();
     for (uint32_t block_start = 0; block_start < tiles; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (tiles - block_start < max_dst_tiles) ? tiles - block_start : max_dst_tiles;
+        KDA_ROUND_REINIT(sigmoid_tile_init<false>());
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             copy_tile(logits_id, block_start + tile, tile);
             sigmoid_tile<VectorMode::R, false, DST_ACCUM_MODE, 2>(tile);
         }
+        KDA_ROUND_DST(0, block_tiles);
         tile_regs_commit();
         tile_regs_wait();
         pack_tiles(0, row_id, block_start, block_tiles);
@@ -649,6 +681,7 @@ KDA_PREP_HELPER void gate_exponentials(
         copy_dest_values<DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b>(0, 1);
         recip_tile_init<recip_dest, ReciprocalApproxMode::Precise>();
         recip_tile<recip_dest, ReciprocalApproxMode::Precise>(1);
+        KDA_ROUND_DST(0, 3);
         tile_regs_commit();
         tile_regs_wait();
         pack_tiles(0, exp_id, tile, 1);

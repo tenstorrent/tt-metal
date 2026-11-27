@@ -415,6 +415,53 @@ def test_prepare_chunk_recurrence_contract_accuracy_and_determinism(
         ttnn.deallocate(output)
 
 
+def test_prepare_chunk_recurrence_round_fp32_operands(device: ttnn.Device) -> None:
+    """round_fp32_operands rounds every tile the kernel packs, and products that move from DST to a source register, to
+    the 9 mantissa bits the FPU multiplier reads (nearest-even) instead of letting SrcA / SrcB truncate them: the
+    FLOAT32 outputs land on that grid and stay accurate, and v_beta = beta * v loses the bias of beta's truncation."""
+    case = _PRODUCTION_CASE
+    output_bf16_mask = _PRODUCTION_OUTPUT_BF16_MASK
+    host_inputs = _case_host_inputs(case, seed=52797)
+    expected = _oracle(host_inputs, case.num_heads, output_bf16_mask)
+    inputs = _device_inputs(host_inputs, device)
+
+    def outputs(**kwargs) -> list[torch.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            tensors = ttnn.experimental.kda.prepare_chunk_recurrence(
+                *inputs,
+                case.num_heads,
+                output_bf16_mask=output_bf16_mask,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=_production_compute_config(device),
+                **kwargs,
+            )
+        result = [ttnn.to_torch(tensor) for tensor in tensors]
+        for tensor in tensors:
+            ttnn.deallocate(tensor)
+        return result
+
+    truncated = outputs()
+    rounded = outputs(round_fp32_operands=True)
+    _assert_outputs_accurate(expected, rounded, context="round_fp32_operands")
+    biases = {}
+    for index, name in enumerate(OUTPUT_NAMES):
+        reference = expected[index].double()
+        if name == "t_inv":  # (its unit diagonal is exact either way)
+            reference = torch.tril(reference, diagonal=-1)
+
+        def bias(got: torch.Tensor) -> float:
+            got = got.double() if name != "t_inv" else torch.tril(got.double(), diagonal=-1)
+            return float((got * reference).sum() / (reference * reference).sum()) - 1.0
+
+        biases[name] = (bias(truncated[index]), bias(rounded[index]))
+        logger.info(f"{name}: bias {biases[name][0]:+.3e} -> {biases[name][1]:+.3e}")
+        if not output_bf16_mask & (1 << index):
+            low_bits = rounded[index].float().contiguous().view(torch.int32) & 0x3FFF
+            assert int(torch.count_nonzero(low_bits)) == 0, f"{name}: rounded outputs must keep 9 mantissa bits"
+    bias_off, bias_on = biases["v_beta"]
+    assert abs(bias_on) <= max(0.25 * abs(bias_off), 2e-6), "v_beta: rounding should remove most of the bias"
+
+
 def test_prepare_chunk_recurrence_t_inv_is_stable_for_correlated_keys(device: ttnn.Device) -> None:
     host_inputs = _t_inv_numerical_stress_inputs()
     num_heads = host_inputs[-1].shape[0]

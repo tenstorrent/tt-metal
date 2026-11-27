@@ -25,6 +25,9 @@ struct PrepareChunkRecurrenceParams {
     uint32_t beta_logits_column_offset = 0;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // Round every tile the compute kernel packs to the 9 mantissa bits the FPU multiplier reads, nearest-even, instead
+    // of letting the source registers truncate its FP32 intermediates and outputs (compiled in only when set).
+    bool round_fp32_operands = false;
 };
 
 struct PrepareChunkRecurrenceInputs {

@@ -348,6 +348,10 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = std::move(compute_hw),
     };
+    // The rounding is compiled in only when asked for: the kernel sits at the kernel-config size limit.
+    if (attrs.round_fp32_operands) {
+        compute.compiler_options.defines.insert({"KDA_ROUND_OPERANDS", "1"});
+    }
 
     m2::KernelRunArgs reader_run{.kernel = READER};
     m2::KernelRunArgs writer_run{.kernel = WRITER};
