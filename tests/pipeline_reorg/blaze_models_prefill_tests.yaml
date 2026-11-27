@@ -325,7 +325,6 @@
           models/demos/deepseek_v3_d_p/tests/long_context_accuracy/kimi_k3/test_golden_producer.py \
           models/demos/deepseek_v3_d_p/tests/long_context_accuracy/kimi_k3_1/test_golden_producer.py \
           models/demos/deepseek_v3_d_p/tests/long_context_accuracy/kimi_k3_1/test_blocks.py \
-          models/demos/deepseek_v3_d_p/tests/kda/dev/test_layer0_run_analysis.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
         python3 -m pytest -vvv --tb=short -k "torusxy-mesh-8x4" \

@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """KDA accuracy against an FP64 golden: the metric tiers of a run (``kda_tiers``) and the CI scorer (``KdaScorer``).
 
-``kda_tiers`` is the one definition of the KDA tiers. It reads reduced sums only, so a CI run and a dev run directory
-(``deepseek_v3_d_p/tests/kda/dev/layer0_run_analysis.py``, which stores these sums) score the same way:
+``kda_tiers`` defines the KDA tiers from reduced sums only:
 
 * per output row: Σe² (squared error), Σyy (squared golden), Σxy (device times golden) over the hidden;
 * per state snapshot (one after each device call) and head: the same three sums over the head's recurrent state.
