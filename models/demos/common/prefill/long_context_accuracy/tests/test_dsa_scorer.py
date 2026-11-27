@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""``DsaScorer`` (``dsa/scorer.py``): scored rows, causality, gain, the per-chunk check, and a whole run on a stub
+"""``DsaScorer`` (``dsa/scorer.py``): scored rows, causality, gain, the per-chunk contracts, and a whole run on a stub
 golden: metric tiers, fail-closed bars and the recompute check. CPU only, tiny dimensions."""
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar, check
-from models.demos.common.prefill.long_context_accuracy.block import METRIC_TIERS, BlockOutputs
+from models.demos.common.prefill.long_context_accuracy.block import METRIC_TIERS, BlockOutputs, ChunkScore
 from models.demos.common.prefill.long_context_accuracy.dsa import fp64_attention as fa
 from models.demos.common.prefill.long_context_accuracy.dsa import scorer as ds
 from models.demos.common.prefill.long_context_accuracy.tests.test_dsa_fp64_attention import attend, small_case
@@ -90,10 +90,9 @@ def run_exact(scorer, data, w, dims):
     for lo in (0, 4):
         rows = {k: v[lo : lo + 4] for k, v in data.items()}
         outputs = exact_outputs(scorer, data, w, dims, lo, lo + 4)
-        scorer.score_chunk(lo, outputs, rows)
-        assert scorer.check_chunk(lo, outputs, rows, ()) == []
+        assert scorer.score_chunk(lo, outputs, rows) == ChunkScore()
     carried = {"kv_cache": torch.cat([data["latent"], data["kpe"]], 1), "index_cache": data["index_key"]}
-    return scorer.score_run(carried, None)
+    return scorer.score_run(carried)
 
 
 def test_device_input_is_the_normed_input_rounded_once() -> None:
@@ -139,24 +138,22 @@ def test_run_bars_fail_closed() -> None:
         got[r >= 3, -1] = r[r >= 3] - 3  # rows r >= 3 select r - 3 for their lowest-ranked key r - 2 (still causal)
         scorer.score_chunk(lo, BlockOutputs(outputs.output, {"topk": got}), rows)
     carried = {"kv_cache": torch.cat([data["latent"], data["kpe"]], 1), "index_cache": data["index_key"]}
-    tiers = scorer.score_run(carried, None)
+    tiers = scorer.score_run(carried)
     failures = check([m for t in METRIC_TIERS for m in tiers[t]], bars)
     assert any(f.startswith("sel_nrmse_median") for f in failures), failures
 
 
-def test_check_chunk(expect_error) -> None:
+def test_score_chunk_reports_contract_breaks() -> None:
     scorer, data, w, dims = stub_run([5])
+    scorer.score_chunk(0, exact_outputs(scorer, data, w, dims, 0, 4), {k: v[0:4] for k, v in data.items()})
     rows = {k: v[4:8] for k, v in data.items()}
     outputs = exact_outputs(scorer, data, w, dims, 4, 8)
-    assert scorer.check_chunk(4, outputs, rows, ()) == []
     broken = outputs.output.clone()
     broken[1, 0] = math.nan
     future = outputs.extras["topk"].clone()
     future[2, 0] = 7  # row 6 selects key 7
-    violations = scorer.check_chunk(4, BlockOutputs(broken, {"topk": future}), rows, ())
+    violations = scorer.score_chunk(4, BlockOutputs(broken, {"topk": future}), rows).violations
     assert violations == ["non-finite device attention output", "1 selected keys lie after their row (first on row 6)"]
-    with expect_error(ValueError, "no per-chunk bars"):
-        scorer.check_chunk(4, outputs, rows, [AcceptanceBar("attn_nrmse", "max", 1.0)])
 
 
 def test_recompute_is_checked(expect_error) -> None:

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Host contracts of ``moe/scorer.MoeScorer``, with hand-computed values: a scored chunk reports the absolute and
 relative error, recall, dropped weight, miss ranks and gain the hand case has, in the metric tiers its docstring names
-(one tier per metric name); misses land in the window of their absolute row; ``check_chunk`` reports non-finite
-output and a row routed to one expert twice, and refuses chunk bars. CPU only."""
+(one tier per metric name); misses land in the window of their absolute row; ``score_chunk`` reports non-finite
+output and a row routed to one expert twice, with no measurement for chunk bars. CPU only."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import pytest
 import torch
 
 from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar, check
-from models.demos.common.prefill.long_context_accuracy.block import METRIC_TIERS, BlockOutputs
+from models.demos.common.prefill.long_context_accuracy.block import METRIC_TIERS, BlockOutputs, ChunkScore
 from models.demos.common.prefill.long_context_accuracy.moe.scorer import MoeScorer
 
 BARS = (
@@ -53,7 +53,7 @@ def test_a_scored_run_reports_the_hand_case_in_its_tiers() -> None:
     scorer = _scorer()
     outputs, rows = _hand_case()
     scorer.score_chunk(0, outputs, rows)
-    tiers = scorer.score_run({}, None)
+    tiers = scorer.score_run({})
     assert sorted(tiers) == list(METRIC_TIERS)
     span = {"start": 0, "end": 3, "rows": 3}
     names = [set().union(*(set(m) - set(span) for m in tiers[t])) for t in METRIC_TIERS]
@@ -122,32 +122,29 @@ def test_misses_land_in_the_window_of_their_absolute_row() -> None:
         scorer.score_chunk(
             start, _outputs(out, ids, [[0.5, 0.5]] * 2), _golden_rows(out, [[0, 1]] * 2, [[0.5, 0.5]] * 2)
         )
-    run, *windows = scorer.score_run({}, None)[1]
+    run, *windows = scorer.score_run({})[1]
     assert run["run_misses"] == 1
     assert [(w["start"], w["misses"]) for w in windows] == [(0, 0), (2, 1)]
     assert windows[0]["recall_mean"] == 1.0 and windows[1]["recall_mean"] == pytest.approx(0.75)
     assert check(windows[:1], BARS) == []
 
 
-def test_check_chunk_reports_contract_breaks_and_refuses_chunk_bars(expect_error) -> None:
+def test_score_chunk_reports_contract_breaks_and_no_measurement() -> None:
     scorer = _scorer()
     good = [[1.0, 2.0], [3.0, 4.0]]
     rows = _golden_rows(good, [[0, 1], [2, 3]], [[0.5, 0.5]] * 2)
     exact = _outputs(good, [[1, 0], [3, 2]], [[0.5, 0.5]] * 2)  # (the golden's sets, in another order)
-    scorer.score_chunk(0, exact, rows)
-    assert scorer.check_chunk(0, exact, rows, ()) == []
+    assert scorer.score_chunk(0, exact, rows) == ChunkScore()
 
     nan = _outputs([[1.0, float("nan")], [3.0, 4.0]], [[0, 1], [2, 3]], [[0.5, 0.5]] * 2)
-    scorer.score_chunk(2, nan, rows)
-    assert scorer.check_chunk(2, nan, rows, ()) == ["non-finite MoE output"]
+    assert scorer.score_chunk(2, nan, rows).violations == ["non-finite MoE output"]
 
     twice = _outputs(good, [[0, 1], [2, 2]], [[0.5, 0.5]] * 2)
-    scorer.score_chunk(4, twice, rows)
-    assert scorer.check_chunk(4, twice, rows, ()) == ["a row routed to one expert twice"]
+    assert scorer.score_chunk(4, twice, rows).violations == ["a row routed to one expert twice"]
 
     # (a routing miss is no contract break: the window bars judge it)
     missing = _outputs(good, [[0, 1], [3, 9]], [[0.5, 0.5]] * 2)
-    scorer.score_chunk(6, missing, rows)
-    assert scorer.check_chunk(6, missing, rows, ()) == []
-    with expect_error(ValueError, "MoE has no per-chunk bars"):
-        scorer.check_chunk(6, missing, rows, BARS)
+    scored = scorer.score_chunk(6, missing, rows)
+    assert scored == ChunkScore()
+    # (no measurement: a per-chunk bar fails closed)
+    assert check([scored.measurement], BARS[:1]) == ["moe_row_nrmse_median: not measured by any window"]

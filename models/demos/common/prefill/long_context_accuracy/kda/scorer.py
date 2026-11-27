@@ -35,9 +35,7 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar, check
-from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs, MetricTiers
-from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden
+from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs, ChunkScore, MetricTiers
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
     SUM_EE,
     SUM_YY,
@@ -128,8 +126,8 @@ class KdaScorer:
     rows, and ``outputs.extras["recurrent"]`` ``[heads, k, v]``, the device state after the call, against the golden
     ``state.recurrent`` at the call's end (so every call ends a golden segment).
 
-    Per call (``check_chunk``): finite output and state, and the per-call bars on the call's output errors
-    (``call_nrmse``, ``call_pcc``, ``call_rms_err``, ``call_rms_ref``). Over the run (``score_run``): ``kda_tiers``
+    Per call (``score_chunk``): finite output and state, and the call's output errors (``call_nrmse``, ``call_pcc``,
+    ``call_rms_err``, ``call_rms_ref``) as the measurement per-chunk bars name. Over the run (``score_run``): ``kda_tiers``
     with the golden's per-row floor ``token_floor``, plus in tier 0 ``output_rms_err`` / ``output_rms_ref`` /
     ``output_pcc``, in tier 1 one measurement per 1,024-row window (``window_nrmse`` / ``_rms_err`` / ``_rms_ref`` /
     ``_pcc``) and per call (``call_*``), and the final state's worst per-head PCC ``state_head_final_pcc_min`` (head
@@ -145,11 +143,12 @@ class KdaScorer:
         self._state_ends: list[int] = []
         self._final_head_sums: torch.Tensor | None = None  # row_sums per head of the last call's state
 
-    def score_chunk(self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor]) -> None:
+    def score_chunk(self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor]) -> ChunkScore:
         sums = row_sums(rows["output"], outputs.output)
         self._rows.append(lo, sums=sums)
         hi = lo + sums.shape[0]
-        self._calls.append({"start": lo, "end": hi, "rows": hi - lo, **errors(sums, "call_")})
+        call = {"start": lo, "end": hi, "rows": hi - lo, **errors(sums, "call_")}
+        self._calls.append(call)
         golden_state = rows[STATE_PRODUCT][0]
         head_sums = row_sums(golden_state.flatten(1), outputs.extras["recurrent"].flatten(1))
         self._state_sums.append(
@@ -157,21 +156,14 @@ class KdaScorer:
         )
         self._state_ends.append(hi)
         self._final_head_sums = head_sums
-
-    def check_chunk(
-        self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor], bars: Sequence[AcceptanceBar]
-    ) -> list[str]:
-        call = self._calls[-1]
-        if call["start"] != lo:
-            raise ValueError(f"check_chunk at row {lo} does not follow score_chunk at row {call['start']}")
         violations = [
             f"{name} has {int((~torch.isfinite(t)).sum())} non-finite values"
             for name, t in (("output", outputs.output), ("recurrent state", outputs.extras["recurrent"]))
             if not torch.isfinite(t).all()
         ]
-        return violations + check([call], bars)
+        return ChunkScore(call, violations)
 
-    def score_run(self, carried_state: Mapping[str, torch.Tensor], golden: Fp64Golden) -> MetricTiers:
+    def score_run(self, carried_state: Mapping[str, torch.Tensor]) -> MetricTiers:
         sums = self._rows.column("sums")
         tiers = kda_tiers(
             sums[:, SUM_EE],

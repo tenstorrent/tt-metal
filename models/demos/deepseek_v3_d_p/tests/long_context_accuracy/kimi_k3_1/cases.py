@@ -144,7 +144,7 @@ DSA_GOLDEN_NAMES = GoldenNames(
 #         growth, accepted by these ceilings, not gated by a growth bar.
 # Reruns are bit-identical on full windows; choosing other scored rows moved a window's metrics by 3-4%. The gate is
 # the selection NRMSE (m06n.11.7); missed-key max is a metric tier 2 diagnostic. No future key is a per-chunk contract
-# (DsaScorer.check_chunk).
+# (DsaScorer.score_chunk).
 DSA_BARS: dict[int, dict[str, float]] = {
     5120: {"sel_nrmse_median": 0.0065, "attn_nrmse": 0.036, "attn_rms_err": 7.1e-4},
     128000: {"sel_nrmse_median": 0.038, "attn_nrmse": 0.060, "attn_rms_err": 1.3e-3},

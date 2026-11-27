@@ -29,19 +29,18 @@ Metric tiers (``score_run``; a whole-run metric whose name a window also uses ca
   the device output on the reference), ``run_scored_rows``, ``recompute_nrmse`` and ``nrmse_floor`` (the per-row
   NRMSE floor, ``windowed_errors.golden_floor`` of the reference row norms).
 
-Per chunk (``check_chunk``): the output is finite and no row selects a key after itself (causality); DSA has no
-per-chunk bars (its bars are per window).
+Per chunk (``score_chunk``): the output is finite and no row selects a key after itself (causality); no measurement
+(the bars are per window).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar
-from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs, MetricTiers
+from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs, ChunkScore, MetricTiers
 from models.demos.common.prefill.long_context_accuracy.dsa.fp64_attention import Dims, RowArms, normed_input, score_rows
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden
 from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_hits, topk_recall
@@ -176,7 +175,7 @@ class DsaScorer:
         bf16."""
         return normed_input(rows[self.names.input], self.w, self.dims).to(torch.bfloat16)
 
-    def score_chunk(self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor]) -> None:
+    def score_chunk(self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor]) -> ChunkScore:
         names, out, got = self.names, outputs.output, outputs.extras["topk"]
         n = rows[names.input].shape[0]
         hi = lo + n
@@ -187,16 +186,23 @@ class DsaScorer:
         want, scores = rows[names.selection].long(), rows[names.selection_scores].float()
         hits = topk_hits(got, want)  # one membership per chunk: recall, misses and the scored rows' missed keys
         miss = missed_keys(hits, want, scores)
+        future = future_keys(got, lo)
         self.series.append(
             lo,
             recall=topk_recall(hits, want),
             misses_all=torch.bincount(miss["row"], minlength=n),
             misses_top_half=torch.bincount(miss["row"][2 * miss["rank"] < miss["selected"]], minlength=n),
-            future=future_keys(got, lo),
+            future=future,
         )
+        violations = []
+        if not torch.isfinite(out).all():
+            violations.append("non-finite device attention output")
+        if future.any():
+            first = lo + int(future.nonzero()[0])
+            violations.append(f"{int(future.sum())} selected keys lie after their row (first on row {first})")
         inside = self.scored[(self.scored >= lo) & (self.scored < hi)]
         if not inside.numel():
-            return
+            return ChunkScore(violations=violations)
         local = inside - lo
         # the scored rows' normed input only: its ops are per row (one row reduction, elementwise IEEE ops), so each
         # row equals the chunk's device input before rounding bit for bit, at ~1/60 of the chunk's cost
@@ -217,22 +223,9 @@ class DsaScorer:
         at = torch.isin(self.sampled_rows, inside)
         if at.any():
             self.recompute.append(row_sums(self.sampled_output[at], ref[torch.isin(inside, self.sampled_rows)]))
+        return ChunkScore(violations=violations)
 
-    def check_chunk(
-        self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor], bars: Sequence[AcceptanceBar]
-    ) -> list[str]:
-        if bars:
-            raise ValueError(f"DSA has no per-chunk bars (its bars are per {WINDOW}-row window), got {list(bars)}")
-        violations = []
-        if not torch.isfinite(outputs.output).all():
-            violations.append("non-finite device attention output")
-        future = future_keys(outputs.extras["topk"], lo)
-        if future.any():
-            first = lo + int(future.nonzero()[0])
-            violations.append(f"{int(future.sum())} selected keys lie after their row (first on row {first})")
-        return violations
-
-    def score_run(self, carried_state: Mapping[str, torch.Tensor], golden: Fp64Golden) -> MetricTiers:
+    def score_run(self, carried_state: Mapping[str, torch.Tensor]) -> MetricTiers:
         """Raises when the series does not cover every row, or when the FP64 recompute is unchecked (no sampled row
         scored) or off the golden's stored attention by more than ``RECOMPUTE_NRMSE``."""
         if self.series.end != self.rows:

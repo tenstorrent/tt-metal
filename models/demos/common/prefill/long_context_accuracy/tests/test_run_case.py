@@ -15,9 +15,10 @@ import pytest
 import torch
 from loguru import logger
 
-from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar, check
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar
 from models.demos.common.prefill.long_context_accuracy.block import (
     BlockOutputs,
+    ChunkScore,
     ContextBars,
     GoldenIdentity,
     LongContextCase,
@@ -111,8 +112,8 @@ class FakeBlock:
 
 
 class FakeScorer:
-    """Scores ``target`` per row; checks each chunk's NRMSE against ``chunk_nrmse`` bars; tier 0 is the run's NRMSE,
-    tier 1 the per-chunk-window NRMSE, tier 2 the carried state's error."""
+    """Scores ``target`` per row; measures each chunk's ``chunk_nrmse``; tier 0 is the run's NRMSE, tier 1 the
+    per-chunk-window NRMSE, tier 2 the carried state's error (the golden's state after the last row is ``ROWS``)."""
 
     golden_tensors = ("target",)
 
@@ -122,27 +123,17 @@ class FakeScorer:
 
     def score_chunk(self, lo, outputs, rows):
         assert torch.equal(outputs.extras["rows"], torch.arange(lo, lo + rows["target"].shape[0]))
-        self.series.append(lo, sums=row_sums(rows["target"], outputs.output))
+        sums = row_sums(rows["target"], outputs.output)
+        self.series.append(lo, sums=sums)
         self.scored.append(lo)
+        hi = lo + len(outputs.output)
+        return ChunkScore({"start": lo, "end": hi, "rows": hi - lo, "chunk_nrmse": nrmse(sums)})
 
-    def check_chunk(self, lo, outputs, rows, bars):
-        return check(
-            [
-                {
-                    "start": lo,
-                    "end": lo + len(outputs.output),
-                    "chunk_nrmse": nrmse(row_sums(rows["target"], outputs.output)),
-                }
-            ],
-            bars,
-        )
-
-    def score_run(self, carried_state, golden):
-        state = golden.read_rows(["state"], 0, ROWS)["state"]
+    def score_run(self, carried_state):
         return {
             0: [self.series.whole(lambda w: errors(w["sums"], "output_"))],
             1: self.series.windows(CHUNK, lambda w: {"window_nrmse": nrmse(w["sums"])}),
-            2: [{"start": 0, "end": ROWS, "rows": ROWS, "state_error": float((carried_state["state"] - state).abs())}],
+            2: [{"start": 0, "end": ROWS, "rows": ROWS, "state_error": float((carried_state["state"] - ROWS).abs())}],
         }
 
 
@@ -212,7 +203,7 @@ def test_run_scores_every_chunk_in_order_and_logs_progress(golden_root, log_line
         ("carried_state",),
         ("release",),
     ]
-    assert TinyGolden.reads == [(0, 4), (4, 8), (8, 10)]  # (each chunk's rows read once; score_run reads none)
+    assert TinyGolden.reads == [(0, 4), (4, 8), (8, 10)]  # (each chunk's rows read once)
     tiers = result.metric_tiers
     # only rows [4, 8) are off, by 1%: 0.01 * sqrt((5² + 6² + 7² + 8²) / (1² + ... + 10²))
     assert tiers[0][0]["output_nrmse"] == pytest.approx(0.01 * (174 / 385) ** 0.5)
@@ -315,7 +306,7 @@ def test_metric_tiers_need_spans_and_one_tier_per_metric(golden_root, expect_err
             super().__init__()
             self.tiers = tiers
 
-        def score_run(self, carried_state, golden):
+        def score_run(self, carried_state):
             return self.tiers
 
     with expect_error(ValueError, "metric 'nrmse' is in metric tiers 0 and 1"):

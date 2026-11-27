@@ -64,25 +64,31 @@ class DeviceBlock(Protocol):
         """Free the device resources ``build`` and ``forward`` took."""
 
 
+@dataclass(frozen=True)
+class ChunkScore:
+    """What ``BlockScorer.score_chunk`` returns for one chunk: ``measurement``, the chunk's span (``start``, ``end``,
+    ``rows``) and the metrics per-chunk bars may name (empty for a Block without per-chunk bars: a per-chunk bar then
+    fails as not measured), and ``violations``, the chunk's broken Block contracts (non-finite output, a row routed to
+    one expert twice, a selected key after its row, ...)."""
+
+    measurement: Mapping[str, Any] = field(default_factory=dict)
+    violations: Sequence[str] = field(default_factory=list)
+
+
 class BlockScorer(Protocol):
     """Scores one Block type's device results against its golden products, chunk by chunk, then over the run.
 
-    ``golden_tensors``: the golden products (``Fp64Golden.read_rows`` names) ``score_chunk`` / ``check_chunk`` read
-    for each chunk; ``run_case`` prefetches them."""
+    ``golden_tensors``: the golden products (``Fp64Golden.read_rows`` names) ``score_chunk`` reads for each chunk;
+    ``run_case`` prefetches them."""
 
     golden_tensors: Sequence[str]
 
-    def score_chunk(self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor]) -> None:
-        """Accumulate the chunk ``[lo, lo + n)``; ``rows`` holds the golden products of ``golden_tensors`` and of the
-        case's ``input_tensors`` for these rows."""
+    def score_chunk(self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor]) -> ChunkScore:
+        """Accumulate the chunk ``[lo, lo + n)`` and return its ``ChunkScore``; ``rows`` holds the golden products of
+        ``golden_tensors`` and of the case's ``input_tensors`` for these rows. ``run_case`` checks the measurement
+        against the context length's per-chunk bars and stops at the first chunk with any violation."""
 
-    def check_chunk(
-        self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor], bars: Sequence[AcceptanceBar]
-    ) -> list[str]:
-        """Every violation of the chunk just scored: the block's contracts (finite output, distinct routing, ...) and
-        ``bars``, the context length's per-chunk bars. ``run_case`` stops at the first chunk with any."""
-
-    def score_run(self, carried_state: Mapping[str, torch.Tensor], golden: Fp64Golden) -> MetricTiers:
+    def score_run(self, carried_state: Mapping[str, torch.Tensor]) -> MetricTiers:
         """The run's metrics by ``metric_tier``, after every chunk is scored; ``carried_state`` from the device."""
 
 
@@ -97,8 +103,8 @@ class GoldenIdentity:
 
 @dataclass(frozen=True)
 class ContextBars:
-    """The bars of one context length: ``chunk`` checked on every chunk (``BlockScorer.check_chunk``), ``run`` on
-    the run's metric tiers."""
+    """The bars of one context length: ``chunk`` checked on every chunk's ``ChunkScore.measurement``, ``run`` on the
+    run's metric tiers."""
 
     chunk: Sequence[AcceptanceBar] = ()
     run: Sequence[AcceptanceBar | GrowthBar] = ()

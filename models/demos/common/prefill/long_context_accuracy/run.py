@@ -6,7 +6,8 @@ Order, so that a wrong golden or weights fail before any device time: open the g
 ``case.prepare`` (weights, digests, scorer), require the golden's identity and every product the case reads, then
 build the device Block. The chunks run in order from row 0. One prefetch thread reads chunk ``c + 1``'s golden rows
 and builds its device input while the device runs chunk ``c`` and the host scores it. Each chunk is scored, then
-checked (``BlockScorer.check_chunk``); the first chunk with a violation stops the run. After the last chunk the
+checked (its ``ChunkScore``'s contract violations, then the per-chunk bars on its measurement); the first chunk with
+a violation stops the run. After the last chunk the
 carried state is read, the run is scored into metric tiers and checked against the context length's run bars.
 
 First the host heap is set to keep freed memory for reuse (``_retain_freed_heap``, one ``LC_HEAP`` line).
@@ -17,7 +18,7 @@ carried state and score run), and one ``LC_CHUNK`` line per chunk with the case,
 time, ETA (from the chunks after the first, whose one-time cost it leaves out; ``?`` after the first) and the chunk's
 time split: ``golden`` (read
 and input build on the prefetch thread, overlapped), ``wait`` (the part the loop waited for it), ``device``
-(forward including readback) and ``score`` (``score_chunk`` + ``check_chunk``). Then one ``LONG_CONTEXT_RESULT=``
+(forward including readback) and ``score`` (``score_chunk`` and the chunk bars). Then one ``LONG_CONTEXT_RESULT=``
 JSON line.
 """
 
@@ -183,8 +184,8 @@ def run_case(case: LongContextCase, context_len: int, mesh: Any, checkpoint: Pat
                     outputs = block.forward(x, lo, hi)
                     device_s = time.perf_counter() - t
                     t = time.perf_counter()
-                    scorer.score_chunk(lo, outputs, rows)
-                    violations = scorer.check_chunk(lo, outputs, rows, bars.chunk)
+                    scored = scorer.score_chunk(lo, outputs, rows)
+                    violations = [*scored.violations, *check([scored.measurement], bars.chunk)]
                     score_s = time.perf_counter() - t
                     for key, value in zip(totals, (golden_s, wait_s, device_s, score_s)):
                         totals[key] += value
@@ -215,7 +216,7 @@ def run_case(case: LongContextCase, context_len: int, mesh: Any, checkpoint: Pat
 
     if result.stopped_at is None:
         with stage("score run"):
-            tiers = scorer.score_run(carried, golden)
+            tiers = scorer.score_run(carried)
             _check_tiers(tiers)
             result.metric_tiers = tiers
             result.violations = check([m for tier in METRIC_TIERS for m in tiers.get(tier, [])], bars.run)
