@@ -35,6 +35,7 @@ struct Chronology {
 
     kda_chronology::Topology topology;
     kda_chronology::Topology interval;
+    uint32_t sp_rank;
     uint32_t position;  // this rank's place in the relay, 0 on the chronologically first rank (the holder)
     uint32_t index;     // the slab index
     bool zero_entry;    // the chunk starts from zeros (a request's head, or no slab entry)
@@ -57,7 +58,7 @@ struct Chronology {
         }
         noc_async_read_barrier();
         const auto* chron_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chron);
-        const uint32_t sp_rank = get_common_arg_val<uint32_t>(common + 3);
+        sp_rank = get_common_arg_val<uint32_t>(common + 3);
         const uint32_t actual_start = chron_words[0];
         index = slab ? chron_words[slab_index_word] : 0;
         topology = kda_chronology::derive(actual_start, sp_rank, sp_size, local_rows);

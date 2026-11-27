@@ -30,23 +30,49 @@ extern std::uint32_t llk_assert_matmul_row_mop_rt_dim;
 #endif
 
 /**
+ * @brief Program ADDR_MOD_6 with the row MOP's step to the next tile of the reuse row.
+ *
+ * Resets src and fidelity and steps dest cr (and the counter with it) to the base row of the next tile: the next
+ * column when SrcB is reused along a row, the next row when SrcA is reused down a column.
+ *
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @note Called by @ref _llk_math_matmul_ at entry of a row-MOP call, which restores the ADDR_MOD_6 invariant
+ *       (dest += 2) before returning.
+ */
+inline void matmul_row_mop_set_next_tile_addrmod(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
+{
+    const bool reuse_a                   = ct_dim >= rt_dim;
+    const std::uint32_t dest_tile_stride = (reuse_a ? 1 : ct_dim) << DstTileSizeLog2[DstTileShape::Tile32x32];
+    LLK_ASSERT(dest_tile_stride <= DEST_INCR_MASK, "matmul row MOP: the DEST step to the next tile does not fit the dest increment");
+    const addr_mod_t next_tile {
+        .srca     = {.incr = 0, .clr = 1, .cr = 1},
+        .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+        .dest     = {.incr = static_cast<std::int16_t>(dest_tile_stride), .clr = 0, .cr = 1},
+        .fidelity = {.incr = 0, .clr = 1},
+    };
+    // next_tile.set(ADDR_MOD_6), but the dest word via TT_SETC16: its DEST step depends on run-time ct_dim / rt_dim.
+    TTI_SETC16(addr_mod_t::addr_mod_src_reg_addr[ADDR_MOD_6], next_tile.srca.val() | (next_tile.srcb.val() << 8));
+    TT_SETC16(addr_mod_t::addr_mod_dest_reg_addr[ADDR_MOD_6], next_tile.dest.val() | (next_tile.fidelity.val() << 13));
+    TTI_SETC16(addr_mod_t::addr_mod_bias_reg_addr[ADDR_MOD_6], next_tile.bias.val());
+}
+
+/**
  * @brief Program the matmul address-mod slots for the given tile shapes, transpose, and fidelity.
  *
- * Sets up the SrcA/SrcB/dest increments and the fidelity-phase reset mods (ADDR_MOD_5, plus ADDR_MOD_6 when
- * throttling or running the row MOP). The increment pattern branches on the in0/in1 face geometry (16x32, 32x16,
- * full 32x32) and transpose.
+ * Sets up the SrcA/SrcB/dest increments and the fidelity-phase reset mod (ADDR_MOD_5). ADDR_MOD_6, which the
+ * row MOP and the throttled MOP both use, is programmed by @ref _llk_math_matmul_ for the duration of each call.
+ * The increment pattern branches on the in0/in1 face geometry (16x32, 32x16, full 32x32) and transpose.
  *
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam THROTTLE_LEVEL: Non-zero adds the extra fidelity-clear address mod used by the throttled MOP.
- * @tparam ROW_MOP: True to program the address mods of the row MOP (@ref matmul_runs_row_mop): ADDR_MOD_5, 6 and 3.
+ * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; does not change the slots programmed here.
+ * @tparam ROW_MOP: True to program the address mods of the row MOP (@ref matmul_runs_row_mop): ADDR_MOD_5 and 3.
  * @param transpose: True to transpose in1 faces during the multiply.
  * @param in0_tile_r_dim: Row dimension of an in0 tile.
  * @param in0_tile_c_dim: Column dimension of an in0 tile.
  * @param in1_tile_r_dim: Row dimension of an in1 tile.
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
- * @param ct_dim: Number of column tiles in the output block; sets the row MOP's DEST step.
- * @param rt_dim: Number of row tiles in the output block; sets the row MOP's DEST step.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool ROW_MOP>
 inline void matmul_configure_addrmod(
@@ -55,9 +81,7 @@ inline void matmul_configure_addrmod(
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
     const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    const bool partial_face            = false,
-    const std::uint32_t ct_dim         = 1,
-    const std::uint32_t rt_dim         = 1)
+    const bool partial_face            = false)
 {
     static_assert(!(ROW_MOP && THROTTLE_LEVEL), "The row MOP and the throttled MOP both own ADDR_MOD_6");
     constexpr std::uint32_t fidelity_increment = is_high_fidelity(math_fidelity) ? 1 : 0;
@@ -96,22 +120,6 @@ inline void matmul_configure_addrmod(
         }
             .set(ADDR_MOD_5);
 
-        // reset src and fidelity, step dest cr (and the counter with it) to the base row of the next tile of the
-        // reuse row: the next column when SrcB is reused along a row, the next row when SrcA is reused down a column
-        const bool reuse_a                   = ct_dim >= rt_dim;
-        const std::uint32_t dest_tile_stride = (reuse_a ? 1 : ct_dim) << DstTileSizeLog2[DstTileShape::Tile32x32];
-        LLK_ASSERT(dest_tile_stride <= DEST_INCR_MASK, "matmul row MOP: the DEST step to the next tile does not fit the dest increment");
-        const addr_mod_t next_tile {
-            .srca     = {.incr = 0, .clr = 1, .cr = 1},
-            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-            .dest     = {.incr = static_cast<std::int16_t>(dest_tile_stride), .clr = 0, .cr = 1},
-            .fidelity = {.incr = 0, .clr = 1},
-        };
-        // next_tile.set(ADDR_MOD_6), but the dest word via TT_SETC16: its DEST step depends on run-time ct_dim / rt_dim.
-        TTI_SETC16(addr_mod_t::addr_mod_src_reg_addr[ADDR_MOD_6], next_tile.srca.val() | (next_tile.srcb.val() << 8));
-        TT_SETC16(addr_mod_t::addr_mod_dest_reg_addr[ADDR_MOD_6], next_tile.dest.val() | (next_tile.fidelity.val() << 13));
-        TTI_SETC16(addr_mod_t::addr_mod_bias_reg_addr[ADDR_MOD_6], next_tile.bias.val());
-
         // The row's last MVMUL: reset srca/srcb/fidelity and return DEST (counter and CR) to the block base, as the
         // SETRWC(SET_ABD_F) after the per-tile MOP does, so the next run starts from the same state.
         addr_mod_t {
@@ -132,18 +140,6 @@ inline void matmul_configure_addrmod(
             .fidelity = {.incr = fidelity_increment, .clr = 0},
         }
             .set(ADDR_MOD_5);
-    }
-
-    if constexpr (THROTTLE_LEVEL)
-    {
-        // reset all, including fidelity
-        addr_mod_t {
-            .srca     = {.incr = 0, .clr = 1, .cr = 1},
-            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-            .dest     = {.incr = 0, .clr = 1, .cr = 1},
-            .fidelity = {.incr = 0, .clr = 1},
-        }
-            .set(ADDR_MOD_6);
     }
 
     if ((is_in0_16x32 && (!is_in1_32x16)) || is_in0_32x16)
@@ -824,7 +820,7 @@ inline void matmul_configure_mop_throttled(
  * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; 0 disables throttling, valid throttled range is {1,2,3,4,5}.
  *         Init records the MOP it programmed in @ref ckernel::math::matmul_mop_throttle_level.
  * @tparam ROW_MOP: Build the row MOP of @ref matmul_runs_row_mop (ignored when THROTTLE_LEVEL > 0); also programs
- *         ADDR_MOD_3 and ADDR_MOD_6.
+ *         ADDR_MOD_3.
  * @param in0_tile_r_dim: Row dimension of an in0 tile.
  * @param in0_tile_c_dim: Column dimension of an in0 tile.
  * @param in1_tile_r_dim: Row dimension of an in1 tile.
@@ -865,7 +861,7 @@ inline void _llk_math_matmul_init_(
     }
 
     matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, row_mop>(
-        transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, ct_dim, rt_dim);
+        transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 
     // The throttled replay sequence is written for full 32x32 tiles and wedges the math thread on any
     // other geometry; throttling is only a throughput cap, so those tiles take the unthrottled MOP.
@@ -928,6 +924,8 @@ inline void _llk_math_matmul_uninit_()
  * @note Call @ref _llk_math_matmul_init_ with matching template args before this
  *       function, and @ref _llk_math_matmul_uninit_ after it to restore modified state. With the row MOP,
  *       ct_dim and rt_dim must also match the init.
+ * @note With the row MOP or the throttled MOP, programs ADDR_MOD_6 at entry and restores its dest += 2
+ *       invariant before returning, so SFPU ops can follow in the same kernel.
  * @note On the unpack thread, @ref _llk_unpack_AB_matmul_ must feed the operand tiles into SrcA/SrcB.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool ROW_MOP = false>
@@ -944,6 +942,18 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
         "matmul: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
         "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
 
+    if constexpr (THROTTLE_LEVEL)
+    {
+        // The throttled MOP's last MVMUL resets all counters, including fidelity, through ADDR_MOD_6.
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = 0, .clr = 1},
+        }
+            .set(ADDR_MOD_6);
+    }
+
     const bool reuse_a          = ct_dim >= rt_dim;
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // reuse-dim
@@ -958,7 +968,8 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
     {
         LLK_ASSERT(
             ct_dim == llk_assert_matmul_row_mop_ct_dim && rt_dim == llk_assert_matmul_row_mop_rt_dim,
-            "matmul row MOP: ct_dim / rt_dim must match the init's, which set the MOP's tile count and DEST step");
+            "matmul row MOP: ct_dim / rt_dim must match the init's, which set the MOP's tile count");
+        matmul_row_mop_set_next_tile_addrmod(ct_dim, rt_dim);
         // One MOP run per reuse row: it steps DEST from tile to tile, clears both sources and leaves every counter
         // reset at the block base, so consecutive runs need only the row's DEST offset
         if (t_dim == 1)
@@ -969,16 +980,20 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
             {
                 ckernel_template::run();
             }
-            return;
         }
-        for (std::uint32_t k = 0; k < k_steps; k++)
+        else
         {
-            for (std::uint32_t t = 0; t < t_dim; t++)
+            for (std::uint32_t k = 0; k < k_steps; k++)
             {
-                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (reuse_a ? ct_dim * t : t));
-                ckernel_template::run();
+                for (std::uint32_t t = 0; t < t_dim; t++)
+                {
+                    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (reuse_a ? ct_dim * t : t));
+                    ckernel_template::run();
+                }
             }
         }
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
         return;
     }
 
@@ -1024,5 +1039,11 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
                 }
             }
         }
+    }
+
+    if constexpr (THROTTLE_LEVEL)
+    {
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     }
 }

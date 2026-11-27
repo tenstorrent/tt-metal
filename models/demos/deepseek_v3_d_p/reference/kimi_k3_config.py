@@ -52,10 +52,12 @@ class KimiK3Config:
     # chunk to attend over, and 4096 left ring_mla 1,408 B short (chunked L24) once the fused
     # matmul + reduce-scatter kept 2,176 B/bank of L1. AttnRes uses none since #54834
     # (tests/attn_res/model/test_l1_small_footprint.py).
-    # 5104 = the model's own ops' 3328 B (KDA / MLA / all-gather semaphores and matmul_reduce_scatter_prefill's
+    # 5168 = the model's own ops' 3328 B (KDA / MLA / all-gather semaphores and matmul_reduce_scatter_prefill's
     # semaphores and mailbox; measured on the K3 L24 tests, untraced then traced in one process, + 64 B headroom)
-    # + the MoE block's persistent words' slab (1712 B, KimiK3Adapter.moe_block_words_slab) + 64 B allocator alignment.
-    L1_SMALL_SIZE = 5104
+    # + the KDA convolution's old-tail arrival semaphore (64 B, KDA_HISTORY_EXCHANGE_SEMAPHORES 3 -> 4, added after
+    # that measurement) + the MoE block's persistent words' slab (1712 B, KimiK3Adapter.moe_block_words_slab)
+    # + 64 B allocator alignment.
+    L1_SMALL_SIZE = 5168
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 33792  # Dense FFN hidden dimension
 
