@@ -16,6 +16,8 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
@@ -47,7 +49,20 @@ ISSUER_SLOTS = (
 #   "balanced":  starts from "wrap_free", then moves single issuers between NoCs
 #                while that lowers the busiest directed link (NIU ports included)
 #                of a dimension-order route model over the device's core coordinates.
-NOC_POLICY = "balanced"
+#   "split":     starts from "balanced", then searches each issuer's NoC and, per
+#                SPLIT_SHAPE, a cut of its sub-block whose far side reads on the other
+#                NoC, lowering a p-norm of the same route model's loads with rising p.
+#                Keeps the "balanced" plan unless the result lowers the busiest link
+#                without raising the busiest NIU port.
+NOC_POLICY = "split"
+
+# What the "split" policy may choose per issuer.
+#   "issuer": one NoC.
+#   "cut":    one NoC, or one tile-row or piece-column cut with a NoC per side.
+SPLIT_SHAPE = "cut"
+# Candidate cut positions per axis; bounds the host search per issuer.
+SPLIT_MAX_ROW_CUTS = 6
+SPLIT_MAX_COL_CUTS = 4
 
 # Common RT arg slots, rewritten on every call (both buffers are lockstep-allocated:
 # one address serves every core).
@@ -191,11 +206,11 @@ def _route_links(noc, src, dst, grid):
     return links
 
 
-def balance_nocs(roles, in_p, nocs, device, max_passes=16):
-    """Greedy single-issuer NoC moves that lower (busiest link, sum of squared link loads)."""
+def _route_model(device):
+    """(grid, logical core -> NoC coordinate) of the device's route model, or None if not modeled."""
     grid = NOC_GRID.get(str(device.arch()).split(".")[-1])
     if grid is None:
-        return nocs
+        return None
     coord_cache = {}
 
     def noc_xy(core):
@@ -203,6 +218,16 @@ def balance_nocs(roles, in_p, nocs, device, max_passes=16):
             v = device.worker_core_from_logical_core(ttnn.CoreCoord(*core))
             coord_cache[core] = (v.x, v.y)
         return coord_cache[core]
+
+    return grid, noc_xy
+
+
+def balance_nocs(roles, in_p, nocs, device, max_passes=16):
+    """Greedy single-issuer NoC moves that lower (busiest link, sum of squared link loads)."""
+    model = _route_model(device)
+    if model is None:
+        return nocs
+    grid, noc_xy = model
 
     # Per issuer, for each NoC: the (link, tiles) it adds.
     contrib = []
@@ -249,6 +274,152 @@ def balance_nocs(roles, in_p, nocs, device, max_passes=16):
     return out
 
 
+def _subsample(values, cap):
+    """At most `cap` of the sorted `values`, evenly spaced, first and last kept."""
+    if len(values) <= cap:
+        return list(values)
+    n = len(values)
+    return sorted({values[round(i * (n - 1) / (cap - 1))] for i in range(cap)})
+
+
+def _issuer_options(main_default, rows, cols, piece_rows0, piece_rows, piece_cols0, piece_widths, shape):
+    """Per-issuer encodings (noc, cut) and, per encoding, the tiles of each piece on NoC0.
+
+    A cut ("row", r) or ("col", c) sends tile rows >= r, or the pieces starting at column >= c,
+    to the other NoC. The first option is (main_default, None); options with the same NoC0
+    tiles keep the first.
+    """
+    cuts = [None]
+    if shape == "cut":
+        row_cuts = _subsample(list(range(rows[0] + 1, rows[1])), SPLIT_MAX_ROW_CUTS)
+        col_cuts = _subsample(sorted({c for c in piece_cols0 if c > cols[0]}), SPLIT_MAX_COL_CUTS)
+        cuts += [("row", r) for r in row_cuts] + [("col", c) for c in col_cuts]
+    elif shape != "issuer":
+        raise ValueError(f"g6_reshard: unknown SPLIT_SHAPE {shape!r}")
+
+    p0 = np.asarray(piece_rows0)
+    p1 = p0 + np.asarray(piece_rows)
+    c0 = np.asarray(piece_cols0)
+    w = np.asarray(piece_widths)
+    tiles = (p1 - p0) * w
+    options, seen, noc0 = [], set(), []
+    for main in (main_default, 1 - main_default):
+        for cut in cuts:
+            if cut is None:
+                far_tiles = np.zeros_like(tiles)
+            elif cut[0] == "row":
+                far_tiles = np.clip(p1 - np.maximum(p0, cut[1]), 0, None) * w
+            else:
+                far_tiles = tiles * (c0 >= cut[1])
+            on_noc0 = tiles - far_tiles if main == 0 else far_tiles
+            key = on_noc0.tobytes()
+            if key in seen:
+                continue
+            seen.add(key)
+            options.append((main, cut))
+            noc0.append(on_noc0)
+    return options, np.asarray(noc0, dtype=np.float64), tiles
+
+
+def issuer_segments(rows, cols, noc, cut):
+    """Rectangles (row begin, row end, col begin, col end, NoC) one issuer reads; the first starts at cols[0]."""
+    (r0, r1), (c0, c1) = rows, cols
+    if cut is None:
+        return [(r0, r1, c0, c1, noc)]
+    if cut[0] == "row":
+        return [(r0, cut[1], c0, c1, noc), (cut[1], r1, c0, c1, 1 - noc)]
+    return [(r0, r1, c0, cut[1], noc), (r0, r1, cut[1], c1, 1 - noc)]
+
+
+def split_nocs(roles, in_p, nocs, device, shape, powers=(4, 8, 16, 32, 64), max_passes=20):
+    """Per issuer (NoC, cut) from a p-norm local search over the route model's loads.
+
+    Starts at `nocs` with no cut. Each pass gives every issuer, in turn, the encoding that
+    minimizes sum(load ** p) over all links and NIU ports; p rises so the search ends on the busiest
+    load. Returns the start unless a result lowers the busiest link without raising the busiest NIU port.
+    """
+    start = [[(noc, None) for noc in row] for row in nocs]
+    model = _route_model(device)
+    if model is None:
+        return start
+    grid, noc_xy = model
+
+    resource_ids = {}
+    issuers = []  # per issuer: (role index, issuer index, options, touched resources, load per option)
+    for ri_, role in enumerate(roles):
+        dst = noc_xy(role["core"])
+        for k, issuer in enumerate(role["issuers"]):
+            begin, end = issuer["rows"]
+            if begin >= end:
+                continue
+            pr0, prs, pc0, pws, routes = [], [], [], [], []
+            for ri, ci, piece_rows, piece_width in issuer["piece_list"]:
+                pr0.append(max(begin, ri * in_p.block_height_tiles))
+                prs.append(piece_rows)
+                pc0.append(max(role["block_cols"][0], ci * in_p.block_width_tiles))
+                pws.append(piece_width)
+                src = noc_xy(in_p.core_of(ri, ci))
+                routes.append(
+                    [
+                        [resource_ids.setdefault(link, len(resource_ids)) for link in _route_links(noc, src, dst, grid)]
+                        for noc in (0, 1)
+                    ]
+                )
+            options, noc0, tiles = _issuer_options(
+                nocs[ri_][k], (begin, end), role["block_cols"], pr0, prs, pc0, pws, shape
+            )
+            touched = sorted({r for route in routes for per_noc in route for r in per_noc})
+            column = {r: i for i, r in enumerate(touched)}
+            on0 = np.zeros((len(routes), len(touched)))
+            on1 = np.zeros((len(routes), len(touched)))
+            for j, (route0, route1) in enumerate(routes):
+                on0[j, [column[r] for r in route0]] = 1.0
+                on1[j, [column[r] for r in route1]] = 1.0
+            load = noc0 @ on0 + (tiles[None, :] - noc0) @ on1
+            issuers.append((ri_, k, options, np.asarray(touched), load))
+    if not issuers:
+        return start
+
+    total = np.zeros(len(resource_ids))
+    choice = [0] * len(issuers)
+    for (_, _, _, touched, load), j in zip(issuers, choice):
+        total[touched] += load[j]
+
+    niu = np.zeros(len(resource_ids), dtype=bool)
+    for link, r in resource_ids.items():
+        niu[r] = link[0] in ("egress", "ingress")
+    # Measured: a NoC's NIU port carrying twice the tiles costs time even with no link traffic,
+    # so a plan that only trades link load for NIU-port load is not taken.
+    niu_cap = float(total[niu].max())
+
+    def score(loads):
+        return float(loads[~niu].max(initial=0.0)), float((loads * loads).sum())
+
+    best_score, best_choice = score(total), list(choice)
+    scale = max(float(total.max()), 1.0)
+    for p in powers:
+        for _ in range(max_passes):
+            changed = False
+            for i, (_, _, _, touched, load) in enumerate(issuers):
+                base = total[touched] - load[choice[i]]
+                cost = (((base[None, :] + load) / scale) ** p).sum(axis=1)
+                j = int(np.argmin(cost))
+                if cost[j] < cost[choice[i]] * (1 - 1e-12):
+                    total[touched] = base + load[j]
+                    choice[i] = j
+                    changed = True
+            if not changed:
+                break
+        candidate = score(total)
+        if candidate[0] < best_score[0] and float(total[niu].max()) <= niu_cap:
+            best_score, best_choice = candidate, list(choice)
+
+    out = [list(row) for row in start]
+    for (ri_, k, options, _, _), j in zip(issuers, best_choice):
+        out[ri_][k] = options[j]
+    return out
+
+
 def describe_plan(input_tensor, memory_config):
     """Per out block: holder core, clipped block rectangle, and each issuer's rows, pieces and NoC."""
     issuers_per_core = ISSUERS_PER_CORE
@@ -281,17 +452,24 @@ def describe_plan(input_tensor, memory_config):
                     "issuers": issuers,
                 }
             )
-    nocs = choose_nocs(roles, in_p, NOC_POLICY)
-    if NOC_POLICY == "balanced":
+    nocs = choose_nocs(roles, in_p, "wrap_free" if NOC_POLICY == "split" else NOC_POLICY)
+    if NOC_POLICY in ("balanced", "split"):
         nocs = balance_nocs(roles, in_p, nocs, input_tensor.device())
-    for role, role_nocs in zip(roles, nocs):
-        for issuer, noc in zip(role["issuers"], role_nocs):
+    if NOC_POLICY == "split":
+        encodings = split_nocs(roles, in_p, nocs, input_tensor.device(), SPLIT_SHAPE)
+    else:
+        encodings = [[(noc, None) for noc in row] for row in nocs]
+    for role, role_encodings in zip(roles, encodings):
+        for issuer, (noc, cut) in zip(role["issuers"], role_encodings):
             issuer["noc"] = noc
+            issuer["cut"] = cut
+            issuer["segments"] = issuer_segments(issuer["rows"], role["block_cols"], noc, cut)
             del issuer["piece_list"]
     return {
         "regime": PLAN_REGIME,
         "issuers_per_core": issuers_per_core,
         "noc_policy": NOC_POLICY,
+        "split_shape": SPLIT_SHAPE if NOC_POLICY == "split" else None,
         "kernel_range": out_p.kernel_range(),
         "roles": roles,
     }
@@ -314,6 +492,9 @@ def _cache_key(input_tensor, memory_config):
         input_tensor.device().id(),
         ISSUERS_PER_CORE,
         NOC_POLICY,
+        SPLIT_SHAPE,
+        SPLIT_MAX_ROW_CUTS,
+        SPLIT_MAX_COL_CUTS,
     )
 
 
@@ -329,12 +510,14 @@ def _build(input_tensor, output_tensor, memory_config):
 
     core_ranges = ttnn.CoreRangeSet([plan["kernel_range"]])
 
+    max_segments = max(len(issuer["segments"]) for role in plan["roles"] for issuer in role["issuers"])
     compile_time_args = [
         in_p.block_height_tiles,
         in_p.block_width_tiles,
         out_p.block_width_tiles,
         out_p.tensor_width_tiles,
         aligned_page_bytes,
+        max_segments,
     ]
     compile_time_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -344,7 +527,10 @@ def _build(input_tensor, output_tensor, memory_config):
 
     # A RISC may read on a NoC other than its configured one only in dynamic NoC mode.
     off_default = any(
-        issuer["noc"] != ISSUER_SLOTS[k][1] for role in plan["roles"] for k, issuer in enumerate(role["issuers"])
+        segment[4] != ISSUER_SLOTS[k][1]
+        for role in plan["roles"]
+        for k, issuer in enumerate(role["issuers"])
+        for segment in issuer["segments"]
     )
     noc_mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC if off_default else ttnn.NOC_MODE.DM_DEDICATED_NOC
 
@@ -354,16 +540,10 @@ def _build(input_tensor, output_tensor, memory_config):
         runtime_args = ttnn.RuntimeArgs()
         for role in plan["roles"]:
             x, y = role["core"]
-            row_begin, row_end = role["issuers"][issuer]["rows"]
-            col_begin, col_end = role["block_cols"]
-            runtime_args[x][y] = [
-                row_begin,
-                row_end,
-                role["block_rows"][0],
-                col_begin,
-                col_end,
-                role["issuers"][issuer]["noc"],
-            ]
+            segments = role["issuers"][issuer]["segments"]
+            # Unused segment slots carry an empty row range.
+            padding = [(0, 0, 0, 0, segments[0][4])] * (max_segments - len(segments))
+            runtime_args[x][y] = [role["block_rows"][0]] + [arg for segment in segments + padding for arg in segment]
         kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=str(ISSUER_KERNEL),

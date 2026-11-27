@@ -4,7 +4,7 @@
 // g6_reshard issuer (PULL). One source, one instance per issuer of an out block
 // (issuer 0 on RISCV_1, issuer 1 on RISCV_0). The instance pulls every
 // piece of in0 that overlaps its tile rows of this core's out block straight
-// into the out shard: no CB, no compute, one read barrier.
+// into the out shard: no CB, no compute, one read barrier per NoC it reads on.
 //
 // No kernel_lib helper is used: the local-copy helpers are self-aimed and
 // single-packet only, while pieces come from remote cores and full-width runs
@@ -20,7 +20,9 @@ void kernel_main() {
     constexpr uint32_t block_width_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t tensor_width_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t aligned_page_bytes = get_compile_time_arg_val(4);
-    constexpr auto in_args = TensorAccessorArgs<5>();
+    // The issuer's sub-block is cut into at most this many rectangles, each read on its own NoC.
+    constexpr uint32_t max_segments = get_compile_time_arg_val(5);
+    constexpr auto in_args = TensorAccessorArgs<6>();
 
     // Slot stride is always the shard width, also inside a cut-short tail shard.
     constexpr uint32_t in_row_stride_bytes = in_block_width_tiles * aligned_page_bytes;
@@ -28,10 +30,16 @@ void kernel_main() {
     // Rows are contiguous on both sides only when a piece spans both shard widths.
     constexpr bool shard_widths_match = in_block_width_tiles == block_width_tiles;
 
-    // Chosen on the host from where the placement pair's sources lie (NoC0 carries
-    // data east/south, NoC1 west/north); may differ from the configured NoC, in
-    // which case the host builds the kernel in dynamic NoC mode.
-    uint8_t noc;
+    // Per segment: tile rows [begin, end), tile columns [begin, end), NoC.
+    constexpr uint32_t args_per_segment = 5;
+    constexpr uint32_t first_segment_arg = 1;
+
+    // NoCs are chosen on the host from a route model of the placement pair (NoC0 carries data
+    // east/south, NoC1 west/north). Any NoC other than the configured one makes the host build
+    // the kernel in dynamic NoC mode.
+    uint8_t first_noc;
+    uint8_t second_noc;
+    bool second_noc_used = false;
 
     {
         // Argument loads and accessor setup are per-block fixed cost: kept inside the zone (BB-21).
@@ -39,16 +47,30 @@ void kernel_main() {
         const uint32_t in_addr = get_common_arg_val<uint32_t>(0);
         const uint32_t out_addr = get_common_arg_val<uint32_t>(1);
 
-        // This issuer's rectangle of the padded 2-D view, already clipped to the tensor.
-        const uint32_t row_begin = get_arg_val<uint32_t>(0);
-        const uint32_t row_end = get_arg_val<uint32_t>(1);
-        const uint32_t block_row_begin = get_arg_val<uint32_t>(2);
-        const uint32_t col_begin = get_arg_val<uint32_t>(3);
-        const uint32_t col_end = get_arg_val<uint32_t>(4);
-        noc = static_cast<uint8_t>(get_arg_val<uint32_t>(5));
+        // Origin of this core's out block; segment 0 starts at its first column.
+        const uint32_t block_row_begin = get_arg_val<uint32_t>(0);
+        const uint32_t block_col_begin = get_arg_val<uint32_t>(first_segment_arg + 2);
+        first_noc = static_cast<uint8_t>(get_arg_val<uint32_t>(first_segment_arg + 4));
+        second_noc = first_noc;
 
-        if (row_begin < row_end) {
-            const auto in_accessor = TensorAccessor(in_args, in_addr, aligned_page_bytes);
+        const auto in_accessor = TensorAccessor(in_args, in_addr, aligned_page_bytes);
+
+        // One copy of the walk, run once per segment: a second pass executes warm code.
+        for (uint32_t segment = 0; segment < max_segments; ++segment) {
+            const uint32_t arg = first_segment_arg + segment * args_per_segment;
+            // This segment's rectangle of the padded 2-D view, already clipped to the tensor.
+            const uint32_t row_begin = get_arg_val<uint32_t>(arg);
+            const uint32_t row_end = get_arg_val<uint32_t>(arg + 1);
+            const uint32_t col_begin = get_arg_val<uint32_t>(arg + 2);
+            const uint32_t col_end = get_arg_val<uint32_t>(arg + 3);
+            const uint8_t noc = static_cast<uint8_t>(get_arg_val<uint32_t>(arg + 4));
+            if (row_begin >= row_end) {
+                continue;
+            }
+            if (segment > 0) {
+                second_noc = noc;
+                second_noc_used = true;
+            }
 
             const uint32_t first_in_block_col = col_begin / in_block_width_tiles;
             const uint32_t first_col_edge = (first_in_block_col + 1) * in_block_width_tiles;
@@ -68,7 +90,7 @@ void kernel_main() {
                     const uint32_t piece_width = piece_col_end - piece_col0;
 
                     uint64_t src = in_accessor.get_noc_addr(page_row0 + piece_col0, 0, noc);
-                    uint32_t dst = out_row_addr + (piece_col0 - col_begin) * aligned_page_bytes;
+                    uint32_t dst = out_row_addr + (piece_col0 - block_col_begin) * aligned_page_bytes;
 
                     if (shard_widths_match && piece_width == in_block_width_tiles) {
                         noc_async_read(src, dst, piece_rows * piece_width * aligned_page_bytes, noc);
@@ -93,6 +115,9 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("RESHARD-WAIT");
-        noc_async_read_barrier(noc);
+        noc_async_read_barrier(first_noc);
+        if (second_noc_used && second_noc != first_noc) {
+            noc_async_read_barrier(second_noc);
+        }
     }
 }

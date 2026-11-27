@@ -22,6 +22,8 @@ SETTINGS = {
     "wrapfree2": {"NOC_POLICY": "wrap_free", "ISSUERS_PER_CORE": 2},
     "wrapfree1": {"NOC_POLICY": "wrap_free", "ISSUERS_PER_CORE": 1},
     "balanced2": {"NOC_POLICY": "balanced", "ISSUERS_PER_CORE": 2},
+    "split_issuer2": {"NOC_POLICY": "split", "SPLIT_SHAPE": "issuer", "ISSUERS_PER_CORE": 2},
+    "split_cut2": {"NOC_POLICY": "split", "SPLIT_SHAPE": "cut", "ISSUERS_PER_CORE": 2},
 }
 
 
