@@ -73,3 +73,51 @@
 - Golden test progress: targeted slice 18/18 pass (p1, case 63, hw 196/185/207, `[1,196,128]`, all ROW_MAJOR cells). The unit dir passes 106/106.
 - Issues encountered: the Tracy capture tool sometimes exits with code 3 before writing a trace. Re-running is enough; the test itself had passed.
 - Tests added: `test_g6_pad_knobs.py` gained `stagger_block3` (rotated walk wrapping across blocks, 64 B fill seed) and `phase0_schedule`. The existing multi-block sets now pin `pipeline_min_units=1`. `test_g6_pad_perf_ab.py` gained guard cases 63 (uint32) and 299 (L1).
+
+## Refinement 3 — Speed up the perf-flagged profile p1 (copy/fill load balance)
+- Date: 2026-11-27
+- What was done: built the design's "load balance (new_storage_tiles)" lever as live knobs. The defaults keep the Refinement 2 schedule.
+  - Reused: `OutTileWalker`, `RotatedCursor` (bank_stagger), the block ring, the N3 fill pass and the descriptor plumbing.
+  - Added (host): `split_mode` (0 = equal count, `split_work_to_cores`, the default). Mode 1 is a cost-weighted contiguous split: `_source_prefix` counts the kernels' source-bearing predicate in closed form, and `_cost_split` places the boundaries by binary search, weighted by `copy_cost` / `fill_cost`. Mode 2 gives each core a cost-weighted slice of the region holding the source units (output dim-0 index < input dim 0) and an even slice of the new dim-0 (fill-only) region. The core set is the same single rectangular row-wise range in every mode (BB-17).
+  - Added (kernels): `MixCursor` / `SegmentCursor` in `g6_pad_common.hpp`. A `two_segments` CT flag selects it, so mode 0/1 compile the old `RotatedCursor` walk and read no extra RT args. Two rotated segments are interleaved with Bresenham, and reader and writer share the same walk.
+  - Added (writer): `fill_upfront` CT knob. It hoists N3 into one pass over the whole range before block 0.
+- Perf (BH, 110 cores, device kernel ns, median of 3 where noted):
+  - p1: 26,830 at the defaults, against 26,780 after Refinement 2 (noise).
+  - Rebalance variants on p1 (all slower):
+
+    | Variant | Device ns |
+    |---|---|
+    | mode 1 at copy/fill cost 2/1 | 28,480 |
+    | mode 1 at cost 1/2 | 27,605 |
+    | mode 1 at cost 2/3 | 27,500 |
+    | mode 2 | 27,610 |
+    | mode 2 with `fill_upfront` | 28,107 |
+    | mode 0 with `fill_upfront` | 27,114 |
+
+  - Ablation:
+
+    | Ablation | Device ns | Note |
+    |---|---|---|
+    | Write-only (reads stubbed) | ~22,500 | does not move under cost or position weights (22,700–22,900) |
+    | Read-only (writes stubbed) | ~11,400 | |
+    | Write-only with writes on NoC0 | ~38,000 | mirror-image skew |
+
+  - Guard set (defaults; extension path untouched):
+
+    | Case | Device ns | Change |
+    |---|---|---|
+    | `[1,196,128]` (≤ 32 tiles) | 1,384–1,399 | 1,361–1,376 on the same day without this change: noise band |
+    | `[1,1,196,196]` hw | 2,241 | no regression |
+    | case 63 | 2,667 | no regression |
+    | RM `[5,8192]` | 2,052 | no regression |
+    | RM `[5,3,2560]` | 1,403 | no regression |
+    | RM `[1,1,196,196]` | 1,507 | no regression |
+
+- Finding (remaining headroom): the copy/fill imbalance is not the bound. The op is bound by the DRAM write stream, and its write-only floor (22.5 µs) is already roughly the 22.19 µs roofline. The ~4 µs left is read/write interference.
+  - The per-core end-time skew (west/north early, east/south late) comes from NoC1 arbitration order, not per-core work. Giving east cores fewer units with 1/T position weights does not move the wall.
+  - Spreading reads over every core (mode 2) is slower than concentrating them on ~69 cores.
+  - The levers stay as tunables at their byte-identical defaults.
+- Accuracy achieved: bit-exact (exact gate, PCC = 1.0, RMS = 0). Shapes: p1 in modes 0 and 2, every knob set in `test_g6_pad_knobs.py` (including the new dim-0 + hw shape `[3,2,50,70]`), and the RM split sweep.
+- Golden test progress: targeted slice 11/11 pass (p1 strict + loose, `[1,1,196,196]`, `[5,3,2560]` RM, `1x196*`). The unit dir passes 147/147.
+- Issues encountered: run-to-run noise on p1 is about ±0.7 µs, so every comparison above is a median of 3. Posted writes were rejected without a measurement: they give no completion guarantee at the op boundary.
+- Tests added: `test_g6_pad_knobs.py` gained the `split_cost`, `split_cost_fill_heavy`, `split_mix`, `split_mix_block3`, `fill_upfront` and `split_mix_fill_upfront` knob sets and the `lead_hw_3x2x50x70` shape. `test_g6_pad_row_major.py` gained `test_g6_pad_row_major_split` (modes 1, 2 and 2 + `fill_upfront` on the rows regime).

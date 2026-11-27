@@ -28,13 +28,19 @@ void kernel_main() {
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(11);     // rows: bytes per row chunk
     constexpr uint32_t in_row_bytes = get_compile_time_arg_val(12);    // rows: logical input row bytes
     constexpr uint32_t src_page_bytes = get_compile_time_arg_val(13);  // aligned input page size
-    constexpr auto src_args = TensorAccessorArgs<14>();
+    constexpr bool two_segments = get_compile_time_arg_val(14) != 0;   // split_mode 2 (segment B RT args)
+    constexpr auto src_args = TensorAccessorArgs<15>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_tile = get_arg_val<uint32_t>(1);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    const uint32_t num_tiles_a = get_arg_val<uint32_t>(2);
     const uint32_t rot = get_arg_val<uint32_t>(3);  // bank_stagger rotation (0 = in-order)
+    // split_mode 2: second unit segment (count_b = 0 otherwise); num_tiles counts segment A only.
+    const uint32_t start_b = two_segments ? get_arg_val<uint32_t>(4) : 0;
+    const uint32_t num_tiles_b = two_segments ? get_arg_val<uint32_t>(5) : 0;
+    const uint32_t rot_b = two_segments ? get_arg_val<uint32_t>(6) : 0;
 
+    const uint32_t num_tiles = num_tiles_a + num_tiles_b;
     if (num_tiles == 0) {
         return;
     }
@@ -42,7 +48,7 @@ void kernel_main() {
     const auto src = TensorAccessor(src_args, src_addr, src_page_bytes);
     using Walker =
         g6_pad::OutTileWalker<out_tiles_h, out_tiles_w, out_lead1, in_tiles_h, in_tiles_w, in_lead0, in_lead1>;
-    g6_pad::RotatedCursor<Walker> cur(start_tile, num_tiles, rot);
+    g6_pad::SegmentCursor<Walker, two_segments> cur(start_tile, num_tiles_a, rot, start_b, num_tiles_b, rot_b);
     const Walker& walk = cur.w;
 
     const uint32_t num_blocks = (num_tiles + block_tiles - 1) / block_tiles;

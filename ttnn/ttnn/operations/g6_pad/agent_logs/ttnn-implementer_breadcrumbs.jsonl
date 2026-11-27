@@ -21,3 +21,4 @@
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T21:46:02+01:00"}
 {"event":"test_run","status":"pass","tests":"unit dir 93/93; golden -k ROW_MAJOR+TILE reps 17/17; row_major --dev 20/20","ts":"2026-11-27T21:50:33+01:00"}
 {"event":"test_run","refinement":2,"status":"pass","unit":"106/106","golden_slice":"18/18","p1_ns_before":29300,"p1_ns_after":26780,"finding":"per-core end time grows with logical x (8us->26us); fill page RISC fill was 2.3us","ts":"2026-11-27T22:10:26+01:00"}
+{"event":"test_run","refinement":3,"status":"pass","detail":"unit 147/147, golden slice 11/11; p1 default 26.83us median; split_mode1 28.5, mode2 27.6; write-only ablation 22.5us, read-only 11.4us -> DRAM write stream binds; levers parked at default","ts":"2026-11-27T22:31:53+01:00"}

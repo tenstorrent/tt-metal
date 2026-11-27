@@ -71,7 +71,7 @@ No SUPPORTED change.
 
 **Outcome**: p1 went from 29.30 µs to 26.78 µs (median of 3, bit-exact). That is −8.6% and 1.21× the roofline, under the 29.91 µs limit. The defaults are now `block_tiles` = 2 at depth 2 (gated by `pipeline_min_units` = 8), `bank_stagger` = 1 and `fill_seed_bytes` = 256. The last of these took the writer's RISC fill of the whole fill page from 2.3 µs to 0.5 µs. The NoC knobs stay at their defaults, which measured fastest. There is no guard-set regression beyond noise, and new_storage shapes gained 15–40%. `bank_stagger` alone measured within noise on p1. The bottleneck now is a placement skew: per-core end time rises from about 8 µs at x=0 to about 26 µs at x=10 in every grid row, for copy and fill-only cores alike. Next would be an x/cost-aware split, which is Refinement 3's scope and so was not done here.
 
-### [ ] Refinement 3 — Speed up the perf-flagged profile p1 (copy/fill load balance)
+### [x] Refinement 3 — Speed up the perf-flagged profile p1 (copy/fill load balance)
 
 **Type**: perf
 
@@ -83,3 +83,24 @@ No SUPPORTED change.
 No SUPPORTED change.
 
 **Done when**: measured device-ns on p1 improves on Refinement 2's result toward the 22.19 µs roofline (≤ 29.96 µs = 1.35× is the goal) and stays bit-exact, with the golden suite green. There must be no regression across the same guard set as Refinement 2.
+
+**Outcome**: the load-balance lever was built, measured and parked; p1 is unchanged at 26.3–26.9 µs (median 26.8 µs, the same as Refinement 2's 26.78 µs; 1.21× the roofline, under 29.96 µs, bit-exact).
+- **What was built.** New knob `split_mode`: 0 = equal count, the default; 1 = cost-weighted contiguous split (`copy_cost` / `fill_cost`); 2 = two segments per core, a slice of the source region and a slice of the new dim-0 region, interleaved in the walk. A second new knob, `fill_upfront`, issues every fill write of a core before block 0.
+- **Measured on p1, median of 3:**
+
+  | Variant | Device time (µs) |
+  |---|---|
+  | `split_mode` 0 (default) | 26.9 |
+  | mode 1 at copy/fill cost 2/1 | 28.5 |
+  | mode 1 at cost 1/2 | 27.6 |
+  | mode 1 at cost 2/3 | 27.5 |
+  | mode 2 | 27.6 |
+  | mode 2 at cost 1/1 | 27.6 |
+  | mode 2 with `fill_upfront` | 28.1 |
+  | mode 0 with `fill_upfront` | 27.1 |
+  | mode 2 at depth 4 | 28.1 |
+  | mode 0 at depth 4 | 27.7 |
+  | position weights (1/T per core) | 25.9–27.5, noise |
+
+- **What binds now.** Ablation shows the bound is the DRAM write stream, not the copy/fill split. Write-only (reads stubbed) is 22.5 µs. Read-only (writes stubbed) is 11.4 µs. Write-only does not move under cost or position weighting (22.7 µs). The write-only end-time skew (8 µs west, 25 µs east) is arbitration order, not per-core work. Writes on NoC0 cost 38 µs, so moving fills to the reader RISC or NoC0 is not viable. The remaining ~4 µs over the write-only floor is read/write interference in DRAM.
+- **What would be next, and why not here.** Next would be fewer write bytes in flight from congested positions, or DRAM-bank-aware write ordering, i.e. per-bank write queues. Neither is a load-balance change, and the write-only floor (22.5 µs) is already roughly the 22.19 µs roofline.

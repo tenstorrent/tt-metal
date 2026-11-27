@@ -90,3 +90,18 @@ def test_g6_pad_row_major_knobs(device, monkeypatch, chunk, block):
     )
     got = ttnn.to_torch(g6_pad(x_tt, padding, value))
     assert torch.equal(bits(got), bits(torch_g6_pad(x, padding, value)))
+
+
+@pytest.mark.parametrize("split", [{"split_mode": 1}, {"split_mode": 2}, {"split_mode": 2, "fill_upfront": 1}])
+def test_g6_pad_row_major_split(device, monkeypatch, split):
+    """Refinement 3 split modes on the rows regime (dim-0 growth: two split regions, row tails)."""
+    for k, v in split.items():
+        monkeypatch.setitem(g6_mod.KNOBS, k, v)
+    monkeypatch.setitem(g6_mod.KNOBS, "pipeline_min_units", 1)
+    shape, padding, value = [3, 5, 301], [[0, 2], [0, 1], [0, 90]], -2.0
+    x = make_input(shape, ttnn.float32)
+    x_tt = ttnn.from_torch(
+        x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    got = ttnn.to_torch(g6_pad(x_tt, padding, value))
+    assert torch.equal(bits(got), bits(torch_g6_pad(x, padding, value)))

@@ -82,4 +82,59 @@ struct RotatedCursor {
     }
 };
 
+// A core's work as two unit segments A = [start_a, start_a + count_a) and B (load balance, split_mode 2:
+// e.g. a slice of the source-bearing region and a slice of the fill-only region). Each segment is walked
+// by its own RotatedCursor; the two are interleaved in proportion (Bresenham: take A while
+// taken_a * count_b <= taken_b * count_a) so every block mixes reads and fills. count_b = 0 is exactly
+// the single-segment RotatedCursor walk. `w` / `t` mirror the current segment's cursor.
+template <typename Walker>
+struct MixCursor {
+    RotatedCursor<Walker> a, b;
+    uint32_t count_a, count_b, taken_a = 0, taken_b = 0;
+    bool on_a = true;
+    Walker w;
+    uint32_t t;
+
+    MixCursor(
+        uint32_t start_a, uint32_t count_a_, uint32_t rot_a, uint32_t start_b, uint32_t count_b_, uint32_t rot_b) :
+        a(start_a, count_a_, rot_a),
+        b(start_b, count_b_, rot_b),
+        count_a(count_a_),
+        count_b(count_b_),
+        w(start_a + rot_a),
+        t(start_a + rot_a) {
+        select();
+    }
+
+    void select() {
+        on_a = taken_a < count_a && (taken_b >= count_b || taken_a * count_b <= taken_b * count_a);
+        const RotatedCursor<Walker>& c = on_a ? a : b;
+        w = c.w;
+        t = c.t;
+    }
+
+    void advance() {
+        if (on_a) {
+            ++taken_a;
+            a.advance();
+        } else {
+            ++taken_b;
+            b.advance();
+        }
+        select();
+    }
+};
+
+// The cursor the kernels walk: MixCursor when the host split gives a core two segments (split_mode 2,
+// CT flag), else the single-segment RotatedCursor (segment B arguments ignored; always count 0 there).
+template <typename Walker, bool two_segments>
+struct SegmentCursor : RotatedCursor<Walker> {
+    SegmentCursor(uint32_t start_a, uint32_t count_a, uint32_t rot_a, uint32_t, uint32_t, uint32_t) :
+        RotatedCursor<Walker>(start_a, count_a, rot_a) {}
+};
+template <typename Walker>
+struct SegmentCursor<Walker, true> : MixCursor<Walker> {
+    using MixCursor<Walker>::MixCursor;
+};
+
 }  // namespace g6_pad

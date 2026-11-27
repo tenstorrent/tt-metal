@@ -32,6 +32,14 @@ KNOB_SETS = {
     # the Phase 0 schedule (whole range, in-order, whole-page RISC fill) kept reachable.
     "stagger_block3": {"block_tiles": 3, "bank_stagger": 1, "pipeline_min_units": 1, "fill_seed_bytes": 64},
     "phase0_schedule": {"block_tiles": 0, "bank_stagger": 0, "fill_seed_bytes": 4096},
+    # Refinement 3 load-balance knobs: cost-weighted contiguous split, two-segment (source region + new
+    # dim-0 region) interleaved walk, and the hoisted fill pass -- alone and combined with the ring.
+    "split_cost": {"split_mode": 1},
+    "split_cost_fill_heavy": {"split_mode": 1, "copy_cost": 1, "fill_cost": 3},
+    "split_mix": {"split_mode": 2},
+    "split_mix_block3": {"split_mode": 2, "block_tiles": 3, "pipeline_min_units": 1, "bank_stagger": 1},
+    "fill_upfront": {"fill_upfront": 1, "block_tiles": 1, "pipeline_min_units": 1},
+    "split_mix_fill_upfront": {"split_mode": 2, "fill_upfront": 1, "block_tiles": 2, "pipeline_min_units": 1},
 }
 
 SHAPES = [
@@ -39,6 +47,8 @@ SHAPES = [
     pytest.param((16, 1, 1536), ((0, 0), (0, 31), (0, 0)), 3.0, id="16x1x1536"),
     pytest.param((1, 1, 196, 196), ((0, 60), (0, 60)), -1.7014118346046923e38, id="hw_196"),
     pytest.param((1, 185, 128), ((0, 71), (0, 0)), 0, id="h_185x128"),
+    # dim-0 growth (two split regions) with row and column edge patches in the source region.
+    pytest.param((3, 2, 50, 70), ((0, 2), (0, 1), (0, 10), (0, 30)), -5.0, id="lead_hw_3x2x50x70"),
 ]
 
 

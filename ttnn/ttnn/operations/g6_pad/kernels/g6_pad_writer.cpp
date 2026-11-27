@@ -6,7 +6,8 @@
 // Block operations (op_design.md, Block schedule / new_storage_tiles):
 //   N1 make_fill_page   -- fill_l1_range of fill_bits into cb_fill_tile, once per kernel
 //   N3 write_fill_tiles -- fill-only output tiles of the block written from cb_fill_tile BEFORE the
-//                          wait on cb_input_tiles (they do not depend on the input: stall shadow)
+//                          wait on cb_input_tiles (they do not depend on the input: stall shadow);
+//                          fill_upfront hoists it to one pass over the whole range before block 0
 //   N4 patch_block      -- wait block_tiles; in each edge slot RISC-store fill_bits into rows
 //                          [edge_row, 32) (last input tile row) and/or cols [edge_col, 32) (last input
 //                          tile col), face-aware, in place (bit-exact, no unpack/pack)
@@ -47,7 +48,9 @@ void kernel_main() {
     constexpr uint32_t out_row_bytes = get_compile_time_arg_val(17);   // rows: logical output row bytes
     constexpr uint32_t dst_page_bytes = get_compile_time_arg_val(18);  // aligned output page size
     constexpr uint32_t fill_seed_bytes = get_compile_time_arg_val(19);  // RISC-filled prefix of the fill page
-    constexpr auto dst_args = TensorAccessorArgs<20>();
+    constexpr bool fill_upfront = get_compile_time_arg_val(20) != 0;    // N3 for the whole range before N4
+    constexpr bool two_segments = get_compile_time_arg_val(21) != 0;    // split_mode 2, same as reader
+    constexpr auto dst_args = TensorAccessorArgs<22>();
 
     constexpr uint32_t row_bytes = FACE * elem_bytes;
     constexpr uint32_t face_bytes = FACE * row_bytes;
@@ -56,10 +59,15 @@ void kernel_main() {
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_tile = get_arg_val<uint32_t>(1);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    const uint32_t num_tiles_a = get_arg_val<uint32_t>(2);
     const uint32_t fill_bits = get_arg_val<uint32_t>(3);
     const uint32_t rot = get_arg_val<uint32_t>(4);  // bank_stagger rotation (0 = in-order), same as reader
+    // split_mode 2: second unit segment (count_b = 0 otherwise), same as reader.
+    const uint32_t start_b = two_segments ? get_arg_val<uint32_t>(5) : 0;
+    const uint32_t num_tiles_b = two_segments ? get_arg_val<uint32_t>(6) : 0;
+    const uint32_t rot_b = two_segments ? get_arg_val<uint32_t>(7) : 0;
 
+    const uint32_t num_tiles = num_tiles_a + num_tiles_b;
     if (num_tiles == 0) {
         return;
     }
@@ -106,23 +114,31 @@ void kernel_main() {
         }
     };
 
-    using Cursor = g6_pad::RotatedCursor<Walker>;
-    Cursor cur(start_tile, num_tiles, rot);
+    using Cursor = g6_pad::SegmentCursor<Walker, two_segments>;
+    Cursor cur(start_tile, num_tiles_a, rot, start_b, num_tiles_b, rot_b);
     const uint32_t num_blocks = (num_tiles + block_tiles - 1) / block_tiles;
     uint32_t remaining = num_tiles;
+    // N3 hoisted (fill_upfront): every fill-only unit of the core's range is issued at once, so the write
+    // stream starts at t = 0 instead of trailing each block's input wait.
+    auto write_fill_units = [&](const Cursor& from, uint32_t count) {
+        DeviceZoneScopedN("write_fill_tiles");
+        Cursor c = from;
+        for (uint32_t k = 0; k < count; ++k) {
+            if (!c.w.source_bearing()) {
+                noc_async_write(fill_base, dst_noc_addr(c.w, c.t), unit_bytes(c.w));
+            }
+            c.advance();
+        }
+    };
+    if constexpr (fill_upfront) {
+        write_fill_units(cur, num_tiles);
+    }
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         const uint32_t extent = remaining < block_tiles ? remaining : block_tiles;
 
         // N3: fill-only tiles of this block, issued before the input wait.
-        {
-            DeviceZoneScopedN("write_fill_tiles");
-            Cursor c = cur;
-            for (uint32_t k = 0; k < extent; ++k) {
-                if (!c.w.source_bearing()) {
-                    noc_async_write(fill_base, dst_noc_addr(c.w, c.t), unit_bytes(c.w));
-                }
-                c.advance();
-            }
+        if constexpr (!fill_upfront) {
+            write_fill_units(cur, extent);
         }
 
         // N4: patch edge slots in place (zone includes the wait).

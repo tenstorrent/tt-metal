@@ -56,6 +56,85 @@ def _core_assignment(plan, device):
     return all_cores, ranges, units_g1
 
 
+def _source_prefix(plan, t):
+    """Source-bearing units in the flat output-unit range [0, t) -- the kernels' OutTileWalker predicate
+    (g6_pad_common.hpp, source_bearing) counted in closed form over its mixed radix."""
+    out_lead1, out_h, out_w = plan["out_lead"][1], plan["out_tiles_h"], plan["out_tiles_w"]
+    in_lead0, in_lead1 = plan["in_lead"]
+    in_h, in_w = plan["in_tiles_h"], plan["in_tiles_w"]
+    wt = t % out_w
+    t //= out_w
+    ht = t % out_h
+    t //= out_h
+    j1 = t % out_lead1
+    j0 = t // out_lead1
+    n = min(j0, in_lead0) * in_lead1 * in_h * in_w
+    if j0 < in_lead0:
+        n += min(j1, in_lead1) * in_h * in_w
+        if j1 < in_lead1:
+            n += min(ht, in_h) * in_w
+            if ht < in_h:
+                n += min(wt, in_w)
+    return n
+
+
+def _cost_split(plan, lo, hi, weights):
+    """Cut [lo, hi) into len(weights) contiguous pieces whose cost (copy_cost per source-bearing unit,
+    fill_cost per fill-only unit) is proportional to the integer weights. Returns len + 1 boundaries."""
+    nparts = sum(weights)
+    wc, wf = plan["copy_cost"], plan["fill_cost"]
+    src_lo = _source_prefix(plan, lo)
+
+    def cost(t):
+        s = _source_prefix(plan, t) - src_lo
+        return wc * s + wf * (t - lo - s)
+
+    total = cost(hi)
+    bounds = [lo]
+    acc = 0
+    for wk in weights[:-1]:
+        acc += wk
+        target = total * acc  # cost(t) * nparts >= target, smallest t
+        a, b = bounds[-1], hi
+        while a < b:
+            m = (a + b) // 2
+            if cost(m) * nparts >= target:
+                b = m
+            else:
+                a = m + 1
+        bounds.append(a)
+    bounds.append(hi)
+    return bounds
+
+
+def _new_storage_assignment(plan, device):
+    """Per-core (core, start_a, count_a, start_b, count_b) for new_storage (split_mode knob):
+    0 = equal-count contiguous ranges (split_work_to_cores; count_b = 0);
+    1 = cost-weighted contiguous ranges (copy units cost copy_cost, fill-only units fill_cost);
+    2 = two segments per core: a cost-weighted slice of the region holding every source-bearing unit
+        (output dim-0 index < input dim-0 extent) and an equal slice of the fill-only rest (new leading
+        dim-0 slices), so every core both reads and fills. Without dim-0 growth it is mode 1.
+    The core set is the same rectangular row-wise range in every mode (BB-17)."""
+    mode = plan["split_mode"]
+    if mode == 0:
+        all_cores, ranges, units_max = _core_assignment(plan, device)
+        return all_cores, [(c, s, n, 0, 0) for c, s, n in ranges], units_max
+    grid = device.compute_with_storage_grid_size()
+    ncores = plan["ncores"]
+    all_cores = ttnn.num_cores_to_corerangeset(ncores, grid, True)
+    cores = ttnn.corerange_to_cores(all_cores, None, True)
+    n_units = plan["n_units"]
+    boundary = n_units
+    if mode == 2:
+        boundary = plan["in_lead"][0] * plan["out_lead"][1] * plan["out_tiles_h"] * plan["out_tiles_w"]
+    weights = [1] * ncores
+    seg_a = _cost_split(plan, 0, boundary, weights)
+    seg_b = _cost_split(plan, boundary, n_units, weights) if boundary < n_units else [n_units] * (ncores + 1)
+    ranges = [(c, seg_a[i], seg_a[i + 1] - seg_a[i], seg_b[i], seg_b[i + 1] - seg_b[i]) for i, c in enumerate(cores)]
+    assert sum(r[2] + r[4] for r in ranges) == n_units
+    return all_cores, ranges, max(r[2] + r[4] for r in ranges)
+
+
 def build_extension_descriptor(plan, tensor):
     """extension_band: write c into band rows of the last tile row of every slice, in place."""
     device = tensor.device()
@@ -106,7 +185,7 @@ def build_new_storage_descriptor(plan, input_tensor, output_tensor):
     """new_storage_tiles / new_storage_rows: assemble every output page (tile, or row chunk) once in L1
     and write it once. Same kernels; rows_mode CT flag selects the row-page addressing."""
     device = input_tensor.device()
-    all_cores, ranges, units_g1 = _core_assignment(plan, device)
+    all_cores, ranges, units_g1 = _new_storage_assignment(plan, device)  # units_g1: largest per-core count
     rows_mode = plan["regime"] == "new_storage_rows"
     tile_bytes = plan["slot_bytes"] if rows_mode else plan["tile_bytes"]  # CB page / slot stride
 
@@ -134,12 +213,13 @@ def build_new_storage_descriptor(plan, input_tensor, output_tensor):
     ]
     rows_ct = [int(rows_mode), plan.get("row_chunk_bytes", 0), plan.get("in_row_bytes", 0)]
     reader_ct = [CB_INPUT_TILES, tile_bytes, block_tiles] + geom
-    reader_ct += rows_ct + [input_tensor.buffer_aligned_page_size()]
+    two_segments = int(plan["split_mode"] == 2)
+    reader_ct += rows_ct + [input_tensor.buffer_aligned_page_size(), two_segments]
     reader_ct += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     writer_ct = [CB_FILL_TILE, CB_INPUT_TILES, plan["elem_bytes"], tile_bytes, block_tiles] + geom
     writer_ct += [plan["edge_row"], plan["edge_col"]]
     writer_ct += rows_ct + [plan.get("out_row_bytes", 0), output_tensor.buffer_aligned_page_size()]
-    writer_ct += [plan["fill_seed_bytes"]]
+    writer_ct += [plan["fill_seed_bytes"], int(plan["fill_upfront"]), two_segments]
     writer_ct += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
 
     # bank_stagger: rotate core i's walk so it begins on bank (i mod n_banks) instead of (start mod n_banks)
@@ -148,10 +228,15 @@ def build_new_storage_descriptor(plan, input_tensor, output_tensor):
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     patches_in, patches_out = [], []
-    for i, (c, start, cnt) in enumerate(ranges):
-        rot = ((i - start) % n_banks) % cnt if (plan["bank_stagger"] and cnt) else 0
-        reader_rt[c.x][c.y] = [input_tensor.buffer_address(), start, cnt, rot]
-        writer_rt[c.x][c.y] = [output_tensor.buffer_address(), start, cnt, plan["fill_bits"], rot]
+
+    def rot_of(i, start, cnt):
+        return ((i - start) % n_banks) % cnt if (plan["bank_stagger"] and cnt) else 0
+
+    for i, (c, start, cnt, start_b, cnt_b) in enumerate(ranges):
+        rot, rot_b = rot_of(i, start, cnt), rot_of(i, start_b, cnt_b)
+        seg_b = [start_b, cnt_b, rot_b] if two_segments else []  # RT args read only under two_segments
+        reader_rt[c.x][c.y] = [input_tensor.buffer_address(), start, cnt, rot] + seg_b
+        writer_rt[c.x][c.y] = [output_tensor.buffer_address(), start, cnt, plan["fill_bits"], rot] + seg_b
         patches_in.append((0, c.x, c.y))
         patches_out.append((1, c.x, c.y))
 

@@ -148,6 +148,18 @@ KNOBS = {
     # ConfigDescriptor default (reads on NoC0, writes on NoC1).
     "reader_noc": 0,
     "writer_noc": 1,
+    # new_storage_*: how output units are split across cores (Refinement 3, load balance).
+    # 0 = equal-count contiguous ranges (split_work_to_cores; the Refinement 2 schedule);
+    # 1 = cost-weighted contiguous ranges (copy_cost per source-bearing unit, fill_cost per fill-only one);
+    # 2 = two segments per core -- a slice of the source-bearing dim-0 region and a slice of the new
+    #     dim-0 (fill-only) region, interleaved in the walk, so every core reads and fills.
+    "split_mode": 0,
+    # new_storage_*: 1 = the writer issues every fill-only unit of its range before block 0 (write stream
+    # starts at t = 0); 0 = per block, before that block's input wait (the Refinement 2 schedule).
+    "fill_upfront": 0,
+    # Relative per-unit costs used by split_mode 1 / 2 (integers).
+    "copy_cost": 2,
+    "fill_cost": 1,
     # new_storage_rows: bytes per row chunk (0 = auto: split each output row into enough 64 B-aligned
     # chunks that rows x chunks covers the grid, never below min_row_chunk_bytes, capped by L1).
     "row_chunk_bytes": 0,
@@ -313,6 +325,10 @@ def make_plan(input_tensor, out_shape, value, knobs):
         "pipeline_min_units": knobs["pipeline_min_units"],
         "reader_noc": knobs["reader_noc"],
         "writer_noc": knobs["writer_noc"],
+        "split_mode": knobs["split_mode"],
+        "fill_upfront": knobs["fill_upfront"],
+        "copy_cost": knobs["copy_cost"],
+        "fill_cost": knobs["fill_cost"],
     }
     if regime == "extension_band":
         row_begin = in_shape[-2] % TILE
