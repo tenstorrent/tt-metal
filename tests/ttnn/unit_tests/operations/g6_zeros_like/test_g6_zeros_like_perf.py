@@ -79,3 +79,26 @@ def test_profile_writer_noc_fp32(device, monkeypatch, noc):
         ttnn.synchronize_device(device)
         ttnn.deallocate(out)
     ttnn.ReadDeviceProfiler(device)
+
+
+@pytest.mark.parametrize("row_wise", [False, True], ids=["col", "row"])
+@pytest.mark.parametrize("num_cores_cap", [None, 20, 8], ids=lambda c: f"cap{c}")
+def test_profile_core_knobs_bf8(device, monkeypatch, num_cores_cap, row_wise):
+    """Grid-synchronization and placement lamps on the bfloat8_b production case (P = 40)."""
+    monkeypatch.setattr(pd, "NUM_CORES_CAP", num_cores_cap)
+    monkeypatch.setattr(pd, "ROW_WISE", row_wise)
+    shape = (5, 1, 32, 256)
+    x = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    for _ in range(5):
+        # bfloat8_b is outside Phase 0 SUPPORTED; dispatch the same program directly.
+        out = ttnn.allocate_tensor_on_device(x.spec, device)
+        ttnn.generic_op([out], pd.get_program_descriptor(out))
+        ttnn.synchronize_device(device)
+        ttnn.deallocate(out)
+    ttnn.ReadDeviceProfiler(device)

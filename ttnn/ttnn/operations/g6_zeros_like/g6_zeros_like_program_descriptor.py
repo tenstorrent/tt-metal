@@ -114,9 +114,11 @@ class CachedProgram:
 
 def build(output_tensor) -> CachedProgram:
     p = plan(output_tensor)
+    # Sizes both the CB and the kernel's zero fill: every zero-sourced byte is filled.
+    zero_scratch_bytes = ZERO_SCRATCH_PAGES * p.page_size
 
     cb_zero_page = ttnn.CBDescriptor(
-        total_size=ZERO_SCRATCH_PAGES * p.page_size,
+        total_size=zero_scratch_bytes,
         core_ranges=p.all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
@@ -127,7 +129,7 @@ def build(output_tensor) -> CachedProgram:
         ],
     )
 
-    writer_ct_args = [CB_ZERO_PAGE, p.page_size]
+    writer_ct_args = [CB_ZERO_PAGE, p.page_size, zero_scratch_bytes]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     writer_rt_args = ttnn.RuntimeArgs()
