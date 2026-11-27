@@ -407,7 +407,8 @@ static ttnn::Tensor bound_matmul(
             [&](auto& config) {
                 if constexpr (requires { config.fused_activation; }) {
                     if (config.fused_activation.has_value()) {
-                        trailing_activations.push_back(config.fused_activation.value());
+                        trailing_activations.push_back(
+                            utilities::with_fused_activation_defaults(config.fused_activation.value()));
                         config.fused_activation = std::nullopt;
                     }
                 }
@@ -417,7 +418,8 @@ static ttnn::Tensor bound_matmul(
     }
     if (parameters.user_fused_activation.has_value() &&
         (!parameters.user_core_coord.has_value() || post_process_bias)) {
-        trailing_activations.push_back(parameters.user_fused_activation.value());
+        trailing_activations.push_back(
+            utilities::with_fused_activation_defaults(parameters.user_fused_activation.value()));
         parameters.user_fused_activation = std::nullopt;
     }
 
@@ -512,9 +514,10 @@ static ttnn::Tensor bound_matmul(
         output_tensor = ttnn::reshape(output_tensor, result_shape);
     }
 
-    if (!trailing_activations.empty()) {
-        output_tensor = ttnn::unary_chain(
-            output_tensor, trailing_activations, output_tensor.memory_config(), optional_output_tensor);
+    // One op each: some activations run in a dedicated kernel and cannot share a unary chain.
+    for (const auto& activation : trailing_activations) {
+        output_tensor =
+            ttnn::unary_chain(output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
     }
 
     return output_tensor;

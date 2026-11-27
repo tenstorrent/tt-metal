@@ -1701,6 +1701,57 @@ def test_linear_fused_activation_after_post_processed_bias(device, config_type, 
         assert torch.equal(output, expected)
 
 
+def _batched_2d_mcast_config(fused_activation):
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(2, 2),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        transpose_mcast=False,
+        fuse_batch=False,
+        fused_activation=fused_activation,
+    )
+
+
+@pytest.mark.parametrize(
+    "op_type, golden",
+    [
+        (ttnn.UnaryOpType.SOFTPLUS, torch.nn.functional.softplus),
+        (ttnn.UnaryOpType.SELU, torch.nn.functional.selu),
+        (ttnn.UnaryOpType.HARDTANH, torch.nn.functional.hardtanh),
+    ],
+    ids=["softplus", "selu", "hardtanh"],
+)
+def test_linear_deferred_fused_activation_keeps_default_params(device, op_type, golden):
+    """A parameterless fused_activation moved after a post-processed bias gets the kernel's default parameters."""
+    a, w, bias = _exact_batched_linear_inputs()
+    a, w = a / 4, w / 4
+    put = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    config = _batched_2d_mcast_config(ttnn.UnaryWithParam(op_type))
+    output = ttnn.to_torch(ttnn.linear(put(a), put(w), bias=put(bias), program_config=config)).float()
+    assert_with_pcc(golden(a @ w + bias), output, 0.999)
+
+
+@pytest.mark.parametrize(
+    "op_type, golden",
+    [
+        (ttnn.UnaryOpType.LOGSIGMOID, torch.nn.functional.logsigmoid),
+        (ttnn.UnaryOpType.HARDSWISH, torch.nn.functional.hardswish),
+    ],
+    ids=["logsigmoid", "hardswish"],
+)
+def test_linear_deferred_activations_run_in_order(device, op_type, golden):
+    """fused_activation, then an activation argument that runs in its own kernel, both after the bias."""
+    a, w, bias = _exact_batched_linear_inputs()
+    a, w = a / 4, w / 4
+    put = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    config = _batched_2d_mcast_config(ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU))
+    output = ttnn.linear(put(a), put(w), bias=put(bias), program_config=config, activation=ttnn.UnaryWithParam(op_type))
+    assert_with_pcc(golden(torch.relu(a @ w + bias)), ttnn.to_torch(output).float(), 0.999)
+
+
 def test_linear_batched_reuse_fused_bias_program_cache(device):
     """Fused bias stays correct across a program-cache hit with a different bias buffer.
 
