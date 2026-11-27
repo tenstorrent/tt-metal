@@ -435,8 +435,11 @@ GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
     const uint32_t num_batches = padded_shape[0];
     const uint32_t H = padded_shape[2] * num_batches;
     const uint32_t W = padded_shape[3];
-    const uint32_t group_size = W / num_groups;
-    const uint32_t block_wt = find_max_tile_span(per_core_N, group_size).first;
+    // Groups come from the logical C; non-tile-aligned C has all channels on one core (the factory enforces it).
+    const uint32_t C = input.logical_shape()[3];
+    const uint32_t per_core_C = C == W ? per_core_N : C;
+    const uint32_t group_size = C / num_groups;
+    const uint32_t block_wt = find_max_tile_span(per_core_C, group_size).first;
 
     const uint32_t num_shards_r = H / per_core_M;
     const uint32_t num_shards_c = W / per_core_N;

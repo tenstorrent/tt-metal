@@ -111,10 +111,23 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     const auto& shape = a.padded_shape();
     uint32_t H = shape[2] * num_batches;
     uint32_t W = shape[3];
-    uint32_t num_datum_row_per_group = W / num_groups;
+    // Logical channel count: defines the groups. W (padded) only sizes the tiles and shards.
+    const uint32_t C = a.logical_shape()[3];
+    // The C tile padding sits in the last core's shard, so channels split across cores would give
+    // the cores different logical widths; keep non-tile-aligned C on one core across the channels.
+    TT_FATAL(
+        C == W || per_core_N == W,
+        "group_norm: non-tile-aligned channels (C={}, padded to {}) need all channels on one core: use height "
+        "sharding, or a block-sharded grid with one core across the channels (shard width {}).",
+        C,
+        W,
+        per_core_N);
+    // Channels on each core, without the tile padding.
+    const uint32_t per_core_C = C == W ? per_core_N : C;
+    uint32_t num_datum_row_per_group = C / num_groups;
     uint32_t num_datum_row_per_group_mod_tile_w =
         num_datum_row_per_group % tile_width == 0 ? tile_width : num_datum_row_per_group % tile_width;
-    uint32_t group_size = W / num_groups;
+    uint32_t group_size = C / num_groups;
     auto all_cores = a.shard_spec().value().grid.merge_ranges();
     TT_FATAL(all_cores.ranges().size() == 1, "sharded groupnorm requires a rectangular shard grid");
     uint32_t num_cores = all_cores.num_cores();
@@ -140,9 +153,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
 
     TT_FATAL(
-        per_core_N % num_datum_row_per_group == 0,
-        "per_core_N ({}) must be divisible by num_datum_row_per_group ({})",
-        per_core_N,
+        per_core_C % num_datum_row_per_group == 0,
+        "per-core channels ({}) must be divisible by num_datum_row_per_group ({})",
+        per_core_C,
         num_datum_row_per_group);
     TT_FATAL(
         per_core_M % tile_height == 0,
@@ -185,7 +198,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         per_core_M,
         tile_height);
 
-    TT_FATAL(W % num_groups == 0, "Tensor W ({}) must be divisible by num_groups ({})", W, num_groups);
+    TT_FATAL(C % num_groups == 0, "Tensor C ({}) must be divisible by num_groups ({})", C, num_groups);
     TT_FATAL(H % per_core_M == 0, "H dim ({}) must be divisible by per_core_M ({})", H, per_core_M);
     TT_FATAL(W % per_core_N == 0, "W dim ({}) must be divisible by per_core_N ({})", W, per_core_N);
     if (num_batches >= num_shards_r) {
@@ -225,7 +238,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
     uint32_t num_rows_per_batch_per_core = per_core_M / num_batches_per_core;
-    auto [block_wt, num_groups_per_reset] = find_max_tile_span(per_core_N, group_size);
+    auto [block_wt, num_groups_per_reset] = find_max_tile_span(per_core_C, group_size);
     uint32_t block_ht = per_core_Mt / num_batches_per_core;
     // FullBlock consumers must use the same physical block size as the dataflow kernels.
     // FP32 DEST has room for four tiles under half sync; do not let the chain shrink it.
@@ -260,7 +273,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         "shard height ({}) must be divisible by per_core_batch ({})",
         per_core_M,
         num_batches_per_core);
-    TT_FATAL(W % num_groups == 0, "tensor width ({}) must be divisible by num_groups ({})", W, num_groups);
+    TT_FATAL(C % num_groups == 0, "tensor width ({}) must be divisible by num_groups ({})", C, num_groups);
     if (shard_orientation == ShardOrientation::ROW_MAJOR && num_groups_per_core == 1) {
         TT_FATAL(
             num_cores_c % num_groups == 0,
