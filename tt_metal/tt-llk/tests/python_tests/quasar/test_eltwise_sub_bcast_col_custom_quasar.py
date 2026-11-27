@@ -92,16 +92,39 @@ def _block_shapes_fitting_dest(
     return [shape for shape in _BLOCK_SHAPES if shape[0] <= max_tiles]
 
 
+def _fitting_ct_dims(
+    dest_sync: DestSync, dest_acc: DestAccumulation, tile_dimensions: list
+):
+    """The distinct ct_dim values of the shapes that fit, in sweep order."""
+    return list(
+        dict.fromkeys(
+            ct
+            for ct, _ in _block_shapes_fitting_dest(
+                dest_sync, dest_acc, tile_dimensions
+            )
+        )
+    )
+
+
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     dest_sync=[DestSync.Half, DestSync.Full],
     tile_dimensions=runtime(TILE_DIMENSIONS),
-    block_shape=runtime(
-        lambda dest_sync, dest_acc, tile_dimensions: _block_shapes_fitting_dest(
+    ct_dim=runtime(
+        lambda dest_sync, dest_acc, tile_dimensions: _fitting_ct_dims(
             dest_sync, dest_acc, tile_dimensions
         )
+    ),
+    num_blocks=runtime(
+        lambda dest_sync, dest_acc, tile_dimensions, ct_dim: [
+            num_blocks
+            for ct, num_blocks in _block_shapes_fitting_dest(
+                dest_sync, dest_acc, tile_dimensions
+            )
+            if ct == ct_dim
+        ]
     ),
 )
 def test_eltwise_sub_bcast_col_custom_quasar(
@@ -109,10 +132,10 @@ def test_eltwise_sub_bcast_col_custom_quasar(
     dest_acc,
     dest_sync,
     tile_dimensions,
-    block_shape,
+    ct_dim,
+    num_blocks,
     boot_mode=BootMode.DEFAULT,
 ):
-    ct_dim, num_blocks = block_shape
     total_tiles = ct_dim * num_blocks
     face_r_dim, num_faces_r, num_faces_c = get_tile_params(tile_dimensions)
     num_faces_total = num_faces_r * num_faces_c

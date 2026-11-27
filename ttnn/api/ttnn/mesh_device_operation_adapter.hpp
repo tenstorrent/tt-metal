@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <tt-metalium/program_cache.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/utils/program_cache.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/run_args/validation_mode.hpp>
@@ -18,6 +18,7 @@
 #include "ttnn/per_device_run_args.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -1006,10 +1007,14 @@ public:
     // stored indices, and applies via Program::update_tensor_args — no Program
     // rebuild. Op-owned tensors are re-patched even though their address is
     // unchanged, because Program::update_tensor_args is currently all-or-nothing.
+    // PrefetcherPipes and GlobalSemaphores are rebound from operation_attributes_t.
     //
     // Contract: every TensorArgument returned by the factory must reference a
     // MeshTensor reachable from tensor_args / tensor_return_value, or one of the
-    // MeshTensors the factory placed in ProgramArtifacts::op_owned_tensors.
+    // MeshTensors the factory placed in ProgramArtifacts::op_owned_tensors. Every
+    // GlobalSemaphoreArgument must reference a GlobalSemaphore in
+    // operation_attributes_t::global_semaphores, unless the factory's
+    // override_runtime_arguments supplies its run args on every hit.
     // Binding machinery shared by every spec-path adapter: it depends only on the op's tensor
     // types, not on which factory concept produced the artifacts.
     struct SpecBindingSupport {
@@ -1017,6 +1022,8 @@ public:
         using TensorArgument = tt::tt_metal::ProgramRunArgs::TensorArgument;
         using PrefetcherPipeParamName = tt::tt_metal::experimental::PrefetcherPipeParamName;
         using PrefetcherPipeArgument = tt::tt_metal::experimental::PrefetcherPipeArgument;
+        using GlobalSemaphoreParamName = tt::tt_metal::GlobalSemaphoreParamName;
+        using GlobalSemaphoreArgument = tt::tt_metal::ProgramRunArgs::GlobalSemaphoreArgument;
 
         // Stored across cache entries: for each TensorArgument in a program's ProgramRunArgs, which
         // tensor (by index into the deterministic enumeration of io tensors followed by op-owned
@@ -1040,14 +1047,37 @@ public:
             { attrs.prefetcher_pipes } -> std::convertible_to<const ttnn::PrefetcherPipeList&>;
         };
 
+        // The same for each GlobalSemaphoreArgument bound to one of the caller's GlobalSemaphores: the index
+        // into operation_attributes_t::global_semaphores of the semaphore it was bound to. An argument bound to
+        // one of the factory's parked GlobalSemaphores (MeshWorkloadArtifacts::global_semaphores) has none: its
+        // address never changes.
+        struct ResolvedGlobalSemaphoreBinding {
+            GlobalSemaphoreParamName global_semaphore_parameter_name;
+            std::size_t semaphore_idx;
+        };
+
+        // An op whose programs bind its caller's GlobalSemaphores holds them in
+        // operation_attributes_t::global_semaphores, where the cache-hit path finds them again.
+        static constexpr bool attrs_hold_global_semaphores = requires(const operation_attributes_t& attrs) {
+            { attrs.global_semaphores } -> std::convertible_to<const std::vector<tt::tt_metal::GlobalSemaphore>&>;
+        };
+
         // Shared by both spec adapters: the SPMD one and the per-range MeshWorkload one.
         struct SpecSharedVariables {
             std::vector<ResolvedTensorBinding> bindings;
             std::vector<ResolvedPipeBinding> pipe_bindings;
+            std::vector<ResolvedGlobalSemaphoreBinding> global_semaphore_bindings;
+            // The size of operation_attributes_t::global_semaphores on the cache miss, which every hit that
+            // rebinds global_semaphore_bindings must match.
+            std::size_t num_caller_global_semaphores = 0;
             // Op-owned tensors produced by the factory, parked here so the (move-only) MeshTensors
             // outlive the cache miss and every program on the occupied ranges can reference them.
             // Shared ownership keeps the device allocation alive for the life of the cache entry.
             std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
+            // GlobalSemaphores a MeshWorkloadSpecFactoryConcept factory allocated for its programs, parked here
+            // (shared by every range of the workload) so they stay allocated, at the addresses its programs were
+            // given, for the life of the cache entry. Null if it allocated none.
+            std::shared_ptr<const std::vector<tt::tt_metal::GlobalSemaphore>> global_semaphores;
             // Factories with per-device run args: the state of the range the factory returned, shared by its
             // cached programs (see MeshWorkloadSpecFactoryAdapter).
             std::shared_ptr<per_device_run_args::RangeState> per_device;
@@ -1075,7 +1105,7 @@ public:
             const tensor_args_t& tensor_args,
             const tt::tt_metal::ProgramSpec& spec,
             const tt::tt_metal::ProgramRunArgs& run_params) {
-            if constexpr (requires { &Factory::map_cmd_list_parameters; }) {
+            if constexpr (detail::MapsCmdListParameters<Factory>) {
                 auto bindings = Factory::map_cmd_list_parameters(attrs, tensor_args, spec, run_params);
                 bindings.factory_name = ttsl::long_type_name<Factory>;
                 return std::make_shared<const ttnn::command_list::CmdListBindings>(std::move(bindings));
@@ -1135,6 +1165,46 @@ public:
             }
         }
 
+        // Cache-hit GlobalSemaphore refresh: supply each program the caller's GlobalSemaphores now at its
+        // resolved positions in operation_attributes_t::global_semaphores. A GlobalSemaphore keys the program hash
+        // by its cores and buffer type, not by which semaphore it is, so a hit may bring other semaphores than the
+        // ones the program bound, and supplying them rebinds the program. Parked semaphores keep their addresses.
+        template <typename CachedWorkload>
+        static void refresh_global_semaphore_args(
+            CachedWorkload& cached_workload, const operation_attributes_t& attrs) {
+            if constexpr (attrs_hold_global_semaphores) {
+                const std::vector<tt::tt_metal::GlobalSemaphore>& caller_semaphores = attrs.global_semaphores;
+                const tt::tt_metal::ValidationMode validation = program_args_validation_mode();
+                for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                    const auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                    if (sv.global_semaphore_bindings.empty()) {
+                        continue;
+                    }
+                    TT_FATAL(
+                        caller_semaphores.size() == sv.num_caller_global_semaphores,
+                        "This program bound operation_attributes_t::global_semaphores by position when it was cached, "
+                        "with {} semaphores there, but the hit supplies {}; the program hash must cover how many there "
+                        "are",
+                        sv.num_caller_global_semaphores,
+                        caller_semaphores.size());
+                    tt::tt_metal::ProgramRunArgs run_args;
+                    for (const auto& b : sv.global_semaphore_bindings) {
+                        run_args.global_semaphore_args.emplace(
+                            b.global_semaphore_parameter_name, std::cref(caller_semaphores[b.semaphore_idx]));
+                    }
+                    program.update_program_run_args(run_args, validation);
+                }
+            }
+        }
+
+        // Cache-hit refresh of everything a program binds from operation_attributes_t (PrefetcherPipes and the
+        // caller's GlobalSemaphores), shared so that no hit path can leave one of them stale.
+        template <typename CachedWorkload>
+        static void refresh_attrs_bound_args(CachedWorkload& cached_workload, const operation_attributes_t& attrs) {
+            refresh_prefetcher_pipe_args(cached_workload, attrs);
+            refresh_global_semaphore_args(cached_workload, attrs);
+        }
+
         // The Metal 2.0 MeshWorkload constructor needs a MeshDevice; pull it from the first device
         // tensor reachable from tensor_args, falling back to tensor_return_value for output-only
         // ops (e.g. rand) whose tensor_args carry no input tensor, and then, as launch does, to the
@@ -1177,6 +1247,13 @@ public:
         // Match each TensorArgument's MeshTensor reference back to its index in the combined
         // enumeration (io tensors followed by op-owned tensors). Cache-miss path only.
         //
+        // When several slots hold the same MeshTensor, pointer identity cannot tell which of them a
+        // TensorArgument came from (ProgramRunArgs::tensor_args is a Table with no promised order).
+        // Any of them is correct for both readers of these bindings on a hit, the tensor refresh and
+        // command-list recording: compute_mesh_workload_cache_key keys such ops by which tensor_args
+        // slots alias (compute_tensor_alias_signature), so every hit of this entry repeats the miss's
+        // aliasing.
+        //
         // NOTE on host perf: the index-based binding scheme is what makes a fast cache-hit path
         // possible, but the current straightforward implementation isn't there yet -- the
         // enumeration returns a heap std::vector, and apply_descriptor builds a fresh
@@ -1187,32 +1264,18 @@ public:
             const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
             std::vector<ResolvedTensorBinding> bindings;
             bindings.reserve(factory_tensor_args.size());
-            // Tracks which enumeration slots have already been claimed by an earlier
-            // TensorParameter in this loop. Without this, two parameters aliasing the same
-            // tensor (e.g. batch_norm's running_mean == running_var) would both resolve to
-            // the *first* matching slot via find_if, collapsing their indices together. On a
-            // later cache hit with distinct-but-same-spec tensors, the collapsed index map is
-            // replayed verbatim, silently rebinding the second parameter to the first tensor.
-            // Scanning left-to-right and skipping claimed slots recovers the intended
-            // positional binding (first occurrence -> first slot, second occurrence -> next
-            // matching unclaimed slot) instead of aliasing both onto the same index.
-            std::vector<bool> claimed(mesh_tensors.size(), false);
             // The name is the Table key; the TensorArgument value carries only the tensor ref.
             for (const auto& [tensor_parameter_name, tensor_arg] : factory_tensor_args) {
                 const auto* target = &tt::tt_metal::mesh_tensor_of(tensor_arg);
-                std::size_t idx = 0;
-                for (; idx < mesh_tensors.size(); ++idx) {
-                    if (!claimed[idx] && &mesh_tensors[idx].get() == target) {
-                        break;
-                    }
-                }
+                const auto it = std::find_if(
+                    mesh_tensors.begin(), mesh_tensors.end(), [target](const auto& t) { return &t.get() == target; });
                 TT_FATAL(
-                    idx != mesh_tensors.size(),
+                    it != mesh_tensors.end(),
                     "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args / "
                     "tensor_return_value, or one of the factory's op_owned_tensors (got an unowned MeshTensor)",
                     tensor_parameter_name);
-                claimed[idx] = true;
-                bindings.push_back({tensor_parameter_name, idx});
+                bindings.push_back(
+                    {tensor_parameter_name, static_cast<std::size_t>(std::distance(mesh_tensors.begin(), it))});
             }
             return bindings;
         }
@@ -1248,6 +1311,56 @@ public:
                 TT_THROW(
                     "The spec factory binds PrefetcherPipes, but operation_attributes_t has no prefetcher_pipes "
                     "(a ttnn::PrefetcherPipeList) for a cache hit to rebind them from");
+            }
+        }
+
+        // Match each GlobalSemaphoreArgument to one of the factory's parked GlobalSemaphores (nothing to rebind)
+        // or to its index in operation_attributes_t::global_semaphores, so that every cache hit rebinds it
+        // (refresh_global_semaphore_args). An argument in neither is the factory's own business if its
+        // override_runtime_arguments supplies the run args on every hit (generic_op passes its caller's run args
+        // through this way), and an error otherwise: the hit would keep a semaphore that may since have been freed.
+        // Cache-miss path only.
+        static std::vector<ResolvedGlobalSemaphoreBinding> resolve_global_semaphore_bindings(
+            const tt::tt_metal::Table<GlobalSemaphoreParamName, GlobalSemaphoreArgument>& factory_semaphore_args,
+            const operation_attributes_t& attrs,
+            const std::vector<tt::tt_metal::GlobalSemaphore>* parked_semaphores,
+            bool hit_overrides_run_args) {
+            std::vector<ResolvedGlobalSemaphoreBinding> bindings;
+            for (const auto& [semaphore_parameter_name, semaphore_arg] : factory_semaphore_args) {
+                const auto* target = &semaphore_arg.get();
+                const auto is_target = [target](const tt::tt_metal::GlobalSemaphore& s) { return &s == target; };
+                if (parked_semaphores != nullptr &&
+                    std::any_of(parked_semaphores->begin(), parked_semaphores->end(), is_target)) {
+                    continue;
+                }
+                if constexpr (attrs_hold_global_semaphores) {
+                    const std::vector<tt::tt_metal::GlobalSemaphore>& caller_semaphores = attrs.global_semaphores;
+                    const auto it = std::find_if(caller_semaphores.begin(), caller_semaphores.end(), is_target);
+                    if (it != caller_semaphores.end()) {
+                        bindings.push_back(
+                            {semaphore_parameter_name,
+                             static_cast<std::size_t>(std::distance(caller_semaphores.begin(), it))});
+                        continue;
+                    }
+                }
+                TT_FATAL(
+                    hit_overrides_run_args,
+                    "GlobalSemaphoreArgument '{}' must reference a GlobalSemaphore in "
+                    "operation_attributes_t::global_semaphores, which a cache hit rebinds it from, or (for a "
+                    "MeshWorkloadSpecFactoryConcept factory) one in MeshWorkloadArtifacts::global_semaphores, which "
+                    "the program cache keeps allocated; or the factory's override_runtime_arguments must supply it on "
+                    "every cache hit",
+                    semaphore_parameter_name.get());
+            }
+            return bindings;
+        }
+
+        // The size of operation_attributes_t::global_semaphores, recorded on the cache miss.
+        static std::size_t num_caller_global_semaphores(const operation_attributes_t& attrs) {
+            if constexpr (attrs_hold_global_semaphores) {
+                return attrs.global_semaphores.size();
+            } else {
+                return 0;
             }
         }
     };
@@ -1294,6 +1407,12 @@ public:
                 .bindings = SpecBindingSupport::resolve_bindings(artifacts.run_params.tensor_args, mesh_tensors),
                 .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
                     artifacts.run_params.advanced_options.prefetcher_pipe_args, attrs),
+                .global_semaphore_bindings = SpecBindingSupport::resolve_global_semaphore_bindings(
+                    artifacts.run_params.global_semaphore_args,
+                    attrs,
+                    /*parked_semaphores=*/nullptr,
+                    /*hit_overrides_run_args=*/detail::HasSpecRuntimeArgsOverride<SpecFactory>),
+                .num_caller_global_semaphores = SpecBindingSupport::num_caller_global_semaphores(attrs),
                 .op_owned_tensors =
                     std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors))};
         }
@@ -1337,7 +1456,7 @@ public:
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
 
-        // The framework's cache-hit dispatcher (handle_mesh_adapter_cache_hit in
+        // The framework's cache-hit dispatcher (use_cached_mesh_workload in
         // device_operation.hpp) prefers a method named `apply_descriptor` over
         // `override_runtime_arguments` when both exist. We adopt the name to
         // slot into that hook directly — the "descriptor" word here is the
@@ -1348,15 +1467,16 @@ public:
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
             SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
-            SpecBindingSupport::refresh_prefetcher_pipe_args(cached_workload, attrs);
+            SpecBindingSupport::refresh_attrs_bound_args(cached_workload, attrs);
         }
     };
 
     // Like ProgramSpecMeshWorkloadFactoryAdapter (cache-miss build inherited unchanged), but the
     // cache-hit path calls the factory's override_runtime_arguments and applies the returned
     // ProgramRunArgs via Program::update_program_run_args instead of the base's tensor-only
-    // Program::update_tensor_args. PrefetcherPipes are rebound from operation_attributes_t::prefetcher_pipes either
-    // way. The miss path applies create_program_artifacts' run args, not the override, so per-coordinate run args must
+    // Program::update_tensor_args. PrefetcherPipes and the caller's GlobalSemaphores are rebound from
+    // operation_attributes_t::prefetcher_pipes and ::global_semaphores either way.
+    // The miss path applies create_program_artifacts' run args, not the override, so per-coordinate run args must
     // come from a MeshWorkloadSpecFactoryConcept factory's create_mesh_workload_artifacts.
     template <CustomProgramSpecFactoryConcept CustomSpecFactory>
     struct CustomProgramSpecMeshWorkloadFactoryAdapter : ProgramSpecMeshWorkloadFactoryAdapter<CustomSpecFactory> {
@@ -1368,7 +1488,7 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            Base::refresh_prefetcher_pipe_args(cached_workload, attrs);
+            Base::refresh_attrs_bound_args(cached_workload, attrs);
             const tt::tt_metal::ValidationMode validation = program_args_validation_mode();
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto run_args = CustomSpecFactory::override_runtime_arguments(
@@ -1388,12 +1508,14 @@ public:
     // returns the workload-scoped resources plus a ProgramSpec and ProgramRunArgs per coordinate
     // range, which the adapter realises into a MeshWorkload via the MeshWorkload constructor.
     //
-    // Resources are parked once and shared by every range's shared_variables.
+    // Resources (MeshWorkloadArtifacts::global_semaphores) are parked once and shared by every range's
+    // shared_variables.
     //
     // On cache hit the adapter refreshes tensor bindings per range, or calls the factory's
     // override_runtime_arguments(attrs, args, ret, range) if it declares one. The range is passed
     // whole: one Program backs it, so the run args it returns apply to every device in it.
-    // PrefetcherPipes are rebound from operation_attributes_t::prefetcher_pipes either way.
+    // PrefetcherPipes and the caller's GlobalSemaphores are rebound from operation_attributes_t::prefetcher_pipes and
+    // ::global_semaphores either way; parked GlobalSemaphores keep their addresses.
     //
     // Per-device run args. A factory whose devices differ only in a few named kernel run args declares
     // `static constexpr bool uses_per_device_run_args = true`, lists each device's values in
@@ -1497,7 +1619,8 @@ public:
             const operation_attributes_t& attrs,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             MeshWorkloadArtifacts& artifacts,
-            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
+            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors,
+            const std::shared_ptr<const std::vector<tt::tt_metal::GlobalSemaphore>>& parked_semaphores) {
             namespace pd = per_device_run_args;
             // Checked on the ranges as returned: splitting would turn an overlap into a duplicate coordinate.
             for (size_t i = 0; i < artifacts.programs.size(); ++i) {
@@ -1541,6 +1664,13 @@ public:
                     .bindings = SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
                     .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
                         per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs),
+                    .global_semaphore_bindings = SpecBindingSupport::resolve_global_semaphore_bindings(
+                        per_coord.run_params.global_semaphore_args,
+                        attrs,
+                        parked_semaphores.get(),
+                        /*hit_overrides_run_args=*/has_override_runtime_arguments()),
+                    .num_caller_global_semaphores = SpecBindingSupport::num_caller_global_semaphores(attrs),
+                    .global_semaphores = parked_semaphores,
                     .per_device = state};
                 if (state->merged) {
                     state->program_ranges = {range};
@@ -1598,7 +1728,7 @@ public:
             for (const auto& [coordinate_range, sv] : cached_workload.shared_variables) {
                 check_merged_entry_usable(*sv.per_device, *mesh_device);
             }
-            SpecBindingSupport::refresh_prefetcher_pipe_args(cached_workload, attrs);
+            SpecBindingSupport::refresh_attrs_bound_args(cached_workload, attrs);
             SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
         }
 
@@ -1638,7 +1768,7 @@ public:
             for (auto& [state, run_args, keys] : pending) {
                 state->prev_keys.insert(keys.begin(), keys.end());
             }
-            SpecBindingSupport::refresh_prefetcher_pipe_args(cached_workload, attrs);
+            SpecBindingSupport::refresh_attrs_bound_args(cached_workload, attrs);
             const tt::tt_metal::ValidationMode validation = program_args_validation_mode();
             for (auto& [state, run_args, keys] : pending) {
                 if (state->merged) {
@@ -1672,11 +1802,18 @@ public:
             TT_FATAL(!artifacts.programs.empty(), "create_mesh_workload_artifacts returned no programs");
 
             const auto mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
+            // Park the factory's GlobalSemaphores. Moving the vector keeps its elements where they are, so the run
+            // args' references to them stay valid.
+            const auto parked_semaphores = artifacts.global_semaphores.empty()
+                                               ? nullptr
+                                               : std::make_shared<const std::vector<tt::tt_metal::GlobalSemaphore>>(
+                                                     std::move(artifacts.global_semaphores));
             if constexpr (uses_per_device_run_args()) {
-                return create_per_device_mesh_workload(*mesh_device, attrs, tensor_coords, artifacts, mesh_tensors);
+                return create_per_device_mesh_workload(
+                    *mesh_device, attrs, tensor_coords, artifacts, mesh_tensors, parked_semaphores);
             } else {
                 return create_plain_mesh_workload(
-                    *mesh_device, attrs, tensor_coords, tensor_args, artifacts, mesh_tensors);
+                    *mesh_device, attrs, tensor_coords, tensor_args, artifacts, mesh_tensors, parked_semaphores);
             }
         }
 
@@ -1686,7 +1823,8 @@ public:
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
             MeshWorkloadArtifacts& artifacts,
-            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
+            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors,
+            const std::shared_ptr<const std::vector<tt::tt_metal::GlobalSemaphore>>& parked_semaphores) {
             std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramSpec> program_specs;
             std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramRunArgs> run_params;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -1709,7 +1847,14 @@ public:
                 shared_variables_t sv{
                     .bindings = SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
                     .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
-                        per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs)};
+                        per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs),
+                    .global_semaphore_bindings = SpecBindingSupport::resolve_global_semaphore_bindings(
+                        per_coord.run_params.global_semaphore_args,
+                        attrs,
+                        parked_semaphores.get(),
+                        /*hit_overrides_run_args=*/has_override_runtime_arguments()),
+                    .num_caller_global_semaphores = SpecBindingSupport::num_caller_global_semaphores(attrs),
+                    .global_semaphores = parked_semaphores};
                 sv.cmd_list_bindings = SpecBindingSupport::template make_cmd_list_bindings<WorkloadSpecFactory>(
                     attrs, tensor_args, per_coord.spec, per_coord.run_params);
                 const auto [_, inserted] = program_specs.emplace(per_coord.range, std::move(per_coord.spec));
@@ -1740,7 +1885,7 @@ public:
             } else if constexpr (uses_per_device_run_args()) {
                 apply_per_device_run_args(cached_workload, attrs, tensor_args, tensor_return_value);
             } else {
-                SpecBindingSupport::refresh_prefetcher_pipe_args(cached_workload, attrs);
+                SpecBindingSupport::refresh_attrs_bound_args(cached_workload, attrs);
                 if constexpr (has_override_runtime_arguments()) {
                     const tt::tt_metal::ValidationMode validation = program_args_validation_mode();
                     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
@@ -1755,42 +1900,71 @@ public:
         }
     };
 
-    static ttsl::hash::hash_t compute_mesh_workload_hash(
-        tt::tt_metal::distributed::MeshDevice* mesh_device,
-        const operation_attributes_t& attrs,
-        const tensor_args_t& tensor_args) {
-        ttsl::hash::hash_t hash = compute_program_hash(attrs, tensor_args);
-        const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
-        std::for_each(
-            coords.begin(), coords.end(), [&](const auto& coord) { hash = ttsl::hash::hash_objects(hash, coord); });
-        return hash;
+    // A spec factory's cache hit replays the io slot each TensorArgument was matched to on the miss in
+    // its tensor refresh, unless it re-derives its run args with override_runtime_arguments, and in a
+    // command-list recording, if it defines map_cmd_list_parameters. When the miss passed one MeshTensor
+    // in several slots, that match could have picked any of them (#57248), so ops with a factory that
+    // replays it key the cache on which tensor_args slots alias: an entry is then only reused by calls whose
+    // aliased slots again hold one tensor, where every pick is right. Outputs need no entry in the
+    // signature: the cache is keyed on tensor_args only, a new output aliases nothing, and an output
+    // that aliases an input (e.g. a preallocated one) is passed in a tensor_args slot. Whether an op
+    // returns one of its inputs outside of tensor_args is part of the op and must not vary per call:
+    // a hit would replay the slot the miss matched.
+    static constexpr bool keys_on_tensor_aliasing =
+        []<typename... Factories>(std::type_identity<std::variant<Factories...>>) {
+            return (
+                ((ProgramSpecFactoryConcept<Factories> || CustomProgramSpecFactoryConcept<Factories> ||
+                  MeshWorkloadSpecFactoryConcept<Factories>) &&
+                 (!detail::HasSpecRuntimeArgsOverride<Factories> || detail::MapsCmdListParameters<Factories>)) ||
+                ...);
+        }(std::type_identity<program_factory_t>{});
+
+    // Empty unless the op keys on tensor aliasing and some tensors alias, so other calls hash as before.
+    static std::vector<std::uint32_t> tensor_alias_signature(
+        const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors) {
+        if constexpr (keys_on_tensor_aliasing) {
+            return detail::compute_tensor_alias_signature(tensors);
+        } else {
+            return {};
+        }
     }
 
-    // Exact, collision-free companion to compute_mesh_workload_hash: the cache compares this on a
-    // hash hit so a 64-bit collision is resolved to a correct (rebuild) miss instead of a wrong
-    // hit (issue #45821). It must mirror the SAME inputs the hash combines.
+    // The program cache key: a 64-bit hash plus an exact, collision-free canonical encoding. The
+    // cache compares the canonical part on a hash hit so a 64-bit collision is resolved to a
+    // correct (rebuild) miss instead of a wrong hit (issue #45821), so it must mirror the SAME
+    // inputs the hash combines.
     //
-    // The key is prefixed with op_type_name (the DeviceOperation's type name) so distinct ops can
-    // never alias on a hash collision.
+    // The canonical key is prefixed with op_type_name (the DeviceOperation's type name) so distinct
+    // ops can never alias on a hash collision.
     // For ops with a custom compute_program_hash we can't infer which fields it keyed on (it may
-    // deliberately exclude some, e.g. an RNG seed), so we return only the op-identity prefix --
-    // opting that op out of attribute-level collision resolution. The default reflection-hash
-    // path is mirrored exactly.
-    static std::string compute_mesh_workload_canonical_key(
-        [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
+    // deliberately exclude some, e.g. an RNG seed), so the canonical key holds only the op-identity
+    // prefix plus the tensor alias signature, which this adapter rather than the op folds into the
+    // hash -- opting that op out of attribute-level collision resolution. The default
+    // reflection-hash path is mirrored exactly.
+    static tt::tt_metal::program_cache::detail::ProgramCacheKey compute_mesh_workload_cache_key(
+        tt::tt_metal::distributed::MeshDevice* mesh_device,
         std::string_view op_type_name,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        std::string key{op_type_name};
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            return key;  // custom hash -> opt out beyond the op-identity prefix
-        } else {
-            key += ttsl::hash::canonical_key(attrs, tensor_args);
-            const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
-            std::for_each(
-                coords.begin(), coords.end(), [&](const auto& coord) { key += ttsl::hash::canonical_key(coord); });
-            return key;
+        const auto tensors = mesh_device_operation_utils::collect_tensors(tensor_args);
+        const auto coords = detail::extract_tensor_coordinates_impl(tensors, mesh_device);
+        const auto alias_signature = tensor_alias_signature(tensors);
+
+        ttsl::hash::hash_t hash = compute_program_hash(attrs, tensor_args);
+        std::string canonical{op_type_name};
+        std::for_each(
+            coords.begin(), coords.end(), [&](const auto& coord) { hash = ttsl::hash::hash_objects(hash, coord); });
+        if constexpr (!requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+            canonical += ttsl::hash::canonical_key(attrs, tensor_args);
+            std::for_each(coords.begin(), coords.end(), [&](const auto& coord) {
+                canonical += ttsl::hash::canonical_key(coord);
+            });
         }
+        if (!alias_signature.empty()) {
+            hash = ttsl::hash::hash_objects(hash, alias_signature);
+            canonical += ttsl::hash::canonical_key(alias_signature);
+        }
+        return {hash, std::move(canonical)};
     }
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(

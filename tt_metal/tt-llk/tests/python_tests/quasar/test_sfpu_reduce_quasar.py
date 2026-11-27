@@ -71,7 +71,7 @@ def get_max_tiles(formats: InputOutputFormat) -> int:
     return MAX_TILES_32_BIT if formats.input_format.is_32_bit() else MAX_TILES_16_BIT
 
 
-def get_dimension_combinations(formats: InputOutputFormat) -> list[list[int]]:
+def get_input_dimensions(formats: InputOutputFormat) -> list[list[int]]:
     """Every tile grid that fits Dest at this format's width, in elements."""
     max_tiles = get_max_tiles(formats)
     return [
@@ -153,7 +153,7 @@ def get_reduce_extents(
     mathop: MathOperation,
     pool_type: ReducePool,
     formats: InputOutputFormat,
-    dimension_combinations: list[int],
+    input_dimensions: list[int],
 ) -> list[int]:
     """How many rows of the column-reduce axis hold real data.
 
@@ -173,7 +173,7 @@ def get_reduce_extents(
     full = [TILE_DIM]
     if (
         mathop != MathOperation.ReduceColumn
-        or dimension_combinations != [TILE_DIM, TILE_DIM]
+        or input_dimensions != [TILE_DIM, TILE_DIM]
         or pool_type == ReducePool.Average
     ):
         return full
@@ -269,7 +269,7 @@ def _reduce_test_config_kwargs(
     formats=REDUCE_FORMATS,
     mathop=get_supported_reduce_axes,
     input_bounds=runtime(get_format_input_bounds),
-    dimension_combinations=get_dimension_combinations,
+    input_dimensions=get_input_dimensions,
     reduced_extent=runtime(get_reduce_extents),
 )
 def test_sfpu_reduce_quasar(
@@ -277,7 +277,7 @@ def test_sfpu_reduce_quasar(
     mathop,
     pool_type,
     input_bounds,
-    dimension_combinations,
+    input_dimensions,
     reduced_extent,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -306,7 +306,6 @@ def test_sfpu_reduce_quasar(
     ), f"{formats.input_format.name} at dest_acc={dest_acc.name} is not a legal unpack-to-dest pairing"
 
     min_value, max_value = input_bounds
-    input_dimensions = dimension_combinations
     torch_format = format_dict[formats.input_format]
 
     tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE

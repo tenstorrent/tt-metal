@@ -8,6 +8,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/fabric_master_router_selection.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "tt_metal/fabric/graph/graph_fabric_build_session.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -126,6 +127,9 @@ void FabricBuilder::create_routers() {
             routers_.insert({eth_chan, make_router(location)});
         }
     }
+    for (const auto& location : perimeter_router_locations()) {
+        routers_.insert({location.eth_chan, make_router(location)});
+    }
 
     // Configure dispatch links
     if (device_has_dispatch_tunnel_) {
@@ -142,13 +146,26 @@ void FabricBuilder::create_routers() {
 
     // Record build state
     builder_context_.set_num_fabric_initialized_routers(device_->id(), routers_.size());
-    if (!routers_.empty()) {
-        master_router_chan_ = pick_master_router_chan();
-        builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
-    }
 }
 
-chan_id_t FabricBuilder::pick_master_router_chan() const { return routers_.begin()->first; }
+void FabricBuilder::choose_master_router() {
+    master_router_chan_ = pick_master_router_chan();
+    builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
+}
+
+chan_id_t FabricBuilder::pick_master_router_chan() const {
+    TT_FATAL(!routers_.empty(), "Fabric chip {} has no routers to choose a local handshake master from", device_->id());
+
+    std::vector<MasterRouterCandidate> candidates;
+    candidates.reserve(routers_.size());
+
+    // Describe the master router candidates for each router
+    for (const auto& [eth_chan, router_builder] : routers_) {
+        candidates.push_back(router_builder->describe_master_router_candidate());
+    }
+
+    return pick_local_handshake_master_router(candidates);
+}
 
 std::unique_ptr<FabricRouterBuilder> FabricBuilder::make_router(const RouterLocation& location) {
     return FabricRouterBuilder::create(
@@ -319,6 +336,9 @@ std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& f
     if (fabric_context.get_rtoptions().get_fabric_graph_builder()) {
         return std::make_unique<graph::GraphFabricBuildSession>(fabric_context);
     }
+    TT_FATAL(
+        !fabric_context.get_rtoptions().get_fabric_inter_domain(),
+        "inter-domain fabric needs the graph builder (TT_METAL_FABRIC_GRAPH_BUILDER=1)");
     return std::make_unique<FabricBuildSession>();
 }
 

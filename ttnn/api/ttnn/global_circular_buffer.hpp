@@ -7,7 +7,7 @@
 #include <memory>
 #include <optional>
 #include <vector>
-#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor.hpp"

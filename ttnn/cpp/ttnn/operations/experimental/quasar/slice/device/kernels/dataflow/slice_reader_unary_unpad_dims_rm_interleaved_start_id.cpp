@@ -48,7 +48,8 @@ void kernel_main() {
 
     uint32_t read_size = unpadded_stick_size + misalignment;
 
-    // padded_stick_size = per-shard page size (shard_W on B/W-sharded, full row otherwise);
+    // padded_stick_size = per-shard page size (unaligned shard_W on B/W-sharded,
+    // aligned page size on HEIGHT/ND-sharded, full row on interleaved);
     // feeds `noc_async_read_sharded`'s multi-shard split via `get_aligned_page_size()`.
     // Override the binding's address (aligned-down: base + addr_offset) and page size (per-shard
     // width). The base address is the auto-patched binding address (cache-hit safe).

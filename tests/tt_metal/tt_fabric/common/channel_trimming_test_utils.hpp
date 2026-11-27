@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <hostdevcommon/fabric_common.h>

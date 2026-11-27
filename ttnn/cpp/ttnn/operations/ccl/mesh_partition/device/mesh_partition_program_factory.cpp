@@ -3,18 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mesh_partition_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tuple>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_metal2_names.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 namespace ttnn::operations::ccl {
 namespace detail {

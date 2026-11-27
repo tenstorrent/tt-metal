@@ -6,8 +6,8 @@
 
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt_stl/fmt.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -235,6 +235,17 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
     };
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+ttnn::command_list::CmdListBindings ArgMaxSingleCoreProgramFactory::map_cmd_list_parameters(
+    const ArgmaxParams&,
+    const ArgmaxInputs&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    binder.tensor(/*invoke_name=*/"output_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"output"});
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

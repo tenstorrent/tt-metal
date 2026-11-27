@@ -9,7 +9,7 @@
 #include <variant>
 
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal {

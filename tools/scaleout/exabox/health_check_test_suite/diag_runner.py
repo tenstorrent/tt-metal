@@ -8,8 +8,8 @@
 
 Orchestrates: tt-smi snapshot validation, direct FW-telemetry-table reads,
 reset stability loop, tt-metal deployment-test gtest invocation, the kmd_triage
-first-step tools, and — where the host has the package — the QSFP tests and
-the sys-triage bundle.
+first-step tools, the tt-triage ETH status read, and — where the host has the
+package — the QSFP tests and the sys-triage bundle.
  Emits a single JSON pass/fail report.
 
 This file holds the CLI and the order the phases run in. What each tier runs is
@@ -38,6 +38,8 @@ if _SUITE_DIR not in sys.path:
 
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
+from diag.eth_status import run_eth_status  # noqa: E402
+from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
 from diag.resets import fold_post_reset_snapshots, reset_loop, run_post_test_reset  # noqa: E402
@@ -80,6 +82,11 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
             "Let triage FAILs gate the run. Off by default: triage FAILs are held at WARN so a "
             "tool still bedding in cannot ticket the fleet. Findings are recorded either way."
         ),
+    )
+    ap.add_argument(
+        "--skip-eth-status",
+        action="store_true",
+        help="Skip the ETH status read (two tt-triage check_eth_status reads) entirely.",
     )
     ap.add_argument(
         "--skip-qsfp-tests",
@@ -205,6 +212,23 @@ def _print_overall(report: dict) -> None:
             print(f"    {phase_name:14} {status}{note}")
 
 
+def _print_eth_summary(report: dict, output: Path, logs_dir: Path) -> None:
+    """The ETH link summary, printed last and kept beside the logs. Rendered after
+    the report is written, so a fault here costs the summary and nothing else."""
+    summary_path = logs_dir / SUMMARY_FILE
+    try:
+        text = render_eth_summary(report, report_path=output, summary_path=summary_path)
+    except Exception as e:
+        log(f"could not render the ETH link summary: {e!r}")
+        return
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(text)
+    except OSError as e:
+        log(f"could not write {summary_path}: {e!r}")
+    print("\n" + text, end="", flush=True)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,6 +241,7 @@ def run_diag(
     skip_reset: bool = False,
     skip_tests: bool = False,
     skip_triage: bool = False,
+    skip_eth_status: bool = False,
     skip_qsfp_tests: bool = False,
     input_snapshot: Path | None = None,
     tt_smi_path: str | None = None,
@@ -234,7 +259,7 @@ def run_diag(
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
 ) -> tuple[int, dict]:
-    """Run the full pipeline (snapshot → resets → gtests → triage → QSFP tests → sys-triage).
+    """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -361,7 +386,30 @@ def run_diag(
         )
     _finish(report, triage_phase, t0, summary=True)
 
-    # Phase 6: the QSFP tests, when the host has the package. Last,
+    # Phase 6: the ETH status read. After the post-test reset and the triage
+    # tools for the reason they sit there: it opens every chip, so it must not
+    # overlap the tests. It reads the links as found and never resets, so on a
+    # tier with no resets the state it reads is the one the unit was left in.
+    # Unlike the triage and QSFP phases it gates: it is the flash tier's verdict.
+    eth_phase = Phase(name="eth_status")
+    t0 = time.time()
+    if skip_eth_status:
+        eth_phase.add(Check(name="eth_status_read", status=SKIP, details="--skip-eth-status", ip="other"))
+    elif not plan.eth_status:
+        eth_phase.add(
+            Check(name="eth_status_read", status=SKIP, details=f"no ETH status read for tier '{tier}'", ip="other")
+        )
+    else:
+        # A crash here is lost coverage, not a hardware finding.
+        _guarded(
+            eth_phase,
+            "eth_status_read",
+            WARN,
+            lambda: run_eth_status(tt_metal_path, eth_phase, dry_run, logs_dir),
+        )
+    _finish(report, eth_phase, t0, summary=True, all_skip_stays_skip=True)
+
+    # Phase 7: the QSFP tests, when the host has the package. Last,
     # and after the post-test reset for the same two reasons the triage phase
     # sits there: it opens every chip, so it must not overlap the tests, and the
     # tool has no SIGBUS handler, so a concurrent reset would kill it outright
@@ -396,7 +444,7 @@ def run_diag(
         )
     _finish(report, qsfp_phase, t0, summary=True, all_skip_stays_skip=True)
 
-    # Phase 7: the sys-triage bundle, when the host has the package. After the
+    # Phase 8: the sys-triage bundle, when the host has the package. After the
     # QSFP tests for the same reason they follow triage: it opens every chip
     # (tt-smi -s, tt-fw-terminal, the reset-unit scratch reads), so nothing may
     # run beside it. Forensics for a person rather than findings, so it never
@@ -448,6 +496,9 @@ def run_diag(
     log(f"wrote report: {output} (overall={report['overall_status']})")
 
     _print_overall(report)
+    # A dry run reads nothing, so there is nothing to summarise.
+    if plan.eth_summary and not dry_run:
+        _print_eth_summary(report, output, logs_dir)
     return (0 if report["overall_status"] != FAIL else 1), report
 
 
@@ -459,6 +510,7 @@ def main() -> int:
         skip_reset=args.skip_reset,
         skip_tests=args.skip_tests,
         skip_triage=args.skip_triage,
+        skip_eth_status=args.skip_eth_status,
         skip_qsfp_tests=args.skip_qsfp_tests,
         input_snapshot=args.input_snapshot,
         tt_smi_path=args.tt_smi_path,

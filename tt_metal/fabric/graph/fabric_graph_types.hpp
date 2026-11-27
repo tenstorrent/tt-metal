@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 
+#include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -36,6 +37,16 @@ struct Vc {
     std::string name;
 };
 
+struct PerimeterPort {
+    FabricNodeId node{MeshId{0}, 0};
+    chan_id_t eth_chan = 0;
+    PortDirection direction{RoutingDirection::N};
+    uint32_t plane = 0;
+    bool link_trained = true;
+    uint64_t peer_asic = 0;
+    chan_id_t peer_chan = 0;
+};
+
 using RouterIndex = uint32_t;
 using ChannelIndex = uint32_t;
 
@@ -58,8 +69,9 @@ struct LogicalChannel {
 };
 
 enum class Transport : uint8_t {
-    Eth,  // sender -> peer's receiver
-    Noc,  // receiver -> sender on another router of the same chip
+    Eth,
+    Noc,
+    Dynamic,
 };
 
 struct LogicalEdge {

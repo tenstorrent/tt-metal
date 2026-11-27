@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <hostdevcommon/fabric_common.h>
