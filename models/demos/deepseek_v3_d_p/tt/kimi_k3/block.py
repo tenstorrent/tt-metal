@@ -192,6 +192,19 @@ class TtKimiK3Block(LightweightModule):
                 situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
                 hidden_dim=config.intermediate_size,
                 fuse_tp_collectives=getattr(model_cfg, "FUSE_DENSE_FFN_TP_COLLECTIVES", False),
+                # (K3_ACC_FIDELITY: HiFi4 with fp32 DEST instead of the HiFi2 / bf16-DEST default)
+                **(
+                    {
+                        "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                            math_fidelity=ttnn.MathFidelity.HiFi4,
+                            math_approx_mode=False,
+                            fp32_dest_acc_en=True,
+                            packer_l1_acc=True,
+                        )
+                    }
+                    if accuracy.fidelity()
+                    else {}
+                ),
             )
             self.ffn.capture_layer = layer_idx  # (the teacher capture's mlp0_down_in tap)
             if self.ffn.fuses_tp_collectives:

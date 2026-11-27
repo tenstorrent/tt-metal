@@ -18,7 +18,7 @@ They are read from the environment each time a module asks, so set them before t
                              affine prefix, gated norm output in fp32; MLA projections (fp32 DEST only where the
                              tuned config already had it: ttMLA's default config keeps bf16 DEST) with bf16 instead
                              of bf8 outputs; sparse SDPA with fp32 DEST (the approximate exp kept); the indexer's
-                             score matmul and key LayerNorm; the MoE head's
+                             score matmul and key LayerNorm; layer 0's dense MLP (fp32 DEST); the MoE head's
                              shared expert and the tail's latent up; routed experts' x / h in bf16 (not bf8); the
                              MoE combine without its 2^-14 snap of every routed term (fp32 sums)
     K3_ACC_MLA_FP32          MLA (and DSA indexer) accumulation in fp32 everywhere: ttMLA's default compute config with
