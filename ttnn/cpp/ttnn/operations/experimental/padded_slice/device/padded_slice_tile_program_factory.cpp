@@ -642,6 +642,9 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceTileProgramFactory::create_p
                 {"num_dims", num_dims /* == 4 */},
                 {"output_elem_size", output.element_size()},
                 {"output_row_size_bytes", output_row_size_bytes},
+                {"pad_value_bits",
+                 ttnn::operations::experimental::detail::pad_value_to_element_bits(
+                     operation_attributes.pad_value, output.dtype())},
             },
         .runtime_arg_schema =
             {
