@@ -16,6 +16,7 @@ and then compares the output with the oracle: 0 differing elements.
 - test_multiply_mx_sfpu: the SFPU kernel (multiply) with MX.
 - test_add_mx_placement: each MX tile size (1,056, 544 and 288 B) at each placement, with full batches.
 - test_add_mx_outer_broadcast: an outer-dim broadcast, which the native slice holds.
+- test_add_mx_subtile_broadcast: a ROW, COL or SCALAR subtile broadcast, expanded by unary_bcast on an MX source.
 - test_mx_program_cache: each op of a sequence of two (bfloat16 then MX, or two MX dtypes) builds its own program.
 - test_mx_partial_tiles: a logical shape that is not a whole number of tiles. The padding beside real values in an
   MX block must not change them.
@@ -199,7 +200,7 @@ def test_add_mx_placement(device, dtype, placement):
 
 @quasar_only
 def test_add_mx_outer_broadcast(device):
-    """An outer-dim broadcast stays in the native slice: the gate refuses a subtile broadcast only. b has 1 where a has
+    """An outer-dim broadcast stays in the native slice: a subtile broadcast is admitted too (test_add_mx_subtile_broadcast). b has 1 where a has
     2 in dim 0, so the reader reads each tile of b twice through b's Map."""
     torch.manual_seed(0)
     ta, a = _mx_input(device, torch.randn((2, 2, 2 * 32, 2 * 32), dtype=torch.float32), ttnn.mxint8)
@@ -210,6 +211,48 @@ def test_add_mx_outer_broadcast(device):
 
     assert tc.dtype == ttnn.mxint8 and tuple(tc.shape) == tuple(ta.shape), f"output {tc.dtype} {tuple(tc.shape)}"
     wrong = mx.mx_output_wrong(tc, _fpu_add_bf16(a, b.expand(a.shape)))
+    assert not wrong, f"{len(wrong)} elements differ from the oracle, first at {wrong[:8]}"
+
+
+@quasar_only
+@pytest.mark.parametrize("b_shape", [(1, 2 * 32), (2 * 32, 1), (1, 1)], ids=["row", "col", "scalar"])
+@pytest.mark.parametrize("operand", ["b", "a"])
+def test_add_mx_subtile_broadcast(device, b_shape, operand):
+    """A subtile broadcast stays on the native factory: the compute expands the ROW, COL or SCALAR operand with
+    unary_bcast, and the expansion rings hold Float16_b. The operand with the 1 is b, or a (swapped)."""
+    torch.manual_seed(0)
+    full_shape = (2 * 32, 2 * 32)
+    ta, a = _mx_input(device, torch.randn(full_shape, dtype=torch.float32), ttnn.mxint8)
+    tb, b = _mx_input(device, torch.randn(b_shape, dtype=torch.float32), ttnn.mxint8)
+    if operand == "a":
+        ta, tb, a, b = tb, ta, b, a
+    before = bound_kernel_sources()
+    tc = ttnn.experimental.quasar.add(ta, tb)
+    mx.assert_native(before, "add with a subtile broadcast")
+
+    assert tc.dtype == ttnn.mxint8 and tuple(tc.shape) == full_shape, f"output {tc.dtype} {tuple(tc.shape)}"
+    wrong = mx.mx_output_wrong(tc, _fpu_add_bf16(a.expand(full_shape), b.expand(full_shape)))
+    assert not wrong, f"{len(wrong)} elements differ from the oracle, first at {wrong[:8]}"
+
+
+@quasar_only
+@pytest.mark.parametrize("out_dtype", [None, ttnn.bfloat16, ttnn.mxint8], ids=["default_out", "bf16_out", "mx_out"])
+@pytest.mark.parametrize("mx_operand", ["a", "b"])
+def test_add_mx_with_bf16_operand(device, mx_operand, out_dtype):
+    """One bf16 and one MX operand stay on the native factory: the unpacker expands each to Float16_b on its own."""
+    torch.manual_seed(0)
+    shape = (2 * 32, 2 * 32)
+    tm, m = _mx_input(device, torch.randn(shape, dtype=torch.float32), ttnn.mxint8)
+    tb, b16 = _bf16_input(device, torch.randn(shape, dtype=torch.bfloat16))
+    ta, tb2, a, b = (tm, tb, m, b16) if mx_operand == "a" else (tb, tm, b16, m)
+    before = bound_kernel_sources()
+    tc = ttnn.experimental.quasar.add(ta, tb2, **({} if out_dtype is None else {"dtype": out_dtype}))
+    mx.assert_native(before, "add of an MX and a bf16 operand")
+
+    expected_dtype = out_dtype if out_dtype is not None else (ttnn.mxint8 if mx_operand == "a" else ttnn.bfloat16)
+    assert tc.dtype == expected_dtype, f"output dtype {tc.dtype}, expected {expected_dtype}"
+    check_output = mx.bf16_output_wrong if expected_dtype == ttnn.bfloat16 else mx.mx_output_wrong
+    wrong = check_output(tc, _fpu_add_bf16(a, b))
     assert not wrong, f"{len(wrong)} elements differ from the oracle, first at {wrong[:8]}"
 
 
@@ -472,25 +515,10 @@ def _add_bf16_to_mx(device, **kwargs):
 # without the feature that the gate refuses, so the case shows that the feature, not MX, sends the op away. "throws":
 # no factory takes the op, so it raises. "falls back": the deprecated Metal 2.0 factory runs it.
 _GATE_CASES = {
-    "row_broadcast": (
-        _add_mx,
-        lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.mxint8), _random(d, ttnn.mxint8, (1, 2 * 32))),
-        "throws",
-    ),
     "scalar": (_add_mx, lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.mxint8), 2.0), "throws"),
     "lhs_activation": (_add_mx, lambda d: _add_mx(d, input_tensor_a_activations=_RELU), "falls back"),
     "rhs_activation": (_add_mx, lambda d: _add_mx(d, input_tensor_b_activations=_RELU), "falls back"),
     "post_activation": (_add_bf16_to_mx, lambda d: _add_bf16_to_mx(d, activations=_RELU), "falls back"),
-    "mx_and_bf16": (
-        _add_mx,
-        lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.mxint8), _random(d, ttnn.bfloat16)),
-        "throws",
-    ),
-    "bf16_and_mx": (
-        _add_mx,
-        lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.bfloat16), _random(d, ttnn.mxint8)),
-        "throws",
-    ),
     "two_mx_dtypes": (
         _add_mx,
         lambda d: ttnn.experimental.quasar.add(_random(d, ttnn.mxint8), _random(d, ttnn.mxfp8_e4m3)),

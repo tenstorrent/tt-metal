@@ -9,7 +9,6 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
-#include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 
@@ -213,7 +212,7 @@ inline void _build_lane_mask_col0_() {
 // No SFPNOP after step 1: SFPAND is a single-cycle op whose result the next
 // instruction reads directly (only the SFPMAD-class ops need the slot).
 inline void _record_broadcast_replay_() {
-    lltt::record(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
+    TTI_REPLAY(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST, 0, 1);
 
     // (1) Mask: zero out SFPU cols 1..7 bitwise, so an Inf or NaN in a
     //     discarded column cannot reach col 0.
@@ -320,7 +319,7 @@ inline void _process_col_bcast_row_band_(
     //     (ROR4+ADD) is emitted inline with the 4 data SFPLOADs interleaved
     //     into the SFPSHFT2 chain's latency slots, so LREG_DATA0..3 are
     //     ready by the time the per-slot binops below start.
-    lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
+    TTI_REPLAY(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST, 0, 0);
     _broadcast_stage3_with_data_prefetch_(
         data_tile_offset + slot0, data_tile_offset + slot1, data_tile_offset + slot2, data_tile_offset + slot3);
 
@@ -454,7 +453,7 @@ sfpi_inline void _finish_col_normalize_row_band_(
     std::uint32_t inv_std_col0_addr, std::uint32_t dst0, std::uint32_t dst1, std::uint32_t dst2, std::uint32_t dst3) {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
     TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, inv_std_col0_addr);
-    lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
+    TTI_REPLAY(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST, 0, 0);
     // Centre the data in the dependent rotate chain's four latency slots.
     TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA0, 0);
@@ -485,7 +484,7 @@ inline void _process_col_normalize_row_band_(
     const std::uint32_t slot3 = right_face_addr + ODD_COLS_OFFSET;
 
     TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, mean_col0_addr);
-    lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
+    TTI_REPLAY(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST, 0, 0);
     _broadcast_stage3_with_data_prefetch_(
         data_tile_offset + slot0, data_tile_offset + slot1, data_tile_offset + slot2, data_tile_offset + slot3);
 
@@ -546,7 +545,7 @@ inline void _process_col_normalize_two_tiles_row_band_(
     const std::uint32_t slot3 = right_face_addr + ODD_COLS_OFFSET;
 
     TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, mean_col0_addr);
-    lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
+    TTI_REPLAY(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST, 0, 0);
     _broadcast_stage3_with_data_prefetch_(
         first_data_tile_offset + slot0,
         first_data_tile_offset + slot1,
@@ -638,7 +637,7 @@ inline void _process_col_residual_normalize_row_band_(
     TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, LREG_BCAST, LREG_DATA3, 0);
 
     TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, mean_col0_addr);
-    lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
+    TTI_REPLAY(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST, 0, 0);
     _broadcast_stage3_preserve_data_();
     TTI_SFPMOV(0, LREG_BCAST, p_sfpu::LREG7, 1 /* SFPMOV_MOD1_NEGATE */);
 
@@ -931,13 +930,6 @@ inline void _sfpu_binary_bcast_init_() {
     // e.g. _init_add_top_row_, init_reduce_*). Required before any replay
     // recording or SFPCONFIG-based lane-mask setup below.
     _init_sfpu_config_reg();
-
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
 
     if constexpr (Dim == BroadcastType::COL) {
         // Build persistent col-0 lane mask in LREG_MASK.

@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <limits>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
@@ -224,23 +224,6 @@ PerTokenCastBackDeviceOperation::spec_return_value_t PerTokenCastBackDeviceOpera
 PerTokenCastBackDeviceOperation::tensor_return_value_t PerTokenCastBackDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input_e4m3.device());
-}
-
-ttsl::hash::hash_t PerTokenCastBackDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // Hash each tensor's full TensorSpec (shape + dtype + layout + tile + memory config) rather than
-    // cherry-picking fields, so nothing that changes program structure is missed. The token-count-aware
-    // metadata tensors are optional (absent on the plain path, which attrs.token_count_aware distinguishes).
-    const auto opt_spec = [](const std::optional<Tensor>& t) {
-        return t.has_value() ? std::optional<tt::tt_metal::TensorSpec>(t->tensor_spec()) : std::nullopt;
-    };
-    return tt::tt_metal::operation::hash_operation<PerTokenCastBackDeviceOperation>(
-        attrs,
-        tensor_args.input_e4m3.tensor_spec(),
-        tensor_args.input_scale.tensor_spec(),
-        opt_spec(tensor_args.expert_region_offsets),
-        opt_spec(tensor_args.expert_token_counts),
-        opt_spec(tensor_args.global_expert_idx_table));
 }
 
 }  // namespace ttnn::experimental::prim::qsr::per_token_cast_back

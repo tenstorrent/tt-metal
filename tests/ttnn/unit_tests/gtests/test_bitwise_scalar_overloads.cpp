@@ -14,7 +14,7 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/tensor/tensor.hpp"

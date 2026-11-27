@@ -13,10 +13,10 @@
 
 #include "ccl_host_datastructures.hpp"
 
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/math.hpp>
-#include "tt-metalium/hal.hpp"
+#include <tt-metalium/utils/math.hpp>
+#include "tt-metalium/discovery/hal.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
 

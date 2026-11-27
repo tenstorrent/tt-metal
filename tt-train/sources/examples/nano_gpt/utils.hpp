@@ -117,7 +117,6 @@ TrainingSteps compute_training_steps(
     uint32_t sequence_length,
     uint32_t batch_size,
     uint32_t gradient_accumulation_steps,
-    uint32_t num_data_workers,
     uint32_t max_steps,
     uint32_t num_epochs);
 

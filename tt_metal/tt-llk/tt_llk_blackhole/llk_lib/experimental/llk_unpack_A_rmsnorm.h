@@ -88,7 +88,7 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
             });
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = 1;
-        ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, replay_buf_len));
+        ckernel_template tmp(outerloop, innerloop, TT_OP_REPLAY(0, replay_buf_len, 0, 0));
         tmp.set_start_op(unpack_srcb_set_dvalid);
         tmp.program();
     }

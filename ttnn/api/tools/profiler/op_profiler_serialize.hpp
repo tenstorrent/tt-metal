@@ -5,7 +5,7 @@
 #pragma once
 
 // Lightweight header for op profiler template shims.
-// Does NOT include nlohmann/json.hpp, tt-metalium/tt_metal.hpp, or ttnn/operation.hpp.
+// Does NOT include nlohmann/json.hpp, tt-metalium/execution/slow_dispatch.hpp, or ttnn/operation.hpp.
 // Heavy JSON assembly lives in op_profiler_json.cpp.
 
 #include <algorithm>
@@ -24,8 +24,8 @@
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyC.h>
 
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/type_name.hpp>
 #include "ttnn/tensor/tensor.hpp"

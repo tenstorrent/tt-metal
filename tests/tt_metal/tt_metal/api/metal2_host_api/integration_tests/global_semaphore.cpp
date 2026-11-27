@@ -16,12 +16,12 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "command_queue_fixture.hpp"
@@ -37,6 +37,7 @@ using ::testing::ThrowsMessage;
 constexpr const char* kCounterKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/global_semaphore_counter.cpp";
 constexpr const char* kMcastKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/global_semaphore_mcast.cpp";
 constexpr const char* kStopFlagKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/global_semaphore_stop_flag.cpp";
+constexpr const char* kAddressKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/global_semaphore_address.cpp";
 
 const CoreCoord kHub{0, 0};
 const CoreRange kSenders({1, 0}, {3, 0});
@@ -338,6 +339,49 @@ TEST_F(GlobalSemaphoreMetal2Test, StopFlagSeenThroughValue) {
     ASSERT_EQ(report.size(), 2u);
     EXPECT_EQ(report[0], 7u);
     EXPECT_EQ(report[1], 0u) << "kernel gave up before it saw the flag";
+}
+
+// address() is the host's GlobalSemaphore::address(), reaches the semaphore through the legacy primitives, and
+// follows the binding when Program::update_program_run_args switches semaphores.
+TEST_F(GlobalSemaphoreMetal2Test, AddressMatchesHostAndFollowsTheBinding) {
+    auto& mesh_device = *devices_.at(0);
+    auto& cq = mesh_device.mesh_command_queue();
+    auto first = CreateGlobalSemaphore(mesh_device, CoreRangeSet(CoreRange(kHub)), 0);
+    auto second = CreateGlobalSemaphore(mesh_device, CoreRangeSet(CoreRange(kHub)), 0);
+    ASSERT_NE(first.address(), second.address());
+
+    ProgramSpec spec;
+    spec.name = "global_semaphore_address";
+    spec.global_semaphore_parameters = OneParameter("sem");
+    KernelSpec kernel = MakeKernel("address", kAddressKernel, "sem");
+    kernel.runtime_arg_schema.runtime_arg_names = {"report_addr", "value"};
+    spec.kernels.push_back(kernel);
+    spec.work_units.push_back(
+        WorkUnitSpec{.name = "address", .kernels = {KernelSpecName{"address"}}, .target_nodes = kHub});
+
+    constexpr uint32_t kValue = 11;
+    const uint32_t report_addr = ReportAddr(mesh_device);
+    ProgramRunArgs args;
+    args.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"address"},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(kHub, {{"report_addr", report_addr}, {"value", kValue}}),
+    });
+    args.global_semaphore_args = {{GlobalSemaphoreParamName{"sem"}, std::cref(first)}};
+
+    Program program(mesh_device, spec);
+    program.set_program_run_args(args);
+    auto workload = MakeWorkload(mesh_device, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    EXPECT_EQ(ReadWord(mesh_device, kHub, report_addr), first.address());
+    EXPECT_EQ(ReadWord(mesh_device, kHub, first.address()), kValue);
+    EXPECT_EQ(ReadWord(mesh_device, kHub, second.address()), 0u);
+
+    ProgramRunArgs update;
+    update.global_semaphore_args = {{GlobalSemaphoreParamName{"sem"}, std::cref(second)}};
+    OnlyProgram(workload).update_program_run_args(update);
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    EXPECT_EQ(ReadWord(mesh_device, kHub, report_addr), second.address());
+    EXPECT_EQ(ReadWord(mesh_device, kHub, second.address()), kValue);
 }
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -207,6 +207,12 @@ void kernel_main() {
     constexpr uint32_t dfb_in_id = dfb_in0;
 #endif
     DataflowBuffer dfb_in(dfb_in_id);
+    // Interleaved input: the writer reads this core's block into in0 instead of it being the resident shard. Wait
+    // for all of it once; it is then read by tile index exactly like a resident shard, and popped at the end.
+    constexpr bool in0_streamed = get_arg(args::in0_streamed) == 1;
+    if constexpr (in0_streamed) {
+        dfb_in.wait_front(num_tiles_per_block);
+    }
     constexpr uint32_t dfb_im_no_gamma_id = do_beta ? dfb_fusion_id : dfb_out_id;
     constexpr uint32_t dfb_im_id = do_gamma ? dfb_x : dfb_im_no_gamma_id;
     DataflowBuffer dfb_im(dfb_im_id);
@@ -747,6 +753,9 @@ void kernel_main() {
     dfb_eps_obj.wait_front(1);
     dummy_unpack(dfb_eps);
     dfb_eps_obj.pop_front(1);
+    if constexpr (in0_streamed) {
+        dfb_in.pop_front(num_tiles_per_block);
+    }
 #ifdef OUT_SELF_LOOP
     // Without a write-back the output buffer has no reader: this kernel is its only producer and consumer.
     // Pop what it pushed so the buffer is left balanced.

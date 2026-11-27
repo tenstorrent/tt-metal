@@ -32,6 +32,7 @@ from tests.nightly.blackhole.sdpa.test_sparse_ring_sdpa import (
     Case,
     Geometry,
     _density,
+    balance_mask,
     frame_block_mask,
     make_mask,
     make_structured_mask,
@@ -54,6 +55,8 @@ FRAME_POINTS = {11520: ("720p", 3840), 5760: ("480p", 1920)}
 FRAMES_REAL, FRAMES_PADDED = 21, 24
 DENSE_CHUNKS.update({rows: (320, 384) for rows in FRAME_POINTS})
 SHAPE_NAMES = {**WORKING_POINTS, **{rows: name for rows, (name, _) in FRAME_POINTS.items()}}
+TAIL_TOKENS = [512, 1024, 4096]
+TAIL_POINTS = {rows: WORKING_POINTS[rows] for rows in (4736, 9184)}
 
 
 @pytest.fixture(scope="module")
@@ -349,3 +352,37 @@ def test_frame_mask_perf(bench, results_file, rows, lofi):
     time_mask(
         bench, results_file, rows, make, FAMILY_K_CHUNK, False, structure="frames", logical_n=logical_n, lofi=lofi
     )
+
+
+@pytest.mark.parametrize("pooled", [True, False], ids=["sparse", "kept"])
+@pytest.mark.parametrize("tail_tokens", TAIL_TOKENS, ids=[f"T{t}" for t in TAIL_TOKENS])
+@pytest.mark.parametrize("position", ["start", "end"])
+@pytest.mark.parametrize("rows", list(TAIL_POINTS), ids=list(TAIL_POINTS.values()))
+def test_dense_tail_perf(bench, results_file, rows, position, tail_tokens, pooled):
+    """Density-0.2 video blocks with a dense text / audio tail (first or last tail_tokens) on one device."""
+    kind = "prefix" if position == "start" else "suffix"
+
+    def make(case):
+        return balance_mask(
+            case.geo, case.S, case.H, kind=kind, density=0.2, seed=rows, dense_blocks=tail_tokens // BLOCK
+        )
+
+    structure = f"dense_tail_{position}_T{tail_tokens}"
+    time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, pooled, structure=structure)
+
+
+# heavy_rows: 2 % of rows keep 90 % of the blocks (unbalances within a device); causal: unbalances across devices.
+BALANCE_STRUCTURES = ["heavy_rows", "causal"]
+
+
+@pytest.mark.parametrize("pooled", [True, False], ids=["sparse", "kept"])
+@pytest.mark.parametrize("structure", BALANCE_STRUCTURES)
+@pytest.mark.parametrize("rows", list(TAIL_POINTS), ids=list(TAIL_POINTS.values()))
+def test_balance_perf(bench, results_file, rows, structure, pooled):
+    """The sparse op at the production k_chunk on masks with very uneven rows, on both routes."""
+
+    def make(case):
+        n_heavy = max(1, (case.S * case.H * case.geo.nb()) // 50)
+        return balance_mask(case.geo, case.S, case.H, kind=structure, density=0.2, seed=rows, heavy_rows=n_heavy)
+
+    time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, pooled, structure=f"balance_{structure}")

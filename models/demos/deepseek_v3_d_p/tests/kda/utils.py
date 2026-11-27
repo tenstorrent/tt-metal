@@ -783,20 +783,83 @@ def assert_matches_reference(
 
 
 def read_slab_layer(mesh_device, slabs: KdaStates, slot: int, layer_idx: int) -> KdaState:
-    """A native copy of layer ``layer_idx``'s carry at host ``slot``. OWNED: free it with ``deallocate_state``."""
+    """A native copy of layer ``layer_idx``'s carry at host ``slot``: on each device its TP column's whole carry
+    (``[1, H_local, D, D]`` / ``[1, SEG, (K-1)*64]``, as a replicated layer holds it), assembled on the host from every
+    SP row's stored heads. OWNED: free it with ``deallocate_state``."""
     batch = slabs.batch_index(slot, layer_idx)
+    geometry = slabs.geometry
+    rows, cols = tuple(mesh_device.shape)
+    sp_axis = geometry.sequence_parallel_axis
 
-    def entry(slab: ttnn.Tensor) -> ttnn.Tensor:
-        # Both may hand back their input: clone the entry, and free only an interleaved copy of the ND slab.
+    def stored(slab: ttnn.Tensor) -> list[torch.Tensor]:
+        # The ND recurrent slab reads back through an interleaved copy; free only a copy.
         interleaved = ttnn.to_memory_config(slab, ttnn.DRAM_MEMORY_CONFIG)
-        ends = [batch + 1, *tuple(slab.shape)[1:]]
-        sliced = ttnn.slice(interleaved, [batch] + [0] * (len(ends) - 1), ends, [1] * len(ends))
-        copy = ttnn.clone(sliced, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        entries = [ttnn.to_torch(shard)[batch] for shard in ttnn.get_device_tensors(interleaved)]
         if interleaved.buffer_address() != slab.buffer_address():
             ttnn.deallocate(interleaved)
-        return copy
+        return entries
 
-    return KdaState(recurrent=entry(slabs.recurrent), convolution=entry(slabs.convolution))
+    def column(entries: list[torch.Tensor], tp_col: int, groups: int) -> torch.Tensor:
+        """A TP column's native layer from its SP rows' stored ones, concatenated per group (the convolution's q/k/v
+        branches; the recurrent state is one group of heads)."""
+        parts = []
+        for sp_row in range(geometry.sequence_parallel_size):
+            row, col = (sp_row, tp_col) if sp_axis == 0 else (tp_col, sp_row)
+            part = entries[row * cols + col]
+            parts.append(part.reshape(groups, part.shape[0] // groups, *part.shape[1:]))
+        native = torch.cat(parts, dim=1)
+        return native.reshape(native.shape[0] * native.shape[1], *native.shape[2:]).unsqueeze(0)
+
+    def to_device(per_column: list[torch.Tensor], dtype, layout) -> ttnn.Tensor:
+        # Device (row, col) takes its TP column's layer: [rows, cols * N, ...] sharded on dims (0, 1).
+        columns = [per_column[col if sp_axis == 0 else row] for row in range(rows) for col in range(cols)]
+        grid = torch.cat([torch.cat(columns[row * cols : (row + 1) * cols], dim=1) for row in range(rows)])
+        return ttnn.from_torch(
+            grid,
+            dtype=dtype,
+            layout=layout,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(rows, cols)),
+        )
+
+    recurrent, convolution = stored(slabs.recurrent), stored(slabs.convolution)
+    tp = geometry.tensor_parallel_size
+    return KdaState(
+        recurrent=to_device([column(recurrent, c, 1) for c in range(tp)], slabs.recurrent.dtype, ttnn.TILE_LAYOUT),
+        convolution=to_device(
+            [column(convolution, c, 3) for c in range(tp)], slabs.convolution.dtype, ttnn.ROW_MAJOR_LAYOUT
+        ),
+    )
+
+
+def write_slab_layer(mesh_device, slabs: KdaStates, state: KdaState, slot: int, layer_idx: int) -> None:
+    """Store a native carry (on each device its TP column's whole carry, ``[1, H_local, D, D]`` / ``[1, SEG, 192]``)
+    into layer ``layer_idx``'s entry at host ``slot``: each chip keeps its SP row's heads, as the layer's ops leave
+    them. Host round trip: rewrites both slabs whole (test setup only)."""
+    batch = slabs.batch_index(slot, layer_idx)
+    geometry = slabs.geometry
+    cols = tuple(mesh_device.shape)[1]
+    sp_axis = geometry.sequence_parallel_axis
+    stored = geometry.stored_heads
+
+    def rewrite(slab: ttnn.Tensor, native: ttnn.Tensor, groups: int) -> None:
+        interleaved = ttnn.to_memory_config(slab, ttnn.DRAM_MEMORY_CONFIG)
+        shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(interleaved)]
+        if interleaved.buffer_address() != slab.buffer_address():
+            ttnn.deallocate(interleaved)
+        for index, carry in enumerate(ttnn.get_device_tensors(native)):
+            sp_row = divmod(index, cols)[sp_axis]
+            whole = ttnn.to_torch(carry)[0]
+            grouped = whole.reshape(groups, whole.shape[0] // groups, *whole.shape[1:])
+            per_row = grouped.shape[1] // geometry.sequence_parallel_size
+            mine = grouped[:, sp_row * per_row : (sp_row + 1) * per_row]
+            shards[index][batch] = mine.reshape(groups * per_row, *whole.shape[1:])
+        upload_slab(slab, shards)
+
+    assert stored * geometry.sequence_parallel_size == geometry.local_heads
+    rewrite(slabs.recurrent, state.recurrent, 1)
+    rewrite(slabs.convolution, state.convolution, 3)
 
 
 def upload_slab(slab: ttnn.Tensor, shards: list[torch.Tensor]) -> None:
@@ -836,6 +899,16 @@ def per_chip_convolution(geometry: KdaContractGeometry, convolution: torch.Tenso
         for branch in range(3)
     ]
     return torch.cat(parts, dim=-1)
+
+
+def stored_head(geometry: KdaContractGeometry, h_local: int) -> tuple[int, int]:
+    """Reference: local head ``h_local`` -> ``(sp_row, j)``, the SP row of its TP column storing it and where."""
+    return divmod(h_local, geometry.stored_heads)
+
+
+def convolution_native_page(geometry: KdaContractGeometry, branch: int, h_local: int, half: int) -> int:
+    """Reference: the page (64-channel column slice) of a chip's native convolution tail holding (branch, head, half)."""
+    return (branch * geometry.local_heads + h_local) * geometry.halves + half
 
 
 def native_state_from_global(

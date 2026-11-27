@@ -10,8 +10,8 @@
 #include <optional>
 #include <string>
 
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
