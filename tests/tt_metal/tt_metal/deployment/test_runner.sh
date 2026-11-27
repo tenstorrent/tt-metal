@@ -37,12 +37,15 @@ Optional:
                                             10 links per chip are expected.
     --mgd <path>                            Path to the mesh graph descriptor (.textproto) file to
                                             use for the Ethernet, DRAM, NOC and PCIe tests (default: $MGD).
-    --run-vf-sweep                          After all tests: if DIDT failed on non-determinism, or a NOC test failed
-                                            on a hang or non-determinism, re-run that workload as a clock x VDD sweep
-                                            (AICLK 800/1000/1200/1350 MHz x firmware VCORE +0/+25/+50 mV) and report
-                                            where the failure is gone and the working (clock, Vmin) pairs. Failures
-                                            from timeouts or machine problems do not trigger it. Hangs inside the
-                                            sweep are recovered with a board reset, also under --skip-reset.
+    --run-vf-sweep                          After all tests: sweep every failed test on its own. Each NOC test
+                                            (C++ Noc00/Noc01, NOC integrity py) that failed on a hang or
+                                            non-determinism, and each DIDT test that failed on non-determinism, is
+                                            re-run as a clock x VDD sweep (AICLK 800/1000/1200/1350 MHz x firmware
+                                            VCORE +0/+25/+50 mV), reporting where its failure is gone and the working
+                                            (clock, Vmin) pairs. C++ NOC cases are swept through the Python port with
+                                            the same sources. Failures from timeouts or machine problems are not
+                                            swept. Hangs inside a sweep are recovered with a board reset, also under
+                                            --skip-reset.
     -h                                      Display this help message and exit
 
 Examples:
@@ -476,72 +479,34 @@ else
 		didt_ok=1 || { didt_ok=0; didt_rc="$rc"; cp "$STEP_LOG" "$RUN_DIR/didt.log"; }
 fi
 
-# classify <didt|noc_cpp|noc_py> <log> <rc>: print '<PASS|ND|HANG|OTHER> <reason>' for a failed test.
-classify() {
-	$PYTHON tests/tt_metal/tt_metal/deployment/vf_sweep/vf_sweep.py classify --kind "$1" --log "$2" --rc "$3" 2>&1 ||
-		echo "OTHER could not classify the failure"
-}
-
-# run_vf_sweep <didt|noc>: sweep one workload; sets vf_<test>_result to its one-line verdict.
-run_vf_sweep() {
-	sweep_dir="$RUN_DIR/vf_sweep_$1"
-	if [ "$SKIP_RESET" -eq 1 ]; then initial_reset=--no-initial-reset; else initial_reset=; fi
-	run_logged $PYTHON tests/tt_metal/tt_metal/deployment/vf_sweep/vf_sweep.py sweep --test "$1" \
-		--output "$sweep_dir" --reset-cmd "$RESET_CMD" $initial_reset
-	if [ -f "$sweep_dir/verdict.txt" ]
-	then
-		result="$(cat "$sweep_dir/verdict.txt")"
-	else
-		result="INCONCLUSIVE: the sweep did not finish (exit code $rc, see $sweep_dir)"
-	fi
-	eval "vf_$1_result=\"\$result\""
-}
-
-vf_noc_result="not run"
-vf_didt_result="not run"
+# VF sweep follow-up: every NOC / NOC integrity / DIDT test that failed is classified on its own, and each one that
+# failed on a hang or non-determinism (NOC) or on non-determinism (DIDT) gets its own clock x VDD sweep. The C++ NOC
+# cases are swept through their Python port with the same sources. One line per failed test lands in vf_followup.txt.
+vf_summary="not run (no NOC or DIDT test failed)"
 if [ "$RUN_VF_SWEEP" -eq 1 ]
 then
 	emit_banner "VF SWEEP OF FAILING TESTS"
-	noc_trigger=""
-	if [ "$noc_ok" -eq 0 ]
+	followup_args=""
+	if [ "$noc_ok" -eq 0 ] && [ -f "$RUN_DIR/noc_cpp.log" ]
 	then
-		set -- $(classify noc_cpp "$RUN_DIR/noc_cpp.log" "$noc_rc")
-		emit "NOC tests (C++): $*"
-		case "$1" in HANG|ND) noc_trigger="NOC tests (C++) $1" ;; esac
+		followup_args="$followup_args --noc-cpp $RUN_DIR/noc_cpp.log $noc_rc"
 	fi
 	if [ "$noc_py_ok" -eq 0 ] && [ -f "$RUN_DIR/noc_py.log" ]
 	then
-		set -- $(classify noc_py "$RUN_DIR/noc_py.log" "$noc_py_rc")
-		emit "NOC integrity tests (OpTestBase): $*"
-		case "$1" in HANG|ND) noc_trigger="${noc_trigger:+$noc_trigger, }NOC integrity (OpTestBase) $1" ;; esac
+		followup_args="$followup_args --noc-py $RUN_DIR/noc_py.log $noc_py_rc"
 	fi
-	didt_trigger=""
 	if [ "$didt_ok" -eq 0 ] && [ -f "$RUN_DIR/didt.log" ]
 	then
-		set -- $(classify didt "$RUN_DIR/didt.log" "$didt_rc")
-		emit "DIDT tests: $*"
-		case "$1" in ND) didt_trigger="DIDT ND" ;; esac
+		followup_args="$followup_args --didt $RUN_DIR/didt.log $didt_rc"
 	fi
-
-	if [ -n "$noc_trigger" ]
+	if [ -z "$followup_args" ]
 	then
-		emit_section "VF sweep: NOC integrity (OpTestBase), triggered by $noc_trigger"
-		run_vf_sweep noc
-	elif [ "$noc_ok" -eq 0 ] || [ "$noc_py_ok" -eq 0 ]
-	then
-		vf_noc_result="not run (NOC failures were not hangs or non-determinism)"
+		emit "No NOC or DIDT test failed with a log to classify: nothing to sweep."
 	else
-		vf_noc_result="not run (NOC tests passed)"
-	fi
-	if [ -n "$didt_trigger" ]
-	then
-		emit_section "VF sweep: DIDT minimal_matmul, triggered by $didt_trigger"
-		run_vf_sweep didt
-	elif [ "$didt_ok" -eq 0 ]
-	then
-		vf_didt_result="not run (DIDT failure was not non-determinism)"
-	else
-		vf_didt_result="not run (DIDT passed)"
+		if [ "$SKIP_RESET" -eq 1 ]; then initial_reset=--no-initial-reset; else initial_reset=; fi
+		run_logged $PYTHON tests/tt_metal/tt_metal/deployment/vf_sweep/vf_sweep.py followup --output "$RUN_DIR" \
+			--reset-cmd "$RESET_CMD" $initial_reset $followup_args
+		vf_summary="did not finish (exit code $rc, see $RUN_LOG)"
 	fi
 fi
 
@@ -559,9 +524,16 @@ emit "$(printf '%-20s %s' 'NOC integrity (py):' "$([ "$noc_py_ok" -eq 1 ] && ech
 emit "$(printf '%-20s %s' 'DIDT tests:'      "$([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
 if [ "$RUN_VF_SWEEP" -eq 1 ]
 then
-	emit "$(printf '%-20s %s' 'NOC VF sweep:'  "$vf_noc_result")"
-	emit "$(printf '%-20s %s' 'DIDT VF sweep:' "$vf_didt_result")"
-	emit "$(printf '%-20s %s' 'VF sweep logs:' "$RUN_DIR/vf_sweep_*/sweep.log")"
+	if [ -f "$RUN_DIR/vf_followup.txt" ]
+	then
+		emit "VF sweeps (one per failed test):"
+		while IFS= read -r line
+		do
+			emit "  $line"
+		done < "$RUN_DIR/vf_followup.txt"
+	else
+		emit "$(printf '%-20s %s' 'VF sweeps:' "$vf_summary")"
+	fi
 fi
 emit "$RULE_LIGHT"
 if [ "$iteration_failures" -gt 0 ] || [ "$noc_ok" -eq 0 ] || [ "$noc_py_ok" -eq 0 ] || [ "$didt_ok" -eq 0 ]

@@ -5,9 +5,14 @@
 """VF sweep follow-up for the deployment test suite (test_runner.sh --run-vf-sweep).
 
 classify  Decide from a test's log and exit code why it failed: ND (non-deterministic outputs), HANG (NOC barrier
-          timeouts, stalled sources, wedged chips, pytest timeout), OTHER (setup/machine problems) or PASS.
-sweep     Re-run the failing workload (DIDT minimal_matmul, or the NOC integrity test on OpTestBase) as a clock x VDD
+          timeouts, stalled sources, wedged chips, chips that stopped answering MMIO, pytest timeout), OTHER
+          (setup/machine problems) or PASS.
+sweep     Re-run one workload (a DIDT minimal_matmul case, or a NOC integrity case on OpTestBase) as a clock x VDD
           sweep through ARC, and report at which (AICLK, VDD) points the failure is gone.
+followup  What the suite runs: find every failed test in the NOC (C++), NOC integrity (py) and DIDT stage logs,
+          classify each one, and sweep each test that failed on a hang or non-determinism (NOC) or on
+          non-determinism (DIDT), one sweep per test. The C++ NOC tests cannot change clocks, so each one is swept
+          through its Python port with the same sources: Noc00 (Ethernet sources) -> eth, Noc01 (Tensix) -> tensix.
 
 The sweep survives hangs: OpTestBase appends one JSON line per sweep event (--vf-sweep-results). When no event arrives
 within the step timeout, or pytest dies on a device timeout (a chip that stopped answering MMIO), the step is marked
@@ -42,11 +47,8 @@ TESTS = {
     "didt": {
         "name": "DIDT minimal_matmul",
         "env": {},
-        "args": [
-            "tests/didt/test_minimal_matmul.py::test_minimal_matmul",
-            "-k",
-            "all and bf16_HiFi2",
-        ],
+        "target": "tests/didt/test_minimal_matmul.py::test_minimal_matmul",
+        "k": "all and bf16_HiFi2",  # what the suite's DIDT stage runs
         "iterations": 1000,
         "check_interval": 50,
     },
@@ -54,15 +56,35 @@ TESTS = {
         "name": "NOC integrity (OpTestBase)",
         # Active Ethernet cores only accept kernels in slow dispatch.
         "env": {"TT_METAL_SLOW_DISPATCH_MODE": "1"},
-        "args": [
-            "tests/didt/test_noc_integrity.py::test_noc_integrity",
-            "-k",
-            "galaxy and all",
-        ],
+        "target": "tests/didt/test_noc_integrity.py::test_noc_integrity",
+        "k": "galaxy and all",  # what the suite's NOC integrity stage runs
         "iterations": 20,
         "check_interval": 5,
     },
 }
+
+# C++ NOC test cases -> the Python NOC integrity case with the same sources (the C++ test cannot change clocks).
+CPP_NOC_CASES = {
+    "Noc00": ("NOC (C++) Noc00, Ethernet sources", "galaxy and eth"),
+    "Noc01": ("NOC (C++) Noc01, Tensix sources", "galaxy and tensix"),
+}
+GTEST_RUN = re.compile(r"\[ RUN\s+\] (\S+)")
+GTEST_OK = re.compile(r"\[\s+OK \] (\S+)")
+GTEST_FAILED = re.compile(r"\[\s+FAILED\s+\] (\S+)")
+PYTEST_FAILED = re.compile(r"^(?:FAILED|ERROR) (\S+::\S+)")
+
+
+def selection_args(spec, node=None, k=None):
+    """pytest arguments that select the test to sweep: an exact node id, a -k expression, or the kind's default."""
+    if node:
+        return [node]
+    return [spec["target"], "-k", k or spec["k"]]
+
+
+def selection_label(spec, node=None, k=None):
+    if node:
+        return node.split("::")[-1]
+    return f"-k '{k or spec['k']}'"
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -170,7 +192,7 @@ def run_invocation(a, spec, results, start_step, out):
         sys.executable,
         "-m",
         "pytest",
-        *spec["args"],
+        *selection_args(spec, a.node, a.k),
         "--didt-workload-iterations",
         str(a.iterations),  # ignored by the sweep itself, kept so the fixture value is sane
         "--determinism-check-interval",
@@ -216,10 +238,10 @@ def run_invocation(a, spec, results, start_step, out):
         if last is None:
             limit, what = a.startup_timeout, "device open"
             since = phase_started
-        elif last["event"] == "reference_start":  # includes the compile, so it gets the startup allowance
+        elif last["event"] in ("reference_start", "reference_set"):  # includes the compile: startup allowance
             limit, what = a.startup_timeout, f"reference outputs at {last['mhz']} MHz, +{last['offset']} mV"
             since = last["time"]
-        elif last["event"] == "start":
+        elif last["event"] in ("start", "set"):
             what = f"step {last['step']} ({last['mhz']} MHz, +{last['offset']} mV)"
             since = last["time"]
         else:  # reference taken or a step just ended: the next step's clock change is due shortly
@@ -261,16 +283,20 @@ def run_sweep(a, out):
         started = [e for e in events if e["event"] == "start"]
         ended = {e["step"] for e in events if e["event"] == "end"}
         ref_started = [e for e in events if e["event"] == "reference_start"]
+        ref_set = any(e["event"] == "reference_set" for e in events)
         ref_done = any(e["event"] == "reference" for e in events)
+        set_steps = {e["step"] for e in events if e["event"] == "set"}
         hung = attempt_hung(outcome, attempt_log)
         if outcome == "done":
             break
         if not started and ref_started and not ref_done and hung:
             # The reference run hung at this step's clock and VDD: that is the failure under test, at this point.
+            # HANG* = it hung while AICLK/VDD were being forced, before the workload ran there.
             current = ref_started[-1]["step"]
-            status[current] = "HANG"
+            status[current] = "HANG" if ref_set else "HANG*"
             startup_failures = 0
-            log(f"step {current} {steps[current]} marked HANG (hung while taking the reference outputs)", out)
+            where = "taking the reference outputs" if ref_set else "forcing AICLK/VDD for the reference outputs"
+            log(f"step {current} {steps[current]} marked {status[current]} (hung while {where})", out)
             start = current + 1
             if not reset_boards(a.reset_cmd, out):
                 return steps, status, "could not reset the boards after a failed step"
@@ -290,9 +316,15 @@ def run_sweep(a, out):
         if current in ended:  # died between steps: resume after the last one that finished
             current_status = None
         else:
-            current_status = "HANG" if hung else "ERROR"
+            if hung:
+                current_status = "HANG" if current in set_steps else "HANG*"
+            else:
+                current_status = "ERROR"
             status[current] = current_status
-            log(f"step {current} {steps[current]} marked {current_status}", out)
+            where = {"HANG": " (hung while running)", "HANG*": " (hung while forcing AICLK/VDD)"}.get(
+                current_status, ""
+            )
+            log(f"step {current} {steps[current]} marked {current_status}{where}", out)
         start = current + 1
         if not reset_boards(a.reset_cmd, out):
             return steps, status, "could not reset the boards after a failed step"
@@ -311,7 +343,8 @@ def summarize(a, steps, status, abort_reason, out):
     points = {}  # (mhz, off) -> dict(verdict, text, vcore{dev: mV}, bad_devices)
     for idx, (mhz, off) in enumerate(steps):
         if idx in status:
-            points[(mhz, off)] = {"verdict": status[idx], "text": status[idx], "vcore": {}, "bad": []}
+            verdict = "HANG" if status[idx].startswith("HANG") else status[idx]
+            points[(mhz, off)] = {"verdict": verdict, "text": status[idx], "vcore": {}, "bad": []}
             continue
         e = ends.get(idx)
         if e is None:
@@ -333,7 +366,8 @@ def summarize(a, steps, status, abort_reason, out):
         }
 
     problem_devices = sorted({d for p in points.values() for d in p["bad"]})
-    lines = ["", "=" * 78, f"VF SWEEP RESULT: {TESTS[a.test]['name']}", "=" * 78]
+    title = f"{TESTS[a.test]['name']} {selection_label(TESTS[a.test], a.node, a.k)}"
+    lines = ["", "=" * 78, f"VF SWEEP RESULT: {title}", "=" * 78]
     lines.append(
         f"AICLK {a.freqs} MHz x VDD offsets {a.offsets} mV over the firmware VCORE, {a.iterations} iterations "
         f"per point, determinism check every {a.check_interval}"
@@ -346,6 +380,11 @@ def summarize(a, steps, status, abort_reason, out):
     widths = [max(len(r[c]) for r in rows + [header]) for c in range(len(header))]
     fmt = lambda r: "  " + " | ".join(v.ljust(w) for v, w in zip(r, widths))
     lines += ["", "Points (PASS = every check bit-exact on every chip, no hang):", fmt(header)] + [fmt(r) for r in rows]
+    forced_hangs = [idx for idx, s in status.items() if s == "HANG*"]
+    if forced_hangs:
+        lines.append(
+            "  HANG* = a chip stopped answering while AICLK/VDD were being forced, before the workload ran there"
+        )
     for idx, devs in sorted(ref_failed.items()):
         if idx < len(steps):
             mhz, off = steps[idx]
@@ -373,9 +412,16 @@ def summarize(a, steps, status, abort_reason, out):
         working.append((mhz, off))
 
     passing = [k for k, p in points.items() if p["verdict"] == "PASS"]
+    workload_failed = any(p["verdict"] == "FAIL" or p["text"] == "HANG" for p in points.values())
     if passing:
         verdict = "FIXED"
         detail = f"failure gone at {len(passing)}/{len(points)} points"
+    elif forced_hangs and not workload_failed:
+        verdict = "INCONCLUSIVE"
+        detail = (
+            f"forcing AICLK/VDD made a chip stop answering at {len(forced_hangs)} point(s); "
+            "the workload never ran at a forced point"
+        )
     elif abort_reason and not any(p["verdict"] in ("FAIL", "HANG") for p in points.values()):
         verdict = "INCONCLUSIVE"
         detail = abort_reason
@@ -388,6 +434,7 @@ def summarize(a, steps, status, abort_reason, out):
 
     summary = {
         "test": a.test,
+        "selection": selection_args(TESTS[a.test], a.node, a.k),
         "verdict": verdict,
         "detail": detail,
         "abort_reason": abort_reason,
@@ -405,18 +452,162 @@ def summarize(a, steps, status, abort_reason, out):
     return verdict
 
 
-def cmd_sweep(a):
+def sweep_one(a):
+    """Run one sweep as configured in a (test, node/k, output, grid, timeouts); return its verdict."""
     spec = TESTS[a.test]
     a.iterations = a.iterations or spec["iterations"]
     a.check_interval = a.check_interval or spec["check_interval"]
-    a.freqs = [int(f) for f in a.freqs.split(",") if f]
-    a.offsets = [int(o) for o in a.offsets.split(",") if o]
+    if isinstance(a.freqs, str):
+        a.freqs = [int(f) for f in a.freqs.split(",") if f]
+    if isinstance(a.offsets, str):
+        a.offsets = [int(o) for o in a.offsets.split(",") if o]
     Path(a.output).mkdir(parents=True, exist_ok=True)
     with open(Path(a.output) / "sweep.log", "a") as out:
-        log(f"VF sweep of {spec['name']} (log: {Path(a.output) / 'sweep.log'})", out)
+        title = f"{spec['name']} {selection_label(spec, a.node, a.k)}"
+        log(f"VF sweep of {title} (log: {Path(a.output) / 'sweep.log'})", out)
         steps, status, abort_reason = run_sweep(a, out)
-        verdict = summarize(a, steps, status, abort_reason, out)
+        return summarize(a, steps, status, abort_reason, out)
+
+
+def cmd_sweep(a):
+    verdict = sweep_one(a)
     sys.exit({"FIXED": 0, "NOT FIXED": 1}.get(verdict, 2))
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# followup
+
+
+def failed_tests(stage, log_text, rc):
+    """Each failed test of a suite stage: dicts with name, verdict, reason and what to sweep (test, node, k).
+
+    noc_cpp: one entry per gtest case that failed or never finished, classified on its own part of the log, mapped to
+             the Python NOC case with the same sources. A case that never finished in a run that exited 2 (chips left
+             wedged) is the one that wedged them.
+    noc_py, didt: one entry per 'FAILED/ERROR <node id>' line of pytest's summary, swept by that exact node id. When
+             pytest died before printing its summary (a crash), the stage's own selection is swept. The stage log is
+             classified as a whole (each stage runs a single test today).
+    """
+    entries = []
+    if stage == "noc_cpp":
+        lines = log_text.splitlines()
+        runs = [(i, m.group(1)) for i, l in enumerate(lines) for m in [GTEST_RUN.search(l)] if m]
+        ok = {m.group(1) for l in lines for m in [GTEST_OK.search(l)] if m}
+        failed = {m.group(1) for l in lines for m in [GTEST_FAILED.search(l)] if m}
+        for n, (i, case) in enumerate(runs):
+            if case in ok and case not in failed:
+                continue
+            end = runs[n + 1][0] if n + 1 < len(runs) else len(lines)
+            finished = case in failed
+            verdict, reason = classify("noc_cpp", "\n".join(lines[i:end]), 1 if finished else rc)
+            short = next((key for key in CPP_NOC_CASES if key in case), None)
+            name, k = CPP_NOC_CASES.get(short, (f"NOC (C++) {case}", TESTS["noc"]["k"]))
+            entries.append({"name": name, "verdict": verdict, "reason": reason, "test": "noc", "node": None, "k": k})
+        if not entries and rc != 0:  # died before any case started, or the case lines are missing
+            verdict, reason = classify("noc_cpp", log_text, rc)
+            entries.append(
+                {"name": "NOC (C++)", "verdict": verdict, "reason": reason, "test": "noc", "node": None, "k": None}
+            )
+        return entries
+
+    kind = "noc" if stage == "noc_py" else "didt"
+    stage_name = "NOC integrity (py)" if stage == "noc_py" else "DIDT"
+    verdict, reason = classify("noc_py" if stage == "noc_py" else "didt", log_text, rc)
+    nodes = []
+    for l in log_text.splitlines():
+        m = PYTEST_FAILED.search(l.strip())
+        if m and m.group(1) not in nodes:
+            nodes.append(m.group(1))
+    for node in nodes:
+        entries.append(
+            {
+                "name": f"{stage_name} {node.split('::')[-1]}",
+                "verdict": verdict,
+                "reason": reason,
+                "test": kind,
+                "node": node,
+                "k": None,
+            }
+        )
+    if not nodes and rc != 0:
+        entries.append(
+            {
+                "name": f"{stage_name} (pytest died before its summary)",
+                "verdict": verdict,
+                "reason": reason,
+                "test": kind,
+                "node": None,
+                "k": None,
+            }
+        )
+    return entries
+
+
+def sweep_qualifies(entry):
+    """NOC tests are swept on a hang or non-determinism, DIDT only on non-determinism."""
+    return entry["verdict"] in (("HANG", "ND") if entry["test"] == "noc" else ("ND",))
+
+
+def slug(entry):
+    sel = entry["node"].split("::")[-1] if entry["node"] else (entry["k"] or TESTS[entry["test"]]["k"])
+    return entry["test"] + "_" + re.sub(r"[^A-Za-z0-9]+", "_", sel).strip("_")
+
+
+def cmd_followup(a):
+    entries = []
+    for stage in ("noc_cpp", "noc_py", "didt"):
+        given = getattr(a, stage)
+        if not given:
+            continue
+        log_path, rc = given[0], int(given[1])
+        text = Path(log_path).read_text(errors="replace") if Path(log_path).exists() else ""
+        entries += failed_tests(stage, text, rc)
+
+    Path(a.output).mkdir(parents=True, exist_ok=True)
+    report = []
+    swept = {}  # sweep key -> (verdict line, sweep dir), so a test failed by two stages is swept once
+    for e in entries:
+        print(f"{e['name']}: {e['verdict']} {e['reason']}", flush=True)
+    for e in entries:
+        if not sweep_qualifies(e):
+            want = "a hang or non-determinism" if e["test"] == "noc" else "non-determinism"
+            report.append(f"{e['name']}: not swept ({e['verdict']}: {e['reason']}; only {want} is swept)")
+            continue
+        key = (e["test"], e["node"] or e["k"] or TESTS[e["test"]]["k"])
+        if key not in swept:
+            sweep_dir = Path(a.output) / f"vf_sweep_{slug(e)}"
+            print(f"\n=== VF sweep of {e['name']} ({e['verdict']}: {e['reason']}) -> {sweep_dir}", flush=True)
+            s = argparse.Namespace(
+                test=e["test"],
+                node=e["node"],
+                k=e["k"],
+                output=str(sweep_dir),
+                freqs=a.freqs,
+                offsets=a.offsets,
+                iterations=None,
+                check_interval=None,
+                startup_timeout=a.startup_timeout,
+                step_timeout=a.step_timeout,
+                reset_cmd=a.reset_cmd,
+                no_initial_reset=a.no_initial_reset,
+            )
+            try:
+                sweep_one(s)
+            except Exception as ex:  # one broken sweep must not stop the others
+                print(f"VF sweep of {e['name']} failed: {ex}", flush=True)
+            verdict_file = sweep_dir / "verdict.txt"
+            line = (
+                verdict_file.read_text().strip() if verdict_file.exists() else "INCONCLUSIVE: the sweep did not finish"
+            )
+            swept[key] = (line, sweep_dir)
+        line, sweep_dir = swept[key]
+        report.append(f"{e['name']} ({e['verdict']}): {line} [{sweep_dir}/sweep.log]")
+    if not entries:
+        report.append("no failed tests found in the given logs")
+    (Path(a.output) / "vf_followup.txt").write_text("\n".join(report) + "\n")
+    print("\nVF sweep follow-up:", flush=True)
+    for l in report:
+        print(f"  {l}", flush=True)
 
 
 def main():
@@ -429,23 +620,37 @@ def main():
     c.add_argument("--rc", type=int, required=True)
     c.set_defaults(func=cmd_classify)
 
-    s = sub.add_parser("sweep", help="run a VF sweep of a failing test; exit 0 fixed, 1 not fixed, 2 inconclusive")
+    def add_sweep_options(s):
+        s.add_argument("--freqs", default="800,1000,1200,1350", help="AICLK MHz, comma separated")
+        s.add_argument("--offsets", default="0,25,50", help="VDD offsets over the firmware VCORE, mV, comma separated")
+        s.add_argument("--startup-timeout", type=int, default=1200, help="s allowed for open + compile + reference")
+        s.add_argument(
+            "--step-timeout",
+            type=int,
+            default=1800,
+            help="s allowed for one point before it counts as a hang (raised to 3x the slowest finished point)",
+        )
+        s.add_argument("--reset-cmd", default="tt-smi -glx_reset")
+        s.add_argument("--no-initial-reset", action="store_true", help="do not reset the boards before a sweep")
+
+    s = sub.add_parser("sweep", help="run a VF sweep of one test; exit 0 fixed, 1 not fixed, 2 inconclusive")
     s.add_argument("--test", choices=sorted(TESTS), required=True)
+    sel = s.add_mutually_exclusive_group()
+    sel.add_argument("--node", help="exact pytest node id to sweep (default: the suite's selection for --test)")
+    sel.add_argument("-k", dest="k", help="pytest -k expression within the test (e.g. 'galaxy and eth')")
     s.add_argument("--output", required=True, help="directory for sweep.log, events.jsonl, summary.json, verdict.txt")
-    s.add_argument("--freqs", default="800,1000,1200,1350", help="AICLK MHz, comma separated")
-    s.add_argument("--offsets", default="0,25,50", help="VDD offsets over the firmware VCORE, mV, comma separated")
     s.add_argument("--iterations", type=int, default=None, help="iterations per point (default: the suite's)")
     s.add_argument("--check-interval", type=int, default=None, help="determinism check interval (default: suite's)")
-    s.add_argument("--startup-timeout", type=int, default=1200, help="s allowed for open + compile + reference")
-    s.add_argument(
-        "--step-timeout",
-        type=int,
-        default=1800,
-        help="s allowed for one point before it counts as a hang (raised to 3x the slowest finished point)",
-    )
-    s.add_argument("--reset-cmd", default="tt-smi -glx_reset")
-    s.add_argument("--no-initial-reset", action="store_true", help="do not reset the boards before the sweep")
+    add_sweep_options(s)
     s.set_defaults(func=cmd_sweep)
+
+    f = sub.add_parser("followup", help="sweep every failed test of the suite's NOC / NOC integrity / DIDT stages")
+    f.add_argument("--output", required=True, help="directory for one vf_sweep_<test> folder per sweep")
+    f.add_argument("--noc-cpp", nargs=2, metavar=("LOG", "RC"), help="C++ NOC stage log and exit code")
+    f.add_argument("--noc-py", nargs=2, metavar=("LOG", "RC"), help="NOC integrity (py) stage log and exit code")
+    f.add_argument("--didt", nargs=2, metavar=("LOG", "RC"), help="DIDT stage log and exit code")
+    add_sweep_options(f)
+    f.set_defaults(func=cmd_followup)
 
     a = p.parse_args()
     a.func(a)

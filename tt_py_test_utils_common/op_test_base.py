@@ -337,6 +337,8 @@ class OpTestBase:
                     ref_vcore = self._set_sweep_clock(clock, ref_mhz, "reference outputs")
                     if ref_offset:
                         self._set_sweep_vdd(clock, ref_vcore, ref_offset, "reference outputs")
+                    # The point is set: a hang from here on is the workload's, not the clock/VDD force's.
+                    self._record_sweep_event("reference_set", step=ref_step, mhz=ref_mhz, offset=ref_offset)
                 # One reference run per activation; we then cycle through them and compare output to
                 # reference_out[act]. Deallocate only for L1 due to memory constraints.
                 # For DRAM we keep all a_t[act] live; we still switch self.activations each time, so
@@ -407,6 +409,7 @@ class OpTestBase:
                                 ttnn.device.synchronize_device(self.get_device(device_idx))
                             clock.release_vdd()
                         vcore = base_vcore
+                    self._record_sweep_event("set", step=self.vf_start_step + step_idx, mhz=mhz, offset=offset)
                     step = {
                         "step": self.vf_start_step + step_idx,
                         "mhz": mhz,
