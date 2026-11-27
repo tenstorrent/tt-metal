@@ -596,8 +596,8 @@ class SolPrepass(Module):
         it: it is the first cross-chip write of a call and lands in a fresh buffer, which the allocator may place
         where the previous call's mask and pooled K/V were (the caller frees them as soon as the sparse op is
         enqueued). Without it a chip that finished that sparse op early overwrites them under a chip still running
-        it, and the output changes from run to run (10 s clips, task #794). The V gather runs without one (measured
-        2026-10-28: 130 -> 72 us per gather at 5 s): a chip finishes the K gather only once every chip has started it.
+        it, and the output of a 10 s clip changes from run to run. The V gather runs without one (130 -> 72 us per
+        gather at 5 s): a chip finishes the K gather only once every chip has started it.
         """
         ccl = self.ccl_manager
         if self._ag_sems is None:
