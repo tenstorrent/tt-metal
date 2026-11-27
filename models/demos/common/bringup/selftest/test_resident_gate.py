@@ -24,7 +24,9 @@ PROFILE = f"BRINGUP_PROFILE_WALL=1 {R} {T}test_profile.py"
 @pytest.fixture
 def call_hooks(monkeypatch):
     """A model whose X_SKIP switch is per run (but at value 'tail'), as DeepSeek-V4.1's DECODER_SKIP (but replay128)."""
-    monkeypatch.setattr(B, "_CALL_HOOKS", [[("X_", lambda env: () if env.get("X_SKIP") == "tail" else ("SKIP",))]])
+    monkeypatch.setattr(
+        B, "_call_hooks", lambda: [("X_", lambda env: () if env.get("X_SKIP") == "tail" else ("SKIP",))]
+    )
 
 
 def test_drive_submits_to_a_serving_resident_runner_and_marks_determinism_fresh(tmp_path, monkeypatch):
@@ -414,3 +416,28 @@ def test_a_plans_model_is_loaded_for_a_declared_max_seq(tmp_path, monkeypatch):
     assert B.hints([plain, plain], spec)[B.MAX_SEQ_ENV] == "56320"
     small = SimpleNamespace(get=lambda k, d=None: {"target.chunk": 8192, "deploy.seq": 65536}.get(k, d))
     assert B.MAX_SEQ_ENV not in B.hints([iso], small)
+
+
+def test_call_hooks_follow_an_edit_of_the_hooks_file(tmp_path, monkeypatch):
+    """F305: a long-lived process (the orchestrator) sees a switch an agent made call-time after it first read the hooks
+    (DeepSeek-V4.1 WA.3: a stale import refused a one-load gate on DS41_WOA_BANK)."""
+    import sys
+
+    pkg = tmp_path / "models" / "demos" / "toyf305"
+    (pkg / "bringup").mkdir(parents=True)
+    (pkg / "tt").mkdir()
+    for d in (tmp_path / "models", tmp_path / "models" / "demos", pkg, pkg / "bringup", pkg / "tt"):
+        (d / "__init__.py").write_text("")
+    (pkg / "tt" / "settings.py").write_text("class S:\n    prefix = 'TOY_'\n\nS_ = S()\n")
+    hooks = pkg / "bringup" / "hooks.py"
+    hooks.write_text("def batch_call_settings(env=None):\n    return ('A',)\n")
+    monkeypatch.setattr(B, "_REPO", tmp_path)
+    monkeypatch.setattr(B, "_CALL_HOOKS", [])
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for m in [m for m in sys.modules if m == "models" or m.startswith("models.")]:
+        monkeypatch.delitem(sys.modules, m)
+    assert B.call_vars({}) == {"TOY_A"}
+    hooks.write_text("def batch_call_settings(env=None):\n    return ('A', 'BANK')\n")
+    st = hooks.stat()
+    os.utime(hooks, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    assert B.call_vars({}) == {"TOY_A", "TOY_BANK"}
