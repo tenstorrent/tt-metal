@@ -46,8 +46,11 @@ BLOCKS_PER_CORE_KNOB = 1
 
 # Transfer-shape knob of logical_rows_partial_tile: two logical pieces of a page whose gap is at
 # most this many bytes move as one span through the gap, trading padding bytes for one fewer
-# NoC request per page. 0 merges only touching pieces.
-PIECE_MERGE_GAP_BYTES = 0
+# NoC request per page. 0 merges only touching pieces. Small partial pieces are request-bound
+# (Blackhole p150b, 1940 pages on 110 cores): a 448 B gap (one-row bf16 tiles) merged runs
+# 7.06 us vs 9.35 us split, while merging a 512 B gap (17x16 bf16 tiles) costs +3%, 960 B
+# (one-row f32 tiles) +10% and 1024 B (17x16 f32 tiles) +53%.
+PIECE_MERGE_GAP_BYTES = 448
 
 # L1 the model environment leaves to the op on every core (BB-05).
 L1_BUDGET_BYTES = 1347776
