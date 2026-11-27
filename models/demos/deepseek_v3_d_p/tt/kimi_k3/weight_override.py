@@ -97,10 +97,16 @@ def active():
 def unpack_bf4(exp: torch.Tensor, codes: torch.Tensor) -> torch.Tensor:
     """Packed bf4 (the GPTQ tools' pack.py) -> float32 [K, N]: value = (-1)^s m 2^(e - 129) per 16-value block of N."""
     c = torch.stack([codes & 0xF, codes >> 4], -1).reshape(codes.shape[0], -1)
-    mag = (c & 0x7).to(torch.float64)
-    shift = exp.to(torch.int64).repeat_interleave(16, dim=-1)[..., : c.shape[-1]] - 129
-    v = mag * torch.pow(torch.tensor(2.0, dtype=torch.float64), shift.to(torch.float64))
-    return torch.where((c >> 3) != 0, -v, v).to(torch.float32)
+    e = exp.to(torch.int32)
+    if bool(((e <= 2) & (e > 0)).any()):  # (a subnormal block scale: the slow exact path)
+        mag = (c & 0x7).to(torch.float64)
+        shift = e.to(torch.int64).repeat_interleave(16, dim=-1)[..., : c.shape[-1]] - 129
+        v = mag * torch.pow(torch.tensor(2.0, dtype=torch.float64), shift.to(torch.float64))
+        return torch.where((c >> 3) != 0, -v, v).to(torch.float32)
+    # 2^(e - 129) built from its float32 bits (exponent field e - 2), once per block; m <= 7 times it is exact
+    scale = ((e - 2).clamp(min=0) << 23).view(torch.float32).repeat_interleave(16, dim=-1)[..., : c.shape[-1]]
+    v = (c & 0x7).to(torch.float32) * scale
+    return torch.where((c >> 3) != 0, -v, v)
 
 
 def split_key(key: str):
