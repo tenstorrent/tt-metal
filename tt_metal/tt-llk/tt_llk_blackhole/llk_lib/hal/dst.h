@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::dst
@@ -56,7 +57,7 @@ struct Zero
     std::uint8_t address_mode = 0; // applied by hardware only for SingleRow
 
     /** @brief Encode the operation. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 namespace detail
@@ -123,25 +124,24 @@ constexpr bool is_valid(const Zero operation)
     return detail::is_valid(operation);
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t Zero::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation Zero::get_operation() const
 {
     detail::validate(*this);
-    return detail::encode(*this);
+    return hal::detail::make_operation(detail::encode(*this));
 }
 
 /** @brief Issue a compile-time Dst zeroing operation as one immediate instruction. */
-template <Zero Operation>
+template <Zero Descriptor>
 inline __attribute__((always_inline)) void run()
 {
-    static_assert(detail::is_valid(Operation), "invalid ZEROACC descriptor");
-    constexpr std::uint32_t operation = detail::encode(Operation);
-    TTI_INSN(operation);
+    static_assert(detail::is_valid(Descriptor), "invalid ZEROACC descriptor");
+    hal::detail::run_immediate<detail::encode(Descriptor)>();
 }
 
 /** @brief Issue a runtime-selected Dst zeroing operation. */
-inline __attribute__((always_inline)) void run(const Zero operation)
+inline __attribute__((always_inline)) void run(const Zero descriptor)
 {
-    TT_INSN(operation.get_operation());
+    hal::run(descriptor.get_operation());
 }
 
 } // namespace hal::dst

@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "llk_assert.h"
+#include "utils/operation.h"
 #include "utils/source.h"
 
 namespace hal
@@ -96,13 +97,13 @@ public:
         src_ops::BankScope Scope = src_ops::BankScope::Current,
         src_ops::BankOwner Owner = src_ops::BankOwner::Math,
         src_ops::Fill Value      = src_ops::Fill::Zero>
-    static constexpr std::uint32_t fill_operation()
+    static constexpr hal::Operation fill_operation()
     {
-        return TT_OP_ZEROSRC(
+        return hal::detail::make_operation(TT_OP_ZEROSRC(
             Value == src_ops::Fill::NegativeInfinity ? 1u : 0u,
             Owner == src_ops::BankOwner::Math ? 1u : 0u,
             Scope == src_ops::BankScope::All ? 1u : 0u,
-            MASK_BITS);
+            MASK_BITS));
     }
 
     /** @brief Fill the selected source registers (ZEROSRC). */
@@ -112,7 +113,7 @@ public:
         src_ops::Fill Value      = src_ops::Fill::Zero>
     static inline __attribute__((always_inline)) void fill()
     {
-        TTI_INSN((fill_operation<Scope, Owner, Value>()));
+        hal::detail::run_immediate<fill_operation<Scope, Owner, Value>()>();
     }
 
     // ---------------- Data-valid handoff ----------------
@@ -127,16 +128,16 @@ public:
      *       instructions; this is the standalone form.
      */
     template <src_ops::BankAdvance Advance = src_ops::BankAdvance::Flip>
-    static constexpr std::uint32_t release_operation()
+    static constexpr hal::Operation release_operation()
     {
-        return TT_OP_CLEARDVALID(MASK_BITS, Advance == src_ops::BankAdvance::KeepReadingSame ? 0b10u : 0u);
+        return hal::detail::make_operation(TT_OP_CLEARDVALID(MASK_BITS, Advance == src_ops::BankAdvance::KeepReadingSame ? 0b10u : 0u));
     }
 
     /** @brief Release the selected current bank(s) back to the unpackers (CLEARDVALID). */
     template <src_ops::BankAdvance Advance = src_ops::BankAdvance::Flip>
     static inline __attribute__((always_inline)) void release()
     {
-        TTI_INSN((release_operation<Advance>()));
+        hal::detail::run_immediate<release_operation<Advance>()>();
     }
 
     /**
@@ -147,29 +148,29 @@ public:
      *       math-filled banks (Dst-to-SrcB staging) with implied-format inference disabled. The
      *       sanctioned general-purpose publish is the unpacker-side handoff (UNPACR/UNPACR_NOP).
      */
-    static constexpr std::uint32_t publish_operation()
+    static constexpr hal::Operation publish_operation()
     {
-        return TT_OP_SETDVALID(MASK_BITS);
+        return hal::detail::make_operation(TT_OP_SETDVALID(MASK_BITS));
     }
 
     /** @brief Publish the unpacker-side write bank(s) to the math thread (SETDVALID). */
     static inline __attribute__((always_inline)) void publish()
     {
-        TTI_INSN(publish_operation());
+        hal::detail::run_immediate<publish_operation()>();
     }
 
     // ---------------- Pipeline clock gating ----------------
 
     /** @brief Encode a reset of the selected source pipelines' clock gating to "don't gate" (GATESRCRST). */
-    static constexpr std::uint32_t reset_pipeline_gating_operation()
+    static constexpr hal::Operation reset_pipeline_gating_operation()
     {
-        return TT_OP_GATESRCRST((MASK_BITS >> 1) & 1u, MASK_BITS & 1u);
+        return hal::detail::make_operation(TT_OP_GATESRCRST((MASK_BITS >> 1) & 1u, MASK_BITS & 1u));
     }
 
     /** @brief Reset the selected source pipelines' clock gating to "don't gate" (GATESRCRST). */
     static inline __attribute__((always_inline)) void reset_pipeline_gating()
     {
-        TTI_INSN(reset_pipeline_gating_operation());
+        hal::detail::run_immediate<reset_pipeline_gating_operation()>();
     }
 
     // ---------------- Single-register features ----------------
@@ -183,16 +184,16 @@ public:
      * @note The SrcA form is absent from the ISA documentation and has no call sites —
      *       SrcA transposition is normally the unpacker's job. Validate on hardware before use.
      */
-    static constexpr std::uint32_t transpose_operation()
+    static constexpr hal::Operation transpose_operation()
     {
         static_assert(SINGLE_A || SINGLE_B, "transpose targets exactly one source register");
-        return SINGLE_A ? TT_OP_TRNSPSRCA : TT_OP_TRNSPSRCB;
+        return hal::detail::make_operation(SINGLE_A ? TT_OP_TRNSPSRCA : TT_OP_TRNSPSRCB);
     }
 
     /** @brief Transpose the selected register in place (TRNSPSRCA / TRNSPSRCB). */
     static inline __attribute__((always_inline)) void transpose()
     {
-        TTI_INSN(transpose_operation());
+        hal::detail::run_immediate<transpose_operation()>();
     }
 
     /**
@@ -204,17 +205,17 @@ public:
      *       The hardware only supports a shift amount of one datum.
      */
     template <src_ops::ShiftDirection Direction>
-    static constexpr std::uint32_t shift_columns_operation()
+    static constexpr hal::Operation shift_columns_operation()
     {
         static_assert(SINGLE_A, "the combined column shift targets SrcA");
-        return TT_OP_SHIFTXA(0u /* log2 amount: shift by one */, static_cast<std::uint32_t>(Direction));
+        return hal::detail::make_operation(TT_OP_SHIFTXA(0u /* log2 amount: shift by one */, static_cast<std::uint32_t>(Direction)));
     }
 
     /** @brief Shift all SrcA rows by one datum column (SHIFTXA). */
     template <src_ops::ShiftDirection Direction>
     static inline __attribute__((always_inline)) void shift_columns()
     {
-        TTI_INSN((shift_columns_operation<Direction>()));
+        hal::detail::run_immediate<shift_columns_operation<Direction>()>();
     }
 
     /**
@@ -225,34 +226,34 @@ public:
      * @tparam AddressMode: ADDR_MOD section applied after the shift.
      */
     template <std::uint32_t Row, src_ops::ShiftFill Feed = src_ops::ShiftFill::Zero, std::uint8_t AddressMode = 0>
-    static constexpr std::uint32_t shift_row_operation()
+    static constexpr hal::Operation shift_row_operation()
     {
         static_assert(SINGLE_B, "the row shift targets SrcB");
         static_assert(Row < SRCB_ROWS, "SrcB row must be in [0, 63]");
         static_assert(AddressMode < 8u, "Blackhole address mode must be in [0, 7]");
-        return TT_OP_SHIFTXB(AddressMode, Feed == src_ops::ShiftFill::Zero ? 1u : 0u, Row);
+        return hal::detail::make_operation(TT_OP_SHIFTXB(AddressMode, Feed == src_ops::ShiftFill::Zero ? 1u : 0u, Row));
     }
 
     template <src_ops::ShiftFill Feed = src_ops::ShiftFill::Zero, std::uint8_t AddressMode = 0>
-    static inline __attribute__((always_inline)) std::uint32_t shift_row_operation(const std::uint32_t row)
+    static inline __attribute__((always_inline)) hal::Operation shift_row_operation(const std::uint32_t row)
     {
         static_assert(SINGLE_B, "the row shift targets SrcB");
         static_assert(AddressMode < 8u, "Blackhole address mode must be in [0, 7]");
         LLK_ASSERT(row < SRCB_ROWS, "SrcB row must be in [0, 63]");
-        return TT_OP_SHIFTXB(AddressMode, Feed == src_ops::ShiftFill::Zero ? 1u : 0u, row);
+        return hal::detail::make_operation(TT_OP_SHIFTXB(AddressMode, Feed == src_ops::ShiftFill::Zero ? 1u : 0u, row));
     }
 
     /** @brief Shift one SrcB row left by one datum (SHIFTXB). */
     template <std::uint32_t Row, src_ops::ShiftFill Feed = src_ops::ShiftFill::Zero, std::uint8_t AddressMode = 0>
     static inline __attribute__((always_inline)) void shift_row()
     {
-        TTI_INSN((shift_row_operation<Row, Feed, AddressMode>()));
+        hal::detail::run_immediate<shift_row_operation<Row, Feed, AddressMode>()>();
     }
 
     template <src_ops::ShiftFill Feed = src_ops::ShiftFill::Zero, std::uint8_t AddressMode = 0>
     static inline __attribute__((always_inline)) void shift_row(const std::uint32_t row)
     {
-        TT_INSN((shift_row_operation<Feed, AddressMode>(row)));
+        hal::run(shift_row_operation<Feed, AddressMode>(row));
     }
 
     /**
@@ -261,16 +262,16 @@ public:
      * @note Legacy operation: absent from the ISA documentation, no call sites. Validate on
      *       hardware before use.
      */
-    static constexpr std::uint32_t rarefy_operation()
+    static constexpr hal::Operation rarefy_operation()
     {
         static_assert(SINGLE_B, "rarefication targets SrcB");
-        return TT_OP_RAREB;
+        return hal::detail::make_operation(TT_OP_RAREB);
     }
 
     /** @brief Rarefy the SrcB registers (RAREB). */
     static inline __attribute__((always_inline)) void rarefy()
     {
-        TTI_INSN(rarefy_operation());
+        hal::detail::run_immediate<rarefy_operation()>();
     }
 
     /**
@@ -282,62 +283,62 @@ public:
      *       sites. Wrapped for encoding completeness only; validate on hardware before use.
      */
     template <std::uint32_t RegisterMask, std::uint32_t HaloMask = 0>
-    static constexpr std::uint32_t right_shift_mask_horizontal_operation()
+    static constexpr hal::Operation right_shift_mask_horizontal_operation()
     {
         static_assert(SINGLE_A, "the right-shift masks target SrcA");
         static_assert(RegisterMask < (1u << 16), "horizontal right-shift register mask is 16 bits");
         static_assert(HaloMask < 2u, "halo mask is one bit");
-        return TT_OP_SETASHRMH(RegisterMask, HaloMask);
+        return hal::detail::make_operation(TT_OP_SETASHRMH(RegisterMask, HaloMask));
     }
 
     template <std::uint32_t RegisterMask, std::uint32_t HaloMask = 0>
-    static constexpr std::uint32_t right_shift_mask_horizontal_thread0_operation()
+    static constexpr hal::Operation right_shift_mask_horizontal_thread0_operation()
     {
         static_assert(SINGLE_A, "the right-shift masks target SrcA");
         static_assert(RegisterMask < (1u << 16), "horizontal right-shift register mask is 16 bits");
         static_assert(HaloMask < 2u, "halo mask is one bit");
-        return TT_OP_SETASHRMH0(RegisterMask, HaloMask);
+        return hal::detail::make_operation(TT_OP_SETASHRMH0(RegisterMask, HaloMask));
     }
 
     template <std::uint32_t RegisterMask>
-    static constexpr std::uint32_t right_shift_mask_horizontal_thread1_operation()
+    static constexpr hal::Operation right_shift_mask_horizontal_thread1_operation()
     {
         static_assert(SINGLE_A, "the right-shift masks target SrcA");
         static_assert(RegisterMask < (1u << 16), "horizontal right-shift register mask is 16 bits");
-        return TT_OP_SETASHRMH1(RegisterMask, 0u /* no thread1 left halo */);
+        return hal::detail::make_operation(TT_OP_SETASHRMH1(RegisterMask, 0u /* no thread1 left halo */));
     }
 
     template <std::uint32_t RegisterMask>
-    static constexpr std::uint32_t right_shift_mask_vertical_operation()
+    static constexpr hal::Operation right_shift_mask_vertical_operation()
     {
         static_assert(SINGLE_A, "the right-shift masks target SrcA");
         static_assert(RegisterMask < (1u << 20), "vertical right-shift register mask is 20 bits");
-        return TT_OP_SETASHRMV(RegisterMask);
+        return hal::detail::make_operation(TT_OP_SETASHRMV(RegisterMask));
     }
 
     /** @brief Write one SrcA right-shift mask (SETASHRMH / SETASHRMH0 / SETASHRMH1 / SETASHRMV). */
     template <std::uint32_t RegisterMask, std::uint32_t HaloMask = 0>
     static inline __attribute__((always_inline)) void set_right_shift_mask_horizontal()
     {
-        TTI_INSN((right_shift_mask_horizontal_operation<RegisterMask, HaloMask>()));
+        hal::detail::run_immediate<right_shift_mask_horizontal_operation<RegisterMask, HaloMask>()>();
     }
 
     template <std::uint32_t RegisterMask, std::uint32_t HaloMask = 0>
     static inline __attribute__((always_inline)) void set_right_shift_mask_horizontal_thread0()
     {
-        TTI_INSN((right_shift_mask_horizontal_thread0_operation<RegisterMask, HaloMask>()));
+        hal::detail::run_immediate<right_shift_mask_horizontal_thread0_operation<RegisterMask, HaloMask>()>();
     }
 
     template <std::uint32_t RegisterMask>
     static inline __attribute__((always_inline)) void set_right_shift_mask_horizontal_thread1()
     {
-        TTI_INSN((right_shift_mask_horizontal_thread1_operation<RegisterMask>()));
+        hal::detail::run_immediate<right_shift_mask_horizontal_thread1_operation<RegisterMask>()>();
     }
 
     template <std::uint32_t RegisterMask>
     static inline __attribute__((always_inline)) void set_right_shift_mask_vertical()
     {
-        TTI_INSN((right_shift_mask_vertical_operation<RegisterMask>()));
+        hal::detail::run_immediate<right_shift_mask_vertical_operation<RegisterMask>()>();
     }
 };
 
