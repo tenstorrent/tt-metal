@@ -1,75 +1,67 @@
 # L1 Ledger: g6_concat
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions:
-`op_design.md` → Blocking Model. Block axes: `out_page` (fold of `lead`, `join`, `trail`, `tile_row`,
-`tile_col`), `row_in_tile`, `source`.
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking axes (from `op_design.md`): `out_page` (page_copy), `out_tile_row`, `tile_col` and `in_tile_row` (row_gather; `in_tile_row` in both).
 
-## CB table
+Inventory: two buffers, the minimum this data path admits.
+- `cb_moved_pages` is the destination: page_copy reads straight into it (pattern 1, pack into the destination), and row_gather's on-parity rows land in it directly.
+- `cb_parity_stage` exists only for rows whose DRAM source offset cannot be congruent with their destination offset (bf16 on BH). The design uses no other scratch, no intermediate and no solve.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_concat_tiles` (index 0, page `tile_bytes`) | `depth_eff · block_tiles`, `depth_eff = min(cb_depth, ceil(max_core_tiles / block_tiles))` | `depth_eff · block_tiles` pages: block `i` held by the writer (place + store) while the reader fills block `i+1`; `block_tiles` when the core has one block | `{out_page: spans → block_tiles; row_in_tile: spans → 32 rows (a page is one tile; only rows [0, m) carry data); source: streams — every source of a tile lands in that tile's one page; lead, join, trail, tile_row, tile_col: folded into out_page}` | input dtype (`Float16_b` in Phase 0). Dataflow-only payload, never through DEST — no compute kernel, `fp32_dest_acc_en` does not exist | reader | writer | whole program, both regimes | Is the destination: direct reads land in it, `place_rows_block` transforms it in place, `store_block` writes from it (reuse patterns 1 + 2). Cannot alias `cb_row_staging`: concurrent lifetime — rows are copied from staging into it while both are held by the writer. Fold-into-DEST does not apply (nothing computed) |
-| `cb_row_staging` (index 1, page `tile_bytes`; **row_gather only**) | `depth_eff · block_tiles · S` | ≤ `depth_eff · block_tiles · S` pages; a page holds only the rows staged for one (shifted input, output tile). Slots beyond the shifted-input count of a tile row stay unused | `{out_page: spans → block_tiles; source: spans → S; row_in_tile: spans → 32 rows (staged rows sit at their source intra-tile offsets); lead, join, trail, tile_row, tile_col: folded into out_page}` | input dtype; dataflow-only | reader | writer | whole program, row_gather only (not allocated in page_run) | Cannot alias `cb_concat_tiles` (concurrent, above). Capacity exceeds the bytes staged (Qwen 79: 64 B of each 2 048 B page): **mechanism reason** — Blackhole DRAM reads require L1 and DRAM offsets equal mod 64, so a row is staged at its source offset in a tile-sized slot. The fixed per-tile stride `S` keeps slot addressing static and every push nominal for the ring invariant. Packing rows of several sources into one slot at matching residues is the compaction alternative; not built because Qwen 79's total (589 824 B) fits the budget |
+| `cb_moved_pages` | `buffer_depth · block_pages` pages of `page_bytes` | `buffer_depth · block_pages`. At peak the reader fills one block slot while the writer drains the other (depth 2). | page_copy: `{out_page: spans → block_pages (streams over blocks, window buffer_depth), in_tile_row: spans → 32 (whole page)}`. row_gather: `{out_tile_row: streams → 1 (a block never spans two tile rows), tile_col: spans → block_pages, in_tile_row: spans → 32}` | Input dtype, raw bytes (`Float16_b` for bf16 Phase 0). Dataflow-only payload that never passes through DEST, so audit 2 does not apply. | reader | writer | Whole program, both regimes | **None.** It is the only buffer in page_copy. In row_gather it is live concurrently with `cb_parity_stage`, because phase 2 reads the stage and writes a reserved slot at the same time, so they cannot alias. Capacity equals the live set; `buffer_depth` is the double-buffering mechanism reason. |
+| `cb_parity_stage` | `(block_pages · page_bytes + dram_read_align) / dram_read_align` pages of `dram_read_align` bytes. Present only when `regime == row_gather and face_row_bytes < dram_read_align` (bf16 on BH). Absent for fp32, for bf16 on WH, and in page_copy. | `block_pages · page_bytes + dram_read_align` bytes. The block's off-parity rows sit at their destination in-tile offsets, one tile image per column, plus the class-offset slack (base used = CB base + class). | `{out_tile_row: streams → 1, tile_col: spans → block_pages, in_tile_row: spans → 32 (destination row positions; the face spans copied out are contiguous in this layout only)}` | Input dtype, raw bytes. Never pushed or popped. | reader | reader (private scratch) | row_gather, phases 1–2 of each block. It is emptied by the phase-2 barrier before the next block's phase 1. | **Cannot alias `cb_moved_pages`.** Phase 2 copies stage → slot, so both are live at once. The *other* `cb_moved_pages` slot cannot host it either, because the writer owns that slot while the block is staged. A compact (source-row-packed) stage would save L1 but break the one-span-per-face copy, turning 2 copies per tile into one per run (rejected regime `per_run_source_staging`). Capacity exceeds the live rows by the slack only. |
 
 ## Symbol table
 
-| Symbol | Meaning | Bound | Predicate / source establishing it |
-|--------|---------|-------|------------------------------------|
-| `block_tiles` | output pages per block (knob) | `1 ≤ block_tiles ≤ min(max_core_tiles, floor(1347776 / (cb_depth · tile_bytes · (1 + S))))` | host plan; the cap clamp in Mechanism caps |
-| `cb_depth` | buffer-depth knob | `= 2` (Phase 0) | host plan constant |
-| `depth_eff` | depth actually allocated | `min(cb_depth, num_blocks_max)` ∈ {1, 2} | derived from `block_tiles` |
-| `S` | `staging_slots_per_tile` | `0` in page_run; `1 ≤ S ≤ min(K, 32)` in row_gather | each source contributes ≥ 1 of 32 rows; regime predicate |
-| `tile_bytes` | page size | 2 048 (bf16, Phase 0); 4 096 (fp32); 1 088 (bfp8) | dtype |
-| `max_core_tiles` | pages of a group-1 core | `ceil(total_out_pages / num_cores)` | `split_work_to_cores` |
-| `total_out_pages` | `output.buffer_num_pages()` | unbounded — appears only inside `max_core_tiles`, which `block_tiles` is clamped against | — |
-| `num_cores` | cores used | `min(G, total_out_pages)`, `G = 110` here | grid query |
-| `K` | inputs | `1 ≤ K ≤ 160` | RT-arg cap (host `RuntimeError`) |
-| `partial_rows_max` | transfer-shape threshold (does not size any CB) | 16 (0 for bfloat8_b) | host plan constant |
-| L1 budget | op's L1 per core | 1 347 776 B | BB-05 |
+| Symbol | Bound | Predicate / source establishing it |
+|--------|-------|------------------------------------|
+| `block_pages` | `1 ≤ block_pages ≤ min(ceil(core_out_pages_max / buffer_depth), cap)`. page_copy: `cap = floor(L1_OP_BUDGET / (buffer_depth · page_bytes))`. row_gather: `cap = floor((L1_OP_BUDGET − s·dram_read_align) / ((buffer_depth + s) · page_bytes))`, also `≤ out_tile_cols`. | Host plan (`select_plan`), regime predicate |
+| `buffer_depth` | `= 2` (Phase 0) | Host constant `BUFFER_DEPTH` |
+| `s` | `1` if `row_gather and face_row_bytes < dram_read_align`, else `0` | Regime predicate + dtype + HAL |
+| `page_bytes` | 2048 (bf16, Phase 0); 4096 (fp32); 1088 (bf8b); `buffer_aligned_page_size()` per stick (RM) | Dtype / layout axis |
+| `face_row_bytes` | 32 (bf16), 64 (fp32) | Dtype |
+| `dram_read_align` | 64 (Blackhole), 32 (Wormhole) | `ttnn.get_dram_alignment()` / `NOC_DRAM_READ_ALIGNMENT_BYTES` |
+| `L1_OP_BUDGET` | `1347776` B per core. TARGET `output_buffer: l1` subtracts `ceil(P / num_l1_banks) · aligned_page_bytes`. | Spec (model leaves this per core); BB-05 |
+| `core_out_pages_max` | `≤ ceil(P / num_cores)` | `split_work_to_cores` |
+| `P` (output pages) | Unbounded by contract. It never sizes a buffer; it only sets the per-core assignment. | Shape |
 
-## Footprint
+## Total per-core footprint
 
-`L1_per_core = depth_eff · block_tiles · tile_bytes · (1 + S)` ≤ 1 347 776 B by construction.
+```
+footprint = (buffer_depth + s) · block_pages · page_bytes + s · dram_read_align   ≤ L1_OP_BUDGET (by construction of cap)
+```
 
-Scaling: linear in `block_tiles` (knob) and `depth_eff` (knob); `(1 + S)` scales with the number of
-shifted inputs meeting one output tile row (shape-derived, ≤ 33); `tile_bytes` with dtype. No term
-scales with an unbounded op dimension.
-
-| Case (G = 110) | Regime | `max_core_tiles` | `S` | `block_tiles` | `depth_eff` | L1 per core |
-|----------------|--------|------------------|-----|---------------|-------------|-------------|
-| Qwen 17 `16×(1,6,4096,256)` d0 bf16 (p2) | page_run | 894 | 0 | 329 (cap) | 2 | 1 347 584 B |
-| Qwen 18 `(108,4096,128)+(84,4096,128)` d0 fp32 (p1, refinement) | page_run | 894 | 0 | 164 (cap) | 2 | 1 343 488 B |
-| FLUX 29 `(1,8192,3072)+(1,256,3072)` d1 | page_run | 231 | 0 | 231 | 1 | 473 088 B |
-| Qwen 81 `16×(1,1,128,256)` d0 | page_run | 5 | 0 | 5 | 1 | 10 240 B |
-| Qwen 79 `16×(1,1,1,62080)` d2 | row_gather | 18 | 15 | 18 | 1 | 589 824 B |
-| Qwen 143 `8×(1,1,1,62080)` d2 | row_gather | 18 | 7 | 18 | 1 | 294 912 B |
-| Qwen 89 `2×(1,1,1,62080)` d2 | row_gather | 18 | 1 | 18 | 1 | 73 728 B |
-| FLUX 23 `2×(1,1,1,128)` d-1 | page_run | 1 | 0 | 1 | 1 | 2 048 B |
+- Every term scales linearly with `block_pages`. `buffer_depth` multiplies the streaming term only. No term scales with K, `P`, or any whole-op dimension.
+- Phase 0 worst case, bf16 page_copy with the cap binding: `2 · 329 · 2048 = 1,347,584 B ≤ 1,347,776`.
+- Qwen 79 (row_gather, ~130 cores, 15 pages per core, `block_pages = 8`): `3 · 8 · 2048 + 64 = 49,216 B`.
+- Qwen 151 (page_copy, 8 pages per core, `block_pages = 4`): `2 · 4 · 2048 = 16,384 B`.
+- The plan never depends on free L1, so a production shape gets the same footprint inside the model.
 
 ## Data-movement budget
 
-The footprint and the traffic are one decision: nothing is resident across blocks because nothing
-is re-read — every output page has its own sources.
+Chosen split: contiguous `out_page` ranges over the full grid, with valid-row-prefix transfers. A full tile is one transfer.
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| each input `x_k` | 1 (each logical row read once) | the flat `out_page` split is a bijection between output pages and input pages (page_run) or between output rows and input rows (row_gather); no page or row has two readers. Tiles with `m > partial_rows_max` carry their padding rows along; tiles with `m ≤ 16` move only logical rows | none |
-| output | 1 (each logical row written once) | each output page belongs to exactly one core and one block; written once from `cb_concat_tiles` | none |
-| staged rows (row_gather) | 0 | core-local L1→L1 self-copies; they never leave the core | none (self-aimed NoC reads stay on the core) |
+| each input `x_k` | 1. page_copy moves each source page's valid-row prefix once. row_gather reads each logical row exactly once, as disjoint row ranges even when two output tile rows (or two cores) share a source tile. | Every source page (or row range) belongs to exactly one block on one core. No pass re-reads it, and nothing is staged through DRAM. | 0 |
+| output | 1, each output page's valid-row prefix written once | Each output page belongs to exactly one block | 0 |
+| (row_gather only) off-parity rows | 0 extra DRAM. One extra **core-local** L1→L1 crossing (stage → slot, one span per face per tile). | NoC DRAM-read congruence (64 B on BH) vs. a 32 B bf16 face row | 0 |
 
-| Case | DRAM read | DRAM written | Core-local copies | Note |
-|------|-----------|--------------|-------------------|------|
-| Qwen 18 (p1, fp32) | 402 653 184 B | 402 653 184 B | 0 | = LOOSE_CASES minimum 805 306 368 B |
-| Qwen 17 (p2) | 201 326 592 B | 201 326 592 B | 0 | = stated minimum 402 653 184 B |
-| Qwen 79 | 1 986 560 B (62 080 × 32 B) | 1 986 560 B (1 940 × 1 024 B) | 1 862 400 B | whole-tile gather would read 63 569 920 B |
-| Qwen 160 (H = 1, w) | 124 160 B | 124 160 B | 0 | whole tiles would move 3 973 120 B each way |
-| Qwen 109 (H = 31, w) | 98 304 B | 98 304 B | 0 | `m = 31 > 16`: whole tiles, 1 padding row per tile moved |
+Totals per tier for representative production cells:
 
-Totals per tier for the chosen split: DRAM = Σ logical input rows + Σ logical output rows (plus the
-padding rows of tiles with `16 < m < 32`); inter-core NoC = 0; core-local = the shifted rows of
-row_gather once.
+| Cell | Regime | DRAM read | DRAM write | Core-local L1→L1 | Cross-core |
+|------|--------|-----------|------------|------------------|------------|
+| Qwen 17 (16 × [1,6,4096,256], d0, bf16) | page_copy | 201,326,592 B | 201,326,592 B | 0 | 0 |
+| Qwen 19 (16 × [1,4096,1536], d0, bf16) | page_copy | 201,326,592 B | 201,326,592 B | 0 | 0 |
+| Qwen 151 ([1,1,4096,64]+[1,1,4096,192], d−1) | page_copy | 2,097,152 B | 2,097,152 B | 0 | 0 |
+| Qwen 109 ([1,6,31,64]+[1,6,31,192], d−1) | page_copy (vr = 31) | 95,232 B | 95,232 B | 0 | 0 |
+| Qwen 160 (3 × [1,1,1,16384]+[1,1,1,12928], d−1) | page_copy (vr = 1) | 124,160 B | 124,160 B | 0 | 0 |
+| Qwen 80 (same with 16 rows) | page_copy (vr = 16) | 1,986,560 B | 1,986,560 B | 0 | 0 |
+| Qwen 79 (16 × [1,1,1,62080], d2) | row_gather | 1,986,560 B | 1,986,560 B (vr = 16) | 1,862,400 B | 0 |
+| Qwen 18 (TARGET fp32, [108,4096,128]+[84,4096,128], d0) | page_copy | 402,653,184 B | 402,653,184 B | 0 | 0 |
 
-> Cheapest-traffic split considered: flat `out_page` ranges over the full grid — delta 0 B at
-> every tier (it is the floor: one DRAM crossing per logical row, no inter-core traffic).
-> Implemented: flat `out_page` ranges (`page_run` / `row_gather`). The implemented split is the
-> cheapest; no deferral is needed for traffic.
+Comparison points for the rejected alternatives:
+- Whole-page transfers would move 3,973,120 B each way on Qwen 160 (32×) and 3,973,120 B on Qwen 80 (2×).
+- Whole-tile staging for row_gather would read 63,569,920 B on Qwen 79 (32×).
+
+> Cheapest-traffic split considered: contiguous `out_page` ranges with valid-row-prefix transfers. Every logical row segment crosses DRAM once in and once out, with zero cross-core traffic. That is the minimum against the named boundary; the only above-minimum term is row_gather's core-local parity copy, which no DRAM-tier split removes. Implemented: the same split. **The implemented split is the cheapest.** Bank-affine page sets (lamp L5) move the same bytes in fewer transactions and are a measurement, not a traffic delta.
