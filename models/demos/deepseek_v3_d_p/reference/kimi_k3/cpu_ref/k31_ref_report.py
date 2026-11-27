@@ -77,6 +77,11 @@ def row_groups(out, N):
             groups[e["stratum"]] = torch.cat(
                 [groups.get(e["stratum"], torch.empty(0, dtype=torch.long)), torch.arange(a, b)]
             )
+        tp = out / "tokens.pt"
+        if tp.exists():
+            am = torch.load(tp).get("assistant_mask")
+            if am is not None and int(am.sum()):
+                groups["assistant tokens"] = am.nonzero().squeeze(1)
         return groups
     if N > 4096:
         return {"all": torch.arange(N), "c0": torch.arange(4096), "c1": torch.arange(4096, N)}
@@ -219,7 +224,7 @@ def main():
                 f"{fmt(g(m, 'route_vs_trace', 'identical'), 4)} | {fmt(g(sr, 'snr'))} ({g(sr, 'rows') or ''}) | {fmt(g(m, 'ffn_trace_route_vs_trace', 'all'))} |"
             )
     for name, mm in (("fp32", fr), ("bf16", bfm)):
-        if not mm:
+        if not any("attn_vs_trace" in m for m in mm.values()):  # panel runs have no trace to drift from
             continue
         print(f"\n## free-running {name} vs the trace, per layer (drift, dB)\n")
         print("| L | attn dB | FFN dB | routing identical | DSA recall | stream rms |")
