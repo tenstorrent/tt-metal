@@ -13,11 +13,11 @@
 #                   + two tt-triage check_eth_status reads 30 s apart
 #                   + sys-triage bundle, if the host has the package and BMC credentials.
 #                   No resets, no tests
-#   daily           snapshot validate + 2 resets (-r, -glx_reset) + GDDR fast-pattern stress
+#   daily           snapshot validate + 2 resets (-glx_reset) + GDDR fast-pattern stress
 #                   + eth link_up + eth bandwidth
 #                   + post-test -glx_reset + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
-#   weekly          3 resets (1x -r then 2x -glx_reset) + full GDDR patterns + eth link_up
+#   weekly          3 resets (-glx_reset) + full GDDR patterns + eth link_up
 #                   + eth bandwidth + didt matmul stress (pytest, galaxy mesh)
 #                   + gddr_act_c3 GDDR ACT screen (pytest); if it passed: -glx_reset + snapshot + rerun
 #                   + post-test -glx_reset + triage (host_side + device_side)

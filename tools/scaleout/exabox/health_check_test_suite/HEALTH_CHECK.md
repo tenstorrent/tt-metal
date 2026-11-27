@@ -84,8 +84,8 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | Tier | Resets | Tests | Triage | ETH status | QSFP tests | sys-triage | Duration | Use when |
 |---|---|---|---|---|---|---|---|---|
 | `flash` | none | — | — | 2 reads, 30 s apart | — | yes, if installed and BMC credentials set | snapshot + 2 triage reads + 30 s + sys-triage | Quick ETH link health, the unit read as found |
-| `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
-| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + gddr_act_c3 (pytest, ~10.3 min) + didt_matmul_galaxy (pytest, ~9 min); if gddr_act_c3 passed, `tt-smi -glx_reset`, a snapshot and gddr_act_c3 again (~11.3 min) | host_side + device_side | — | yes, if installed | — | ~40 min + triage + ~7 min | Every test, less often |
+| `daily` | `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
+| `weekly` | `tt-smi -glx_reset` × 3, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + gddr_act_c3 (pytest, ~10.3 min) + didt_matmul_galaxy (pytest, ~9 min); if gddr_act_c3 passed, `tt-smi -glx_reset`, a snapshot and gddr_act_c3 again (~11.3 min) | host_side + device_side | — | yes, if installed | — | ~40 min + triage + ~7 min | Every test, less often |
 | `full` | as `weekly` | as `weekly`, with gddr_act_all (pytest, ~25.5 min) in place of gddr_act_c3, which the retest after the reset runs again too | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + ~30 min + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
@@ -120,6 +120,12 @@ added to the tier lists in `run_diag.sh`, `run_diag_docker.sh` and
 `test_infrastructure/run_health_check.py`, and to the table above;
 `tools/scaleout/exabox/tests/test_diag_tiers.py` fails until they agree with
 `TIERS`.
+
+Every reset is `tt-smi -glx_reset`; `tt-smi -r` is not used on Galaxy units. After
+each one the chips' PCIe root ports are rescanned (that needs root; a failed
+rescan is noted on the reset check) and the chips are recounted by BDF. A reset
+that leaves a chip missing FAILs and names it by tray and ASIC, e.g.
+`0000:46:00.0 (UBB2/U6)`, and ends the reset loop.
 
 `pre_bmc_reboot` collects data; it does not check the unit. It runs on a unit
 that is about to be power cycled through the BMC, so it records the state first

@@ -20,7 +20,7 @@ to run.
 Where the steps a tier can name are defined:
 
     resets, post_test_resets,
-    retest_reset              tt-smi flags: "-r" or "-glx_reset"
+    retest_reset              tt-smi flags: "-glx_reset"
     tests, retest             TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py
     triage                    TRIAGE_TOOLS in diag/triage.py
 
@@ -45,8 +45,8 @@ from diag.triage import TRIAGE_TOOLS
 
 @dataclass(frozen=True)
 class Tier:
-    # Pre-test reset loop, in order. Per SYS-4365 the first reset is -r, then
-    # stick to -glx_reset. Each is followed by a fresh snapshot, revalidated.
+    # Pre-test reset loop, in order. Each reset is followed by a root-port
+    # rescan, a recount of the chips by BDF and a fresh snapshot, revalidated.
     resets: tuple[str, ...] = ()
 
     # Device tests, in order: names from TESTS / PYTESTS.
@@ -92,7 +92,7 @@ class Tier:
 
 
 _WEEKLY = Tier(
-    resets=("-r", "-glx_reset", "-glx_reset"),
+    resets=("-glx_reset", "-glx_reset", "-glx_reset"),
     tests=("gddr_full", "gddr_act_c3", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
     retest=("gddr_act_c3",),
     post_test_resets=("-glx_reset",),
@@ -114,7 +114,7 @@ TIERS: dict[str, Tier] = {
     ),
     # The scheduled run.
     "daily": Tier(
-        resets=("-r", "-glx_reset"),
+        resets=("-glx_reset", "-glx_reset"),
         tests=("gddr_fast", "eth_link_up", "eth_bandwidth"),
         post_test_resets=("-glx_reset",),
         triage=("host_side", "device_side"),

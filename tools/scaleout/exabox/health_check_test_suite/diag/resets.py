@@ -5,36 +5,60 @@
 """Phase 2 (pre-test reset stability loop) and phase 4 (post-test reset)."""
 from __future__ import annotations
 
-import re
-import subprocess
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
 from .common import emit_result, emit_running, log, print_phase_summary, run, write_command_log
-from .galaxy import EXPECTED_CHIP_COUNT
+from .eth_status import read_pcie_functions
+from .galaxy import EXPECTED_CHIP_COUNT, expected_bdf, format_bdf
 from .model import FAIL, PASS, WARN, Check, Phase
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import validate_snapshot
 
-# The tt-smi flags a tier's reset plan may name.
-RESET_FLAGS = ("-r", "-glx_reset")
+# The tt-smi flags a tier's reset plan may name. Only the Galaxy reset: `tt-smi -r`
+# is not used on Galaxy units, it can leave chips that re-enumerate but read
+# 0xffffffff until a -glx_reset.
+RESET_FLAGS = ("-glx_reset",)
 
-# tt-smi prints this banner before attempting `-r` on Galaxy units when the CPLD
-# FW is older than v1.16. The PCIe-level reset path is unreliable on those CPLDs
-# (chips re-enumerate but UMD's post-reset register reads return 0xffffffff).
-# Workaround per the banner: use `-glx_reset` instead.
-CPLD_OLD_BANNER_RE = re.compile(r"CPLD FW v1\.16 or higher is required to use tt-smi -r", re.IGNORECASE)
+EXPECTED_BDFS = tuple(expected_bdf(tray, asic) for tray in range(1, 5) for asic in range(1, 9))
 
 
-def count_pcie_chips() -> int:
-    """Tenstorrent chips enumerated on PCIe, or -1 if they could not be counted."""
-    try:
-        lspci = subprocess.run(["bash", "-c", "lspci -d 1e52: | wc -l"], capture_output=True, text=True, check=True)
-        return int(lspci.stdout.strip())
-    except Exception:
-        return -1
+def chip_root_ports(sys_root: Path = Path("/sys")) -> set[str]:
+    """The PCIe root ports the chips hang off. Read before a reset: a chip the
+    reset drops leaves sysfs, and with it the only record of its root port."""
+    devices = (sys_root / "devices").resolve()
+    ports = set()
+    for f in read_pcie_functions(sys_root):
+        try:
+            parts = (sys_root / "bus" / "pci" / "devices" / f.bdf).resolve().relative_to(devices).parts
+        except ValueError:
+            continue
+        # ("pci0000:40", "0000:40:01.1", ..., "0000:41:00.0"): the root port is second.
+        if len(parts) >= 3:
+            ports.add(parts[1])
+    return ports
+
+
+def rescan_root_ports(ports: set[str], sys_root: Path = Path("/sys")) -> list[str]:
+    """Rescan each root port, or the whole bus when none is known, so a chip that
+    came back from the reset is enumerated again. Returns what could not be
+    rescanned; writing needs root."""
+    targets = [sys_root / "bus" / "pci" / "devices" / p / "rescan" for p in sorted(ports)]
+    errors = []
+    for target in targets or [sys_root / "bus" / "pci" / "rescan"]:
+        try:
+            target.write_text("1")
+        except OSError as e:
+            errors.append(f"{target}: {e.strerror or e}")
+    return errors
+
+
+def recount_chips(sys_root: Path = Path("/sys")) -> tuple[int, list[str]]:
+    """Chips on PCIe that answer, and the expected BDFs missing, each named by tray and ASIC."""
+    answering = {f.bdf for f in read_pcie_functions(sys_root) if not f.unverified and not f.dropped}
+    return len(answering), [format_bdf(b) for b in EXPECTED_BDFS if b not in answering]
 
 
 def reset_loop(
@@ -45,12 +69,13 @@ def reset_loop(
     snapshot_out: Path | None = None,
     post_reset_phases: list | None = None,
     logs_dir: Path | None = None,
+    sys_root: Path = Path("/sys"),
 ) -> None:
-    """Per SYS-4365: first -r, then stick to -glx_reset for subsequent iterations.
+    """Run each reset of the plan, then rescan the chips' root ports and recount
+    the chips by BDF.
 
     If `snapshot_out` and `post_reset_phases` are provided, a fresh snapshot is
-    taken + validated after each reset iteration (including any CPLD auto-recover),
-    and appended to `post_reset_phases` as (name, Phase) pairs for the caller to
+    taken + validated after each reset iteration, and appended to `post_reset_phases` as (name, Phase) pairs for the caller to
     splice into the report.
     """
 
@@ -70,6 +95,7 @@ def reset_loop(
         post_reset_phases.append((sp.name, sp))
         print_phase_summary(sp.name, asdict(sp))
 
+    ports = set() if dry_run else chip_root_ports(sys_root)
     for i, flag in enumerate(plan):
         check_name = f"reset_{i+1}_{flag.lstrip('-')}"
         emit_running(check_name)
@@ -82,9 +108,9 @@ def reset_loop(
             if write_command_log(log_path, f"{tt_smi} {flag}", cp.returncode, dt, cp.stdout, cp.stderr):
                 log(f"  log:  {log_path}")
 
-        # Quick post-reset enum check
-        post_count = EXPECTED_CHIP_COUNT if dry_run else count_pcie_chips()
-        status = PASS if (dry_run or (cp.returncode == 0 and post_count == EXPECTED_CHIP_COUNT)) else FAIL
+        rescan_errors = [] if dry_run else rescan_root_ports(ports, sys_root)
+        post_count, missing = (EXPECTED_CHIP_COUNT, []) if dry_run else recount_chips(sys_root)
+        status = PASS if (dry_run or (cp.returncode == 0 and not missing)) else FAIL
         emit_result(check_name, status, suffix=f"({dt:.1f}s, post_pcie={post_count})")
 
         # A failed reset is the one case where the console should say why
@@ -93,82 +119,36 @@ def reset_loop(
             text = (cp.stderr or "").strip() or (cp.stdout or "").strip()
             for line in text.splitlines()[-5:]:
                 log(f"  ! {line}")
+            if missing:
+                log(f"  ! missing after rescan: {', '.join(missing)}")
+        details = f"flag={flag} rc={cp.returncode if not dry_run else '(dry)'} dur={dt:.1f}s post_pcie={post_count}"
+        if missing:
+            details += f" missing: {', '.join(missing)}"
+        if rescan_errors:
+            details += f" (rescan failed: {'; '.join(rescan_errors)})"
         phase.add(
             Check(
                 name=check_name,
                 status=status,
-                details=f"flag={flag} rc={cp.returncode if not dry_run else '(dry)'} "
-                f"dur={dt:.1f}s post_pcie={post_count}",
+                details=details,
                 data={
                     "flag": flag,
                     "rc": cp.returncode,
                     "duration_s": dt,
                     "post_pcie_count": post_count,
+                    "missing": missing,
+                    "rescan_errors": rescan_errors,
                     "stdout_tail": cp.stdout[-2000:] if cp.stdout else "",
                     "stderr_tail": cp.stderr[-2000:] if cp.stderr else "",
                 },
                 ip="other",
             )
         )
-        cpld_old = flag == "-r" and not dry_run and cp.stdout and CPLD_OLD_BANNER_RE.search(cp.stdout)
-        if cpld_old:
-            phase.add(
-                Check(
-                    name="cpld_fw_old",
-                    status=WARN,
-                    details="CPLD FW < v1.16 detected — `tt-smi -r` unreliable on this system; "
-                    "use `tt-smi -glx_reset` instead and request a CPLD update from the sysadmin",
-                    ip="other",
-                )
-            )
-        # Auto-recover: -r on CPLD < v1.16 doesn't just fail, it leaves chips in a
-        # bad state (UMD reads 0xffffffff on subsequent calls) until -glx_reset is
-        # run. Recover so we don't strand the system.
-        if cpld_old and status == FAIL:
-            emit_running("cpld_auto_recover")
-            t0 = time.time()
-            rcp = run([tt_smi, "-glx_reset"], dry_run=False, capture_output=True, text=True)
-            rdt = time.time() - t0
-            rpost = count_pcie_chips()
-            recovered = rcp.returncode == 0 and rpost == EXPECTED_CHIP_COUNT
-            rstatus = PASS if recovered else FAIL
-            emit_result("cpld_auto_recover", rstatus, suffix=f"({rdt:.1f}s, post_pcie={rpost})")
-            phase.add(
-                Check(
-                    name="cpld_auto_recover",
-                    status=rstatus,
-                    details=(
-                        f"ran `tt-smi -glx_reset` after -r failed; "
-                        f"rc={rcp.returncode} post_pcie={rpost} "
-                        f"{'recovered' if recovered else 'still broken — manual intervention needed'}"
-                    ),
-                    data={
-                        "rc": rcp.returncode,
-                        "duration_s": rdt,
-                        "post_pcie_count": rpost,
-                        "stdout_tail": rcp.stdout[-2000:] if rcp.stdout else "",
-                        "stderr_tail": rcp.stderr[-2000:] if rcp.stderr else "",
-                    },
-                    ip="other",
-                )
-            )
-            # If recovery worked, refresh post_count so the enumeration-break
-            # bailout below doesn't trip on the pre-recovery state.
-            if recovered:
-                post_count = rpost
-                # Downgrade the original -r FAIL to WARN now that we know it's
-                # CPLD-attributable and the unit is back up. Hard FAIL is reserved
-                # for -r failures we *can't* explain or recover from.
-                for c in phase.checks:
-                    if c.name == check_name and c.status == FAIL:
-                        c.status = WARN
-                        c.details += " (downgraded to WARN: CPLD-attributable, auto-recovered)"
-                        break
-        # Post-reset snapshot: validate the unit's state after this iteration
-        # (including any auto-recovery). Skipped on dry-run / offline.
+        # Post-reset snapshot: validate the unit's state after this iteration.
+        # Skipped on dry-run / offline.
         _post_reset_snapshot(f"r{i+1}_{flag.lstrip('-')}")
         # Bail if a reset broke enumeration — no point chasing the rest
-        if not dry_run and post_count != EXPECTED_CHIP_COUNT:
+        if missing:
             log(f"Reset {i+1} broke enumeration ({post_count}/{EXPECTED_CHIP_COUNT}); stopping reset loop")
             break
 
