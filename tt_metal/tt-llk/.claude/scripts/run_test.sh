@@ -554,10 +554,12 @@ _do_count() {
 
   runtime_exit=0
   runtime_output=$(
+    runtime_tmp=$(mktemp -d "${TMPDIR:-/tmp}/llk_count_XXXXXX") || exit
+    trap 'rm -rf -- "${runtime_tmp}"' EXIT
     # shellcheck disable=SC1091
     source "${VENV}/bin/activate"
     cd "${TEST_DIR}"
-    LLK_HARDWARE_FREE=1 CHIP_ARCH="${ARCH}" pytest --co -q ${solflag+"${solflag[@]}"} \
+    RUNNER_TEMP="${runtime_tmp}" LLK_HARDWARE_FREE=1 CHIP_ARCH="${ARCH}" pytest --co -q ${solflag+"${solflag[@]}"} \
       ${PERF_PYTEST_ARGS+"${PERF_PYTEST_ARGS[@]}"} "${TEST_FILE}" 2>&1
   ) || runtime_exit=$?
 

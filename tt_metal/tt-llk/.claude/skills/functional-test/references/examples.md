@@ -125,11 +125,18 @@ raises `TypeError`.
 `tests/sources/op_test.cpp` serves both modes:
 
 ```cpp
+#include <cstdint>
+
 #include "ckernel.h"
 #include "counters.h"
 #include "llk_defs.h"
 #include "perf.h"
 #include "profiler.h"
+
+// WH/BH-only globals declared extern by ckernel_globals.h.
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 #include "params.h"
@@ -154,8 +161,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 }
 #endif
 
-// Add the active MATH and PACK sections. A real Quasar fourth-thread stage
-// uses an LLK_TRISC_ISOLATE_SFPU section.
+// Add the active MATH and PACK sections. For Quasar, start from a current
+// Quasar source and include sfpu_stub.h when no fourth-thread stage exists.
+// A real fourth-thread stage uses LLK_TRISC_ISOLATE_SFPU and opens the same
+// INIT and TILE_LOOP profiler zones as the other threads.
 ```
 
 Follow `perf-test` for the exact run-type branches, stand-ins, dvalid counts,

@@ -17,9 +17,9 @@ routes to the focused skill; it does not replace those skills.
 | Add, edit, repair, or review `perf_*.py` or measured kernel paths | `perf-test`, then `perf-coverage` | Perf measures the functional program |
 | Unify a legacy `*_perf.cpp` or retain a phase microbenchmark while adding paired perf | `functional-test`, `perf-test`, `perf-coverage` | Paired path shares runner/kernel; phase path uses explicit `_phases` names and is not comparer coverage |
 | Choose a Quasar functional sweep | `functional-test`, then `quasar-test-coverage` | Representative shapes, Dest overflow, formats, and fidelity |
-| Run a device or simulator test | `run-test` | Never invoke `pytest` directly |
+| Run a normal device or simulator test | `run-test` | Never invoke `pytest` directly |
 | Add a fuser case | `.claude/CLAUDE.md`, "The Fuser Is the Reference" | Add YAML or a new op; do not weaken existing reference data or validation |
-| Add an SFPU accuracy case | `tests/SFPU_ULP.md` and `docs/tests/accuracy_tests.md` | Accuracy/perf mode is separate from the normal `test_*.py`/`perf_*.py` pairing |
+| Add an SFPU accuracy case | `tests/SFPU_ULP.md` and `docs/tests/accuracy_tests.md` | Explicit runner exception: follow their documented raw `pytest` commands because `run-test` does not expose `--ulp-emit`, `--ulp-measure`, or accuracy `--mode` |
 | Add a host-only harness/tool test | Nearby `tests/hardware_free/` tests | Must not open a card; validate with `tests/run_hardware_free.sh` |
 | Change the external harness API | `docs/tests/getting_started.md`, "Out-of-tree / proprietary kernels" | Preserve the versioned `tt_llk_harness` contract |
 
@@ -32,9 +32,10 @@ new Quasar operation normally needs `functional-test`,
 1. Identify every target architecture:
    - Wormhole and Blackhole share top-level Python and C++ files; import-time
      constraints can still make their collected sweeps differ.
-   - Quasar normally uses `python_tests/quasar/` and `sources/quasar/`, has a
-     fourth `sfpu` kernel component (only some operations give it a real
-     fourth-thread stage), and uses Quasar-specific markers and sweep rules.
+   - Quasar normally uses `python_tests/quasar/` and `sources/quasar/` and
+     always compiles a fourth `sfpu` kernel component. Include `sfpu_stub.h`
+     when no real stage exists; a real `LLK_TRISC_ISOLATE_SFPU` stage must
+     participate in the `INIT`/`TILE_LOOP` profiler rendezvous.
 2. Find the complete program:
    - functional Python module and each `test_*` function;
    - perf module and each normalized `test_perf_*` function, if present;

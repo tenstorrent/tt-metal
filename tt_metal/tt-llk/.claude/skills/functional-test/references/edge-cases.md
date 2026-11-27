@@ -9,7 +9,7 @@ checks.
 | Case | Required handling |
 |---|---|
 | Wormhole and Blackhole | They share top-level Python/C++ files, but `CHIP_ARCH` can change constraints, APIs, formats, skips, and collected variants. Compile and compare both. Put signature differences behind existing `tests/helpers/include/llk_lib_*_wrappers.h` patterns rather than scattering `#ifdef ARCH_BLACKHOLE` through test kernels. |
-| Quasar | Use `python_tests/quasar/`, `sources/quasar/`, `_quasar` names, and `@pytest.mark.quasar`. Quasar normally boots from TRISC, uses semantic LLK header names, and compiles an `sfpu` component whose real fourth-thread sources use `LLK_TRISC_ISOLATE_SFPU`. Use `PERF_RUN_TYPES_QUASAR_4_TRISC`/`SFPU_ISOLATE` only when that stage does real work. |
+| Quasar | Use `python_tests/quasar/`, `sources/quasar/`, `_quasar` names, and `@pytest.mark.quasar`. Quasar normally boots from TRISC, uses semantic LLK header names, and always compiles an `sfpu` component. Include `sfpu_stub.h` when there is no real fourth-thread stage; a real `LLK_TRISC_ISOLATE_SFPU` section must open the shared `INIT`/`TILE_LOOP` profiler zones. Use `PERF_RUN_TYPES_QUASAR_4_TRISC`/`SFPU_ISOLATE` only when that stage does real work. |
 | Quasar sweep | Follow `quasar-test-coverage`: representative tile shapes, at least one Dest-overflow shape, MX smoke rather than an accidental full product, valid fidelity, and per-block Dest release. Perf may use only its documented tile/dimension narrowing. |
 | Architecture-only test | Use the established skip/only marker or a shared constraint. Apply the same restriction to the perf peer. A Blackhole-only value in a shared file must not compile on Wormhole. |
 | Different APIs by architecture | Copy calls from a current test for the target architecture. Do not copy a WH/BH call into Quasar or an old perf source into a current functional source. |
@@ -99,7 +99,7 @@ Quasar. Override it only when the behavior under test is the boot mode.
 |---|---|
 | Compile-only passes, run cannot find ELF | Functional/perf filters, architecture, assert mode, speed-of-light, and variant IDs must match between producer and consumer. Use `run-test`. |
 | Hang | Map SrcA/SrcB and Dest producer/consumer handshakes. Perf stand-in counts must equal real pulses. Do not auto-retry or reset blindly; use `run-test` triage and `debug-kernel`. |
-| Reconfiguration-only failure | Tests can leak hardware state. Do not reset the device to hide it; reproduce the ordering and fix init/uninit coverage. |
+| Reconfiguration-only failure | Tests can leak hardware state. Do not reset the device or add end-of-call cleanup to hide it. Reproduce the ordering, identify the leaked state, make the consuming operation's init program every state it depends on at entry, and keep the ordering as a regression. |
 | Bit-exact rerun failure | Result L1 and mutable state must be restored between runs. |
 | Functional passes, isolate hangs | The shared real loop can be correct while a perf partner stand-in, wait mask, or Dest release is wrong. Follow the architecture reference in `perf-test`. |
 | Speed-of-light mismatch | Every compile-time constant must mean the same thing as its normal-build runtime field. Never select semantic values on `LLK_PROFILER`. |

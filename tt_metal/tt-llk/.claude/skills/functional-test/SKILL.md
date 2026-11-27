@@ -98,8 +98,11 @@ CMake entry to add. Name every collected callable `test_*`.
 2. Include `params.h` in each active kernel component and define
    `run_kernel(RUNTIME_PARAMETERS params)`.
 3. Wormhole/Blackhole normally implement
-   `LLK_TRISC_UNPACK`, `LLK_TRISC_MATH`, and `LLK_TRISC_PACK`. Quasar can add
-   `LLK_TRISC_ISOLATE_SFPU` when the operation has a real fourth-thread stage.
+   `LLK_TRISC_UNPACK`, `LLK_TRISC_MATH`, and `LLK_TRISC_PACK`. Quasar always
+   compiles an `sfpu` component: include `sfpu_stub.h` when there is no real
+   fourth-thread stage. A real stage uses an `LLK_TRISC_ISOLATE_SFPU` section
+   whose `run_kernel` opens the same `INIT` and `TILE_LOOP` profiler zones as
+   the other threads.
 4. Derive loop bounds, tile shapes, formats, and addresses from the generated
    parameters. Keep functional and perf `L1_TO_L1` on the same buffers and
    loop body.
@@ -204,6 +207,6 @@ named and record the rationale.
 - [ ] Shared sweep/generator; canonical axis names
 - [ ] New function has a normalized perf peer or an explicit functional-only reason
 - [ ] Same skips, parameters, buffers, and `L1_TO_L1` loop in both modes
-- [ ] Quasar shape, MX, fidelity, Dest blocking, and fourth-thread rules checked
+- [ ] Quasar shape, MX, fidelity, Dest blocking, and mandatory SFPU stub/real-stage profiler rendezvous checked
 - [ ] `perf-coverage` plus manual blind-spot inventory completed
 - [ ] Functional, perf, host-only, schema, and cost validation applied as needed

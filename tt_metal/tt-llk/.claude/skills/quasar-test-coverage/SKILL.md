@@ -168,11 +168,14 @@ its count command uses collection-only mode without opening a device:
 
 Report both values from the labeled summary:
 
-- `elf` is the runtime-only-deduplicated compile-producer total used for build
-  and PR-gate sizing.
-- `runtime` is the full consumer/simulator total. Quasar simulator regression
-  runs every runtime ID, so this is the sweep execution cost (for example,
-  `test_eltwise_binary_quasar.py` can produce 92 ELFs but run 766 IDs).
+- `elf` is the runtime-only-deduplicated compile-producer pytest-item total.
+- `runtime` is the full consumer pytest-item total (for example,
+  `test_eltwise_binary_quasar.py` can produce 92 items but run 766 IDs).
+  Quasar simulator regression runs every runtime ID, so this is the functional
+  sweep execution cost.
+- Under `--perf`, both values count pytest items rather than ELF sets or
+  launches. Multiply each item by its run-type count (normally five for a
+  four-TRISC Quasar test) when sizing perf builds and execution.
 
 Count compares the whole functional module. A perf count can add `--perf` and
 `--op`; `--k` and `--test-id` do not narrow count. Do not invoke raw

@@ -90,7 +90,10 @@ work to the correct contract.
 Use `/run-test <test_file> --arch <arch>` for both phases,
 `--compile-only` for the producer, `--rerun` for the consumer, and `--count`
 for collection without compiling or opening a device. Do not invoke the
-underlying `pytest` phases directly.
+underlying `pytest` phases directly. SFPU ULP and accuracy workflows are the
+documented exception: their `--ulp-emit`, `--ulp-measure`, and accuracy
+`--mode` flows use the raw `pytest` commands in `tests/SFPU_ULP.md` and
+`docs/tests/accuracy_tests.md` because `run-test` does not expose those flags.
 
 ### Key Concepts
 - `CHIP_ARCH` env var selects the target architecture (`blackhole`, `wormhole`, `quasar`)

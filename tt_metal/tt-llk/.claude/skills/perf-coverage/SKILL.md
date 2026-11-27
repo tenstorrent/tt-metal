@@ -51,9 +51,11 @@ fixed inside a `PerfConfig` call: read the code for those (`perf-test`,
   module on the other side. Use it only for that. Two modules of one op whose
   stems differ (`pack_dest_bank` against `pack_l1_acc`) are a naming bug: rename
   the module (`perf-test`, "Renames").
-- A same-architecture `perf_<stem>.py` importing
-  `test_<different_stem>.py` is a naming defect, not a comparer exception.
-  Split or rename the functional module so directory discovery pairs it.
+- A same-architecture `perf_<stem>.py` with no `test_<stem>.py`, whose
+  measured program lives only in `test_<different_stem>.py`, is a naming
+  defect, not a comparer exception. Split or rename the functional module so
+  directory discovery pairs it. Importing a shared runner or helper from
+  another module is fine when the same-stem functional module exists.
 - An explicitly named `perf_<op>_phases.py` phase microbenchmark is outside
   functional/perf comparison. List it as intentionally perf-only; do not add
   a fake functional file or patch discovery to hide it.
