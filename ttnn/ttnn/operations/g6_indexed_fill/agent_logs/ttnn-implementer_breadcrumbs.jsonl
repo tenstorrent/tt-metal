@@ -1,0 +1,10 @@
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T13:30:54-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T13:47:05-05:00"}
+{"event":"test_run","mode":"dev","result":"fail","classification":"runtime_error_free","detail":"ttnn.Shape does not support slicing in validate()","ts":"2026-11-27T13:51:29-05:00"}
+{"event":"fix_applied","detail":"compare value/input shapes as tuples","ts":"2026-11-27T13:51:29-05:00"}
+{"event":"test_run","mode":"dev","result":"pass","detail":"34/34 acceptance tests","ts":"2026-11-27T13:51:29-05:00"}
+{"event":"test_run","mode":"non-dev","result":"pass","detail":"34/34 acceptance tests","ts":"2026-11-27T13:51:29-05:00"}
+{"event":"test_run","mode":"dev+non-dev","result":"pass","detail":"acceptance 34/34, golden 11/11","ts":"2026-11-27T14:07:09-05:00"}
+{"event":"perf_measure","case":"production [1],[7,1,1,32],[1,1,1,32]","device_kernel_ns_median":1094,"cores":8,"first_to_last_start_ns":89,"dm0_kernel_bytes":2692,"incumbent_ns":2100,"ts":"2026-11-27T14:07:09-05:00"}
+{"event":"fix_applied","detail":"use shared align/div_up from api/alignment.h (pre-commit check-redefined-helpers)","ts":"2026-11-27T14:08:00-05:00"}
+{"event":"test_run","mode":"dev+non-dev","result":"pass","detail":"acceptance 34/34, golden 11/11 after helper swap","ts":"2026-11-27T14:08:00-05:00"}
