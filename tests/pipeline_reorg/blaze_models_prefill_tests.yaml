@@ -506,7 +506,7 @@
     # mpirun exits 0 when it loses its remote daemon (a test killed on the device host): pass only on the marker.
     grep -q K3_MOE_PERF_OK /tmp/k3_moe_job.out || { echo "::error::k3_moe_perf: mpirun ended without the success marker (killed or lost daemon)"; exit 1; }
   test_type: k3_moe_perf
-  test_tags: [kimi_k3, kimi_k3_1, moe, k3_mla_perf, glm_chunked_perf_suite]
+  test_tags: [kimi_k3, kimi_k3_1, moe, k3_mla_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -995,6 +995,7 @@
     export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
+      export LOGURU_LEVEL=INFO
       models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 6 models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py::test_moe_block_perf -k "glm53" || exit $?
       echo GLM_MOE_PERF_OK
     ' 2>&1 | tee /tmp/glm_moe_job.out
