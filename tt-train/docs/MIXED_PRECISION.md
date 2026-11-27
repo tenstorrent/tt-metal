@@ -82,13 +82,28 @@ a new path in an existing one (for example a config option that changes which te
 forward and backward keep running in bf16. This is not PyTorch FSDP2's `MixedPrecisionPolicy(param_dtype=...)`, which
 names the compute dtype. It is applied by `core::apply_precision_config()`
 (`sources/ttml/core/parameter_dtype.{hpp,cpp}`) after the model is built and before the optimizer is created, so the
-optimizer state follows: in Python by `ttml.common.utils.create_optimizer()` when it is given the whole config (as in
-`train.py`), and in C++ by the `nano_gpt` runner. Runners that pass only the optimizer
-section, such as the SFT and GRPO trainers, don't apply it. The load order is: build the model, convert, load
-weights, create the optimizer, then load a training checkpoint, which restores the optimizer state too. Every loader
-writes the dtype a tensor is stored in, so values loaded after the conversion keep their fp32 bits; loaded before it,
-they are rounded to bf16 first. `train.py` and the `nano_gpt` runner keep this order; `nano_gpt`'s save-and-exit path
-skips the conversion, so it exports the weights in the dtype the model builds.
+optimizer state follows. It is applied once per run, where the optimizer is built:
+
+- **Python.** `ttml.common.utils.create_optimizer()` applies it when it is given the whole config (as in `train.py`).
+  `SFTTrainer` takes the block as the keyword argument `precision=`, and `GRPOTrainer` reads it from
+  `GRPOConfig.precision`, which `get_grpo_config()` fills from the YAML (in both, the YAML's
+  `training_config.precision` as a dict, whose values may also be `ttnn.DataType.BFLOAT16`/`FLOAT32`). `SFTTrainer`
+  applies it after the LoRA wrapping and before it builds the optimizer from a dict or its default; given a ready
+  optimizer it applies nothing, and a block passed with one raises. `GRPOTrainer` applies it right after it builds the
+  model, and under FSDP shards it, before the weights or a trainer checkpoint load. `None` means no block everywhere,
+  as a config without one: the parameters keep their dtype and no reduce dtype is stored, clearing one stored earlier
+  in the process.
+- **C++.** The `nano_gpt` runner applies it.
+- **Checking.** `ttml.core.validate_precision_config()` (C++ `core::validate_precision_config()`) checks the block
+  without applying it. Python's `ttml.common.config.TrainingConfig`, which also exposes the block as `.precision`,
+  `GRPOConfig` (through `ttml.common.utils.validate_precision()`) and the C++ `nano_gpt`
+  `parse_config()` call it, so a typo stops the run before the model is built.
+
+The load order is: build the model, convert, load weights, create the optimizer, then load a training checkpoint,
+which restores the optimizer state too. Every loader writes the dtype a tensor is stored in, so values loaded after
+the conversion keep their fp32 bits; loaded before it, they are rounded to bf16 first. `train.py` and the `nano_gpt`
+runner keep this order; `nano_gpt`'s save-and-exit path skips the conversion, so it exports the weights in the dtype
+the model builds.
 In the Python hierarchical example the workers keep bf16 parameters for `RemoteOptimizer`; the rank that runs the
 optimizer holds the fp32 master weights.
 The fp32 parameter is the master weight: fused `AdamW` updates it in place with fp32 moments, and forward and backward
@@ -111,7 +126,9 @@ gradient.
 
 - **DDP.** `core::apply_precision_config()` stores the value in `AutoContext` (`set_gradient_reduce_dtype()`) every
   time it runs: a config without the key stores none, so nothing carries over from a config applied earlier in the
-  process, and `close_device()` clears it too. A script that sets the value itself does so after `create_optimizer()`.
+  process, and `close_device()` clears it too. A script that sets the value itself does so after `create_optimizer()`,
+  or after building `SFTTrainer` or `GRPOTrainer`: they apply the block the same way, so they clear a value set
+  before.
   C++ `synchronize_gradients()` and Python `ttml.sync_gradients()` sum in the `reduce_dtype` they are given, else in
   the stored one. `core::distributed::synchronize_tensor()`, the average they call, takes `reduce_dtype` only as an
   argument.
@@ -160,12 +177,9 @@ gradient.
   the `[2, 2]` test about 98.5% of its elements, rounded to bf16, land on the exact mean, where an exact sum would give
   100% and rounding the shard to bf16 before the `dp` sum 76%. No shipped config enables HSDP, and none of the
   measurements above is an HSDP run.
-- **Not covered yet.** GRPO, and `SFTTrainer` when it builds its own optimizer (from an optimizer dict, or its default
-  `AdamW`), don't apply the precision block; a later PR of #56513 covers them. They store no value, so their syncs
-  keep the bf16 sum unless an earlier config in the same process stored one. The aggregators of 2- and 3-tier training,
-  `aggregator()` and `aggregator_optimizer()` in the Python hierarchical example
-  (`sources/examples/python/multihost/hierarchical_parallel/trainer.py`), add the workers' gradients and all-reduce
-  them in bf16.
+- **Not covered yet.** The aggregators of 2- and 3-tier training, `aggregator()` and `aggregator_optimizer()` in the
+  Python hierarchical example (`sources/examples/python/multihost/hierarchical_parallel/trainer.py`), add the
+  workers' gradients and all-reduce them in bf16.
 
 In the DDP sync, a bf16 gradient's mean is written in bf16 rather than kept in fp32: it is used once per step, so this
 costs one rounding, while the optimizer state and the master weights, which accumulate, stay in fp32 with

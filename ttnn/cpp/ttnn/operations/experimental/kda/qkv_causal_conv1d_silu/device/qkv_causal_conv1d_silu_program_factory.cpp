@@ -39,8 +39,9 @@ using qkv_conv::no_fabric_connection;
 
 const SemaphoreSpecName predecessor_ready_semaphore{"predecessor_ready"};
 const SemaphoreSpecName staged_semaphore{"staged"};
-// With a history slab: every convolution core has read the old carry before the exchange core replaces it.
-const SemaphoreSpecName history_consumed_semaphore{"history_consumed"};
+// With a history slab: on the chronologically first rank, the exchange core has gathered every rank's channels of the
+// old tail into the exchange buffer's history rows.
+const SemaphoreSpecName history_ready_semaphore{"history_ready"};
 const TensorParamName slab_index_tensor{"slab_index"};
 
 void add_slab_args(KernelSpec& kernel, const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in) {
@@ -75,6 +76,9 @@ struct ExchangeRoute {
     // On a 2D fabric whose SP axis turns, a multicast cannot follow the axis: the barrier and the carry go to each
     // other rank as a 2D unicast, through the connection its route leaves on. Per peer: connection, chip, mesh.
     bool unicast_peers = false;
+    // On any 2D fabric each other rank's route, so a unicast can reach any rank (an SP-sharded slab's old tail goes to
+    // the chronologically first rank); peer step s = 1 .. SP-1 is rank (rank + s) % SP.
+    bool peer_routes = false;
     std::vector<uint32_t> peer_args;
 };
 
@@ -103,9 +107,9 @@ ExchangeRoute exchange_route(const ttnn::MeshDevice& device, const ttnn::MeshCoo
     route.backward_range = ring ? sp_size - 1 - sp_size / 2 : rank;
     route.successor_connection = successor_forward ? route.forward_connection : route.backward_connection;
     route.successor_hops = successor_forward ? 1 : sp_size - 1;
-    route.unicast_peers = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(device)) &&
-                          !ttnn::ccl::is_axis_straight(device, axis);
-    if (route.unicast_peers) {
+    route.peer_routes = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(device));
+    route.unicast_peers = route.peer_routes && !ttnn::ccl::is_axis_straight(device, axis);
+    if (route.peer_routes) {
         const auto source = device.get_fabric_node_id(coordinate);
         // Connections use link 0 (compute_fabric_connection_rt_args below). A peer's route may leave on a link that is
         // neither SP neighbor's (a shortcut across a 2x4 mesh): it gets a connection of its own.
@@ -146,6 +150,7 @@ auto exchange_layout(const ExchangeRoute& route) {
         route.successor_connection,
         route.successor_hops,
         route.unicast_peers,
+        route.peer_routes,
         route.peer_args.size());
 }
 
@@ -222,7 +227,8 @@ void add_history_exchange(
         SemaphoreSpecName{"buffer_index2"},
         SemaphoreSpecName{"buffer_index3"}};
     const CoreRangeSet exchange_nodes{CoreRange(exchange_core)};
-    const std::vector<std::string> semaphore_args = {"entry_semaphore", "predecessor_semaphore", "carry_semaphore"};
+    const std::vector<std::string> semaphore_args = {
+        "entry_semaphore", "predecessor_semaphore", "carry_semaphore", "history_semaphore"};
 
     // A single rank exchanges nothing and may run without a fabric: no connections, no cores to release.
     const auto route_of = [&](const ttnn::MeshCoordinate& coordinate) {
@@ -275,7 +281,7 @@ void add_history_exchange(
                 {
                     SemaphoreBinding{staged_semaphore, "staged"},
                     SemaphoreBinding{predecessor_ready_semaphore, "predecessor_ready"},
-                    SemaphoreBinding{history_consumed_semaphore, "history_consumed"},
+                    SemaphoreBinding{history_ready_semaphore, "history_ready"},
                     SemaphoreBinding{teardown[0], "teardown0"},
                     SemaphoreBinding{buffer_index[0], "buffer_index0"},
                     SemaphoreBinding{teardown[1], "teardown1"},
@@ -311,12 +317,18 @@ void add_history_exchange(
                  {"has_actual_end", uint32_t(in.actual_end.has_value())},
                  {"token_paged", uint32_t(tail.token_paged)},
                  {"page_channels", tail.page_channels},
-                 {"unicast_peers", uint32_t(route.unicast_peers)}},
+                 {"unicast_peers", uint32_t(route.unicast_peers)},
+                 {"peer_routes", uint32_t(route.peer_routes)},
+                 // A slab rank's channels: whole tail pages of each Q/K/V branch.
+                 {"q_pages", attrs.q_width / tail.page_channels},
+                 {"k_pages", attrs.k_width / tail.page_channels},
+                 {"v_pages", attrs.v_width / tail.page_channels}},
             .runtime_arg_schema =
                 {.runtime_arg_names =
                      {"entry_semaphore",
                       "predecessor_semaphore",
                       "carry_semaphore",
+                      "history_semaphore",
                       "sp_rank",
                       "successor_chip",
                       "successor_mesh"},
@@ -484,7 +496,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
             },
         .semaphore_bindings =
             {SemaphoreBinding{predecessor_ready_semaphore, "predecessor_ready"},
-             SemaphoreBinding{history_consumed_semaphore, "history_consumed"}},
+             SemaphoreBinding{history_ready_semaphore, "history_ready"}},
         .scratchpad_bindings = {{act_window_name, "act_window"}},
         .tensor_bindings =
             {
@@ -625,7 +637,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
             {
                 SemaphoreSpec{.unique_id = predecessor_ready_semaphore, .target_nodes = semaphore_cores},
                 SemaphoreSpec{.unique_id = staged_semaphore, .target_nodes = semaphore_cores},
-                SemaphoreSpec{.unique_id = history_consumed_semaphore, .target_nodes = semaphore_cores},
+                SemaphoreSpec{.unique_id = history_ready_semaphore, .target_nodes = semaphore_cores},
             },
         .scratchpads =
             {{.unique_id = act_window_name, .size_per_node = window_bytes},

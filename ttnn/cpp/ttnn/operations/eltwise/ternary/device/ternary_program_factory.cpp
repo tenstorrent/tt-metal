@@ -1692,10 +1692,16 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
                 {"scalar_is_true", scalar_is_true_value},
             },
         .runtime_arg_schema = {.runtime_arg_names = runtime_arg_names(kComputeArgNames)},
-        // The legacy config set only these two fields.  Every other field keeps its default, and each
-        // default equals the legacy default.
+        // The legacy config set only enable_32_bit_dest and unpack_modes.  Every other field keeps its default,
+        // and each default equals the legacy default, except fpu_math_fidelity:
+        // due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole,
+        // so the FPU (addcmul/addcdiv) path uses HiFi3 when fp32_dest_acc_en is True on Wormhole.
         .hw_config =
             ComputeHardwareConfig{
+                .fpu_math_fidelity =
+                    (is_fpu && fp32_dest_acc_en && predicate_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0)
+                        ? MathFidelity::HiFi3
+                        : MathFidelity::HiFi4,
                 .enable_32_bit_dest = fp32_dest_acc_en,
                 .unpack_modes = std::move(unpack_modes),
             },

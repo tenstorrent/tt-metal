@@ -21,7 +21,6 @@
 
 namespace ckernel {
 namespace sfpu {
-
 /*
  * _float_to_int32_positive_ use branch to handle special cases
  * With exp21f function, some of these cases never happen (e.g. negative exponent, overflow)
@@ -73,8 +72,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val, C0 c0, C1 
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
     sfpi::vInt exponential_part =
-        sfpi::exexp(z, sfpi::ExponentMode::Biased);    // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vMag fractional_part = sfpi::exman(z);       // Extract mantissa ( = leftover part, in [0; 1])
+        sfpi::exexp(z, sfpi::ExponentMode::Biased);  // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vMag fractional_part = sfpi::exman(z);     // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
@@ -232,8 +231,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_prgm_(sfpi::vFloat val, C0 c0, C1 c1
  * This implementation is faster, and give comparable accuracy as _sfpu_exp_21f_bf16_
  * (~< 1 ULP).
  *
- * Requires _init_exponential_tti_bf16_() to have been called to configure
- * ADDR_MOD_6 (dest auto-increment by 2 on SFPSTORE) and to load:
+ * Requires exp_init<false, 0, false, true>() to have been called to load:
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
  *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
  */
@@ -521,9 +519,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_prgm_(sfpi::vFloat a, H neg_ln2
     return _sfpu_exp_fp32_accurate_<unsafe>(a, sfpi::vConstFloatPrgm1, neg_ln2_hi, p0, p1);
 }
 
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
-    return _sfpu_exp_fp32_accurate_<true>(x);
-}
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
 
 // 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN. The base-e
 // form multiplies by log2(e) before rounding, which canonicalizes NaN to +NaN; here x is rounded
@@ -571,7 +567,7 @@ inline void _sfpu_exp_fp32_load_imm32_() {
  * @tparam SCALE_EN: Multiply the input by exp_base_scale_factor first
  * @tparam ITERATIONS: Vectors per call
  * @param exp_base_scale_factor: fp16b scale, read when SCALE_EN.
- * @note Requires exp_init<false, scale, clamp, true> (LREG12..14 and ADDR_MOD_6). Writes LREG0..7 and replay
+ * @note Requires exp_init<false, scale, clamp, true> (LREG12..14). Writes LREG0..7 and replay
  * slots [0, 15 + SCALE_EN).
  * @note LREG12..14 are the SFPU's shared programmable constants (sfpi::vConstFloatPrgm0..2). Other SFPU ops'
  * inits (reciprocal, tanh, sqrt, typecast, reduce, ...) reprogram them, so any such init between exp_init and
@@ -709,7 +705,7 @@ template <
     bool SCALE_EN = false,
     int ITERATIONS = 8,
     bool CLAMP_NEGATIVE = true>
-void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
@@ -893,14 +889,6 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
         // Drain phase handles final 2 SHFT2s.
         // =======================================================================
 
-        // Configure ADDR_MOD_7 for auto-increment (dest += 2 per LOADMACRO).
-        addr_mod_t{
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 2},
-        }
-            .set(ADDR_MOD_7);
-
         // Single replay of 16 instructions = 8 LM + 8 SHFT2 (2 dummy + 6 real).
         TTI_REPLAY(0, 16, 0, 0);
 
@@ -921,14 +909,6 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
         // Drain phase handles final 2 SHFT2s.
         // =======================================================================
 
-        // Configure ADDR_MOD_7 for auto-increment (dest += 2 per LOADMACRO).
-        addr_mod_t{
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 2},
-        }
-            .set(ADDR_MOD_7);
-
         // 2 replays of 32 instructions = 32 LM + 32 SHFT2 (2 dummy + 30 real).
         TTI_REPLAY(0, 32, 0, 0);
         TTI_REPLAY(0, 32, 0, 0);
@@ -947,17 +927,12 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
 #endif
 }
 
-template <
-    bool APPROXIMATION_MODE,
-    uint32_t scale,
-    bool CLAMP_NEGATIVE,
-    bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
 void exp_init() {
-    // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
+    // Common SFPU init (SFPU config register + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
-    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
+    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses ADDR_MOD_6 and ADDR_MOD_7 at their invariants).
     sfpu::_init_sfpu_config_reg();
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
         // Algorithm is adapted from:
@@ -1225,7 +1200,7 @@ void exp_init() {
         // Program Replay Buffer
         // ===================================================================
         // Record 32 instructions (16 LM+SHFT2 pairs) into replay buffer.
-        // ADDR_MOD_7 will be configured for auto-increment at replay time.
+        // ADDR_MOD_6 (its dest += 2 invariant) advances DEST once per LOADMACRO.
         //
         // Pattern starts with LM(LREG0) so all LOADMACROs can be replayed.
         // The first two SHFT2s are "dummy" (operate on not-yet-loaded LREGs)
@@ -1239,37 +1214,37 @@ void exp_init() {
         load_replay_buf(0, 32, [] {
             // 16 pairs of LM + SHFT2 (LREG pattern repeats every 4 pairs)
             // Pairs 0-1: dummy SHFT2s, Pairs 2-15: real SHFT2s for elements 0-13
-            TTI_SFPLOADMACRO(0, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(0, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(1, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(1, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(2, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(2, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(3, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(3, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(0, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(0, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(1, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(1, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(2, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(2, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(3, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(3, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(0, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(0, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(1, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(1, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(2, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(2, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(3, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(3, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(0, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(0, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(1, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(1, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(2, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(2, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-            TTI_SFPLOADMACRO(3, 0, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO(3, 0, ADDR_MOD_6, 0);
             TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
         });
         TTI_SFPNOP;
@@ -1277,14 +1252,6 @@ void exp_init() {
     } else {
         if constexpr (!is_fp32_dest_acc_en) {
             // _calculate_exponential_tti_bf16_() path:
-            // Auto-increment Dest on ADDR_MOD_6
-            addr_mod_t{
-                .srca = {.incr = 0},
-                .srcb = {.incr = 0},
-                .dest = {.incr = 2},
-            }
-                .set(ADDR_MOD_6);
-
             // LREG12 = 1/ln2
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
@@ -1301,9 +1268,8 @@ void exp_init() {
             // primed here.
             sfpu_reciprocal_init<false>();
 #else
-            // _sfpu_exp_fp32_accurate_tti_: DEST advances by 2 on its store; LREG12..14 hold 1/ln2 and -ln2 in two
-            // parts.
-            addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+            // _sfpu_exp_fp32_accurate_tti_: DEST advances by 2 on its store (the ADDR_MOD_6
+            // invariant hw_configure establishes); LREG12..14 hold 1/ln2 and -ln2 in two parts.
             _sfpu_load_config32_(p_sfpu::LREG12, Converter::hi16(EXP_FP32_LOG2E), Converter::lo16(EXP_FP32_LOG2E));
             _sfpu_load_config32_(
                 p_sfpu::LREG13, Converter::hi16(EXP_FP32_NEG_LN2_HI), Converter::lo16(EXP_FP32_NEG_LN2_HI));

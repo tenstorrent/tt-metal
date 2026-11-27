@@ -359,6 +359,7 @@ class MathOperation(Enum):
     SfpuAddcmul = OpSpec("addcmul", MathOpType.SFPU_TERNARY)
     SfpuAddcdiv = OpSpec("addcdiv", MathOpType.SFPU_TERNARY)
     SfpuLerp = OpSpec("lerp", MathOpType.SFPU_TERNARY)
+    SfpuMac = OpSpec("mac", MathOpType.SFPU_TERNARY)
     SfpuSnakeBeta = OpSpec("snake_beta", MathOpType.SFPU_TERNARY)
 
     # =============================================================================

@@ -1849,6 +1849,33 @@ def test_group_norm_rejects_tile_input_with_inplace(device, expect_error):
         ttnn.group_norm(input_tensor, num_groups=num_groups, inplace=True)
 
 
+@pytest.mark.parametrize("input_type", ["tile", "row_major", "row_major_sharded"])
+@pytest.mark.parametrize("C, num_groups", [(4, 1), (40, 5)])
+def test_group_norm_channels_not_multiple_of_32(device, input_type, C, num_groups, expect_error):
+    # Only ROW_MAJOR sharded input supports C that is not a multiple of 32.
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 1024, C, dtype=torch.bfloat16)
+
+    if input_type != "row_major_sharded":
+        layout = ttnn.TILE_LAYOUT if input_type == "tile" else ttnn.ROW_MAJOR_LAYOUT
+        tt_x = ttnn.from_torch(x, layout=layout, device=device)
+        with expect_error(RuntimeError, "must be a multiple of the tile width"):
+            ttnn.group_norm(tt_x, num_groups=num_groups, inplace=False)
+        return
+
+    core_grid = ttnn.CoreGrid(y=1, x=8)
+    sharded = ttnn.create_sharded_memory_config(
+        (1024 // 8, C), core_grid, ttnn.ShardStrategy.HEIGHT, use_height_and_width_as_shard_shape=True
+    )
+    tt_x = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded)
+    out = ttnn.group_norm(tt_x, num_groups=num_groups, memory_config=sharded, core_grid=core_grid, inplace=False)
+
+    expected = torch.nn.functional.group_norm(x.float().permute(0, 3, 1, 2), num_groups).permute(0, 2, 3, 1)
+    assert_numeric_metrics(
+        expected, ttnn.to_torch(out).float(), pcc_threshold=0.999, rtol=0.02, atol=0.06, frobenius_threshold=0.015
+    )
+
+
 def test_group_norm_rejects_host_input_mask(device, expect_error):
     # TILE layout: a ROW_MAJOR interleaved input is rejected earlier (it is unsupported
     # on the non-sharded path), which would pre-empt the host-input-mask check this test
@@ -2704,3 +2731,39 @@ def test_group_norm_user_fp32_dest_acc_en_honored_for_bf16_input(device, use_wel
         err_on = (out_on - ref).abs().mean().item()
         err_off = (out_off - ref).abs().mean().item()
         assert err_on < err_off, f"fp32 DEST mean abs error {err_on} is not below bf16 DEST {err_off}"
+
+
+@pytest.mark.parametrize("input_memory", ["dram", "l1", "height_sharded", "block_sharded"])
+def test_group_norm_output_defaults_to_input_memory_config(device, input_memory):
+    # With memory_config omitted, the output takes the input's memory config, as documented.
+    torch.manual_seed(0)
+    N, HW, C, G = 1, 1024, 64, 8
+    x = torch.randn((N, 1, HW, C), dtype=torch.bfloat16)
+    ref = torch.nn.functional.group_norm(x.float().permute(0, 3, 1, 2), G, eps=1e-5).permute(0, 2, 3, 1)
+
+    core_grid = None
+    memory_config = ttnn.DRAM_MEMORY_CONFIG if input_memory == "dram" else ttnn.L1_MEMORY_CONFIG
+
+    if input_memory == "height_sharded":
+        core_grid = ttnn.CoreGrid(y=1, x=8)
+        memory_config = ttnn.create_sharded_memory_config(
+            (N * HW // 8, C), core_grid, ttnn.ShardStrategy.HEIGHT, use_height_and_width_as_shard_shape=True
+        )
+    elif input_memory == "block_sharded":
+        core_grid = ttnn.CoreGrid(y=4, x=2)
+        memory_config = ttnn.create_sharded_memory_config(
+            (N * HW // 4, C // 2), core_grid, ttnn.ShardStrategy.BLOCK, use_height_and_width_as_shard_shape=True
+        )
+
+    if core_grid is not None:
+        device_grid = device.compute_with_storage_grid_size()
+        if device_grid.x < core_grid.x or device_grid.y < core_grid.y:
+            pytest.skip(f"device grid too small for {core_grid.x}x{core_grid.y}")
+
+    tt_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    tt_output = ttnn.group_norm(tt_input, num_groups=G, epsilon=1e-5, core_grid=core_grid, inplace=False)
+
+    assert tt_output.memory_config() == tt_input.memory_config()
+    assert_numeric_metrics(
+        ref, ttnn.to_torch(tt_output).float(), pcc_threshold=0.999, rtol=0.02, atol=0.05, frobenius_threshold=0.01
+    )

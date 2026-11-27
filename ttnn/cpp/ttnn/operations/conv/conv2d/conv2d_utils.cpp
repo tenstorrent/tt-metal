@@ -621,8 +621,13 @@ DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
     MeshDevice* device, DataType input_dtype, DataType weight_dtype) {
     // Default fp32_dest_acc to true if both inputs are FP32, false otherwise
     bool default_fp32_acc = (input_dtype == DataType::FLOAT32 && weight_dtype == DataType::FLOAT32);
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto math_fidelity = (default_fp32_acc && device->arch() == tt::ARCH::WORMHOLE_B0)
+                                   ? tt::tt_metal::MathFidelity::HiFi3
+                                   : tt::tt_metal::MathFidelity::HiFi4;
     return init_device_compute_kernel_config(
-        device->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, default_fp32_acc, false);
+        device->arch(), std::nullopt, math_fidelity, true, default_fp32_acc, false);
 }
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
@@ -923,11 +928,14 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         } else {
             auto pad_tensor = [&]() {
                 if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
-                    input_tensor = ttnn::pad(
-                        input_tensor,
-                        ttnn::Array4D({input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
-                        ttnn::Array4D({0, 0, 0, 0}),
-                        0);
+                    const ttnn::Array4D padded_shape{
+                        input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]};
+                    if (ttnn::is_device_tensor(input_tensor)) {
+                        input_tensor = ttnn::pad(input_tensor, padded_shape, ttnn::Array4D({0, 0, 0, 0}), 0);
+                    } else {
+                        // Physical padding only on host: the activation keeps its logical [1, 1, NHW, C] shape.
+                        input_tensor = input_tensor.pad(ttnn::Shape(padded_shape), ttnn::Shape{0, 0, 0, 0}, 0);
+                    }
                 }
             };
 

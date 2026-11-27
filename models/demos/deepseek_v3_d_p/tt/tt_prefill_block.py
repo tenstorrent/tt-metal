@@ -811,6 +811,7 @@ class TtPrefillBlock(LightweightModule):
         ack_layer_idx: Optional[int] = None,
         ack_alias_layer_ids: tuple = (),
         force_kv_only: bool = False,
+        active_chunks: Optional[int] = None,
     ):
         """One packed forward: ``chunks`` (PrefillChunk) back to back, ``x.shape[2] // len(chunks)`` rows each.
 
@@ -825,13 +826,17 @@ class TtPrefillBlock(LightweightModule):
         indexer_indices: GLM-5.3 reuse, one entry per chunk (None for an empty chunk) from the last "full"
             layer; None when this layer computes its own.
         metadata: the traced form. One ChunkMetadata per chunk position, read on device; ``chunks`` is then
-            unused (None). Every position runs its attention half, so the caller points an empty chunk at
-            a scratch slot. Requires ``padding_config``, the persistent MoE padding config, and no ack.
+            unused (None). Positions below ``active_chunks`` run their attention half; the caller points any
+            empty one among them at a scratch slot. Requires ``padding_config``, the persistent MoE padding
+            config, and no ack.
         padding_config: the MoE padding (PackedPadding) for the whole forward, built once by the caller for every
             layer (TtPrefillTransformer.forward_packed, packed_padding); None when every row is real.
         zero_pad: zero each chunk's KV pad window without acking, for a caller sending D2H acks afterwards.
         ack_layer_idx / ack_alias_layer_ids / force_kv_only: as in forward(), for the MTP block TtMTPPredictor
             replays once per level.
+        active_chunks: traced form only. The forward's first ``active_chunks`` positions hold its real chunks and
+            the rest are empty (validate_chunks puts empties at the tail): the empty positions' rows pass through
+            without the attention half, as in the eager form. None: every position runs its attention half.
 
         Returns:
             (x, kv_cache=None) or, with return_indexer_indices, (x, None, per-chunk indices list). x is None
@@ -840,6 +845,8 @@ class TtPrefillBlock(LightweightModule):
         traced = metadata is not None
         n = len(metadata) if traced else len(chunks)
         assert n == self.forward_chunks, f"{n} chunks for a block built for {self.forward_chunks}"
+        assert active_chunks is None or (traced and 1 <= active_chunks <= n), f"active_chunks={active_chunks}"
+        active = n if active_chunks is None else active_chunks
         assert not traced or (padding_config is not None and on_layer_complete is None)
         assert indexer_indices is None or len(indexer_indices) == n
         rows = x.shape[2] // n
@@ -853,11 +860,18 @@ class TtPrefillBlock(LightweightModule):
             _t_start = time.perf_counter()
 
         # The sparse-KV push (shared layers) fills each attention step's buffer beside the step before it.
-        push_targets = packed_push_targets([traced or not c.is_empty for c in (chunks or [None] * n)])
+        runs = [k < active for k in range(n)] if traced else [not c.is_empty for c in chunks]
+        push_targets = packed_push_targets(runs)
         first_step = min(push_targets, default=None)
         outs, chunk_indices = [], []
         for k in range(n):
             chunk = None if traced else chunks[k]
+            if traced and k >= active:
+                # The empty tail passes through as one slice: no attention, no KV write.
+                if k == active and not kv_only:
+                    outs.append(ttnn.slice(x, (0, 0, k * rows, 0), (1, 1, n * rows, x.shape[-1])))
+                chunk_indices.append(None)
+                continue
             x_k = ttnn.slice(x, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, x.shape[-1]))
             if not traced and chunk.is_empty:
                 outs.append(x_k)
