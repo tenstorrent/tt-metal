@@ -604,6 +604,9 @@ TEST(KernelPrewarmShutdownTest, MissingMarkerReapsOwnedChild) {
 }
 
 TEST(KernelPrewarmShutdownTest, EarlyExitIsReapedWithItsStatus) {
+    ScopedTempDir tree("ttprewarm_early_exit");
+    const fs::path release = tree.path_ / "release";
+    ASSERT_EQ(::mkfifo(release.c_str(), 0600), 0);
     const pid_t pid = ::fork();
     ASSERT_GE(pid, 0);
     if (pid == 0) {
@@ -613,6 +616,7 @@ TEST(KernelPrewarmShutdownTest, EarlyExitIsReapedWithItsStatus) {
     ASSERT_TRUE(child.wait_for_exit(std::chrono::seconds(1)));
     ASSERT_TRUE(WIFEXITED(child.status));
     EXPECT_EQ(WEXITSTATUS(child.status), 17);
+    EXPECT_TRUE(release_shutdown_fifo(release));
 }
 
 TEST(KernelPrewarmShutdownTest, ReleaseWithoutReaderDoesNotBlock) {
