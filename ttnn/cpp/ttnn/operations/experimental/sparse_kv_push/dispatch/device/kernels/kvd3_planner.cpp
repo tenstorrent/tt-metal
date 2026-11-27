@@ -30,6 +30,9 @@
 #ifndef KVD_PART
 #define KVD_PART 0
 #endif
+#ifndef KVD_SKIP_XCHG
+#define KVD_SKIP_XCHG 0
+#endif
 
 using namespace kvd;
 using namespace kvd3;
@@ -182,11 +185,14 @@ void kernel_main() {
     const uint32_t t_p0 = stats_clock();
     // Planner 0 copies this chip's own slice into the inbox, waits until the N - 1 other chips' slices are in (their
     // last packets increment its inbox word), takes the word back to zero (persistent), and releases every planner.
+    // (KVD_SKIP_XCHG: the inbox already holds every chip's slice from an earlier call on this plan build: no copy,
+    // no wait; planner 0 still releases the planners)
     if (is_sync) {
 #if defined(KVD_FUSED_PLAN) && !defined(KVD_ABL_FUSED_NOPLAN)
         // (the fused plan: every owner's slot is in the table)
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(KVD_PLAN_READY)), N);
 #endif
+#if !KVD_SKIP_XCHG
         cb_reserve_back(cb_inbox, 1);
         const uint32_t buf = align64(get_write_ptr(cb_inbox));
         const auto table = TensorAccessor(table_args, table_addr, inbox_slot_bytes);
@@ -210,6 +216,7 @@ void kernel_main() {
         noc_semaphore_wait_min(inbox_sem, N - 1);
         t_inbox = stats_clock();
         noc_semaphore_inc(get_noc_addr(inbox_sem_addr), 0u - (N - 1));
+#endif
         for (uint32_t p = 0; p < planners; ++p) {
             noc_semaphore_inc(
                 get_noc_addr(

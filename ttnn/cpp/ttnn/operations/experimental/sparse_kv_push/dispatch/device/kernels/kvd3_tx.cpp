@@ -29,6 +29,10 @@
 #include "api/debug/dprint.h"
 #include "kvd3_common.hpp"
 
+#ifndef KVD_SKIP_XCHG
+#define KVD_SKIP_XCHG 0
+#endif
+
 #include <cstdint>
 
 using namespace kvd;
@@ -202,7 +206,9 @@ void kernel_main() {
     // (the fused plan: every owner's slot is in the table)
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(KVD_PLAN_READY)), N);
 #endif
-    // ---- 2. slice exchange (v2's, split over the links instead of lanes)
+    // ---- 2. slice exchange (v2's, split over the links instead of lanes); KVD_SKIP_XCHG: the inbox already holds
+    // this plan's slices (an earlier call on the same plan build sent them)
+#if !KVD_SKIP_XCHG
     {
         noc_async_read(table.get_noc_addr(0), send_l1, 64);
         noc_async_read_barrier();
@@ -268,6 +274,7 @@ void kernel_main() {
             }
         }
     }
+#endif
 
     const uint32_t t_xchg = stats_clock();
     // ---- 3. send what the reader (kvd3_txr.cpp, NCRISC) hands over, in ring order; forward my workers' credits

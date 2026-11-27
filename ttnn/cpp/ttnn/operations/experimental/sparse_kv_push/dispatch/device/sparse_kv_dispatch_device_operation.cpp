@@ -288,6 +288,7 @@ ttsl::hash::hash_t SparseKvDispatchDeviceOperation::compute_program_hash(
             p.plan_chunk_start.has_value(),
             p.active_from,
             p.part,
+            p.skip_exchange,
             t.plan_chunk_start_tensor.has_value()
                 ? std::optional<tt::tt_metal::TensorSpec>(t.plan_chunk_start_tensor->tensor_spec())
                 : std::nullopt,
@@ -349,7 +350,8 @@ Tensor sparse_kv_dispatch(
     std::optional<uint32_t> plan_chunk_start,
     const std::optional<Tensor>& plan_chunk_start_tensor,
     uint32_t active_from,
-    uint32_t part) {
+    uint32_t part,
+    bool skip_exchange) {
     using namespace ttnn::operations::experimental::sparse_kv_push;
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "sparse_kv_dispatch input must be on device");
@@ -375,7 +377,8 @@ Tensor sparse_kv_dispatch(
             .batch_slot_layer_idx = batch_slot_layer_idx,
             .plan_chunk_start = plan_chunk_start,
             .active_from = active_from,
-            .part = part},
+            .part = part,
+            .skip_exchange = skip_exchange},
         SparseKvDispatchInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,

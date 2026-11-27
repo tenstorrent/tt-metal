@@ -51,6 +51,8 @@ class SparseKvPushPlan:
     inbox: ttnn.Tensor | None = None
     # The planner's cache slot of this plan (its gathered-table pool entry).
     slot: int = 0
+    # SPIKE: a dispatch on this plan build already exchanged its slices into `inbox` (later calls skip the exchange).
+    exchanged: bool = False
 
 
 @dataclass(frozen=True)
@@ -342,8 +344,11 @@ class SparseKvPushPlanner:
         table, compact_indices = outputs[0], outputs[1]
         if inbox_mode:
             slot_words = slot_bytes // 4
-            if self._inbox is None or self._inbox.shape[3] != slot_words:
-                self._inbox = _replicated(
+            # one inbox per cached plan slot: a later call on this plan reuses its exchanged slices
+            if not isinstance(self._inbox, dict):
+                self._inbox = {}
+            if slot not in self._inbox or self._inbox[slot].shape[3] != slot_words:
+                self._inbox[slot] = _replicated(
                     self.mesh_device,
                     torch.zeros(1, 1, n, slot_words, dtype=torch.int32),
                     ttnn.uint32,
@@ -357,7 +362,7 @@ class SparseKvPushPlanner:
                 dense_below=dense_below,
                 compact_indices_2=outputs[2] if dense_below_2 else None,
                 dense_below_2=dense_below_2,
-                inbox=self._inbox,
+                inbox=self._inbox[slot],
                 slot=slot,
             )
         gathered_rows = table.shape[2] * n

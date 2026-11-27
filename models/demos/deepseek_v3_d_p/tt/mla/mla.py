@@ -69,6 +69,16 @@ def _scratch_mark(mesh_device, name, t_prev):
     return t
 
 
+def _kvd_skip_exchange(plan) -> bool:
+    """SPIKE: whether this dispatch may skip the slice exchange (an earlier call on the same plan build did it);
+    marks the plan exchanged. SPARSE_MLA_KVD_SPIKE_XCHG_ONCE=0 exchanges on every call."""
+    if os.environ.get("SPARSE_MLA_KVD_SPIKE_XCHG_ONCE", "1") != "1":
+        return False
+    done = plan.exchanged
+    plan.exchanged = True
+    return done
+
+
 def _kvd_spike() -> bool:
     """SPIKE (GLM_KV_DISPATCH_PLAN.md Phase 0, not for merge): shared layers' rows go through sparse_kv_dispatch with
     global landing instead of sparse_kv_push."""
@@ -845,10 +855,14 @@ class ttMLA:
         self._kv_dispatch_from = 0
         # One chip's rows of a chunk: the cache's block-cyclic block.
         push_stripe_chunk = self.active_seq_len_local // self.tp_factor
-        if self._sparse_kv_gather_buffer is not None and (
-            sparse_kv_push_supported(mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2])
-            or _kvd_spike()  # SPIKE: the dispatch routes any 2D fabric
-        ):
+        if (
+            self._sparse_kv_gather_buffer is not None
+            and (
+                sparse_kv_push_supported(mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2])
+                or _kvd_spike()  # SPIKE: the dispatch routes any 2D fabric
+            )
+            and not os.environ.get("SCRATCH_FORCE_GATHER")
+        ):  # SCRATCH: shared layers gather (today's non-push path)
             dense = self._sparse_kv_gather_buffer
             self._push = self.tt_ccl.get_sparse_kv_push_planner(self.ccl_num_links)
             # The cache's row page as the push reads it: the row, padded to the DRAM alignment.
@@ -2770,6 +2784,7 @@ class ttMLA:
             **slot,
             **({"core_grid": core_grid} if core_grid is not None else {}),
             part=int(part.value),
+            skip_exchange=_kvd_skip_exchange(plan),
         )
 
     @contextlib.contextmanager

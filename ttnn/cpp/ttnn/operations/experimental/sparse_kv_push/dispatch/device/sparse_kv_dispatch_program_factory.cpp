@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-logger/tt-logger.hpp>
+#include "ttnn/per_device_program_merge.hpp"
 #include "sparse_kv_dispatch_program_factory.hpp"
 #include "sparse_kv_dispatch_device_operation.hpp"
 #include "sparse_kv_dispatch_layout.hpp"
@@ -274,99 +275,209 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
         std::vector<CoreCoord> planners;
     };
     const auto cores = corerange_to_cores(p.core_grid, std::nullopt, true);
-    std::map<std::pair<uint32_t, uint32_t>, Chip> placed;
-    auto place = [&](const MeshCoordinate& at) -> const Chip& {
-        const auto key = std::make_pair(at[0], at[1]);
-        if (auto it = placed.find(key); it != placed.end()) {
-            return it->second;
-        }
-        Chip ch;
+    // The fabric directions of chip `at`, by mesh direction d (0 +X, 1 -X, 2 +Y, 3 -Y); none where it has no neighbour.
+    auto dirs_of = [&](const MeshCoordinate& at) {
+        std::array<std::optional<FabricDirection>, 4> dirs;
         const auto at_dirs = fabric_directions(mesh_device, at, L);
-        auto* dev = tt::tt_metal::internal::get_device(*mesh_device, at);
-        std::set<std::pair<size_t, size_t>> taken{{cores.back().x, cores.back().y}};
-        const auto at_node = mesh_device->get_fabric_node_id(at);
-        auto nearest = [&](const tt::tt_metal::experimental::Device::CoreAtNocHops& closest) {
-            std::optional<CoreCoord> best;
-            uint32_t best_hops = std::numeric_limits<uint32_t>::max();
-            for (const auto& cand : cores) {
-                if (taken.contains({cand.x, cand.y})) {
-                    continue;
-                }
-                const uint32_t h =
-                    (cand == closest.logical_coord ? 0u
-                                                   : tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                                                         dev, cand, closest.logical_coord, tt::tt_metal::NOC::NOC_1)) +
-                    closest.distance_in_noc_hops;
-                if (h < best_hops) {
-                    best_hops = h;
-                    best = cand;
-                }
-            }
-            TT_FATAL(
-                best.has_value(),
-                "sparse_kv_dispatch v3: too few grid cores for the port cores (active directions x links x (1 + K, + 1 "
-                "helper "
-                "with LANES=2), plus planner 0; K = {}): lower K (KVD3=K=..)",
-                K);
-            taken.insert({best->x, best->y});
-            return *best;
-        };
         for (uint32_t d = 0; d < 4; ++d) {
             const auto tc = neighbour_of(at, d);
             for (const auto& x : at_dirs) {
                 if (tc && x.neighbor == *tc) {
-                    ch.dir[d] = x;
+                    dirs[d] = x;
                 }
             }
-            if (!ch.dir[d]) {
+        }
+        return dirs;
+    };
+    // Placement, one program per mesh (as high_bw_all_gather): each chip puts its port cores next to its own Ethernet
+    // cores, and the program runs each role's kernel on the union of that role's cores over the chips; a core that is
+    // another chip's TX (or worker, or helper) idles on this one (present = 0: it only takes part in the chip barrier).
+    // Roles get disjoint cores so that no core carries two kernels: TX cores first (no chip's worker or helper takes
+    // a core any chip's TX took), then workers, then helpers; planners on cores of no role, the same on every chip.
+    // When the unions do not fit the grid (a small sub-device grid), every chip uses one placement: each direction's
+    // cores next to the Ethernet cores of the first chip that has it (uniform; slower on chips whose Ethernet cores
+    // are elsewhere: GLM 1M real top-k up to +38%).
+    using CoreKey = std::pair<size_t, size_t>;
+    auto key_of = [](const CoreCoord& c) { return CoreKey{c.x, c.y}; };
+    const auto mesh_coords = tt::tt_metal::distributed::MeshCoordinateRange(view.shape());
+    std::map<std::pair<uint32_t, uint32_t>, Chip> placed;
+    std::array<std::set<CoreKey>, 3> role_cores;  // 0 TX, 1 workers, 2 helpers: the union over the chips
+    auto nearest_free = [&](tt::tt_metal::IDevice* dev,
+                            const CoreCoord& eth,
+                            const std::set<CoreKey>& taken,
+                            const std::set<CoreKey>& blocked) -> std::optional<CoreCoord> {
+        const auto closest =
+            tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(*dev, eth, tt::tt_metal::NOC::NOC_1);
+        std::optional<CoreCoord> best;
+        uint32_t best_hops = std::numeric_limits<uint32_t>::max();
+        for (const auto& cand : cores) {
+            const auto k = key_of(cand);
+            if (taken.contains(k) || blocked.contains(k) || cand == cores.back()) {  // (cores.back(): planner 0)
                 continue;
             }
-            const auto nb_node = mesh_device->get_fabric_node_id(*tc);
-            for (uint32_t l = 0; l < L; ++l) {
-                const auto eth =
-                    tt::tt_fabric::get_forwarding_eth_core(*mesh_device, at_node, nb_node, ch.dir[d]->links[l]);
-                const auto closest = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
-                    *dev, eth, tt::tt_metal::NOC::NOC_1);
-                ch.tx[d][l] = nearest(closest);
-                for (uint32_t k = 0; k < K; ++k) {
-                    ch.w[d][l][k] = nearest(closest);
-                }
-                if (kn.lanes == 2) {
-                    ch.hlp[d][l] = nearest(closest);
-                }
+            const uint32_t h =
+                (cand == closest.logical_coord ? 0u
+                                               : tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                                                     dev, cand, closest.logical_coord, tt::tt_metal::NOC::NOC_1)) +
+                closest.distance_in_noc_hops;
+            if (h < best_hops) {
+                best_hops = h;
+                best = cand;
             }
         }
-        ch.planners.push_back(cores.back());
+        return best;
+    };
+    // a chip's Ethernet core of (d, l), or none when the chip has no direction d
+    auto eth_of = [&](const MeshCoordinate& at, const Chip& ch, uint32_t d, uint32_t l) -> std::optional<CoreCoord> {
+        if (!ch.dir[d]) {
+            return std::nullopt;
+        }
+        return tt::tt_fabric::get_forwarding_eth_core(
+            *mesh_device,
+            mesh_device->get_fabric_node_id(at),
+            mesh_device->get_fabric_node_id(*neighbour_of(at, d)),
+            ch.dir[d]->links[l]);
+    };
+    auto choose_planners = [&](const std::set<CoreKey>& used) -> std::optional<std::vector<CoreCoord>> {
+        std::vector<CoreCoord> pl{cores.back()};
         for (const auto& c : cores) {
-            if (ch.planners.size() == P) {
+            if (pl.size() == P) {
                 break;
             }
-            if (!taken.contains({c.x, c.y})) {
-                ch.planners.push_back(c);
-                taken.insert({c.x, c.y});
+            if (c != cores.back() && !used.contains(key_of(c))) {
+                pl.push_back(c);
             }
         }
-        TT_FATAL(ch.planners.size() == P, "sparse_kv_dispatch v3: too few cores for {} planners", P);
-        return placed.emplace(key, std::move(ch)).first->second;
+        return pl.size() == P ? std::optional(pl) : std::nullopt;
     };
+    auto place_per_chip = [&]() -> bool {
+        placed.clear();
+        for (auto& r : role_cores) {
+            r.clear();
+        }
+        for (const auto& at : mesh_coords) {
+            placed[{at[0], at[1]}].dir = dirs_of(at);
+        }
+        std::map<std::pair<uint32_t, uint32_t>, std::set<CoreKey>> taken;  // per chip, every role
+        for (uint32_t role = 0; role < (kn.lanes == 2 ? 3u : 2u); ++role) {
+            std::set<CoreKey> blocked;  // the earlier roles' cores on any chip
+            for (uint32_t r = 0; r < role; ++r) {
+                blocked.insert(role_cores[r].begin(), role_cores[r].end());
+            }
+            for (const auto& at : mesh_coords) {
+                Chip& ch = placed[{at[0], at[1]}];
+                auto& tk = taken[{at[0], at[1]}];
+                auto* dev = tt::tt_metal::internal::get_device(*mesh_device, at);
+                for (uint32_t d = 0; d < 4; ++d) {
+                    for (uint32_t l = 0; l < L; ++l) {
+                        const auto eth = eth_of(at, ch, d, l);
+                        if (!eth) {
+                            continue;
+                        }
+                        const uint32_t n = role == 1 ? K : 1;
+                        for (uint32_t k = 0; k < n; ++k) {
+                            const auto c = nearest_free(dev, *eth, tk, blocked);
+                            if (!c) {
+                                return false;
+                            }
+                            tk.insert(key_of(*c));
+                            role_cores[role].insert(key_of(*c));
+                            (role == 0 ? ch.tx[d][l] : role == 1 ? ch.w[d][l][k] : ch.hlp[d][l]) = *c;
+                        }
+                    }
+                }
+            }
+        }
+        std::set<CoreKey> used;
+        for (const auto& r : role_cores) {
+            used.insert(r.begin(), r.end());
+        }
+        const auto pl = choose_planners(used);
+        if (!pl) {
+            return false;
+        }
+        for (auto& [_, ch] : placed) {
+            ch.planners = *pl;
+        }
+        return true;
+    };
+    auto place_uniform = [&]() {
+        placed.clear();
+        for (auto& r : role_cores) {
+            r.clear();
+        }
+        Chip uniform;
+        std::set<CoreKey> taken;
+        for (uint32_t d = 0; d < 4; ++d) {
+            for (const auto& at : mesh_coords) {
+                Chip probe;
+                probe.dir = dirs_of(at);
+                if (!probe.dir[d]) {
+                    continue;
+                }
+                auto* dev = tt::tt_metal::internal::get_device(*mesh_device, at);
+                for (uint32_t l = 0; l < L; ++l) {
+                    const auto eth = *eth_of(at, probe, d, l);
+                    auto pick = [&](uint32_t role) {
+                        const auto c = nearest_free(dev, eth, taken, {});
+                        TT_FATAL(
+                            c.has_value(),
+                            "sparse_kv_dispatch v3: too few grid cores for the port cores (directions x links x (1 + "
+                            "K, + 1 helper with LANES=2), plus planner 0; K = {}): lower K (KVD3=K=..)",
+                            K);
+                        taken.insert(key_of(*c));
+                        role_cores[role].insert(key_of(*c));
+                        return *c;
+                    };
+                    uniform.tx[d][l] = pick(0);
+                    for (uint32_t k = 0; k < K; ++k) {
+                        uniform.w[d][l][k] = pick(1);
+                    }
+                    if (kn.lanes == 2) {
+                        uniform.hlp[d][l] = pick(2);
+                    }
+                }
+                break;
+            }
+        }
+        const auto pl = choose_planners(taken);
+        TT_FATAL(pl.has_value(), "sparse_kv_dispatch v3: too few cores for {} planners", P);
+        uniform.planners = *pl;
+        for (const auto& at : mesh_coords) {
+            Chip ch = uniform;
+            ch.dir = dirs_of(at);
+            placed[{at[0], at[1]}] = std::move(ch);
+        }
+    };
+    const bool per_chip = place_per_chip();
+    log_info(
+        tt::LogOp,
+        "sparse_kv_dispatch placement on {} cores, {} planners: per-chip {} (TX {} / workers {} / helpers {} cores "
+        "over "
+        "the chips)",
+        cores.size(),
+        P,
+        per_chip ? "fits" : "does not fit, uniform",
+        role_cores[0].size(),
+        role_cores[1].size(),
+        role_cores[2].size());
+    if (!per_chip) {
+        place_uniform();
+    }
+    auto place = [&](const MeshCoordinate& at) -> const Chip& { return placed.at({at[0], at[1]}); };
     const Chip& mine = place(coord);
     auto virt = [&](const CoreCoord& c) { return mesh_device->worker_core_from_logical_core(c); };
 
-    std::vector<CoreCoord> tx_cores, w_cores, hlp_cores, all_cores;
-    for (uint32_t d = 0; d < 4; ++d) {
-        if (!mine.dir[d]) {
-            continue;
+    // every role's cores over the chips (the program runs each role's kernel on all of them), then the planners
+    auto sorted_cores = [](const std::set<CoreKey>& keys) {
+        std::vector<CoreCoord> v;
+        for (const auto& [x, y] : keys) {
+            v.emplace_back(x, y);
         }
-        for (uint32_t l = 0; l < L; ++l) {
-            tx_cores.push_back(mine.tx[d][l]);
-            if (kn.lanes == 2) {
-                hlp_cores.push_back(mine.hlp[d][l]);
-            }
-            for (uint32_t k = 0; k < K; ++k) {
-                w_cores.push_back(mine.w[d][l][k]);
-            }
-        }
-    }
+        return v;
+    };
+    std::vector<CoreCoord> tx_cores = sorted_cores(role_cores[0]), w_cores = sorted_cores(role_cores[1]),
+                           hlp_cores = sorted_cores(role_cores[2]), all_cores;
     all_cores = tx_cores;
     all_cores.insert(all_cores.end(), w_cores.begin(), w_cores.end());
     all_cores.insert(all_cores.end(), hlp_cores.begin(), hlp_cores.end());
@@ -612,6 +723,7 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
     ring_defines.insert(ring_defines.end(), abl_defs.begin(), abl_defs.end());
     // which rows of each requester this call sends (planners: kvd3_planner.cpp route_word)
     ring_defines.emplace_back("KVD_PART", std::to_string(p.part));
+    ring_defines.emplace_back("KVD_SKIP_XCHG", p.skip_exchange ? "1" : "0");
     if (p.active_from != 0) {
         // every v3 kernel: return when the chunk starts before active_from (kvd3_common.hpp skip_chunk)
         TT_FATAL(kn.lanes == 1, "sparse_kv_dispatch active_from: LANES=1 only (the helper readers have no gate)");
@@ -766,6 +878,22 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
 
     const auto bar = virt(mine.planners[0]);
     const auto sync = bar;  // planner 0 is the same logical core on every chip
+    // Per core: every core of a role's union starts idle (another chip's TX, worker or helper), then this chip's own
+    // cores get their real args; each core's args are set once, below.
+    std::map<CoreKey, std::vector<uint32_t>> tx_rt, txr_rt, hlp_rt, w_rt;
+    {
+        const std::vector<uint32_t> idle = {0u, static_cast<uint32_t>(bar.x), static_cast<uint32_t>(bar.y)};
+        for (const auto& c : tx_cores) {
+            tx_rt[key_of(c)] = idle;
+            txr_rt[key_of(c)] = {0u};
+        }
+        for (const auto& c : w_cores) {
+            w_rt[key_of(c)] = idle;
+        }
+        for (const auto& c : hlp_cores) {  // (the helper reads its TX core before the present check)
+            hlp_rt[key_of(c)] = {0u, static_cast<uint32_t>(bar.x), static_cast<uint32_t>(bar.y), 0u, 0u};
+        }
+    }
     for (uint32_t d = 0; d < 4; ++d) {
         if (!mine.dir[d]) {
             continue;
@@ -815,17 +943,13 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
             {  // the reader: present, d, l, producers, workers; the helper: present, barrier, TX core, then the same
                 std::vector<uint32_t> r = {1u, d, l};
                 r.insert(r.end(), a.end() - (2 * (P + 4 * K) + 1), a.end());
-                tt::tt_metal::KernelDescriptor::RTArgList rrt;
-                rrt.append(r);
-                txr.emplace_runtime_args(mine.tx[d][l], rrt);
+                txr_rt[key_of(mine.tx[d][l])] = r;
                 if (kn.lanes == 2) {
                     const auto txc = virt(mine.tx[d][l]);
                     std::vector<uint32_t> h = {
                         1u, static_cast<uint32_t>(bar.x), static_cast<uint32_t>(bar.y), txc.x, txc.y, d, l};
                     h.insert(h.end(), r.begin() + 3, r.end());
-                    tt::tt_metal::KernelDescriptor::RTArgList hrt;
-                    hrt.append(h);
-                    hlp.emplace_runtime_args(mine.hlp[d][l], hrt);
+                    hlp_rt[key_of(mine.hlp[d][l])] = h;
                 }
             }
             {  // my helper, and the neighbour TX's helper (credit copies)
@@ -844,9 +968,7 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
                 desc,
                 mine.tx[d][l],
                 a);
-            tt::tt_metal::KernelDescriptor::RTArgList rt;
-            rt.append(a);
-            tx.emplace_runtime_args(mine.tx[d][l], rt);
+            tx_rt[key_of(mine.tx[d][l])] = a;
             // W(d, l, k)
             uint32_t tx_present = 0;
             for (uint32_t td = 0; td < 4; ++td) {
@@ -877,13 +999,26 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
                     w.push_back(c.x);
                     w.push_back(c.y);
                 }
-                tt::tt_metal::KernelDescriptor::RTArgList rt;
-                rt.append(w);
-                wk.emplace_runtime_args(mine.w[d][l][k], rt);
-                if (kn.wsplit == 2) {
-                    wk1.emplace_runtime_args(mine.w[d][l][k], rt);
-                }
+                w_rt[key_of(mine.w[d][l][k])] = w;
             }
+        }
+    }
+    {
+        auto emit = [](tt::tt_metal::KernelDescriptor& k, const std::map<CoreKey, std::vector<uint32_t>>& rt_of) {
+            for (const auto& [c, v] : rt_of) {
+                tt::tt_metal::KernelDescriptor::RTArgList rt;
+                rt.append(v);
+                k.emplace_runtime_args(CoreCoord(c.first, c.second), rt);
+            }
+        };
+        emit(tx, tx_rt);
+        emit(txr, txr_rt);
+        emit(wk, w_rt);
+        if (kn.wsplit == 2) {
+            emit(wk1, w_rt);
+        }
+        if (kn.lanes == 2) {
+            emit(hlp, hlp_rt);
         }
     }
     uint32_t ports_present = 0;
@@ -1737,6 +1872,55 @@ void SparseKvDispatchProgramFactory::override_runtime_arguments(
             patch(6, 0);
             patch(7, 0);
         }
+    }
+}
+
+SparseKvDispatchMeshWorkloadFactory::cached_mesh_workload_t SparseKvDispatchMeshWorkloadFactory::create_mesh_workload(
+    const SparseKvDispatchParams& p,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const SparseKvDispatchInputs& t,
+    Tensor& output_tensor) {
+    auto* mesh_device = t.input_tensor.device();
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& range : tensor_coords.ranges()) {
+        std::vector<tt::tt_metal::ProgramDescriptor> descriptors;
+        for (const auto& coord : range) {
+            descriptors.push_back(SparseKvDispatchProgramFactory::create_descriptor(p, t, output_tensor, coord));
+        }
+        if (range.shape().mesh_size() < 2) {
+            workload.add_program(range, tt::tt_metal::Program{*mesh_device, descriptors.front()});
+            shared_variables[range] = {};
+            continue;
+        }
+        TT_FATAL(
+            tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(*mesh_device, range),
+            "sparse_kv_dispatch runs one program per mesh, which needs per-device runtime args on {}",
+            range);
+        // A direction a chip lacks has shorter (idle) runtime args on its cores: zero padded, never read.
+        ttnn::ProgramMergeOptions options;
+        options.pad_runtime_args = true;
+        auto merged = ttnn::merge_per_device_program_descriptors(descriptors, options);
+        TT_FATAL(
+            merged.has_value(),
+            "sparse_kv_dispatch: the per-chip programs of {} differ beyond runtime-arg values (kernels, compile-time "
+            "args, CBs or semaphores must be the same on every chip)",
+            range);
+        workload.add_program(range, tt::tt_metal::Program{*mesh_device, merged->descriptor});
+        ttnn::apply_per_device_runtime_args(workload, range, merged->per_device_runtime_args);
+        shared_variables[range] = {};
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+}
+
+void SparseKvDispatchMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const SparseKvDispatchParams& p,
+    const SparseKvDispatchInputs& t,
+    Tensor& output_tensor) {
+    // (common runtime args only: the same on every chip, so set on the merged program as a whole)
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        SparseKvDispatchProgramFactory::override_runtime_arguments(program, p, t, output_tensor, std::nullopt);
     }
 }
 

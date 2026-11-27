@@ -50,6 +50,10 @@ struct SparseKvDispatchParams {
     // Which of each requester's needed rows this call sends (sparse_push::PushPart: 0 ALL, 1 PREFIX = rows of blocks
     // before the plan's split block, 2 REST = the others). Hashed (a compile-time define of the planners).
     uint32_t part = 0;
+
+    // The inbox already holds this plan's slices (an earlier call on the same plan build exchanged them): skip the
+    // slice exchange. Hashed (a compile-time define of TX and the planners).
+    bool skip_exchange = false;
 };
 
 struct SparseKvDispatchInputs {

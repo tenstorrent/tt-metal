@@ -348,10 +348,13 @@ def test_dispatch_parts(mesh_device, fabric, split_slabs):
                 else:
                     assert not bool(exact.any()), f"{label} chip {i}: {int(exact.sum())} {name} rows sent by mistake"
 
+    # every call after the first reuses the plan's exchanged slices (skip_exchange)
+    exchanged = False
     for parts in (("PREFIX",), ("REST",), ("PREFIX", "REST"), ("ALL",)):
         ttnn.copy(poison, d.output)
         for name in parts:
-            d(cache, table, part={"ALL": 0, "PREFIX": 1, "REST": 2}[name])
+            d(cache, table, part={"ALL": 0, "PREFIX": 1, "REST": 2}[name], skip_exchange=exchanged)
+            exchanged = True
         ttnn.synchronize_device(mesh_device)
         sent = {"PREFIX", "REST"} if parts in (("ALL",), ("PREFIX", "REST")) else set(parts)
         check(sent, "+".join(parts))
@@ -1127,7 +1130,7 @@ def test_zz_push_vs_dispatch_real_scratch(mesh_device):
         # proposed: owner-major plan, then the dispatch (48 planners full grid; 16 planners K=2 beside attention)
         for name, planners, env, grid in (
             ("kvd", 48, {}, None),
-            ("kvd_beside", 16, {"KVD3": "K=2"}, beside),
+            ("kvd_beside", 16, {"KVD3": os.environ.get("KVD_BESIDE_KVD3", "K=2")}, beside),
         ):
             saved = {k: os.environ.get(k) for k in env}
             os.environ.update(env)
