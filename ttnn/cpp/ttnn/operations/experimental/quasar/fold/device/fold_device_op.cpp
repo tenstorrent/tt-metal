@@ -28,6 +28,10 @@ void validate_fold(const std::vector<Tensor>& input_tensors, bool is_sharded, ui
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
     TT_FATAL(input_tensor.is_allocated(), "Fold: Expect input tensor to be allocated on a device buffer.");
+    TT_FATAL(
+        !tt::tt_metal::is_mx(input_tensor.dtype()),
+        "Fold: MX tensors ({}) are not supported (row-granular copies cannot address MX tiles).",
+        input_tensor.dtype());
     // Row-major fold copies raw bytes, so its output must be declared with the input's dtype.
     const auto dtype = input_tensor.dtype();
     TT_FATAL(

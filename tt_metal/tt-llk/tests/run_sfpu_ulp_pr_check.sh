@@ -201,7 +201,7 @@ main() {
     local status=0
     RUNNER_TEMP="$ulp/head" pytest -q -n auto --dist=worksteal --timeout=120 \
         --ulp-measure=ulp_measurements.jsonl --compile-consumer "$@" "@$ulp/nodes.txt" || status=$?
-    python3 -m helpers.ulp_budget_diff headroom --measured ulp_measurements.jsonl --out "$SUMMARY" || status=$?
+    python3 -m helpers.ulp_budget_diff headroom --measured ulp_measurements.jsonl | tee -a "$SUMMARY" || status=$?
     exit "$status"
 }
 

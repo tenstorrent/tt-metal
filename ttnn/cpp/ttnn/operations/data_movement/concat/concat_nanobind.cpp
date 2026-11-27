@@ -30,6 +30,10 @@ void bind_concat(nb::module_& mod) {
         ROW_MAJOR input is not tile-aligned. A TILE input that is padded along `dim` needs every input to be TILE.
         Sharded inputs must also have the same layout, shard grid, sharding scheme and shard orientation.
 
+        Aliasing: inputs with `logical_shape[dim] == 0` are dropped (torch.cat-lenient); if exactly one survivor
+        remains and its memory_config already matches the output, the result aliases that input's buffer — do not
+        deallocate or in-place write the surviving input until the concat result is no longer read.
+
         Args:
             tensors (List[ttnn.Tensor]): the tensors to concatenate.
             dim (int, optional): the dimension along which to concatenate; negative values count from the last dimension. Defaults to `0`.

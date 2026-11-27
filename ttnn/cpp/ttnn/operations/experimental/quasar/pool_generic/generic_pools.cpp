@@ -1100,6 +1100,12 @@ static std::vector<Tensor> pool2d(
     std::array<uint32_t, 4> padding_check = sliding_window::get_pair_n4_padding(padding);
     uint32_t dilation_h = dilation.has_value() ? dilation.value().at(0) : 1;
     uint32_t dilation_w = dilation.has_value() ? dilation.value().at(1) : 1;
+    // MX input is not supported: the window kernels read bf16 row-major sticks (pool_op.cpp), and the global-average
+    // fast path below would reshape / view MX tiles (reshape takes BFLOAT16 / UINT32 only).
+    TT_FATAL(
+        !is_mx(input_tensor_4d.dtype()),
+        "Quasar pool2d does not support MX input tensors (got {}); typecast to BFLOAT16 first",
+        input_tensor_4d.dtype());
     bool input_is_block_float_tile =
         (input_tensor_4d.dtype() == DataType::BFLOAT8_B || input_tensor_4d.dtype() == DataType::BFLOAT4_B) &&
         input_tensor_4d.layout() == Layout::TILE;
