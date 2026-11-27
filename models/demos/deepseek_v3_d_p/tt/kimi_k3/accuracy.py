@@ -14,9 +14,11 @@ They are read from the environment each time a module asks, so set them before t
                              projections, MLA q_a / q_b / kv_a / kv_b / o / g projections, indexer wq_b / wk, the
                              MoE head's shared expert + latent down and the tail's latent up
     K3_ACC_KV                "bf16": the DSA layers' kvpe cache in bf16 (BF16_RM) instead of scaled FP8
-    K3_ACC_FIDELITY          HiFi4 with fp32 DEST accumulation where the op takes a compute config: KDA input /
-                             output projections and gated norm output (fp32), MLA projections, sparse SDPA (the
-                             approximate exp kept), the indexer's score matmul and key LayerNorm, the MoE head's
+    K3_ACC_FIDELITY          HiFi4 where the op takes a compute config: KDA input / output projections, scan and
+                             affine prefix, gated norm output in fp32; MLA projections (fp32 DEST only where the
+                             tuned config already had it: ttMLA's default config keeps bf16 DEST) with bf16 instead
+                             of bf8 outputs; sparse SDPA with fp32 DEST (the approximate exp kept); the indexer's
+                             score matmul and key LayerNorm; the MoE head's
                              shared expert and the tail's latent up; routed experts' x / h in bf16 (not bf8); the
                              MoE combine without its 2^-14 snap of every routed term (fp32 sums)
 
