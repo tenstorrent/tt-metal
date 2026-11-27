@@ -17,6 +17,7 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     GOLDEN_FILE_MODE,
     MANIFEST,
     open_golden,
+    write_manifest,
 )
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import golden_floor
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
@@ -97,6 +98,42 @@ def test_resumed_run_is_bit_identical_to_an_uninterrupted_one(tmp_path: Path, ex
     # Segmenting changes nothing but rounding: the whole sequence in one call agrees to FP64 precision.
     whole_output, whole_state = kda_forward_reference(table.unsqueeze(0), weights, config, dtype=torch.float64)
     torch.testing.assert_close(full_state["recurrent"], whole_state.recurrent, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("written, lists", [(False, [(0, 4)]), (True, [(0, 4), (4, 8)])], ids=["before", "after"])
+def test_a_crash_around_a_segment_manifest_write_resumes_bit_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, expect_error, written: bool, lists: list
+) -> None:
+    """A crash just before or just after the manifest lists segment 1 (its files already published) leaves the FP64
+    state of the manifest's last segment in place, and the resume equals an uninterrupted run bit for bit."""
+    run_full, *_ = make_run(tmp_path / "full")
+    run_full()
+
+    def crash_at_segment_1(run_dir, manifest):
+        if len(manifest["segments"]) == 2:
+            if written:
+                write_manifest(run_dir, manifest)
+            raise Interrupted("simulated crash")
+        write_manifest(run_dir, manifest)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(golden_producer, "write_manifest", crash_at_segment_1)
+        run_crashing, *_ = make_run(tmp_path / "resumed")
+        with expect_error(Interrupted, "simulated crash"):
+            run_crashing()
+    manifest = json.loads((tmp_path / "resumed" / MANIFEST).read_text())
+    assert [(s["start"], s["end"]) for s in manifest["segments"]] == lists
+    assert resume_state_path(tmp_path / "resumed", len(lists) - 1).exists()
+
+    run_resumed, *_ = make_run(tmp_path / "resumed")
+    resumed = run_resumed()
+    assert [session["first_segment"] for session in resumed["sessions"]] == [0, len(lists)]
+    for index in range(3):
+        full = torch.load(tmp_path / "full" / f"segment_{index:06d}.pt", weights_only=True)
+        got = torch.load(tmp_path / "resumed" / f"segment_{index:06d}.pt", weights_only=True)
+        assert torch.equal(full["output"], got["output"]), index
+        assert all(torch.equal(t, got["state"][n]) for n, t in full["state"].items()), index
+    assert sorted(p.name for p in (tmp_path / "resumed").glob("resume_state_*.pt")) == ["resume_state_000002.pt"]
 
 
 def test_products_are_computed_in_fp64_and_stored_in_fp32(tmp_path: Path) -> None:

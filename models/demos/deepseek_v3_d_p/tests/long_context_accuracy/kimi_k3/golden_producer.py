@@ -109,13 +109,12 @@ def _write_segment(run_dir: Path, index: int, start: int, end: int, output: torc
     publish(lambda path: torch.save(payload, path), segment_path(run_dir, index))
 
 
-def _write_resume_state(run_dir: Path, index: int, state: dict[str, torch.Tensor]) -> None:
-    """Publish the FP64 state after segment ``index`` and remove earlier ones. Called once the manifest lists segment
-    ``index``, so after a crash the state of the manifest's last segment is still there."""
-    keep = resume_state_path(run_dir, index)
-    publish(lambda path: torch.save(dict(state), path), keep)
+def _remove_resume_states(run_dir: Path, keep: int) -> None:
+    """Remove every resume state but segment ``keep``'s. Called once the manifest lists segment ``keep`` (whose state
+    was published before the manifest), so after a crash at any point the state of the manifest's last segment is
+    there."""
     for path in Path(run_dir).glob("resume_state_*.pt"):
-        if path.name != keep.name:
+        if path.name != resume_state_path(run_dir, keep).name:
             path.unlink()
 
 
@@ -182,12 +181,13 @@ def run_golden(
         began = time.perf_counter()
         output, state = kda_forward_reference(layer_input(token_ids[start:end]), weights, config, state, dtype=dtype)
         _write_segment(run_dir, index, start, end, output[0], vars(state))
+        publish(lambda path: torch.save(dict(vars(state)), path), resume_state_path(run_dir, index))
         if "products" not in manifest:
             manifest["products"] = _products(output[0], vars(state))
         seconds = time.perf_counter() - began
         manifest["segments"].append({"start": start, "end": end, "seconds": seconds})
         write_manifest(run_dir, manifest)
-        _write_resume_state(run_dir, index, vars(state))
+        _remove_resume_states(run_dir, index)
         print(f"segment {index + 1}/{segments} tokens [{start}, {end}) {seconds:.2f} s", flush=True)
 
     if len(manifest["segments"]) < segments:
@@ -257,7 +257,7 @@ def convert_to_fp32_storage(source: Path, destination: Path) -> dict:
             raise ValueError(f"segment {index} of {destination}: {bad} are not the FP64 source cast to {STORAGE_DTYPE}")
         entry["sha256"] = _sha256(segment_path(destination, index))
         if index == len(segments) - 1:
-            _write_resume_state(destination, index, payload["state"])
+            publish(lambda path: torch.save(dict(payload["state"]), path), resume_state_path(destination, index))
             products = _products(payload["output"], payload["state"])
         print(f"{_now()} converted segment {index + 1}/{len(segments)} {time.perf_counter() - began:.1f} s", flush=True)
 
