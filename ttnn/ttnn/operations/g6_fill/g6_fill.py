@@ -218,12 +218,7 @@ def fill_bits(dtype, fill_value) -> int:
 
 
 def _plan(tensor):
-    return _pd.make_plan(
-        tensor,
-        max_fill_cores=_pd.MAX_FILL_CORES,
-        block_w_tiles=_pd.BLOCK_W_TILES,
-        fill_row_source=_pd.FILL_ROW_SOURCE,
-    )
+    return _pd.make_plan(tensor, _pd.current_knobs())
 
 
 def g6_fill_plan(input_tensor) -> dict:
@@ -237,6 +232,7 @@ def g6_fill_plan(input_tensor) -> dict:
         "tiles_per_core": {(core.x, core.y): n for core, _, n in assignment},
         "block_w_tiles": plan.block_w_tiles,
         "fill_row_source": plan.fill_row_source,
+        "fill_row_depth": plan.fill_row_depth,
         "segment_bytes": plan.segment_bytes,
         "segments_per_tile": plan.segments_per_tile,
         "roles": {(core.x, core.y): "fill_writer" for core, _, _ in assignment},
@@ -253,9 +249,7 @@ def _cache_key(tensor):
         tensor.dtype,
         tensor.layout,
         str(tensor.memory_config()),
-        _pd.MAX_FILL_CORES,
-        _pd.BLOCK_W_TILES,
-        _pd.FILL_ROW_SOURCE,
+        _pd.current_knobs(),
     )
 
 

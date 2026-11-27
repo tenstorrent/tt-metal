@@ -49,21 +49,19 @@ void kernel_main() {
     constexpr uint32_t page_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t block_w_tiles = get_compile_time_arg_val(5);
     constexpr bool fill_row_in_common_args = get_compile_time_arg_val(6) != 0;
-    constexpr auto dst_args = TensorAccessorArgs<7>();
+    constexpr uint32_t dst_addr_arg = get_compile_time_arg_val(7);
+    constexpr auto dst_args = TensorAccessorArgs<8>();
 
     constexpr uint32_t segment_words = segment_bytes / sizeof(uint32_t);
-    constexpr uint32_t fill_words = fill_row_in_common_args ? segment_words : 1;
 
     static_assert(segment_bytes % sizeof(uint32_t) == 0, "segment must hold whole 32-bit elements");
     static_assert(segment_bytes <= NOC_MAX_BURST_SIZE, "a one-packet write cannot exceed one burst");
     static_assert(block_w_tiles > 0, "block_w_tiles must be positive");
+    static_assert(
+        !fill_row_in_common_args || dst_addr_arg >= segment_words, "the in-place fill run must precede dst_addr");
 
     // e is a common runtime arg, never a CT arg: the cached program must take a new value on
-    // every call. Layout: fill_words copies of e, then dst_addr.
-    const uint32_t dst_addr = get_common_arg_val<uint32_t>(fill_words);
-    const uint32_t start_tile = get_arg_val<uint32_t>(0);
-    const uint32_t core_w_tiles = get_arg_val<uint32_t>(1);
-
+    // every call. Layout (host-owned): copies of e from index 0, then dst_addr at dst_addr_arg.
     uint32_t row_addr;
     if constexpr (fill_row_in_common_args) {
         // Blackhole DRAM writes need source and destination congruent mod 16; every segment
@@ -77,6 +75,10 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("G6FILL-ISSUE");
+        // The argument reads sit inside the zone so no work of the core falls outside one (BB-21).
+        const uint32_t dst_addr = get_common_arg_val<uint32_t>(dst_addr_arg);
+        const uint32_t start_tile = get_arg_val<uint32_t>(0);
+        const uint32_t core_w_tiles = get_arg_val<uint32_t>(1);
         const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
         for (uint32_t done = 0; done < core_w_tiles; done += block_w_tiles) {
             const uint32_t remaining = core_w_tiles - done;

@@ -1,0 +1,97 @@
+{
+  "eval/golden_tests/g6_fill/test_golden.py::test_op[512-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op[256-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op[1-alignment=w_non_aligned-dtype=INT32-layout=ROW_MAJOR]": {
+    "dtype": "INT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op[196-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op[185-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op[207-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose0-512-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose1-196-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose2-207-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose3-256-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose4-196-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose5-1-alignment=w_non_aligned-dtype=INT32-layout=ROW_MAJOR]": {
+    "dtype": "INT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose6-512-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose7-512-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose8-207-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose9-196-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose10-1-alignment=w_non_aligned-dtype=INT32-layout=ROW_MAJOR]": {
+    "dtype": "INT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_regression.py::test_last_tile_second_face": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "w_non_aligned"
+  },
+  "eval/golden_tests/g6_fill/test_regression.py::test_input_untouched": {
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  }
+}
