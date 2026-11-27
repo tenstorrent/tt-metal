@@ -8,6 +8,7 @@ from tests.didt.runner.checks import (
     GddrEdc,
     Result,
     Status,
+    child_failure,
     classify_pytest,
     collected_node_ids,
     gddr_edc,
@@ -17,7 +18,6 @@ from tests.didt.runner.checks import (
     read_tail,
     sweep_skipped_windows,
     umd_metal_ids,
-    write_ack_chips,
 )
 
 TESTDATA = Path(__file__).parent / "testdata"
@@ -90,52 +90,25 @@ def test_sweep_skipped_windows():
     assert sweep_skipped_windows("=== 1 failed in 9s ===") is None
 
 
-def _write_ack_log(chips, hung):
-    where = "__main__:scan_all_chips:274"
-    lines = [LOGURU.format("INFO    ", where, "scanning 32 chips, dispatch watchdog=30s, logs under /tmp/x")]
-    for c in chips:
-        if c in hung:
-            why = f"HUNG chip {c} (runtime id 0): BusDeviceFunction=0000:c3:00.0 /dev/tenstorrent/{c} T3:N3"
-            lines.append(LOGURU.format("ERROR   ", where, f"chip {c} FAIL: {why}"))
-            lines.append(LOGURU.format("ERROR   ", where, f"  cat /tmp/x/chip{c}/pytest.log"))
-        else:
-            lines.append(LOGURU.format("SUCCESS ", where, f"chip {c} PASS"))
-    end = f"hung chips: {sorted(hung)} -- reset before re-running" if hung else f"all {len(chips)} chips passed"
-    return "".join(lines) + LOGURU.format("INFO    ", where, end)
+def test_child_failure_names_the_throw():
+    text = "E   RuntimeError: TT_THROW: trisc0 build failed. Log: /tmp/x.s: Assembler messages: (see)\n"
+    text += "=== 1 failed in 9.00s ===\n"
+    assert child_failure(text, 1) == "TT_THROW: trisc0 build failed. Log: /tmp/x.s: Assembler messages:"
 
 
-def test_write_ack_chips_pass():
-    assert write_ack_chips(_write_ack_log(range(32), set())) == (Result(Status.PASS, "no hang on 32/32 chips"), {})
+def test_child_failure_device_timeout_before_throw():
+    text = "Device 0: Timeout waiting for dispatch.\nTT_THROW: device timeout in fetch queue wait\n"
+    assert child_failure(text, 1) == "Device 0: Timeout waiting for dispatch."
 
 
-def test_write_ack_chips_hung():
-    r, chips = write_ack_chips(_write_ack_log([19, 3, 0], {19, 3}))
-    assert r.status == Status.FAIL
-    assert r.reason == "hang or ND on 2/3 chips"
-    assert r.details == [
-        "chip 3: hang BusDeviceFunction=0000:c3:00.0 /dev/tenstorrent/3 T3:N3",
-        "chip 19: hang BusDeviceFunction=0000:c3:00.0 /dev/tenstorrent/19 T3:N3",
-    ]
-    assert sorted(chips) == [3, 19]
+def test_child_failure_falls_back_to_pytest_summary():
+    text = "FAILED tests/x.py::t[p] - AssertionError: non-deterministic outputs\n=== 1 failed in 9.00s ===\n"
+    assert child_failure(text, 1) == "AssertionError: non-deterministic outputs"
 
 
-def test_write_ack_chips_crash_without_chip_lines():
-    crash = "Traceback (most recent call last):\nFileNotFoundError: [Errno 2] No such file\n"
-    assert write_ack_chips(crash) == (Result(Status.FAIL, "FileNotFoundError: [Errno 2] No such file"), {})
-
-
-def test_write_ack_chips_splits_hung_and_nd():
-    text = "chip 3 FAIL: HUNG chip 3 (runtime id 0): ...\nchip 5 FAIL: ND chip 5 ...\nchip 1 PASS\n"
-    r, chips = write_ack_chips(text)
-    assert r.status == Status.FAIL and r.reason == "hang or ND on 2/3 chips"
-    assert chips[3].startswith("HUNG") and chips[5].startswith("ND")
-
-
-def test_write_ack_chips_real_duty_hang():
-    # testdata/write_ack_duty_hang.log: see testdata/SOURCES.txt
-    r, chips = write_ack_chips((TESTDATA / "write_ack_duty_hang.log").read_text())
-    assert r.reason == "hang or ND on 1/32 chips"
-    assert chips == {27: "HUNG chip 27 (runtime id 0): BusDeviceFunction=0000:c4:00.0 /dev/tenstorrent/19 T3:N4"}
+def test_child_failure_killed_without_output():
+    assert child_failure("", -9) == "killed by signal 9, no diagnostic line; check dmesg"
+    assert child_failure("partial output\n", 135) == "exit code 135, no diagnostic line; check dmesg"
 
 
 def test_read_tail_reads_only_the_end(tmp_path):

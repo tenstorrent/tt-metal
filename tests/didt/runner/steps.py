@@ -20,6 +20,7 @@ from pathlib import Path
 from .checks import (
     Result,
     Status,
+    child_failure,
     classify_pytest,
     collected_node_ids,
     gddr_edc,
@@ -28,16 +29,15 @@ from .checks import (
     missing_node_ids,
     read_tail,
     sweep_skipped_windows,
-    write_ack_chips,
 )
 from .chips import Chip, by_dev
 from .config import Config, Fallback, StepCfg
 from .devices import (
     core_sweep_devices,
+    identity,
     nd_report_devices,
     run_to_run_devices,
     triage_hang_devices,
-    write_ack_devices,
 )
 from .status import Attempt, StepState, write
 
@@ -57,6 +57,8 @@ IDENTITY = ("dev", "bdf", "tray", "asic", "asic_id", "kmd")
 ND_DATA = {"failed_checks", "elements", "cores"}
 # Triage on a wedged chip can hang too; the bound keeps the hook's `kill -9 $PPID` reachable so the step ends.
 TRIAGE_SECS = 1200
+# each_chip: chip dev's process serves its inspector on this port + dev, so its triage reads that process only.
+INSPECTOR_PORT_BASE = 50100
 
 
 def _kill_group(p: subprocess.Popen) -> None:
@@ -69,8 +71,8 @@ def _kill_group(p: subprocess.Popen) -> None:
 
 def sh(cmd: str, log: Path, env: dict, cwd: Path, timeout: float | None) -> int:
     """Run cmd with output to log. On the wall timeout or an interrupt the whole process group dies: the workload
-    runs in its own session, so Ctrl-C reaches only the runner, and the mcast-ack script's per-chip children would
-    otherwise keep the chips open into the next reset."""
+    runs in its own session, so Ctrl-C reaches only the runner, and a child it left would keep the chips open into
+    the next reset."""
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "w") as f:
         p = subprocess.Popen(
@@ -85,6 +87,41 @@ def sh(cmd: str, log: Path, env: dict, cwd: Path, timeout: float | None) -> int:
         except BaseException:
             _kill_group(p)
             raise
+
+
+def sh_all(jobs: list[tuple[str, Path, dict]], cwd: Path, timeout: float | None) -> list[int]:
+    """Run every (cmd, log, env) at once, each as sh runs one. The wall timeout is shared: whatever still runs when
+    it expires is killed with its group and gets the timeout exit code; an interrupt kills them all."""
+    procs = []
+    try:
+        for cmd, log, env in jobs:
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with open(log, "w") as f:
+                procs.append(
+                    subprocess.Popen(
+                        ["bash", "-c", cmd],
+                        cwd=cwd,
+                        env=env,
+                        stdout=f,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+                )
+        deadline = None if timeout is None else time.monotonic() + timeout
+        rcs = []
+        for p, (_, log, _) in zip(procs, jobs):
+            try:
+                rcs.append(p.wait(timeout=None if deadline is None else max(0.0, deadline - time.monotonic())))
+            except subprocess.TimeoutExpired:
+                _kill_group(p)
+                with open(log, "a") as f:
+                    f.write(f"\nTIMEOUT after {timeout:g} s\n")
+                rcs.append(TIMEOUT_RC)
+        return rcs
+    except BaseException:
+        for p in procs:
+            _kill_group(p)
+        raise
 
 
 def host() -> str:
@@ -121,13 +158,18 @@ def base_env(repo: Path = REPO) -> dict[str, str]:
     }
 
 
-def triage_env(cfg: Config, csv: Path, repo: Path = REPO) -> dict[str, str]:
-    """On a dispatch timeout metal runs tt-triage while the workload is still up, then the hook kills the pytest."""
+def triage_env(cfg: Config, csv: Path, repo: Path = REPO, inspector: tuple[int, Path] | None = None) -> dict[str, str]:
+    """On a dispatch timeout metal runs tt-triage while the workload is still up, then the hook kills the pytest.
+    inspector: (RPC port, log dir) of a process that does not use the default ones."""
+    where = ""
+    if inspector:
+        port, logs = inspector
+        where = f"--inspector-rpc-port={port} --inspector-log-path={logs} --inspector-disable-rank "
     return {
         "TT_METAL_OPERATION_TIMEOUT_SECONDS": str(cfg.hang_secs),
         "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE": f"timeout {TRIAGE_SECS} "
         f"{repo / 'python_env/bin/python'} {repo}/tools/tt-triage.py "
-        f"--disable-progress {HANG_TRIAGE} --llm-output --llm-output-path={csv}; kill -9 $PPID",
+        f"--disable-progress {HANG_TRIAGE} {where}--llm-output --llm-output-path={csv}; kill -9 $PPID",
     }
 
 
@@ -173,9 +215,15 @@ def _device_line(d: dict, why: str | None = None) -> str:
     return f"{who}: {what}"
 
 
+def _same_chip(d: dict, t: dict) -> bool:
+    """By BDF when both name one: `dev` shifts when a reset leaves a chip off the bus."""
+    return d["bdf"] == t["bdf"] if "bdf" in d and "bdf" in t else d["dev"] == t["dev"]
+
+
 class Runner:
-    def __init__(self, cfg: Config, run_dir: Path, chips: list[Chip], co: bool, shell, snap=None):
+    def __init__(self, cfg: Config, run_dir: Path, chips: list[Chip], co: bool, shell, snap=None, shell_all=sh_all):
         self.cfg, self.run_dir, self.chips, self.shell, self.snap = cfg, run_dir, by_dev(chips), shell, snap
+        self.shell_all = shell_all
         self.header = {
             "tool": "didt_runner",
             "host": host(),
@@ -244,13 +292,15 @@ class Runner:
         env: dict | None = None,
         opts: list[str] | None = None,
         reset: dict | None = None,
+        target: dict | None = None,
     ) -> None:
+        """target: for a each_chip step, the one device to run on instead of every chip."""
         a.status, a.start = Status.RUN, time.time()
         self.reset_failed = False
         self.save()
         self.note(f"{step.key} {label} start -> {d}")
         try:
-            self._attempt(step, a, d, ids or step.ids, env or {}, step.opts if opts is None else opts, reset)
+            self._attempt(step, a, d, ids or step.ids, env or {}, step.opts if opts is None else opts, reset, target)
         except Exception as e:
             a.status, a.reason, a.details, a.devices = Status.FAIL, f"{type(e).__name__}: {e}", [], []
         except BaseException:
@@ -262,7 +312,15 @@ class Runner:
         self.save()
 
     def _attempt(
-        self, step: StepCfg, a: Attempt, d: Path, ids: list[str], extra_env: dict, opts: list[str], reset: dict | None
+        self,
+        step: StepCfg,
+        a: Attempt,
+        d: Path,
+        ids: list[str],
+        extra_env: dict,
+        opts: list[str],
+        reset: dict | None,
+        target: dict | None,
     ) -> None:
         d.mkdir(parents=True, exist_ok=True)
         r = reset or self.cfg.reset
@@ -271,28 +329,25 @@ class Runner:
             a.reason = f"reset failed {r.get('tries', 1)}x: {r['cmd']}, see {d / 'reset.log'}"
             return
         chips, chip_warnings = self.chips_after_reset()
-        log, csv, chips_dir = d / "log", d / "crash_triage.csv", d / "chips"
+        log, csv = d / "log", d / "crash_triage.csv"
         a.log = str(log)
         env = {**base_env(), **step.env, **extra_env}
+        cmd = "pytest " + _quote(ids + opts)
         if step.runner == "pytest":
-            cmd = "pytest " + _quote(ids + opts)
-            env |= triage_env(self.cfg, csv)
+            rc = self.shell(cmd, log, env | triage_env(self.cfg, csv), REPO, step.timeout)
         else:
-            # The script deletes its work and cache dirs at start, so both are dedicated, never the attempt dir.
-            # Kernel caches go to local disk: 32 concurrent JIT builds into one NFS tree fail.
-            extra_opts = opts[len(step.opts) :]
-            cmd = step.cmd + (" " + _quote(extra_opts) if extra_opts else "")
-            cache_dir = self.local_root() / d.relative_to(self.run_dir)
-            env |= {"MCAST_ACK_WORK_DIR": str(chips_dir), "MCAST_ACK_CACHE_DIR": str(cache_dir)}
-        try:
-            rc = self.shell(cmd, log, env, REPO, step.timeout)
-        finally:
-            if step.runner == "script":
-                shutil.rmtree(self.local_root(), ignore_errors=True)
+            devs = sorted(chips) if target is None else [c for c in chips if _same_chip(chips[c].as_dict(), target)]
+            if not devs:
+                a.status, a.reason = Status.FAIL, f"chip {target.get('bdf', target['dev'])} not on the bus after reset"
+                return
+            rcs = self.each_chip(cmd, d, env, devs, step.timeout)
         snap = d / "tt-smi.json"
         self.shell(self.cfg.smi["cmd"], snap, base_env(), REPO, self.cfg.smi["timeout"])
 
-        r, devices, warnings, whys = self.classify(step, rc, log, csv, chips_dir, chips, len(ids))
+        if step.runner == "pytest":
+            r, devices, warnings, whys = self.classify(step, rc, log, csv, chips, len(ids))
+        else:
+            r, devices, warnings, whys = self.classify_chips(step, rcs, d, log, chips, len(ids))
         details = [_device_line(x, whys.get(x["dev"])) for x in devices] + warnings + (r.details if not devices else [])
         details += chip_warnings
         r = gddr_result(Result(r.status, r.reason, details), self.gddr(snap), {c.bdf: c.dev for c in chips.values()})
@@ -300,6 +355,74 @@ class Runner:
 
     def local_root(self) -> Path:
         return Path(tempfile.gettempdir()) / f"didt_runner_{self.run_dir.name}"
+
+    def each_chip(self, cmd: str, d: Path, env: dict, devs: list[int], timeout: float | None) -> dict[int, int]:
+        """cmd once per chip, all at once, in chips/chip<dev>/. Each process gets its own inspector port and log dir,
+        so a hung chip's triage reads its own process only, and its own kernel cache on local disk: 32 concurrent
+        JIT builds into one NFS tree fail. Returns dev -> exit code."""
+        jobs = []
+        for dev in devs:
+            out = d / "chips" / f"chip{dev}"
+            port = INSPECTOR_PORT_BASE + dev
+            chip_env = env | {
+                # The BDF rank: UMD maps an integer through its BDF-sorted device list, and the test parses it as one.
+                "TT_VISIBLE_DEVICES": str(dev),
+                "TT_METAL_CACHE": str(self.local_root() / d.relative_to(self.run_dir) / f"chip{dev}"),
+                "OUT_DIR": str(out),
+                "TT_METAL_LOGS_PATH": str(out),
+                "TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS": f"localhost:{port}",
+            }
+            chip_env |= triage_env(
+                self.cfg, out / "crash_triage.csv", inspector=(port, out / "generated" / "inspector")
+            )
+            jobs.append((cmd, out / "pytest.log", chip_env))
+        try:
+            rcs = self.shell_all(jobs, REPO, timeout)
+        finally:
+            shutil.rmtree(self.local_root(), ignore_errors=True)
+        return dict(zip(devs, rcs))
+
+    def classify_chips(
+        self, step: StepCfg, rcs: dict[int, int], d: Path, log: Path, chips: dict[int, Chip], n_ids: int
+    ):
+        """Each chip on its own: a non-empty triage CSV is a hang, else the child's pytest result and ND lines. The
+        step is HANG when any chip hung, else FAIL when any failed. log gets one line per chip."""
+        devices, warnings, whys, lines = [], [], {}, []
+        hung, failed = [], []
+        for dev, rc in sorted(rcs.items()):
+            out = d / "chips" / f"chip{dev}"
+            csv, chip_log = out / "crash_triage.csv", out / "pytest.log"
+            if csv.is_file() and csv.stat().st_size > 0:
+                found, warn = triage_hang_devices(csv.read_text(errors="replace"), chips, dev_override=dev)
+                devices += found or [{**identity(dev, chips), "hung": True}]
+                warnings += warn
+                hung.append(dev)
+                lines.append(f"chip {dev} HANG triage {csv}")
+                continue
+            text = read_tail(chip_log) if chip_log.is_file() else ""
+            timed_out = rc == TIMEOUT_RC
+            if not timed_out and classify_pytest(text, n_ids).status == Status.PASS:
+                lines.append(f"chip {dev} PASS")
+                continue
+            failed.append(dev)
+            nd, warn = ([], []) if timed_out else nd_report_devices(text, chips, dev_override=dev)
+            warnings += warn
+            if nd:
+                devices += nd
+                lines.append(f"chip {dev} ND {chip_log}")
+            else:
+                whys[dev] = f"timeout after {step.timeout:g} s" if timed_out else child_failure(text, rc)
+                devices.append(identity(dev, chips))
+                lines.append(f"chip {dev} FAIL {whys[dev]} {chip_log}")
+        log.write_text("\n".join(lines) + "\n")
+        n = len(rcs)
+        if hung:
+            r = Result(Status.HANG, f"hung on {len(hung)}/{n} chips" + (f", failed on {len(failed)}" if failed else ""))
+        elif failed:
+            r = Result(Status.FAIL, f"failed on {len(failed)}/{n} chips")
+        else:
+            r = Result(Status.PASS, f"{n}/{n} chips passed")
+        return r, devices, warnings, whys
 
     def chips_after_reset(self) -> tuple[dict[int, Chip], list[str]]:
         """A reset can leave a chip off the bus, shifting every later dev; this attempt joins on the chips it ran on."""
@@ -314,24 +437,13 @@ class Runner:
         change += f"; new {', '.join(sorted(after - before))}" if after - before else ""
         return by_dev(now), [change]
 
-    def classify(
-        self, step: StepCfg, rc: int, log: Path, csv: Path, chips_dir: Path, chips: dict[int, Chip], n_ids: int
-    ):
+    def classify(self, step: StepCfg, rc: int, log: Path, csv: Path, chips: dict[int, Chip], n_ids: int):
         if csv.is_file() and csv.stat().st_size > 0:
             devices, warnings = triage_hang_devices(csv.read_text(errors="replace"), chips)
             return Result(Status.HANG, f"triage {csv}"), devices, warnings, {}
         if rc == TIMEOUT_RC:
             return Result(Status.FAIL, f"timeout after {step.timeout:g} s"), [], [], {}
         text = read_tail(log) if log.is_file() else ""
-        if step.check == "write_ack":
-            r, failed = write_ack_chips(text)
-            logs = {
-                c: read_tail(p)
-                for c in failed
-                if failed[c].startswith("ND") and (p := chips_dir / f"chip{c}" / "pytest.log").is_file()
-            }
-            devices, warnings = write_ack_devices(failed, logs, chips)
-            return r, devices, warnings, failed
         r = classify_pytest(text, n_ids)
         if step.check == "core_sweep" and r.status == Status.PASS:
             skipped = sweep_skipped_windows(text)
@@ -348,21 +460,24 @@ class Runner:
 
     def pin_core(self, step: StepCfg, fb: Fallback, state: StepState) -> None:
         """Rerun the step's per-chip test on each failing device of the first attempt, alone, at twice the
-        iterations. A hung target gets the fallback's own reset first; a reset that fails here aborts the run."""
+        iterations; a each_chip step reruns its own ids on that chip. A hung target gets the fallback's own reset
+        first; a reset that fails here aborts the run."""
         first = state.first
-        # A write_ack step is FAIL with hung chips in it, so hung or ND is per device, never from the step status.
-        # ND data on the device, not only a name: a build error or a killed child is no reason to pin.
+        # A each_chip step can hang on one chip and show ND on another, so hung or ND is per device, never from the
+        # step status. ND data on the device, not only a name: a build error or a killed child is no reason to pin.
         targets = [d for d in first.devices if d.get("hung") or ND_DATA & set(d)]
         if not targets:
             trigger = "hang" if first.status == Status.HANG else "nd"
             self._skip_pin(state, fb, "no failing device named by the first attempt", {"trigger": trigger})
             return
+        each_chip = step.runner == "each_chip"
         unsupported = None
-        if not step.pin_id:
+        if not each_chip and not step.pin_id:
             unsupported = "no per-chip test"
-        elif step.pin_id in self.pin_missing:
+        elif not each_chip and step.pin_id in self.pin_missing:
             unsupported = f"pin id does not collect: {step.pin_id}"
-        test = step.pin_id.split("::")[-1].split("[")[0] if step.pin_id else ""
+        pin_test = step.ids[0] if each_chip else step.pin_id
+        test = pin_test.split("::")[-1].split("[")[0] if pin_test else ""
         for t in targets:
             trigger = "hang" if t.get("hung") else "nd"
             # One chip iterates faster than the full mesh: the rerun loops at least as long as the original did, and
@@ -388,9 +503,10 @@ class Runner:
             opts, env_iters, used = double_iterations(step.opts, step.env)
             extra["iterations"] = used
             extra["loop"] = {"original_s": round(original[0], 1)} if original else {}
+            pick = {} if each_chip else {DEVICE_ID_ENV: str(t["dev"])}
             a = Attempt(
                 fb.name,
-                {**env_iters, DEVICE_ID_ENV: str(t["dev"]), **loop_env},
+                {**env_iters, **pick, **loop_env},
                 opts,
                 Status.PENDING,
                 "",
@@ -404,7 +520,8 @@ class Runner:
             state.fallbacks.append(a)
             reset = fb.hang_reset if trigger == "hang" else None
             d = self.run_dir / f"{step.key.replace(':', '/')}_{fb.name}_dev{t['dev']}"
-            self.attempt(step, a, d, f"{fb.name} dev {t['dev']}", [step.pin_id], a.env, opts, reset)
+            ids, target = (step.ids, t) if each_chip else ([step.pin_id], None)
+            self.attempt(step, a, d, f"{fb.name} dev {t['dev']}", ids, a.env, opts, reset, target)
             if self.reset_failed:
                 a.reason += "; run aborted"
                 self.aborted = f"reset failed before the {fb.name} rerun of {step.key} on device {t['dev']}"
@@ -420,14 +537,14 @@ class Runner:
 
     @staticmethod
     def _loop_log(step: StepCfg, log: str, dev: int) -> Path | None:
-        """The iteration lines of a script step are in each chip's child log, not in the script's own."""
+        """The iteration lines of a each_chip step are in each chip's own log."""
         if not log:
             return None
-        return Path(log).parent / "chips" / f"chip{dev}" / "pytest.log" if step.runner == "script" else Path(log)
+        return Path(log).parent / "chips" / f"chip{dev}" / "pytest.log" if step.runner == "each_chip" else Path(log)
 
     def _pin_result(self, step: StepCfg, a: Attempt, t: dict, test: str, used: dict) -> None:
-        rerun = [d for d in a.devices if d["dev"] == t["dev"]]
-        others = [d["dev"] for d in a.devices if d["dev"] != t["dev"]]
+        rerun = [d for d in a.devices if _same_chip(d, t)]
+        others = [d["dev"] for d in a.devices if not _same_chip(d, t)]
         a.devices = rerun
         a.extra["cores"]["rerun"] = list(rerun[0].get("cores", [])) if rerun else []
         notes = [f"WARNING failure on device {d}, outside the pinned chip" for d in others]
@@ -475,10 +592,11 @@ def run(
     co: bool,
     shell=sh,
     snap=None,
+    shell_all=sh_all,
 ) -> int:
     """Every selected step in config order; a FAIL or HANG never stops the next step. Exit code: 1 when any step's
     first attempt FAILed or HUNG, else 0."""
-    r = Runner(cfg, run_dir, chips, co, shell, snap)
+    r = Runner(cfg, run_dir, chips, co, shell, snap, shell_all)
     selected = [s for s in cfg.steps if (only is None or s.key in only) and s.key not in skip]
     states = {s.key: StepState(s.key, _pending(), []) for s in cfg.steps}
     for s in cfg.steps:

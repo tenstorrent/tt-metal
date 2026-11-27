@@ -15,7 +15,7 @@ MAX_CORES = 8
 _BDF = r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]"
 
 
-def _identity(dev: int, chips: dict[int, Chip]) -> dict:
+def identity(dev: int, chips: dict[int, Chip]) -> dict:
     return chips[dev].as_dict() if dev in chips else {"dev": dev}
 
 
@@ -56,7 +56,7 @@ def nd_report_devices(
     for logged, failed, checks, pattern in summary:
         logged = int(logged)
         dev = logged if dev_override is None else dev_override
-        ident = _identity(dev, chips)
+        ident = identity(dev, chips)
         bdf = log_bdf.get(logged)
         if bdf and bdf != ident.get("bdf"):
             if "bdf" in ident:
@@ -94,7 +94,7 @@ def run_to_run_devices(text: str, chips: dict[int, Chip]) -> list[dict]:
         cores[key] = cores.get(key, 0) + int(n)
     return [
         {
-            **_identity(dev, chips),
+            **identity(dev, chips),
             "hung": False,
             "cores": _top(
                 [{"x": x, "y": y, "translated": [px, py], "elements": n} for (x, y, px, py), n in per[dev].items()],
@@ -118,7 +118,7 @@ def core_sweep_devices(text: str, chips: dict[int, Chip]) -> list[dict]:
             cores.setdefault(dev, []).append({"x": int(ox), "y": int(oy), "elements": int(n)})
     return [
         {
-            **_identity(dev, chips),
+            **identity(dev, chips),
             "hung": False,
             "elements": total[dev],
             **({"cores": _top(cores[dev], "elements")} if dev in cores else {}),
@@ -139,9 +139,12 @@ def _rows(section: str) -> list[dict[str, str]]:
     return [{k: (v or "").replace("\\n", "\n") for k, v in row.items() if k} for row in reader]
 
 
-def triage_hang_devices(csv_text: str, chips: dict[int, Chip]) -> tuple[list[dict], list[str]]:
+def triage_hang_devices(
+    csv_text: str, chips: dict[int, Chip], dev_override: int | None = None
+) -> tuple[list[dict], list[str]]:
     """Stalled devices from dump_running_operations.py, cross-checked with dump_op_mesh.py's T<tray>:N<asic> cells.
-    The workload is still up when the dispatch-timeout hook runs triage, so this names the op and its cores."""
+    The workload is still up when the dispatch-timeout hook runs triage, so this names the op and its cores.
+    dev_override: the parent's chip id for a child process that sees itself as device 0."""
     sections = _sections(csv_text)
     mesh = {
         int(dev): (int(tray), int(asic))
@@ -149,19 +152,20 @@ def triage_hang_devices(csv_text: str, chips: dict[int, Chip]) -> tuple[list[dic
     }
     devices, warnings = {}, []
     for row in _rows(sections.get("dump_running_operations.py", "")):
-        for dev in (int(d) for d in re.findall(r"\d+", row.get("Devices", ""))):
+        for logged in (int(d) for d in re.findall(r"\d+", row.get("Devices", ""))):
+            dev = logged if dev_override is None else dev_override
             if dev in devices:
                 continue
-            ident = _identity(dev, chips)
-            if dev in mesh and "tray" in ident and mesh[dev] != (ident["tray"], ident["asic"]):
+            ident = identity(dev, chips)
+            if logged in mesh and "tray" in ident and mesh[logged] != (ident["tray"], ident["asic"]):
                 warnings.append(
-                    f"device {dev}: triage says T{mesh[dev][0]}:N{mesh[dev][1]}, chip snapshot says "
+                    f"device {dev}: triage says T{mesh[logged][0]}:N{mesh[logged][1]}, chip snapshot says "
                     f"T{ident['tray']}:N{ident['asic']} ({ident['bdf']})"
                 )
             cores = [
                 {"x": int(x), "y": int(y), "translated": [int(tx), int(ty)]}
                 for d, tx, ty, x, y in re.findall(r"^(\d+):(\d+)-(\d+) \((\d+),(\d+)\)$", row.get("Cores", ""), re.M)
-                if int(d) == dev
+                if int(d) == logged
             ]
             count = row.get("Core Cnt", "").strip()
             devices[dev] = {
@@ -172,22 +176,3 @@ def triage_hang_devices(csv_text: str, chips: dict[int, Chip]) -> tuple[list[dic
                 **({"cores": cores} if cores else {}),
             }
     return [devices[d] for d in sorted(devices)], warnings
-
-
-def write_ack_devices(
-    chip_status: dict[int, str], chip_logs: dict[int, str], chips: dict[int, Chip]
-) -> tuple[list[dict], list[str]]:
-    """chip_status: chip N -> the scan's FAIL reason, N being the chip's BusDeviceFunction rank on the host. Each
-    child runs with TT_VISIBLE_DEVICES=<N> and logs itself as device 0, so its ND lines are joined on N."""
-    devices, warnings = [], []
-    for chip in sorted(chip_status):
-        why = chip_status[chip]
-        if why.startswith("HUNG"):
-            devices.append({**_identity(chip, chips), "hung": True})
-        elif why.startswith("ND"):
-            nd, warn = nd_report_devices(chip_logs.get(chip, ""), chips, dev_override=chip)
-            devices += nd or [{**_identity(chip, chips), "hung": False}]
-            warnings += warn
-        else:
-            devices.append(_identity(chip, chips))
-    return devices, warnings
