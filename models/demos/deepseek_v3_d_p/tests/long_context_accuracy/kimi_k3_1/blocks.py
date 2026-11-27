@@ -9,10 +9,42 @@ row order:
 * ``KimiK31DsaBlock`` (m06n.11.5): ``ttMLA`` of layer 3 with the adapter's caches, sized from the context length;
   ``extras`` hold the indexer top-k; the carried state is the KV and index caches.
 
-Each Block's code, including its imports, stays inside its own section below.
+Each Block's code, including its imports, stays inside its own section below; the per-chip readback both use is in
+the shared section first.
 """
 
 from __future__ import annotations
+
+# ==== Shared: per-chip readback =====================================================================================
+# isort: split
+import torch
+
+
+def shard_grid(mesh, tensor, sp_axis: int) -> list[list[torch.Tensor]]:
+    """Each chip's shard of ``tensor`` on host, as ``grid[sp][tp]`` (SP position, TP position): mesh chip i, at
+    (mr, mc) = divmod(i, columns) in ``ttnn.get_device_tensors`` order, is (sp, tp) = (mr, mc) with SP on mesh axis 0,
+    (mc, mr) with SP on axis 1. Reading each chip's shard gives the same tensor as a ``ConcatMesh2dToTensor`` composer,
+    ~10x faster for a chunk's [2560, 7168] bf16 output (0.03 vs 0.29 s) and ~3-4x for its DSA top-k (m06n.15)."""
+    import ttnn
+
+    R, C = tuple(mesh.shape)
+    sp, tp = (R, C) if sp_axis == 0 else (C, R)
+    grid = [[None] * tp for _ in range(sp)]
+    for i, d in enumerate(ttnn.get_device_tensors(tensor)):
+        mr, mc = divmod(i, C)
+        s, t = (mr, mc) if sp_axis == 0 else (mc, mr)
+        grid[s][t] = ttnn.to_torch(d)
+    return grid
+
+
+def sp_tp_rows(mesh, tensor, sp_axis: int, rows: int) -> torch.Tensor:
+    """A ``[1, 1, seq/sp, width/tp]``-sharded activation (sequence over SP, width over TP) as host ``[rows, width]``
+    in token order: SP shards stacked along rows, each SP position's TP shards side by side."""
+    grid = shard_grid(mesh, tensor, sp_axis)
+    return torch.cat([torch.cat([t.reshape(t.shape[-2], t.shape[-1]) for t in row], dim=-1) for row in grid])[:rows]
+
+
+# ==== end of shared =================================================================================================
 
 # ==== MoE: KimiK31MoeBlock (m06n.11.4) ==============================================================================
 import torch
@@ -82,7 +114,7 @@ class KimiK31MoeBlock:
     def __init__(self, layer: int) -> None:
         self.layer = layer
         self.mesh = self.ffn = self.mapper = None
-        self.chunk = 0
+        self.chunk = self.sp_axis = 0
 
     def build(self, mesh, context_len: int, chunk: int) -> None:
         import ttnn
@@ -103,11 +135,10 @@ class KimiK31MoeBlock:
         dims = [None, None]
         dims[layout.sp_axis], dims[layout.tp_axis] = -2, -1
         self.mapper = ttnn.ShardTensor2dMesh(mesh, mesh_shape=mesh_shape, dims=tuple(dims))
-        self.mesh, self.chunk = mesh, chunk
+        self.mesh, self.chunk, self.sp_axis = mesh, chunk, layout.sp_axis
 
     def forward(self, x: torch.Tensor, lo: int, hi: int) -> BlockOutputs:
         import ttnn
-        from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import compose
 
         rows = hi - lo
         x_rows = torch.zeros(self.chunk, KimiK31Config.EMB_SIZE, dtype=torch.bfloat16)
@@ -123,7 +154,7 @@ class KimiK31MoeBlock:
         y = self.ffn(tt_x, actual_isl=rows, actual_start=lo)  # (the runtime passes every chunk's real span)
         ttnn.deallocate(tt_x)
         ids, weights = moe_routing(self.ffn, self.ffn._block(self.chunk), rows)  # (the call's cached block)
-        output = compose(self.mesh, y, rows)
+        output = sp_tp_rows(self.mesh, y, self.sp_axis, rows)
         ttnn.deallocate(y)
         return BlockOutputs(output, {"expert_ids": ids, "expert_weights": weights})
 
@@ -147,8 +178,23 @@ import torch
 import ttnn
 from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import k31_topk_rows
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows
+
+
+def topk_rows(mesh, indices, rows: int, sp_axis: int) -> torch.Tensor:
+    """A DSA layer's top-k ``[1, 1, rows/sp(/tp), k]`` (one chunk's query rows over SP, TP-split or TP-replicated) as
+    host int64 ``[rows, k]`` in token order, read per chip (``shard_grid``); the uint32 no-key sentinel reads
+    0xFFFFFFFF. TP-replicated, TP position 0's shards hold the chunk; TP-split, SP position s's rows are its TP
+    positions' shards in order (as ``k31_topk_rows`` composes them)."""
+    grid = [
+        [(t.reshape(t.shape[-2], t.shape[-1]).to(torch.int64) & 0xFFFFFFFF) for t in row]
+        for row in shard_grid(mesh, indices, sp_axis)
+    ]
+    sp, tp, local = len(grid), len(grid[0]), grid[0][0].shape[0]
+    if local * sp == rows:
+        return torch.cat([row[0] for row in grid])
+    assert local * sp * tp == rows, f"top-k rows {local} a chip do not tile a {rows}-row chunk on {sp}x{tp}"
+    return torch.cat([t for row in grid for t in row])
 
 
 def device_selection(topk: torch.Tensor) -> torch.Tensor:
@@ -231,13 +277,14 @@ class KimiK31DsaBlock:
             return_indexer_indices=True,
         )
         ttnn.deallocate(x_tt)
-        topk = k31_topk_rows(mesh, indices, chunk, layout.sp_axis, layout.tp_axis)[: hi - lo]
-        out = compose(mesh, attn, hi - lo)
+        topk = topk_rows(mesh, indices, chunk, layout.sp_axis)[: hi - lo]
+        out = sp_tp_rows(mesh, attn, layout.sp_axis, hi - lo)
         ttnn.deallocate(attn)
         ttnn.deallocate(indices)
         return BlockOutputs(output=out, extras={"topk": device_selection(topk)})
 
     def carried_state(self) -> dict[str, torch.Tensor]:
+        # Composed, not read per chip: single-device to_torch rejects the kvpe cache's FP8_E4M3 (m06n.15).
         return {
             "kv_cache": cache_rows(self._mesh, self._caches.kvpe, self._chunk, self._rows)[0],
             "index_cache": cache_rows(self._mesh, self._caches.index, self._chunk, self._rows)[0],
