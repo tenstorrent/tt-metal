@@ -12,6 +12,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 from datetime import datetime
@@ -151,14 +152,22 @@ DROPPED_ENV = (
 
 
 def base_env(repo: Path = REPO) -> dict[str, str]:
-    venv = repo / "python_env"
-    return {
+    """The repo's python_env comes first on PATH when it exists. Without one, as in the exabox-tools image, the
+    caller's PATH and VIRTUAL_ENV stay as they are."""
+    env = {
         **{k: v for k, v in os.environ.items() if k not in DROPPED_ENV},
         "TT_METAL_HOME": str(repo),
         "PYTHONPATH": str(repo),
-        "VIRTUAL_ENV": str(venv),
-        "PATH": f"{venv / 'bin'}:{os.environ.get('PATH', '')}",
     }
+    venv = repo / "python_env"
+    if venv.is_dir():
+        env |= {"VIRTUAL_ENV": str(venv), "PATH": f"{venv / 'bin'}:{os.environ.get('PATH', '')}"}
+    return env
+
+
+def repo_python(repo: Path = REPO) -> str:
+    venv_python = repo / "python_env" / "bin" / "python"
+    return str(venv_python) if venv_python.is_file() else sys.executable
 
 
 def triage_env(cfg: Config, csv: Path, repo: Path = REPO, inspector: tuple[int, Path] | None = None) -> dict[str, str]:
@@ -171,7 +180,7 @@ def triage_env(cfg: Config, csv: Path, repo: Path = REPO, inspector: tuple[int, 
     return {
         "TT_METAL_OPERATION_TIMEOUT_SECONDS": str(cfg.hang_secs),
         "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE": f"timeout {TRIAGE_SECS} "
-        f"{repo / 'python_env/bin/python'} {repo}/tools/tt-triage.py "
+        f"{repo_python(repo)} {repo}/tools/tt-triage.py "
         f"--disable-progress {HANG_TRIAGE} {where}--llm-output --llm-output-path={csv}; kill -9 $PPID",
     }
 

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -13,7 +14,7 @@ from pathlib import Path
 from tests.didt.didt_runner import main
 from tests.didt.runner.chips import Chip
 from tests.didt.runner.config import load
-from tests.didt.runner.steps import INSPECTOR_PORT_BASE, double_iterations, run, sh, sh_all
+from tests.didt.runner.steps import INSPECTOR_PORT_BASE, base_env, double_iterations, run, sh, sh_all, triage_env
 
 TESTDATA = Path(__file__).parent / "testdata"
 SHIPPED = Path(__file__).parents[1] / "runner_configs" / "weekly.json"
@@ -214,6 +215,30 @@ def test_hang_reads_triage_csv(tmp_path):
     assert s["reason"] == f"triage {run_dir / 'nd/minimal/crash_triage.csv'}"
     assert s["devices"][0]["dev"] == 27 and s["devices"][0]["hung"] is True and s["devices"][0]["tray"] == 3
     assert s["fallbacks"][0]["status"] == "PASS"
+
+
+def test_env_without_python_env_keeps_callers_python(tmp_path, monkeypatch):
+    # The exabox-tools image has no python_env: tests and triage run on the image venv already on PATH.
+    monkeypatch.setenv("PATH", "/opt/venv/bin:/usr/bin")
+    monkeypatch.setenv("VIRTUAL_ENV", "/opt/venv")
+    env = base_env(tmp_path)
+    assert (env["PATH"], env["VIRTUAL_ENV"], env["PYTHONPATH"]) == (
+        "/opt/venv/bin:/usr/bin",
+        "/opt/venv",
+        str(tmp_path),
+    )
+    hook = triage_env(CFG, tmp_path / "c.csv", repo=tmp_path)["TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"]
+    assert f" {sys.executable} {tmp_path}/tools/tt-triage.py " in hook
+
+
+def test_env_with_python_env_puts_it_first(tmp_path, monkeypatch):
+    (tmp_path / "python_env" / "bin").mkdir(parents=True)
+    (tmp_path / "python_env" / "bin" / "python").touch()
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = base_env(tmp_path)
+    assert env["PATH"] == f"{tmp_path}/python_env/bin:/usr/bin" and env["VIRTUAL_ENV"] == str(tmp_path / "python_env")
+    hook = triage_env(CFG, tmp_path / "c.csv", repo=tmp_path)["TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"]
+    assert f" {tmp_path}/python_env/bin/python {tmp_path}/tools/tt-triage.py " in hook
 
 
 def test_triage_env_on_pytest_attempts(tmp_path):
