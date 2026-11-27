@@ -1,150 +1,153 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regime N (new_storage) reader, NCRISC / NoC0.
+// g6_pad new_storage_tiles reader (NCRISC / NoC0): reads the core's staged input pages into
+// cb_staged_tiles a block at a time, then overwrites the part of every edge tile that lies
+// outside the logical input with c, copied over the NoC from this core's fill page at the
+// same in-tile offset.
 //
-// Per block of block_tiles output tiles: slot i of cb_work_tiles <-> block tile i. Every
-// input-backed tile is read whole into its slot; after the block's read barrier, the parts of a
-// boundary tile that lie in x's tile padding are overwritten with c. Fill-only slots stay untouched
-// (the writer sends those from its own fill page). Push/pop are always the nominal block_tiles so
-// the CB ring closes on a ragged last block.
-//
-// Raw dataflow for the page reads: no kernel_lib helper wraps interleaved page reads for a block.
+// load_block uses raw noc_async_read + TensorAccessor: kernel_lib has no interleaved batch reader.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "g6_pad_fill.hpp"
-#include "g6_pad_new_storage_walk.hpp"
+#include "api/debug/kernel_profiler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+#include "g6_pad_common.hpp"
 
 namespace {
 
-constexpr uint32_t FACE_DIM = 16;
-constexpr uint32_t TILE_DIM = 32;
+// Self-aimed L1 -> L1 copies of [off, off + len) from the fill page into a staged tile.
+// Runs arrive in increasing offset order; adjacent runs are merged into one transfer.
+class MaskCopier {
+public:
+    MaskCopier(uint32_t fill_page) : fill_page_(fill_page) {}
 
-// Tile rows [row_mask_rem, 32), all columns, of the slot at slot_offset past the CB write pointer.
-// Faces of 16 rows: 0,1 hold tile rows 0-15, 2,3 rows 16-31.
-template <uint32_t elem_bytes, uint32_t row_mask_rem>
-FORCE_INLINE void mask_rows(uint32_t cb_id, uint32_t slot_offset, uint32_t fill_bits) {
-    constexpr uint32_t face_row_bytes = FACE_DIM * elem_bytes;
-    constexpr uint32_t face_bytes = FACE_DIM * face_row_bytes;
-    if constexpr (row_mask_rem < FACE_DIM) {
-        constexpr uint32_t skip = row_mask_rem * face_row_bytes;
-        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + skip, face_bytes - skip, fill_bits);
-        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + face_bytes + skip, 3 * face_bytes - skip, fill_bits);
-    } else {
-        constexpr uint32_t skip = (row_mask_rem - FACE_DIM) * face_row_bytes;
-        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + 2 * face_bytes + skip, face_bytes - skip, fill_bits);
-        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + 3 * face_bytes + skip, face_bytes - skip, fill_bits);
+    FORCE_INLINE void add(uint32_t tile_addr, uint32_t off, uint32_t len) {
+        if (len_ != 0 && tile_ == tile_addr && off == off_ + len_) {
+            len_ += len;
+            return;
+        }
+        flush();
+        tile_ = tile_addr;
+        off_ = off;
+        len_ = len;
     }
-}
 
-// Columns [col_mask_rem, 32) of tile rows [0, row_end). Faces 0,2 hold columns 0-15, faces 1,3
-// columns 16-31. row_end < 32 on a corner tile, whose rows from row_end on the row mask covers.
-template <uint32_t elem_bytes, uint32_t col_mask_rem>
-FORCE_INLINE void mask_cols(uint32_t cb_id, uint32_t slot_offset, uint32_t row_end, uint32_t fill_bits) {
-    constexpr uint32_t face_row_bytes = FACE_DIM * elem_bytes;
-    constexpr uint32_t face_bytes = FACE_DIM * face_row_bytes;
-    constexpr bool right_faces_whole = col_mask_rem < FACE_DIM;
-    constexpr uint32_t skip = (right_faces_whole ? col_mask_rem : col_mask_rem - FACE_DIM) * elem_bytes;
-    constexpr uint32_t part_bytes = face_row_bytes - skip;
-    constexpr uint32_t part_face_top = right_faces_whole ? 0 : face_bytes;
-    constexpr uint32_t part_face_bottom = right_faces_whole ? 2 * face_bytes : 3 * face_bytes;
-    const uint32_t top_rows = row_end < FACE_DIM ? row_end : FACE_DIM;
-    const uint32_t bottom_rows = row_end - top_rows;
-    if constexpr (right_faces_whole) {
-        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + face_bytes, top_rows * face_row_bytes, fill_bits);
-        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + 3 * face_bytes, bottom_rows * face_row_bytes, fill_bits);
+    FORCE_INLINE void flush() {
+        if (len_ == 0) {
+            return;
+        }
+        UnicastEndpoint self;
+        noc_.async_read(
+            self,
+            CoreLocalMem<uint32_t>(tile_ + off_),
+            len_,
+            dataflow_kernel_lib::local_addr(fill_page_ + off_, noc_.get_noc_id()),
+            {});
+        len_ = 0;
     }
-    // Slots and face rows are 32-B aligned, so a partial row's alignment is that of `skip`.
-    const uint32_t word = g6_pad::pattern_word<elem_bytes>(fill_bits);
-    const uint32_t top_first = get_write_ptr(cb_id) + slot_offset + part_face_top + skip;
-#pragma GCC unroll 16
-    for (uint32_t row = 0; row < top_rows; ++row) {
-        g6_pad::store_constant_fixed<elem_bytes, part_bytes, skip % 4>(top_first + row * face_row_bytes, word);
-    }
-    const uint32_t bottom_first = get_write_ptr(cb_id) + slot_offset + part_face_bottom + skip;
-#pragma GCC unroll 16
-    for (uint32_t row = 0; row < bottom_rows; ++row) {
-        g6_pad::store_constant_fixed<elem_bytes, part_bytes, skip % 4>(bottom_first + row * face_row_bytes, word);
+
+private:
+    Noc noc_;
+    uint32_t fill_page_;
+    uint32_t tile_ = 0, off_ = 0, len_ = 0;
+};
+
+// Mask of one edge tile: every element outside [0, row_mask) x [0, col_mask) takes c.
+template <uint32_t es>
+FORCE_INLINE void mask_tile(MaskCopier& copier, uint32_t tile_addr, uint32_t row_mask, uint32_t col_mask) {
+    constexpr uint32_t row_bytes = g6_pad::FACE * es;
+    constexpr uint32_t face_bytes = g6_pad::FACE * row_bytes;
+    for (uint32_t face = 0; face < 4; ++face) {
+        const uint32_t face_base = face * face_bytes;
+        const uint32_t row0 = g6_pad::FACE * (face >> 1);
+        const uint32_t col0 = g6_pad::FACE * (face & 1);
+        const uint32_t rows = row_mask > row0 ? (row_mask - row0 < g6_pad::FACE ? row_mask - row0 : g6_pad::FACE) : 0;
+        const uint32_t cols = col_mask > col0 ? (col_mask - col0 < g6_pad::FACE ? col_mask - col0 : g6_pad::FACE) : 0;
+        if (rows == 0 || cols == 0) {
+            copier.add(tile_addr, face_base, face_bytes);
+            continue;
+        }
+        if (cols < g6_pad::FACE) {
+            for (uint32_t r = 0; r < rows; ++r) {
+                copier.add(tile_addr, face_base + r * row_bytes + cols * es, (g6_pad::FACE - cols) * es);
+            }
+        }
+        if (rows < g6_pad::FACE) {
+            copier.add(tile_addr, face_base + rows * row_bytes, (g6_pad::FACE - rows) * row_bytes);
+        }
     }
 }
 
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t cb_work_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t elem_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t block_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t geometry_ct_base = 4;
-    using Walk = g6_pad::NewStorageWalk<geometry_ct_base>;
-    constexpr auto x_args = TensorAccessorArgs<geometry_ct_base + g6_pad::kGeometryArgCount>();
+    constexpr uint32_t cb_staged_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_fill_page_reader = get_compile_time_arg_val(1);
+    constexpr uint32_t es = get_compile_time_arg_val(2);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
+    constexpr bool fill_is_zero = get_compile_time_arg_val(4) != 0;
+    constexpr auto in_args = TensorAccessorArgs<5>();
 
-    const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
-    [[maybe_unused]] const uint32_t fill_bits = get_common_arg_val<uint32_t>(1);
-    const uint32_t core_work_begin = get_arg_val<uint32_t>(0);
-    const uint32_t core_work_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t num_blocks_this_core = get_arg_val<uint32_t>(2);
+    const uint32_t in_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t c_bits = get_common_arg_val<uint32_t>(1);
+    const uint32_t ht_in = get_common_arg_val<uint32_t>(2);
+    const uint32_t wt_in = get_common_arg_val<uint32_t>(3);
+    const uint32_t row_mask = get_common_arg_val<uint32_t>(4);
+    const uint32_t col_mask = get_common_arg_val<uint32_t>(5);
+    const uint32_t block_pages = get_common_arg_val<uint32_t>(6);
 
-    const auto x_accessor = TensorAccessor(x_args, x_addr, tile_bytes);
+    const uint32_t staged_start = get_arg_val<uint32_t>(0);
+    const uint32_t staged_count = get_arg_val<uint32_t>(1);
+    const uint32_t num_blocks = get_arg_val<uint32_t>(2);
 
-    Walk walk;
-    walk.start(core_work_begin);
-    uint32_t tiles_left = core_work_tiles;
-    for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
-        const uint32_t block_extent = tiles_left < block_tiles ? tiles_left : block_tiles;
-        [[maybe_unused]] const Walk block_first = walk;
+    const auto in = TensorAccessor(in_args, in_addr, page_bytes);
+    const bool has_masks = row_mask < g6_pad::TILE || col_mask < g6_pad::TILE;
+    const uint32_t fill_page = get_write_ptr(cb_fill_page_reader);
+    MaskCopier copier(fill_page);
 
-        // load_block
+    uint32_t page_id = staged_start;
+    // The lead indices are irrelevant here: lead1 = 1 makes the walk track (ht, wt) only.
+    g6_pad::StagedWalk walk(staged_start, ht_in, wt_in, 1);
+
+    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        const uint32_t done = block_idx * block_pages;
+        const uint32_t block_extent = staged_count - done < block_pages ? staged_count - done : block_pages;
+
+        cb_reserve_back(cb_staged_tiles, block_pages);
+        const uint32_t block_base = get_write_ptr(cb_staged_tiles);
         {
-            DeviceZoneScopedN("G6PAD_SLOT_WAIT");
-            cb_reserve_back(cb_work_tiles, block_tiles);
-        }
-        const uint32_t block_base = get_write_ptr(cb_work_tiles);
-        {
-            DeviceZoneScopedN("G6PAD_LOAD");
+            DeviceZoneScopedN("G6PAD-READ-BLOCK");
+            uint32_t slot = block_base;
             for (uint32_t i = 0; i < block_extent; ++i) {
-                if (walk.has_input()) {
-                    noc_async_read_page(walk.in_page(), x_accessor, block_base + i * tile_bytes);
-                }
-                walk.advance();
+                noc_async_read(in.get_noc_addr(page_id + i), slot, page_bytes);
+                slot += page_bytes;
             }
-        }
-        {
-            DeviceZoneScopedN("G6PAD_READ_WAIT");
+            if (block_idx == 0 && has_masks) {
+                DeviceZoneScopedN("G6PAD-FILL-PAGE");
+                g6_pad::build_fill_page<cb_fill_page_reader, es, fill_is_zero>(0, page_bytes, c_bits);
+            }
             noc_async_read_barrier();
         }
+        page_id += block_extent;
 
-        // assemble_block: masks strictly after the barrier, or the landing read overwrites them.
-        {
-            DeviceZoneScopedN("G6PAD_ASSEMBLE");
-            if constexpr (Walk::has_masks) {
-                Walk mask_walk = block_first;
-                for (uint32_t i = 0; i < block_extent; ++i) {
-                    if (mask_walk.has_input()) {
-                        const uint32_t slot_offset = i * tile_bytes;
-                        bool row_masked = false;
-                        if constexpr (Walk::row_mask_rem != 0) {
-                            row_masked = mask_walk.row_mask();
-                            if (row_masked) {
-                                mask_rows<elem_bytes, Walk::row_mask_rem>(cb_work_tiles, slot_offset, fill_bits);
-                            }
-                        }
-                        if constexpr (Walk::col_mask_rem != 0) {
-                            if (mask_walk.col_mask()) {
-                                const uint32_t row_end = row_masked ? Walk::row_mask_rem : TILE_DIM;
-                                mask_cols<elem_bytes, Walk::col_mask_rem>(
-                                    cb_work_tiles, slot_offset, row_end, fill_bits);
-                            }
-                        }
-                    }
-                    mask_walk.advance();
+        if (has_masks) {
+            DeviceZoneScopedN("G6PAD-MASK");
+            uint32_t slot = block_base;
+            for (uint32_t i = 0; i < block_extent; ++i) {
+                const uint32_t tile_row_mask = walk.ht == ht_in - 1 ? row_mask : g6_pad::TILE;
+                const uint32_t tile_col_mask = walk.wt == wt_in - 1 ? col_mask : g6_pad::TILE;
+                if (tile_row_mask < g6_pad::TILE || tile_col_mask < g6_pad::TILE) {
+                    mask_tile<es>(copier, slot, tile_row_mask, tile_col_mask);
                 }
+                walk.advance(ht_in, wt_in, 1);
+                slot += page_bytes;
             }
-            cb_push_back(cb_work_tiles, block_tiles);
+            copier.flush();
+            noc_async_read_barrier();
         }
-        tiles_left -= block_extent;
+        cb_push_back(cb_staged_tiles, block_pages);
     }
 }
