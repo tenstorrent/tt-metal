@@ -57,6 +57,11 @@ class Tier:
     retest: tuple[str, ...] = ()
     retest_reset: str = "-glx_reset"
 
+    # Boots a retest test runs on, counting the first run; a retest test not
+    # listed gets 2. Each extra boot is a round: retest_reset + snapshot, then
+    # every test that wants more boots runs again (see diag/retest.py).
+    retest_boots: tuple[tuple[str, int], ...] = ()
+
     # Reset run between the tests and the triage phase. Two reasons it sits
     # there: the triage probes open every chip read-write, so they must not
     # overlap the tests, and the tools have no SIGBUS handler — tt-kmd zaps
@@ -94,7 +99,11 @@ class Tier:
 _WEEKLY = Tier(
     resets=("-r", "-glx_reset", "-glx_reset"),
     tests=("gddr_full", "gddr_retention", "gddr_act_c3", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
-    retest=("gddr_act_c3",),
+    retest=("gddr_act_c3", "gddr_retention"),
+    # Each boot trains GDDR afresh. gddr_retention gets 4, ~4.5 min of weekly on a
+    # galaxy: ~45 s a run, and boots 3 and 4 each add a reset and a snapshot
+    # (~1.4 min a round). gddr_act_c3 (~10 min) gets 2.
+    retest_boots=(("gddr_retention", 4),),
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
     qsfp_tests=True,
@@ -127,7 +136,7 @@ TIERS: dict[str, Tier] = {
     "full": replace(
         _WEEKLY,
         tests=tuple("gddr_act_all" if t == "gddr_act_c3" else t for t in _WEEKLY.tests),
-        retest=("gddr_act_all",),
+        retest=tuple("gddr_act_all" if t == "gddr_act_c3" else t for t in _WEEKLY.retest),
         sys_triage=True,
     ),
     # Data collection before a BMC reboot. No resets and no tests: a reset
@@ -168,6 +177,10 @@ def _validate() -> None:
         ]
         problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
         problems += [f"{name}: retest {t!r} is not in its tests" for t in tier.retest if t not in tier.tests]
+        problems += [
+            f"{name}: retest_boots {t!r} is not in its retest" for t, _ in tier.retest_boots if t not in tier.retest
+        ]
+        problems += [f"{name}: retest_boots {t!r} needs at least 2 boots" for t, n in tier.retest_boots if n < 2]
         if tier.retest_reset not in RESET_FLAGS:
             problems.append(f"{name}: unknown retest reset flag {tier.retest_reset!r}")
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]

@@ -83,7 +83,7 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 |---|---|---|---|---|---|---|---|---|
 | `flash` | none | — | — | 2 reads, 30 s apart | — | yes, if installed and BMC credentials set | snapshot + 2 triage reads + 30 s + sys-triage | Quick ETH link health, the unit read as found |
 | `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
-| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + gddr_retention (pytest, ~40 s) + gddr_act_c3 (pytest, ~10.3 min) + didt_matmul_galaxy (pytest, ~9 min); if gddr_act_c3 passed, `tt-smi -glx_reset`, a snapshot and gddr_act_c3 again (~11.3 min) | host_side + device_side | — | yes, if installed | — | ~40 min + triage + ~7 min | Every test, less often |
+| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + gddr_retention (pytest, ~55 s) + gddr_act_c3 (pytest, ~10.3 min) + didt_matmul_galaxy (pytest, ~9 min); if gddr_act_c3 and gddr_retention passed, `tt-smi -glx_reset`, a snapshot and both again (~12 min), then 2 more rounds of `tt-smi -glx_reset`, a snapshot and gddr_retention (~1.4 min each), so gddr_retention sees 4 boots | host_side + device_side | — | yes, if installed | — | ~45 min + triage + ~7 min | Every test, less often |
 | `full` | as `weekly` | as `weekly`, with gddr_act_all (pytest, ~25.5 min) in place of gddr_act_c3, which the retest after the reset runs again too | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + ~30 min + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
@@ -171,6 +171,9 @@ GDDR ACT screen (pytest, `tests/dram/test_dram_act_patterns.py`):
   `tt-smi -glx_reset`, snapshot validation, rerun as `<check>_after_reset`. The retest snapshot is the
   last `snapshot_after_*`, so the verdict uses it. `--skip-reset` / `--skip-tests` skip it;
   `Tier.retest` / `Tier.retest_reset` set the tests and the reset.
+- `Tier.retest_boots` gives a retest test more boots than 2. Each extra boot is one more round: reset,
+  snapshot validation, and a rerun of only the tests that want another boot, as `<check>_after_reset_<n>`.
+  Rounds stop after one whose snapshot or tests failed. `gddr_retention` gets 4 boots in `weekly` and `full`.
 
 Output, per hit:
 
@@ -179,8 +182,13 @@ Output, per hit:
 - `logs/<check>.json`: full per-target results (the runner sets `DIAG_RESULT_JSON` for every pytest).
 
 `weekly` and `full` also run `gddr_retention`
-([`gddr/test_gddr_retention.py`](gddr/test_gddr_retention.py)), and so does the
-deployment runner; `daily` does not. It writes every
+([`gddr/test_gddr_retention.py`](gddr/test_gddr_retention.py)), on 4 boots: the
+first run, then 3 retest rounds, each after `tt-smi -glx_reset` and a validated
+snapshot. The first round shares the ACT retest's reset and snapshot; the other
+two take ~1.4 min each on a galaxy (the reset 33 s, the snapshot 5.5 s and the
+rerun ~45 s), so the 4 boots add ~4.5 min to `weekly` (measured 2026-11-27).
+Each boot trains GDDR afresh. The deployment runner runs it once per iteration
+(5 by default); `daily` does not run it. It writes every
 DRAM address the allocator leaves free once (99.9999% of each 4080 MiB bank: all
 but the 64 B barrier word and the test's kernel binaries), then reads all of it
 back and compares it 2, 4 and 6 s later. `gddr_fast` and `gddr_full` read each
@@ -190,6 +198,8 @@ failing word goes to `gddr_retention_<host>_<time>.json` in the logs directory
 with its chip, bank, address, expected and read values, flipped bits, first
 failing read and classification (stale, alias of an address bit, other). It
 took 12.9 s on a 4-chip Blackhole p300c system, chips in parallel (2026-11-25).
+On a 32-chip galaxy a run takes ~45 s, ~31 s of it opening the chips and
+loading the kernel (2026-11-27).
 `RETENTION_GAPS_S` sets the schedule (default `2,2,2`), `RETENTION_SECONDS=<s>`
 keeps reading at the last gap for triage, and `RETENTION_PATTERNS=2` adds the
 complement pattern so every cell holds both a 1 and a 0. The test overwrites the
@@ -910,7 +920,7 @@ tools/scaleout/exabox/health_check_test_suite/
 │   ├── snapshot_checks.py  # phase 1: the checks over a snapshot
 │   ├── resets.py           # phase 2: pre-test reset loop; phase 4: post-test reset
 │   ├── device_tests.py     # phase 3: deployment gtests (TESTS) and pytests (PYTESTS)
-│   ├── retest.py           # phase 3b: test -> reset -> snapshot -> test for Tier.retest
+│   ├── retest.py           # phase 3b: test -> reset -> snapshot -> test for Tier.retest, a round per extra boot
 │   ├── external.py         # ingesting checks written by external tools
 │   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)
 │   ├── eth_status.py       # phase 6: ETH status read: PCIe gate, two tt-triage reads, and the
