@@ -34,7 +34,7 @@ void bind_reshape(nb::module_& mod) {
     const auto* doc =
         R"doc(
 
-        Returns a tensor with the new shape of ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
+        Returns a tensor with the new shape ``[W, Z, Y, X]``.
 
         Equivalent pytorch code:
 
@@ -47,21 +47,58 @@ void bind_reshape(nb::module_& mod) {
             X = 2
             output_tensor = torch.reshape(input_tensor, (W, Z, Y, X))
 
+        Whether data moves depends on ``X``:
+
+        * If ``X`` equals the input's padded last dim (for TILE, its last dim rounded up to a multiple of 32), the
+          result is a zero-cost view that shares the input's buffer and keeps its memory configuration;
+          ``memory_config`` is ignored.
+        * Otherwise the data is copied into a new tensor on device.
+        * A ROW_MAJOR copy in which the input's or the new last dim is not a multiple of 8 is instead done on host and
+          written back to device. It needs a ``BFLOAT16`` input.
 
         Args:
-            * :attr:`input_tensor`: Input Tensor. A TILE layout tensor must use the standard 32x32 tile.
-            * :attr:`W`: W dim of tensor.
-            * :attr:`Z`: Z dim of tensor.
-            * :attr:`Y`: Y dim of tensor.
-            * :attr:`X`: X dim of tensor.
+            input_tensor (ttnn.Tensor): the input tensor, of rank 4. A TILE layout tensor must use the standard 32x32 tile.
+            W (int): the new dim 0. One of ``W``, ``Z``, ``Y`` and ``X`` can be ``-1``, in which case it is inferred from the volume.
+            Z (int): the new dim 1.
+            Y (int): the new dim 2.
+            X (int): the new dim 3.
 
         Keyword Args:
-            * :attr:`memory_config`: Memory Config of the output tensor
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor when data is copied. Defaults to `None`, which uses the input tensor's memory configuration.
+
+        Returns:
+            ttnn.Tensor: the rank 4 output tensor, with the input's dtype and layout. It is a view of the input when ``X`` matches the input's padded last dim, and a new tensor otherwise.
+
+        Note:
+            Supported dtypes and layouts when data is copied:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+
+            A view, where ``X`` matches the input's padded last dim, does not move data and accepts any dtype.
+
+            A TILE copy needs the input and output to have the same tile-padded volume; reshapes that change the
+            tile padding, such as ``(1, 1, 1, 1024)`` to ``(1, 1, 32, 32)``, are not supported. Use :func:`ttnn.reshape`
+            for those.
+
+            A ROW_MAJOR copy on device needs the input's and the new last dim to be multiples of 8, with one of the two
+            row sizes, in bytes, a multiple of the other.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: not supported when data is copied; use :func:`ttnn.reshape` for sharded tensors
 
         Example:
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 4), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.reshape(tensor, 1, 1, 2, 2)
+            >>> tensor = ttnn.from_torch(torch.rand((1, 1, 32, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = ttnn.reshape_on_device(tensor, 1, 1, 64, 32)
+            >>> print(output.shape)
+            ttnn.Shape([1, 1, 64, 32])
 
         )doc";
 

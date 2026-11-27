@@ -53,15 +53,41 @@ void bind_split(nb::module_& mod) {
                 a, b = ttnn.split(input_tensor, [2, 4], dim=1)  # input_tensor.shape[1] == 6
 
             Args:
-                * :attr:`input_tensor`: Input Tensor.
-                * :attr:`split_size` (Union[int, list[int]]): Size of a single chunk, or a list of per-chunk sizes.
-                * :attr:`dim` (int): Dimension along which to split. Negative indexing is supported. Defaults to 0.
+                input_tensor (ttnn.Tensor): the input tensor, on device. A TILE input must use 32x32 tiles.
+                split_size (Union[int, List[int]]): the size of a single chunk, or a list of per-chunk sizes.
+                dim (int): the dimension to split along, in ``[-r, r)`` for an input of rank ``r``. Negative values count from the last dimension. Defaults to 0.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensors.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensors. A sharded configuration without a shard spec gets one derived from the per-chunk shape, or falls back to DRAM interleaved when none can be derived. Defaults to `None`, which uses the input tensor's memory configuration, with these exceptions: for a sharded input, the shard spec is rescaled to the chunk shape, and the outputs are DRAM interleaved when the chunks are unequal, the shard spec cannot be rescaled, or the rescaled TILE shard is not a multiple of 32 in both dims; and an L1 input whose chunks would not fit in L1 gives DRAM interleaved outputs.
 
             Returns:
-                List[ttnn.Tensor]: The list of output tensors.
+                List[ttnn.Tensor]: the chunks, in order along :attr:`dim`. Each chunk has the dtype and layout of :attr:`input_tensor` and the input's shape except along :attr:`dim`. The chunks are copies, except that a single chunk covering the whole input, with an unchanged memory configuration, is the input tensor itself.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16
+                     - TILE, ROW_MAJOR
+                   * - UINT8
+                     - ROW_MAJOR
+                   * - BFLOAT8_B
+                     - TILE
+
+                ``BFLOAT16`` TILE input values must not be NaN when :attr:`dim` is one of the last two dims and a chunk
+                starts at an index that is not a multiple of 32.
+
+                Each chunk is produced by :func:`ttnn.slice`, except for an equal split of a TILE tensor along its last
+                dim, which uses a single kernel when the logical last dim is tile-aligned and the chunks line up with tiles.
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output, in DRAM or L1
+                - ND sharded: input, with DRAM interleaved outputs by default
         )doc";
 
     ttnn::bind_function<"split">(

@@ -30,20 +30,47 @@ ttnn::Tensor expand_wrapper(
 void bind_expand(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Returns a new tensor where singleton dimensions are expanded to a larger side.
-        Unlike :func:`torch.expand`, this function is not zero-cost and perform a memory copy to create the expanded tensor. This is due to `ttnn.Tensor`'s lack of strided tensor support.
+        Returns a new tensor where singleton dimensions are expanded to a larger size.
+
+        Unlike :func:`torch.expand`, this function is not zero-cost: ``ttnn.Tensor`` has no strided views, so the
+        expanded tensor is materialized with :func:`ttnn.repeat`.
+
+        As in :func:`torch.expand`, ``output_shape`` is aligned with the input shape from the last dimension:
+
+        * Only dimensions of size 1 can be expanded.
+        * ``-1``, or the input's size, keeps a dimension unchanged.
+        * ``output_shape`` can have more dimensions than the input. The new leading dimensions must be given as non-negative sizes, not ``-1``. A size of 0 gives an empty tensor.
 
         Args:
-            * :attr:`input_tensor`: The tensor to be expanded.
-            * :attr:`output_shape`: The desired output shape.
-            * :attr:`memory_config`: The memory configuration for the expanded tensor.
+            input_tensor (ttnn.Tensor): the tensor to expand, on device.
+            output_shape (List[int]): the desired output shape. Its rank must be at least the rank of ``input_tensor``.
 
-        Requirements:
-            like torch.expand:
-                only size 1 dimensions can be expanded in the output shape
-                -1 or the original shape size can be used to indicate that dimension should not have an expansion
-                The output shape must have the same or higher dimensions than the input shape
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to `None`, which derives it from the input as :func:`ttnn.repeat` does.
 
+        Returns:
+            ttnn.Tensor: the expanded tensor, with shape ``output_shape`` and the same dtype and layout as the input. It is a copy, except that when no dimension is expanded and the memory configuration does not change, the input's data is reused without a copy.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B
+                 - TILE
+
+            For a ``BFLOAT16`` TILE input whose last two dims are not both multiples of 32, input values must not be NaN.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output in L1
+            - DRAM sharded: HEIGHT_SHARDED and WIDTH_SHARDED input. A TILE input keeps its DRAM sharding by default or takes an interleaved ``memory_config``; a ROW_MAJOR input needs an interleaved ``memory_config``
+            - ND sharded: input in DRAM or L1; by default the output is interleaved, in the input's buffer type
         )doc";
 
     ttnn::bind_function<"expand">(

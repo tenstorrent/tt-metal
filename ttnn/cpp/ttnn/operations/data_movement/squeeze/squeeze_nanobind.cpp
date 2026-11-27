@@ -46,8 +46,39 @@ void bind_squeeze(nb::module_& mod) {
             output_tensor = torch.squeeze(input_tensor, 2) # tensor of shape (1,1,256), where at dimension 2 we removed it
 
         Args:
-            * :attr:`input_tensor`: Input Tensor.
-            * :attr:`dim`: Dim where we want to squeeze
+            input_tensor (ttnn.Tensor): the input tensor.
+            dim (int or List[int], optional): the dimension or dimensions to squeeze, each in ``[-r, r)`` for an input of rank ``r``. Negative values count from the last dimension. A list must not repeat a dimension. Defaults to `None`, which squeezes every dimension of size 1.
+
+        Returns:
+            ttnn.Tensor: the input with the size 1 dimensions removed, with the same dtype, layout and memory configuration. If no dimension is removed, the input tensor itself is returned.
+
+        Note:
+            The squeeze is done with :func:`ttnn.reshape`. It is a zero-cost view that shares the input's buffer
+            when the last dimension is kept and, for TILE layout, the second-to-last dimension does not change or is a
+            multiple of 32 both before and after the squeeze. Otherwise, as when squeezing the last dimension, the
+            data is copied into a new tensor. An ND sharded input is always copied when a dimension is removed, since
+            that changes its padded shape.
+
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B, BFLOAT4_B
+                 - TILE
+
+            A squeeze that copies data has the dtype restrictions of :func:`ttnn.reshape`.
+
+            For a rank 0 input, ``dim`` must be `None`, 0 or -1, and the input is returned unchanged.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED
+            - ND sharded: supported as in :func:`ttnn.reshape`, through a DRAM-interleaved intermediate when data is copied
         )doc",
         &squeeze_wrapper,
         nb::arg("input_tensor"),
