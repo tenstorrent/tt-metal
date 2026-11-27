@@ -19,12 +19,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     (void)params;
     // Stub: SFPU TRISC not used in this test; trisc.cpp will signal completion. It still opens INIT and TILE_LOOP,
-    // because every zone boundary is a four-thread rendezvous.
+    // because every zone boundary is a four-thread rendezvous, and UNINIT, because L1_TO_L1 pairs SFPU zones per marker.
     {
         START_PERF_MEASURE("INIT")
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
+    }
+    {
+        ZONE_SCOPED("UNINIT")
     }
 }
 
