@@ -384,12 +384,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         for hook in (cap, lg):
             if hook is not None:
                 hook.begin_chunk(start, end)
-        out = super().prefill_chunk(*args, **kwargs)
-        if self.config.is_last_rank and self.model.norm is not None:
-            if cap is not None:  # lm_head_in: the final norm's output
-                cap.tap(capture.LM_HEAD, "lm_head_in", out)
-            if lg is not None:
-                lg.write(out)
+        out = super().prefill_chunk(*args, **kwargs)  # (lm_head_in and the logits: TtKimiK3Transformer.forward)
         if cap is not None:
             cap.end_chunk()
         return out

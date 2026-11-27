@@ -568,7 +568,17 @@ class TtKimiK3Transformer(LightweightModule):
             return self._pack_handoff(*residual.handoff())
 
         hidden = residual.finish()
-        return self.norm(hidden) if self.norm is not None else hidden
+        if self.norm is None:
+            return hidden
+        out = self.norm(hidden)
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture, logits
+
+        if not capture.PAUSED:  # (the GPTQ teacher capture's lm_head_in; K3_LOGITS_DIR's logits of every position)
+            if capture.CAPTURE is not None:
+                capture.CAPTURE.tap(capture.LM_HEAD, "lm_head_in", out)
+            if logits.LOGITS is not None:
+                logits.LOGITS.write(out)
+        return out
 
     def forward_packed(
         self,
