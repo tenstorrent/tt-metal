@@ -235,9 +235,9 @@ class TestTierRetest(unittest.TestCase):
         # gddr_act_all runs both of gddr_act_c3's passes.
         self.assertNotIn("gddr_act_c3", TIERS["full"].tests)
 
-    def test_retention_runs_on_four_boots(self):
+    def test_retention_runs_on_five_boots(self):
         for name in ("weekly", "full"):
-            self.assertEqual(dict(TIERS[name].retest_boots), {"gddr_retention": 4}, name)
+            self.assertEqual(dict(TIERS[name].retest_boots), {"gddr_retention": 5}, name)
         self.assertNotIn("gddr_retention", TIERS["daily"].tests)
 
 

@@ -100,10 +100,10 @@ _WEEKLY = Tier(
     resets=("-r", "-glx_reset", "-glx_reset"),
     tests=("gddr_full", "gddr_retention", "gddr_act_c3", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
     retest=("gddr_act_c3", "gddr_retention"),
-    # Each boot trains GDDR afresh. gddr_retention gets 4, ~4.5 min of weekly on a
-    # galaxy: ~45 s a run, and boots 3 and 4 each add a reset and a snapshot
-    # (~1.4 min a round). gddr_act_c3 (~10 min) gets 2.
-    retest_boots=(("gddr_retention", 4),),
+    # Each boot trains GDDR afresh. gddr_retention gets 5, ~5.2 min of weekly on a
+    # galaxy: ~42 s a run, and boots 3 to 5 each add a reset and a snapshot
+    # (~1.3 min a round). gddr_act_c3 (~10 min) gets 2.
+    retest_boots=(("gddr_retention", 5),),
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
     qsfp_tests=True,
