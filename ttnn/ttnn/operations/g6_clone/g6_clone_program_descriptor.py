@@ -1,13 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_clone program descriptor: regime flat_page_range.
+"""g6_clone program descriptor: regime `flat_page_range`.
 
-The flat page axis (every page-level tensor axis folded) is split into contiguous
-page ranges over the compute grid. Each core stages blocks of `block_pages` whole
-aligned pages in cb_page_staging: the reader fills a block behind one read
-barrier, the writer drains it behind one flush.
+Reader (NCRISC, NoC0) -> cb_page_staging -> writer (BRISC, NoC1); no compute kernel, so the
+bytes never pass through an unpacker, DEST or a packer. The flat page axis is split into
+contiguous page ranges over the compute grid; each core walks its range in blocks of
+`block_pages` pages.
+
+Every block knob is defined once here and every dependent quantity is derived from it:
+`block_pages` and `cb_depth_blocks` set the CB capacity, the push/pop quantum (CT arg) and the
+per-core block count the kernels derive from `num_pages_this_core`.
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -15,42 +21,25 @@ import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-# Per-core L1 the model leaves to the op (BB-05).
-L1_BUDGET_BYTES = 1347776
-# Upper bound on staged blocks per core; the realized depth is capped by the block count.
+REGIME = "flat_page_range"
+
+# Buffer-depth knob of cb_page_staging: slots of `block_pages` pages when a core has more than
+# one block, so the reader fills block k+1 while the writer drains block k.
 CB_DEPTH_KNOB = 2
+
+# L1 the model environment leaves to the op on every core (BB-05).
+L1_BUDGET_BYTES = 1347776
 
 CB_PAGE_STAGING = 0
 
-READER_KERNEL_INDEX = 0
-WRITER_KERNEL_INDEX = 1
+# Order of the kernels in the descriptor; patch_addresses indexes by it.
+READER_KERNEL_IDX = 0
+WRITER_KERNEL_IDX = 1
 
-REGIME = "flat_page_range"
 
-
-def plan_key(input_tensor):
-    """Everything the descriptor depends on except the two buffer addresses."""
-    device = input_tensor.device()
+def compute_plan(device, tensor_pages: int, aligned_page_bytes: int) -> dict:
+    """Work split and block knobs for one (grid, page count, page size) triple."""
     grid = device.compute_with_storage_grid_size()
-    memory_config = input_tensor.memory_config()
-    return (
-        device.id(),
-        grid.x,
-        grid.y,
-        input_tensor.dtype,
-        input_tensor.layout,
-        memory_config.buffer_type,
-        memory_config.memory_layout,
-        input_tensor.buffer_num_pages(),
-        input_tensor.buffer_aligned_page_size(),
-    )
-
-
-def g6_clone_plan(input_tensor):
-    """The blocking plan a call of g6_clone on `input_tensor` runs (BB-08, BB-21)."""
-    grid = input_tensor.device().compute_with_storage_grid_size()
-    tensor_pages = input_tensor.buffer_num_pages()
-    aligned_page_bytes = input_tensor.buffer_aligned_page_size()
 
     block_pages_l1_cap = L1_BUDGET_BYTES // (CB_DEPTH_KNOB * aligned_page_bytes)
     if block_pages_l1_cap < 1:
@@ -59,29 +48,24 @@ def g6_clone_plan(input_tensor):
             f"in the {L1_BUDGET_BYTES} B per-core L1 budget"
         )
 
-    (
-        num_cores,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        core_pages_g1,
-        core_pages_g2,
-    ) = ttnn.split_work_to_cores(grid, tensor_pages, row_wise=True)
-
-    # Group 1 holds the larger per-core count, so it bounds every core's assignment.
+    num_cores, all_cores, core_group_1, core_group_2, core_pages_g1, core_pages_g2 = ttnn.split_work_to_cores(
+        grid, tensor_pages, row_wise=True
+    )
     core_pages_max = core_pages_g1
+
     block_pages = min(core_pages_max, block_pages_l1_cap)
     num_blocks_max = -(-core_pages_max // block_pages)
     cb_depth_blocks = min(CB_DEPTH_KNOB, num_blocks_max)
 
+    # split_work_to_cores(row_wise=True) hands group 1 the first cores in row-major order and
+    # group 2 the rest; start_page is the running page count in that same order.
+    num_cores_g1 = core_group_1.num_cores()
     roles = []
     start_page = 0
-    for group, core_pages in ((core_group_1, core_pages_g1), (core_group_2, core_pages_g2)):
-        if core_pages == 0:
-            continue
-        for core in ttnn.corerange_to_cores(group, None, True):
-            roles.append((core, "reader+writer", start_page, core_pages))
-            start_page += core_pages
+    for idx, core in enumerate(ttnn.grid_to_cores(num_cores, grid.x, grid.y, True)):
+        num_pages = core_pages_g1 if idx < num_cores_g1 else core_pages_g2
+        roles.append((core, "reader+writer", start_page, num_pages))
+        start_page += num_pages
     if start_page != tensor_pages:
         raise RuntimeError(f"g6_clone: work split covers {start_page} of {tensor_pages} pages")
 
@@ -90,45 +74,54 @@ def g6_clone_plan(input_tensor):
         "grid": (grid.x, grid.y),
         "num_cores": num_cores,
         "core_ranges": all_cores,
-        "tensor_pages": tensor_pages,
-        "aligned_page_bytes": aligned_page_bytes,
         "core_pages_g1": core_pages_g1,
         "core_pages_g2": core_pages_g2,
         "block_pages": block_pages,
         "cb_depth_blocks": cb_depth_blocks,
         "num_blocks_max": num_blocks_max,
         "roles": roles,
+        "tensor_pages": tensor_pages,
+        "aligned_page_bytes": aligned_page_bytes,
     }
 
 
-def create_program_descriptor(input_tensor, output_tensor, plan):
-    page_bytes = plan["aligned_page_bytes"]
-    block_pages = plan["block_pages"]
+def create_program_descriptor(
+    input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor, plan: dict
+) -> ttnn.ProgramDescriptor:
+    """Descriptor for `plan`. Buffer addresses sit in common RT args, slot 0 of each kernel,
+    so a cached descriptor is reused by patching two values (see patch_addresses)."""
     all_cores = plan["core_ranges"]
+    block_pages = plan["block_pages"]
+    aligned_page_bytes = plan["aligned_page_bytes"]
 
-    # The payload is raw bytes; data_format only labels the descriptor, no unpacker reads it.
     cb_page_staging = ttnn.CBDescriptor(
-        total_size=plan["cb_depth_blocks"] * block_pages * page_bytes,
+        total_size=plan["cb_depth_blocks"] * block_pages * aligned_page_bytes,
         core_ranges=all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
                 buffer_index=CB_PAGE_STAGING,
                 data_format=input_tensor.dtype,
-                page_size=page_bytes,
+                page_size=aligned_page_bytes,
             )
         ],
     )
 
+    input_accessor_args = ttnn.TensorAccessorArgs(input_tensor)
+    output_accessor_args = ttnn.TensorAccessorArgs(output_tensor)
+    # Common RT slot 0 holds the buffer address; an interleaved accessor adds no common RT args.
+    if len(input_accessor_args.get_common_runtime_args()) or len(output_accessor_args.get_common_runtime_args()):
+        raise RuntimeError("g6_clone: interleaved TensorAccessorArgs unexpectedly carry common runtime args")
+
     reader_ct_args = [CB_PAGE_STAGING, block_pages]
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct_args.extend(input_accessor_args.get_compile_time_args())
     writer_ct_args = [CB_PAGE_STAGING, block_pages]
-    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct_args.extend(output_accessor_args.get_compile_time_args())
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
-    for core, _, start_page, core_pages in plan["roles"]:
-        reader_rt_args[core.x][core.y] = [start_page, core_pages]
-        writer_rt_args[core.x][core.y] = [start_page, core_pages]
+    for core, _, start_page, num_pages in plan["roles"]:
+        reader_rt_args[core.x][core.y] = [start_page, num_pages]
+        writer_rt_args[core.x][core.y] = [start_page, num_pages]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_clone_reader.cpp"),
@@ -147,14 +140,12 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    kernels = [None, None]
-    kernels[READER_KERNEL_INDEX] = reader_kernel
-    kernels[WRITER_KERNEL_INDEX] = writer_kernel
-    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[cb_page_staging])
+    # List order is READER_KERNEL_IDX, WRITER_KERNEL_IDX.
+    return ttnn.ProgramDescriptor(kernels=[reader_kernel, writer_kernel], semaphores=[], cbs=[cb_page_staging])
 
 
-def set_buffer_addresses(program_descriptor, input_address, output_address):
-    """Patch the per-call buffer addresses (common RT arg 0 of reader and writer)."""
-    kernels = program_descriptor.kernels
-    kernels[READER_KERNEL_INDEX].common_runtime_args = [input_address]
-    kernels[WRITER_KERNEL_INDEX].common_runtime_args = [output_address]
+def patch_addresses(descriptor: ttnn.ProgramDescriptor, input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor) -> None:
+    """Write this call's buffer addresses into a cached descriptor, in place."""
+    kernels = descriptor.kernels
+    kernels[READER_KERNEL_IDX].common_runtime_args[0] = input_tensor.buffer_address()
+    kernels[WRITER_KERNEL_IDX].common_runtime_args[0] = output_tensor.buffer_address()

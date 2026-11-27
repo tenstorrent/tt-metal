@@ -7,9 +7,9 @@ from .g6_clone import (
     PROPERTIES,
     SUPPORTED,
     g6_clone,
+    g6_clone_plan,
     validate,
 )
-from .g6_clone_program_descriptor import g6_clone_plan
 
 __all__ = [
     "EXCLUSIONS",
