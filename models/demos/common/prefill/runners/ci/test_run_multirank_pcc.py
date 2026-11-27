@@ -14,6 +14,7 @@ import io
 import itertools
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -527,7 +528,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
 
     # Kimi-K3 and Kimi-K3.1 share the launcher's layout handling; they differ in the request and the slot counts.
     KIMI_REQUEST_LEN = {"kimi_k3": 1049600, "kimi_k3_1": 1049600}
-    KIMI_4X4_USERS = {"kimi_k3": "127", "kimi_k3_1": "88"}
+    KIMI_4X4_USERS = {"kimi_k3": "127", "kimi_k3_1": "100"}
+    # Packed holds more per forward (four chunks), so it fits fewer slots than the one-chunk run, not just one fewer.
+    KIMI_K31_PACKED_USERS = "95"
     KIMI_8X4_USERS = {"kimi_k3": "100", "kimi_k3_1": "76"}
     KIMI_4X4_SP_AXIS = {"kimi_k3": 1, "kimi_k3_1": 0}
 
@@ -616,8 +619,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_kimi_k3_1_sc1_packed_runs_four_chunks_per_forward(self):
-        """--variant packed: kimi_k3_1_packed.json's 2560-token chunks, four per forward (budget 10240), at one slot
-        fewer than kimi_k3_1.json, on the same two 4x4 stages, golden and PCC gate."""
+        """--variant packed: kimi_k3_1_packed.json's 2560-token chunks, four per forward (budget 10240), at its own
+        (smaller) slot count, on the same two 4x4 stages, golden and PCC gate."""
         result, records = self.run_harness(
             "kimi_k3_1", config="sc1", hosts=self.SC4_HOSTS[:1], args=["--variant", "packed"]
         )
@@ -632,7 +635,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(runner["PREFILL_CHUNK_SIZE"], "2560")
         self.assertNotIn("PREFILL_FORWARD_TOKENS_BUDGET", runner)
         self.assertEqual(runner["PREFILL_NUM_LAYERS"], "24")
-        self.assertEqual(runner["PREFILL_NUM_USERS"], str(int(self.KIMI_4X4_USERS["kimi_k3_1"]) - 1))
+        self.assertEqual(runner["PREFILL_NUM_USERS"], self.KIMI_K31_PACKED_USERS)
         self.assert_kimi_4x4_cache_check(result, records, "kimi_k3_1")
         producer = self.one_record(records, "producer")["env"]
         self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith("manifests/kimi_k3_1_packed.json"))
@@ -854,6 +857,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], "2")
         producer = self.one_record(records, "producer")["env"]
         self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+        # SP on axis 0 from the manifest (no knob exported): the probe checks the axis-0 cache, glm_5_3_bh_16dev/4x4.
+        self.assertNotIn("PREFILL_SP_AXIS", runner)
+        self.assertRegex(result.stdout, rf"4x4 weight cache {re.escape(self.root)}/cache/glm_5_3_bh_16dev/4x4\n")
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_glm53_sc1_rr_is_one_ring_ring_stage_of_the_first_38_layers(self):
@@ -870,6 +876,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(runner["PREFILL_FABRIC_MODE"], "2d_torus_xy")
         self.assertNotIn("PREFILL_STAGE_HOSTS", runner)
         self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_4x4.json"))
+        # SP on axis 1 over the manifest's tray-half axis 0: the probe checks the axis-1 cache, glm_5_3_bh_16dev/4x4_sp1.
+        self.assertEqual(runner["PREFILL_SP_AXIS"], "1")
+        self.assertRegex(result.stdout, rf"4x4 weight cache {re.escape(self.root)}/cache/glm_5_3_bh_16dev/4x4_sp1\n")
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_glm53_sc1_4x4_packed_runs_two_chunks_per_forward(self):
@@ -884,6 +893,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         manifest = json.loads(Path(runner["PREFILL_MANIFEST"]).read_text())["env"]
         self.assertEqual(manifest["PREFILL_CHUNK_SIZE"], "2560")
         self.assertEqual(manifest["PREFILL_FORWARD_TOKENS_BUDGET"], "5120")
+        self.assertEqual(manifest["PREFILL_SP_AXIS"], "0")
         self.assertNotIn("PREFILL_FORWARD_TOKENS_BUDGET", runner)
         producer = self.one_record(records, "producer")["env"]
         self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
@@ -953,10 +963,10 @@ class MultirankPccHarnessTests(unittest.TestCase):
 
     def test_sp_axis_knob_on_glm53_4x4_checks_its_mesh_key(self):
         result, records = self.run_harness(
-            "glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True, extra_env={"PREFILL_SP_AXIS": "0"}
+            "glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True, extra_env={"PREFILL_SP_AXIS": "1"}
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertRegex(result.stdout + result.stderr, r"glm_5_3_bh_16dev/4x4\b(?!_sp1)")
+        self.assertIn("glm_5_3_bh_16dev/4x4_sp1", result.stdout + result.stderr)
 
     def test_sp_axis_knob_rejects_axis_1_off_a_4x4_stage_and_bad_values(self):
         for model, config, value, message in (
@@ -976,7 +986,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no 4x4 weight cache at", result.stdout + result.stderr)
-        self.assertIn("glm_5_3_bh_16dev/4x4_sp1", result.stdout + result.stderr)
+        # glm53_4x4.json's SP axis 0: mesh_cache_key((4, 4), 0) == "4x4".
+        self.assertRegex(result.stdout + result.stderr, r"glm_5_3_bh_16dev/4x4\b(?!_sp1)")
         self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
 
     def test_glm53_mtp_runs_8x4_stages_from_its_manifest(self):
@@ -1011,7 +1022,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
                                 "PREFILL_TP_SHARD_KV",
                             )
                         ),
-                        ("4", "4", "1", "2560", "1"),
+                        ("4", "4", "0", "2560", "1"),
                     )
                 if config == "sc4_4x4":
                     # The MTP variants keep their manifest's slots.

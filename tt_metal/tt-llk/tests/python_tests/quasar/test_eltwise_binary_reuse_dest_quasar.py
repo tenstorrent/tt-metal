@@ -40,7 +40,6 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -351,7 +350,6 @@ def test_eltwise_binary_reuse_dest_quasar(
                 tile_dimensions=tile_dimensions_tuple,
             ),
             TILE_COUNT(tile_cnt_input),
-            INPUT_TILE_CNT(tile_cnt_input),
             OUTPUT_TILE_CNT(tile_cnt_output),
             NUM_TILES_IN_BLOCK(
                 output_tiles_in_block,

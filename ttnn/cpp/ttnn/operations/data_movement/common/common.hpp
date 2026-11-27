@@ -323,8 +323,10 @@ uint32_t get_pending_l1_output_reservation(
 // for `input_dtype`: block floats cannot exist in ROW_MAJOR, so a BFLOAT8_B input is written out as
 // BFLOAT16. The device operations' compute_output_specs and the composites' L1 accounting (output
 // tile size, pending L1 output reservation) must all agree on this, so they all go through here.
+// MX tiles (Quasar) are expanded to Float16_b by the unpacker and cannot exist in ROW_MAJOR either, so they
+// also come out as BFLOAT16.
 constexpr DataType untilize_output_dtype(DataType input_dtype) {
-    return input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
+    return (input_dtype == DataType::BFLOAT8_B || tt::tt_metal::is_mx(input_dtype)) ? DataType::BFLOAT16 : input_dtype;
 }
 
 ttnn::Tensor pad_to_tile_vol(

@@ -139,6 +139,7 @@ tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-a
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
 tt_metal/api/tt-metalium/experimental/command_list.hpp @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-runtime-performance
 tt_metal/api/tt-metalium/experimental/dispatch_telemetry.hpp @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
+tt_metal/api/tt-metalium/experimental/jit_telemetry.hpp @nsextonTT @cfjchu @ruizhangTT @ckaravasilisTT
 tt_metal/api/tt-metalium/experimental/kernel_config_buffer.hpp @sohaibnadeemTT @cfjchu @tenstorrent/metalium-runtime-performance
 tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar
 tt_metal/api/internal/disaggregation/ @SeanNijjar @ubcheema # disaggregation internal APIs (moved from experimental in #48638)

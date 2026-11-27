@@ -163,12 +163,13 @@ def test_vision_attention_layout_vs_ref(grid_thw, hf_vision):
 def test_vision_rope_tables_kept_per_grid(monkeypatch):
     """The model stages a grid's tables with its first image and reuses them for later images of that grid.
 
-    Each image gets its own grid's tables. Dropping the least recently used grid frees exactly its two tables.
+    Each image gets its own grid's tables. Dropping the least recently used grid frees exactly its two tables. The
+    stand-in blocks have no weights to place activations by, so the test runs the model with activations "dram".
     """
     tables, freed = [], []  # the cached (cos, sin) whose copies each forward gives the blocks; the cached tables freed
     copies = {}  # id of each L1 copy not freed yet -> the table it copies
 
-    def block(x, cos, sin):
+    def block(x, cos, sin, *placement, **out_memory_config):
         tables.append((copies[id(cos)], copies[id(sin)]))
         return x
 
@@ -189,8 +190,9 @@ def test_vision_rope_tables_kept_per_grid(monkeypatch):
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
     config = MiniMaxM3VisionConfig()
     model = M3VLVisionModel(
-        None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x: x, blocks=[block]
+        None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x, memory_config: x, blocks=[block]
     )
+    model.activations = "dram"
 
     def forward(grid):
         """The tables the blocks get for an image of grid, which must be the grid's own and not freed."""
@@ -224,7 +226,8 @@ def test_vision_rope_tables_kept_per_grid(monkeypatch):
 def test_vision_rope_tables_copied_to_l1(monkeypatch):
     """Each forward copies its grid's cached tables to L1 once for all the blocks, and frees the copies after them.
 
-    The cached tables stay in DRAM for the next image.
+    The cached tables stay in DRAM for the next image. The stand-in blocks have no weights to place activations by, so
+    the test runs the model with activations "dram".
     """
     uploads, calls = [], []  # (tensor, memory config) of each upload; the copies, blocks and frees in call order
 
@@ -237,7 +240,7 @@ def test_vision_rope_tables_copied_to_l1(monkeypatch):
         return calls[-1][3]
 
     def block(index):
-        def forward(x, cos, sin):
+        def forward(x, cos, sin, *placement, **out_memory_config):
             calls.append(("block", index, cos, sin))
             return x
 
@@ -250,8 +253,9 @@ def test_vision_rope_tables_copied_to_l1(monkeypatch):
     config = MiniMaxM3VisionConfig()
     blocks = [block(index) for index in range(3)]
     model = M3VLVisionModel(
-        None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x: x, blocks=blocks
+        None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x, memory_config: x, blocks=blocks
     )
+    model.activations = "dram"
     grid, copied = (1, 4, 6), None
     for image in (1, 2):
         calls.clear()

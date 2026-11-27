@@ -121,8 +121,8 @@ MODEL_CFG = ADAPTER.model_config
 
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
-# Mesh axis SP runs on; TP takes the other. The SP-axis knob: the manifest gives the stage's default (1 for a 4x4
-# tray-half stage, whose only ring is axis 1), and an exported PREFILL_SP_AXIS overrides it.
+# Mesh axis SP runs on; TP takes the other. The SP-axis knob: the manifest sets the stage's axis, and an exported
+# PREFILL_SP_AXIS overrides it.
 SP_AXIS = int(os.environ.get(SP_AXIS_ENV, 0))
 TP_AXIS = 1 - SP_AXIS
 GLOBAL_MESH_SHAPE = stage_mesh_shape(_sp, _tp, SP_AXIS)
@@ -1906,6 +1906,17 @@ def _serve_request(
         if outbound.activation is not None:
             _forward_send_warmup(runtime, outbound, rank, send_indices)
         runtime.capture_trace(kv_caches)
+        # DRAM headroom per bank once caches, weights and the trace are resident: compared across ranks at the
+        # same num_users, it shows which stage limits the slot count. print, as the ranks may log at ERROR.
+        dram = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+        mib = 1 << 20
+        print(
+            f"[pp rank {rank}/{num_ranks}] DRAM after trace capture, num_users={NUM_USERS}: "
+            f"free {dram.total_bytes_free_per_bank / mib:.1f} MiB/bank, "
+            f"largest free block {dram.largest_contiguous_bytes_free_per_bank / mib:.1f} MiB/bank, "
+            f"bank {dram.total_bytes_per_bank / mib:.1f} MiB",
+            flush=True,
+        )
         _capture_socket_ops(
             sockets,
             mesh_device,

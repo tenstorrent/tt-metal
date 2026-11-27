@@ -45,6 +45,7 @@ PERF_CONFIG_BUILDERS = {"PerfConfig", "create_test_or_perf_config", "execute_llk
 SHARED_RUNNER_MODULES = {
     "helpers.sdpa_bcast_utils",
     "helpers.compressed_utils",
+    "helpers.pack_tiny_tile",
 }
 
 
