@@ -14,7 +14,11 @@
 
 namespace ttnn::experimental::prim {
 void StridedAllGatherAsync::validate_on_program_cache_miss(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensors_args*/) {}
+    const operation_attributes_t& attributes, const tensor_args_t& /*tensors_args*/) {
+    TT_FATAL(
+        attributes.mm_block_wt.value_or(0) > 0,
+        "strided_all_gather_async: mm_block_wt (matmul K block size) must be set and > 0");
+}
 
 StridedAllGatherAsync::spec_return_value_t StridedAllGatherAsync::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
