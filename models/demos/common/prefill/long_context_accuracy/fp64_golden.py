@@ -31,6 +31,11 @@ producers write through them. An existing directory keeps its mode.
 
 Producers start or resume a golden with ``start_or_resume``: a resume continues only the same run, and each run
 session's provenance (``session_provenance``) is recorded with the segment it started from.
+
+Readers copy row slices out of ``torch.save`` files with ``read_slices``: the file is opened with ``MappedFile``
+(``torch.load(mmap=True)``, which reads only the metadata), the reader slices the mapped tensors as usual, and
+``read_slices`` reads exactly those bytes with ``READ_STREAMS`` parallel ``preadv`` streams instead of faulting the
+mapped pages in one at a time.
 """
 
 from __future__ import annotations
@@ -40,7 +45,8 @@ import json
 import os
 import platform
 import subprocess
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -54,6 +60,10 @@ TOKEN_IDS = "token_ids.pt"
 PRODUCT_KINDS = ("row", "segment_end", "sampled_row")
 GOLDEN_FILE_MODE = 0o664
 GOLDEN_DIR_MODE = 0o2775
+# Parallel read streams of ``read_slices``. Cold reads of one chunk's products from Weka on the dev host (m06n.19,
+# page cache evicted, median of 3): KDA FP64 5120 rows (306 MB) 0.87 s through mapped pages, 0.27 / 0.19 / 0.13 / 0.11 s
+# with 1 / 2 / 4 / 8 streams; K3.1 MoE and DSA 2560 rows (~145 MB) 0.53 / 0.90 s mapped, 0.05 s with 8 streams.
+READ_STREAMS = 8
 
 
 class GoldenError(Exception):
@@ -222,6 +232,107 @@ def manifest_problems(golden_id: str, manifest: dict) -> list[str]:
             ):
                 problems.append(f"product {name!r} needs kind in {PRODUCT_KINDS}, a dtype string and an integer shape")
     return problems
+
+
+class MappedFile:
+    """A ``torch.save`` file loaded with ``mmap=True`` (``contents``: no tensor data is read), whose tensors' views
+    ``read_slices`` copies out of the file."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self.contents = torch.load(self.path, weights_only=True, mmap=True)
+        self.size = self.path.stat().st_size
+        # torch maps the whole file once and every storage is a slice of that mapping at its record's file offset:
+        # matched in address order, the storages give the mapping's address of file offset 0.
+        reader = torch._C.PyTorchFileReader(str(self.path))
+        offsets = sorted(reader.get_record_offset(r) for r in reader.get_all_records() if r.startswith("data/"))
+        addresses = sorted({t.untyped_storage().data_ptr() for t in _tensors(self.contents)})
+        bases = {address - offset for address, offset in zip(addresses, offsets)}
+        if len(addresses) != len(offsets) or len(bases) != 1:
+            raise GoldenInvalid(f"{self.path}: cannot locate its {len(offsets)} tensor records in the mapped file")
+        self._base = bases.pop()
+
+    def span(self, view: torch.Tensor) -> tuple[int, int]:
+        """The file byte range ``[start, end)`` covering ``view``, a view of a tensor in ``contents``."""
+        last = sum((n - 1) * s for n, s in zip(view.shape, view.stride()))
+        start = view.data_ptr() - self._base
+        end = start + (last + 1) * view.element_size()
+        if not 0 <= start < end <= self.size:
+            raise ValueError(f"the view is not inside {self.path}")
+        return start, end
+
+
+def _tensors(tree: object) -> Iterable[torch.Tensor]:
+    if torch.is_tensor(tree):
+        yield tree
+    elif isinstance(tree, dict):
+        for value in tree.values():
+            yield from _tensors(value)
+    elif isinstance(tree, (list, tuple)):
+        for value in tree:
+            yield from _tensors(value)
+
+
+def read_slices(parts: Mapping[str, Sequence[tuple[MappedFile, torch.Tensor]]]) -> dict[str, torch.Tensor]:
+    """Per name, the concatenation along rows of non-empty views ``(file, view)`` of mapped tensors, as a new
+    contiguous tensor, equal to ``torch.cat([view, ...])``. All the bytes are read with ``READ_STREAMS`` parallel
+    ``preadv`` streams of equal size; a non-contiguous view is read whole over its span, then copied."""
+    out: dict[str, torch.Tensor] = {}
+    reads: list[tuple[Path, int, memoryview]] = []  # (file, offset, destination bytes)
+    strided: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []  # (span bytes, view, destination rows)
+    for name, views in parts.items():
+        first = views[0][1]
+        result = torch.empty((sum(v.shape[0] for _, v in views), *first.shape[1:]), dtype=first.dtype)
+        row = 0
+        for file, view in views:
+            rows = result[row : row + view.shape[0]]
+            row += view.shape[0]
+            start, end = file.span(view)
+            if view.is_contiguous():
+                reads.append((file.path, start, memoryview(rows.view(-1).view(torch.uint8).numpy())))
+            else:
+                raw = torch.empty(end - start, dtype=torch.uint8)
+                reads.append((file.path, start, memoryview(raw.numpy())))
+                strided.append((raw, view, rows))
+        out[name] = result
+    _pread(reads)
+    for raw, view, rows in strided:
+        rows.copy_(raw.view(view.dtype).as_strided(view.shape, view.stride()))
+    return out
+
+
+def _pread(reads: Sequence[tuple[Path, int, memoryview]]) -> None:
+    """Fill each destination from its file offset, the total bytes split into ``READ_STREAMS`` equal streams."""
+    share = -(-sum(len(m) for _, _, m in reads) // READ_STREAMS)
+    streams: list[list[tuple[Path, int, memoryview]]] = [[]]
+    room = share
+    for path, offset, memory in reads:
+        position = 0
+        while position < len(memory):
+            take = min(room, len(memory) - position)
+            streams[-1].append((path, offset + position, memory[position : position + take]))
+            position += take
+            room -= take
+            if room == 0:
+                streams.append([])
+                room = share
+    descriptors = {path: os.open(path, os.O_RDONLY) for path, _, _ in reads}
+
+    def stream(pieces: list[tuple[Path, int, memoryview]]) -> None:
+        for path, offset, memory in pieces:
+            done = 0
+            while done < len(memory):
+                count = os.preadv(descriptors[path], [memory[done:]], offset + done)
+                if count <= 0:
+                    raise GoldenInvalid(f"{path} ends before byte {offset + done}")
+                done += count
+
+    try:
+        with ThreadPoolExecutor(READ_STREAMS, thread_name_prefix="golden-read") as pool:
+            list(pool.map(stream, [s for s in streams if s]))
+    finally:
+        for descriptor in descriptors.values():
+            os.close(descriptor)
 
 
 @dataclass(frozen=True)

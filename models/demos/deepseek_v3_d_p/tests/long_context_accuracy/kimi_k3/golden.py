@@ -18,7 +18,13 @@ from pathlib import Path
 
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.fp64_golden import MANIFEST, Fp64Golden, open_golden
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
+    MANIFEST,
+    Fp64Golden,
+    MappedFile,
+    open_golden,
+    read_slices,
+)
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer import (
     K3_LAYER0_GOLDEN,
@@ -32,18 +38,18 @@ STATE_PREFIX = "state."  # segment-end products are the state's fields, "state.<
 
 def _rows(run_dir: Path, segment: int, start: int, end: int) -> torch.Tensor:
     """Output rows ``[start, end)`` from the segment files (the caller checks the bounds)."""
-    rows = []
+    parts = []
     for index in range(start // segment, -(-end // segment)):
-        payload = torch.load(segment_path(run_dir, index), weights_only=True, mmap=True)
-        lo = payload["start"]
-        rows.append(payload["output"][max(start, lo) - lo : min(end, payload["end"]) - lo])
-    return torch.cat(rows)  # (the cat copies out of the mapped files)
+        file = MappedFile(segment_path(run_dir, index))
+        lo, hi = file.contents["start"], file.contents["end"]
+        parts.append((file, file.contents["output"][max(start, lo) - lo : min(end, hi) - lo]))
+    return read_slices({"output": parts})["output"]
 
 
 def _state(run_dir: Path, index: int) -> dict[str, torch.Tensor]:
-    """The state after segment ``index``, copied out of the mapped file (the segment's output rows are not read)."""
-    state = torch.load(segment_path(run_dir, index), weights_only=True, mmap=True)["state"]
-    return {name: t.clone() for name, t in state.items()}
+    """The state after segment ``index``, read out of its file (the segment's output rows are not read)."""
+    file = MappedFile(segment_path(run_dir, index))
+    return read_slices({name: [(file, t)] for name, t in file.contents["state"].items()})
 
 
 class KimiK3KdaGolden(Fp64Golden):

@@ -21,10 +21,12 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     GoldenInvalid,
     GoldenMismatch,
     GoldenNotFound,
+    MappedFile,
     golden_root,
     make_golden_dir,
     open_golden,
     product_schema,
+    read_slices,
     write_manifest,
     write_token_ids,
 )
@@ -199,3 +201,44 @@ def test_read_rows_validates_then_delegates_to_the_reader(tmp_path: Path, expect
 
     with expect_error(GoldenMismatch, "expected 'tests.other'"):
         open_golden("tiny-l0-kda-fp64-10", root=tmp_path, reader=OtherProducer)
+
+
+def test_read_slices_copies_mapped_views_as_torch_cat_would(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``read_slices`` returns, per name, exactly ``torch.cat`` of the views: row slices across two files, several
+    dtypes, a column view (strided, like K3.1's ``kpe``), a nested state and a whole tensor; the bytes are split
+    across streams inside and across views (3 streams over these sizes)."""
+    monkeypatch.setattr("models.demos.common.prefill.long_context_accuracy.fp64_golden.READ_STREAMS", 3)
+    files = []
+    for i in range(2):
+        rows = torch.arange(6 * 5, dtype=torch.float64).reshape(6, 5) + 100 * i
+        payload = {
+            "start": 6 * i,
+            "rows": rows,
+            "ids": (rows[:, :2] * 7).to(torch.int32),
+            "margin": rows[:, 0].float().neg(),
+            "state": {"keys": rows[:, 1:].clone(), "recurrent": torch.full((1, 2, 3), float(i), dtype=torch.float64)},
+        }
+        torch.save(payload, tmp_path / f"segment_{i}.pt")
+        files.append(MappedFile(tmp_path / f"segment_{i}.pt"))
+    a, b = (f.contents for f in files)
+    parts = {
+        "rows": [(files[0], a["rows"][4:]), (files[1], b["rows"][:3])],
+        "ids": [(files[0], a["ids"][5:]), (files[1], b["ids"][:1])],
+        "margin": [(files[0], a["margin"][2:]), (files[1], b["margin"])],
+        "columns": [(files[0], a["state"]["keys"][3:, 2:]), (files[1], b["state"]["keys"][:2, 2:])],
+        "recurrent": [(files[1], b["state"]["recurrent"])],
+    }
+    got = read_slices(parts)
+    assert list(got) == list(parts)
+    for name, views in parts.items():
+        want = torch.cat([v for _, v in views])
+        assert got[name].dtype == want.dtype and got[name].is_contiguous() and torch.equal(got[name], want), name
+    assert got["rows"][:, 0].tolist() == [20.0, 25.0, 100.0, 105.0, 110.0]  # (hand-checked: row r starts at 5 r)
+
+
+def test_read_slices_refuses_a_view_of_another_file(tmp_path: Path, expect_error) -> None:
+    torch.save({"x": torch.zeros(4, 2)}, tmp_path / "a.pt")
+    torch.save({"x": torch.ones(64, 64)}, tmp_path / "b.pt")
+    a, b = MappedFile(tmp_path / "a.pt"), MappedFile(tmp_path / "b.pt")
+    with expect_error(ValueError, "not inside"):
+        read_slices({"x": [(a, b.contents["x"][:10])]})

@@ -21,7 +21,7 @@ On sampled rows only (``sampled_row`` products, quadratic in context otherwise):
 
 Each segment ``i`` (rows ``[i * segment, (i + 1) * segment)``) is ``segment_<i>.pt`` (the row and sampled products)
 and ``state_<i>.pt`` (``keys``: the DSA keys; ``kda``: the KDA states after the segment; no consumer reads those, so the
-reader serves no segment-end product). Files are memory-mapped and only the requested rows are copied.
+reader serves no segment-end product). Only the requested rows are read (``fp64_golden.read_slices``).
 
 The chain's ``identity.weights_sha256`` holds one digest per layer's non-routed weights (``layers.<l>``) as the chain
 read them. ``layer_weights`` reads the set of MoE layers 1 and 2 or DSA layer 3 from a checkpoint with its digest, for
@@ -35,7 +35,12 @@ from pathlib import Path
 
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden, open_golden
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
+    Fp64Golden,
+    MappedFile,
+    open_golden,
+    read_slices,
+)
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer import (
     DSA_LAYER,
@@ -70,19 +75,19 @@ class KimiK31ChainGolden(Fp64Golden):
 
     def _read_rows(self, names: list[str], start: int, end: int) -> dict[str, torch.Tensor]:
         segment = self.manifest["segment"]
-        in_state = [n for n in names if n in KEYS]
-        in_segment = [n for n in names if n not in KEYS]
-        parts: dict[str, list[torch.Tensor]] = {n: [] for n in names}
+        parts: dict[str, list[tuple[MappedFile, torch.Tensor]]] = {n: [] for n in names}
         for index in range(start // segment, -(-end // segment)):
             lo = index * segment
-            data = {}
-            if in_segment:
-                data.update(torch.load(self.segment_file(index), weights_only=True, mmap=True))
-            if in_state:
-                data.update(torch.load(self.state_file(index), weights_only=True, mmap=True)["keys"])
+            files = {}
+            if any(n not in KEYS for n in names):
+                files["segment"] = MappedFile(self.segment_file(index))
+            if any(n in KEYS for n in names):
+                files["state"] = MappedFile(self.state_file(index))
             for n in names:
-                parts[n].append(data[n][max(start, lo) - lo : end - lo])
-        return {n: torch.cat(v) for n, v in parts.items()}  # (the cat copies out of the mapped files)
+                file = files["state" if n in KEYS else "segment"]
+                data = file.contents["keys"] if n in KEYS else file.contents
+                parts[n].append((file, data[n][max(start, lo) - lo : end - lo]))
+        return read_slices(parts)
 
     def read_sampled(self, end: int | None = None) -> dict[str, torch.Tensor]:
         """The sampled-row products below row ``end`` (default: all): ``sampled_rows`` (absolute rows, ascending,
