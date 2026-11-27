@@ -219,7 +219,7 @@ def test_hang_reads_triage_csv(tmp_path):
 def test_triage_env_on_pytest_attempts(tmp_path):
     _, _, _, shell, run_dir = _run(tmp_path, only=["nd:minimal"])
     env = shell.workload_calls("nd/minimal")[0]["env"]
-    assert env["TT_METAL_OPERATION_TIMEOUT_SECONDS"] == "120"
+    assert env["TT_METAL_OPERATION_TIMEOUT_SECONDS"] == "30"
     hook = env["TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"]
     assert "tools/tt-triage.py" in hook and "--run=dump_running_operations" in hook and "--run=dump_op_mesh" in hook
     assert f"--llm-output-path={run_dir / 'nd/minimal/crash_triage.csv'};" in hook and hook.endswith("kill -9 $PPID")
@@ -275,7 +275,7 @@ def test_each_chip_runs_every_chip_with_its_own_triage(tmp_path):
         assert j["log"] == out / "pytest.log" and env["OUT_DIR"] == env["TT_METAL_LOGS_PATH"] == str(out)
         assert env["TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS"] == f"localhost:{port}"
         assert env["TT_METAL_CACHE"] == str(cache / f"nd/mcast-ack/chip{dev}")
-        assert env["MATMUL_ITERS"] == "10" and env["TT_METAL_OPERATION_TIMEOUT_SECONDS"] == "120"
+        assert env["MATMUL_ITERS"] == "10" and env["TT_METAL_OPERATION_TIMEOUT_SECONDS"] == "30"
         hook = env["TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"]
         assert f"--inspector-rpc-port={port} --inspector-log-path={out / 'generated/inspector'} " in hook
         assert "--inspector-disable-rank" in hook and f"--llm-output-path={out / 'crash_triage.csv'};" in hook
