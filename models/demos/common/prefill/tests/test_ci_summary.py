@@ -41,6 +41,95 @@ def test_metrics_sidecar_splits_the_config_suffix_with_its_layout(tmp_path, monk
         assert (rec["model"], rec["config"]) == (model, config)
 
 
+def test_perf_summary_and_gate_name_what_ran(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    from models.demos.common.prefill.runners.ci import perf_gate
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import _perf_metrics, _setup_from_logs
+
+    # Each runner rank's start-up line, as mpirun tags it; the last stage is shorter.
+    logs = tmp_path / "ranklogs"
+    logs.mkdir()
+    (logs / "stdout").write_text(
+        "".join(
+            f"[1,{r}]<stdout>: [pp rank {r}/8] mesh=(4, 4) layers=[{12 * r}, {min(12 * r + 12, 93)}) is_first={r == 0} "
+            f"is_last={r == 7} chunk_size=2560 forward_chunks=4 max_seq_len=1064960 num_users=87 "
+            "sp=4 tp=4 sp_axis=1 traced=1\n"
+            for r in range(8)
+        )
+    )
+    setup = _setup_from_logs(logs)
+    assert setup == (
+        "8 stages x [4,4] (SP4 on mesh axis 1, TP4), 93 layers as 12+12+12+12+12+12+12+9, 87 slots, "
+        "2560-token chunks, 4 per forward (packed), traced"
+    )
+    lines, rec = _perf_metrics(_packed_spans(40, 4, 0.2, tail_s=0.2), 2560, 8, {39}, chunks_per_forward=4, setup=setup)
+    assert lines[1] == f"run: {setup}"
+    assert rec["setup"] == setup
+
+    summaries = tmp_path / "summaries"
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(summaries))
+    monkeypatch.delenv("CI_FAILURE_RECORDS", raising=False)
+    perf_json = tmp_path / "kimi_k3_1_packed_sc4.json"
+    perf_json.write_text(json.dumps(rec))
+    label = next(iter(rec["throughput_tok_s"]))
+    table = tmp_path / "baselines.json"
+    table.write_text(
+        json.dumps(
+            {
+                "margin": {"throughput_tok_s": 0.05},
+                "baselines": {
+                    "kimi_k3_1": {
+                        "sc4_packed": {"probe": label, "8kw": {"throughput_tok_s": rec["throughput_tok_s"][label]}}
+                    }
+                },
+            }
+        )
+    )
+    args = [str(perf_json), "--table", str(table), "--model", "kimi_k3_1", "--config", "sc4_packed", "--power", "8kw"]
+    monkeypatch.setattr(sys, "argv", ["perf_gate.py", *args])
+    assert perf_gate.main() == 0
+    gate = (summaries / "perf" / "kimi_k3_1_packed_sc4_gate.md").read_text().splitlines()
+    assert gate[2] == f"run: {setup}; baseline kimi_k3_1/sc4_packed on the 8kw power class"
+
+
+# Without a baseline the gate only reports, so it must check that the whole request retired: a run cut short reports a
+# shallow rate that would otherwise pass. Runs the summarizer and the gate as CI does (--real-chunks 40).
+@pytest.mark.parametrize("retired, rc", [(40, 0), (12, 1)])
+def test_unbaselined_gate_fails_a_run_cut_short(tmp_path, monkeypatch, retired, rc):
+    import json
+    import sys
+
+    from models.demos.common.prefill.runners.ci import perf_gate, summarize_ci_run
+
+    monkeypatch.delenv("CI_FAILURE_RECORDS", raising=False)
+    summaries = tmp_path / "summaries"
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(summaries))
+    logs = tmp_path / "ranklogs"
+    logs.mkdir()
+    (logs / "stderr").write_text(
+        "".join(
+            f"[producer] CHUNK_RETIRE slot=0 start={c * 2560} end={(c + 1) * 2560} first={begin:.3f} "
+            f"retire={end:.3f} warmup=0 acks=24\n"
+            for c, (begin, end, _) in enumerate(_packed_spans(retired, 4, 0.2, tail_s=0.2))
+        )
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["summarize_ci_run.py", "--ranklogs", str(logs), "--real-chunks", "40", "--chunk-size", "2560"]
+        + ["--pipeline-ranks", "8", "--chunks-per-forward", "4", "--summary-name", "run_sc4"],
+    )
+    summarize_ci_run.main()
+    table = tmp_path / "baselines.json"
+    table.write_text(json.dumps({"margin": {}, "baselines": {}}))
+    perf_json = summaries / "perf_json" / "run_sc4.json"
+    args = [str(perf_json), "--table", str(table), *"--model run --config sc4 --power 8kw --require 1".split()]
+    monkeypatch.setattr(sys, "argv", ["perf_gate.py", *args])
+    assert perf_gate.main() == rc
+
+
 def _packed_spans(num_chunks, chunks_per_forward, forward_s, tail_s):
     # Every chunk of a packed forward retires at the forward's end. A short final forward is padded to a
     # full one, so it costs tail_s (near forward_s), not its share of forward_s.

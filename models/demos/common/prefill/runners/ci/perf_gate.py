@@ -111,13 +111,15 @@ def check(rec, path, label, metric, expected, margin):
     return True, [label, f"{name} ({unit})", f"{value:{fmt}}", band, "PASS"]
 
 
-def publish_verdicts(perf_json, rows):
-    """Write the gate table to PREFILL_SUMMARIES/perf/<run>_gate.md, which CI adds to the job summary."""
+def publish_verdicts(perf_json, rows, about=""):
+    """Write the gate table to PREFILL_SUMMARIES/perf/<run>_gate.md, which CI adds to the job summary. `about` names
+    what ran and the baseline it is held to, above the table."""
     root = os.environ.get("PREFILL_SUMMARIES")
     if not root or not rows:
         return
     run = os.path.splitext(os.path.basename(perf_json))[0]
-    table = ["| probe | metric | measured | expected | verdict |", "|---|---|---|---|---|"]
+    table = [about, ""] if about else []
+    table += ["| probe | metric | measured | expected | verdict |", "|---|---|---|---|---|"]
     table += ["| " + " | ".join(row) + " |" for row in rows]
     try:
         out = os.path.join(root, "perf")
@@ -175,6 +177,12 @@ def main():
         return 1
 
     if baselines is None:
+        # No baseline's deepest probe to check depth against: the whole request must have retired, or a run cut short
+        # would report a shallow rate and pass.
+        expected, measured = rec.get("expected_chunks", 0), rec.get("num_chunks", 0)
+        if expected and measured < expected:
+            fail(f"TPS GATE FAIL: {measured} of the request's {expected} chunks retired; the run did not finish")
+            return 1
         print(f"TPS: {probes[label]:,.0f} tok/s {label} (no PREFILL_EXPECTED_TPS set -- reporting, not gating)")
         return 0
 
@@ -193,7 +201,12 @@ def main():
         for probe, baseline in baselines
         for metric, (expected, margin) in baseline.items()
     ]
-    publish_verdicts(args.perf_json, [row for _, row in results])
+    if args.expected_tps:
+        held_to = "explicit PREFILL_EXPECTED_TPS"
+    else:
+        held_to = f"baseline {args.model}/{args.config}" + (f" on the {args.power} power class" if args.power else "")
+    about = f"run: {rec['setup']}; {held_to}" if rec.get("setup") else held_to
+    publish_verdicts(args.perf_json, [row for _, row in results], about)
     return 0 if all(ok for ok, _ in results) else 1
 
 
