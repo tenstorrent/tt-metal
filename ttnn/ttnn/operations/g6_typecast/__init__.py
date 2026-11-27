@@ -7,7 +7,18 @@ from .g6_typecast import (
     SUPPORTED,
     describe_plan,
     g6_typecast,
+    g6_typecast_with_knobs,
     validate,
 )
+from .g6_typecast_program_descriptor import Knobs
 
-__all__ = ["g6_typecast", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS", "validate", "describe_plan"]
+__all__ = [
+    "EXCLUSIONS",
+    "INPUT_TAGGERS",
+    "Knobs",
+    "SUPPORTED",
+    "describe_plan",
+    "g6_typecast",
+    "g6_typecast_with_knobs",
+    "validate",
+]

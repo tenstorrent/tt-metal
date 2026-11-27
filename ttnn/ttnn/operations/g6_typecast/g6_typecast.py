@@ -1,20 +1,26 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_typecast: convert every value of one interleaved tensor to `dtype` in one device program,
-keeping shape, layout and memory placement (registry model, see eval/op_template.py)."""
+"""g6_typecast: convert every value of one tensor to `dtype` in one device program.
+
+The output keeps the input's shape, layout and interleaved memory config. Registry model:
+INPUT_TAGGERS / SUPPORTED / EXCLUSIONS / validate() below drive both the runtime gate and the
+golden harness.
+"""
 
 from __future__ import annotations
 
-import ttnn
+import hashlib
 
+import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_typecast_program_descriptor import CORE_ROLES, build_program, make_plan
+from .g6_typecast_program_descriptor import Knobs, _plan, create_program_descriptor, patch_addresses
 
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_TAGGERS — every axis is projected from the scenario dict (inputs = (scenario,))
+# 1. INPUT_TAGGERS — every axis is projected from the scenario dict
+#    {"input_shape", "dtype", "output_dtype", "layout", "buffer"}; inputs = (scenario,).
 # ---------------------------------------------------------------------------
 
 
@@ -38,9 +44,9 @@ def tag_alignment(inputs, axes):
     shape = inputs[0]["input_shape"]
     W = shape[-1]
     H = shape[-2] if len(shape) >= 2 else 1
-    if W % 32 != 0:
+    if W % 32:
         return "w_non_aligned"
-    if H % 32 != 0:
+    if H % 32:
         return "h_non_aligned"
     return "tile_aligned"
 
@@ -60,7 +66,7 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED — Phase 0: bfloat16 TILE -> float32 / bfloat8_b / int32, DRAM or L1, ranks 3-4
+# 2. SUPPORTED
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -74,15 +80,10 @@ SUPPORTED = {
 
 
 # ---------------------------------------------------------------------------
-# 3. EXCLUSIONS — stays empty: every TARGET cell is a production case
+# 3. EXCLUSIONS — every TARGET cell is a production case, so this stays empty.
 # ---------------------------------------------------------------------------
 
 EXCLUSIONS = []
-
-
-PROPERTIES = {
-    "multi_core": {"value": True, "source": "declared"},
-}
 
 
 # ---------------------------------------------------------------------------
@@ -91,32 +92,31 @@ PROPERTIES = {
 
 
 def _scenario(input_tensor, dtype):
-    buffer_type = input_tensor.memory_config().buffer_type
+    is_l1 = input_tensor.memory_config().buffer_type == ttnn.BufferType.L1
     return {
         "input_shape": tuple(input_tensor.shape),
         "dtype": input_tensor.dtype,
         "output_dtype": dtype,
         "layout": input_tensor.layout,
-        "buffer": "l1" if buffer_type == ttnn.BufferType.L1 else "dram",
+        "buffer": "l1" if is_l1 else "dram",
     }
 
 
 def validate(input_tensor, dtype, *, sub_core_grids=None):
-    # Contract errors first; they are not support refusals.
     if not isinstance(dtype, ttnn.DataType):
         raise ValueError(f"g6_typecast: dtype must be a ttnn.DataType, got {type(dtype).__name__}")
     if sub_core_grids is not None:
         raise ValueError("g6_typecast: sub_core_grids must be None")
     rank = len(input_tensor.shape)
     if not 1 <= rank <= 4:
-        raise ValueError(f"g6_typecast: rank must be 1 to 4, got rank {rank}")
+        raise ValueError(f"g6_typecast: input rank must be 1..4, got {rank}")
     if input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise ValueError("g6_typecast: input_tensor must be interleaved (DRAM or L1)")
+        raise ValueError("g6_typecast: input must be interleaved")
 
     scenario = _scenario(input_tensor, dtype)
     axes = {}
-    for axis_name, tagger in INPUT_TAGGERS.items():
-        axes[axis_name] = tagger((scenario,), axes)
+    for axis, tagger in INPUT_TAGGERS.items():
+        axes[axis] = tagger((scenario,), axes)
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
@@ -128,42 +128,67 @@ def validate(input_tensor, dtype, *, sub_core_grids=None):
 
 
 # ---------------------------------------------------------------------------
-# Plan reporting and program cache
+# Program cache (BB-07): one Plan + ProgramDescriptor per key; a hit only rewrites the
+# input/output buffer addresses.
 # ---------------------------------------------------------------------------
 
-
-def describe_plan(input_tensor, dtype):
-    """The plan a call selects, without dispatching (BB-08, BB-21)."""
-    plan = make_plan(input_tensor, dtype)
-    role = CORE_ROLES[plan.regime]
-    return {
-        "regime": plan.regime,
-        "num_cores": plan.num_cores,
-        "block_tiles": plan.block_tiles,
-        "core_roles": {(core.x, core.y): role for core, _, _ in plan.assignment},
-    }
+_CACHE = {}
 
 
-# Everything that changes the program is in the key; buffer addresses are patched per call (BB-07).
-_PROGRAM_CACHE = {}
-
-
-def _cache_key(input_tensor, dtype):
+def _cache_key(input_tensor, dtype, knobs):
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
-    memory_config = input_tensor.memory_config()
     return (
-        device.id(),
         tuple(input_tensor.shape),
         tuple(input_tensor.padded_shape),
-        tuple(input_tensor.tile.tile_shape),
         input_tensor.dtype,
         dtype,
         input_tensor.layout,
-        memory_config.memory_layout,
-        memory_config.buffer_type,
+        input_tensor.memory_config().buffer_type,
+        device.id(),
         (grid.x, grid.y),
+        knobs,
     )
+
+
+def _program_hash(key):
+    digest = hashlib.blake2b(repr(("g6_typecast",) + key).encode(), digest_size=8).digest()
+    return int.from_bytes(digest, "little")
+
+
+def _lookup(input_tensor, output_tensor, dtype, knobs):
+    key = _cache_key(input_tensor, dtype, knobs)
+    entry = _CACHE.get(key)
+    if entry is None:
+        plan = _plan(input_tensor, dtype, knobs)
+        descriptor = create_program_descriptor(input_tensor, output_tensor, plan)
+        descriptor.custom_program_hash = _program_hash(key)
+        entry = (plan, descriptor)
+        _CACHE[key] = entry
+    else:
+        plan, descriptor = entry
+        patch_addresses(descriptor, plan, input_tensor, output_tensor)
+    return entry
+
+
+def describe_plan(input_tensor, dtype, *, knobs: Knobs = Knobs()):
+    """Report the plan a call with these arguments selects (BB-08, BB-21)."""
+    validate(input_tensor, dtype)
+    plan = _plan(input_tensor, dtype, knobs)
+    return {
+        "regime": plan.regime,
+        "num_cores": plan.num_cores,
+        "core_ranges": str(plan.all_cores),
+        "block_tiles": plan.block_tiles,
+        "pipeline_depth": plan.pipeline_depth,
+        "page_stride": plan.page_stride,
+        "max_cores": plan.max_cores,
+        "tensor_tiles": plan.tensor_tiles,
+        "cb_input_tiles_bytes": plan.cb_input_bytes,
+        "cb_output_tiles_bytes": plan.cb_output_bytes,
+        "fp32_dest_acc_en": plan.fp32_dest_acc_en,
+        "core_roles": {(w.x, w.y): ("reader", "compute", "writer") for w in plan.cores},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -171,9 +196,7 @@ def _cache_key(input_tensor, dtype):
 # ---------------------------------------------------------------------------
 
 
-def g6_typecast(input_tensor: ttnn.Tensor, dtype: ttnn.DataType, *, sub_core_grids=None) -> ttnn.Tensor:
-    validate(input_tensor, dtype, sub_core_grids=sub_core_grids)
-
+def _dispatch(input_tensor, dtype, knobs):
     output_tensor = ttnn.allocate_tensor_on_device(
         input_tensor.shape,
         dtype,
@@ -181,11 +204,16 @@ def g6_typecast(input_tensor: ttnn.Tensor, dtype: ttnn.DataType, *, sub_core_gri
         input_tensor.device(),
         input_tensor.memory_config(),
     )
+    _, descriptor = _lookup(input_tensor, output_tensor, dtype, knobs)
+    return ttnn.generic_op([input_tensor, output_tensor], descriptor)
 
-    key = _cache_key(input_tensor, dtype)
-    program = _PROGRAM_CACHE.get(key)
-    if program is None:
-        program = build_program(make_plan(input_tensor, dtype), input_tensor, output_tensor)
-        _PROGRAM_CACHE[key] = program
 
-    return ttnn.generic_op([input_tensor, output_tensor], program.descriptor(input_tensor, output_tensor))
+def g6_typecast_with_knobs(input_tensor, dtype, *, knobs: Knobs):
+    """Perf-sweep entry: the same op with the blocking knobs overridden."""
+    validate(input_tensor, dtype)
+    return _dispatch(input_tensor, dtype, knobs)
+
+
+def g6_typecast(input_tensor, dtype, *, sub_core_grids=None):
+    validate(input_tensor, dtype, sub_core_grids=sub_core_grids)
+    return _dispatch(input_tensor, dtype, Knobs())

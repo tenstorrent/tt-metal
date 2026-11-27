@@ -18,3 +18,5 @@
 {"event":"test_run","result":"perf","detail":"core-count lamp refuted: Q2229 4/2/1 cores = 1540/2161/3268ns; Q2191 16/8/4 = 1596/1600/1754; Q2203 64/32/16 = 1616/1784/1991. MIN_PAGES_PER_CORE stays 1 (live knob).","ts":"2026-11-26T19:18:13-05:00"}
 {"event":"fix_applied","change":"BLOCK_TILES_CAP 8 -> 4 (measured); MIN_PAGES_PER_CORE knob added at no-op default 1; ledger updated","ts":"2026-11-26T19:19:20-05:00"}
 {"event":"test_run","result":"pass","detail":"acceptance 17/17 dev+prod, golden 42 pass / 27 xfail. Kernel ns: Q2227 803, Q2191 1599, Q2229 1577, Q2203 1628, Q2185 35800, Q2187 8087, P22 2792, P39 17738","ts":"2026-11-26T19:19:20-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T05:21:53-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T05:59:25-05:00"}
