@@ -25,6 +25,18 @@ namespace {
 
 using Placements = ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>;
 
+// Reads `label` as one placement per axis of `mesh_shape`, expanding a collapsed label by ttnn's rule. `whose` names
+// the label in the error message.
+Placements read_per_axis(
+    const tt::tt_metal::TensorTopology& label,
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    const char* whose) {
+    std::string reason;
+    auto placements = ttnn::operations::ccl::common::uncollapse_placements(label, mesh_shape, &reason);
+    TT_FATAL(placements.has_value(), "cannot read {} placement per mesh axis: {}", whose, reason);
+    return std::move(*placements);
+}
+
 // fp32 sums of at least this many elements per device (1 MiB of bf16) go through a reduce-scatter in fp32 and an
 // all-gather in bf16; smaller ones through one fp32 all-reduce. Measured on a Blackhole LoudBox (8x p150b) in 2026-10:
 // below about 1 MiB a call costs host dispatch, and the reduce-scatter route issues more ops; above it, the route moves
@@ -90,11 +102,19 @@ Placements placements_per_axis(const ttnn::Tensor& value) {
         device != nullptr,
         "cannot read the placement per mesh axis of a tensor that is not allocated on a device mesh (a host tensor, "
         "or a deallocated one): its label is read against the mesh it is on");
-    std::string reason;
-    auto placements =
-        ttnn::operations::ccl::common::uncollapse_placements(value.tensor_topology(), device->shape(), &reason);
-    TT_FATAL(placements.has_value(), "cannot read the tensor's placement per mesh axis: {}", reason);
-    return std::move(*placements);
+    return read_per_axis(value.tensor_topology(), device->shape(), "the tensor's");
+}
+
+Placements placements_per_axis(
+    const tt::tt_metal::distributed::MeshMapperConfig& config, const tt::tt_metal::distributed::MeshShape& mesh_shape) {
+    // The label a mapper with `config` gives a tensor. Its device coordinates matter only when the label covers the
+    // whole mesh, and then a mapper lists them in row-major order.
+    const ttnn::MeshCoordinateRange whole_mesh(mesh_shape);
+    const tt::tt_metal::TensorTopology label(
+        config.mesh_shape_override.value_or(mesh_shape),
+        config.placements,
+        std::vector(whole_mesh.begin(), whole_mesh.end()));
+    return read_per_axis(label, mesh_shape, "the mapper's");
 }
 
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
