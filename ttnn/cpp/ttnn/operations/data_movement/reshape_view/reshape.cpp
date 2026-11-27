@@ -374,7 +374,8 @@ ttnn::Tensor reshape_tiled(
     const std::optional<CoreRangeSet>& sub_core_grid,
     bool explicit_memory_config,
     const bool skip_padding_fill,
-    const bool pad_value_explicit) {
+    const bool pad_value_explicit,
+    const bool runtime_shapes) {
     // fill_implicit_tile_padding takes float; integer pad is not bit-exact for all dtypes/values.
     const float fill_value = detail::pad_value_as_float(pad_value, tensor.dtype());
     // squeeze input tensor and requested shape to 3D
@@ -535,7 +536,8 @@ ttnn::Tensor reshape_tiled(
         requested_padded_shape_3d,
         updated_mem_config,
         recreate_mapping_tensor,
-        sub_core_grid);
+        sub_core_grid,
+        runtime_shapes);
 
     // Fill rules:
     //   - Block-float (BFLOAT8_B / BFLOAT4_B): ALWAYS fill (skip_padding_fill is ignored). The downstream
@@ -840,7 +842,8 @@ ttnn::Tensor reshape_dispatch(
         sub_core_grid,
         explicit_memory_config,
         skip_padding_fill,
-        pad_value_explicit);
+        pad_value_explicit,
+        reshape_map_mode == TileReshapeMapMode::RUNTIME_SHAPES);
 }
 
 }  // namespace

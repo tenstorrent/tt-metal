@@ -41,6 +41,7 @@ ttnn::Tensor reshape_view(
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid);
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    bool runtime_shapes = false);
 
 }  // namespace ttnn::prim

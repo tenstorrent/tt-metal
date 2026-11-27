@@ -33,6 +33,21 @@ struct ReshapeViewTiledRowsProgramFactory {
         const ReshapeViewParams& operation_attributes,
         const ReshapeViewInputs& tensor_args,
         Tensor& tensor_return_value);
+
+    // Rebinds the tensors, and with reshape_view_tiled_rows_is_shape_free recomputes every core's args.
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
+        const ReshapeViewParams& operation_attributes,
+        const ReshapeViewInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
+
+// Whether a row-factory program serves every shape with the same last dim: with runtime_shapes, interleaved input and
+// output and no sub core grid. Only the core set then still follows the shape, through
+// reshape_view_tiled_rows_cores_key.
+bool reshape_view_tiled_rows_is_shape_free(const ReshapeViewParams& operation_attributes, const Tensor& input);
+
+// 0 when every core of the grid gets output tiles, otherwise the output tile count, which sets the core set.
+uint32_t reshape_view_tiled_rows_cores_key(const ReshapeViewParams& operation_attributes, const Tensor& input);
 
 }  // namespace ttnn::prim
