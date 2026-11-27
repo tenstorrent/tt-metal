@@ -30,6 +30,7 @@ Audit notes:
 | `block_tile_rows`, `block_tile_cols` | one issuer's rectangle | `≤ shard_tile_rows`, `≤ shard_tile_cols` | `min()` clamps in the host work split |
 | `span_bytes(r)` | bytes read per tile of tile row `r` | `≤ tile_bytes` | regime selection function (op_design.md, Regimes) |
 | `issuers_per_core` | reader kernels per core | {1, 2} | `KNOBS` value set |
+| `partial_tile_read` | span shape of a partial tile row | {`valid_rows`, `face_rows`, `whole_tile`} | `KNOBS` value set; every span ≤ `tile_bytes` (kernel `static_assert`) |
 
 ## Footprint
 
@@ -58,3 +59,14 @@ Totals per tier:
 | p2 | 2,176 | 2,176 into 1 core (4 requests) | 0 |
 
 > Cheapest-traffic split considered: owner-fetch along the target's shard axis — 1 DRAM crossing per page, 0 core-to-core bytes. Implemented: the same split. The implemented split is the cheapest. Inside it, the two-span transfer shape (perf lamp L2) moves fewer bytes, reaching the logical floor (p1: 10,240 B, i.e. −76,800 DRAM bytes) at 2 requests per partial tile. That is a transfer shape within the chosen split, measured as a lamp, not a different split.
+
+Implemented knob alternatives (same split, no L1 change; p1 device kernel duration, 5-call medians, Blackhole):
+
+| `partial_tile_read` | DRAM bytes (p1) | Requests per core | 1 issuer | 2 issuers |
+|---------------------|-----------------|-------------------|----------|-----------|
+| `valid_rows` (default) | 87,040 | 5 | 1096 ns | 1031 ns |
+| `face_rows` (lamp L2) | 10,240 | 10 | 1280 ns | 1121 ns |
+| `whole_tile` | 327,680 | 5 | 1675 ns | 1495 ns |
+
+Read-ablated floor: 543 ns, of which ~450 ns is first-to-last core launch stagger. `face_rows` reaches the
+logical byte floor but loses on request count; `valid_rows` stays the default.

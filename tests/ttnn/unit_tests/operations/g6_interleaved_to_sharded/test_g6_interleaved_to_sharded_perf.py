@@ -5,10 +5,11 @@
 
 Measurement only: run under `scripts/run_safe_pytest.sh --profile --no-py-zones`. Every test makes
 REPEATS op calls of one variant and no readback, so the profiler CSV holds REPEATS GenericOp rows
-per test, in parametrize order. The launch stagger across the 32 cores is noisy; compare medians. Correctness of each knob value is graded by test_g6_interleaved_to_sharded_knobs.py.
+per test, in parametrize order. Correctness of each knob value is graded by
+test_g6_interleaved_to_sharded_knobs.py.
 
-"ablate_reads" compiles the reader with G6I2S_ABLATE_READS: the NoC reads are dropped and the
-launch, argument loading, address generation and barrier stay, which gives the sync-only floor.
+"ablate" variants set ABLATE_READS: the NoC reads are dropped while launch, argument loading,
+address generation and the barrier stay, which gives the sync-only floor.
 """
 
 from __future__ import annotations
@@ -26,32 +27,27 @@ from eval.golden_tests.g6_interleaved_to_sharded.helpers import (
 from ttnn.operations.g6_interleaved_to_sharded import g6_interleaved_to_sharded
 from ttnn.operations.g6_interleaved_to_sharded import g6_interleaved_to_sharded_program_descriptor as descriptor
 
-_ABLATE = (("G6I2S_ABLATE_READS", "1"),)
 REPEATS = 5
 
-_TWO_SPANS = {"LAST_ROW_FORM": "two_spans"}
-_ONE_SPAN = {"LAST_ROW_FORM": "one_span"}
-_ONE_READER = {"READER_WEIGHTS": (1,)}
-
+# variant -> (KNOBS overrides, ABLATE_READS)
 VARIANTS = {
-    "default": {},
-    "two_spans-1reader": {**_TWO_SPANS, **_ONE_READER},
-    "one_span-1reader": {**_ONE_SPAN, **_ONE_READER},
-    "whole_page-1reader": {"LAST_ROW_FORM": "whole_page", **_ONE_READER},
-    "one_span-1reader-noc1": {**_ONE_SPAN, **_ONE_READER, "READER_NOC": ttnn.NOC.NOC_1},
-    "two_spans-split1:1": {**_TWO_SPANS, "READER_WEIGHTS": (1, 1)},
-    "one_span-split1:1": {**_ONE_SPAN, "READER_WEIGHTS": (1, 1)},
-    "one_span-split3:1": {**_ONE_SPAN, "READER_WEIGHTS": (3, 1)},
-    "one_span-split1:1-noc1first": {**_ONE_SPAN, "READER_WEIGHTS": (1, 1), "READER_NOC": ttnn.NOC.NOC_1},
-    "ablate-1reader": {**_ONE_READER, "READER_DEFINES": _ABLATE},
-    "ablate-split1:1": {"READER_WEIGHTS": (1, 1), "READER_DEFINES": _ABLATE},
+    "default": ({}, False),
+    "1issuer-face_rows": ({"issuers_per_core": 1, "partial_tile_read": "face_rows"}, False),
+    "1issuer-whole_tile": ({"issuers_per_core": 1, "partial_tile_read": "whole_tile"}, False),
+    "2issuers-face_rows": ({"issuers_per_core": 2, "partial_tile_read": "face_rows"}, False),
+    "2issuers-valid_rows": ({"issuers_per_core": 2, "partial_tile_read": "valid_rows"}, False),
+    "2issuers-whole_tile": ({"issuers_per_core": 2, "partial_tile_read": "whole_tile"}, False),
+    "ablate-1issuer": ({"issuers_per_core": 1}, True),
+    "ablate-2issuers": ({"issuers_per_core": 2}, True),
 }
 
 
 @pytest.mark.parametrize("variant", list(VARIANTS))
 def test_perf_flux58(variant, device, monkeypatch):
-    for name, value in VARIANTS[variant].items():
-        monkeypatch.setattr(descriptor, name, value)
+    knobs, ablate = VARIANTS[variant]
+    for name, value in knobs.items():
+        monkeypatch.setitem(descriptor.KNOBS, name, value)
+    monkeypatch.setattr(descriptor, "ABLATE_READS", ablate)
 
     torch.manual_seed(0)
     torch_input = make_torch_input(FLUX_58["shape"], FLUX_58["dtype"])

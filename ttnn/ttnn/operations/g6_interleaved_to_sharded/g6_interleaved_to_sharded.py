@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_interleaved_to_sharded: move a DRAM-interleaved bfloat16 TILE tensor, bit for bit,
-into the L1 height or width shards that memory_config names, in one program.
+"""g6_interleaved_to_sharded: move a DRAM-interleaved bfloat16 TILE tensor, bit for bit, into the
+L1 height or width shards that memory_config names, in one device program (owner-fetch).
 
-Registry model (eval/op_template.py): INPUT_TAGGERS, SUPPORTED, EXCLUSIONS, validate().
+Registry model: INPUT_TAGGERS, SUPPORTED, EXCLUSIONS and validate() are declared here; INVALID
+lives in eval/golden_tests/g6_interleaved_to_sharded/feature_spec.py.
 """
 
 from __future__ import annotations
@@ -13,18 +14,11 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from . import g6_interleaved_to_sharded_program_descriptor as program_descriptor
-
-OP_NAME = "g6_interleaved_to_sharded"
-
-_SCHEME_NAME = {
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: "height_sharded",
-    ttnn.TensorMemoryLayout.WIDTH_SHARDED: "width_sharded",
-}
+from . import g6_interleaved_to_sharded_program_descriptor as _descriptor
 
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_TAGGERS — each projects the scenario dict (inputs = (scenario,))
+# 1. INPUT_TAGGERS — each reads inputs[0], the scenario dict of one call.
 # ---------------------------------------------------------------------------
 
 
@@ -42,10 +36,10 @@ def tag_rank(inputs, axes):
 
 def tag_alignment(inputs, axes):
     shape = inputs[0]["shape"]
-    height, width = shape[-2], shape[-1]
-    if height % 32 == 0 and width % 32 == 0:
+    H, W = shape[-2], shape[-1]
+    if H % 32 == 0 and W % 32 == 0:
         return "tile_aligned"
-    if width % 32 != 0:
+    if W % 32 != 0:
         return "w_non_aligned"
     return "h_non_aligned"
 
@@ -87,106 +81,123 @@ EXCLUSIONS = []
 # 4. validate()
 # ---------------------------------------------------------------------------
 
+_SCHEME_NAME = {
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: "height_sharded",
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED: "width_sharded",
+}
+_ORIENTATION_NAME = {
+    ttnn.ShardOrientation.ROW_MAJOR: "row_major",
+    ttnn.ShardOrientation.COL_MAJOR: "col_major",
+}
 
-def _malformed(message):
-    return ValueError(f"{OP_NAME}: {message}")
+
+def _refuse(message):
+    raise ValueError(f"g6_interleaved_to_sharded: {message}")
 
 
-def _check_well_formed(input_tensor, memory_config):
-    """Malformed requests raise ValueError, before and independently of the support check."""
+def _check_malformed(input_tensor, memory_config):
+    """Malformed requests (ValueError), checked before any support decision."""
+    if not isinstance(input_tensor, ttnn.Tensor):
+        _refuse(f"input_tensor must be a ttnn.Tensor, got {type(input_tensor).__name__}")
     if not ttnn.is_tensor_storage_on_device(input_tensor):
-        raise _malformed("input_tensor must be on a device")
+        _refuse("input_tensor is not on a device")
     if input_tensor.layout != ttnn.TILE_LAYOUT:
-        raise _malformed(f"input_tensor must be in TILE_LAYOUT, got {input_tensor.layout}")
-    input_memory = input_tensor.memory_config()
-    if (
-        input_memory.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
-        or input_memory.buffer_type != ttnn.BufferType.DRAM
-    ):
-        raise _malformed(
-            f"input_tensor must be DRAM interleaved, got {input_memory.buffer_type} {input_memory.memory_layout}"
-        )
+        _refuse(f"input_tensor must be in TILE_LAYOUT, got {input_tensor.layout}")
+    if tuple(input_tensor.tile.tile_shape) != (32, 32) or tuple(input_tensor.tile.face_shape) != (16, 16):
+        _refuse(f"input tile must be 32x32 with 16x16 faces, got {input_tensor.tile.tile_shape}")
+    in_mc = input_tensor.memory_config()
+    if in_mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        _refuse(f"input_tensor must be interleaved, got {in_mc.memory_layout}")
+    if in_mc.buffer_type != ttnn.BufferType.DRAM:
+        _refuse(f"input_tensor must be in DRAM, got {in_mc.buffer_type}")
     if input_tensor.dtype != ttnn.bfloat16:
-        raise _malformed(f"input_tensor must be bfloat16, got {input_tensor.dtype}")
+        _refuse(f"dtype must be bfloat16, got {input_tensor.dtype}")
     rank = len(input_tensor.shape)
     if rank not in (2, 4):
-        raise _malformed(f"input_tensor must have rank 2 or 4, got {rank}")
+        _refuse(f"rank must be 2 or 4, got {rank}")
 
-    if (
-        memory_config.buffer_type != ttnn.BufferType.L1
-        or memory_config.memory_layout not in _SCHEME_NAME
-        or memory_config.shard_spec is None
-    ):
-        raise _malformed(
-            "memory_config must be L1 HEIGHT_SHARDED or WIDTH_SHARDED with a shard spec, got "
-            f"{memory_config.buffer_type} {memory_config.memory_layout}"
-        )
-
-    tile_h, tile_w, num_images, tiles_h_per_image, tensor_cols_tiles = program_descriptor.tile_grid(input_tensor)
-    tensor_rows_tiles = num_images * tiles_h_per_image
+    if not isinstance(memory_config, ttnn.MemoryConfig):
+        _refuse(f"memory_config must be a ttnn.MemoryConfig, got {type(memory_config).__name__}")
+    if memory_config.buffer_type != ttnn.BufferType.L1:
+        _refuse(f"memory_config must name L1, got {memory_config.buffer_type}")
+    if memory_config.memory_layout not in _SCHEME_NAME:
+        _refuse(f"memory_config must be HEIGHT_SHARDED or WIDTH_SHARDED, got {memory_config.memory_layout}")
     shard_spec = memory_config.shard_spec
-    shard_h, shard_w = (int(d) for d in shard_spec.shape)
-    if shard_h % tile_h != 0 or shard_w % tile_w != 0:
-        raise _malformed(f"shard shape ({shard_h}, {shard_w}) must be a multiple of the tile ({tile_h}, {tile_w})")
-    height_sharded = memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    if height_sharded and shard_w != tile_w * tensor_cols_tiles:
-        raise _malformed(
-            f"a height shard must span the padded width {tile_w * tensor_cols_tiles}, got shard width {shard_w}"
+    if shard_spec is None:
+        _refuse("memory_config has no shard_spec")
+    shard_h, shard_w = shard_spec.shape
+    if shard_h <= 0 or shard_w <= 0 or shard_h % 32 or shard_w % 32:
+        _refuse(f"shard shape {list(shard_spec.shape)} is not a positive multiple of 32")
+
+    geom = _descriptor.compute_geometry(input_tensor, memory_config)
+    if geom.scheme == _descriptor.WIDTH and geom.shard_tile_rows < geom.tensor_tile_rows:
+        _refuse(
+            f"width shard of {geom.shard_tile_rows} tile rows is shorter than the tensor's "
+            f"{geom.tensor_tile_rows} tile rows"
         )
-    if not height_sharded and shard_h != tile_h * tensor_rows_tiles:
-        raise _malformed(
-            f"a width shard must span the padded height {tile_h * tensor_rows_tiles}, got shard height {shard_h}"
+    if geom.scheme == _descriptor.HEIGHT and geom.shard_tile_cols < geom.tensor_tile_cols:
+        _refuse(
+            f"height shard of {geom.shard_tile_cols} tile columns is narrower than the tensor's "
+            f"{geom.tensor_tile_cols} tile columns"
         )
-    num_shards = program_descriptor.num_shards_of(
-        height_sharded, tensor_rows_tiles, tensor_cols_tiles, shard_h // tile_h, shard_w // tile_w
-    )
-    num_cores = shard_spec.grid.num_cores()
-    if num_shards > num_cores:
-        raise _malformed(f"{num_shards} shards do not fit on the {num_cores} cores of the shard grid")
-    if memory_config.experimental_is_per_core_allocation():
-        raise _malformed("per-core L1 allocation is not accepted: every shard must share one address")
+    if geom.num_shards > len(geom.cores):
+        _refuse(f"{geom.num_shards} shards need more cores than the grid's {len(geom.cores)}")
+    shard_bytes = geom.shard_tile_rows * geom.shard_tile_cols * geom.tile_bytes
+    if shard_bytes > _descriptor.L1_BUDGET_BYTES:
+        _refuse(f"shard of {shard_bytes} B exceeds the per-core L1 budget of {_descriptor.L1_BUDGET_BYTES} B")
 
 
-def _scenario_of(input_tensor, memory_config):
-    """The registry scenario dict of a real call, so validate() runs the same taggers as the harness."""
+def _scenario(input_tensor, memory_config):
+    """The live call as the scenario dict the taggers read (one tagging source)."""
+    shard_spec = memory_config.shard_spec
+    box = shard_spec.grid.bounding_box()
     return {
-        "shape": [int(d) for d in input_tensor.shape],
+        "shape": list(input_tensor.shape),
         "dtype": input_tensor.dtype,
         "layout": input_tensor.layout,
-        "out_memory": {"scheme": _SCHEME_NAME[memory_config.memory_layout]},
+        "in_memory": {"buffer": "dram", "scheme": "interleaved"},
+        "out_memory": {
+            "buffer": "l1",
+            "scheme": _SCHEME_NAME[memory_config.memory_layout],
+            "grid": [[box.start.x, box.start.y], [box.end.x, box.end.y]],
+            "shard_shape": list(shard_spec.shape),
+            "orientation": _ORIENTATION_NAME[shard_spec.orientation],
+        },
     }
 
 
 def validate(input_tensor, memory_config):
-    _check_well_formed(input_tensor, memory_config)
+    _check_malformed(input_tensor, memory_config)
 
-    inputs = (_scenario_of(input_tensor, memory_config),)
+    inputs = (_scenario(input_tensor, memory_config),)
     axes = {}
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger(inputs, axes)
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
-            raise UnsupportedAxisValue(f"{OP_NAME}: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
-    for exc in EXCLUSIONS:
-        if all(axes.get(k) == v for k, v in exc.items()):
-            raise ExcludedCell(f"{OP_NAME}: unsupported combination (refinement candidate): {exc}")
+            raise UnsupportedAxisValue(f"g6_interleaved_to_sharded: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+
+    for cell in EXCLUSIONS:
+        if all(axes.get(key) == value for key, value in cell.items()):
+            raise ExcludedCell(f"g6_interleaved_to_sharded: unsupported combination (refinement candidate): {cell}")
 
 
 # ---------------------------------------------------------------------------
-# Public entry points
+# Plan report and public entry point
 # ---------------------------------------------------------------------------
 
 
 def describe_plan(input_tensor, memory_config) -> dict:
-    """The plan a call with these arguments selects (BB-08), in shard-grid core order."""
+    """The plan a call with these arguments runs (BB-08, BB-21), from the same cached planning step."""
     validate(input_tensor, memory_config)
-    return program_descriptor.describe(program_descriptor.derive_plan(input_tensor, memory_config))
+    return _descriptor.get_program(input_tensor, memory_config).plan
 
 
 def g6_interleaved_to_sharded(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
     validate(input_tensor, memory_config)
 
+    cached = _descriptor.get_program(input_tensor, memory_config)
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(input_tensor.shape)),
         input_tensor.dtype,
@@ -194,5 +205,5 @@ def g6_interleaved_to_sharded(input_tensor: ttnn.Tensor, memory_config: ttnn.Mem
         input_tensor.device(),
         memory_config,
     )
-    descriptor = program_descriptor.get_program_descriptor(input_tensor, output_tensor, memory_config)
-    return ttnn.generic_op([input_tensor, output_tensor], descriptor)
+    program = _descriptor.create_program_descriptor(cached, input_tensor, output_tensor)
+    return ttnn.generic_op([input_tensor, output_tensor], program)
