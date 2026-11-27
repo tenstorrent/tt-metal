@@ -19,8 +19,8 @@ weight's dtype. The adapters' `attn.orig.*` targets are the H3 attention's own w
 the VDN repo's `h3-base/` plus MiniMax-H3's text encoder); `checkpoint_dir` is one VDN checkpoint, e.g.
 `<vdn repo>/stage-dmd-step-250`.
 
-Eager, unbucketed and not coresident for now: no denoise trace, no dynamic length, no warmup, and each stage is
-loaded per request (stage 4).
+Eager and unbucketed for now: no denoise trace, no dynamic length, no warmup. Coresident (every stage stays loaded
+across requests) since stage 4 measured it fits: the hybrid layers no longer gather the whole hidden state.
 """
 
 from __future__ import annotations
@@ -122,9 +122,8 @@ class OpenVDNPipeline(MiniMaxH3Pipeline):
             use_persistent_ccl_buffers=False,
             dit_fsdp=False,
             warmup=False,
-            # The hybrid layers hold whole-sequence activations on every device (see the attention's SP note), so
-            # the text encoder and VAE are evicted while the transformer runs.
-            coresident=False,
+            # Every stage stays loaded (stage 4: fits at 5 s on the 4x8, total 183 -> 92 s per request).
+            coresident=True,
         )
         return super().create_pipeline(
             mesh_device=mesh_device,

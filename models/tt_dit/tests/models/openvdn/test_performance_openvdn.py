@@ -7,10 +7,10 @@
 program, then the measured generation reports per-stage times. Its output is kept and held to the end-to-end test's
 gates (frame and audio sanity, mean CLIP >= 30), so every perf number comes with its quality check.
 
-The pipeline is not coresident (`pipeline_openvdn.py`): the text encoder and VAE are reloaded per request, which the
-stage rows exclude but the total includes. Set TT_DIT_CACHE_DIR to make those reloads cheap.
+The pipeline is coresident (`pipeline_openvdn.py`), so no stage is reloaded per request.
 
-Env: OPENVDN_WEIGHTS_DIR, OPENVDN_CHECKPOINT_DIR, OPENVDN_ARTIFACTS, OPENVDN_DURATION_S (see test_pipeline_openvdn.py)
+Env: OPENVDN_WEIGHTS_DIR, OPENVDN_CHECKPOINT_DIR, OPENVDN_ARTIFACTS, OPENVDN_DURATION_S (see test_pipeline_openvdn.py),
+OPENVDN_CORESIDENT=0 (reload each stage per request, the pre-stage-4 behaviour)
 
 Run: pytest models/tt_dit/tests/models/openvdn/test_performance_openvdn.py -s --tb=short
 """
@@ -70,11 +70,14 @@ def test_openvdn_t2va_performance(mesh_device, reset_seeds):
     num_frames = get_num_frames(DURATION_S)
     stem = f"openvdn_perf_t2va_{width}x{height}_{num_frames}f_{OPENVDN_NUM_FORWARDS}nfe_seed{SEED}"
 
+    # The pipeline is coresident by default; OPENVDN_CORESIDENT=0 reloads each stage per request, as before stage 4.
+    extra = dict(coresident=False) if os.environ.get("OPENVDN_CORESIDENT") == "0" else {}
     pipeline = OpenVDNPipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights_dir,
         checkpoint_dir=checkpoint_dir,
         vae_output_type="float",
+        **extra,
     )
     request = dict(num_frames=num_frames, height=height, width=width, seed=SEED)
     warm_quietly(pipeline, PROMPT, warmup_steps=3, **request)
