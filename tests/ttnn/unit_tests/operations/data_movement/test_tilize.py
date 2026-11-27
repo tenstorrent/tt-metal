@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import pytest
 import re
 import torch
@@ -15,11 +16,16 @@ from tracy import signpost
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc, assert_with_ulp
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     check_readable,
+    docstring_dtype_conversion_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    convertible_input,
+    full_range_input,
+)
 from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch, run_for_blackhole, is_blackhole, is_quasar
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
@@ -1476,17 +1482,20 @@ def _architecture_xfail(dtype, buffer_type, tile_height):
     """None for an input the ttnn.tilize docstring supports on this architecture, else (reason, run) for an xfail.
 
     The docstring's architecture rules: on Blackhole, BFLOAT16, UINT16 and UINT8 inputs need a tile height of 2 or
-    more, and a UINT8 input must be in DRAM; on Quasar, a FLOAT32 input needs a tile height of 32. An input outside a
-    rule runs and is expected to fail, except a UINT8 input in L1 on Blackhole and a FLOAT32 input on Quasar, which
-    don't run.
+    more, and a UINT8 input must be in DRAM; on Quasar, the input must be BFLOAT16, FLOAT32 or INT32, and FLOAT32 and
+    INT32 inputs need a tile height of 32. An input outside a rule runs and is expected to fail, except a UINT8 input in
+    L1 on Blackhole and an input outside the Quasar rule, which don't run.
     """
     if is_blackhole():
         if dtype == ttnn.uint8 and buffer_type != ttnn.BufferType.DRAM:
             return "the docstring asks for UINT8 inputs in DRAM on Blackhole", False
         if dtype in (ttnn.bfloat16, ttnn.uint16, ttnn.uint8) and tile_height < 2:
             return f"the docstring asks for a tile height of 2 or more for {dtype} inputs on Blackhole", True
-    if is_quasar() and dtype == ttnn.float32 and tile_height != 32:
-        return "the docstring asks for a tile height of 32 for FLOAT32 inputs on Quasar", False
+    if is_quasar():
+        if dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+            return "the docstring lists only BFLOAT16, FLOAT32 and INT32 inputs on Quasar", False
+        if dtype in (ttnn.float32, ttnn.int32) and tile_height != 32:
+            return f"the docstring asks for a tile height of 32 for {dtype} inputs on Quasar", False
     return None
 
 
@@ -1498,7 +1507,7 @@ def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, ti
     """Runs every dtype, layout and interleaved buffer type the ttnn.tilize docstring lists, with each tile height its
     ``tile`` line lists.
 
-    BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value. An input that the docstring's
+    BFLOAT16 inputs leave out NaN, as the docstring requires, and -0.0 as well. An input that the docstring's
     architecture rules leave out is an xfail on that architecture (see ``_architecture_xfail``).
     """
     check_readable(dtype, layout, buffer_type)
@@ -1510,7 +1519,7 @@ def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, ti
         request.applymarker(pytest.mark.xfail(reason=reason, strict=False))
     memory_config = interleaved_memory_config(buffer_type)
     input_tensor = ttnn.from_torch(
-        full_range_input(shape, dtype, nan=dtype != ttnn.bfloat16),
+        full_range_input(shape, dtype, nan=dtype != ttnn.bfloat16, negative_zero=dtype != ttnn.bfloat16),
         dtype=dtype,
         layout=layout,
         device=device,
@@ -1522,7 +1531,7 @@ def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, ti
     assert output.dtype == dtype
     assert list(output.tile.tile_shape) == [tile_height, 32]
     assert output.memory_config() == memory_config
-    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output))
 
 
 @pytest.mark.parametrize(
@@ -1549,3 +1558,27 @@ def test_tilize_wide_rows_multicore(device, dtype, shape):
     )
     tt_output = ttnn.tilize(tt_input, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True)
     assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize("input_dtype, output_dtype", docstring_dtype_conversion_params(ttnn.tilize, "input", "output"))
+def test_tilize_docstring_dtype_conversions(input_dtype, output_dtype, device):
+    """Runs each output dtype the ttnn.tilize docstring lists for an input of another dtype, with values that both
+    dtypes hold exactly and no NaN or -0.0. An output that the docstring's Quasar rule leaves out
+    is an xfail on Quasar, without running."""
+    check_readable(input_dtype, output_dtype)
+    if is_quasar() and output_dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+        pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 outputs on Quasar")
+    if is_quasar() and os.getenv("TT_METAL_SIMULATOR") and (input_dtype, output_dtype) == (ttnn.bfloat16, ttnn.float32):
+        pytest.skip("Quasar ttsim does not model the BFLOAT16 to FLOAT32 packer conversion")
+    shape = (2, 3, 64, 96)
+    input_tensor = ttnn.from_torch(
+        convertible_input(shape, input_dtype, output_dtype),
+        dtype=input_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    output = ttnn.tilize(input_tensor, dtype=output_dtype)
+
+    assert output.dtype == output_dtype
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output))

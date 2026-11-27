@@ -10,6 +10,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     UnreadableDocstring,
     check_readable,
+    docstring_dtype_conversion_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
 )
@@ -152,3 +153,38 @@ def test_interleaved_buffer_types_that_cannot_be_read_fail(doc, reason, expect_e
 
 def test_check_readable_passes_real_values():
     check_readable(ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.BufferType.DRAM)
+
+
+def test_dtype_conversions_expand_each_clause():
+    doc = "A ``BFLOAT16`` or ``FLOAT32`` input can give a ``BFLOAT16``, ``FLOAT32`` or ``BFLOAT8_B`` output."
+    params = docstring_dtype_conversion_params(fake_op(doc), "input", "output")
+    assert ids(params) == [
+        "BFLOAT16-to-FLOAT32",
+        "BFLOAT16-to-BFLOAT8_B",
+        "FLOAT32-to-BFLOAT16",
+        "FLOAT32-to-BFLOAT8_B",
+    ]
+
+
+def test_dtype_conversions_read_every_clause_and_both_verbs():
+    doc = (
+        "a ``BFLOAT8_B`` or ``BFLOAT4_B`` `input_a` can be copied into a ``FLOAT32`` `input_b`, and a ``BFLOAT16``"
+        " `input_a` into a ``FLOAT32`` `input_b` when its values are not NaN."
+    )
+    params = docstring_dtype_conversion_params(fake_op(doc), "`input_a`", "`input_b`")
+    assert ids(params) == ["BFLOAT8_B-to-FLOAT32", "BFLOAT4_B-to-FLOAT32", "BFLOAT16-to-FLOAT32"]
+
+
+@pytest.mark.parametrize(
+    "doc, reason",
+    [
+        ("Copies a tensor.", "clause"),
+        ("A ``BFLOAT16`` input can give a ``FLOAT33`` output.", "not a ttnn.DataType: ['FLOAT33']"),
+        ("A ``TYPO`` input can give a ``TYPO`` output.", "not a ttnn.DataType: ['TYPO', 'TYPO']"),
+        ("A ``BFLOAT16`` input can give a ``BFLOAT16`` output.", "no change of dtype"),
+    ],
+    ids=["no-clause", "unknown-name", "unknown-name-in-identity-pair", "identity-only"],
+)
+def test_dtype_conversions_that_cannot_be_read_fail(doc, reason, expect_error):
+    params = docstring_dtype_conversion_params(fake_op(doc), "input", "output")
+    assert_unreadable(params, "dtype changes", reason, expect_error)
