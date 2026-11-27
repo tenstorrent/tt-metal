@@ -158,10 +158,11 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         auto check_shard_row = [](const TensorSpec& spec, uint32_t element_size, const char* role) {
             TT_FATAL(
                 !ttnn::operations::data_movement::has_subaligned_shard_row(spec.memory_config(), element_size) &&
-                    !ttnn::operations::data_movement::has_subaligned_split_row(spec),
-                "gather: ROW_MAJOR {} shard row of {} B is not a multiple of the buffer alignment. Reach this op "
-                "through ttnn::gather, which moves such tensors to interleaved memory, rather than calling the "
-                "device operation directly.",
+                    !ttnn::operations::data_movement::needs_interleaved_row_staging(spec),
+                "gather: ROW_MAJOR {} sharding (shard row of {} B) can't be moved by the native kernels: the shard "
+                "row is not a multiple of the buffer alignment, or the shard is one row high across several shard "
+                "columns. Reach this op through ttnn::gather, which moves such tensors to interleaved memory, rather "
+                "than calling the device operation directly.",
                 role,
                 spec.compute_page_size_bytes());
         };

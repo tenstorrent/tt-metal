@@ -7,8 +7,9 @@ run it.
 One MoE layer through the model adapter (TtMoEBlockFfn, the model's seeded random weights from block_cases.MODELS):
 
 * kimi_k3-8x4-5120: K3 on one 8x4 Galaxy, 5,120-token chunk.
-* kimi_k3_1-4x4-sp1-2560: K3.1's production stage, one tray half (SP=4 on mesh axis 1), 2,560-token chunk, K3.1's
-  L1_SMALL_SIZE. Run it through tests/run_4x4_stage_tests.sh; on the full Galaxy it skips.
+* kimi_k3_1-xy4-sp1-2560 and kimi_k3-xy4-sp1-{5120,10240}-packed-*: the 4x4 stage on the single-Galaxy [RING, RING]
+  carve (SP=4 on mesh axis 1): K3.1 (its L1_SMALL_SIZE) one 2,560-token chunk, K3 forwards of two and four. Run them
+  through tests/run_subtorus_4x4_tests.sh; on the full Galaxy they skip.
 * glm53-8x4-5120: GLM-5.3 on one 8x4 Galaxy ([RING, RING]), 5,120-token chunk.
 * glm53-xy4-sp1-2560 and glm53-xy4-sp1-{5120,10240}-packed-*: GLM-5.3's 4x4 stage on the single-Galaxy [RING, RING]
   carve (SP=4 on mesh axis 1), forwards of one, two and four full 2,560-token chunks, the packed ones with their
@@ -20,8 +21,8 @@ two-sided against TARGETS_MS ± MARGIN[mode]; the traced output must match the u
 same calls is test_moe_block_models.py::test_moe_block_perf (BLOCK_US).
 
     python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py -k "8x4"
-    models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \\
-        models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py -k kimi_k3_1-4x4-sp1
+    models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --expect 3 \\
+        models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py -k kimi
     models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --expect 3 \\
         models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_host_perf.py -k glm53
 (Several cases in one process share one seeded weight build: block_cases.BlockModel.state_dict.)
@@ -73,7 +74,8 @@ class MoEPerfCase:
 
 CASES = [
     MoEPerfCase("kimi_k3", "8x4", 5120),
-    MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560),
+    MoEPerfCase("kimi_k3_1", "xy4-sp1", 2560),
+    *(MoEPerfCase("kimi_k3", "xy4-sp1", 2560 * f, forward_chunks=f) for f in (2, 4)),
     MoEPerfCase("glm53", "8x4", 5120),
     *(MoEPerfCase("glm53", "xy4-sp1", 2560 * f, forward_chunks=f) for f in (1, 2, 4)),
 ]
@@ -81,7 +83,10 @@ CASES = [
 # fastest run, traced the mean of the runs. A case without targets only reports.
 TARGETS_MS = {
     "kimi_k3-8x4-5120": (2.38, 2.27),
-    "kimi_k3_1-4x4-sp1-2560": (3.63, 3.54),
+    # K3 / K3.1 carve: mean of 2 CI runs of that run's number (10k: 1 run)
+    "kimi_k3_1-xy4-sp1-2560": (3.43, 3.38),
+    "kimi_k3-xy4-sp1-5120-packed-2560@0-2560@2560": (4.42, 4.33),
+    "kimi_k3-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (6.26, 6.15),
     # GLM-5.3: each the mean over 3 runs of that run's number (fastest untraced sample, traced replay)
     "glm53-8x4-5120": (1.32, 1.21),
     "glm53-xy4-sp1-2560": (1.55, 1.44),
