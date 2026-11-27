@@ -11,6 +11,10 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#ifdef HF_ROPE_FP32_PRODUCTS
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#endif
 
 namespace ckl = compute_kernel_lib;
 
@@ -89,8 +93,21 @@ void kernel_main() {
                 ckl::input(cos_cb_id, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
                 pre_reserved_output(cos_interm_cb_id)>(
                 ckl::IterationShape::one_tile(), in_cb_dfb, cos_cb_dfb, cos_interm_cb_dfb);
+#ifdef HF_ROPE_FP32_PRODUCTS
+            // Round ties to even in DEST before the packer narrows to BF16.
+            ckl::eltwise_chain(
+                ckl::IterationShape::one_tile(),
+                ckl::CopyTile<ckl::input(cos_interm_cb_id)>{cos_interm_cb_dfb},
+                ckl::CopyTile<ckl::input(sin_interm_cb_id), ckl::Dst::D1>{sin_interm_cb_dfb},
+                ckl::AddBinary<>{},
+                ckl::Typecast<
+                    static_cast<uint32_t>(DataFormat::Float32),
+                    static_cast<uint32_t>(DataFormat::Float16_b)>{},
+                ckl::PackTile<pre_reserved_output(out_cb_id)>{out_cb_dfb});
+#else
             ckl::add<ckl::input(cos_interm_cb_id), ckl::input(sin_interm_cb_id), pre_reserved_output(out_cb_id)>(
                 ckl::IterationShape::one_tile(), cos_interm_cb_dfb, sin_interm_cb_dfb, out_cb_dfb);
+#endif
         }
 
         sin_cb.pop_front(onetile);

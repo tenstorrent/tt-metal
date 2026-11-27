@@ -22,6 +22,7 @@
 #include <optional>
 #include <bit>
 #include <cstdint>
+#include "ttnn/operations/nanbeige_opt_in.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -93,6 +94,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     std::uint32_t block_wt = 0;
     bool legacy_reduction = false;
     bool requested_use_welford = false;
+    bool inplace = false;
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -103,6 +105,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 block_wt = program_config.block_w;
                 legacy_reduction = program_config.legacy_reduction;
                 requested_use_welford = program_config.use_welford;
+                inplace = program_config.inplace;
             }
         },
         operation_attributes.program_config);
@@ -166,6 +169,23 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     auto grid = GridParams::compute(a, block_ht, device->compute_with_storage_grid_size());
     auto workers = WorkerDistribution::compute(grid, block_ht);
     auto core_ranges = CoreRanges::compute(grid, workers);
+
+    // Full-FP32 RMSNorm for the single-row, eight-width-shard geometry. The legacy
+    // FPU path narrows FP32 operands to TF32 and uses BF16 reduction constants.
+    // Keep this SFPU path deliberately restricted until other geometries are tested.
+    const bool fp32_rms_sfpu =
+        ttnn::nanbeige::precision() && device->arch() == tt::ARCH::BLACKHOLE && rms_norm && !is_pre_all_gather && !is_post_all_gather &&
+        !requested_use_welford && !legacy_reduction && !math_approx_mode && fp32_dest_acc_en && !inplace &&
+        !b.has_value() && !beta.has_value() && !stats.has_value() &&
+        !operation_attributes.fused_activation.has_value() && gamma.has_value() &&
+        gamma->layout() == Layout::ROW_MAJOR && gamma_dfb_data_format == tt::DataFormat::Float16_b &&
+        a.layout() == Layout::TILE && output.layout() == Layout::TILE && in_data_format == tt::DataFormat::Float32 &&
+        out_data_format == tt::DataFormat::Float32 && a.tensor_spec().tile().get_height() == 32 && tile_width == 32 &&
+        logical_K == K && K == 7168 && a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+        a.memory_config().buffer_type() == BufferType::L1 && output.memory_config() == a.memory_config() &&
+        skip_write_back && block_ht == 1 && block_wt == 28 && subblock_wt == 4 && grid.mcast_1d && grid.row_wise &&
+        grid.grid_is_rectangular && grid.grid_size == CoreCoord{8, 1} && !grid.use_two_stage_reduce &&
+        grid.num_blocks == 8;
 
     // Get all storage cores
     ShardSpec output_shard_spec = output.shard_spec().value();
@@ -312,7 +332,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .reader_sender_path = kernel_paths.reader_sender,
         .reader_receiver_path = kernel_paths.reader_receiver,
         .writer_path = kernel_paths.writer,
-        .compute_path = kernel_paths.compute,
+        .compute_path =
+            fp32_rms_sfpu
+                ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/rmsnorm_sharded_fp32.cpp"
+                : kernel_paths.compute,
         .is_pre_all_gather = is_pre_all_gather,
         .is_post_all_gather = is_post_all_gather,
         .rms_norm = rms_norm,
@@ -328,6 +351,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
         // RMSNorm doesn't use Welford in this kernel path.
         .welford_fp32_alias = use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en,
+        .rmsnorm_fp32_sfpu = fp32_rms_sfpu,
         .use_two_stage_reduce = grid.use_two_stage_reduce,
         .sizes = dfb_sizes,
         .reciprocal_dfb_size_bytes = reciprocal_dfb_size_bytes,

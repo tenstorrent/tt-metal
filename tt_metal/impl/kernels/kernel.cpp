@@ -672,6 +672,11 @@ std::string ComputeKernel::config_hash() const {
         this->config_.math_approx_mode,
         this->config_.dst_full_sync_en,
         unpack_mode_descriptor);
+    // Precise BFP packing changes generated pack-source formats. Keep the
+    // default identity stable, but never reuse its binary for the precise mode.
+    if (this->config_.bfp8_pack_precise) {
+        hash += "_bfp8_precise";
+    }
     // Appended only when opted in, so hashes (and cached binaries) of kernels that don't use
     // the RVV knob are unchanged.
     if (this->config_.enable_trisc2_rvv) {

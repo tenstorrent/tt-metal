@@ -35,6 +35,10 @@
 // through one non-cloneable out-of-line copy saves ~4-6 KB of kernel-config buffer under LLK
 // asserts. The per-K-chunk moves in the flash-attention loop keep calling move_block<true> directly.
 __attribute__((noinline, noclone)) void move_block_ool(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+#ifdef SDPA_FP32_DECODE_STATE
+    reconfig_data_format_srca(in_cb);
+    pack_reconfig_data_format(out_cb);
+#endif
     move_block<true>(in_cb, out_cb, num_tiles);
 }
 
@@ -302,6 +306,9 @@ void kernel_main() {
     // - VectorMode::R is equivalent to 16x32 tiles
     // NOTE: Using VectorMode::RC for 16x32 tiles will be correct accuracy, just slower due to unnecessary math
     constexpr VectorMode vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
+#ifdef SDPA_FP32_DECODE_STATE
+    static_assert(!use_half_tile && !tilize_q && !use_attention_sink && !use_attention_mask);
+#endif
 
     // We set up Ping Pong intermediate buffers between loops
     uint32_t cb_cur_max = cb_max_1;
@@ -449,8 +456,12 @@ void kernel_main() {
                     } else if constexpr (is_causal) {
                         // For decode, we only apply mask at the last chunk for causal mode
                         if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
+#ifdef SDPA_FP32_DECODE_STATE
+                            add_mask_block_fp32(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+#else
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+#endif
                         }
                     } else {
                         if constexpr (use_attention_mask) {
@@ -484,8 +495,13 @@ void kernel_main() {
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
+#ifdef SDPA_FP32_DECODE_STATE
+                reduce_max_row_fp32<cb_qk_im, Sq_chunk_t>(
+                    cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
+#else
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
+#endif
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
                 reconfig_data_format(cb_qk_im, cb_cur_max);
@@ -494,10 +510,19 @@ void kernel_main() {
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
+#ifdef SDPA_FP32_DECODE_STATE
+                // Sum the FP32 exponentials while they are still in DEST, then
+                // reduce columns on SFPU. P@V below retains its original FPU intake.
+                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true, true, vector_mode>(
+                    cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
+                online_reduce_sum_fp32(cb_cur_sum, Sq_chunk_t);
+#else
                 sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true, false, vector_mode>(
                     cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
+#endif
                 CircularBuffer(cb_qk_im).wait_front(qk_chunk_tiles_dynamic);
 
+#ifndef SDPA_FP32_DECODE_STATE
                 // Reconfig register DF
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_sum);
@@ -505,6 +530,7 @@ void kernel_main() {
                 /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
                 reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
+#endif
 
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_v_in, cb_qk_im);  // DEBUG
@@ -543,6 +569,12 @@ void kernel_main() {
                     sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
 
+#ifdef SDPA_FP32_DECODE_STATE
+                    // Both destinations already hold the new chunk's contribution.
+                    online_mul_add_fp32<Sq_chunk_t, 1, true, false>(cb_prev_sum, cb_exp_max_diff, cb_cur_sum);
+                    online_mul_add_fp32<Sq_chunk_t, vDHt, true, true>(cb_out_accumulate_im, cb_exp_max_diff, cb_out_im);
+                    move_block_ool(cb_out_im, cb_out_accumulate_im, out_chunk_tiles);
+#else
                     /* PREV_SUM *= EXP_MAX_DIFF */
                     mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
@@ -561,6 +593,7 @@ void kernel_main() {
                     reconfig_data_format(cb_out_accumulate_im, cb_out_im);
                     pack_reconfig_data_format(cb_out_accumulate_im);
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
+#endif
                 }
 
                 // More local chunks to process - move intermediate sum and max values to ping-pong buffers
@@ -607,6 +640,21 @@ void kernel_main() {
                     // Combine child with existing local/accumulated data
                     // Move child's L to cb_prev_sum_2 for correction
                     move_block_ool(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
+#ifdef SDPA_FP32_DECODE_STATE
+                    reconfig_data_format_srca(cb_prev_max);
+                    pack_reconfig_data_format(cb_cur_max);
+                    max_block<VectorMode::C>(cb_prev_max, cb_m_in, cb_cur_max, Sq_chunk_t);
+                    sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    sub_exp_block<scale_fp32>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
+                    online_mul_add_fp32<Sq_chunk_t, 1, false, false>(cb_prev_sum, cb_exp_max_diff, cb_cur_sum);
+                    online_mul_add_fp32<Sq_chunk_t, 1, true, false>(cb_prev_sum_2, cb_exp_max_diff_2, cb_cur_sum);
+                    // O/M/L are transported as FP32. Consume each correction
+                    // only after both its L and O contributions have used it.
+                    online_mul_add_fp32<Sq_chunk_t, vDHt, false, true>(
+                        cb_out_accumulate_im, cb_exp_max_diff, cb_out_im);
+                    online_mul_add_fp32<Sq_chunk_t, vDHt, true, true>(cb_out_o, cb_exp_max_diff_2, cb_out_im);
+                    move_block_ool(cb_out_im, cb_out_accumulate_im, out_chunk_tiles);
+#else
                     // Fused Softmax Correction
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
@@ -636,6 +684,8 @@ void kernel_main() {
 
                     // OUT_ACC = OUT_ACC + OUT_ACC_2
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
+
+#endif
 
                     // Update prev buffers for next round
                     // PREV_MAX <- CUR_MAX
@@ -688,6 +738,11 @@ void kernel_main() {
             pack_reconfig_data_format(cb_prev_sum);
             recip_block_inplace(cb_prev_sum, Sq_chunk_t);
 
+#ifdef SDPA_FP32_DECODE_STATE
+            // Normalize once in FP32, then explicitly round BF16 output to RNE.
+            online_mul_add_fp32<Sq_chunk_t, vDHt, false, true, true>(cb_out_accumulate_im, cb_prev_sum, cb_out_final);
+            CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
+#else
             /* OUT_ACC *= 1/SUM */
             reconfig_data_format(cb_out_accumulate_im, cb_prev_sum);
             pack_reconfig_data_format(cb_out_accumulate_im);
@@ -713,6 +768,8 @@ void kernel_main() {
                 // Move output to buffer for the writer
                 move_block_ool(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
             }
+
+#endif
 
         } else if (has_parent) {
             // Non-root node with parent: send intermediate results

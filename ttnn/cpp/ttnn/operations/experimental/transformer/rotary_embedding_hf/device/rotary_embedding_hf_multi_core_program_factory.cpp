@@ -4,11 +4,13 @@
 
 #include "rotary_embedding_hf_multi_core_program_factory.hpp"
 #include <bit>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/operations/nanbeige_opt_in.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -53,6 +55,18 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+
+    // Keep BF16 operands, but defer product rounding until the final sum.
+    const bool fp32_rotary_products =
+        ttnn::nanbeige::precision() && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en &&
+        input_cb_data_format == tt::DataFormat::Float16_b && cos_cb_data_format == tt::DataFormat::Float16_b &&
+        sin_cb_data_format == tt::DataFormat::Float16_b && output_cb_data_format == tt::DataFormat::Float16_b;
+    ComputeConfigDescriptor::UnpackToDestModes product_unpack_modes;
+    if (fp32_rotary_products) {
+        product_unpack_modes.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        product_unpack_modes[tt::CBIndex::c_25] = UnpackToDestMode::UnpackToDestFp32;
+        product_unpack_modes[tt::CBIndex::c_26] = UnpackToDestMode::UnpackToDestFp32;
+    }
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -145,24 +159,28 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
     });
 
     constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
+    const auto cos_product_format = fp32_rotary_products ? tt::DataFormat::Float32 : input_cb_data_format;
+    const uint32_t cos_product_tile_size = tt::tile_size(cos_product_format);
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * input_single_tile_size,
+        .total_size = num_interm_tiles * cos_product_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = cos_interm_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
+            .data_format = cos_product_format,
+            .page_size = cos_product_tile_size,
         }}},
     });
 
     constexpr uint8_t sin_interm_cb_index = tt::CBIndex::c_26;
+    const auto sin_product_format = fp32_rotary_products ? tt::DataFormat::Float32 : input_cb_data_format;
+    const uint32_t sin_product_tile_size = tt::tile_size(sin_product_format);
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * input_single_tile_size,
+        .total_size = num_interm_tiles * sin_product_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = sin_interm_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
+            .data_format = sin_product_format,
+            .page_size = sin_product_tile_size,
         }}},
     });
 
@@ -257,9 +275,13 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
     compute_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc_g1.core_ranges = core_group_1;
     compute_desc_g1.compile_time_args = compute_kernel_args_group_1;
+    if (fp32_rotary_products) {
+        compute_desc_g1.defines.emplace_back("HF_ROPE_FP32_PRODUCTS", "1");
+    }
     compute_desc_g1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = product_unpack_modes,
     };
 
     std::optional<KernelDescriptor> compute_desc_g2;
@@ -273,9 +295,13 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
         g2.core_ranges = core_group_2;
         g2.compile_time_args = std::move(compute_kernel_args_group_2);
+        if (fp32_rotary_products) {
+            g2.defines.emplace_back("HF_ROPE_FP32_PRODUCTS", "1");
+        }
         g2.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = product_unpack_modes,
         };
         compute_desc_g2 = std::move(g2);
     }
@@ -354,6 +380,18 @@ ProgramDescriptor create_multi_tile_descriptor(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+
+    // Keep BF16 operands, but defer product rounding until the final sum.
+    const bool fp32_rotary_products =
+        ttnn::nanbeige::precision() && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en &&
+        input_cb_data_format == tt::DataFormat::Float16_b && cos_cb_data_format == tt::DataFormat::Float16_b &&
+        sin_cb_data_format == tt::DataFormat::Float16_b && output_cb_data_format == tt::DataFormat::Float16_b;
+    ComputeConfigDescriptor::UnpackToDestModes product_unpack_modes;
+    if (fp32_rotary_products) {
+        product_unpack_modes.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        product_unpack_modes[tt::CBIndex::c_25] = UnpackToDestMode::UnpackToDestFp32;
+        product_unpack_modes[tt::CBIndex::c_26] = UnpackToDestMode::UnpackToDestFp32;
+    }
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -461,24 +499,28 @@ ProgramDescriptor create_multi_tile_descriptor(
     });
 
     constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
+    const auto cos_product_format = fp32_rotary_products ? tt::DataFormat::Float32 : cos_cb_data_format;
+    const uint32_t cos_product_tile_size = tt::tile_size(cos_product_format);
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * cos_single_tile_size,
+        .total_size = num_interm_tiles * cos_product_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = cos_interm_cb_index,
-            .data_format = cos_cb_data_format,
-            .page_size = cos_single_tile_size,
+            .data_format = cos_product_format,
+            .page_size = cos_product_tile_size,
         }}},
     });
 
     constexpr uint8_t sin_interm_cb_index = tt::CBIndex::c_26;
+    const auto sin_product_format = fp32_rotary_products ? tt::DataFormat::Float32 : sin_cb_data_format;
+    const uint32_t sin_product_tile_size = tt::tile_size(sin_product_format);
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * sin_single_tile_size,
+        .total_size = num_interm_tiles * sin_product_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = sin_interm_cb_index,
-            .data_format = sin_cb_data_format,
-            .page_size = sin_single_tile_size,
+            .data_format = sin_product_format,
+            .page_size = sin_product_tile_size,
         }}},
     });
 
@@ -565,9 +607,13 @@ ProgramDescriptor create_multi_tile_descriptor(
     compute_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc_g1.core_ranges = core_group_1;
     compute_desc_g1.compile_time_args = compute_kernel_args_group_1;
+    if (fp32_rotary_products) {
+        compute_desc_g1.defines.emplace_back("HF_ROPE_FP32_PRODUCTS", "1");
+    }
     compute_desc_g1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = product_unpack_modes,
     };
 
     std::optional<KernelDescriptor> compute_desc_g2;
@@ -582,9 +628,13 @@ ProgramDescriptor create_multi_tile_descriptor(
         g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
         g2.core_ranges = core_group_2;
         g2.compile_time_args = std::move(compute_kernel_args_group_2);
+        if (fp32_rotary_products) {
+            g2.defines.emplace_back("HF_ROPE_FP32_PRODUCTS", "1");
+        }
         g2.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = product_unpack_modes,
         };
         compute_desc_g2 = std::move(g2);
     }

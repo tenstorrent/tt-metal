@@ -11,6 +11,10 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#ifdef HF_ROPE_FP32_PRODUCTS
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#endif
 
 namespace ckl = compute_kernel_lib;
 
@@ -169,6 +173,28 @@ void kernel_main() {
                 ckl::PackTile<cos_output>{cos_interm_cb_dfb});
 
             // out = cos_interim + sin_interim
+#ifdef HF_ROPE_FP32_PRODUCTS
+            // Copy both FP32 products to DEST without the FPU's TF32 source conversion.
+            // The chain owns all format changes and clamps its two-slot lanes to DEST capacity.
+            // Round ties to even in DEST before the packer narrows to BF16.
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+                ckl::CopyTile<ckl::input(
+                    cos_interm_cb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block)>{
+                    cos_interm_cb_dfb},
+                ckl::CopyTile<
+                    ckl::input(
+                        sin_interm_cb_id,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::InputTileMapping::Block),
+                    ckl::Dst::D1>{sin_interm_cb_dfb},
+                ckl::AddBinary<>{},
+                ckl::Typecast<
+                    static_cast<uint32_t>(DataFormat::Float32),
+                    static_cast<uint32_t>(DataFormat::Float16_b)>{},
+                ckl::PackTile<ckl::output(out_cb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>{out_cb_dfb});
+#else
             reconfig_data_format(in_cb_id, cos_interm_cb_id, cos_cb_id, sin_interm_cb_id);
             pack_reconfig_data_format(cos_interm_cb_id, out_cb_id);
             ckl::add<cos_interm_input, sin_interm_input, rotary_output>(
@@ -176,6 +202,7 @@ void kernel_main() {
                 cos_interm_cb_dfb,
                 sin_interm_cb_dfb,
                 out_cb_dfb);
+#endif
         }
 
         sin_cb.pop_front(Wt);

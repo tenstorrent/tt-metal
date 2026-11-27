@@ -42,6 +42,7 @@
 
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "ttnn/operations/nanbeige_opt_in.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -2413,6 +2414,19 @@ auto build_line_reduce_scatter_program_impl(
             slice_B,
             slice_C,
             normalized_dim)};
+
+    // FPU add narrows FP32 inputs to TF32. Preserve both operands in DEST for
+    // the SFPU branch of the ordinary line kernel; other paths remain unchanged.
+    if (ttnn::nanbeige::precision() && mesh_device->arch() == tt::ARCH::BLACKHOLE && normalized_dim != 0 &&
+        input_tensor.dtype() == DataType::FLOAT32 && fp32_dest_acc_en) {
+        sender_reduce_kernel_config.defines["FP32_SFPU_REDUCTION"] = "1";
+        sender_reduce_kernel_config.unpack_to_dest_mode.assign(
+            NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        sender_reduce_kernel_config.unpack_to_dest_mode[input_cb_index] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        sender_reduce_kernel_config.unpack_to_dest_mode[intermediate_cb_index] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
 
     std::string sender_reduce_kernel_path =
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"

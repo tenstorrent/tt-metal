@@ -13,6 +13,10 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#ifdef SDPA_FP32_ONLINE_STATE
+#include "api/compute/sfpu_binary_bcast.h"
+#include "api/compute/eltwise_unary/typecast.h"
+#endif
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
@@ -25,6 +29,10 @@
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 #include "api/dataflow/circular_buffer.h"
+#ifdef SDPA_FP32_SCORE_MATH
+#include "api/compute/experimental/2_0/bcast.h"
+#include "api/compute/experimental/2_0/reconfig_data_format.h"
+#endif
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
@@ -303,6 +311,91 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     cb_out.push_back(rows);
 }
 
+#ifdef SDPA_FP32_SCORE_MATH
+// Use an explicit Float32 operand only for this load. Setting the CB-wide unpack mode would also
+// change the FPU readers of qk_im (including P @ V), losing probability mantissa bits before the matmul.
+// NONE is a full-tile copy; COL broadcasts column zero while retaining all 32 bits.
+// Blackhole's unary-broadcast LLK handles the hi16/lo16 unpack-to-DEST protocol in both cases.
+template <BroadcastType broadcast = BroadcastType::NONE>
+ALWI void sdpa_load_fp32(uint32_t cb_id, uint32_t tile_index, uint32_t dst_index) {
+    static_assert(DST_ACCUM_MODE, "SDPA FP32 score arithmetic requires FP32 DEST");
+    using Operand = ckernel::experimental::LLKOperand<DataFormat::Float32, ckernel::DEFAULT_TENSOR_SHAPE>;
+    const auto& cb = get_local_cb_interface(cb_id);
+    const Operand operand(cb.fifo_rd_ptr - 1 + cb.fifo_page_size * tile_index);
+    ckernel::experimental::reconfig_data_format_srca(operand);
+    ckernel::experimental::unary_bcast_init<broadcast>(operand);
+    ckernel::experimental::unary_bcast_tile<broadcast>(operand, dst_index);
+    // Restore the legacy source format after each isolated load. No CB-wide format table changes.
+    reconfig_data_format_srca(cb_id);
+}
+#endif
+
+#ifdef SDPA_FP32_SCORE_MATH
+/**
+ * out_cb = max(in0_cb, dim=-1), and eltwise_max(prev_cb, ...) if do_eltwise_max.
+ *
+ * The FPU max reduce keeps only 8 significant bits, so for an fp32 in0_cb its row max can miss the
+ * row's peak by far more than exp's range once scaled. This folds and reduces on the SFPU instead, so
+ * the max equals the peak as the FPU later reads it from in0_cb and (in0 - max) peaks at exactly 0.
+ * out_cb gets the max in column 0 of each tile, as reduce_c does.
+ */
+template <uint32_t in0_cb, uint32_t rows>
+void reduce_max_row_fp32(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_out(out_cb);
+    // Precondition: in0_cb has rows*cols produced, in row-major order
+    // Precondition: out_cb has rows free
+    // Precondition: if do_eltwise_max, prev_cb has rows produced
+    // Postcondition: in0_cb has rows*cols produced
+    // Postcondition: out_cb has rows produced
+    cb_in0.wait_front(rows * cols);
+    cb_out.reserve_back(rows);
+    pack_reconfig_data_format(out_cb);
+
+    constexpr uint32_t max_dst_idx = 0;
+    constexpr uint32_t in_dst_idx = 1;
+    for (uint32_t i = 0; i < rows; i++) {
+        tile_regs_acquire();
+#ifdef SDPA_FP32_SCORE_MATH
+        sdpa_load_fp32(in0_cb, i * cols, max_dst_idx);
+        for (uint32_t j = 1; j < cols; j++) {
+            sdpa_load_fp32(in0_cb, i * cols + j, in_dst_idx);
+            binary_max_tile_init();
+            binary_max_tile(max_dst_idx, in_dst_idx, max_dst_idx);
+        }
+#else
+        reconfig_data_format_srca(in0_cb);
+        copy_init(in0_cb);
+        binary_max_tile_init();
+        copy_tile(in0_cb, i * cols, max_dst_idx);
+        for (uint32_t j = 1; j < cols; j++) {
+            copy_tile(in0_cb, i * cols + j, in_dst_idx);
+            binary_max_tile(max_dst_idx, in_dst_idx, max_dst_idx);
+        }
+#endif
+        sfpu_reduce_init<PoolType::MAX, DataFormat::Float32>();
+        sfpu_reduce<PoolType::MAX, DataFormat::Float32, ReduceDim::REDUCE_ROW>(max_dst_idx);
+        if (do_eltwise_max) {
+#ifdef SDPA_FP32_SCORE_MATH
+            sdpa_load_fp32(prev_cb, i, in_dst_idx);
+#else
+            reconfig_data_format_srca(prev_cb);
+            copy_init(prev_cb);
+            copy_tile(prev_cb, i, in_dst_idx);
+#endif
+            binary_max_tile_init();
+            binary_max_tile(max_dst_idx, in_dst_idx, max_dst_idx, VectorMode::C);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(max_dst_idx, out_cb);
+        tile_regs_release();
+    }
+
+    cb_out.push_back(rows);
+}
+#endif  // SDPA_FP32_SCORE_MATH
+
 #ifdef TRISC_MATH
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
@@ -360,8 +453,10 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // llk_unpack_AB_init (inside sub_bcast_cols_init) validates the live
     // unpacker configuration.  Reconfigure first: qk_im can be FP32 while the
     // row maximum is BF16, notably after applying a windowed BF16 mask.
+#ifndef SDPA_FP32_SCORE_MATH
     reconfig_data_format(in0_cb, in1_cb);
     sub_bcast_cols_init(in0_cb, in1_cb);
+#endif
 
     // Approximate exp skips negative-input clamping for speed. Inputs below about -88 can
     // produce negative outputs, which packer ReLU clears. Keep this path for partial faces.
@@ -377,7 +472,11 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
         cb_reduce.reserve_back(rows);
     }
 
-#ifdef SUB_EXP_GRANULARITY
+#ifdef SDPA_FP32_SCORE_MATH
+    // One score plus one broadcast maximum uses two DEST slots. Preserve the original tile order.
+    uint32_t dst_tiles = 1;
+    uint32_t granularity = cols;
+#elif defined(SUB_EXP_GRANULARITY)
     uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
     uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols / SUB_EXP_GRANULARITY) : 1;
 #else
@@ -389,7 +488,15 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
+#ifdef SDPA_FP32_SCORE_MATH
+                static_assert(!EXP_APPROX_MODE && vector_mode == VectorMode::RC && write_result_inplace);
+                sdpa_load_fp32(in0_cb, j, j);
+                sdpa_load_fp32<BroadcastType::COL>(in1_cb, i, 1);
+                sub_binary_tile_init();
+                sub_binary_tile(j, 1, j);
+#else
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+#endif
                 // A 32x32 tile has four 16x16 faces, each requiring eight SFPU iterations.
                 // None visits the full tile in 32 iterations; R/C traverse faces with eight each.
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
@@ -453,6 +560,98 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
 
     PACK((llk_pack_relu_config(ReluConfig::none())));
 }
+
+#ifdef SDPA_FP32_ONLINE_STATE
+// FP32 online state with full-FP32 copies and SFPU multiply/add.
+// Accumulating output CBs have exactly rows*cols entries and are already full,
+// as in mul_block_bcast_cols's existing L1-accumulate path. Read each old output
+// before overwriting that slot; refresh its CB accounting only after all writes.
+template <uint32_t rows, uint32_t cols, bool accumulate, bool consume_scale, bool final_output = false>
+void online_mul_add_fp32(uint32_t src_cb, uint32_t scale_cb, uint32_t out_cb) {
+    CircularBuffer src(src_cb);
+    CircularBuffer scale(scale_cb);
+    CircularBuffer out(out_cb);
+    constexpr uint32_t count = rows * cols;
+    src.wait_front(count);
+    scale.wait_front(rows);
+    if constexpr (accumulate) {
+        out.wait_front(count);
+    } else {
+        out.reserve_back(count);
+    }
+    pack_reconfig_data_format(out_cb);
+    PACK((llk_pack_reconfig_l1_acc(false)));
+    for (uint32_t row = 0; row < rows; ++row) {
+        for (uint32_t col = 0; col < cols; ++col) {
+            const uint32_t index = row * cols + col;
+            tile_regs_acquire();
+            reconfig_data_format_srca(src_cb);
+            copy_init(src_cb);
+            copy_tile(src_cb, index, 0);
+            reconfig_data_format_srca(scale_cb);
+            copy_init(scale_cb);
+            copy_tile(scale_cb, row, 1);
+            if constexpr (accumulate) {
+                reconfig_data_format_srca(out_cb);
+                copy_init(out_cb);
+                copy_tile(out_cb, index, 2);
+            }
+            sfpu_bcast_col_init();
+            sfpu_mul_bcast_col(0, 1);
+            if constexpr (accumulate) {
+                add_binary_tile_init();
+                add_binary_tile(0, 2, 0);
+            }
+#ifdef SDPA_FP32_ONLINE_BF16_OUTPUT
+            if constexpr (final_output) {
+                // Match explicit FP32 -> BF16 round-to-nearest-even, including ties.
+                typecast_tile_init<
+                    static_cast<uint32_t>(DataFormat::Float32),
+                    static_cast<uint32_t>(DataFormat::Float16_b)>();
+                typecast_tile<static_cast<uint32_t>(DataFormat::Float32), static_cast<uint32_t>(DataFormat::Float16_b)>(
+                    0);
+            }
+#endif
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, out_cb);
+            tile_regs_release();
+        }
+    }
+    src.pop_front(count);
+    if constexpr (consume_scale) {
+        scale.pop_front(rows);
+    }
+    if constexpr (accumulate) {
+        out.pop_front(count);
+        out.reserve_back(count);
+    }
+    out.push_back(count);
+}
+
+// The online denominator is stored as a tile of partial column sums. Its final
+// row reduction must also bypass the FPU once those CBs use full-FP32 unpack.
+void online_reduce_sum_fp32(uint32_t cb_id, uint32_t rows) {
+    CircularBuffer cb(cb_id);
+    cb.wait_front(rows);
+    reconfig_data_format_srca(cb_id);
+    copy_init(cb_id);
+    pack_reconfig_data_format(cb_id);
+    for (uint32_t row = 0; row < rows; ++row) {
+        tile_regs_acquire();
+        copy_tile(cb_id, row, 0);
+        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_id);
+        tile_regs_release();
+    }
+    cb.pop_front(rows);
+    cb.reserve_back(rows);
+    cb.push_back(rows);
+}
+#endif
 
 /**
  * out_cb = in0_cb * in1_cb
@@ -629,6 +828,35 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
     cb_in0.push_back(num_tiles);
 }
 
+#ifdef SDPA_FP32_SCORE_MATH
+// Preserve FP32 scores when adding a BF16 causal mask. The ordinary FPU add
+// unpacks scores through TF32, changing even valid entries with a zero mask.
+// The mask remains retained, matching decode's last-chunk mask ownership.
+void add_mask_block_fp32(uint32_t scores_cb, uint32_t mask_cb, uint32_t num_tiles) {
+    CircularBuffer scores(scores_cb);
+    CircularBuffer mask(mask_cb);
+    scores.wait_front(num_tiles);
+    mask.wait_front(num_tiles);
+    pack_reconfig_data_format(scores_cb);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        sdpa_load_fp32(scores_cb, i, 0);
+        reconfig_data_format_srca(mask_cb);
+        copy_init(mask_cb);
+        copy_tile(mask_cb, i, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, scores_cb);
+        tile_regs_release();
+    }
+    scores.pop_front(num_tiles);
+    scores.reserve_back(num_tiles);
+    scores.push_back(num_tiles);
+}
+#endif
+
 /**
  * in0_cb += in1_cb
  */
@@ -744,7 +972,12 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
+#ifndef SDPA_FP32_SCORE_MATH
     sub_init(in0_cb, in1_cb);
+#endif
+#if defined(SDPA_FP32_SCORE_MATH) || defined(SDPA_FP32_ONLINE_STATE)
+    pack_reconfig_data_format(out_cb);
+#endif
     exp_tile_init<EXP_APPROX_MODE>();
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
@@ -756,8 +989,23 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
         tile_regs_acquire();
+#ifdef SDPA_FP32_SCORE_MATH
+        sdpa_load_fp32(in0_cb, i, 0);
+        sdpa_load_fp32(in1_cb, i, 1);
+        sub_binary_tile_init();
+        sub_binary_tile(0, 1, 0);
+#else
         sub_tiles(in0_cb, in1_cb, i, i, 0);
+#endif
+#ifdef SDPA_FP32_ONLINE_STATE
+        // Use the same full-FP32 scale as the exact score exponentiation.
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, scale_fp32);
+        exp_tile_init<false>();
+        MATH((exp_tile_first_column<false, 0x3F80>(0)));
+#else
         MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_cb);
@@ -1933,9 +2181,16 @@ void sdpa_inner_loop(
              * reduce_tile + binary_max_tile. The overload with cols as a template arg
              * is bf16-only but cb_qk_im could be fp32.
              */
+#ifdef SDPA_FP32_SCORE_MATH
+            // Opt-in FP32 score math: qk_im and the max CBs are fp32; fold and reduce on the SFPU so
+            // the row max equals the fp32 peak exactly.
+            reduce_max_row_fp32<cb_qk_im, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+#else
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
                 alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+#endif
 
             /**
              * sub_exp fuses a few operations.
@@ -1987,17 +2242,26 @@ void sdpa_inner_loop(
                  * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
                  * reduction, containing the sum of tiles in dim=-1 of QK.
                  */
+#ifdef SDPA_FP32_ONLINE_STATE
+                online_mul_add_fp32<Sq_chunk_t, 1, true, false>(alias_prev_sum, cb_exp_max_diff, alias_cur_sum);
+#else
                 mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                 /* cb_cur_sum += cb_prev_sum */
                 add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+#endif
 
                 /**
                  * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
                  * This uses L1 accumulation to accumulate onto mm2_cur_out.
                  */
+#ifdef SDPA_FP32_ONLINE_STATE
+                online_mul_add_fp32<Sq_chunk_t, vDHt, true, true>(
+                    alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+#else
                 mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
                     alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+#endif
             }
 
             // Swap CB handles to prepare for next iteration
@@ -2011,7 +2275,11 @@ void sdpa_inner_loop(
         /**
          * Performs final row-reduction on the partial sum.
          */
+#ifdef SDPA_FP32_ONLINE_STATE
+        online_reduce_sum_fp32(alias_prev_sum, Sq_chunk_t);
+#else
         matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+#endif
 
         /**
          * Process attention sink as a virtual K chunk.
@@ -2128,7 +2396,11 @@ void sdpa_inner_loop(
 
             /* cb_out_accumulate_im *= cb_cur_sum */
             pack_reconfig_data_format(cb_out);
+#ifdef SDPA_FP32_ONLINE_STATE
+            online_mul_add_fp32<Sq_chunk_t, vDHt, false, true, true>(alias_mm2_prev_out, alias_prev_sum, cb_out);
+#else
             mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, cb_out);
+#endif
 
             // free up cb_prev_max after K chunks
             CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);

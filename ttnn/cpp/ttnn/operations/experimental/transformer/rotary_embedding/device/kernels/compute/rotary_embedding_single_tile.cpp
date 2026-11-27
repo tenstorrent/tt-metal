@@ -19,6 +19,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#ifdef HF_ROPE_FP32_PRODUCTS
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#endif
 
 template <uint32_t in0_cb, uint32_t out_cb>
 ALWI void UNTILIZE_ONE_TILE() {
@@ -129,7 +133,18 @@ void kernel_main() {
             output(cos_interm_cb)>(IterationShape::tiles(onetile), cb_in_dfb, cb_updated_cos, cb_cos_interm);
 
         // out = cos_interim + sin_interim
+#ifdef HF_ROPE_FP32_PRODUCTS
+        // Round ties to even in DEST before the packer narrows to BF16.
+        eltwise_chain(
+            IterationShape::tiles(onetile),
+            CopyTile<input(cos_interm_cb)>{cb_cos_interm},
+            CopyTile<input(sin_interm_cb), Dst::D1>{cb_sin_interm},
+            AddBinary<>{},
+            Typecast<static_cast<uint32_t>(DataFormat::Float32), static_cast<uint32_t>(DataFormat::Float16_b)>{},
+            PackTile<output(out_cb)>{cb_out});
+#else
         add<input(cos_interm_cb), input(sin_interm_cb), output(out_cb)>(
             IterationShape::tiles(onetile), cb_cos_interm, cb_sin_interm, cb_out);
+#endif
     }
 }

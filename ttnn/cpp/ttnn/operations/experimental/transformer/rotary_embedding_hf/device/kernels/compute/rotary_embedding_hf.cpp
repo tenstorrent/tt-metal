@@ -10,6 +10,10 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#ifdef HF_ROPE_FP32_PRODUCTS
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#endif
 
 namespace ckl = compute_kernel_lib;
 
@@ -80,8 +84,21 @@ void kernel_main() {
             mul_tiles_chain<in_cb_id, cos_cb_id, cos_interm_cb_id>(in_cb, cos_cb, cos_interm_cb);
 
             // Add applied sin/cos tensors
+#ifdef HF_ROPE_FP32_PRODUCTS
+            // Round ties to even in DEST before the packer narrows to BF16.
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(onetile),
+                ckl::CopyTile<ckl::input(cos_interm_cb_id)>{cos_interm_cb},
+                ckl::CopyTile<ckl::input(sin_interm_cb_id), ckl::Dst::D1>{sin_interm_cb},
+                ckl::AddBinary<>{},
+                ckl::Typecast<
+                    static_cast<uint32_t>(DataFormat::Float32),
+                    static_cast<uint32_t>(DataFormat::Float16_b)>{},
+                ckl::PackTile<ckl::output(out_cb_id)>{out_cb});
+#else
             ckl::add<ckl::input(cos_interm_cb_id), ckl::input(sin_interm_cb_id), ckl::output(out_cb_id)>(
                 ckl::IterationShape::tiles(onetile), cos_interm_cb, sin_interm_cb, out_cb);
+#endif
         }
     }
 }

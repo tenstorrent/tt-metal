@@ -13,6 +13,11 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#ifdef RMSNORM_FP32_SFPU
+#include "api/compute/sfpu_binary_bcast.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#endif
 #include "api/compute/tile_move_copy.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
@@ -223,6 +228,82 @@ void kernel_main() {
     dfb_scaler.wait_front(num_scaler_tiles);
     dfb_eps.wait_front(1);  // comes from the reader
 
+#ifdef RMSNORM_FP32_SFPU
+    // The unchanged reader streams two full passes, with gamma interleaved by
+    // block in pass two. Keep per-column square sums in DST until the complete
+    // first pass has drained, then reduce its 32 columns once. Only inverse RMS
+    // spills to FP32 L1; no squared-value/statistics/affine TF32 intake remains.
+    static_assert(W % 32 == 0 && Wt % block_size == 0 && do_gamma == 1 && do_beta == 0);
+    constexpr uint32_t eps_fp32 = get_arg(args::eps_fp32);
+    for (uint32_t ncht = 0; ncht < NCHt; ++ncht) {
+        tile_regs_acquire();
+        for (uint32_t base = 0; base < Wt; base += block_size) {
+            dfb_in.wait_front(block_size);
+            reconfig_data_format_srca(dfb_in_id);
+            copy_init(dfb_in_id);
+            for (uint32_t tile = 0; tile < block_size; ++tile) {
+                if (base == 0 && tile == 0) {
+                    copy_tile(dfb_in_id, tile, 0);
+                    mul_binary_tile_init();
+                    mul_binary_tile(0, 0, 0);
+                } else {
+                    copy_tile(dfb_in_id, tile, 1);
+                    mul_binary_tile_init();
+                    mul_binary_tile(1, 1, 1);
+                    add_binary_tile_init();
+                    add_binary_tile(0, 1, 0);
+                }
+            }
+            dfb_in.pop_front(block_size);
+        }
+        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(0);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, generic::bit_cast<uint32_t>(1.0f / W));
+        add_unary_tile(0, eps_fp32);
+        rsqrt_tile_init();
+        rsqrt_tile(0);
+        tile_regs_commit();
+        dfb_ex2pe.reserve_back(1);
+        tile_regs_wait();
+        pack_reconfig_data_format(dfb_ex2pe_id);
+        pack_tile(0, dfb_ex2pe_id);
+        tile_regs_release();
+        dfb_ex2pe.push_back(1);
+        dfb_ex2pe.wait_front(1);
+
+        for (uint32_t base = 0; base < Wt; base += block_size) {
+            dfb_in.wait_front(block_size);
+            dfb_gamma.wait_front(block_size);
+            dfb_out.reserve_back(block_size);
+            pack_reconfig_data_format(dfb_out_id);
+            for (uint32_t tile = 0; tile < block_size; ++tile) {
+                tile_regs_acquire();
+                reconfig_data_format_srca(dfb_in_id);
+                copy_init(dfb_in_id);
+                copy_tile(dfb_in_id, tile, 0);
+                reconfig_data_format_srca(dfb_ex2pe_id);
+                copy_init(dfb_ex2pe_id);
+                copy_tile(dfb_ex2pe_id, 0, 1);
+                reconfig_data_format_srca(dfb_gamma_id);
+                copy_init(dfb_gamma_id);
+                copy_tile(dfb_gamma_id, tile, 2);
+                sfpu_bcast_col_init();
+                sfpu_mul_bcast_col(0, 1);
+                sfpu_bcast_row_init();
+                sfpu_mul_bcast_row(0, 2);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, dfb_out_id);
+                tile_regs_release();
+            }
+            dfb_in.pop_front(block_size);
+            dfb_gamma.pop_front(block_size);
+            dfb_out.push_back(block_size);
+        }
+        dfb_ex2pe.pop_front(1);
+    }
+#else
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int dst0 = 0;
 #ifndef RMSNORM
@@ -487,6 +568,7 @@ void kernel_main() {
 #endif
         dfb_ex2pe.pop_front(onetile);
     }  // NCHt loop
+#endif  // RMSNORM_FP32_SFPU
 
     // The reduce scalers are pushed once by the reader (on both the LayerNorm and RMSNorm paths) and
     // waited above; nothing else pops them. reduce_scaler_tile_count gives the number pushed, which

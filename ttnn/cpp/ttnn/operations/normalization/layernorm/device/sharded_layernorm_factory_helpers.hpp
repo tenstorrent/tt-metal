@@ -272,6 +272,8 @@ struct SpecConfig {
     // Exposes the Welford intake under a second buffer index configured for UnpackToDest, so
     // transpose_tile does not truncate Float32 input to TF32 on the SrcA path.
     bool welford_fp32_alias = false;
+    // Uses only direct-to-DEST FP32 loads and SFPU arithmetic, retaining the reader protocol.
+    bool rmsnorm_fp32_sfpu = false;
     // The cross-core reduce runs in two stages. Only then does the non-distributed Var[x] reduce have a
     // first-stage result for the reader to gather, so only then does it need the ex2 buffer.
     bool use_two_stage_reduce = false;

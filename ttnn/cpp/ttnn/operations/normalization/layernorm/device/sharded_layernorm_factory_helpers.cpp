@@ -1069,6 +1069,10 @@ m2::KernelSpec::CompileTimeArgs compute_compile_time_args(
         {"num_blocks_second_stage", workers.num_blocks_second_stage},
     };
 
+    if (c.rmsnorm_fp32_sfpu) {
+        args.emplace("inv_width_fp32", std::bit_cast<uint32_t>(1.0f / c.logical_K));
+        args.emplace("eps_fp32", std::bit_cast<uint32_t>(c.eps));
+    }
     if (c.use_welford) {
         // Number of valid (logical) columns in the final tile of the width. The kernel uses this
         // both to bound the partial Welford tile and, via last_block_w, to weight the final width
@@ -1233,6 +1237,11 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
 // Other Float32 consumers retain the FPU-compatible UnpackToSrc mode.
 void set_compute_unpack_modes(m2::KernelSpec& kernel, const m2::ProgramSpec& spec, const SpecConfig& c) {
     auto& modes = std::get<m2::ComputeHardwareConfig>(kernel.hw_config).unpack_modes;
+    if (c.rmsnorm_fp32_sfpu) {
+        modes.emplace(IN0, UnpackMode::UnpackToDest);
+        modes.emplace(EX_EXTERNAL2, UnpackMode::UnpackToDest);
+        modes.emplace(EX_GLOBAL, UnpackMode::UnpackToDest);
+    }
     if (c.welford_fp32_alias) {
         modes.emplace(X_WELFORD, UnpackMode::UnpackToDest);
     }

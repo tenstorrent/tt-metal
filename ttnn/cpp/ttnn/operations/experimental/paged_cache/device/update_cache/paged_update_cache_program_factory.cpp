@@ -16,6 +16,7 @@
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/nanbeige_opt_in.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -475,9 +476,15 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     // TTNN default maps to LoFi/approximate/double-buffered Dest. That differs only in the fidelity/approx
     // knobs, which do not affect this op: it untilizes cache/input, patches a row, and re-tilizes
     // (data-format moves) — there is no fidelity-sensitive FPU or SFPU math, and bfp_pack_precision_mode
-    // is left default either way.
+    // is left default either way (unless the opt-in below applies).
     auto compute_hw_cfg = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     compute_hw_cfg.enable_32_bit_dest = fp32_dest_acc_en;
+    if (ttnn::nanbeige::precision() && device->arch() == tt::ARCH::BLACKHOLE &&
+        input_tensor.dtype() == DataType::BFLOAT16 && cache_tensor.dtype() == DataType::BFLOAT8_B) {
+        // Match precise BF16-to-BFP8 typecast used by prefill: retain the BF16
+        // mantissa until shared-exponent packing of newly written cache rows.
+        compute_hw_cfg.config_1xx->bfp_pack_precision_mode = tt::tt_metal::Precision::Precise;
+    }
     if (fp32_dest_acc_en) {
         // A 32-bit Dest requires an explicit unpack mode for every Float32 buffer the compute kernel
         // consumes. UnpackToDest preserves full precision for FLOAT32 caches; for other caches,

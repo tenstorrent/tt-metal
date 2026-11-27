@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 #include <cmath>
+#include "ttnn/operations/nanbeige_opt_in.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -1396,6 +1397,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t l1_budget_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    // Opt-in (TTNN_NANBEIGE_PRECISION): preserve online attention state across long exact chunked prefill.
+    const bool fp32_online_state = ttnn::nanbeige::precision() && fp32_dest_acc_en && !exp_approx_mode &&
+                                   flexible_chunked && !use_attention_sink && device->arch() == tt::ARCH::BLACKHOLE;
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -1731,6 +1735,15 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (fp32_online_state) {
+        // Opt-in FP32 online state and score math (TTNN_NANBEIGE_PRECISION). The fp32 max CBs
+        // below come with it, and its row max is reduced on the SFPU (reduce_max_row_fp32).
+        defines_map["SDPA_FP32_ONLINE_STATE"] = "1";
+        defines_map["SDPA_FP32_SCORE_MATH"] = "1";
+        if (output_tensor.dtype() == DataType::BFLOAT16) {
+            defines_map["SDPA_FP32_ONLINE_BF16_OUTPUT"] = "1";
+        }
+    }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
@@ -1752,8 +1765,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df =
-        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
+    tt::DataFormat im_df = fp32_online_state ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
@@ -2016,10 +2028,20 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = compute_compile_time_args;
     compute_desc.defines = defines;
+    std::vector<UnpackToDestMode> online_unpack_modes;
+    if (fp32_online_state) {
+        online_unpack_modes.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        // These buffers are consumed exclusively by the SFPU online-state helpers.
+        // QK/max buffers retain their existing FPU intake; QK/PV matmuls are unchanged.
+        for (const auto cb : {cb_ids.out_im_A, cb_ids.out_im_B, cb_ids.sum_A, cb_ids.sum_B, cb_ids.exp_max_diff}) {
+            online_unpack_modes[cb] = UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = online_unpack_modes,
         .math_approx_mode = math_approx_mode,
     };
 

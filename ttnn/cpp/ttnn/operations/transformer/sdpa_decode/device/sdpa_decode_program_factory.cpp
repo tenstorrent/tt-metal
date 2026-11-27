@@ -22,6 +22,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/nanbeige_opt_in.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -221,6 +222,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const bool exp_approx_mode = program_config.has_value() && program_config->exp_approx_mode.has_value()
                                      ? program_config->exp_approx_mode.value()
                                      : true;
+
+    // Narrow exact paged-decode repair; keep row-major, speculative, masked,
+    // windowed, MLA and legacy precision paths unchanged.
+    const bool fp32_decode_state =
+        ttnn::nanbeige::precision() && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en && !math_approx_mode && !exp_approx_mode &&
+        is_causal && is_paged_attention && !tilize_q && !spec_multi_pos && !use_mla && !apply_geometry_override &&
+        !use_attention_sink && !use_attention_mask && sliding_window_size == 0 && !has_block_padding &&
+        input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == input_tensor_v.dtype() &&
+        (input_tensor_k.dtype() == DataType::BFLOAT16 || input_tensor_k.dtype() == DataType::BFLOAT8_B) &&
+        (output_tensor.dtype() == DataType::BFLOAT16 || output_tensor.dtype() == DataType::FLOAT32);
 
     // ========== Buffer Pointers & Metadata ==========
     auto* q_buffer = input_tensor_q.buffer();
@@ -490,8 +501,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // the pre-tree-reduction flat gather. Legacy sizing is kept verbatim off the spec path;
     // in spec mode each block is T times larger and the over-provisioning alone would blow
     // L1 (110 tiles/block * 63 blocks = 14 MB at T=11, 64 cores/head).
-    const uint32_t intermed_output_blocks =
-        spec_multi_pos ? std::min(num_cores_per_head - 1, num_tree_reduction_rounds) : (num_cores_per_head - 1);
+    const uint32_t intermed_output_blocks = (spec_multi_pos || fp32_decode_state)
+                                                ? std::min(num_cores_per_head - 1, num_tree_reduction_rounds)
+                                                : (num_cores_per_head - 1);
     const uint32_t intermed_output_tiles = (out_tiles + 2 * PNHt) * intermed_output_blocks;
 
     // ========== Data Formats ==========
@@ -504,13 +516,20 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
                                        : tt::DataFormat::Float16_b;
     const tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const tt::DataFormat im_df = tt::DataFormat::Float16_b;
-    const tt::DataFormat stats_df = tt::DataFormat::Float16_b;
+    // Scores/P and every local/transport O/M/L buffer share full FP32 storage.
+    // P retains default TF32 FPU intake for P@V; state-only buffers bypass Src.
+    const tt::DataFormat im_df = fp32_decode_state ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const tt::DataFormat stats_df = im_df;
 
     // ========== Tile Configurations ==========
     const auto half_tile = tt::tt_metal::Tile({16, 32});
     const auto full_tile = tt::tt_metal::Tile({32, 32});
-    const bool use_half_tile = is_causal && num_q_heads <= 16 && q_df == tt::DataFormat::Float16_b;
+    // Exact exp currently requires full RC tiles in the shared SFPU helper.
+    // Keep the half-tile optimization for legacy approximate/non-FP32 paths.
+    const bool exact_exp_full_tile =
+        ttnn::nanbeige::precision() && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en && !exp_approx_mode && is_causal;
+    const bool use_half_tile =
+        is_causal && num_q_heads <= 16 && q_df == tt::DataFormat::Float16_b && !exact_exp_full_tile;
     if (spec_multi_pos) {
         // The mask generator writes one full 32x32 tile per (candidate, k-column) pair and
         // the writer's MQA full-tile output branch assumes full tiles, so half tiles must be
@@ -895,6 +914,15 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     std::map<std::string, std::string> compute_defines;
     compute_defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     compute_defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
+    if (fp32_decode_state) {
+        TT_ASSERT(!use_half_tile && im_df == stats_df);
+        compute_defines["SDPA_FP32_DECODE_STATE"] = "1";
+        compute_defines["SDPA_FP32_ONLINE_STATE"] = "1";
+        compute_defines["SDPA_FP32_SCORE_MATH"] = "1";
+        if (output_tensor.dtype() == DataType::BFLOAT16) {
+            compute_defines["SDPA_FP32_ONLINE_BF16_OUTPUT"] = "1";
+        }
+    }
 
     if (Sk_chunk_t > 0) {
         auto add_granularity = [&](const char* name, uint32_t value) {
@@ -943,10 +971,35 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = std::move(compute_compile_time_args_common);
     compute_desc.defines = std::move(compute_defines_vec);
+    std::vector<UnpackToDestMode> decode_unpack_modes;
+    if (fp32_decode_state) {
+        decode_unpack_modes.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        // Exclude c_24: probability @ V remains an FPU matmul. Its score/exp
+        // SFPU loads use the explicit Float32 operand helper instead.
+        for (const auto cb :
+             {CBIndex::c_6,
+              CBIndex::c_7,
+              CBIndex::c_16,
+              CBIndex::c_17,
+              CBIndex::c_18,
+              CBIndex::c_21,
+              CBIndex::c_22,
+              CBIndex::c_23,
+              CBIndex::c_25,
+              CBIndex::c_26,
+              CBIndex::c_27,
+              CBIndex::c_28,
+              CBIndex::c_29,
+              CBIndex::c_30,
+              CBIndex::c_31}) {
+            decode_unpack_modes[cb] = UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = decode_unpack_modes,
         .math_approx_mode = math_approx_mode,
     };
 

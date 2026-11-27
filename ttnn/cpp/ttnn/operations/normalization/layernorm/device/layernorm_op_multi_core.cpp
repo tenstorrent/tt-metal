@@ -26,6 +26,7 @@
 #include <optional>
 #include <bit>
 #include <cstdint>
+#include "ttnn/operations/nanbeige_opt_in.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -645,6 +646,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
 
+    // Narrow full-FP32 RMSNorm path: preserve other layouts, fused forms and legacy reduction.
+    const bool fp32_rms_sfpu =
+        ttnn::nanbeige::precision() && device->arch() == tt::ARCH::BLACKHOLE && rms_norm && large_tensor_needed && !use_welford && float32_reduction &&
+        !math_approx_mode && !fuse_pre_add && !input_is_row_major && !use_row_major_kernel && !beta.has_value() &&
+        gamma.has_value() && gamma_data_format == tt::DataFormat::Float16_b &&
+        in_data_format == tt::DataFormat::Float32 && out_data_format == tt::DataFormat::Float32 && tile_height == 32 &&
+        tile_width == 32 && W == Wp && Wt % block_size == 0 && !operation_attributes.fused_activation.has_value();
+
     // Only layernorm.cpp and layernorm_large_tensor.cpp carry the TILIZE_IN / UNTILIZE_OUT
     // blocks, so on a row-major input those two fill IN themselves (from IN_RM) instead of the
     // reader filling it. The Welford compute kernels have no tilize block, which is why the
@@ -1070,6 +1079,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (rms_norm) {
         compute.compiler_options.defines.emplace("RMSNORM", "1");
     }
+    if (fp32_rms_sfpu) {
+        compute.compiler_options.defines.emplace("RMSNORM_FP32_SFPU", "1");
+        compute.compile_time_args.emplace("eps_fp32", std::bit_cast<uint32_t>(eps));
+    }
     if (input_is_row_major) {
         compute.compiler_options.defines.emplace("TILIZE_IN", "1");
         compute.compiler_options.defines.emplace("UNTILIZE_OUT", "1");
@@ -1191,6 +1204,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     {
         auto& modes = std::get<m2::ComputeHardwareConfig>(compute.hw_config).unpack_modes;
         std::vector<m2::DFBSpecName> unpack_to_dest;
+        if (fp32_rms_sfpu) {
+            unpack_to_dest.push_back(IN);
+            unpack_to_dest.push_back(EX2PE);
+        }
         // Each entry is gated on the same condition as its binding: an entry naming a buffer the
         // kernel does not bind is rejected, and legacy set this one from float32_reduction alone,
         // writing into a vector slot for a buffer index that may not have been allocated.
