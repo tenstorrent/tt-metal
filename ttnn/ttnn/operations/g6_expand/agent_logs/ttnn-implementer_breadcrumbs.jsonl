@@ -5,3 +5,4 @@
 {"event":"test_run","mode":"prod","target":"test_g6_expand.py","result":"pass","count":"22/22","ts":"2026-11-26T19:16:17-05:00"}
 {"event":"test_run","mode":"prod","target":"eval/golden_tests/g6_expand","result":"pass","count":"20/20","note":"first attempt failed collection: package did not re-export INPUT_TAGGERS/SUPPORTED/EXCLUSIONS","ts":"2026-11-26T19:16:17-05:00"}
 {"event":"test_run","mode":"probe","target":"knob paths","result":"pass","detail":"multi-image ragged, 2 blocks depth1/depth2 with mcast, ragged blocks depth2, absent mcast (replica_groups=1), H_out=1; all bit-exact with poisoned x padding","ts":"2026-11-26T19:16:17-05:00"}
+{"event":"test_run","result":"pass","detail":"acceptance 24/24 (--dev and plain), golden 20/20; R1 column_group_bcast, mcast down strips, seed_rows=4 replicate","ts":"2026-11-27T04:31:25-05:00"}

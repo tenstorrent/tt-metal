@@ -1,14 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_expand writer (BRISC, NoC1), every core of the rectangle: for each published pattern block,
-// write core_replica_rows x this_block_pattern_tiles whole 2 KB output pages from the resident
-// pattern pages, with no barrier inside the block.
-//
-// store_block uses raw Noc::async_write + TensorAccessor: kernel_lib has no DRAM page writer.
-// The stateful write path is not used because it pins the destination NoC coordinates, and
-// consecutive pages of an interleaved tensor live in different DRAM banks.
+// g6_expand writer (BRISC, NoC1), on every core of a strip: store_block.
+// Each built page of the block stays resident while it is written once per out tile row this core
+// owns; x page q = n*Wt + c becomes out tile (n, r, c), page id (n*Ht + r)*Wt + c.
 
 #include <stdint.h>
 
@@ -18,80 +14,58 @@
 #include "api/tensor/noc_traits.h"
 #include "api/debug/kernel_profiler.hpp"
 
-namespace {
-
-constexpr uint32_t cb_pattern_tiles_id = get_compile_time_arg_val(0);
-constexpr uint32_t tile_bytes = get_compile_time_arg_val(1);
-constexpr uint32_t block_pattern_tiles = get_compile_time_arg_val(2);
-constexpr uint32_t tensor_pattern_wt = get_compile_time_arg_val(3);
-constexpr uint32_t tensor_replica_rows = get_compile_time_arg_val(4);
+constexpr uint32_t cb_row_bcast_tiles = get_compile_time_arg_val(0);
+constexpr uint32_t page_bytes = get_compile_time_arg_val(1);
+constexpr uint32_t block_pages = get_compile_time_arg_val(2);
+constexpr uint32_t Wt = get_compile_time_arg_val(3);
+constexpr uint32_t Ht = get_compile_time_arg_val(4);
 constexpr auto out_args = TensorAccessorArgs<5>();
 
-constexpr uint32_t image_pages = tensor_replica_rows * tensor_pattern_wt;
-
-// Output page of (pattern p, replica row r): image(p) * image_pages + r * Wt + col(p). Replica row
-// outer, pattern inner, so consecutive writes of a multi-pattern block hit different banks.
-template <typename Accessor>
-FORCE_INLINE void store_block(
-    const Noc& noc,
-    const Accessor& out,
-    const CircularBuffer& cb,
-    uint32_t first_pattern,
-    uint32_t num_patterns,
-    uint32_t replica_start,
-    uint32_t core_replica_rows) {
-    const uint32_t first_image_base = (first_pattern / tensor_pattern_wt) * image_pages;
-    const uint32_t first_col = first_pattern % tensor_pattern_wt;
-    for (uint32_t r = replica_start; r < replica_start + core_replica_rows; ++r) {
-        uint32_t row_base = first_image_base + r * tensor_pattern_wt;
-        uint32_t col = first_col;
-        for (uint32_t j = 0; j < num_patterns; ++j) {
-            noc.async_write<NocOptions::DEFAULT, tile_bytes>(
-                cb, out, tile_bytes, {.offset_bytes = j * tile_bytes}, {.page_id = row_base + col});
-            if (++col == tensor_pattern_wt) {
-                col = 0;
-                row_base += image_pages;
-            }
-        }
-    }
-}
-
-}  // namespace
-
 void kernel_main() {
-    const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t pattern_start = get_arg_val<uint32_t>(0);
-    const uint32_t core_pattern_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t replica_start = get_arg_val<uint32_t>(2);
-    const uint32_t core_replica_rows = get_arg_val<uint32_t>(3);
-    const uint32_t num_blocks = (core_pattern_tiles + block_pattern_tiles - 1) / block_pattern_tiles;
+    const uint32_t group_q_start = get_arg_val<uint32_t>(0);
+    const uint32_t group_pages = get_arg_val<uint32_t>(1);
+    const uint32_t core_r_start = get_arg_val<uint32_t>(2);
+    const uint32_t core_rows_tiles = get_arg_val<uint32_t>(3);
 
     Noc noc;
-    CircularBuffer cb(cb_pattern_tiles_id);
-    const auto out = TensorAccessor(out_args, out_addr);
+    CircularBuffer cb(cb_row_bcast_tiles);
+    const auto out = TensorAccessor(out_args, get_common_arg_val<uint32_t>(0), page_bytes);
+    const uint32_t core_r_end = core_r_start + core_rows_tiles;
 
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        const uint32_t block_offset = block_idx * block_pattern_tiles;
-        const uint32_t remaining = core_pattern_tiles - block_offset;
-        const uint32_t this_block_pattern_tiles = remaining < block_pattern_tiles ? remaining : block_pattern_tiles;
+    // (n, c) of the first x page of the current block.
+    uint32_t block_n = group_q_start / Wt;
+    uint32_t block_c = group_q_start - block_n * Wt;
+    for (uint32_t remaining = group_pages; remaining > 0;) {
+        const uint32_t pages = remaining < block_pages ? remaining : block_pages;
         {
-            DeviceZoneScopedN("G6_CB_WAIT");
-            cb.wait_front(block_pattern_tiles);
+            DeviceZoneScopedN("G6E-store-wait");
+            cb.wait_front(block_pages);
         }
         {
-            DeviceZoneScopedN("G6_STORE");
-            store_block(
-                noc, out, cb, pattern_start + block_offset, this_block_pattern_tiles, replica_start, core_replica_rows);
-        }
-        {
-            // The reader overwrites these pages on its next reserve: they must have left L1 first.
-            DeviceZoneScopedN("G6_RELEASE");
+            DeviceZoneScopedN("G6E-store");
+            for (uint32_t r = core_r_start; r < core_r_end; ++r) {
+                uint32_t n = block_n;
+                uint32_t c = block_c;
+                for (uint32_t k = 0; k < pages; ++k) {
+                    noc.async_write(
+                        cb, out, page_bytes, {.offset_bytes = k * page_bytes}, {.page_id = (n * Ht + r) * Wt + c});
+                    if (++c == Wt) {
+                        c = 0;
+                        ++n;
+                    }
+                }
+            }
+            // The slot may be refilled once every write has left L1, not once it has landed.
             noc.async_writes_flushed();
-            cb.pop_front(block_pattern_tiles);
+            cb.pop_front(block_pages);
         }
+        block_c += pages;
+        while (block_c >= Wt) {
+            block_c -= Wt;
+            ++block_n;
+        }
+        remaining -= pages;
     }
-    {
-        DeviceZoneScopedN("G6_DRAIN");
-        noc.async_write_barrier();
-    }
+    DeviceZoneScopedN("G6E-drain");
+    noc.async_write_barrier();
 }
