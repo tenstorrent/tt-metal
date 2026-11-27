@@ -5006,6 +5006,15 @@
   "steady_tok_s_p524288_tagentic_cc": 78242.6,
   "steady_tok_s_p786432_tagentic_cc": 70620.7
  },
+ "WA.4R5": {
+  "steady_tok_s_p1024000_tagentic_cc": 59813.1,
+  "steady_tok_s_p131072_tagentic_cc": 67814.6,
+  "steady_tok_s_p139264_tagentic_cc": 67191.6,
+  "steady_tok_s_p262144_tagentic_cc": 67457.2,
+  "steady_tok_s_p51200_tagentic_cc": 70041.0,
+  "steady_tok_s_p524288_tagentic_cc": 65894.5,
+  "steady_tok_s_p786432_tagentic_cc": 62515.3
+ },
  "WA.5": {
   "woa_est_ms_wo_b": 0.446,
   "woa_est_ms_wq_b": 1.277,

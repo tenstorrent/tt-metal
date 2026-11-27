@@ -1562,3 +1562,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   (7) model_bringup: wo_a bank layout + the shared C++ ops, its 5120 ladder + no-rebuild (MB.WA's 40-layer test_ladder
   unit to be dropped per this word). Then the wq_b / wo_b C++ bank probe.
 - 21:20 heartbeat: WA.4R (off ladders) running; RAM used 69 GB; / 71G free.
+- 21:21 WA.4R PASS -> f87b2565df7 (off ladders 8192 single + 4x2k + 4x1792s; framework-added determinism 290 s). WA.4R5 next.
