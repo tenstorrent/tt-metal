@@ -1165,7 +1165,8 @@ def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
 #   (transpose_wh).
 # Row-major routing (interleaved): (0,1,3,2) and the 2D swap go through ttnn::transpose -> prim::permute ->
 # MultiCoreBlockedGeneric on Wormhole and Blackhole. Blackhole stages 8-bit row-major input through UINT32 only when
-# it is sharded (#61827), so these interleaved cases run the factory itself on both architectures.
+# it is sharded (#61827), so these interleaved cases run the factory itself on both architectures. The 50x70 cases
+# leave partial 32x32 blocks in both dims.
 @pytest.mark.parametrize(
     "layout, shape, dims",
     [
@@ -1175,6 +1176,8 @@ def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
         (ttnn.TILE_LAYOUT, [32, 32, 32, 32], (3, 2, 1, 0)),
         (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 64, 64], (0, 1, 3, 2)),
         (ttnn.ROW_MAJOR_LAYOUT, [64, 64], (1, 0)),
+        (ttnn.ROW_MAJOR_LAYOUT, [2, 3, 50, 70], (0, 1, 3, 2)),
+        (ttnn.ROW_MAJOR_LAYOUT, [50, 70], (1, 0)),
     ],
     ids=[
         "tile_wh",
@@ -1183,6 +1186,8 @@ def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
         "tile_generic",
         "row_major_4d",
         "row_major_2d",
+        "row_major_4d_partial_blocks",
+        "row_major_2d_partial_blocks",
     ],
 )
 def test_permute_int8_min_value(device, layout, shape, dims):
