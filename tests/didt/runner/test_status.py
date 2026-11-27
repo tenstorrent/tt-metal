@@ -2,10 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import importlib.util
 import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -125,6 +127,35 @@ def test_renders_with_sweep_page(tmp_path):
     assert r.returncode == 0, r.stderr
     page = out.read_text()
     assert "HANG" in page and "fallback 1: PASS 1 passed" in page
+
+
+def _sweep_module(sweep: Path, name: str):
+    spec = importlib.util.spec_from_file_location(f"gwdt_sweep_{name}", sweep / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("tail", ["d9006726d27", "d9006726d27_2", "unknown", "unknown_3"])
+def test_sweep_page_reads_every_run_dir_name(tmp_path, tail):
+    """didt_runner._run_dir adds _<n> to a taken name and repo_commit() can say unknown: the page still takes the run
+    start and the host from the name."""
+    sweep = _sweep_dir()
+    if sweep is None:
+        pytest.skip("build-gwdt-sweep skill not found; set GWDT_SWEEP_DIR")
+    host = "bh-glx-110-a01u20"
+    name = f"LOG_2026_11_26_20_24_{host}_{tail}"
+    run_dir = tmp_path / name
+    run_dir.mkdir()
+    # no step ran, so the start comes from the name alone
+    write(run_dir / "status.json", {**HEADER, "run": name, "host": host}, [], None)
+    scan = subprocess.run(
+        [sys.executable, str(sweep / "scan.py"), str(run_dir)], capture_output=True, text=True, check=True
+    )
+    (doc,) = json.loads(scan.stdout)
+    assert doc["started"] == datetime(2026, 11, 26, 20, 24, tzinfo=timezone.utc).timestamp()
+    assert _sweep_module(sweep, "scan").NAME.match(name).group(6) == host
+    assert _sweep_module(sweep, "sweep").launch_host({"run": name}) == "110-a01u20"
 
 
 def test_status_json_readable_by_others(tmp_path):
