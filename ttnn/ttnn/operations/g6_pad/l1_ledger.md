@@ -9,6 +9,7 @@ No compute kernel, no DEST: every page holds raw input-dtype bytes (`fp32_dest_a
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_fill_tile` | 1 (constant: one tile of `c`; every band segment / fill-only tile is a sub-range or the whole of it) | 1 | `{band: streams (every band tile re-sources the same page), band_rows: streams (segments are sub-ranges of the page), out_tile: streams (every fill-only tile re-sources it)}` | input dtype bits (bf16 Phase 0) | writer (`band_writer` in extension_band) | writer (NoC write source) | whole kernel | Cannot share with `cb_input_tiles`: concurrent lifetime (it is the source of fill-only writes issued while `load_block` fills `cb_input_tiles`). Not dropped in favor of a hardware zero region: `c` is per-call data and is non-zero in production (`-2^127`, `-1`). |
 | `cb_input_tiles` (new_storage_tiles only; not allocated in extension_band) | `input_depth_blocks · block_tiles`, `input_depth_blocks = min(2, num_blocks_max)` | `block_tiles` (one block assembled at a time when one block per core; `2 · block_tiles` when the L1 cap splits a run and reads of block `i+1` overlap writes of block `i`) | `{out_tile: spans → block_tiles (slot k ↔ k-th output tile of the block), band: n/a (other regime), band_rows: n/a}` | input dtype bits | reader | writer (patches edge slots in place while it owns them, then sends) | per block | Is itself the assembly buffer (pack-into-destination: patch happens in place, no separate output CB — rule 3 patterns 1+2). Fill-only slots are reserved but unwritten: capacity over the source-tile live set is the price of the nominal push count that closes the ring cycle (blocking-model §2); bounded by `block_tiles`. |
+| `cb_fill_tile_lane1` (extension_band only, index 2; allocated when `band_lanes = 2`, the default) | 1 | 1 | `{band: streams (the RISCV_1 / NOC0 lane's half of the per-core band range re-sources it), band_rows: streams}` | input dtype bits | band writer lane 1 (RISCV_1) | same kernel (NoC write source) | whole kernel | Cannot share with `cb_fill_tile`: each lane's kernel owns its own fill page (single producer / single consumer per CB; the design's `band writes on one RISC` lamp). Measured win of the second lane: p2 14.0 -> 11.9 us, p4 12.0 -> 9.8 us. |
 
 ## Symbol table
 
@@ -22,7 +23,7 @@ No compute kernel, no DEST: every page holds raw input-dtype bytes (`fp32_dest_a
 
 ## Footprint
 
-`L1(core) = tile_bytes · (1 + input_depth_blocks · block_tiles)` (new_storage_tiles); `tile_bytes` (extension_band).
+`L1(core) = tile_bytes · (1 + input_depth_blocks · block_tiles)` (new_storage_tiles); `band_lanes · tile_bytes` (extension_band; 4 KB bf16 at the default 2 lanes).
 Scales with: `block_tiles` and `input_depth_blocks` (`cb_input_tiles`); nothing else. Max over INPUTS: p1 fp32 ≈ 4096 · (1 + 14) ≈ 61 KB; bf16 `[1,1,256,256]` 64 tiles / 64 cores → 4 KB; extension 2 KB. Hard bound by construction: ≤ 1347776 B.
 
 ## Data-movement budget

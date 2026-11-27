@@ -91,6 +91,14 @@ void kernel_main() {
             cb_wait_front(cb_input_tiles, block_tiles);
             if constexpr (edge_row != 0 || edge_col != 0) {
                 const uint32_t slot_base = get_read_ptr(cb_input_tiles);
+                // Face-row-aligned runs are copied from the same offset of the fill page by local NoC
+                // writes (DMA, 32 B-granular, src == dst mod 16); only sub-face-row column fragments
+                // (2 B-granular for bf16) are RISC stores. Both write c, so overlap order is irrelevant.
+                bool noc_patched = false;
+                auto noc_fill = [&](uint32_t base, uint32_t off, uint32_t bytes) {
+                    noc_async_write(fill_base + off, get_noc_addr(base + off), bytes);
+                    noc_patched = true;
+                };
                 Walker w = walk;
                 for (uint32_t k = 0; k < extent; ++k) {
                     if (w.source_bearing()) {
@@ -99,56 +107,46 @@ void kernel_main() {
                             if (w.last_input_tile_row()) {
                                 if constexpr (edge_row < FACE) {
                                     // face 0 rows [edge_row,16), then face 1 rows [edge_row,16) + faces 2,3
-                                    dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-                                        base + edge_row * row_bytes, (FACE - edge_row) * row_bytes, fill_bits);
-                                    dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-                                        base + face_bytes + edge_row * row_bytes,
-                                        (FACE - edge_row) * row_bytes + 2 * face_bytes,
-                                        fill_bits);
+                                    noc_fill(base, edge_row * row_bytes, (FACE - edge_row) * row_bytes);
+                                    noc_fill(
+                                        base,
+                                        face_bytes + edge_row * row_bytes,
+                                        (FACE - edge_row) * row_bytes + 2 * face_bytes);
                                 } else {
                                     constexpr uint32_t r0 = edge_row - FACE;
-                                    dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-                                        base + 2 * face_bytes + r0 * row_bytes, (FACE - r0) * row_bytes, fill_bits);
-                                    dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-                                        base + 3 * face_bytes + r0 * row_bytes, (FACE - r0) * row_bytes, fill_bits);
+                                    noc_fill(base, 2 * face_bytes + r0 * row_bytes, (FACE - r0) * row_bytes);
+                                    noc_fill(base, 3 * face_bytes + r0 * row_bytes, (FACE - r0) * row_bytes);
                                 }
                             }
                         }
                         if constexpr (edge_col != 0) {
                             if (w.last_input_tile_col()) {
+                                constexpr uint32_t c0 = edge_col % FACE;
+                                // faces holding columns [edge_col % 16, 16) partially: 0/2 if edge_col < 16
+                                constexpr uint32_t part_a = edge_col < FACE ? 0 : face_bytes;
+                                constexpr uint32_t part_b = part_a + 2 * face_bytes;
                                 if constexpr (edge_col < FACE) {
-                                    // faces 1 and 3 whole; faces 0 and 2 columns [edge_col,16) of each row
+                                    noc_fill(base, face_bytes, face_bytes);      // face 1 whole
+                                    noc_fill(base, 3 * face_bytes, face_bytes);  // face 3 whole
+                                }
+                                for (uint32_t r = 0; r < FACE; ++r) {
                                     dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-                                        base + face_bytes, face_bytes, fill_bits);
+                                        base + part_a + r * row_bytes + c0 * elem_bytes,
+                                        (FACE - c0) * elem_bytes,
+                                        fill_bits);
                                     dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-                                        base + 3 * face_bytes, face_bytes, fill_bits);
-                                    for (uint32_t r = 0; r < FACE; ++r) {
-                                        dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-                                            base + r * row_bytes + edge_col * elem_bytes,
-                                            (FACE - edge_col) * elem_bytes,
-                                            fill_bits);
-                                        dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-                                            base + 2 * face_bytes + r * row_bytes + edge_col * elem_bytes,
-                                            (FACE - edge_col) * elem_bytes,
-                                            fill_bits);
-                                    }
-                                } else {
-                                    constexpr uint32_t c0 = edge_col - FACE;
-                                    for (uint32_t r = 0; r < FACE; ++r) {
-                                        dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-                                            base + face_bytes + r * row_bytes + c0 * elem_bytes,
-                                            (FACE - c0) * elem_bytes,
-                                            fill_bits);
-                                        dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-                                            base + 3 * face_bytes + r * row_bytes + c0 * elem_bytes,
-                                            (FACE - c0) * elem_bytes,
-                                            fill_bits);
-                                    }
+                                        base + part_b + r * row_bytes + c0 * elem_bytes,
+                                        (FACE - c0) * elem_bytes,
+                                        fill_bits);
                                 }
                             }
                         }
                     }
                     w.advance();
+                }
+                if (noc_patched) {
+                    // Local patch writes must land before the slot is sourced by store_block.
+                    noc_async_write_barrier();
                 }
             }
         }

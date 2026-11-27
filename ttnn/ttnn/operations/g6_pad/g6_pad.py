@@ -120,7 +120,8 @@ KNOBS = {
     # Fewest work units (band tiles / output tiles) a core gets: ncores = min(grid, ceil(N / this)).
     "min_units_per_core": 1,
     # extension_band: number of DM RISC lanes the per-core band range is split across (1 or 2).
-    "band_lanes": 1,
+    # Measured (BH, 110 cores): 2 lanes p2 14.0 -> 11.9 us, p3 5.8 -> 5.0, p4 12.0 -> 9.8.
+    "band_lanes": 2,
     # extension_band: band tiles per block (0 = whole per-lane range, the design's Phase 0 value).
     "band_block_tiles": 0,
     # new_storage_tiles: output tiles per block (0 = whole per-core range, clamped by the L1 cap).
