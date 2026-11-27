@@ -2853,9 +2853,10 @@ def kda_verify_flat() -> bool:
 
 
 def kda_verify_rsplit() -> bool:
-    """GLM53_KDA_VERIFY_RSPLIT (default 0; on GLM53_KDA_VERIFY_FLAT): kernels/kda_pre/reader.cpp KDA_VERIFY_RSPLIT in the
-    speculative verify's kda_pre (KDA_VERIFY_GROUPS = G) -- the G groups over G row groups of the column cores, one group
-    per core, the history write-backs after P6 (kernels/mk/owner_dm0.cpp); see kda_verify_rsplit_rows"""
+    """GLM53_KDA_VERIFY_RSPLIT (default 0; on in tt/galaxy_defaults.py; on GLM53_KDA_VERIFY_FLAT):
+    kernels/kda_pre/reader.cpp KDA_VERIFY_RSPLIT in the speculative verify's kda_pre (KDA_VERIFY_GROUPS = G) -- the G
+    groups over G row groups of the column cores, one group per core, the history write-backs after P6
+    (kernels/mk/owner_dm0.cpp); see kda_verify_rsplit_rows"""
     return _flag("GLM53_KDA_VERIFY_RSPLIT")
 
 

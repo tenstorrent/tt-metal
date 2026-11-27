@@ -1677,9 +1677,11 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     explicit environment value wins (an explicit AGK=0 drops the AGB default with it, an explicit RSB=0 the RSNP
     default, an explicit RS1_SPLIT=0 / RSB=0 / RSNP=0 the RS1_TSPLIT default, an explicit MFAST=0 (or R8 / AGK / PREFILTER
     = 0) the MSPLIT default, an explicit GLM53_MLA_ATT_OBF16=1 the COMB default, an explicit RS1_EARLY / RS1_SPLIT /
-    RS1_TSPLIT = 0 (or RSB / RSNP = 0, through TSPLIT) the RS1_PIPE default); the speculative verify's step cuts and
-    its kda_rec value split (GLM53_REC_SPLIT_VERIFY: no default is a GLM53_SPEC_* name, so apply_spec's speculative
-    defaults still follow apply); the 1 M prefill window ladder; other meshes get nothing"""
+    RS1_TSPLIT = 0 (or RSB / RSNP = 0, through TSPLIT) the RS1_PIPE default, an explicit KDA_VERIFY_PIPE / FLAT = 0,
+    GLM53_KDA_RSPLIT > 1 or GLM53_KDA_PREFETCH=1 (or either in a KDA kind's GLM53_STACK_KNOB_SET entry) the
+    KDA_VERIFY_RSPLIT default); the speculative verify's step cuts and its kda_rec value split
+    (GLM53_REC_SPLIT_VERIFY: no default is a GLM53_SPEC_* name, so apply_spec's speculative defaults still follow
+    apply); the 1 M prefill window ladder; other meshes get nothing"""
     import os
 
     from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
@@ -1719,6 +1721,7 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     )
     keys = list(GD.KNOBS) + ["GLM53_MODEL_TRACE_MB", "GLM53_PF_SPARSE_T", "GLM53_PREFILL_BUCKETS"]
     keys += [v for v in KNOB_ENV.values() if v not in keys] + ["GLM53_DSA_SHARD_AGB", "GLM53_MLA_ATT_OBF16"]
+    keys += ["GLM53_KDA_RSPLIT", "GLM53_KDA_PREFETCH", "GLM53_STACK_KNOB_SET"]  # (drop the KDA_VERIFY_RSPLIT default)
     _protect_env(monkeypatch, keys)
     assert GD.apply((2, 4), 4096) == {} and not SP.shard_agk(8)
     got = GD.apply((8, 4), 4096, 4096)
@@ -1815,12 +1818,47 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
         assert GD.KNOBS[k] == got[k] == "1", k
     assert SP.accept_batch() and SP.head_select_fast() and SP.kda_verify_flat()
     assert 'os.environ.get("GLM53_MHC_MSG_TRIM") == "1"' in mhc_src and '("MHC_MSG_TRIM", "1")' in mhc_src
-    # FLAT rides on PIPE: an explicit PIPE=0 drops the FLAT default (the others stay)
+    # GLM53_KDA_VERIFY_RSPLIT: a default on PIPE + FLAT; its reader sees it, and with the applied environment read as
+    # KdaPre reads it the verify-groups widths engage it (8 x 1 / 4 x 3 at TP 32: G row groups x 8 column cores)
+    assert GD.KNOBS["GLM53_KDA_VERIFY_RSPLIT"] == got["GLM53_KDA_VERIFY_RSPLIT"] == "1" and SP.kda_verify_rsplit()
+    kp = dict(
+        rsplit=int(os.environ.get("GLM53_KDA_RSPLIT", "1")),
+        pipe=os.environ.get("GLM53_KDA_VERIFY_PIPE", "0") == "1",
+        flat=SP.kda_verify_flat(),
+        prefetch=os.environ.get("GLM53_KDA_PREFETCH") == "1",
+    )
+    assert SP.kda_verify_rsplit_rows(8, 8, 64, **kp) == 8 and SP.kda_verify_rsplit_rows(4, 8, 64, **kp) == 4
+    # FLAT rides on PIPE: an explicit PIPE=0 drops the FLAT default (the others stay), and RSPLIT's (on FLAT) with it
     monkeypatch.setenv("GLM53_KDA_VERIFY_PIPE", "0")
     monkeypatch.delenv("GLM53_KDA_VERIFY_FLAT", raising=False)
+    monkeypatch.delenv("GLM53_KDA_VERIFY_RSPLIT", raising=False)
     got_np = GD.apply((8, 4), 4096, 4096)
     assert "GLM53_KDA_VERIFY_FLAT" not in got_np and not SP.kda_verify_flat()
+    assert "GLM53_KDA_VERIFY_RSPLIT" not in got_np and not SP.kda_verify_rsplit()
     monkeypatch.delenv("GLM53_KDA_VERIFY_PIPE")
+    # the other values the build refuses RSPLIT with (SP.kda_verify_rsplit_rows) drop its default: an explicit FLAT=0,
+    # GLM53_KDA_RSPLIT > 1, GLM53_KDA_PREFETCH=1, or either of the last two in a dense_kda / sparse_kda
+    # GLM53_STACK_KNOB_SET entry (stack_model.set_knobs pops both per-kind knobs and sets those); the knob-off values,
+    # a sparse_dsa entry and a dropped (K=-) entry keep it
+    for k, v, drop in (
+        ("GLM53_KDA_VERIFY_FLAT", "0", True),
+        ("GLM53_KDA_RSPLIT", "2", True),
+        ("GLM53_KDA_PREFETCH", "1", True),
+        ("GLM53_STACK_KNOB_SET", "s:GLM53_KDA_PREFETCH=1", True),
+        ("GLM53_STACK_KNOB_SET", "d:GLM53_MK_OPT=O3;d:GLM53_KDA_RSPLIT=2", True),
+        ("GLM53_KDA_RSPLIT", "1", False),
+        ("GLM53_KDA_PREFETCH", "0", False),
+        ("GLM53_STACK_KNOB_SET", "a:GLM53_KDA_PREFETCH=1,s:GLM53_KDA_RSPLIT=-", False),
+    ):
+        monkeypatch.setenv("GLM53_KDA_VERIFY_PIPE", "1")
+        monkeypatch.setenv("GLM53_KDA_VERIFY_FLAT", "1")
+        monkeypatch.delenv("GLM53_KDA_VERIFY_RSPLIT", raising=False)
+        monkeypatch.setenv(k, v)
+        assert ("GLM53_KDA_VERIFY_RSPLIT" not in GD.apply((8, 4), 4096, 4096)) == drop, (k, v)
+        assert (os.environ.get("GLM53_KDA_VERIFY_RSPLIT") is None) == drop, (k, v)
+        monkeypatch.delenv(k)
+    monkeypatch.setenv("GLM53_KDA_VERIFY_FLAT", "1")
+    monkeypatch.setenv("GLM53_KDA_VERIFY_RSPLIT", "1")
     # rev 82 GLM53_DSA_SHARD_RS1_PIPE: a default on the 8x4 (never the pair / 2x4); it rides on RS1_EARLY + RS1_SPLIT +
     # RS1_TSPLIT: an explicit 0 on any of them drops the RS1_PIPE default (else shard_rs1_pipe refuses the build)
     assert GD.KNOBS["GLM53_DSA_SHARD_RS1_PIPE"] == got["GLM53_DSA_SHARD_RS1_PIPE"] == "1"

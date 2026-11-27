@@ -187,6 +187,16 @@ KNOBS = {
     # share (ACCEPT_BATCH on in both arms, without the narrow knobs) 28.01 -> 27.70 ms; 8 x 1 / 4 x 3 spec ids identical.
     # The served gate with all four of these knobs on: 1-user hash, 8-user errors and coherence unchanged
     "GLM53_KDA_VERIFY_FLAT": "1",
+    # GLM53_KDA_VERIFY_RSPLIT (kda_pre reader.cpp KDA_VERIFY_RSPLIT, on PIPE + FLAT; the verify-groups widths): the G
+    # verify groups on G row groups of the column cores (8 x 8 = 64 owners at 8 x 1), one group per core, the history
+    # write-backs after P6 (kernels/mk/owner_dm0.cpp) -- the same windows and bytes. Served build (B 16 + the
+    # narrow-width knobs), stamped 8 x 1 verify (8 live, ISL 32 K, OSL 96; MSG_TRIM, ACCEPT_BATCH, HEAD_SELECT_FAST,
+    # KDA_VERIFY_FLAT and DSA_SHARD_RS1_PIPE on in every arm), A / B / A: the 12 KDA programs 13,775 / 12,992 / 13,779 us,
+    # full replay 27.50 / 26.77 / 27.53 ms, in-loop 26.48 / 25.93 / 26.71 ms. Spec ids identical where it engages (8 x 1,
+    # 4 x 3); the lone 1 x 3 and 16 identical rows (not engaged) unchanged; device byte identity with cross-group
+    # selectors (test_mk_layer_check::test_mk_layer_verify_groups). An explicit PIPE / FLAT =
+    # 0, GLM53_KDA_RSPLIT > 1 or GLM53_KDA_PREFETCH=1 (or either in a KDA kind's GLM53_STACK_KNOB_SET entry) drops it
+    "GLM53_KDA_VERIFY_RSPLIT": "1",
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE
     "GLM53_DSA_POOL": "1",  # the sparse_dsa layers' intermediates from one AllocPool (stack_model._dsa_pools)
     "GLM53_MOE_SHARE_M": "1",  # one shared-expert intermediate per stack (mk_moe.MkMoE)
@@ -224,6 +234,21 @@ def sparse_t(seq: int) -> str:
     return ",".join(str(step * k) for k in range(1, 5) if step * k <= seq)
 
 
+def _kda_kind_values(k: str) -> list:
+    """the values a KDA layer's build can read for the per-kind knob k (stack_model.KNOB_KEYS): the environment's and
+    GLM53_STACK_KNOB_SET's dense_kda / sparse_kda entries ("d:K=V" / "s:K=V", ";" or "," between items; K=- drops K) --
+    stack_model.set_knobs pops k and sets those. Conservative: the top-level environment value counts although
+    set_knobs pops it before a KDA build, and an earlier entry counts even when a later "K=-" drops it"""
+    vals = [os.environ[k]] if k in os.environ else []
+    spec = os.environ.get("GLM53_STACK_KNOB_SET", "")
+    for item in filter(None, spec.split(";") if ";" in spec else spec.split(",")):
+        kind, kv = item.split(":", 1)
+        name, v = kv.split("=", 1)
+        if kind in ("d", "s") and name == k and v != "-":
+            vals.append(v)
+    return vals
+
+
 def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
     """-> {knob: value} of what this call set (nothing on other meshes, nothing already in the environment)"""
     if tuple(int(v) for v in mesh_shape) != GALAXY:
@@ -255,6 +280,14 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
         want.pop("GLM53_DSA_SHARD_COMB")  # COMB needs fp32 O partials: an explicit OBF16=1 drops the COMB default
     if os.environ.get("GLM53_KDA_VERIFY_PIPE", want["GLM53_KDA_VERIFY_PIPE"]) != "1":
         want.pop("GLM53_KDA_VERIFY_FLAT")  # FLAT rides on PIPE: an explicit PIPE=0 drops the FLAT default with it
+    if (
+        any(os.environ.get(k, want.get(k, "0")) != "1" for k in ("GLM53_KDA_VERIFY_PIPE", "GLM53_KDA_VERIFY_FLAT"))
+        or any(v.strip() != "1" for v in _kda_kind_values("GLM53_KDA_RSPLIT"))
+        or "1" in _kda_kind_values("GLM53_KDA_PREFETCH")
+    ):
+        # RSPLIT rides on PIPE + FLAT and is refused with GLM53_KDA_RSPLIT > 1 or GLM53_KDA_PREFETCH=1
+        # (shard_plan.kda_verify_rsplit_rows): an explicit value that refuses the build drops the RSPLIT default
+        want.pop("GLM53_KDA_VERIFY_RSPLIT")
     want["GLM53_MODEL_TRACE_MB"] = str(trace_mb(int(seq)))
     ladder = sparse_t(int(seq))
     if ladder:
