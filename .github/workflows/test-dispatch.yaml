@@ -94,7 +94,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
         - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent --shm-size=2g"
     defaults:
       run:
         shell: bash
