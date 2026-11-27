@@ -34,3 +34,4 @@
 {"event":"test_run","refinement":3,"result":"pass","c308_us":1429,"c286_us":338,"note":"R7 writer-only NoC copies; build 637us = 22.5 cyc/copy; slow rows reader-starved","ts":"2026-11-27T15:32:07-05:00"}
 {"event":"fix_applied","refinement":3,"text":"RISC word copies (1315us, store-bound 5.7 cyc/store); RISC split across both RISCs flat (L1 contention); reader RISC 5/8 + writer NoC 3/8 (1265); 128 blocks/core (1113)","ts":"2026-11-27T15:32:07-05:00"}
 {"event":"test_run","refinement":3,"result":"pass","c308_before_us":3394.7,"c308_after_us":1119.8,"c286_before_us":797.1,"c286_after_us":273,"floors":{"reads_only":520,"writes_only":866,"no_copies":1034},"golden_slice":"20/20","unit":"156 passed","ts":"2026-11-27T15:32:07-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-27T15:37:07-05:00"}
