@@ -481,6 +481,59 @@
             "ttft_s": 23.89
           }
         }
+      },
+      "sc4_packed": {
+        "margin": {
+          "@2k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05
+          },
+          "@50k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05
+          },
+          "@100k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05
+          },
+          "@252k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05
+          },
+          "@512k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05
+          },
+          "@1M": {
+            "throughput_tok_s": 0.1,
+            "ttft_s": 0.05
+          }
+        },
+        "8kw": {
+          "@2k": {
+            "throughput_tok_s": 41236
+          },
+          "@50k": {
+            "throughput_tok_s": 40762,
+            "ttft_s": 2.46
+          },
+          "@100k": {
+            "throughput_tok_s": 40462,
+            "ttft_s": 3.72
+          },
+          "@252k": {
+            "throughput_tok_s": 36818,
+            "ttft_s": 7.93
+          },
+          "@512k": {
+            "throughput_tok_s": 32275,
+            "ttft_s": 15.72
+          },
+          "@1M": {
+            "throughput_tok_s": 25286,
+            "ttft_s": 33.91
+          }
+        }
       }
     }
   }

@@ -2549,7 +2549,7 @@
 # kimi_k3). Own test_type, so the scarce 4-galaxy leg is dispatchable without a single-galaxy one.
 # [2/2] runs the same request packed, as the SC1 L24 leg does: four 2,560-token chunks per forward
 # (kimi_k3_1_packed.json), traced with D2H acks, against the same golden; perf is gated on kimi_k3_1/sc4_packed in
-# perf_baselines.json once it has an entry, and until then must still measure.
+# perf_baselines.json.
 - name: "(Kimi-K3.1) disaggregated prefill 8x[4,4] KV accuracy 8k@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
