@@ -90,8 +90,10 @@ void kernel_main() {
                              : nullptr;
     uint32_t reader_idx = 0;
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
-    constexpr uint32_t coalesced_read_bytes =
-        ((dilation_w == 1) ? weight_size_w * conv_act_c_read_bytes : conv_act_c_read_bytes);
+    constexpr bool coalesce_reads = coalesce_kernel_w_reads<dilation_w, weight_size_w, conv_act_c_read_bytes>();
+    constexpr uint32_t num_coalesced_reads = coalesce_reads ? weight_size_w : 1;
+    constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
+    constexpr uint32_t kernel_w_num_reads = (dilation_w == 1) ? weight_size_w / num_coalesced_reads : 1;
     const uint32_t act_l1_read_addr = split_reader_enabled ? dfb_sharded_act_obj.get_read_ptr() : 0;
     uint32_t start_reader_idx =
         split_reader_enabled ? (uint32_t)(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1 : 0;
@@ -124,7 +126,7 @@ void kernel_main() {
                     dfb_act_second_obj.reserve_back(act_block_num_tiles);
                     l1_write_addr_act = dfb_act_second_obj.get_write_ptr();
                     read_sticks<
-                        dilation_w,
+                        coalesce_reads,
                         coalesced_read_bytes,
                         conv_act_c_read_bytes,
                         act_block_w_extra_align_bytes,
@@ -138,6 +140,7 @@ void kernel_main() {
                 } else {
                     read_sticks_activation_reuse<
                         coalesced_read_bytes,
+                        kernel_w_num_reads,
                         conv_act_c_read_bytes,
                         act_block_w_extra_align_bytes,
                         window_outer_offset,
