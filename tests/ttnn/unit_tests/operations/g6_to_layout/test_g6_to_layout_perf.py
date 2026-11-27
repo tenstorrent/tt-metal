@@ -80,3 +80,37 @@ def test_perf_bf8b(device, shape, memory_config, out_memory_config):
     out = g6_to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT, **kwargs)
     expected = ttnn.to_torch(ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(torch.bfloat16)
     assert torch.equal(ttnn.to_torch(out).reshape(shape).view(torch.int16), expected.reshape(shape).view(torch.int16))
+
+
+# Refinement 2 paths: row_major_to_tile (DRAM and L1 placements, multi-image H = 1, column-chunked
+# rows) and packer_tilize (case 16 and loose Q3).
+@pytest.mark.parametrize(
+    "shape, memory_config, out_memory_config, out_dtype",
+    [
+        pytest.param((1, 128, 256, 256), ttnn.DRAM_MEMORY_CONFIG, None, None, id="c301-rm-dram"),
+        pytest.param((1, 64, 128, 256), ttnn.DRAM_MEMORY_CONFIG, None, None, id="c277-rm-dram"),
+        pytest.param((1, 128, 256, 32), ttnn.DRAM_MEMORY_CONFIG, None, None, id="c296-rm-one-col"),
+        pytest.param((16, 1, 1536), ttnn.DRAM_MEMORY_CONFIG, None, None, id="c1989-rm-h1"),
+        pytest.param((1, 128, 256, 256), ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, None, id="c38-rm-l1"),
+        pytest.param((1, 128, 256, 128), ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, None, id="c49-rm-l1"),
+        pytest.param((1, 1, 1, 256), ttnn.DRAM_MEMORY_CONFIG, None, ttnn.bfloat8_b, id="c16-rm-bf8b"),
+        pytest.param((1, 1, 32, 256), ttnn.DRAM_MEMORY_CONFIG, None, ttnn.bfloat8_b, id="q3-rm-bf8b"),
+    ],
+)
+def test_perf_row_major_to_tile(device, shape, memory_config, out_memory_config, out_dtype):
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    tt_x = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    kwargs = {}
+    if out_memory_config is not None:
+        kwargs["memory_config"] = out_memory_config
+    if out_dtype is not None:
+        kwargs["dtype"] = out_dtype
+    out = g6_to_layout(tt_x, ttnn.TILE_LAYOUT, **kwargs)
+    actual = ttnn.to_torch(out).reshape(shape)
+    if out_dtype is None:
+        assert torch.equal(actual.view(torch.int16), x.view(torch.int16))
+    else:
+        assert torch.allclose(actual.float(), x.float(), rtol=0.05, atol=0.05)

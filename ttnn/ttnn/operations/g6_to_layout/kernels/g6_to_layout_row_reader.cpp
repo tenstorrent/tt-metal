@@ -60,15 +60,40 @@ FORCE_INLINE void load_tile_row(const Block& block, uint32_t i, uint32_t stage, 
     }
 }
 
-// Two bf16 datums: a datum whose 7 mantissa bits are all ones becomes the next one toward zero.
+// Bit 7 of each half of a bf16 pair set where that datum's 7 mantissa bits are all ones; XOR-ing
+// the mask >> 7 lowers those datums to the next value toward zero.
 // The bfp8 packer rounds such a datum up into the next binade when it holds its group's largest
 // exponent, and then requantizes the whole group one exponent higher. The host saturates that
 // datum to the largest mantissa instead and keeps the exponent (tech_reports/data_formats/
 // data_formats.md, Mantissa Rounding), which is exactly the lowered value. A lowered datum below
 // its group's exponent moves by at most a quarter of the group's quantization step.
-FORCE_INLINE uint32_t lower_saturating_mantissas(uint32_t pair) {
-    const uint32_t all_ones = ((pair & 0x007F007Fu) + 0x00010001u) & 0x00800080u;
-    return pair ^ (all_ones >> 7);
+FORCE_INLINE uint32_t all_ones_mantissas(uint32_t pair) { return ((pair & 0x007F007Fu) + 0x00010001u) & 0x00800080u; }
+
+// Words per test: their loads are independent, so they issue back to back, and one OR-reduced test
+// skips the common case (no all-ones mantissa) without a store.
+constexpr uint32_t CONDITION_UNROLL = 8;
+
+FORCE_INLINE void lower_saturating_mantissas(tt_l1_ptr uint32_t* words, uint32_t count) {
+    uint32_t k = 0;
+    for (; k + CONDITION_UNROLL <= count; k += CONDITION_UNROLL) {
+        uint32_t pairs[CONDITION_UNROLL];
+        uint32_t any = 0;
+#pragma GCC unroll 8
+        for (uint32_t u = 0; u < CONDITION_UNROLL; ++u) {
+            pairs[u] = words[k + u];
+            any |= all_ones_mantissas(pairs[u]);
+        }
+        if (any == 0) {
+            continue;
+        }
+#pragma GCC unroll 8
+        for (uint32_t u = 0; u < CONDITION_UNROLL; ++u) {
+            words[k + u] = pairs[u] ^ (all_ones_mantissas(pairs[u]) >> 7);
+        }
+    }
+    for (; k < count; ++k) {
+        words[k] ^= all_ones_mantissas(words[k]) >> 7;
+    }
 }
 
 // Prepares the block's live rows for the bfp8 packer: lowers all-ones mantissas (above), then zeroes
@@ -83,14 +108,7 @@ FORCE_INLINE void condition_block_for_bfp8(const Block& block, uint32_t stage) {
         const uint32_t live_rows = live_rows_of(block.tile_row + i);
         uint32_t row = stage + i * Geometry::stage_tile_row_bytes;
         for (uint32_t r = 0; r < live_rows; ++r) {
-            tt_l1_ptr uint32_t* words = reinterpret_cast<tt_l1_ptr uint32_t*>(row);
-            for (uint32_t k = 0; k < segment_words; ++k) {
-                const uint32_t pair = words[k];
-                const uint32_t lowered = lower_saturating_mantissas(pair);
-                if (lowered != pair) {
-                    words[k] = lowered;
-                }
-            }
+            lower_saturating_mantissas(reinterpret_cast<tt_l1_ptr uint32_t*>(row), segment_words);
             if (zero_tail) {
                 tt_l1_ptr uint16_t* datums = reinterpret_cast<tt_l1_ptr uint16_t*>(row);
                 for (uint32_t b = segment_bytes; b < group_end; b += DATUM_BYTES) {
