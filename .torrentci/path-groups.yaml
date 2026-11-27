@@ -23,10 +23,8 @@
 # - Any .gitmodules change is a submodule change.
 #
 # Conditions for PR Gate jobs that are not members yet:
-#   smoke-cpu-asan, smoke-n150-asan: {changed: [cmake, tt-metalium, tt-metalium-tests, tt-nn-tests, image]}
+#   smoke-n150-asan:   {changed: [cmake, tt-metalium, tt-metalium-tests, tt-nn-tests, image]}
 #   ttnn-smoke-n150-asan: {changed: [cmake, tt-metalium, tt-nn, tt-metalium-tests, tt-nn-tests, image]}
-#   llk-hardware-free: {changed: [llk-wormhole, llk-blackhole, llk-common, llk-sfpi, llk-tests, llk-ci, llk-perf,
-#                                 llk-hardware-free, llk-quasar]}
 #   llk-smoke-n150-*:  {changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-wormhole, llk-perf, image]}
 #   verify-time-budgets: unconditional
 #   clang-tidy:        {changed: [clang-tidy-source, cmake-raw, clang-tidy-config, llk-wormhole, llk-blackhole,
