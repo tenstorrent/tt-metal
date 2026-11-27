@@ -12,6 +12,7 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import MANIFEST, token_ids_sha256
 from models.demos.deepseek_v3_d_p.tests.kda.dev.layer0_run_analysis import (
     RunWriter,
     analyze,
@@ -23,7 +24,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.dev.layer0_run_analysis import (
     report,
     sums_token_floor,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, token_ids_sha256
 
 HEADS = 96
 

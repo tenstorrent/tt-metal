@@ -15,11 +15,15 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     write_manifest,
     write_token_ids,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import PRODUCER, PRODUCER_VERSION, segment_path
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import (
     KimiK3KdaGolden,
     load_window,
     state_after,
+)
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer import (
+    PRODUCER,
+    PRODUCER_VERSION,
+    segment_path,
 )
 
 ROWS, SEGMENT = 10, 4  # segments [0, 4) [4, 8) [8, 10)

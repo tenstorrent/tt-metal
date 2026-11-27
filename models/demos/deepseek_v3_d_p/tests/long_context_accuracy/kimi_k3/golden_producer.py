@@ -1,31 +1,34 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Long FP64 KDA golden producer: the reference layer run segment by segment on CPU.
+"""Kimi-K3 ``layers.0`` KDA FP64 golden producer: the reference layer run segment by segment on CPU.
 
 A golden over a long context (up to 1M tokens) takes hours of CPU, so the sequence is processed in fixed-size
 segments. After each segment the run atomically writes that segment's output rows and the full carried state
 (recurrent and convolution histories) after it (``segment_path``), so an interrupted run resumes from the last
-complete segment and any window can be read back with the exact state before it (the reader:
-``tests/long_context_accuracy/kimi_k3/golden.py``). The run never opens a device: device tests only load a prepared
-golden, so the CPU work never holds the device.
+complete segment and any window can be read back with the exact state before it (the reader: ``golden.py`` next to
+this file). The run never opens a device: device tests only load a prepared golden, so the CPU work never holds the
+device.
 
 ``manifest.json`` is the golden's only metadata, in the long-context golden registry's format
 (``common/prefill/long_context_accuracy/fp64_golden.py``; the golden's id is its directory name): what produced it
 (producer, identity, provenance of each run session), the prompt (``token_ids.pt``), which segments are complete and how
-long each took, the products, and, once complete, the token floor for per-token NRMSE. Example (Kimi-K3 ``layers.0`` on
-the code tokens of a vLLM trace, written straight into the registry as golden ``k3-l0-kda-fp64-1m``)::
+long each took, the products, and, once complete, the token floor for per-token NRMSE.
 
-    nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kda.long_context_golden \\
-        --checkpoint $KIMI_K3_CKPT --tokens /path/to/vllm/trace --count 1044480 \\
+The manifest's ``producer`` is ``PRODUCER``, ``models.demos.deepseek_v3_d_p.tests.kda.long_context_golden``: this
+module's path when it wrote the registered golden ``k3-l0-kda-fp64-1m`` (version 1). It names the producer's
+numerics, not where the module lives now, so it stays unchanged while the bytes do; the reader requires it.
+
+Example (Kimi-K3 ``layers.0`` on the code tokens of a vLLM trace, written straight into the registry as golden
+``k3-l0-kda-fp64-1m``; ``--segments N`` stops after N segments, and a later run resumes)::
+
+    nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer \\
+        --checkpoint $KIMI_K3_CKPT --tokens /path/to/vllm/trace --count 1044480 --segment 1024 --threads 32 \\
         --out /mnt/weka/model-cache/scratch/accuracy-goldens/k3-l0-kda-fp64-1m
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import platform
-import subprocess
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict
@@ -34,18 +37,16 @@ from pathlib import Path
 import torch
 
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
-    MANIFEST,
-    make_golden_dir,
     manifest_problems,
     product_schema,
     publish,
+    start_or_resume,
     token_ids_sha256,
     write_manifest,
-    write_token_ids,
 )
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import golden_floor
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 
 PRODUCER = "models.demos.deepseek_v3_d_p.tests.kda.long_context_golden"
 PRODUCER_VERSION = 1
@@ -59,22 +60,6 @@ def segment_path(run_dir: Path, index: int) -> Path:
     return Path(run_dir) / f"segment_{index:06d}.pt"
 
 
-def _provenance() -> dict:
-    """What determines the golden's last bits besides its identity: code, torch, and the CPU backend."""
-    try:
-        revision = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).parent, capture_output=True, text=True, check=True
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        revision = "unknown"
-    return {
-        "code_revision": revision,
-        "torch": torch.__version__,
-        "cpu_capability": torch.backends.cpu.get_cpu_capability(),
-        "machine": platform.machine(),
-    }
-
-
 def run_golden(
     *,
     run_dir: Path,
@@ -85,16 +70,15 @@ def run_golden(
     segment: int,
     dtype: torch.dtype,
     identity: dict,
+    max_segments: int | None = None,
 ) -> dict:
-    """Run (or resume) the golden over ``token_ids`` and return the manifest.
+    """Run (or resume) the golden over ``token_ids`` and return the manifest; with ``max_segments``, stop once that
+    many segments are complete (an incomplete golden a later run resumes).
 
-    ``identity`` names what produced the inputs and weights. A resume refuses a directory whose identity,
-    tokens, segment size, dtype or thread count differ: its snapshots would not continue this run, and the
-    thread count changes FP64 summation order, so enforcing it keeps a resumed golden bit-identical to an
-    uninterrupted one. Each run session's provenance is recorded with the segment it started from.
+    ``identity`` names what produced the inputs and weights. A resume refuses a directory whose identity, tokens,
+    segment size, dtype or thread count differ (``fp64_golden.start_or_resume``).
     """
     run_dir = Path(run_dir)
-    make_golden_dir(run_dir)
     expected = {
         "golden_id": run_dir.name,
         "producer": PRODUCER,
@@ -107,27 +91,16 @@ def run_golden(
         "dtype": str(dtype),
         "threads": torch.get_num_threads(),
     }
-    manifest_path = run_dir / MANIFEST
-    if manifest_path.is_file():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        mismatched = sorted(key for key, value in expected.items() if manifest.get(key) != value)
-        if mismatched:
-            raise ValueError(f"{run_dir} holds a different run; mismatched fields: {mismatched}")
-    else:
-        write_token_ids(run_dir, token_ids)
-        manifest = {**expected, "sessions": [], "segments": []}
-
     segments = -(-len(token_ids) // segment)
+    stop = segments if max_segments is None else min(segments, max_segments)
+    manifest = start_or_resume(run_dir, expected, token_ids, stop)
     done = len(manifest["segments"])
-    if done < segments:
-        manifest["sessions"].append({"first_segment": done, **_provenance()})
-        write_manifest(run_dir, manifest)
     state = None
     if done:
         state = KDAReferenceState(**torch.load(segment_path(run_dir, done - 1), weights_only=True)["state"])
         print(f"resuming at segment {done}/{segments} (token {manifest['segments'][-1]['end']})", flush=True)
 
-    for index in range(done, segments):
+    for index in range(done, stop):
         start, end = index * segment, min((index + 1) * segment, len(token_ids))
         began = time.perf_counter()
         output, state = kda_forward_reference(layer_input(token_ids[start:end]), weights, config, state, dtype=dtype)
@@ -143,6 +116,8 @@ def run_golden(
         write_manifest(run_dir, manifest)
         print(f"segment {index + 1}/{segments} tokens [{start}, {end}) {seconds:.2f} s", flush=True)
 
+    if len(manifest["segments"]) < segments:
+        return manifest  # incomplete: no floor and no registry check yet
     if "token_floor" not in manifest:
         manifest["token_floor"] = golden_floor(
             torch.cat(
@@ -172,6 +147,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--segment", type=int, default=1024)
     parser.add_argument("--threads", type=int, default=16, help="CPU threads; a resume must use the same count")
+    parser.add_argument("--segments", type=int, help="stop after this many complete segments (resumable)")
     args = parser.parse_args()
 
     torch.set_num_threads(args.threads)
@@ -199,6 +175,7 @@ def main() -> None:
         segment=args.segment,
         dtype=torch.float64,
         identity=identity,
+        max_segments=args.segments,
     )
 
 

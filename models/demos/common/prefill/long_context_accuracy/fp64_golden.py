@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Long-context golden registry: where FP64 goldens live, what every golden's manifest says, how a test finds one.
 
-A golden is a directory ``<root>/<golden_id>/`` written segment by segment by a CPU producer (for example
-``tests/kda/long_context_golden.py``). Tests name a golden only by its id; ``open_golden`` finds it under the
+A golden is a directory ``<root>/<golden_id>/`` written segment by segment by a CPU producer (one per model folder,
+``deepseek_v3_d_p/tests/long_context_accuracy/<model>/golden_producer.py``). Tests name a golden only by its id; ``open_golden`` finds it under the
 registry root and refuses one that is missing, incomplete or malformed, so a deleted or half-written golden fails
 the test instead of skipping it. The registry checks identity, completeness and the product schema. Producers' file
 layouts differ, so reading the products is one small reader per golden layout: a subclass of ``Fp64Golden`` that
@@ -28,6 +28,9 @@ Goldens are shared: CI users other than the producer read them. Every file in a 
 (0664) and every directory the writers create (the golden, the registry root and any missing ancestor) is
 ``GOLDEN_DIR_MODE`` (2775), whatever the producer's umask; ``make_golden_dir`` and ``publish`` set them, and
 producers write through them. An existing directory keeps its mode.
+
+Producers start or resume a golden with ``start_or_resume``: a resume continues only the same run, and each run
+session's provenance (``session_provenance``) is recorded with the segment it started from.
 """
 
 from __future__ import annotations
@@ -35,6 +38,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
+import subprocess
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -109,6 +114,48 @@ def write_token_ids(directory: Path, token_ids: Sequence[int] | torch.Tensor) ->
     ids = torch.as_tensor(token_ids, dtype=torch.int64).clone()
     publish(lambda path: torch.save(ids, path), Path(directory) / TOKEN_IDS)
     return token_ids_sha256(ids)
+
+
+def session_provenance() -> dict:
+    """What determines a golden's last bits besides its identity: the code revision, torch and the CPU backend."""
+    try:
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).parent, capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        revision = "unknown"
+    return {
+        "code_revision": revision,
+        "torch": torch.__version__,
+        "cpu_capability": torch.backends.cpu.get_cpu_capability(),
+        "machine": platform.machine(),
+    }
+
+
+def start_or_resume(directory: Path, expected: dict, token_ids: Sequence[int] | torch.Tensor, segments: int) -> dict:
+    """The manifest of the golden run in ``directory``: a new one (``expected`` plus empty ``sessions`` and
+    ``segments``, the token ids stored) or the stored one, which must hold every field of ``expected`` unchanged
+    (``ValueError`` naming the mismatched fields otherwise: its segments would not continue this run). When fewer
+    than ``segments`` segments are complete, a session starting at the next one is recorded and the manifest written.
+
+    ``expected`` holds what fixes the run's bytes: identity, prompt digest, segment size, dtype and thread count (the
+    thread count sets the FP64 summation order, so a resumed golden stays bit-identical to an uninterrupted one)."""
+    directory = Path(directory)
+    make_golden_dir(directory)
+    path = directory / MANIFEST
+    if path.is_file():
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        mismatched = sorted(key for key, value in expected.items() if manifest.get(key) != value)
+        if mismatched:
+            raise ValueError(f"{directory} holds a different run; mismatched fields: {mismatched}")
+    else:
+        write_token_ids(directory, token_ids)
+        manifest = {**expected, "sessions": [], "segments": []}
+    done = len(manifest["segments"])
+    if done < segments:
+        manifest["sessions"].append({"first_segment": done, **session_provenance()})
+        write_manifest(directory, manifest)
+    return manifest
 
 
 def product_schema(kind: str, tensor: torch.Tensor) -> dict:

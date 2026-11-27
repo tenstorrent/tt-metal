@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Reader of the long FP64 KDA goldens (``KimiK3KdaGolden``), written by ``tests/kda/long_context_golden.py``.
+"""Reader of the long FP64 KDA goldens (``KimiK3KdaGolden``), written by ``golden_producer.py`` next to it.
 
 The golden ``K3_LAYER0_GOLDEN`` (``k3-l0-kda-fp64-1m``) is Kimi-K3 ``layers.0`` over 1,044,480 code tokens of a vLLM
-trace. Every segment file (``long_context_golden.segment_path``) holds the segment's FP64 ``output`` rows and the
+trace. Every segment file (``golden_producer.segment_path``) holds the segment's FP64 ``output`` rows and the
 layer's full state after it; the manifest names them as products ``output`` (``row``) and ``state.<name>``
 (``segment_end``: ``state.recurrent`` ``[1, heads, k, v]`` and ``state.{q,k,v}_convolution``).
 
@@ -20,7 +20,7 @@ import torch
 
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import MANIFEST, Fp64Golden, open_golden
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer import (
     K3_LAYER0_GOLDEN,
     PRODUCER,
     PRODUCER_VERSION,
@@ -47,7 +47,7 @@ def _state(run_dir: Path, index: int) -> dict[str, torch.Tensor]:
 
 
 class KimiK3KdaGolden(Fp64Golden):
-    """A registered long KDA golden of ``long_context_golden`` version ``PRODUCER_VERSION``: products ``output``
+    """A registered long KDA golden of ``golden_producer`` version ``PRODUCER_VERSION``: products ``output``
     (rows) and ``state.<name>`` (after a segment)."""
 
     producer = PRODUCER

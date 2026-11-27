@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The resumable long golden on a tiny configuration, and the registered Kimi-K3 golden the device test reads.
-CPU only."""
+"""The Kimi-K3 KDA golden producer (``golden_producer.py``) on a tiny configuration, and the registered Kimi-K3 golden
+the device test reads. CPU only."""
 
 import json
 import os
@@ -10,12 +10,17 @@ from pathlib import Path
 
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.fp64_golden import GOLDEN_DIR_MODE, GOLDEN_FILE_MODE, open_golden
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
+    GOLDEN_DIR_MODE,
+    GOLDEN_FILE_MODE,
+    MANIFEST,
+    open_golden,
+)
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import make_config, random_weights
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, run_golden
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import load_window, open_k3_layer0_golden
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer import run_golden
 
 TOKENS = list(range(10))
 SEGMENT = 4  # segments [0, 4), [4, 8), [8, 10): the last one is partial
@@ -25,7 +30,7 @@ class Interrupted(Exception):
     pass
 
 
-def make_run(run_dir: Path, *, fail_after: int | None = None, identity: str = "tiny"):
+def make_run(run_dir: Path, *, fail_after: int | None = None, identity: str = "tiny", max_segments: int | None = None):
     config = make_config()
     weights = random_weights(config)
     table = torch.randn(len(TOKENS), config.hidden_size, generator=torch.Generator().manual_seed(7)).bfloat16()
@@ -47,6 +52,7 @@ def make_run(run_dir: Path, *, fail_after: int | None = None, identity: str = "t
             segment=SEGMENT,
             dtype=torch.float64,
             identity={"model": identity, "token_source": "a random table", "weights_sha256": "random"},
+            max_segments=max_segments,
         )
 
     return run, table, weights, config
@@ -77,6 +83,26 @@ def test_resumed_run_is_bit_identical_to_an_uninterrupted_one(tmp_path: Path, ex
     torch.testing.assert_close(output, whole_output[0], rtol=0, atol=1e-12)
     last = torch.load(tmp_path / "full" / "segment_000002.pt", weights_only=True)["state"]
     torch.testing.assert_close(last["recurrent"], whole_state.recurrent, rtol=0, atol=1e-12)
+
+
+def test_a_bounded_run_stops_after_its_segments_and_resumes_to_the_same_golden(tmp_path: Path) -> None:
+    """``max_segments=1`` writes segment 0 only, with no token floor (the golden is incomplete); a later unbounded run
+    resumes there, and its files equal an uninterrupted run's bit for bit."""
+    run_full, *_ = make_run(tmp_path / "full")
+    full = run_full()
+    run_one, *_ = make_run(tmp_path / "bounded", max_segments=1)
+    partial = run_one()
+    assert [(s["start"], s["end"]) for s in partial["segments"]] == [(0, 4)] and "token_floor" not in partial
+    assert not (tmp_path / "bounded" / "segment_000001.pt").exists()
+    run_rest, *_ = make_run(tmp_path / "bounded")
+    resumed = run_rest()
+    assert [session["first_segment"] for session in resumed["sessions"]] == [0, 1]
+    assert resumed["token_floor"] == full["token_floor"]
+    for index in range(3):
+        want = torch.load(tmp_path / "full" / f"segment_{index:06d}.pt", weights_only=True)
+        got = torch.load(tmp_path / "bounded" / f"segment_{index:06d}.pt", weights_only=True)
+        assert torch.equal(want["output"], got["output"]), index
+        assert all(torch.equal(t, got["state"][n]) for n, t in want["state"].items()), index
 
 
 def test_load_window_returns_rows_and_the_state_before_them(tmp_path: Path, expect_error) -> None:

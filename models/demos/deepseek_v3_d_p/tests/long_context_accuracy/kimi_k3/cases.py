@@ -33,10 +33,10 @@ from models.demos.common.prefill.long_context_accuracy.kda.scorer import KdaScor
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FIRST_LAYER_INPUT, FirstLayerInput
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import K3_LAYER0_GOLDEN
 from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.blocks import KimiK3KdaBlock
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import KimiK3KdaGolden
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer import K3_LAYER0_GOLDEN
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
 _TP_AXIS = 1
