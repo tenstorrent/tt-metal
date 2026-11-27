@@ -38,11 +38,11 @@ inline void unpack_block(
     // UNP_B has one BFD, so each pass re-programs it with its own operand.
     ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape, l1_address, l1_format);
     _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BROADCAST_TYPE, is_fp32_dest_acc_en, false /*unpack_to_dest*/, acc_to_dest>(
-        ckernel::trisc::BFD_ID_UNP1, 1 /*num_tiles*/);
+        ckernel::trisc::BFD_ID_UNP1, tensor_shape, 1 /*num_tiles*/);
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
         const std::uint32_t l1_tile_idx = first_tile + tile;
-        _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B, false /*unpack_to_dest*/>(l1_tile_idx);
+        _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B, false /*unpack_to_dest*/>(l1_tile_idx, tensor_shape);
     }
 }
 

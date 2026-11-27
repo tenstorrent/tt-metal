@@ -48,11 +48,36 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
     generate_input_dim,
 )
-from helpers.tile_constants import FACE_C_DIM, get_tile_params
+from helpers.tile_constants import (
+    FACE_C_DIM,
+    SUPPORTED_TILE_SIZES,
+    get_tile_params,
+    is_mx_unsupported_tile_dims,
+)
 from helpers.utils import passed_test, result_tensor
 
-INPUT_DIMENSIONS = [[512, 32]]
-TILE_DIMENSIONS = [32, 32]
+UNARY_BROADCAST_INPUT_TILES = 16  # same 16-tile column as the original 512x32 sweep
+
+
+def unary_broadcast_tile_dimensions(formats, dest_acc, broadcast_type):
+    """Tile shapes to sweep. COL and unpack-to-dest (32-bit formats) support only 32x32; the LLK asserts it."""
+    if broadcast_type == BroadcastType.Column or unpacks_to_dest(
+        formats.input_format, dest_acc
+    ):
+        return [[32, 32]]
+    return [
+        list(dims)
+        for dims in SUPPORTED_TILE_SIZES
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, dims
+        )
+    ]
+
+
+def unary_broadcast_input_dimensions(tile_dimensions):
+    tile_rows, tile_cols = tile_dimensions
+    return [[UNARY_BROADCAST_INPUT_TILES * tile_rows, tile_cols]]
+
 
 _FLOAT32_WIDE_RANGE = 10_000.0
 
@@ -107,7 +132,8 @@ def get_valid_dest_acc_unary_broadcast(formats):
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
     broadcast_type=BROADCAST_TYPES,
     dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
-    input_dimensions=runtime(INPUT_DIMENSIONS),
+    tile_dimensions=runtime(unary_broadcast_tile_dimensions),
+    input_dimensions=runtime(unary_broadcast_input_dimensions),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -116,6 +142,7 @@ def test_unary_broadcast_quasar(
     dest_acc,
     broadcast_type,
     dest_sync,
+    tile_dimensions,
     input_dimensions,
     run_types,
     loop_factor,
@@ -130,7 +157,7 @@ def test_unary_broadcast_quasar(
     """
     unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
-    tile_rows, tile_cols = TILE_DIMENSIONS
+    tile_rows, tile_cols = tile_dimensions
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
         [tile_rows, tile_cols]
     )
@@ -145,7 +172,7 @@ def test_unary_broadcast_quasar(
         dest_acc,
         formats,
         input_dimensions,
-        TILE_DIMENSIONS,
+        tile_dimensions,
         BlocksCalculationAlgorithm.Standard,
     )
 
@@ -157,7 +184,7 @@ def test_unary_broadcast_quasar(
         input_dimensions_B=input_dimensions,
         spec_A=spec,
         spec_B=spec,
-        tile_dimensions=TILE_DIMENSIONS,
+        tile_dimensions=tile_dimensions,
     )
     if acc_to_dest is not None:
         src_A, src_B = signed_cancelling_operands(src_A, src_B)
@@ -173,6 +200,8 @@ def test_unary_broadcast_quasar(
                 num_faces=num_faces,
                 tile_cnt=tile_cnt,
                 face_r_dim=face_r_dim,
+                num_faces_r_dim=num_faces_r_dim,
+                num_faces_c_dim=num_faces_c_dim,
             )
 
         golden_tensor = broadcast_golden(src_B)
@@ -206,7 +235,9 @@ def test_unary_broadcast_quasar(
         "formats": formats,
         "templates": templates,
         "runtimes": [
-            generate_input_dim(input_dimensions, input_dimensions),
+            generate_input_dim(
+                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+            ),
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
             NUM_TILES_IN_BLOCK(
@@ -235,7 +266,7 @@ def test_unary_broadcast_quasar(
             tile_count_res=tile_cnt,
             num_faces=num_faces,
             face_r_dim=face_r_dim,
-            tile_dimensions=TILE_DIMENSIONS,
+            tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
         "unpack_to_dest": unpack_to_dest,
@@ -265,7 +296,7 @@ def test_unary_broadcast_quasar(
 
 # acc_to_dest broadcasts through ELWADD with dest accumulation; 32-bit inputs unpack straight to Dest instead.
 UNARY_BROADCAST_ACC_FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
-UNARY_BROADCAST_ACC_INPUT_DIMENSIONS = [256, 32]
+UNARY_BROADCAST_ACC_INPUT_TILES = 8
 
 
 @pytest.mark.quasar
@@ -275,25 +306,24 @@ UNARY_BROADCAST_ACC_INPUT_DIMENSIONS = [256, 32]
     broadcast_type=BROADCAST_TYPES,
     acc_to_dest=[False, True],
     dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
+    tile_dimensions=runtime(unary_broadcast_tile_dimensions),
 )
 def test_unary_broadcast_acc_to_dest_quasar(
-    formats,
-    dest_acc,
-    broadcast_type,
-    acc_to_dest,
-    dest_sync,
+    formats, dest_acc, broadcast_type, acc_to_dest, dest_sync, tile_dimensions
 ):
     """Seed Dest with a plain broadcast of A, then broadcast B with acc_to_dest.
 
     Accumulating gives bcast(A) + bcast(B); acc_to_dest=False is the matched overwrite control, bcast(B).
     Both operands carry signed and exactly cancelling lanes.
     """
+    tile_rows, tile_cols = tile_dimensions
     test_unary_broadcast_quasar(
         formats,
         dest_acc,
         broadcast_type,
         dest_sync,
-        UNARY_BROADCAST_ACC_INPUT_DIMENSIONS,
+        tile_dimensions,
+        [UNARY_BROADCAST_ACC_INPUT_TILES * tile_rows, tile_cols],
         run_types=[PerfRunType.L1_TO_L1],
         loop_factor=1,
         acc_to_dest=acc_to_dest,

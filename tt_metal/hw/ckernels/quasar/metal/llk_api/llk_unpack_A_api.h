@@ -121,7 +121,7 @@ inline void llk_unpack_A_init(
                 "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
             _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, DST_ACCUM_MODE, unpack_to_dest, acc_to_dest>(
-                bfd_id, 1 /*num_tiles*/);
+                bfd_id, tensor_shape, 1 /*num_tiles*/);
         }
     }
 }
@@ -189,7 +189,7 @@ inline void llk_unpack_A(
     } else {
         static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
         constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-        _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx);
+        _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx, tensor_shape);
     }
     WAYPOINT("UPAD");
 }
@@ -269,7 +269,7 @@ inline void llk_unpack_A_block(
                 _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
             } else {
                 constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-                _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx);
+                _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx, tensor_shape);
             }
             WAYPOINT("UPAD");
         }

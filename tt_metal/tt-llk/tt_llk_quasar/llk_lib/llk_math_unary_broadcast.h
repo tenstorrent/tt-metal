@@ -8,6 +8,7 @@
 
 #include "llk_math_common.h"
 #include "tensor_shape.h"
+#include "tensor_shape_coverage_math.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
@@ -196,7 +197,8 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
         // ELWADD (32-bit dest or acc_to_dest) or MOVB2D; MOVB2D cannot accumulate.
         constexpr bool use_elwadd         = EN_32BIT_DEST || acc_to_dest;
         const std::uint32_t num_faces     = static_cast<std::uint32_t>(tensor_shape.total_num_faces());
-        const std::uint32_t rows_per_face = tensor_shape.face_r_dim >> rows_log2(ELTWISE_MATH_ROWS);
+        // Faces shorter than 8 rows still fill an 8-row Dest slot (sparse layout), so they take one 8-row instruction.
+        const std::uint32_t rows_per_face = padded_face_rows(tensor_shape) >> rows_log2(ELTWISE_MATH_ROWS);
         const std::uint32_t outer         = (use_elwadd || BROADCAST_TYPE != BroadcastType::SCALAR) ? num_faces : 1U;
         const std::uint32_t inner         = (use_elwadd || BROADCAST_TYPE != BroadcastType::SCALAR) ? rows_per_face : num_faces * rows_per_face;
 
@@ -257,9 +259,11 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
 template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest, bool acc_to_dest = false>
 inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_shape, [[maybe_unused]] const DataFormat src_format)
 {
-    LLK_ASSERT(
-        tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
-        "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
+    const bool full_tile =
+        tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM;
+    LLK_ASSERT(BROADCAST_TYPE != BroadcastType::COL || full_tile, "Unary column broadcast requires 32x32 tiles");
+    LLK_ASSERT(!unpack_to_dest || full_tile, "Unary broadcast with unpack_to_dest requires 32x32 tiles");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_unary_broadcast_init_", tensor_shape);
     if constexpr (acc_to_dest)
     {
         // ELWADD reads the operand from SrcB: 32-bit formats need unpack-to-dest, Int16 is MOV-only, INT8 math needs a 32-bit dest.
@@ -271,6 +275,9 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_sha
 
     _llk_math_eltwise_unary_broadcast_addrmod_<BROADCAST_TYPE, unpack_to_dest>(tensor_shape);
     _llk_math_eltwise_unary_broadcast_mop_config_<BROADCAST_TYPE, EN_32BIT_DEST, unpack_to_dest, acc_to_dest>(tensor_shape);
+
+    // Dest rows per tile, including the 8-row padding of short faces; execute uses it to place tile_idx in Dest.
+    _set_tile_shape_idx_gpr_(padded_tile_rows(tensor_shape));
 
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -293,7 +300,7 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_sha
  */
 inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_by_rows_(tile_idx);
 
     // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
     // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit. MATH drains the
