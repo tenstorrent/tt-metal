@@ -113,6 +113,12 @@ void bind_ternary_lerp(nb::module_& mod, const std::string& description) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            fast_interpolate (bool, optional): the caller guarantees every weight is in [0, 1]. This is not
+                checked, and the result is undefined for a weight outside [0, 1]. On Blackhole it selects a
+                faster kernel, (input - weight * input) + weight * end: no intermediate overflows, weight 0
+                returns input and weight 1 returns end bit-exact. Other architectures, and the composite
+                fallback (INT32, an unsupported broadcast, or block float inputs with a sub-tile broadcast),
+                ignore it with a warning and compute the default result. Defaults to `False`.
 
 
         Note:
@@ -145,26 +151,30 @@ void bind_ternary_lerp(nb::module_& mod, const std::string& description) {
                 const Tensor&,
                 const Tensor&,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&>(&ttnn::lerp),
+                const std::optional<Tensor>&,
+                bool>(&ttnn::lerp),
             nb::arg("input"),
             nb::arg("end"),
             nb::arg("weight"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("fast_interpolate") = false),
         ttnn::overload_t(
             nb::overload_cast<
                 const Tensor&,
                 const Tensor&,
                 float,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&>(&ttnn::lerp),
+                const std::optional<Tensor>&,
+                bool>(&ttnn::lerp),
             nb::arg("input"),
             nb::arg("end"),
             nb::arg("weight"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("fast_interpolate") = false));
 }
 
 void bind_ternary_addcmul(

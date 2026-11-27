@@ -11,6 +11,7 @@
 #include <utility>
 #include <variant>
 #include <cstdint>
+#include <mutex>
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/ranges.h>
@@ -494,12 +495,42 @@ Tensor addcdiv(
         std::nullopt);
 }
 
+namespace {
+// The composite fallback has no fast_interpolate kernel; it ignores the flag with a one-time warning.
+void warn_lerp_fast_interpolate_fallback(const bool fast_interpolate) {
+    if (fast_interpolate) {
+        static std::once_flag flag;
+        std::call_once(flag, [] {
+            log_warning(
+                tt::LogOp,
+                "lerp: fast_interpolate is not supported by the composite fallback (INT32, invalid broadcast, or "
+                "block float with a sub-tile broadcast); ignored, using the default computation");
+        });
+    }
+}
+
+// fast_interpolate has a kernel on Blackhole only; elsewhere it is ignored with a one-time warning.
+bool resolve_lerp_fast_interpolate(const Tensor& input, const bool fast_interpolate) {
+    if (fast_interpolate && input.device()->arch() != tt::ARCH::BLACKHOLE) {
+        static std::once_flag flag;
+        std::call_once(flag, [] {
+            log_warning(
+                tt::LogOp,
+                "lerp: fast_interpolate is implemented on Blackhole only; ignored, using the default kernel");
+        });
+        return false;
+    }
+    return fast_interpolate;
+}
+}  // namespace
+
 Tensor lerp(
     const Tensor& input,
     const Tensor& end,
     float weight,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
+    const std::optional<Tensor>& output,
+    const bool fast_interpolate) {
     validate_dtypes(TernaryOpType::LERP, {input.dtype(), end.dtype()}, output);
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
 
@@ -511,6 +542,7 @@ Tensor lerp(
 
     if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
         log_debug(tt::LogOp, "Lerp Fallback - TTS (scalar weight)");
+        warn_lerp_fast_interpolate_fallback(fast_interpolate);
         return _lerp_overload(input, end, weight, memory_config, output);
     }
 
@@ -523,7 +555,8 @@ Tensor lerp(
         ternary_utils::determine_output_dtype(output, input.dtype()),
         ternary_utils::determine_memory_config(memory_config, input.memory_config()),
         output,
-        std::nullopt);
+        std::nullopt,
+        resolve_lerp_fast_interpolate(input, fast_interpolate));
 }
 
 Tensor lerp(
@@ -531,7 +564,8 @@ Tensor lerp(
     const Tensor& end,
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
+    const std::optional<Tensor>& output,
+    const bool fast_interpolate) {
     validate_dtypes(TernaryOpType::LERP, {input.dtype(), end.dtype(), weight.dtype()}, output);
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
 
@@ -545,6 +579,7 @@ Tensor lerp(
 
     if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
         log_debug(tt::LogOp, "Lerp Fallback - TTT (tensor weight)");
+        warn_lerp_fast_interpolate_fallback(fast_interpolate);
         return _lerp(input, end, weight, memory_config, output);
     }
 
@@ -557,7 +592,8 @@ Tensor lerp(
         ternary_utils::determine_output_dtype(output, input.dtype()),
         ternary_utils::determine_memory_config(memory_config, input.memory_config()),
         output,
-        std::nullopt);
+        std::nullopt,
+        resolve_lerp_fast_interpolate(input, fast_interpolate));
 }
 
 Tensor snake_beta(

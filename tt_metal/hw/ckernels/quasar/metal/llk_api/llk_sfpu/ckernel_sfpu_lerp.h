@@ -16,8 +16,9 @@ namespace ckernel::sfpu {
  * @brief Program ADDR_MOD_6 for @ref calculate_lerp.
  * @note Run it after any other SFPU op's init and before calculate_lerp: other ops' inits program
  *       ADDR_MOD_6 with a different stride.
+ * @tparam FAST_INTERPOLATE Blackhole-only kernel selector, accepted here and ignored.
  */
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool FAST_INTERPOLATE = false>
 inline void lerp_init() {
     // calculate_lerp's second store of a row pair advances Dest past both rows.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
@@ -26,9 +27,15 @@ inline void lerp_init() {
 /**
  * @brief out = input + weight * (end - input), two Dest rows per iteration.
  * @tparam ITERATIONS Dest rows to process; must be even.
+ * @tparam FAST_INTERPOLATE Ignored, see @ref lerp_init.
  * @note Call @ref lerp_init first; the row pairs advance Dest through the ADDR_MOD_6 it programs.
  */
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    DataFormat data_format,
+    int ITERATIONS,
+    bool FAST_INTERPOLATE = false>
 inline void calculate_lerp(
     const uint dst_index_in0,  // input (start)
     const uint dst_index_in1,  // end

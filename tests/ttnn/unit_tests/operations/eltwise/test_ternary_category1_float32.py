@@ -78,6 +78,9 @@ is a waiver.
 
 FLOAT32_MAX = float(torch.finfo(torch.float32).max)
 MIN_NORMAL_F32 = 2.0**-126
+# Blackhole lerp works at half scale, 2 * (a / 2 + weight * (b / 2 - a / 2)), so
+# a value it flushes below 2^-126 there is below 2^-125 at full scale.
+HALF_SCALE_MIN_NORMAL_F32 = 2.0**-125
 
 # addcdiv divides by multiplying with recip(c), and for |c| >= 2^126 that
 # reciprocal lands at or below the smallest normal and can flush to zero.
@@ -259,8 +262,13 @@ def collapses_exception(name, region, expected, failures, detail, *, whole_regio
     return (name, build_mask)
 
 
-def _subnormal(intermediate):
-    return (intermediate != 0) & (intermediate.abs() < MIN_NORMAL_F32)
+def _subnormal(intermediate, threshold=MIN_NORMAL_F32):
+    return (intermediate != 0) & (intermediate.abs() < threshold)
+
+
+def _exponent(x):
+    """floor(log2(abs(x))) for nonzero x."""
+    return torch.frexp(x).exponent - 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -310,6 +318,8 @@ def test_lerp(device):
     scaled, which is the rounding the grid does exercise: its operands have
     different exponents.
 
+    Wormhole evaluates a + weight * (b - a) directly:
+
     | # | Stage                       | Range                          | Device returns         |
     |---|-----------------------------|--------------------------------|------------------------|
     | 1 | b - a underflows            | abs(b - a) < 2^-126            | a, whole range         |
@@ -321,6 +331,28 @@ def test_lerp(device):
         flushed, so the device returns a where the golden is 6.03e-36.
         a = 2.1268e37, b = -2.1268e37, weight = 8: weight * (b - a) is
         -3.4028e38 and overflows, a + weight * (b - a) = -3.1901e38 does not.
+
+    Blackhole evaluates 2 * (a / 2 + weight * (b / 2 - a / 2)), which does not
+    overflow where the result is finite, so it has no overflow stage. Every
+    halved value flushes below 2^-126, which is below 2^-125 at full scale.
+    e(x) is floor(log2(abs(x))); the multiply-add drops a product whose
+    factors' exponents sum below -127, here weight and (b - a) / 2.
+
+    | # | Stage                       | Range                           | Device returns          |
+    |---|-----------------------------|---------------------------------|-------------------------|
+    | 1 | a / 2 flushes               | 2^-126 <= abs(a) < 2^-125       | weight * b rounded, 0   |
+    |   |                             |                                 | where abs(b) or abs(    |
+    |   |                             |                                 | weight * b) < 2^-125;   |
+    |   |                             |                                 | whole range             |
+    | 2 | b - a underflows            | abs(b - a) < 2^-125             | a, whole range          |
+    | 3 | weight * (b - a) is dropped | e(weight) + e(b - a) < -126     | a, whole range          |
+    | 4 | result flushes              | abs(a + weight * (b - a))       | 0, where it disagrees   |
+    |   |                             | < 2^-125                        |                         |
+
+        a = 1.1755e-38, b = 4.7020e-38, weight = 0.5: a / 2 flushes, so the
+        device returns weight * b = 2.3510e-38 where the golden is 2.9387e-38.
+        a = 2.3510e-38, b = 0, weight = 0.5: the result 1.1755e-38 is below
+        2^-125 at full scale, so the device returns 0.
     """
     input_a, input_b, input_weight = ternary_inputs(include_zero=True, dtype=torch.float32)
     result = _run(device, ttnn.lerp, input_a, input_b, input_weight)
@@ -331,27 +363,83 @@ def test_lerp(device):
     exact = a64 + w64 * difference
     golden = _golden(exact)
     failures = term_scaled_failures(exact, golden, a64, w64 * difference, LERP_TERM_ULP)
-    stages = [
-        collapses_exception(
-            "b - a underflows",
-            _subnormal(difference),
-            input_a,
-            failures,
-            "device is expected to return a when b - a flushes to zero",
-            whole_region=True,
-        ),
-        intermediate_overflow_exception(golden, [difference, scaled], zero_multiplier=w64 == 0),
-        collapses_exception(
-            "weight * (b - a) underflows",
-            _subnormal(scaled),
-            input_a,
-            failures,
-            "device is expected to return a when weight * (b - a) flushes to zero",
-        ),
-    ]
+    if is_blackhole():
+        stages = _lerp_half_scale_stages(input_a, a64, b64, w64, difference, exact, failures)
+    else:
+        stages = [
+            collapses_exception(
+                "b - a underflows",
+                _subnormal(difference),
+                input_a,
+                failures,
+                "device is expected to return a when b - a flushes to zero",
+                whole_region=True,
+            ),
+            intermediate_overflow_exception(golden, [difference, scaled], zero_multiplier=w64 == 0),
+            collapses_exception(
+                "weight * (b - a) underflows",
+                _subnormal(scaled),
+                input_a,
+                failures,
+                "device is expected to return a when weight * (b - a) flushes to zero",
+            ),
+        ]
     result = apply_exceptions(golden, result, stages)
 
     assert_term_scaled(exact, golden, result, a64, w64 * difference, LERP_TERM_ULP, "lerp")
+
+
+def _lerp_half_scale_stages(input_a, a64, b64, w64, difference, exact, failures):
+    """Blackhole lerp's flush stages, see test_lerp. Each region excludes the
+    ones before it, since a whole-range stage asserts on every position."""
+    input_half_flushes = (a64.abs() >= MIN_NORMAL_F32) & (a64.abs() < HALF_SCALE_MIN_NORMAL_F32)
+    end_half = torch.where(b64.abs() < HALF_SCALE_MIN_NORMAL_F32, torch.zeros_like(b64), b64)
+    weight_times_end = (w64 * end_half).to(torch.float32)
+    weight_times_end = torch.where(
+        weight_times_end.abs() < HALF_SCALE_MIN_NORMAL_F32, torch.zeros_like(weight_times_end), weight_times_end
+    )
+    difference_flushes = ~input_half_flushes & _subnormal(difference, HALF_SCALE_MIN_NORMAL_F32)
+    rounded_difference = difference.to(torch.float32).double()
+    product_dropped = (
+        ~input_half_flushes
+        & ~difference_flushes
+        & (w64 != 0)
+        & (rounded_difference != 0)
+        & (_exponent(w64) + _exponent(rounded_difference) < -126)
+    )
+    return [
+        collapses_exception(
+            "a / 2 flushes",
+            input_half_flushes,
+            weight_times_end,
+            failures,
+            "device is expected to return weight * b, flushed below 2^-125, when a / 2 flushes to zero",
+            whole_region=True,
+        ),
+        collapses_exception(
+            "b - a underflows",
+            difference_flushes,
+            input_a,
+            failures,
+            "device is expected to return a when (b - a) / 2 flushes to zero",
+            whole_region=True,
+        ),
+        collapses_exception(
+            "weight * (b - a) is dropped",
+            product_dropped,
+            input_a,
+            failures,
+            "device is expected to return a when the multiply-add drops weight * (b - a) / 2",
+            whole_region=True,
+        ),
+        collapses_exception(
+            "result flushes",
+            _subnormal(exact, HALF_SCALE_MIN_NORMAL_F32),
+            torch.zeros_like(input_a),
+            failures,
+            "device is expected to return 0 when the result is below 2^-125",
+        ),
+    ]
 
 
 @pytest.mark.parametrize("value", ADDC_VALUES)

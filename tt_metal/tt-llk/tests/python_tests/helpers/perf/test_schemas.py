@@ -1861,12 +1861,13 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_softmax_k": "perf_sfpu_softmax_k"},
     },
     "perf_sfpu_ternary": {
-        "version": 6,
+        "version": 7,
         "columns": [
             "approx_mode",
             "clobber_lregs",
             "dest_acc",
             "dest_sync",
+            "fast_interpolate",
             "formats.input_A",
             "formats.input_B",
             "formats.output",

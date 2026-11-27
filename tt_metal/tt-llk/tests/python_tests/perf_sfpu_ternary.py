@@ -107,3 +107,35 @@ def test_perf_sfpu_ternary_approx_after_lreg_clobber(
         perf_report=perf_report,
         run_types=ALL_PERF_RUN_TYPES,
     )
+
+
+@blackhole_only
+@pytest.mark.perf
+@parametrize(
+    mathop=MathOperation.SfpuLerp,
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    loop_factor=[16],
+    input_dimensions=_PERF_INPUT_DIMENSIONS,
+)
+def test_perf_sfpu_lerp_fast_interpolate(
+    perf_report,
+    mathop,
+    formats,
+    dest_acc,
+    loop_factor,
+    input_dimensions,
+):
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    _func._run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        input_dimensions=input_dimensions,
+        loop_factor=loop_factor,
+        approx_mode=ApproximationMode.No,
+        is_perf=True,
+        perf_report=perf_report,
+        run_types=ALL_PERF_RUN_TYPES,
+        fast_interpolate=True,
+    )
