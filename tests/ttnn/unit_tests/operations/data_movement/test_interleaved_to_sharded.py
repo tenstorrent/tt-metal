@@ -94,7 +94,7 @@ def _convertible_input(shape, input_dtype, output_dtype):
     the block float's fraction bits."""
     bits = [_BLOCK_FLOAT_FRACTION_BITS[d] for d in (input_dtype, output_dtype) if d in _BLOCK_FLOAT_FRACTION_BITS]
     if not bits:
-        return full_range_input(shape, ttnn.bfloat16, nan=False).float()
+        return full_range_input(shape, ttnn.bfloat16, nan=False, negative_zero=False).float()
     torch.manual_seed(0)
     magnitude = 1 + torch.randint(0, 2 ** min(bits), shape) / 2 ** min(bits)
     return torch.where(torch.randint(0, 2, shape, dtype=torch.bool), -magnitude, magnitude)
@@ -555,8 +555,8 @@ def test_interleaved_to_sharded_docstring_blackhole_inputs(
 @pytest.mark.parametrize("input_dtype, output_dtype", _docstring_output_dtype_pairs(ttnn.interleaved_to_sharded))
 def test_interleaved_to_sharded_docstring_output_dtype(input_dtype, output_dtype, buffer_type, device):
     """Converts a TILE input between every two dtypes the ttnn.interleaved_to_sharded output_dtype line names, with a
-    memory config, into a preallocated output of the output dtype and from a core grid. The input values are exact in both dtypes, so the output keeps them. Zeros are
-    compared by value."""
+    memory config, into a preallocated output of the output dtype and from a core grid. The input values are exact in both dtypes, so the output keeps them.
+    """
     check_readable(input_dtype, output_dtype, buffer_type)
     input_tensor = ttnn.from_torch(
         _convertible_input(_I2S_SHAPE, input_dtype, output_dtype),
@@ -591,7 +591,7 @@ def test_interleaved_to_sharded_docstring_output_dtype(input_dtype, output_dtype
     for output in outputs:
         assert output.dtype == output_dtype
         assert output.memory_config() == memory_config
-        assert_exact(expected, ttnn.to_torch(output), signed_zeros=False)
+        assert_exact(expected, ttnn.to_torch(output))
 
 
 def _single_core_l1(layout, shard_shape):
