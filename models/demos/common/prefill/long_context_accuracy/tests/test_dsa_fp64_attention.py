@@ -11,6 +11,7 @@ import pytest
 import torch
 
 from models.demos.common.prefill.long_context_accuracy.dsa import fp64_attention as fa
+from models.demos.common.prefill.long_context_accuracy.topk_selection import topk_hits
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import SUM_EE
 
 ONE = fa.Dims(heads=1, nope=1, rope=1, v=1, lora=1, topk=4, eps=1e-5)
@@ -96,6 +97,10 @@ def small_case(seed: int = 0):
     return dims, w, latent, kpe, normed
 
 
+def missed_of(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
+    return ~topk_hits(got, want) & (want >= 0)
+
+
 def test_score_rows_arms() -> None:
     dims, w, latent, kpe, normed = small_case()
     rows = torch.tensor([4, 5])
@@ -103,7 +108,7 @@ def test_score_rows_arms() -> None:
     q = fa.queries(normed, w, dims)
     ref = attend(q, latent, kpe, want, w, dims)
     # Same selection, exact output: every arm is exact and nothing is missed.
-    arms, got_ref = fa.score_rows(rows, normed, ref, want, want, latent, kpe, w, dims)
+    arms, got_ref = fa.score_rows(rows, normed, ref, want, want, missed_of(want, want), latent, kpe, w, dims)
     assert torch.allclose(got_ref, ref)
     for sums in (arms.device, arms.sel, arms.tail):
         assert sums[:, SUM_EE].abs().max() < 1e-24
@@ -111,7 +116,7 @@ def test_score_rows_arms() -> None:
     # Row 4 misses key 0 (its lowest-ranked) for key 2: the selection arm is FP64 attention over [3, 1, 2], the tail
     # baseline over [3, 1]; row 5 is unchanged.
     got = torch.tensor([[3, 1, 2], [5, 2, 4]])
-    arms, _ = fa.score_rows(rows, normed, ref, got, want, latent, kpe, w, dims)
+    arms, _ = fa.score_rows(rows, normed, ref, got, want, missed_of(got, want), latent, kpe, w, dims)
     sel = attend(q, latent, kpe, got, w, dims)
     tail = attend(q, latent, kpe, torch.tensor([[3, 1, -1], [5, 2, 4]]), w, dims)
     assert arms.sel[:, SUM_EE].tolist() == pytest.approx((sel - ref).square().sum(1).tolist())

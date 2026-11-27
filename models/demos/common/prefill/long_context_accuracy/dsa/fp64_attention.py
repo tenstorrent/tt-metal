@@ -16,7 +16,7 @@ golden's selection) (``score_rows``):
 * ``tail``, the near-tie baseline: attention over the golden's selection without its ``m`` lowest-ranked keys, ``m``
   the device's miss count on that row, i.e. what dropping the cut's tail costs;
 
-and the largest attention weight of one key the device missed (``selection_error.selection_masses``).
+and the largest attention weight of one key the device missed (``selection_error.missed_key_max``).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.dsa.selection_error import selection_masses
+from models.demos.common.prefill.long_context_accuracy.dsa.selection_error import missed_key_max
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import row_sums
 
 ATTEND_BATCH = 8  # query rows per batched FP64 attention (bounds the [rows, k, lora] gather)
@@ -131,46 +131,38 @@ def score_rows(
     device_out: torch.Tensor,
     device_sel: torch.Tensor,
     want_sel: torch.Tensor,
+    want_missed: torch.Tensor,
     latent: torch.Tensor,
     kpe: torch.Tensor,
     w: Mapping[str, torch.Tensor],
     dims: Dims,
 ) -> tuple[RowArms, torch.Tensor]:
     """The arms of the scored ``rows`` (absolute), given per row their FP64 normed input, the device's output and
-    selection and the golden's selection (``[n, k]``, -1 for no key); ``latent`` / ``kpe`` hold the golden's keys of
-    rows ``[0, > max(rows)]``. Also returns the FP64 reference output ``[rows, hidden]`` (for the recompute check)."""
+    selection, the golden's selection (``[n, k]``, -1 for no key) and which of its keys the device misses
+    (``want_missed``, ``[n, k]`` bool: ``~topk_selection.topk_hits & valid``); ``latent`` / ``kpe`` hold the golden's
+    keys of rows ``[0, > max(rows)]``. Also returns the FP64 reference output ``[rows, hidden]`` (for the recompute
+    check)."""
     q = queries(normed, w, dims)
-    ref_heads, sel_heads, tail_heads, missed_key_max = [], [], [], []
-    threads = torch.get_num_threads()
+    ref_heads, sel_heads, tail_heads, key_max = [], [], [], []
     for lo in range(0, rows.shape[0], ATTEND_BATCH):
         want, got = want_sel[lo : lo + ATTEND_BATCH], device_sel[lo : lo + ATTEND_BATCH]
+        missed = want_missed[lo : lo + ATTEND_BATCH]
         ref_scores, lat = scores(q, lo, latent, kpe, want, dims)
         p_ref = ref_scores.softmax(-1)
         sel_scores, sel_lat = scores(q, lo, latent, kpe, got, dims)
         p_sel = sel_scores.softmax(-1)
-        torch.set_num_threads(1)  # per-row bookkeeping on [heads, k]: thread fan-out costs ~80x on a loaded host
-        try:
-            masses = [
-                selection_masses(
-                    p_ref[i][:, want[i] >= 0], p_sel[i][:, got[i] >= 0], want[i][want[i] >= 0], got[i][got[i] >= 0]
-                )
-                for i in range(want.shape[0])
-            ]
-        finally:
-            torch.set_num_threads(threads)
-        missed = torch.tensor([m["missed"] for m in masses])
         # the tail baseline drops the reference selection's `missed` lowest-ranked keys: a mask on the same scores
-        tail_scores = ref_scores.masked_fill((tail_dropped(want, missed) < 0).unsqueeze(1), -math.inf)
+        tail_scores = ref_scores.masked_fill((tail_dropped(want, missed.sum(1)) < 0).unsqueeze(1), -math.inf)
         ref_heads.append(heads(p_ref, lat, w, dims))
         sel_heads.append(heads(p_sel, sel_lat, w, dims))
         tail_heads.append(heads(tail_scores.softmax(-1), lat, w, dims))
-        missed_key_max += [m["missed_key_max"] for m in masses]
+        key_max.append(missed_key_max(p_ref, missed))
     ref = output(q, torch.cat(ref_heads), w)
     arms = RowArms(
         rows=rows,
         device=row_sums(ref, device_out.double()),
         sel=row_sums(ref, output(q, torch.cat(sel_heads), w)),
         tail=row_sums(ref, output(q, torch.cat(tail_heads), w)),
-        missed_key_max=torch.tensor(missed_key_max, dtype=torch.float64),
+        missed_key_max=torch.cat(key_max),
     )
     return arms, ref

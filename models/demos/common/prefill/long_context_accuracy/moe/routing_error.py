@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_recall
+from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_hits, topk_recall
 
 
 def routing_rows(
@@ -30,15 +30,14 @@ def routing_rows(
     * ``weight_err``: the largest weight difference on an expert both pick (0 when none is shared);
     * ``misses``: every missed reference expert, ranked in the reference's selection by ``want_scores`` (its score
       of each of its experts, larger first; ``topk_selection.missed_keys``)."""
-    rows = torch.arange(want.shape[0]).unsqueeze(1) << 32
-    missed = ~torch.isin(rows + want, rows + got)
-    dropped = (want_weights.float() * missed).sum(dim=1)
+    hits = topk_hits(got, want)
+    dropped = (want_weights.float() * ~hits).sum(dim=1)
     same = want.unsqueeze(2) == got.unsqueeze(1)  # [rows, k_want, k_got]
     diff = (want_weights.float().unsqueeze(2) - got_weights.float().unsqueeze(1)).abs()
     weight_err = (diff * same).amax(dim=(1, 2)) if want.shape[1] and got.shape[1] else torch.zeros(want.shape[0])
     return {
-        "recall": topk_recall(got, want),
+        "recall": topk_recall(hits, want),
         "dropped": dropped,
         "weight_err": weight_err,
-        "misses": missed_keys(got, want, want_scores),
+        "misses": missed_keys(hits, want, want_scores),
     }

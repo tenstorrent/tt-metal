@@ -10,34 +10,15 @@ module adds the attention weight a selection difference moves, given the referen
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 
-def selection_masses(
-    want_weights: torch.Tensor, got_weights: torch.Tensor, want_sel: torch.Tensor, got_sel: torch.Tensor
-) -> dict:
-    """One query row: ``want_sel`` the reference selection (valid keys, best first by the reference indexer),
-    ``got_sel`` the device's (valid, distinct keys); ``want_weights`` / ``got_weights`` ``[heads, |sel|]`` the
-    reference attention softmax over each selection. Per head (``[heads]``):
-
-    * ``missed_mass``: weight, of the softmax over ``want_sel``, on the keys ``got_sel`` misses;
-    * ``bottom_mass``: weight, of the same softmax, on as many of ``want_sel``'s lowest-ranked keys (what a pure
-      near-tie miss would drop);
-    * ``intruder_mass``: weight, of the softmax over ``got_sel``, on its keys ``want_sel`` lacks;
-
-    and the counts ``missed``, ``intruders`` and ``missed_key_max``, the largest weight of one missed key in one
-    head (0 with no miss)."""
-    missed = ~torch.isin(want_sel, got_sel)
-    intruder = ~torch.isin(got_sel, want_sel)
-    n = int(missed.sum())
-    bottom = torch.zeros_like(missed)
-    if n:
-        bottom[len(want_sel) - n :] = True
-    return {
-        "missed": n,
-        "intruders": int(intruder.sum()),
-        "missed_mass": want_weights[:, missed].sum(-1),
-        "bottom_mass": want_weights[:, bottom].sum(-1),
-        "intruder_mass": got_weights[:, intruder].sum(-1),
-        "missed_key_max": float(want_weights[:, missed].max()) if n else 0.0,
-    }
+def missed_key_max(want_weights: torch.Tensor, missed: torch.Tensor) -> torch.Tensor:
+    """Per query row (``[rows]``, the weights' dtype), the largest weight of one missed key in one head: the maximum
+    of ``want_weights`` ``[rows, heads, k]`` (the reference attention softmax over the reference selection) over the
+    heads and the keys ``missed`` ``[rows, k]`` marks (``~topk_selection.topk_hits & valid``); 0 on a row with no
+    miss."""
+    masked = want_weights.masked_fill(~missed.unsqueeze(1), -math.inf)
+    return masked.amax(dim=(1, 2)).where(missed.any(dim=1), 0.0)

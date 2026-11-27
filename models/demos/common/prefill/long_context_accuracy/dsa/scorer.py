@@ -44,7 +44,7 @@ from models.demos.common.prefill.long_context_accuracy.acceptance_bars import Ac
 from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs, MetricTiers
 from models.demos.common.prefill.long_context_accuracy.dsa.fp64_attention import Dims, RowArms, normed_input, score_rows
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden
-from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_recall
+from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_hits, topk_recall
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
     SUM_YY,
     Window,
@@ -185,10 +185,11 @@ class DsaScorer:
         self.latent[lo:hi], self.kpe[lo:hi] = rows[names.latent], rows[names.kpe]
         self.index_key[lo:hi] = rows[names.index_key]
         want, scores = rows[names.selection].long(), rows[names.selection_scores].float()
-        miss = missed_keys(got, want, scores)
+        hits = topk_hits(got, want)  # one membership per chunk: recall, misses and the scored rows' missed keys
+        miss = missed_keys(hits, want, scores)
         self.series.append(
             lo,
-            recall=topk_recall(got, want),
+            recall=topk_recall(hits, want),
             misses_all=torch.bincount(miss["row"], minlength=n),
             misses_top_half=torch.bincount(miss["row"][2 * miss["rank"] < miss["selected"]], minlength=n),
             future=future_keys(got, lo),
@@ -199,7 +200,16 @@ class DsaScorer:
         local = inside - lo
         normed = normed_input(rows[names.input], self.w, self.dims)  # (the chunk's, as its device input)
         arms, ref = score_rows(
-            inside, normed[local], out[local], got[local], want[local], self.latent, self.kpe, self.w, self.dims
+            inside,
+            normed[local],
+            out[local],
+            got[local],
+            want[local],
+            ~hits[local] & (want[local] >= 0),
+            self.latent,
+            self.kpe,
+            self.w,
+            self.dims,
         )
         self.arms.append(arms)
         at = torch.isin(self.sampled_rows, inside)

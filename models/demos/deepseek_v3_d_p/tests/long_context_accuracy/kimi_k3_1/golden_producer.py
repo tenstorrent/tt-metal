@@ -71,7 +71,7 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     token_ids_sha256,
     write_manifest,
 )
-from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_recall
+from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_hits, topk_recall
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import nrmse, pcc, row_nrmse, row_sums
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
@@ -584,14 +584,13 @@ def trace_checks(trace: Trace, start: int, end: int, products: dict, extra: dict
         c[f"{name}_pcc"], c[f"{name}_nrmse"] = pcc(sums), nrmse(sums)
         c[f"{name}_row_nrmse_median"] = float(row_nrmse(sums, 0.0).median())
     for l in MOE_LAYERS:
-        recall = topk_recall(
-            products[f"routing_ids_{l}"].long(), trace.rows(f"expert_ids_layer_{l}", start, end).long()
-        )
+        got, want = products[f"routing_ids_{l}"].long(), trace.rows(f"expert_ids_layer_{l}", start, end).long()
+        recall = topk_recall(topk_hits(got, want), want)
         c[f"routing_recall_{l}"] = float(recall.mean())
         c[f"routing_set_equal_{l}"] = float((recall == 1).float().mean())
     if products["sampled_rows"].numel():
-        want = torch.cat([trace.rows("expert_ids_layer_3", r, r + 1) for r in products["sampled_rows"].tolist()])
-        recall = topk_recall(extra["routing_ids_3_sampled"], want.long())
+        want = torch.cat([trace.rows("expert_ids_layer_3", r, r + 1) for r in products["sampled_rows"].tolist()]).long()
+        recall = topk_recall(topk_hits(extra["routing_ids_3_sampled"], want), want)
         c["routing_recall_3_sampled"], c["routing_sampled_rows"] = float(recall.mean()), int(recall.numel())
     kv = trace.rows(f"kv_post_transform_layer_{DSA_LAYER}", start, end)
     ik = trace.rows(f"indexer_k_layer_{DSA_LAYER}", start, end)
@@ -604,12 +603,13 @@ def trace_checks(trace: Trace, start: int, end: int, products: dict, extra: dict
         c[f"{name}_pcc"], c[f"{name}_nrmse"] = pcc(sums), nrmse(sums)
     trace_sel = trace.rows(f"dsa_topk_indices_layer_{DSA_LAYER}", start, end).long()
     golden_sel = products["topk_indices_3"].long()
-    recall = topk_recall(trace_sel, golden_sel)
+    hits = topk_hits(trace_sel, golden_sel)
+    recall = topk_recall(hits, golden_sel)
     full = torch.arange(start, end) >= topk - 1  # rows with a full selection (row + 1 >= top-k keys)
     c["topk_recall_min_partial"] = float(recall[~full].min()) if (~full).any() else float("nan")
     if full.any():
         c["topk_recall_mean"], c["topk_recall_p01"] = float(recall[full].mean()), float(recall[full].quantile(0.01))
-        rank = missed_keys(trace_sel[full], golden_sel[full], products["topk_scores_3"][full].double())["rank"]
+        rank = missed_keys(hits[full], golden_sel[full], products["topk_scores_3"][full].double())["rank"]
         c["topk_misses"] = int(rank.numel())
         c["topk_miss_top_half_fraction"] = float((2 * rank < topk).float().mean()) if rank.numel() else 0.0
     return c
