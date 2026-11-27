@@ -10,6 +10,10 @@ Six regimes, each its own program. The bf16 regimes are a reader (NCRISC, NoC0) 
                            -> cb_row_block page -> one write per live row segment.
     face_direct      (R2): one tile column with W <= 16: faces 0/2 prefixes -> cb_left_faces
                            -> one write of 2*W bytes per row straight from its face row.
+    same_bank_slot_writes (R7): R2 whose 2*W-byte row is shorter than its aligned page slot: the
+                           writer copies each row into its slot of a per-bank image (pages p,
+                           p+B, p+2B... of a bank are consecutive slots) and writes each bank's
+                           run of slots in one write, alignment gaps included.
 
 A bfloat8_b input is a value conversion, so it adds a compute kernel between the same two CBs:
 
@@ -47,6 +51,17 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 READ_BATCH_TILES = 8  # tiles per DRAM read batch in R1
 TILE_WINDOW_DEPTH = 2  # R1 batches resident in cb_tile_window
 ROW_DEPTH = 2  # blocks resident in cb_row_block / cb_left_faces / cb_tile_block
+# R7 cb_left_faces / cb_slot_image depths. With the build split, 3 lets the reader build block k
+# while the writer still builds block k - 1 (whose faces page and the image of k - 2, still draining,
+# are held); at 2 the two halves of consecutive blocks serialize.
+SLOT_FACES_DEPTH = 3
+SLOT_IMAGE_DEPTH = 3
+# R7: eighths of each block's rows the reader moves into the slot image with RISC loads/stores (while
+# the next block's reads are in flight); the writer moves the rest, with self-aimed NoC reads when
+# WRITER_SLOT_NOC_COPIES (the two RISCs' loads/stores share one path into L1, so RISC copies on both
+# do not add up), else RISC loads/stores. 0: the writer builds the whole image.
+READER_SLOT_EIGHTHS = 5
+WRITER_SLOT_NOC_COPIES = True
 ROW_WINDOW_DEPTH = 2  # R5 tile-row loads resident in cb_row_stage
 # R5: the writer copies the bottom faces of each staged tile-row (its NoC, its RISC) while the reader
 # copies the top faces; off, the reader copies both and cb_row_stage stays reader-private.
@@ -60,6 +75,11 @@ NAN_MARKS_DEPTH = TILE_BLOCK_DEPTH + ROW_DEPTH
 # time is set by DRAM write transactions, not by the block). The zone build spends 4 profiler markers
 # per block, so 16 + 2 ragged blocks also stay well inside the 250-marker buffer of a RISC.
 PIPELINE_BLOCKS_PER_CORE = 16
+# R7's blocks per core. Its per-block fixed cost is two handshakes and one flush, while a smaller block
+# smooths each core's DRAM write bursts against the reads and shortens fill/drain. Measured on cases
+# 308 / 286 (us): 16 -> 1242 / 289, 64 -> 1144 / 275, 128 -> 1126 / 269, 256 -> 1132 / 273,
+# 600 -> 1121 / 318 (286 then moves one tile per block).
+SLOT_PIPELINE_BLOCKS_PER_CORE = 128
 
 # L1 per core the model leaves to the op (BB-05); an L1 output's pages on a core count inside it.
 L1_BUDGET_BYTES = 1347776
@@ -77,6 +97,8 @@ PACKER_UNTILIZE = "packer_untilize"
 SHARDED_IN_PLACE = "sharded_in_place"
 ROW_MAJOR_TO_TILE = "row_major_to_tile"
 PACKER_TILIZE = "packer_tilize"
+SAME_BANK_SLOT_WRITES = "same_bank_slot_writes"
+_FACE_REGIMES = (FACE_DIRECT, SAME_BANK_SLOT_WRITES)
 _UNTILIZE_REGIMES = (PACKER_UNTILIZE, SHARDED_IN_PLACE)
 _COMPUTE_REGIMES = _UNTILIZE_REGIMES + (PACKER_TILIZE,)
 _TO_TILE_REGIMES = (ROW_MAJOR_TO_TILE, PACKER_TILIZE)
@@ -87,6 +109,7 @@ CB_LEFT_FACES = 2
 CB_NAN_MARKS = 3
 CB_ROW_STAGE = 4
 CB_TILE_BLOCK = 5
+CB_SLOT_IMAGE = 6
 
 # Per-tile record of a cb_nan_marks page (NanMarks in kernels/g6_to_layout_bfp8_nan_marks.hpp): a
 # 64-bit bitmap of the tile's 64 bfp8 groups plus one 16-bit datum mask per group.
@@ -104,6 +127,7 @@ assert TILE_WINDOW_DEPTH + _REORDER_TRIDS <= _MAX_TRID
 assert ROW_WINDOW_DEPTH + _REORDER_TRIDS * (2 if SPLIT_REORDER else 1) <= _MAX_TRID
 assert not SPLIT_REORDER or ROW_WINDOW_DEPTH >= 2  # a pushed-ahead slot needs a second page
 assert 2 * READ_BATCH_TILES <= _MAX_TRID_OUTSTANDING  # at most 2 reads per tile per batch
+assert 0 <= READER_SLOT_EIGHTHS <= 8
 
 
 def _div_up(a, b):
@@ -144,7 +168,12 @@ def tensor_geometry(shape):
     return Geometry(images, height, width, _div_up(height, TILE_HW), _div_up(width, TILE_HW))
 
 
-def select_regime(geometry, dtype=ttnn.bfloat16, sharded=False, to_tile=False, out_dtype=ttnn.bfloat16):
+def out_slot_bytes(geometry, out_alignment):
+    """Aligned page slot of one ROW_MAJOR output row."""
+    return _round_up(geometry.width * DATUM_BYTES, out_alignment)
+
+
+def select_regime(geometry, dtype, sharded, to_tile, out_dtype, out_alignment):
     if to_tile:
         return PACKER_TILIZE if out_dtype == ttnn.bfloat8_b else ROW_MAJOR_TO_TILE
     if sharded:
@@ -152,6 +181,8 @@ def select_regime(geometry, dtype=ttnn.bfloat16, sharded=False, to_tile=False, o
     if dtype == ttnn.bfloat8_b:
         return PACKER_UNTILIZE
     if geometry.tensor_cols_tiles == 1 and geometry.width <= FACE_HW:
+        if geometry.width * DATUM_BYTES < out_slot_bytes(geometry, out_alignment):
+            return SAME_BANK_SLOT_WRITES
         return FACE_DIRECT
     return STAGED_REORDER
 
@@ -166,7 +197,7 @@ def _window_bytes():
 
 
 def _block_bytes(regime, block_rows_tiles, block_cols_tiles, stage_rows):
-    if regime == FACE_DIRECT:
+    if regime in _FACE_REGIMES:
         return block_rows_tiles * LEFT_SLOT_BYTES
     return block_rows_tiles * stage_rows * block_cols_tiles * TILE_ROW_BYTES
 
@@ -179,9 +210,16 @@ def _nan_marks_page_bytes(block_tiles):
     return _round_up(block_tiles * NAN_MARK_RECORD_BYTES, NAN_MARKS_PAGE_ALIGN)
 
 
-def _max_block_tiles(regime, stage_rows, out_l1_share, in_tile_bytes, out_tile_bytes):
+def _slot_image_bytes(block_rows_tiles, stage_rows, slot_bytes):
+    return block_rows_tiles * stage_rows * slot_bytes
+
+
+def _max_block_tiles(regime, stage_rows, out_l1_share, in_tile_bytes, out_tile_bytes, slot_bytes):
     if regime == FACE_DIRECT:
         return (L1_BUDGET_BYTES - out_l1_share) // (ROW_DEPTH * LEFT_SLOT_BYTES)
+    if regime == SAME_BANK_SLOT_WRITES:
+        per_tile = SLOT_FACES_DEPTH * LEFT_SLOT_BYTES + SLOT_IMAGE_DEPTH * _slot_image_bytes(1, stage_rows, slot_bytes)
+        return (L1_BUDGET_BYTES - out_l1_share) // per_tile
     if regime == ROW_MAJOR_TO_TILE:
         # The row window scales with block_cols_tiles only; charging it per tile bounds it for any
         # block_rows_tiles >= 1.
@@ -200,15 +238,15 @@ def _max_block_tiles(regime, stage_rows, out_l1_share, in_tile_bytes, out_tile_b
     return (L1_BUDGET_BYTES - out_l1_share - _window_bytes()) // (ROW_DEPTH * stage_rows * TILE_ROW_BYTES)
 
 
-def _choose_blocking(geometry, core_tiles_max, max_block_tiles):
+def _choose_blocking(geometry, core_tiles_max, max_block_tiles, blocks_per_core):
     """(block_rows_tiles, block_cols_tiles): the whole row when it fits, else the core's column
-    span; full-row blocks get tall enough for ~PIPELINE_BLOCKS_PER_CORE blocks per core."""
+    span; full-row blocks get tall enough for ~blocks_per_core blocks per core."""
     cols = geometry.tensor_cols_tiles
     block_cols_tiles = min(cols, core_tiles_max, max_block_tiles)
     if block_cols_tiles < cols:
         return 1, block_cols_tiles
     core_full_rows_max = core_tiles_max // cols
-    rows = _div_up(core_full_rows_max, PIPELINE_BLOCKS_PER_CORE)
+    rows = _div_up(core_full_rows_max, blocks_per_core)
     return max(1, min(rows, max_block_tiles // block_cols_tiles)), block_cols_tiles
 
 
@@ -283,6 +321,7 @@ class Plan:
     tile_row_stage_rows: int
     in_tile_bytes: int
     out_tile_bytes: int
+    out_slot_bytes: int  # aligned page slot of a ROW_MAJOR output row (None for a TILE output)
     cb_bytes: dict  # CB index -> total bytes the op allocates (a shard-backed CB allocates none)
     out_l1_share: int
     shard: ShardPlacement = None
@@ -325,6 +364,11 @@ class Plan:
             "tile_window_depth": TILE_WINDOW_DEPTH if self.regime == STAGED_REORDER else None,
             "row_window_depth": ROW_WINDOW_DEPTH if self.regime == ROW_MAJOR_TO_TILE else None,
             "split_reorder": SPLIT_REORDER if self.regime == ROW_MAJOR_TO_TILE else None,
+            "slot_image_depth": SLOT_IMAGE_DEPTH if self.regime == SAME_BANK_SLOT_WRITES else None,
+            "slot_faces_depth": SLOT_FACES_DEPTH if self.regime == SAME_BANK_SLOT_WRITES else None,
+            "reader_slot_eighths": READER_SLOT_EIGHTHS if self.regime == SAME_BANK_SLOT_WRITES else None,
+            "writer_slot_noc_copies": WRITER_SLOT_NOC_COPIES if self.regime == SAME_BANK_SLOT_WRITES else None,
+            "out_slot_bytes": self.out_slot_bytes,
             "tile_block_depth": TILE_BLOCK_DEPTH if self.regime in (PACKER_UNTILIZE, PACKER_TILIZE) else None,
             "nan_marks_depth": (
                 self.cb_bytes[CB_NAN_MARKS] // self.nan_marks_page_bytes if self.regime in _UNTILIZE_REGIMES else None
@@ -372,10 +416,12 @@ def compute_plan(
     out_tile_bytes=TILE_BYTES,
 ):
     """Regime, core assignment and block extents of one call. The regime depends on the shape, the
-    input dtype and layout, the output dtype and whether the input is sharded, never on the grid.
+    input dtype and layout, the output dtype and alignment and whether the input is sharded, never
+    on the grid.
     A TILE output (to_tile) is split over the same flattened tile space as a TILE input."""
     geometry = tensor_geometry(shape)
-    regime = select_regime(geometry, dtype, shard is not None, to_tile, out_dtype)
+    regime = select_regime(geometry, dtype, shard is not None, to_tile, out_dtype, out_alignment)
+    slot_bytes = None if to_tile else out_slot_bytes(geometry, out_alignment)
     stage_rows = _tile_row_stage_rows(regime, geometry)
     grid_x, grid_y = grid
 
@@ -384,12 +430,11 @@ def compute_plan(
         if to_tile:
             out_pages, out_aligned_page_bytes = geometry.tensor_tiles, _round_up(out_tile_bytes, out_alignment)
         else:
-            out_pages = geometry.out_pages
-            out_aligned_page_bytes = _round_up(geometry.width * DATUM_BYTES, out_alignment)
+            out_pages, out_aligned_page_bytes = geometry.out_pages, slot_bytes
         banks_per_core = max(1, _div_up(num_l1_banks, grid_x * grid_y))
         out_l1_share = _div_up(out_pages, num_l1_banks) * out_aligned_page_bytes * banks_per_core
 
-    max_block_tiles = _max_block_tiles(regime, stage_rows, out_l1_share, in_tile_bytes, out_tile_bytes)
+    max_block_tiles = _max_block_tiles(regime, stage_rows, out_l1_share, in_tile_bytes, out_tile_bytes, slot_bytes)
     if max_block_tiles < 1:
         raise RuntimeError(
             f"g6_to_layout: an L1 output of {out_l1_share} B per core leaves no room for one block "
@@ -398,7 +443,10 @@ def compute_plan(
 
     if shard is None:
         num_cores, all_cores, core_args, core_tiles_max = _tile_split(grid_x, grid_y, geometry)
-        block_rows_tiles, block_cols_tiles = _choose_blocking(geometry, core_tiles_max, max_block_tiles)
+        blocks_per_core = SLOT_PIPELINE_BLOCKS_PER_CORE if regime == SAME_BANK_SLOT_WRITES else PIPELINE_BLOCKS_PER_CORE
+        block_rows_tiles, block_cols_tiles = _choose_blocking(
+            geometry, core_tiles_max, max_block_tiles, blocks_per_core
+        )
         blocks_per_core_max = None
     else:
         # The shard is the block: one pass over its live tile-rows unless L1 caps the block.
@@ -417,6 +465,11 @@ def compute_plan(
     block_bytes = _block_bytes(regime, block_rows_tiles, block_cols_tiles, stage_rows)
     if regime == FACE_DIRECT:
         cb_bytes = {CB_LEFT_FACES: ROW_DEPTH * block_bytes}
+    elif regime == SAME_BANK_SLOT_WRITES:
+        cb_bytes = {
+            CB_LEFT_FACES: SLOT_FACES_DEPTH * block_bytes,
+            CB_SLOT_IMAGE: SLOT_IMAGE_DEPTH * _slot_image_bytes(block_rows_tiles, stage_rows, slot_bytes),
+        }
     elif regime == STAGED_REORDER:
         cb_bytes = {CB_TILE_WINDOW: _window_bytes(), CB_ROW_BLOCK: ROW_DEPTH * block_bytes}
     elif regime == ROW_MAJOR_TO_TILE:
@@ -457,6 +510,7 @@ def compute_plan(
         tile_row_stage_rows=stage_rows,
         in_tile_bytes=in_tile_bytes,
         out_tile_bytes=out_tile_bytes,
+        out_slot_bytes=slot_bytes,
         cb_bytes=cb_bytes,
         out_l1_share=out_l1_share,
         shard=shard,
@@ -494,11 +548,28 @@ class G6ToLayoutProgram:
         compute_ct_args = None
         compute_source = None
 
-        if plan.regime == FACE_DIRECT:
+        if plan.regime in _FACE_REGIMES:
             cbs = [_cb(CB_LEFT_FACES, plan.cb_bytes[CB_LEFT_FACES], block_bytes, all_cores)]
+            slot_writes = plan.regime == SAME_BANK_SLOT_WRITES
+            if slot_writes:
+                image_bytes = plan.cb_bytes[CB_SLOT_IMAGE]
+                cbs.append(_cb(CB_SLOT_IMAGE, image_bytes, image_bytes // SLOT_IMAGE_DEPTH, all_cores))
             reader_source, writer_source = "g6_to_layout_face_reader.cpp", "g6_to_layout_face_writer.cpp"
-            reader_ct_args = geometry_ct_args + [CB_LEFT_FACES]
-            writer_ct_args = geometry_ct_args + [CB_LEFT_FACES]
+            slot_ct_args = [CB_LEFT_FACES, int(slot_writes), CB_SLOT_IMAGE]
+            reader_ct_args = geometry_ct_args + slot_ct_args + [READER_SLOT_EIGHTHS, plan.out_slot_bytes]
+            # The reader lays out the image by the output's bank interleaving, so it gets the output's
+            # accessor args after its own.
+            reader_out_ct_args = ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+            writer_ct_args = (
+                geometry_ct_args
+                + slot_ct_args
+                + [
+                    SLOT_IMAGE_DEPTH,
+                    plan.out_slot_bytes,
+                    READER_SLOT_EIGHTHS,
+                    int(WRITER_SLOT_NOC_COPIES),
+                ]
+            )
         elif plan.regime in _TO_TILE_REGIMES:
             reorder = plan.regime == ROW_MAJOR_TO_TILE
             stage_page_bytes = (
@@ -539,6 +610,8 @@ class G6ToLayoutProgram:
             compute_source = "g6_to_layout_untilize_compute.cpp"
             compute_ct_args = geometry_ct_args + [CB_TILE_WINDOW, CB_ROW_BLOCK, int(sharded)]
         reader_ct_args += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+        if plan.regime in _FACE_REGIMES:
+            reader_ct_args += reader_out_ct_args
         writer_ct_args += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
 
         core_rt_args = ttnn.RuntimeArgs()

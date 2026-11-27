@@ -86,7 +86,7 @@ Cells moved from `xfail_expected` to passing (23):
 
 **Done when**: the 23 cells above pass, with the specials bit-exact and Q3 within `block_step`. No regression on Phase 0 or Refinement 1. Ledger and design carry the new regime.
 
-### [ ] Refinement 3 — Speed up the perf-flagged profile: DRAM write transactions on case 308
+### [x] Refinement 3 — Speed up the perf-flagged profile: DRAM write transactions on case 308
 
 **Type**: perf
 
@@ -112,6 +112,13 @@ Cut the DRAM write transactions. The design's deferred **`same_bank_slot_writes`
   - R2: c286 (DRAM).
   - R1: c304 (full-row blocks), c294 (column-chunked), c2038 (L1).
   - One cell per path Refinements 1–2 added.
+
+**Outcome**: same-session device kernel time (BH, 110 cores): 308 went from 3394.7 to 1119.8 µs (3.03×) and 286 from 797.1 to 273.0 µs (2.92×). The other guard paths are unchanged, and the golden slice is 20/20 bit-exact.
+- R7 `same_bank_slot_writes` cut 308's writes from 4.19 M to 105 600 bank-run writes. The image build is split: reader RISC copies (5/8 of the rows) and writer NoC copies (3/8). Blocks are 128 per core.
+- **What binds now** is the scheme's DRAM traffic. On 308, the slot-run writes alone take 866 µs (256 MiB at ≈310 GB/s), the reads alone 520 µs, and both together without the copies 1034 µs. The copies add ≈80 µs.
+- The wall is set by the core rows whose read issue stalls on NoC0 back-pressure (reader load 66–690 µs, graded by core row).
+- **Next**: the read-side levers of Refinement 4 (bank stagger, read batches across blocks). They aim at that row gradient and belong to that refinement's scope, so they were not tried here.
+- The 866-µs write floor only moves with fewer output bytes, and the 64-B page slot forbids that for a contiguous write.
 
 ### [ ] Refinement 4 — Speed up the perf-flagged profile: read overlap and block co-tune on case 308
 

@@ -31,7 +31,7 @@ PHASE0_CASES = [
     (2028, (8, 128, 2560), DRAM),  # multi-batch, whole tile-rows per core
     (271, (1, 2048, 128), DRAM),
     (273, (1, 64, 128, 32), DRAM),  # one tile column, W = 32: staged_reorder
-    (286, (1, 1024, 1024, 3), DRAM),  # one tile column, W = 3: face_direct
+    (286, (1, 1024, 1024, 3), DRAM),  # one tile column, W = 3: same_bank_slot_writes
 ]
 
 # -0.0, subnormals, +inf, -inf, NaN with payload
@@ -150,8 +150,8 @@ def test_repeat_is_bit_identical(device):
 @pytest.mark.parametrize(
     "shape,regime",
     [
-        ((1, 1024, 1024, 3), "face_direct"),
-        ((1, 2048, 2048, 3), "face_direct"),
+        ((1, 1024, 1024, 3), "same_bank_slot_writes"),
+        ((1, 2048, 2048, 3), "same_bank_slot_writes"),
         ((1, 64, 128, 32), "staged_reorder"),
         ((1, 185), "staged_reorder"),
         ((16, 4096, 2560), "staged_reorder"),

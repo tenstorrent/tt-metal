@@ -100,3 +100,62 @@
     - L1 guard (c38/c49);
     - regime selection.
   - `test_g6_to_layout_perf.py::test_perf_row_major_to_tile` (8 shapes).
+
+## Refinement 3 — Speed up the perf-flagged profile: DRAM write transactions on case 308
+- **Date**: 2026-11-27
+- **What was done**: the design's deferred `same_bank_slot_writes` regime is built as **R7**. It is selected by shape: one tile column, `W ≤ 16`, and `2·W < out_slot_bytes` (the output's aligned page; 64 B in DRAM). That covers every DRAM-output R2 shape, so cases 308 and 286 move off `face_direct`. `face_direct` stays for L1 outputs whose `2·W` is a multiple of 16.
+  - **Write side.** An interleaved bank holds pages `p, p+B, p+2B…` in consecutive 64-B slots. So each block's rows are gathered into a run-major slot image, and every bank run is written in one NoC write. On 308 that is 105 600 writes of 2560 B instead of 4 194 304 writes of 6 B. The slot's alignment gap is written too: it is the output buffer's own memory.
+  - **Image build.** The build is split by rows (`reader_slot_eighths = 5`):
+    - The reader moves its share with RISC word loads/stores. It issues block `k+1`'s face reads before building its rows of block `k`, so those reads stay in flight during the build.
+    - The writer moves the rest with self-aimed NoC reads, then writes the runs. It pops the previous image after one `noc_async_writes_flushed`.
+  - **Depths and block size.** `cb_left_faces` and `cb_slot_image` are 3 deep, so the two halves of consecutive blocks overlap. R7 has its own `slot_pipeline_blocks_per_core = 128` (308: 10-tile blocks).
+  - **Reused**: R2's face loads, the block walk, `cb_left_faces`, `_choose_blocking` (now taking the block count), the local-copy helpers (`set_read_state` / `read_with_state`).
+  - **Added**:
+    - shared `kernels/g6_to_layout_slot_image.hpp` (run layout, row cursor, both copy engines);
+    - the slot mode of `g6_to_layout_face_reader.cpp` / `g6_to_layout_face_writer.cpp`;
+    - `cb_slot_image` (index 6);
+    - knobs `SLOT_FACES_DEPTH`, `SLOT_IMAGE_DEPTH`, `READER_SLOT_EIGHTHS`, `WRITER_SLOT_NOC_COPIES`, `SLOT_PIPELINE_BLOCKS_PER_CORE`.
+  - `select_plan` reports the regime, `out_slot_bytes` and the R7 knobs. `test_regime_selection` now pins 286/308 to `same_bank_slot_writes`. `op_design.md` and `l1_ledger.md` carry the R7 row, its CBs and the new data-movement budget (308 output: 24 → 256 MiB).
+  - R7's zones are two run totals per RISC (`TT_METAL_PROFILER_SUM`). At ~120 blocks per core, per-block zones overflow the ~250-marker buffer after ~31 blocks, and the overflow is silent.
+- **Perf (device kernel time, BH, 110 cores; same session, before → after)**:
+
+  | Case | Before | After | Speedup |
+  |------|--------|-------|---------|
+  | 308 `[1,2048,2048,3]` | 3394.7 µs | 1119.8 µs | 3.03× |
+  | 286 `[1,1024,1024,3]` | 797.1 µs | 273.0 µs | 2.92× |
+
+  Every other perf-file shape (R1 c304/c1978/c2031/c294/c1993/c2038, R3/R4 c29/c43/c20/c37/c48, R5/R6 c301/c277/c296/c1989/c38/c49/c16/Q3) is unchanged within noise. Their kernels and plans did not change.
+- **Steps measured on 308** (µs):
+  1. Writer-only build with 32-B NoC copies: 1429. The build cost 637 µs, ≈22.5 cycles per copy.
+  2. RISC word copies instead: 1315. The build cost 403 µs, ≈14.3 cycles per row, and it is store-bound: stores alone take 320 µs, ≈5.7 cycles per store. Turning the data cache off changed nothing.
+  3. RISC copies split across both RISCs: flat (1305, then 1309 after the dependency fix). Two causes:
+     - The two halves first serialized on the 2-deep CBs.
+     - Once overlapped, the RISCs' L1 accesses contend: per-row cost went from 14 to 22–26 cycles.
+  4. Reader RISC copies plus writer NoC copies: 1265.
+  5. Plus 128 blocks per core: 1113.
+- **What binds now** (ablations at the final configuration, 308):
+  - reads only: 520 µs;
+  - slot-run writes only: 866 µs (≈310 GB/s);
+  - both, no copies: 1034 µs;
+  - full: 1113 µs.
+
+  So the op is bound by the DRAM traffic of the scheme. The copies add ≈80 µs. The kernel time is set by the core rows whose read issue blocks on NoC0 back-pressure (reader load 66–690 µs, graded by core row y).
+- **Measured nulls (not kept)**:
+  - rotating each core's run write order: 1108–1113 µs, noise;
+  - writes on NoC0: 1497 µs writes-only, worse;
+  - writes alternating between NoCs: 854 vs 866 µs, flat;
+  - depth 4/4: 1125 µs, flat;
+  - 3/8, 4/8 and 6/8 reader shares: 1190, 1148 and 1197 µs.
+- **Accuracy achieved**: bit-exact (PCC = 1.0, relative RMS = 0). This covers loose 308 specials (-0.0, subnormals, ±inf, NaN payload) and 308 poisoned padding (1000.0 and NaN). It also covers the new ragged shapes: `[3,50,5]`, `[7,5,3]`, `[1,1,2]`, `[2,1000,16]`, and L1 outputs with 16-B and 32-B slots, each with NaN-poisoned padding.
+- **Golden test progress**: a targeted slice passes 20/20, with no regression on prior paths:
+  - every 308 cell (INPUTS plus the 4 loose: perf, specials, poison 1000, poison NaN) and 286 plus its loose case;
+  - representatives c304, c294 (with its loose cases), c2038, c29, c37, c301, c16.
+
+  Expected total: 89/89 (no SUPPORTED change).
+- **Issues encountered**:
+  - In the profile build, two zone macros in one scope collide (`conflicting declaration 'hash'`).
+  - Tracy's capture tool crashed once (capture side); the re-run was clean.
+  - `/opt` MPI is fine on this slot, so no `LD_PRELOAD` stub was needed.
+- **Tests added**:
+  - `test_g6_to_layout_slot_writes.py` (14 tests): regime selection and bit-exact output on ragged images, `H < 32`, a single row, `W = 16` with ragged `H`, L1 outputs with 16-B and 32-B slots, and `face_direct` on an L1 full slot, each with randn and NaN-poisoned padding.
+  - `test_g6_to_layout.py::test_regime_selection` pins updated.
