@@ -63,6 +63,7 @@
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/fused_msda/fused_msda_nanobind.hpp"
 #include "ttnn/operations/experimental/modulated_deform_conv2d/modulated_deform_conv2d_nanobind.hpp"
+#include "ttnn/operations/experimental/untilize_and_split_heads/untilize_and_split_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
@@ -231,6 +232,7 @@ void py_module(nb::module_& mod) {
     multi_scale_deformable_attn::detail::bind_multi_scale_deformable_attn(mod);
     fused_msda::detail::bind_fused_msda(mod);
     modulated_deform_conv2d::detail::bind_modulated_deform_conv2d(mod);
+    untilize_and_split_heads::detail::bind_untilize_and_split_heads(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);

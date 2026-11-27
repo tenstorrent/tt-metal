@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -247,6 +248,16 @@ SubtileBroadcastType get_subtile_broadcast_type(
     }
 
     TT_THROW("Invalid subtile broadcast type");  // codespell:ignore subtile
+}
+
+ttsl::SmallVector<unary::EltwiseUnaryWithParam> without_runtime_scalars(
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations) {
+    ttsl::SmallVector<unary::EltwiseUnaryWithParam> projected;
+    projected.reserve(activations.size());
+    for (const auto& activation : activations) {
+        projected.push_back(unary::utils::without_runtime_scalars(activation));
+    }
+    return projected;
 }
 
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {

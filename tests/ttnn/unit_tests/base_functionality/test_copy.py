@@ -22,11 +22,16 @@ from tests.ttnn.utils_for_testing import (
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     check_readable,
     docstring_blackhole_dtype_layout_params,
+    docstring_dtype_conversion_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    convertible_input,
+    full_range_input,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -2677,9 +2682,8 @@ def test_assign_docstring_blackhole_inputs(dtype, layout, input_buffer_type, out
 
     shape = (2, 3, 50, 70)
     memory_config = interleaved_memory_config(output_buffer_type)
-    torch.manual_seed(0)
     input_tensor = ttnn.from_torch(
-        torch.randn(shape) * 8,
+        full_range_input(shape, dtype),
         dtype=dtype,
         layout=layout,
         device=device,
@@ -2822,3 +2826,114 @@ def test_copy_tile_interleaved_to_width_sharded_bf8(device):
 
     output_torch = ttnn.to_torch(output_tensor)
     assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
+
+
+@pytest.mark.parametrize("output_buffer_type", docstring_interleaved_buffer_type_params(ttnn.copy))
+@pytest.mark.parametrize("input_buffer_type", docstring_interleaved_buffer_type_params(ttnn.copy))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.copy))
+def test_copy_docstring_supported_inputs(dtype, layout, input_buffer_type, output_buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.copy docstring lists, for ``input_a`` and
+    ``input_b``. The same buffer type for both and different ones run different programs."""
+    check_readable(dtype, layout, input_buffer_type, output_buffer_type)
+    shape = (2, 3, 50, 70)  # neither of the last two dims is a multiple of 32
+    input_a = ttnn.from_torch(
+        full_range_input(shape, dtype),
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=interleaved_memory_config(input_buffer_type),
+    )
+    expected = ttnn.to_torch(input_a)
+    # Every value of input_b differs from input_a's, so the test sees each one overwritten.
+    other_values = torch.where(expected == 1, 2, 1).to(expected.dtype)
+    memory_config = interleaved_memory_config(output_buffer_type)
+    input_b = ttnn.from_torch(other_values, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    output = ttnn.copy(input_a, input_b)
+
+    assert output.buffer_address() == input_b.buffer_address()
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config() == memory_config
+    assert_exact(expected, ttnn.to_torch(input_b))
+
+
+@pytest.mark.parametrize("output_buffer_type", docstring_interleaved_buffer_type_params(ttnn.copy))
+@pytest.mark.parametrize("input_buffer_type", docstring_interleaved_buffer_type_params(ttnn.copy))
+@pytest.mark.parametrize("dtype, layout", docstring_blackhole_dtype_layout_params(ttnn.copy))
+def test_copy_docstring_blackhole_inputs(dtype, layout, input_buffer_type, output_buffer_type, device):
+    """Runs the dtypes the ttnn.copy docstring lists for Blackhole, for ``input_a`` and ``input_b`` in every
+    interleaved buffer type, with every FP8_E4M3 value but subnormals. Values are compared after a conversion to
+    FLOAT32 on host, which holds every FP8_E4M3 value."""
+    check_readable(dtype, layout, input_buffer_type, output_buffer_type)
+    if not is_blackhole():
+        pytest.skip("the docstring lists these dtypes for Blackhole")
+    shape = (2, 3, 50, 70)
+
+    def device_tensor(values, buffer_type):
+        return ttnn.from_torch(
+            values, dtype=dtype, layout=layout, device=device, memory_config=interleaved_memory_config(buffer_type)
+        )
+
+    def read(tensor):
+        return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
+
+    input_a = device_tensor(full_range_input(shape, dtype), input_buffer_type)
+    expected = read(input_a)
+    # Every value of input_b differs from input_a's, so the test sees each one overwritten.
+    input_b = device_tensor(torch.where(expected == 1, 2, 1).to(torch.float32), output_buffer_type)
+    output = ttnn.copy(input_a, input_b)
+
+    assert output.buffer_address() == input_b.buffer_address()
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config() == interleaved_memory_config(output_buffer_type)
+    assert_exact(expected, read(input_b))
+
+
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype", docstring_dtype_conversion_params(ttnn.copy, "`input_a`", "`input_b`")
+)
+def test_copy_docstring_dtype_conversions(input_dtype, output_dtype, device):
+    """Copies between each pair of dtypes the ttnn.copy docstring lists for an ``input_b`` of another dtype, in TILE
+    layout, with values that both dtypes hold exactly and no NaN; a block-float ``input_a`` has blocks with different
+    shared exponents. ``input_b`` is in L1 and ``input_a`` in DRAM, and ``input_b`` must keep its dtype, layout and
+    memory configuration. Zeros are compared by value."""
+    check_readable(input_dtype, output_dtype)
+    shape = (2, 3, 50, 70)
+    input_a = ttnn.from_torch(
+        convertible_input(shape, input_dtype, output_dtype), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    expected = ttnn.to_torch(input_a)
+    # Every value of input_b differs from input_a's, so the test sees each one overwritten.
+    other_values = torch.where(expected == 1, 2, 1).to(torch.float32)
+    memory_config = ttnn.L1_MEMORY_CONFIG
+    input_b = ttnn.from_torch(
+        other_values, dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    output = ttnn.copy(input_a, input_b)
+
+    assert output.buffer_address() == input_b.buffer_address()
+    assert output.dtype == output_dtype
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert output.memory_config() == memory_config
+    assert_exact(expected, ttnn.to_torch(input_b), signed_zeros=False)
+
+
+@pytest.mark.parametrize("input_dtype, output_dtype", docstring_dtype_conversion_params(ttnn.assign, "input", "output"))
+def test_assign_docstring_dtype_conversions(input_dtype, output_dtype, device):
+    """Assigns into each output dtype the ttnn.assign docstring lists for an input of another dtype, in TILE layout,
+    with values that both dtypes hold exactly and no NaN; a block-float input has blocks with different shared
+    exponents. The output goes to L1 from a DRAM input and must have the requested memory configuration. Zeros are
+    compared by value."""
+    check_readable(input_dtype, output_dtype)
+    shape = (2, 3, 50, 70)
+    input_tensor = ttnn.from_torch(
+        convertible_input(shape, input_dtype, output_dtype), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    memory_config = ttnn.L1_MEMORY_CONFIG
+    output = ttnn.assign(input_tensor, memory_config=memory_config, dtype=output_dtype)
+
+    assert output.dtype == output_dtype
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert output.memory_config() == memory_config
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=False)

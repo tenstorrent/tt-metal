@@ -17,6 +17,11 @@ void MoeRoutingRemapDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_routing_weights = tensor_args.input_routing_weights;
     TT_FATAL(
+        input_routing_weights.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_routing_weights.dtype() == tt::tt_metal::DataType::FLOAT32,
+        "input tensor expected to be bfloat16 or float32, got {}",
+        input_routing_weights.dtype());
+    TT_FATAL(
         input_routing_weights.layout() == tt::tt_metal::Layout::ROW_MAJOR, "input tensor expected to be row major");
 
     const auto& input_routing_weights_shape = input_routing_weights.logical_shape();

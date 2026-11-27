@@ -92,10 +92,10 @@ def test_attn_res_block_mix_rows_per_core(device):
 
 @pytest.mark.parametrize("planes", [[1], [6, 1]], ids=lambda p: "+".join(map(str, p)))
 @pytest.mark.parametrize("num_sites, num_closed", [(2, 1), (25, 1), (25, 3)])
-def test_attn_res_block_mix_closed_sites(device, planes, num_sites, num_closed):
+def test_attn_res_block_mix_closed_sites(device, planes, num_sites, num_closed, num_tokens=640):
     """A closed site comes back as its read, the mixture over its mass; the open sites' batch is unchanged."""
     (out, shift_out, mass_out, closed), (partials, shift, mass) = run_mix(
-        device, planes, num_sites, 4, 640, num_closed=num_closed
+        device, planes, num_sites, 4, num_tokens, num_closed=num_closed
     )
 
     reads = partials[:num_closed] / mass[:num_closed]
@@ -107,3 +107,12 @@ def test_attn_res_block_mix_closed_sites(device, planes, num_sites, num_closed):
     torch.testing.assert_close(out, partials[num_closed:], rtol=2e-2, atol=1e-1)
     torch.testing.assert_close(shift_out, shift[num_closed:], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(mass_out, mass[num_closed:], rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.parametrize("planes", [[7, 1], [11, 1]], ids=lambda p: "+".join(map(str, p)))
+def test_attn_res_block_mix_long_rows(device, planes):
+    """2560 rows per chip, as Kimi-K3.1's four-chunk packed forward has them, fill the grid by rows
+    alone, yet a whole row's run would overflow L1, so rows are still split and cores take several
+    items. Eight candidates, the last pipeline stage's, cut each row in two; twelve cut it in three,
+    runs of 18 and 19 tiles that one core gets both of."""
+    test_attn_res_block_mix_closed_sites(device, planes, num_sites=19, num_closed=1, num_tokens=2560)
