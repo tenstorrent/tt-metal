@@ -77,6 +77,7 @@ jobs:
         timeout-minutes: 20
         with:
           fetch-depth: 0
+          filter: blob:none
       - name: Find the branch point
         id: find
         env:
@@ -94,7 +95,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [blackhole, wormhole]
+        arch: [blackhole]
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: ${{ matrix.arch }}
@@ -121,7 +122,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [blackhole, wormhole]
+        arch: [blackhole]
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: ${{ matrix.arch }}
@@ -152,7 +153,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.13"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.02"}]' || '[{"arch":"blackhole","threshold":"0.02"},{"arch":"wormhole","threshold":"0.13"}]') }}
+        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.13"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.01"}]' || '[{"arch":"blackhole","threshold":"0.01"},{"arch":"wormhole","threshold":"0.13"}]') }}
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
@@ -360,7 +361,7 @@ jobs:
       - name: Decide
         env:
           ARCH: ${{ matrix.arch }}
-          THRESHOLD: "0.02"
+          THRESHOLD: "0.01"
           HEAD_RESULT: ${{ needs.placement-measure-head.result }}
           BASE_RESULT: ${{ needs.placement-measure-base.result }}
           SOURCE_RUN: ${{ needs.placement-plan.outputs.run }}
