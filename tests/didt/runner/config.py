@@ -9,13 +9,15 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-RUNNERS = ("pytest", "script")
-CHECKS = ("nd_report", "run_to_run", "core_sweep", "write_ack")
+# each_chip: the step's ids once per chip, all chips at once, each process seeing only its own chip.
+RUNNERS = ("pytest", "each_chip")
+CHECKS = ("nd_report", "run_to_run", "core_sweep")
 TOP_FIELDS = ("version", "hang_secs", "reset", "smi", "collect", "fallbacks", "steps")
 STEP_FIELDS = ("key", "runner", "ids", "opts", "env", "timeout", "check", "fallbacks", "note")
-STEP_OPTIONAL = ("cmd", "pin_id")
+STEP_OPTIONAL = ("pin_id",)
 FALLBACK_FIELDS = ("env", "opts")
-# pin_core reruns the step's per-chip test (pin_id) on each failing device of the first attempt.
+# pin_core reruns the step's per-chip test (pin_id) on each failing device of the first attempt; a each_chip step
+# reruns its own ids on that chip alone.
 PIN_CORE_FIELDS = ("kind", "hang_reset")
 FALLBACK_KINDS = ("env", "pin_core")
 COMMAND_FIELDS = {"reset": ("cmd", "tries", "timeout"), "smi": ("cmd", "timeout"), "collect": ("cmd", "timeout")}
@@ -43,7 +45,6 @@ class StepCfg:
     key: str
     runner: str
     ids: list[str]
-    cmd: str | None
     opts: list[str]
     env: dict[str, str]
     timeout: float | None
@@ -89,10 +90,11 @@ def _check_step(where: str, s: dict, fallback_names) -> list[str]:
         errors.append(f"{where}: unknown runner {s['runner']!r}")
     if s.get("check", "nd_report") not in CHECKS:
         errors.append(f"{where}: unknown check {s['check']!r}")
-    if s.get("runner") == "script" and not s.get("cmd"):
-        errors.append(f"{where}: script runner needs 'cmd'")
-    if s.get("runner") == "pytest" and "cmd" in s:
-        errors.append(f"{where}: 'cmd' is for the script runner")
+    if s.get("runner") == "each_chip":
+        if "pin_id" in s:
+            errors.append(f"{where}: 'pin_id' is for the pytest runner; each_chip reruns its own ids on the chip")
+        if s.get("check") != "nd_report":
+            errors.append(f"{where}: each_chip runner needs check 'nd_report'")
     ids = s.get("ids", [])
     if not isinstance(ids, list) or not ids:
         errors.append(f"{where}: ids must be a non-empty list")
@@ -165,7 +167,6 @@ def load(path: Path) -> Config:
             key=s["key"],
             runner=s["runner"],
             ids=list(s["ids"]),
-            cmd=s.get("cmd"),
             opts=list(s["opts"]),
             env=dict(s["env"]),
             timeout=s["timeout"],

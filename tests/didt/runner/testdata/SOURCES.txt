@@ -1,8 +1,10 @@
 Real logs the unit tests parse, cut to the lines they need. Runs live on /data/mbezulj.
 
-write_ack_duty_hang.log
-  galaxy-workload-deployment-test/LOG_2026_11_21_13_27_bh-glx-110-a06u02_734b76a2caa/matmul/mcast-ack-duty/log_01
-  (lines from __main__:scan_all_chips only)
+crash_triage_chip5.csv
+  didt-nd/20261126_0935_bh-glx-120-c02u08_d9006726d27_mcast-ack-duty-triage-50/chips/chip5/crash_triage.csv
+  (dump_op_mesh.py and dump_running_operations.py sections, lines 1-8): a per-chip child with TT_VISIBLE_DEVICES=5
+  that triage calls Device 0, T1:N6, hung in MatmulDeviceOperation on 120 cores. 31 other chips ran at once, each
+  with its own inspector port and log path.
 
 crash_triage_hang.csv
   galaxy-workload-deployment-test/LOG_2026_11_21_13_27_bh-glx-110-a06u02_734b76a2caa/matmul/minimal/crash_triage_01.csv

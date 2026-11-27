@@ -97,20 +97,26 @@ def sweep_skipped_windows(log_text: str) -> int | None:
     return int(found[-1]) if found else None
 
 
-def write_ack_chips(log_text: str) -> tuple[Result, dict[int, str]]:
-    """tests/didt/test_mm_mcast_write_ack_failure.py run as a script: one `chip N PASS` or `chip N FAIL: why` line
-    per chip, N being the chip's BusDeviceFunction rank on the host. Returns the step result and chip N -> why."""
-    passed = re.findall(r"chip (\d+) PASS$", log_text, re.MULTILINE)
-    failed = sorted(re.findall(r"chip (\d+) FAIL: (.*)$", log_text, re.MULTILINE), key=lambda f: int(f[0]))
-    total = len(passed) + len(failed)
-    if failed:
-        details = [f"chip {c}: " + re.sub(r"^HUNG chip \d+ \(runtime id \d+\): ", "hang ", why) for c, why in failed]
-        return Result(Status.FAIL, f"hang or ND on {len(failed)}/{total} chips", details), {
-            int(c): why.strip() for c, why in failed
-        }
-    if not re.search(r"all \d+ chips passed", log_text):
-        return Result(Status.FAIL, _first(r"^(\w+(?:Error|Exception): .*)$", log_text) or "no result"), {}
-    return Result(Status.PASS, f"no hang on {total}/{total} chips"), {}
+# Most specific first: only these name what broke; pytest's own summary often says just "1 failed".
+_CHILD_FAILURE = (
+    r"(Device \d+: Timeout[^.\n]*\.)",
+    r"(Read 0x[0-9a-f]+ over PCIe[^\n]*)",
+    r"(TT_THROW: [^(\n]*)",
+    r"^(\w+(?:Error|Exception): .*)$",
+)
+
+
+def child_failure(log_text: str, rc: int) -> str:
+    """Why a per-chip child failed without a triage CSV or ND lines. A killed child (Bus error, OOM) writes no
+    diagnostic at all, so then the exit code is all there is."""
+    for pattern in _CHILD_FAILURE:
+        if why := _first(pattern, log_text):
+            return why
+    if _summary_counts(log_text):
+        return classify_pytest(log_text, 1).reason
+    if rc < 0:
+        return f"killed by signal {-rc}, no diagnostic line; check dmesg"
+    return f"exit code {rc}, no diagnostic line; check dmesg"
 
 
 @dataclass

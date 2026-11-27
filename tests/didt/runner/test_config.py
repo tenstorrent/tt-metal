@@ -86,10 +86,8 @@ def test_shipped_pin_ids():
         "[blackhole-duty-5-rep-1000x-galaxy-galaxy_chip_0]",
         "nd:run-to-run": None,
         "nd:core-sweep": None,
-        "nd:mcast-ack": "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_scan"
-        "[blackhole-1x1]",
-        "nd:mcast-ack-duty": "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_duty"
-        "[blackhole-1x1]",
+        "nd:mcast-ack": None,
+        "nd:mcast-ack-duty": None,
     }
 
 
@@ -105,11 +103,13 @@ def test_shipped_config_matches_spec_table():
     assert c["nd:run-to-run"].env == {"TT_DET_SWEEP_ITERS": "10"}
     assert c["nd:core-sweep"].env == {"TT_SWEEP_ITERS": "10", "TT_SWEEP_MODE": "grid", "TT_SWEEP_GRID": "11x10"}
     ack, duty = c["nd:mcast-ack"], c["nd:mcast-ack-duty"]
-    assert ack.runner == duty.runner == "script"
-    assert ack.cmd == duty.cmd == "python tests/didt/test_mm_mcast_write_ack_failure.py"
-    assert ack.env == {"MATMUL_ITERS": "10", "MATMUL_WORKLOAD": "wkv_b1"}
-    assert duty.env == {"MATMUL_ITERS": "10", "MATMUL_WORKLOAD": "duty"}
-    assert ack.timeout == duty.timeout == 1800 and ack.check == duty.check == "write_ack"
+    assert ack.runner == duty.runner == "each_chip"
+    assert ack.env == duty.env == {"MATMUL_ITERS": "10"}
+    assert ack.opts == duty.opts == ["-p", "no:cacheprovider", "--timeout=0"]
+    assert ack.timeout == duty.timeout == 1800 and ack.check == duty.check == "nd_report"
+    assert ack.ids == [
+        "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_scan[blackhole-1x1]"
+    ]
     assert duty.ids == [
         "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_duty[blackhole-1x1]"
     ]
@@ -177,12 +177,24 @@ def test_non_string_fallback_env_value(tmp_path):
     assert any("env 'TT_MM_THROTTLE_PERF' must be a string" in e for e in _errors(tmp_path, cfg))
 
 
-def test_script_without_cmd(tmp_path):
-    assert any("script runner needs 'cmd'" in e for e in _errors(tmp_path, _with_step(runner="script")))
+def test_each_chip_step_loads(tmp_path):
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(_with_step(runner="each_chip")))
+    assert load(path).steps[0].runner == "each_chip"
 
 
-def test_cmd_on_pytest_runner(tmp_path):
-    assert any("'cmd' is for the script runner" in e for e in _errors(tmp_path, _with_step(cmd="python x.py")))
+def test_each_chip_with_pin_id(tmp_path):
+    errors = _errors(tmp_path, _with_step(runner="each_chip", pin_id="tests/didt/x.py::t_chip[p]"))
+    assert any("'pin_id' is for the pytest runner" in e for e in errors)
+
+
+def test_each_chip_needs_nd_report(tmp_path):
+    errors = _errors(tmp_path, _with_step(runner="each_chip", check="run_to_run"))
+    assert any("each_chip runner needs check 'nd_report'" in e for e in errors)
+
+
+def test_cmd_is_not_a_step_field(tmp_path):
+    assert any("nd:x: unknown field 'cmd'" in e for e in _errors(tmp_path, _with_step(cmd="python x.py")))
 
 
 def test_all_errors_reported_together(tmp_path):

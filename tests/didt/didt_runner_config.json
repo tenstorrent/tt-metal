@@ -83,29 +83,25 @@
     },
     {
       "key": "nd:mcast-ack",
-      "pin_id": "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_scan[blackhole-1x1]",
-      "runner": "script",
-      "cmd": "python tests/didt/test_mm_mcast_write_ack_failure.py",
+      "runner": "each_chip",
       "ids": ["tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_scan[blackhole-1x1]"],
-      "opts": [],
-      "env": {"MATMUL_ITERS": "10", "MATMUL_WORKLOAD": "wkv_b1"},
+      "opts": ["-p", "no:cacheprovider", "--timeout=0"],
+      "env": {"MATMUL_ITERS": "10"},
       "timeout": 1800,
-      "check": "write_ack",
+      "check": "nd_report",
       "fallbacks": ["throttle", "pin_core"],
-      "note": "one process per chip, wkv_b1 matmul; the script arms its own hang watchdog"
+      "note": "one pytest per chip, all chips at once, wkv_b1 matmul"
     },
     {
       "key": "nd:mcast-ack-duty",
-      "pin_id": "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_duty[blackhole-1x1]",
-      "runner": "script",
-      "cmd": "python tests/didt/test_mm_mcast_write_ack_failure.py",
+      "runner": "each_chip",
       "ids": ["tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_duty[blackhole-1x1]"],
-      "opts": [],
-      "env": {"MATMUL_ITERS": "10", "MATMUL_WORKLOAD": "duty"},
+      "opts": ["-p", "no:cacheprovider", "--timeout=0"],
+      "env": {"MATMUL_ITERS": "10"},
       "timeout": 1800,
-      "check": "write_ack",
+      "check": "nd_report",
       "fallbacks": ["throttle", "pin_core"],
-      "note": "one process per chip, bursty matmul compared every iteration (test default)"
+      "note": "one pytest per chip, all chips at once, bursty matmul compared every iteration (test default)"
     }
   ]
 }

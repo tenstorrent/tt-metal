@@ -23,10 +23,6 @@ Run this. Reset first, always -- and note the sweep is always a cold-cache run:
     tt-smi -glx_reset_auto
     TT_METAL_HOME=$PWD python_env/bin/python tests/didt/test_mm_mcast_write_ack_failure.py
 
-One chip of the scan, as didt_runner's pin_core reruns it:
-
-    DIDT_DEVICE_ID=19 TT_METAL_HOME=$PWD python_env/bin/python tests/didt/test_mm_mcast_write_ack_failure.py
-
 Exits 1 if any chip hangs. Logs: /tmp/mm_mcast_write_ack_failure/chip<N>/pytest.log, or under
 $MCAST_ACK_WORK_DIR when set. Kernel caches: kmd<minor>/ per chip under the work dir, or under
 $MCAST_ACK_CACHE_DIR when set (keep it on local disk: 32 concurrent JIT builds fail on NFS). Chips report as they finish, so output is in completion order. Reset
@@ -86,8 +82,6 @@ from models.common.utility_functions import skip_for_wormhole_b0
 TRAY_OF_BUS_NIBBLE = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}
 WATCHDOG_ENV = "TT_METAL_OPERATION_TIMEOUT_SECONDS"
 TRIAGE_ENV = "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"
-# didt_runner's pin_core: the chip id (BusDeviceFunction rank) to scan alone
-DEVICE_ID_ENV = "DIDT_DEVICE_ID"
 
 
 DEVICE_PARAMS = {"l1_small_size": 1152}
@@ -332,7 +326,7 @@ WORKLOADS = {"wkv_b1": "test_mm_mcast_write_ack_failure_scan", "duty": "test_mm_
 
 def scan_all_chips(iters=None, watchdog=30, work_dir=None, workload=None):
     """Run this test once per chip of the host, one process each with its own cold cache, and report
-    which chips hang. Returns the list of hung chip ids. DIDT_DEVICE_ID=<chip id> scans that chip alone.
+    which chips hang. Returns the list of hung chip ids.
 
     Triage is disabled in the children because it halts cores and would disturb the other
     processes; re-run a failing chip on its own to triage it. This gate detects a hang but cannot
@@ -347,15 +341,11 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None, workload=None):
     shutil.rmtree(cache_root, ignore_errors=True)
     identity = chip_identity()
     chips = sorted(identity)
-    if wanted := os.environ.get(DEVICE_ID_ENV):
-        if int(wanted) not in identity:
-            raise ValueError(f"{DEVICE_ID_ENV}={wanted} is not a chip of this host, chip ids {chips}")
-        chips = [int(wanted)]
     running = {}
     for chip in chips:
         out = work_dir / f"chip{chip}"
         out.mkdir(parents=True)
-        env = {k: v for k, v in os.environ.items() if k != DEVICE_ID_ENV} | {
+        env = os.environ | {
             "TT_VISIBLE_DEVICES": str(chip),
             "TT_METAL_CACHE": str(cache_root / f"kmd{identity[chip][1]}"),
             "OUT_DIR": str(out),

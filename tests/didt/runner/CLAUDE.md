@@ -51,6 +51,7 @@ Read by the tests the runner launches, never imported by `runner/`:
 | new screen of an existing kind | config entry only |
 | new pass/fail or device parser | `runner/checks.py` or `runner/devices.py`, + a `check` name |
 | new way to launch | `runner/steps.py`, + a `runner` name |
+| a test run once per chip, all chips at once | config entry with `"runner": "each_chip"` |
 | new fallback | config `fallbacks{}`; code only for a new fallback kind |
 | new status field | `runner/status.py` + the `status.json` section below |
 
@@ -69,7 +70,7 @@ Read by the tests the runner launches, never imported by `runner/`:
 | `dev bdf tray asic asic_id kmd` | `chips[]` joined on `dev`; if the log's `Chip map` BDF differs, keep the log's + a `details` warning |
 | `hung` | always |
 | `failed_checks checks pattern` | `nd_report` (`ND summary device N` line) |
-| `op core_count` | HANG: triage CSV `dump_running_operations.py` |
+| `op core_count` | HANG: triage CSV `dump_running_operations.py` (`each_chip`: the chip's own CSV) |
 | `elements` | `core_sweep` |
 | `cores[]` | up to 8, worst first: `x y`, `translated` if logged, then `failed_checks signature` or `elements` |
 
@@ -89,15 +90,26 @@ Read by the tests the runner launches, never imported by `runner/`:
 - A per-chip child process sees itself as `device 0`: join on the parent's chip id.
 - Log format comes from the test (`op_test_base.py`, test file). Change both together, never one.
 
+## each_chip runner
+
+- The step's ids once per chip, all chips at once, in `chips/chip<dev>/`: `pytest.log`, `crash_triage.csv` on a hang.
+- Each process: `TT_VISIBLE_DEVICES=<dev>`, own kernel cache, own inspector port (`50100 + dev`) and log path.
+  Without its own inspector, triage reads another chip's process or none.
+- Hang handling as gwdt: dispatch timeout -> tt-triage into the chip's CSV -> `kill -9` of that pytest.
+- A chip with a non-empty CSV is hung; step HANG if any chip hung, else FAIL if any failed. The attempt `log` has one
+  line per chip.
+- Check is always `nd_report`, joined on the chip (the child calls itself device 0).
+
 ## Fallbacks and step two
 
 - Today: `throttle` (`TT_MM_THROTTLE_PERF=5`), then `pin_core` on every step.
 - `pin_core`: each failing device of the first attempt (hung, or with ND data) reruns alone via the step's `pin_id`
-  with `DIDT_DEVICE_ID=<dev>`, at twice the iterations and at least the original attempt's loop time
-  (`DIDT_MIN_LOOP_SECONDS`, honoured by `op_test_base.run_op_test`; read from the original log's iteration debug lines,
-  for a script step from the target's `chips/chip<dev>/pytest.log`). Hang or ND is per device, never from the step
-  status: a `write_ack` step is FAIL with hung chips in it. The mcast script scans only chip `DIDT_DEVICE_ID` when
-  set; its wkv_b1 workload logs no iteration lines and ignores `DIDT_MIN_LOOP_SECONDS`. A per-chip test must pick its chip with
+  with `DIDT_DEVICE_ID=<dev>` (an `each_chip` step: its own ids on that chip only, found by BDF after the reset), at
+  twice the iterations and at least the original attempt's loop time (`DIDT_MIN_LOOP_SECONDS`, honoured by
+  `op_test_base.run_op_test`; read from the original log's iteration debug lines, for an `each_chip` step from the
+  target's `chips/chip<dev>/pytest.log`). Hang or ND is per device, never from the step status: an `each_chip` step
+  can hang on one chip and show ND on another. The mcast wkv_b1 workload logs no iteration lines and ignores
+  `DIDT_MIN_LOOP_SECONDS`. A per-chip test must pick its chip with
   `tests/didt/didt_chip.py` `pick_submesh`, never `submeshes[logical_chip_id]` alone: the submesh index is not the
   device id. A new per-chip test = a `pin_id` in the config, collected on a galaxy first.
 - Not reproduced on the chip alone is WARN, not PASS. A reset failure inside `pin_core` aborts the run.
@@ -106,7 +118,9 @@ Read by the tests the runner launches, never imported by `runner/`:
   - `per_core`: core sweep on that chip.
   - `vf_sweep`: no knob found yet; find and document it before building.
 - A new fallback kind consumes `devices[]` of the attempt before it. Never re-parse logs for it.
-- `TT_VISIBLE_DEVICES`: always full BDF form `0000:c1:00.0`; never `TT_METAL_VISIBLE_DEVICES`.
+- `TT_VISIBLE_DEVICES`: dropped from the caller's env (`DROPPED_ENV`), so `dev` = BDF rank. An `each_chip` child
+  gets the rank: UMD maps an integer through its BDF-sorted device list, and the mcast test parses it as an integer.
+  Never `TT_METAL_VISIBLE_DEVICES`.
 
 ## Don'ts
 
@@ -114,7 +128,8 @@ Read by the tests the runner launches, never imported by `runner/`:
 - No CORE_CAP-style fallback without a stated question it answers.
 - No new dependency in `runner/` (stdlib only).
 - No `pkill`, no `kill_aliens`, no `recover.sh` from the runner.
-- No writes outside the run dir; script tools get a dedicated subfolder (they may rmtree it).
+- No writes outside the run dir, except `each_chip` kernel caches: local `/tmp/didt_runner_<run>/` (32 concurrent JIT
+  builds fail on NFS), removed after each attempt.
 - No device runs on slurm-login.
 
 ## Before you call it done

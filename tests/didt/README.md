@@ -56,7 +56,7 @@ Each run makes a new dir `<out>/LOG_<YYYY_MM_DD_HH_MM>_<host>_<commit>/` (suffix
 | `status.json` | the only result: chips, steps, attempts, failing devices; rewritten after every change |
 | `run.log` | one timestamped line per attempt start and end |
 | `collect/` | collect gate logs |
-| `nd/<name>/` | first attempt of step `nd:<name>`: `reset.log`, `log` (test output), `tt-smi.json`, `crash_triage.csv` on a hang, `chips/` (per-chip logs, script steps) |
+| `nd/<name>/` | first attempt of step `nd:<name>`: `reset.log`, `log` (test output), `tt-smi.json`, `crash_triage.csv` on a hang, `chips/chip<N>/` (`each_chip` steps: that chip's `pytest.log`, `crash_triage.csv` on a hang) |
 | `nd/<name>_throttle/` | `throttle` fallback: same test with `TT_MM_THROTTLE_PERF=5` |
 | `nd/<name>_pin_core_dev<N>/` | `pin_core` fallback: the per-chip test on failing device `N` alone, twice the iterations |
 
@@ -73,14 +73,14 @@ exported knob changes every step that reads it.
 
 | variable | read by | effect |
 |---|---|---|
-| `DIDT_DEVICE_ID=<dev>` | `didt_chip.py` (per-chip tests), `test_mm_mcast_write_ack_failure.py` scan | pick the chip by device id, not by submesh index; the mcast scan runs that chip alone; `pin_core` sets it |
+| `DIDT_DEVICE_ID=<dev>` | `didt_chip.py` (per-chip tests) | pick the chip by device id, not by submesh index; `pin_core` sets it |
 | `DIDT_MIN_LOOP_SECONDS=<s>` | `OpTestBase.run_op_test` | keep iterating until the loop has run `<s>` seconds; `pin_core` sets it |
 | `DIDT_MINIMAL_M=<M>` | `test_minimal_matmul.py` | override M (default 16384); M > N transposes the core grid |
 | `DIDT_GRID_X=<x>`, `DIDT_GRID_Y=<y>` | `test_ff1_matmul.py` | shrink the compute grid, anchored at core (0,0) |
 | `DIDT_MATH_FIDELITY=<name>` | `test_minimal_matmul.py`, `test_ff1_matmul.py` | `LoFi`, `HiFi2`, `HiFi3` or `HiFi4` |
 | `DIDT_IN0_DTYPE`, `DIDT_IN1_DTYPE`, `DIDT_OUT_DTYPE` | `test_ff1_matmul.py` | `ttnn.DataType` name, e.g. `BFLOAT4_B`; defaults `BFLOAT16`, `BFLOAT8_B`, `BFLOAT16` |
-| `MCAST_ACK_WORK_DIR=<dir>` | `test_mm_mcast_write_ack_failure.py` | per-chip logs dir (default `/tmp/mm_mcast_write_ack_failure`); the runner sets it |
-| `MCAST_ACK_CACHE_DIR=<dir>` | `test_mm_mcast_write_ack_failure.py` | kernel cache dir (default: the work dir); keep it on local disk; the runner sets it |
+| `MCAST_ACK_WORK_DIR=<dir>` | `test_mm_mcast_write_ack_failure.py` | per-chip logs dir of the standalone scan (default `/tmp/mm_mcast_write_ack_failure`) |
+| `MCAST_ACK_CACHE_DIR=<dir>` | `test_mm_mcast_write_ack_failure.py` | kernel cache dir of the standalone scan (default: the work dir); keep it on local disk |
 
 ### Unit tests
 
@@ -91,8 +91,8 @@ python -m pytest -q --noconftest -p no:cacheprovider tests/didt/runner tests/did
   tests/didt/test_mcast_ack_scan_dirs.py tests/didt/test_op_test_base_min_loop.py tests/didt/test_nd_core_map.py
 ```
 
-Expected: 137 passed, 1 skipped. The skipped test renders `status.json` with the sweep page; it runs only when it
-finds the `build-gwdt-sweep` skill (set `GWDT_SWEEP_DIR` to the skill's folder).
+Expected: 149 passed, 5 skipped. The skipped tests render `status.json` with the sweep page; they run only when they
+find the `build-gwdt-sweep` skill (set `GWDT_SWEEP_DIR` to the skill's folder).
 
 ### Changing the runner
 

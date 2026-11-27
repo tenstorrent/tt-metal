@@ -11,7 +11,6 @@ from tests.didt.runner.devices import (
     nd_report_devices,
     run_to_run_devices,
     triage_hang_devices,
-    write_ack_devices,
 )
 
 TESTDATA = Path(__file__).parent / "testdata"
@@ -154,10 +153,9 @@ def test_nd_report_missing_chip_joins_on_snapshot_order():
     assert warnings == []
 
 
-def test_write_ack_nd_chip_uses_parent_chip_id():
+def test_nd_report_child_joins_on_parent_chip_id():
     # The child ran with TT_VISIBLE_DEVICES=16, saw one chip and logged it as device 0.
-    why = "ND chip 16 (runtime id 0): BusDeviceFunction=0000:81:00.0 /dev/tenstorrent/24"
-    devices, warnings = write_ack_devices({16: why}, {16: read("nd_write_ack_chip16.log")}, c10u08)
+    devices, warnings = nd_report_devices(read("nd_write_ack_chip16.log"), c10u08, dev_override=16)
     (d,) = devices
     assert {k: d[k] for k in IDENTITY} == c10u08[16].as_dict()
     assert (d["failed_checks"], d["checks"], d["pattern"], d["hung"]) == (3, 10, "whole grid (120 cores)", False)
@@ -166,16 +164,21 @@ def test_write_ack_nd_chip_uses_parent_chip_id():
     assert warnings == []
 
 
-def test_write_ack_hung_chip():
-    devices, _ = write_ack_devices({27: "HUNG chip 27 (runtime id 0): BusDeviceFunction=0000:c4:00.0"}, {}, chips32)
-    assert devices == [{**chips32[27].as_dict(), "hung": True}]
+def test_triage_child_joins_on_parent_chip_id():
+    # A per-chip child sees one chip: triage calls it Device 0 in the op mesh, the Devices cell and every core.
+    devices, warnings = triage_hang_devices(read("crash_triage_chip5.csv"), chips32, dev_override=5)
+    (d,) = devices
+    assert {k: d[k] for k in IDENTITY} == chips32[5].as_dict() and (d["tray"], d["asic"]) == (1, 6)
+    assert (d["hung"], d["op"], d["core_count"]) == (True, "MatmulDeviceOperation", 120)
+    assert d["cores"][0] == {"x": 6, "y": 8, "translated": [10, 10]} and len(d["cores"]) == 5
+    assert warnings == []
 
 
-def test_write_ack_other_failure_names_chip_only():
-    devices, _ = write_ack_devices(
-        {5: "no diagnostic line -- process killed (Bus error / OOM); check dmesg"}, {}, chips32
-    )
-    assert devices == [chips32[5].as_dict()]
+def test_triage_child_mesh_mismatch_warns():
+    # chip 4 is T1:N5; the child's op mesh says T1:N6
+    devices, warnings = triage_hang_devices(read("crash_triage_chip5.csv"), chips32, dev_override=4)
+    assert devices[0]["dev"] == 4
+    assert warnings == ["device 4: triage says T1:N6, chip snapshot says T1:N5 (0000:05:00.0)"]
 
 
 def test_run_to_run_devices():
