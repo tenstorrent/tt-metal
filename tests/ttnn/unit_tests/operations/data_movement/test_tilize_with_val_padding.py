@@ -1271,7 +1271,7 @@ def test_tilize_with_val_padding_docstring_supported_inputs(
     """Runs every dtype, layout and interleaved buffer type the ttnn.tilize_with_val_padding docstring lists.
 
     The output shapes follow the docstring's output_tensor_shape rules. The data must come back unchanged and the
-    padding must hold pad_value. BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value.
+    padding must hold pad_value. BFLOAT16 inputs leave out NaN, as the docstring requires, and -0.0 as well.
     An input that the docstring's Quasar rule leaves out is an xfail on Quasar, without running.
     """
     check_readable(dtype, layout, buffer_type)
@@ -1280,7 +1280,7 @@ def test_tilize_with_val_padding_docstring_supported_inputs(
     memory_config = interleaved_memory_config(buffer_type)
     pad_value = _DOCSTRING_PAD_VALUES[dtype]
     input_tensor = ttnn.from_torch(
-        full_range_input(input_shape, dtype, nan=dtype != ttnn.bfloat16),
+        full_range_input(input_shape, dtype, nan=dtype != ttnn.bfloat16, negative_zero=dtype != ttnn.bfloat16),
         dtype=dtype,
         layout=layout,
         device=device,
@@ -1296,7 +1296,7 @@ def test_tilize_with_val_padding_docstring_supported_inputs(
     expected = torch.full(output_tensor_shape, pad_value, dtype=torch.float64)
     expected[tuple(slice(0, size) for size in input_shape)] = ttnn.to_torch(input_tensor).to(torch.float64)
     actual = ttnn.from_device(output).to_torch_with_padded_shape()
-    assert_exact(expected, actual, signed_zeros=dtype != ttnn.bfloat16)
+    assert_exact(expected, actual)
 
 
 _TILIZE_VAL_MODULES = {"ttnn": ttnn, "quasar": ttnn.experimental.quasar}
@@ -1350,7 +1350,7 @@ def test_tilize_with_val_padding_returns_host_tile_input(module_name, entry):
 )
 def test_tilize_with_val_padding_docstring_dtype_conversions(input_dtype, output_dtype, device):
     """Runs each output dtype the ttnn.tilize_with_val_padding docstring lists for an input of another dtype, with values that both
-    dtypes hold exactly and no NaN. Zeros are compared by value. An output that the docstring's Quasar rule leaves out
+    dtypes hold exactly and no NaN or -0.0. An output that the docstring's Quasar rule leaves out
     is an xfail on Quasar, without running."""
     check_readable(input_dtype, output_dtype)
     if is_quasar() and output_dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
@@ -1368,4 +1368,4 @@ def test_tilize_with_val_padding_docstring_dtype_conversions(input_dtype, output
 
     assert output.dtype == output_dtype
     assert output.layout == ttnn.TILE_LAYOUT
-    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=False)
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output))

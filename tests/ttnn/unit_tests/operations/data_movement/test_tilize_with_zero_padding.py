@@ -77,7 +77,7 @@ def test_tilize_with_zero_padding_docstring_supported_inputs(input_shape, dtype,
 
     The data must come back unchanged. For inputs of rank 2 or more, the padded shape must be the input's padded shape
     with the last two dimensions rounded up to multiples of 32, and the padding must hold zeros. BFLOAT16 inputs leave out NaN, as the
-    docstring requires, and compare zeros by value. An input that the docstring's Quasar rule leaves out is an xfail on
+    docstring requires, and -0.0 as well. An input that the docstring's Quasar rule leaves out is an xfail on
     Quasar, without running.
     """
     check_readable(dtype, layout, buffer_type)
@@ -85,7 +85,7 @@ def test_tilize_with_zero_padding_docstring_supported_inputs(input_shape, dtype,
         pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 inputs on Quasar")
     memory_config = interleaved_memory_config(buffer_type)
     input_tensor = ttnn.from_torch(
-        full_range_input(input_shape, dtype, nan=dtype != ttnn.bfloat16),
+        full_range_input(input_shape, dtype, nan=dtype != ttnn.bfloat16, negative_zero=dtype != ttnn.bfloat16),
         dtype=dtype,
         layout=layout,
         device=device,
@@ -98,17 +98,16 @@ def test_tilize_with_zero_padding_docstring_supported_inputs(input_shape, dtype,
     assert output.memory_config() == memory_config
     assert list(output.shape) == list(input_shape)
     input_values = ttnn.to_torch(input_tensor).to(torch.float64)
-    signed_zeros = dtype != ttnn.bfloat16
     if len(input_shape) < 2:
         # The docstring states the padded shape only for inputs of rank 2 or more.
-        assert_exact(input_values, ttnn.to_torch(output), signed_zeros=signed_zeros)
+        assert_exact(input_values, ttnn.to_torch(output))
         return
     input_padded_shape = list(input_tensor.padded_shape)
     padded_shape = [*input_padded_shape[:-2], *((size + 31) // 32 * 32 for size in input_padded_shape[-2:])]
     assert list(output.padded_shape) == padded_shape
     expected = torch.zeros(padded_shape, dtype=torch.float64)
     expected[tuple(slice(0, size) for size in input_shape)] = input_values
-    assert_exact(expected, ttnn.from_device(output).to_torch_with_padded_shape(), signed_zeros=signed_zeros)
+    assert_exact(expected, ttnn.from_device(output).to_torch_with_padded_shape())
 
 
 @pytest.mark.parametrize(
@@ -116,7 +115,7 @@ def test_tilize_with_zero_padding_docstring_supported_inputs(input_shape, dtype,
 )
 def test_tilize_with_zero_padding_docstring_dtype_conversions(input_dtype, output_dtype, device):
     """Runs each output dtype the ttnn.tilize_with_zero_padding docstring lists for an input of another dtype, with values that both
-    dtypes hold exactly and no NaN. Zeros are compared by value. An output that the docstring's Quasar rule leaves out
+    dtypes hold exactly and no NaN or -0.0. An output that the docstring's Quasar rule leaves out
     is an xfail on Quasar, without running."""
     check_readable(input_dtype, output_dtype)
     if is_quasar() and output_dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
@@ -134,4 +133,4 @@ def test_tilize_with_zero_padding_docstring_dtype_conversions(input_dtype, outpu
 
     assert output.dtype == output_dtype
     assert output.layout == ttnn.TILE_LAYOUT
-    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=False)
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output))

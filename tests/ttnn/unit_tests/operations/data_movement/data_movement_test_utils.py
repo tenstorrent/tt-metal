@@ -25,14 +25,26 @@ _INTS = {
 _BLOCK_FLOATS = (ttnn.bfloat8_b, ttnn.bfloat4_b)
 
 
-def full_range_input(shape, dtype, seed=0, nan=True):
+def full_range_input(shape, dtype, seed=0, nan=True, negative_zero=True):
     """Random values over ``dtype``'s whole range, as a torch tensor that ``ttnn.from_torch`` takes for ``dtype``.
 
     Floats get random signs, exponents and mantissas, so every normal exponent occurs. Their first elements are
-    +inf, -inf, NaN (left out if ``nan`` is False), -0.0 and +0.0. Subnormals are left out, since the hardware may
-    flush them to zero. Integers cover their whole range, and their first elements are their smallest and largest
-    values. Block floats share one exponent per 16 values, so they get standard normal values instead.
+    +inf, -inf, NaN (left out if ``nan`` is False), -0.0 (left out if ``negative_zero`` is False) and +0.0. Subnormals
+    are left out, since the hardware may flush them to zero. Integers cover their whole range, and their first elements
+    are their smallest and largest values. Block floats share one exponent per 16 values, so they get standard normal
+    values instead. FP8_E4M3 gets every value it holds except subnormals, which the host conversion flushes to zero:
+    NaN and -0.0 (each left out as above), +0.0 and every normal value up to +-448, repeated over the shape.
     """
+    if dtype == ttnn.fp8_e4m3:
+        values = torch.arange(256, dtype=torch.uint8).view(torch.float8_e4m3fn).float()
+        keep = (values == 0) | (values.abs() >= 2.0**-6)
+        if nan:
+            keep |= values.isnan()
+        if not negative_zero:
+            keep &= ~((values == 0) & values.signbit())
+        values = values[keep]
+        count = math.prod(shape)
+        return values.repeat(count // values.numel() + 1)[:count].reshape(shape)
     torch.manual_seed(seed)
     if dtype in _FLOATS:
         torch_dtype, bits_dtype, mantissa_bits = _FLOATS[dtype]
@@ -41,7 +53,7 @@ def full_range_input(shape, dtype, seed=0, nan=True):
         mantissa = torch.randint(0, 2**mantissa_bits, shape)
         magnitude = ((exponent << mantissa_bits) | mantissa).to(bits_dtype).view(torch_dtype)
         values = torch.where(torch.randint(0, 2, shape, dtype=torch.bool), -magnitude, magnitude)
-        special = [math.inf, -math.inf] + ([math.nan] if nan else []) + [-0.0, 0.0]
+        special = [math.inf, -math.inf] + ([math.nan] if nan else []) + ([-0.0] if negative_zero else []) + [0.0]
         values.view(-1)[: len(special)] = torch.tensor(special, dtype=torch_dtype)
         return values
     if dtype in _INTS:
@@ -107,7 +119,8 @@ def convertible_input(shape, input_dtype, output_dtype, seed=0):
     A block-float output gets +-(1 + k / 2**bits): values that share one exponent and fit its fraction bits. A
     block-float input gets standard normal values, so its blocks have different shared exponents and most values sit
     below their block's largest; once quantized to the input dtype, each one is exact in BFLOAT16 and FLOAT32.
-    Otherwise the values are BFLOAT16 ``full_range_input`` values without NaN, which FLOAT32 also holds.
+    Otherwise the values are BFLOAT16 ``full_range_input`` values without NaN or -0.0, which FLOAT32 also
+    holds.
     """
     if output_dtype in _BLOCK_FLOAT_FRACTION_BITS:
         bits = min(
@@ -119,4 +132,4 @@ def convertible_input(shape, input_dtype, output_dtype, seed=0):
     if input_dtype in _BLOCK_FLOAT_FRACTION_BITS:
         return full_range_input(shape, input_dtype, seed=seed)
     assert {input_dtype, output_dtype} <= {ttnn.bfloat16, ttnn.float32}, f"no convertible input for {input_dtype}"
-    return full_range_input(shape, ttnn.bfloat16, seed=seed, nan=False).float()
+    return full_range_input(shape, ttnn.bfloat16, seed=seed, nan=False, negative_zero=False).float()
