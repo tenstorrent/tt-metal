@@ -85,14 +85,14 @@ CASES = [
 TARGETS_MS = {
     "kimi_k3-8x4-5120": (2.24, 2.11),
     # K3 / K3.1 carve: mean of 2 CI runs of that run's number (10k: 1 run)
-    "kimi_k3_1-xy4-sp1-2560": (3.43, 3.38),
-    "kimi_k3-xy4-sp1-5120-packed-2560@0-2560@2560": (4.42, 4.33),
+    "kimi_k3_1-xy4-sp1-2560": (3.08, 3.02),
+    "kimi_k3-xy4-sp1-5120-packed-2560@0-2560@2560": (4.18, 4.10),
     "kimi_k3-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (6.26, 6.15),
     # GLM-5.3: each the mean over 3 runs of that run's number (fastest untraced sample, traced replay)
     "glm53-8x4-5120": (1.32, 1.21),
-    "glm53-xy4-sp1-2560": (1.49, 1.37),
-    "glm53-xy4-sp1-5120-packed-2560@0-2560@2560": (1.99, 1.88),
-    "glm53-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (3.05, 2.95),
+    "glm53-xy4-sp1-2560": (1.40, 1.28),
+    "glm53-xy4-sp1-5120-packed-2560@0-2560@2560": (1.90, 1.77),
+    "glm53-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (2.96, 2.88),
 }
 
 
