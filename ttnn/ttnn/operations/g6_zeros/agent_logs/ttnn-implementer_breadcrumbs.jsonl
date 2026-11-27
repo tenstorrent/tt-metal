@@ -1,0 +1,1 @@
+{"event":"test_run","result":"pass","detail":"acceptance 23/23 dev+non-dev; debug p4 bf16 + p1 bfp8 dirty-destination pass through same program; env: preloaded ULFM symbol shim because /opt/openmpi-v5.0.7-ulfm vanished after host reboot","ts":"2026-11-26T19:10:38-05:00"}
