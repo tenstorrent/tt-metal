@@ -57,6 +57,32 @@ inline constexpr auto immediate(const std::uint32_t value)
     return Immediate<detail::DynamicImmediateValue> {value};
 }
 
+/**
+ * @brief Select how a GPR is reached.
+ *
+ * Tensix issues scalar-unit instructions in order with the thread's other Tensix work. MMIO uses the
+ * issuing TRISC's GPR window (REGFILE_BASE): one RISC store or load, not ordered with later Tensix
+ * instructions unless completed with Completion::Wait.
+ */
+enum class Access : std::uint8_t
+{
+    Tensix,
+    MMIO
+};
+
+/**
+ * @brief Select whether an MMIO GPR store waits for completion.
+ *
+ * Wait reads the GPR back and consumes the value, so no later instruction, including a Tensix push,
+ * starts before the store is done. A read-back is ordered only after a store to the same GPR, so put
+ * Wait on the last of consecutive stores that a following Tensix instruction reads.
+ */
+enum class Completion : std::uint8_t
+{
+    Deferred,
+    Wait
+};
+
 /** @brief Select the unsigned comparison performed by compare(). */
 enum class Compare : std::uint8_t
 {
@@ -435,6 +461,56 @@ inline __attribute__((always_inline)) void set(const hal::Gpr<Index> destination
         TT_OP_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value & 0xffffu /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, index * 2u /*RegIndex16b*/)));
     hal::run(hal::detail::make_operation(
         TT_OP_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value >> 16 /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, index * 2u + 1u /*RegIndex16b*/)));
+}
+
+/**
+ * @brief Set a GPR to a runtime 32-bit value through the selected access path.
+ *
+ * @code
+ * set<Access::MMIO>(hal::gpr<p_gpr_pack::TILE_HEADER>(), tile_size);
+ * set<Access::MMIO, Completion::Wait>(hal::gpr<p_gpr_pack::TILE_HEADER + 1>(), 0);
+ * @endcode
+ *
+ * @tparam A: Access::Tensix issues two SETDMAREGs, as @ref set; Access::MMIO is one RISC store.
+ * @tparam C: Completion of an MMIO store; defaults to Deferred. Tensix requires Deferred.
+ * @param destination: GPR to write.
+ * @param value: 32-bit value.
+ */
+template <Access A, Completion C = Completion::Deferred, std::uint32_t Index>
+inline __attribute__((always_inline)) void set(const hal::Gpr<Index> destination, const std::uint32_t value)
+{
+    static_assert(A == Access::Tensix || A == Access::MMIO, "scalar access must be Tensix or MMIO");
+    static_assert(A == Access::MMIO || C == Completion::Deferred, "completion applies to MMIO GPR stores; Tensix writes are ordered");
+    if constexpr (A == Access::Tensix)
+    {
+        set(destination, value);
+    }
+    else
+    {
+        detail::validate_gpr(destination);
+        ckernel::regfile[destination.index] = value;
+        if constexpr (C == Completion::Wait)
+        {
+            static_cast<void>(ckernel::load_blocking(&ckernel::regfile[destination.index]));
+        }
+    }
+}
+
+/**
+ * @brief Read a GPR with one RISC load through the GPR window.
+ *
+ * The value reflects only Tensix instructions that have already executed.
+ *
+ * @tparam A: Access path; must be Access::MMIO.
+ * @param source: GPR to read.
+ * @return The 32-bit GPR value.
+ */
+template <Access A, std::uint32_t Index>
+[[nodiscard]] inline __attribute__((always_inline)) std::uint32_t read(const hal::Gpr<Index> source)
+{
+    static_assert(A == Access::MMIO, "value-returning GPR reads require Access::MMIO");
+    detail::validate_gpr(source);
+    return ckernel::regfile[source.index];
 }
 
 /** @brief Set the low half of a GPR to a compile-time 16-bit value. */

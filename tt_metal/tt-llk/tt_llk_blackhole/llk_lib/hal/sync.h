@@ -142,6 +142,10 @@ inline constexpr SemaphoreCondition operator&(const SemaphoreCondition lhs, cons
 
 namespace detail
 {
+// TTSync: PC_BUF_BASE word offsets of the issuing TRISC's done checks.
+inline constexpr std::uint32_t CoprocessorDoneCheck = 1;
+inline constexpr std::uint32_t MopExpanderDoneCheck = 2;
+
 constexpr bool is_valid(const Access access)
 {
     return access == Access::MMIO || access == Access::Tensix;
@@ -533,6 +537,29 @@ inline __attribute__((always_inline)) void semaphore(const StallTarget targets, 
     hal::run(semaphore_operation(targets, semaphores, conditions));
 }
 
+/**
+ * @brief Block the issuing TRISC until its Tensix thread has no instruction in flight.
+ *
+ * Unlike @ref stall, which holds back later Tensix instructions, this stops the RISC itself, so its
+ * later MMIO accesses (CFG stores, GPR window, mailboxes) are ordered after the thread's earlier work.
+ * @note A SEMWAIT latched at the Wait Gate is not in flight; to wait for its condition, push an
+ *       instruction that the wait blocks before calling this.
+ */
+inline __attribute__((always_inline)) void thread_idle()
+{
+    ckernel::store_blocking(&ckernel::pc_buf_base[detail::CoprocessorDoneCheck], 0);
+}
+
+/**
+ * @brief Block the issuing TRISC until its MOP expander has finished expanding earlier MOPs.
+ *
+ * Call before reprogramming the MOP configuration while a MOP may still be expanding.
+ */
+inline __attribute__((always_inline)) void mop_expander_idle()
+{
+    ckernel::store_blocking(&ckernel::pc_buf_base[detail::MopExpanderDoneCheck], 0);
+}
+
 } // namespace wait
 
 // Descriptors encode one Tensix instruction. operation() is usable in constant
@@ -619,5 +646,86 @@ struct SemaphoreWait
         return wait::semaphore_operation(targets, semaphores, conditions);
     }
 };
+
+/**
+ * @brief Select the RISC at the other end of a mailbox.
+ */
+enum class Riscv : std::uint8_t
+{
+    Brisc  = 0,
+    Unpack = 1,
+    Math   = 2,
+    Pack   = 3
+};
+
+/**
+ * @brief Exchange 32-bit values between RISC cores through the Tensix tile mailboxes.
+ *
+ * Each pair of RISCs has a FIFO of up to four values in each direction; one RISC's four outgoing
+ * mailboxes hold at most four values in total. A write to a full mailbox stalls the writer, and a
+ * read waits until a value arrives. The NoC and the Tensix coprocessor cannot reach the mailboxes.
+ *
+ * @code
+ * mailbox::write<Riscv::Math>(dest_offset);                       // unpack -> math
+ * const std::uint32_t offset = mailbox::read<Riscv::Unpack>();    // on math: unpack -> math
+ * @endcode
+ */
+namespace mailbox
+{
+
+namespace detail
+{
+constexpr bool is_valid(const Riscv riscv)
+{
+    return hal::to_underlying(riscv) <= hal::to_underlying(Riscv::Pack);
+}
+} // namespace detail
+
+/** @brief Send a value to RISC To, waiting while its mailboxes from this RISC are full. */
+template <Riscv To>
+inline __attribute__((always_inline)) void write(const std::uint32_t value)
+{
+    static_assert(detail::is_valid(To), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    ckernel::mailbox_base[hal::to_underlying(To)][0] = value;
+}
+
+/** @brief Send a value to a runtime-selected RISC. */
+inline __attribute__((always_inline)) void write(const Riscv to, const std::uint32_t value)
+{
+    LLK_ASSERT(detail::is_valid(to), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    ckernel::mailbox_base[hal::to_underlying(to)][0] = value;
+}
+
+/** @brief Take the next value sent by RISC From, waiting until one arrives. */
+template <Riscv From>
+[[nodiscard]] inline __attribute__((always_inline)) std::uint32_t read()
+{
+    static_assert(detail::is_valid(From), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    return ckernel::load_blocking(&ckernel::mailbox_base[hal::to_underlying(From)][0]);
+}
+
+/** @brief Take the next value sent by a runtime-selected RISC, waiting until one arrives. */
+[[nodiscard]] inline __attribute__((always_inline)) std::uint32_t read(const Riscv from)
+{
+    LLK_ASSERT(detail::is_valid(from), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    return ckernel::load_blocking(&ckernel::mailbox_base[hal::to_underlying(from)][0]);
+}
+
+/** @brief Return whether RISC From has sent a value that is not read yet, without waiting. */
+template <Riscv From>
+[[nodiscard]] inline __attribute__((always_inline)) bool has_data()
+{
+    static_assert(detail::is_valid(From), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    return ckernel::mailbox_base[hal::to_underlying(From)][1] > 0;
+}
+
+/** @brief Return whether a runtime-selected RISC has sent a value that is not read yet, without waiting. */
+[[nodiscard]] inline __attribute__((always_inline)) bool has_data(const Riscv from)
+{
+    LLK_ASSERT(detail::is_valid(from), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
+    return ckernel::mailbox_base[hal::to_underlying(from)][1] > 0;
+}
+
+} // namespace mailbox
 
 } // namespace hal::sync

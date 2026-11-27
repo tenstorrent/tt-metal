@@ -9,6 +9,7 @@
 
 #include "ckernel.h"
 #include "llk_assert.h"
+#include "sync.h"
 #include "utils/operation.h"
 #include "utils/validate.h"
 
@@ -430,7 +431,7 @@ inline __attribute__((always_inline)) void program(const cfg<detail::Template0Pl
     const std::uint32_t skip_a0 = config.skip_a0;
     const std::uint32_t skip_b  = config.skip_b;
 
-    ckernel::mop_sync();
+    hal::sync::wait::mop_expander_idle();
 
     mop_cfg[1] = flags;
     if constexpr (HasB)
@@ -468,7 +469,7 @@ inline void program(const cfg<detail::Template1Plan<HasEndOp>> &config)
 {
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
-    ckernel::mop_sync();
+    hal::sync::wait::mop_expander_idle();
 
     mop_cfg[0] = config.outer_count;
     mop_cfg[1] = config.inner_count;
@@ -512,7 +513,7 @@ inline __attribute__((always_inline)) void update(const Update<Words>... updates
     (hal::detail::require(!detail::is_count_word(Words) || detail::is_valid_count(updates.value), "Template 1 MOP loop count must fit in 10 bits"), ...);
     (hal::detail::require(Words != detail::OUTER_COUNT_WORD || updates.value != 0, "Template 1 MOP configuration issues nothing"), ...);
 
-    ckernel::mop_sync();
+    hal::sync::wait::mop_expander_idle();
 
     ((mop_cfg[Words] = updates.value), ...);
 }

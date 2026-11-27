@@ -708,8 +708,8 @@ inline __attribute__((always_inline)) bool is_valid_fifo_batch(const FifoAcquire
 
     // Complete earlier scalar work before reading the address through the RISC GPR window.
     sync::wait::stall<sync::StallTarget::Scalar, sync::StallCondition::ScalarIdle>();
-    ckernel::tensix_sync();
-    const std::uint32_t line_address = ckernel::regfile[operation.address.index];
+    sync::wait::thread_idle();
+    const std::uint32_t line_address = scalar::read<scalar::Access::MMIO>(operation.address);
 
     // Blackhole's noncoherent L0 must be flushed before observing externally updated L1.
     asm volatile("fence" ::: "memory");
