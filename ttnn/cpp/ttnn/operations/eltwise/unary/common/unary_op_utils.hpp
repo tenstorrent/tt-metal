@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <map>
 #include <optional>
 #include <string>
@@ -154,6 +155,21 @@ uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype);
 
 uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype);
 
+// The defines for a one-op chain on the generic kernel whose parameters reach the SFPU call only as one to three
+// integer-literal arguments, with those literals renamed packed_scalar1/2/3. The compute kernel reads them
+// as runtime args, so a new parameter value reuses the compiled kernel and the cached program. nullopt when the op
+// keeps its parameters in the kernel source (template arguments, float literals, more than three values).
+struct RuntimeScalarDefines {
+    std::map<std::string, std::string> defines;
+    std::string key;  // the renamed init and func strings: everything the parameters still decide in the source
+    std::array<uint32_t, 3> scalars{};
+};
+std::optional<RuntimeScalarDefines> get_runtime_scalar_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype);
+// Memoized form for the per-call paths (program hash and runtime args): nullptr when the op keeps its
+// parameters compiled in. The pointer stays valid until the calling thread's next lookup.
+const RuntimeScalarDefines* get_runtime_scalar_defines_cached(
+    const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype);
 // True when the op's result at 0 is inf or nan. Run on the zero tile padding, such an op leaves a non-finite value in
 // the lanes that share a BFLOAT8_B / BFLOAT4_B block with real lanes, and that value sets the block's exponent.
 bool is_non_finite_at_zero(const EltwiseUnaryWithParam& op);
