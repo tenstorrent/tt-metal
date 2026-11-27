@@ -3,22 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
-#include <tt_metal/api/tt-metalium/core_coord.hpp>
-#include <tt_metal/api/tt-metalium/work_split.hpp>
-#include <tt_metal/api/tt-metalium/host_api.hpp>
+#include <tt_metal/api/tt-metalium/vocabulary/core_coord.hpp>
+#include <tt_metal/api/tt-metalium/utils/work_split.hpp>
+#include <tt_metal/api/tt-metalium/workload/legacy/host_api.hpp>
 #include <tt_metal/impl/buffers/semaphore.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include "ttnn_test_fixtures.hpp"
-#include "tt_metal/api/tt-metalium/cluster.hpp"
+#include "tt_metal/api/tt-metalium/discovery/cluster.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -43,7 +43,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"

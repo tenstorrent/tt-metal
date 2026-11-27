@@ -4,7 +4,7 @@
 
 #pragma once
 #include <ttnn/tensor/tensor.hpp>
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include <tt_stl/span.hpp>
 
 #include <cstdint>

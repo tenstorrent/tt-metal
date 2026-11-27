@@ -11,7 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
-#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/data_formats/bfloat16.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/types.hpp"
 

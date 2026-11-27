@@ -7,7 +7,7 @@
 #include <string>
 #include <tuple>
 #include <variant>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::quasar::rotate {

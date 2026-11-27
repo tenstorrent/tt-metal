@@ -5,7 +5,8 @@
 #
 # Run the full set of 4x4 [RING, RING] test rows on a 16-chip sub-torus of one BH Galaxy, by hand.
 #
-# CI runs only a small part of this set (the GLM components leg, see tests/pipeline_reorg/blaze_models_prefill_tests.yaml);
+# CI runs only a small part of this set (the GLM components and GLM chunked perf legs, see
+# tests/pipeline_reorg/blaze_models_prefill_tests.yaml);
 # the rest is kept here so the new rows stay runnable. Each section is a group of test files run through
 # run_subtorus_4x4_tests.sh, which narrows the Galaxy to the carve (SUBTORUS_4X4_ENV of the AttnRes harness) and fails
 # unless every selected row passed and none skipped.
@@ -40,6 +41,8 @@ SECTIONS=(
   "subtorus_kimi_mla|192|4x4 RING-RING sub-torus Kimi MLA accuracy"
   "subtorus_kimi_dflash|387|4x4 RING-RING sub-torus Kimi DFlash and multiturn accuracy"
   "subtorus_sparse_kv_push_xy4|199|sparse KV push xy4 rows (also run by the GLM components CI leg)"
+  # last: perf, needs a 14 kW Galaxy (PREFILL_PERF_IGNORE_POWER=1 for bring-up); also run by the GLM chunked perf CI leg
+  "subtorus_glm_moe_perf|190|4x4 RING-RING sub-torus GLM MoE block host and per-op perf"
 )
 
 section_subtorus_sparse_kv_push_xy4() {
@@ -142,6 +145,11 @@ section_subtorus_glm_chunked() {
 section_subtorus_kimi_mla() {
   export MESH_DEVICE=TG
   "$HELPER" --timeout-s 1500 -k "k2_7 and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism and scalar))" $T/test_mla.py::test_mla_chunked_prefill || return $?
+}
+
+section_subtorus_glm_moe_perf() {
+  "$HELPER" --timeout-s 900 --expect 6 -k "glm53" $T/perf/test_moe_block_host_perf.py \
+    $T/moe_block/test_moe_block_models.py::test_moe_block_perf || return $?
 }
 
 section_subtorus_kimi_dflash() {

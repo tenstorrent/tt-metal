@@ -27,17 +27,17 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"

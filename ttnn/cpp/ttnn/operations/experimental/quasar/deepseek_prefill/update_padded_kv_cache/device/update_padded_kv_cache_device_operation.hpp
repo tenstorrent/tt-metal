@@ -9,8 +9,8 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -94,8 +94,8 @@ struct UpdatePaddedKvCacheDeviceOperation {
 
     // Wraps the ProgramDescriptor factory so the default adapter patches buffer bindings on cache
     // hits, and override_runtime_arguments additionally patches the per-call common runtime args the
-    // buffer-binding fast path would leave stale: the slot_idx/kv_actual_global tensors' raw DRAM
-    // addresses (metadata path) or slot_idx/kv_actual_global scalars (scalar path).
+    // buffer-binding fast path would leave stale: the slot_idx/kv_actual_global/valid_global
+    // scalars (scalar path). The metadata tensors are buffer bindings, so the adapter refreshes them.
     struct MeshWorkloadFactory {
         using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
             DescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<ProgramFactory>;

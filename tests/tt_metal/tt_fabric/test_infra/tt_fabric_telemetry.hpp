@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <cstdint>
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 

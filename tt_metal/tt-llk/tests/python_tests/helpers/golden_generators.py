@@ -2284,6 +2284,7 @@ class UnarySFPUGolden:
             MathOperation.Log,
             MathOperation.Log1p,
             MathOperation.LogWithBase,
+            MathOperation.Log10,
             MathOperation.Reciprocal,
             MathOperation.Rsqrt,
             MathOperation.Sin,
@@ -2384,6 +2385,7 @@ class UnarySFPUGolden:
             MathOperation.GeluTanh: self._gelu_tanh,
             MathOperation.GeluDerivative: self._gelu_derivative,
             MathOperation.LogWithBase: self._log_with_base,
+            MathOperation.Log10: self._log10,
             MathOperation.ExpWithBase: self._exp_with_base,
             MathOperation.Neg: self._neg,
             MathOperation.Tanh: self._tanh,
@@ -3094,6 +3096,9 @@ class UnarySFPUGolden:
     # 1/ln(2), i.e. log2 with an exact exponent term, so torch.log2 is the golden.
     def _log_with_base(self, x):
         return self._torch_unary(x, torch.log2)
+
+    def _log10(self, x):
+        return self._torch_unary(x, torch.log10)
 
     def _log1p(self, x):
         return self._torch_unary(x, torch.log1p)
@@ -4397,6 +4402,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuGegluTanh: self._geglu_tanh,
                 MathOperation.SfpuIntSumAdd: self._int_sum_add,
                 MathOperation.SfpuClampedSiluGlu: self._clamped_silu_glu,
+                MathOperation.SfpuSiluGlu: self._silu_glu,
                 MathOperation.SfpuSituGlu: self._situ_glu,
             }
         )
@@ -4967,6 +4973,17 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         gate = torch.tensor(sfpu_min(float(t1), limit), dtype=torch.float32)
         up = sfpu_max(sfpu_min(float(t2), limit), -limit)
         return float(gate * torch.sigmoid(gate) * up)
+
+    def _silu_glu(self, t1, t2):
+        # The exact product of the leaves in float64,
+        # each at its input as the SFPU reads it (a subnormal as 0).
+        a, b = (
+            torch.tensor(
+                0.0 if abs(float(t)) < 2.0**-126 else float(t), dtype=torch.float64
+            )
+            for t in (t1, t2)
+        )
+        return float((a / (1 + torch.exp(-a))) * (b))
 
     def _situ_glu(self, t1, t2):
         # calculate_situ_glu: softcap(gate, beta_gate) * sigmoid(gate) * softcap(up, beta_up), gate
@@ -5624,6 +5641,15 @@ class UntilizeGolden:
 
         operand = quantize_input_to_unpack_format(operand, input_format)
 
+        # untilize_block's cast wraps where the packer clamps to sign-magnitude, so a modelled pack
+        # saturates first; a caller that omits input_format is reshaping a device result, not packing.
+        if (
+            input_format is not None
+            and input_format.is_integer()
+            and data_format.is_integer()
+        ):
+            operand = saturate_integer(operand, data_format)
+
         result = untilize_block(
             operand,
             stimuli_format=data_format,
@@ -6123,7 +6149,7 @@ class WhereGolden:
 
 @register_golden
 class TernarySFPUGolden:
-    """Golden for the ternary SFPU kernels (addcmul / addcdiv / lerp / snake_beta).
+    """Golden for the ternary SFPU kernels (addcmul / addcdiv / lerp / mac / snake_beta).
 
     All operate element-wise on three same-shaped operands (a, b, c) — and, for
     the addc kernels, a scalar constant — so, like where, each result depends only
@@ -6134,6 +6160,7 @@ class TernarySFPUGolden:
         addcmul:    out = a + (value * b * c)
         addcdiv:    out = a + (value * b / c)
         lerp:       out = a + c * (b - a)
+        mac:        out = a * b + c
         snake_beta: out = a + sin(b * a)^2 / c    (a=x, b=alpha, c=beta)
 
     Known limitation: this reference computes in fp32 with a single final cast,
@@ -6169,6 +6196,8 @@ class TernarySFPUGolden:
             result = a + (value * b / c)
         elif operation == MathOperation.SfpuLerp:
             result = a + c * (b - a)
+        elif operation == MathOperation.SfpuMac:
+            result = a * b + c
         elif operation == MathOperation.SfpuSnakeBeta:
             result = a + torch.sin(b * a) ** 2 / c
         else:

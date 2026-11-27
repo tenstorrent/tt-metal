@@ -14,10 +14,8 @@ template <bool APPROXIMATION_MODE, bool FAST_INTERPOLATE = false>
 inline void lerp_init() {
     // calculate_lerp's store advances dest by one sfpi row (two dest counter steps).
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_5);
-    if constexpr (FAST_INTERPOLATE) {
-        // The FAST_INTERPOLATE fp32 loop's second store advances dest by the two rows it wrote.
-        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
-    }
+    // ADDR_MOD_6 is left at its invariant (dest += 2); the FAST_INTERPOLATE fp32 loop sets and
+    // restores its own stride in _calculate_lerp_fast_interpolate_.
 }
 
 // fp32 -> bf16 RNE for a 16-bit Dest store only: the low 16 bits are left as is.
@@ -129,7 +127,9 @@ inline void _calculate_lerp_fast_interpolate_(
     // out = (input - weight * input) + weight * end, weight in [0, 1] only: no overflow, and weight
     // 0 / 1 return input / end bit-exact. No instruction reads the SFPMAD result right before it.
     if constexpr (is_fp32_dest_acc_en) {
-        // Two rows (a, b) per iteration.
+        // Two rows (a, b) per iteration. The second store advances dest through ADDR_MOD_6 past
+        // the two rows just written.
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d += 2) {
             const sfpi::vFloat a_in0 = sfpi::dst_reg[off_in0];
@@ -145,6 +145,8 @@ inline void _calculate_lerp_fast_interpolate_(
             sfpi::dst_reg[off_out] = a_res;
             sfpi::dst_reg[off_out + 1].mode(ADDR_MOD_6) = b_res;
         }
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     } else {
         // One row per iteration, rotated, to fit the 16 SFPU replay slots.
         const sfpi::vFloat f_in0 = sfpi::dst_reg[off_in0];

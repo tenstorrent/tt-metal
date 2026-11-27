@@ -6,10 +6,10 @@
 #include <fmt/base.h>
 #include <cstdint>
 #include <sys/types.h>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <map>
 #include <memory>
 #include <string>
@@ -17,20 +17,20 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;

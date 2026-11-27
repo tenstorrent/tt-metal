@@ -98,6 +98,9 @@
 #include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_silu.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_silu_glu.h"
+#endif
 #include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #ifndef SOFTPLUS_TEST_BETA
@@ -440,7 +443,8 @@ template <
     bool FUSED_SORT         = false>
 void call_unary_sfpu_operation_init(std::uint32_t math_format)
 {
-    // Only the topk branches (_init_topk / _init_topk_fused_) need this; every other op's llk_math_eltwise_unary_sfpu_init sets it.
+    // The standalone LLK harness bypasses metal's full-init entry points, so it runs the
+    // once-per-kernel SFPU init (SFPU config reg) itself.
     llk_math_sfpu_init_once();
 
     if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh)
@@ -706,7 +710,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         OPERATION == SfpuType::lrelu || OPERATION == SfpuType::hardtanh || OPERATION == SfpuType::clamp || OPERATION == SfpuType::identity ||
         OPERATION == SfpuType::cast_fp32_to_fp16a || OPERATION == SfpuType::sqrt_custom || OPERATION == SfpuType::expm1_cw)
     {
-        // These ops need only the generic per-op init (SFPU config reg + ADDR_MOD_7 from
+        // These ops need only the generic per-op init (SFPU config reg from
         // llk_math_sfpu_init_once() above, plus a dest RWC counter reset), so route them through
         // the bare `unused` init. The reason each op is safe to route this way varies:
         //   - floor/ceil/trunc/frac/round/relu_max/relu_min/lrelu/hardtanh/clamp: their production/metal
@@ -723,7 +727,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         // Comparison-to-zero ops pair the generic per-op init with the matching metal
         // *_init from llk_sfpu/ckernel_sfpu_comp.h, mirroring production SFPU_UNARY_INIT
         // (eqz_tile_init -> equal_zero_init, etc.). All six of those *_init are byte-identical
-        // (program ADDR_MOD_6 + reset the dest RWC counter), so one representative init covers
+        // (reset the dest RWC counter), so one representative init covers
         // the whole group; OPERATION is still forwarded so the per-op init tag stays correct.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::equal_zero_init);
     }
@@ -1410,7 +1414,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::erfc)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (ITERATIONS, DST_ACCUM_MODE), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::expm1)
     {
@@ -1733,7 +1737,8 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB ||
         BINOP == BinaryOp::XLOGY)
     {
-        // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
+        // BinaryOps without a dedicated SfpuType use the baseline binary init
+        // (config reg + counter reset).
         SFPU_BINARY_INIT_FN(add1, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
     }
     else if constexpr (BINOP == BinaryOp::POW)
@@ -1759,11 +1764,7 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::MAX)
     {
-        // binary_max_min uses SFPLOADMACRO templates programmed by its init.
-        // The SfpuType must be max/min (not a generic placeholder): the LLK init
-        // selects a max/min-specific address-mod setup (ADDR_MOD_6 with dest incr=2)
-        // that the kernel's load/swap/store sequence depends on. Using add1 skips
-        // that setup and leaves the output tile holding in0. Mirrors binary_max_tile_init.
+        // binary_max_min uses SFPLOADMACRO templates programmed by its init. Mirrors binary_max_tile_init.
         SFPU_BINARY_INIT_FN(max, binary_max_min_init, (true /* IS_MAX */));
     }
     else if constexpr (BINOP == BinaryOp::MIN)
@@ -1780,8 +1781,8 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     {
         // logaddexp's log1p reads its polynomial coefficients from the program
         // constant registers; the coefficient set differs by destination precision,
-        // so the init is templated on DST_ACCUM_MODE. Baseline (add1) addrmod setup,
-        // like fmod/remainder. Mirrors logaddexp_binary_tile_init().
+        // so the init is templated on DST_ACCUM_MODE. Baseline (add1) init, like
+        // fmod/remainder. Mirrors logaddexp_binary_tile_init().
         SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_logaddexp_init, (DST_ACCUM_MODE));
     }
     else if constexpr (BINOP == BinaryOp::LOGADDEXP2)
@@ -1834,7 +1835,7 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::ATAN2)
     {
-        // atan2 has no dedicated SfpuType, so use the baseline add1 addrmod. Its init
+        // atan2 has no dedicated SfpuType, so use the baseline add1 init. Its init
         // just loads the reciprocal polynomial; the is_fp32_dest_acc_en variant selects
         // the fp32 vs bf16 reciprocal (matching the minimax branch in the kernel), so it
         // must match DST_ACCUM_MODE used by the paired call_binary_sfpu_operation().
@@ -1842,12 +1843,11 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::MUL_INT32)
     {
-        // mul_int32 is on the LLK init's ADDR_MOD_6 dest+=2 allow-list, so drive its
-        // addrmod through SfpuType::mul_int32; the init loads the 11-bit chunk masks
+        // The init loads the 11-bit chunk masks
         // and the 2**23 fp32-to-int bias constants into vConst registers.
         SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROXIMATION_MODE));
     }
-    // Integer relational eq/ne: no extra init function, just the eq_int/ne_int addrmod.
+    // Integer relational eq/ne: no extra init function.
     else if constexpr (BINOP == BinaryOp::EQ_INT)
     {
         SFPU_BINARY_INIT(eq_int);
@@ -1857,7 +1857,7 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         SFPU_BINARY_INIT(ne_int);
     }
     // Integer max/min: binary_max_min_int32_init programs the SFPLOADMACRO templates
-    // and is keyed on the matching {max,min}_{int32,uint32} SfpuType addrmod allow-list.
+    // keyed on the matching {max,min}_{int32,uint32} SfpuType.
     else if constexpr (BINOP == BinaryOp::MAX_INT32)
     {
         SFPU_BINARY_INIT_FN(max_int32, binary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UNSIGNED */));
@@ -1941,20 +1941,26 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::COPY_DEST)
     {
-        // copy_dest_value_init is empty. The baseline addrmod setup is enough.
+        // copy_dest_value_init is empty. The baseline init is enough.
         SFPU_BINARY_INIT(add1);
     }
     else if constexpr (BINOP == BinaryOp::LOGSIGMOID)
     {
-        // logsigmoid_tile_init: baseline addrmod setup plus logsigmoid_init, which loads the
+        // logsigmoid_tile_init: baseline init plus logsigmoid_init, which loads the
         // polynomial coefficients the Wormhole kernel keeps in vConstFloatPrgm0..2.
         SFPU_BINARY_INIT_FN(add1, logsigmoid_init, (APPROXIMATION_MODE));
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::SILU_GLU)
+    {
+        SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::silu_glu_init);
+    }
+#endif
     else
     {
-        // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
+        // BinaryOps without a dedicated SfpuType use the baseline binary init.
         // BITWISE_AND/OR/XOR, RSUB_INT32 and MASK(_POSINF) land here: those kernels need
-        // no per-op init beyond the standard binary addrmod configuration.
+        // no per-op init beyond the standard config-reg + counter reset.
         SFPU_BINARY_INIT(add1);
     }
 }
@@ -2428,7 +2434,7 @@ void call_binary_sfpu_operation(
     {
         // logsigmoid(x) = -softplus(-x), with x = in0 and exp(-x) = in1 (the compute
         // kernel is expected to supply exp(-x) as the second operand; the test bakes
-        // it into the paired stimuli). Init: baseline add1 addrmod + logsigmoid_init.
+        // it into the paired stimuli). Init: baseline add1 init + logsigmoid_init.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -2439,6 +2445,14 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::SILU_GLU)
+    {
+        // silu_glu(gate, up) with gate = in0 and up = in1; DST_ACCUM_MODE selects the in-kernel BF16 round.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu_glu, (DST_ACCUM_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    }
+#endif
     // Integer relational eq/ne: XOR-based exact compare over Int32 dest bits.
     else if constexpr (BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT)
     {
@@ -2658,7 +2672,7 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::addcmul)
     {
-        // addcmul has no per-op init beyond the shared addrmod setup.
+        // addcmul has no per-op init beyond the shared init.
         SFPU_TERNARY_INIT(addcmul);
     }
     else if constexpr (OPERATION == SfpuType::addcdiv)
@@ -2668,7 +2682,7 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::lerp)
     {
-        // lerp_init programs the dest auto-advance of the Wormhole and Blackhole lerp loops (no-op elsewhere).
+        // lerp_init programs the dest auto-advance of the Blackhole lerp loop (no-op on Wormhole).
         SFPU_TERNARY_INIT_FN(lerp, sfpu::lerp_init, (APPROX_MODE, LERP_FAST_INTERPOLATE_SELECTED));
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
