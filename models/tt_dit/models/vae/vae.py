@@ -86,6 +86,40 @@ def _all_gather_hw(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
     return x
 
 
+def zero_padding(x: ttnn.Tensor, mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    """`x`, flat [N, 1, H * W, C], with the rows where the column `mask` ([1, 1, H * W, 1]) is zero set
+    to zero: the padding a decoder adds where an image does not split over its devices (see
+    Flux2VaeDecoder.padding_masks). Every conv then reads zeros past the image's edge, as with no
+    padding, and every norm adds zeros. `where` serves every size and channel count with one program,
+    and also clears padding that is not finite."""
+    return x if mask is None else ttnn.where(mask, x, 0.0)
+
+
+def warm_zero_padding(ctx: VaeContext) -> None:
+    """Run `zero_padding` once, so that its program, which serves every size and channel count, is not
+    built at the first size whose latents need padding."""
+    if ctx.h_factor <= 1 and ctx.w_factor <= 1:
+        return
+    replicate = ttnn.ReplicateTensorToMesh(ctx.device)
+    x = ttnn.from_torch(
+        torch.zeros(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=ctx.device,
+        mesh_mapper=replicate,
+    )
+    mask = ttnn.from_torch(
+        torch.ones(1, 1, ttnn.TILE_SIZE, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=ctx.device,
+        mesh_mapper=replicate,
+    )
+    ttnn.deallocate(zero_padding(x, mask))
+    ttnn.deallocate(mask)
+    ttnn.deallocate(x)
+
+
 def _all_gather_tokens(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
     """All-gather a token sequence [N, 1, T, C] over the H and W axes: [N, 1, T * h * w, C], in mesh
     order rather than image order. No-op when both factors are 1."""
@@ -464,9 +498,12 @@ class VaeUpsampler(Module):
         self.conv = VaeConv2d(in_channels, out_channels, kernel_size=3, padding=1, ctx=ctx)
         self._runtime_shapes = ctx.runtime_shapes
 
-    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, hw: tuple[int, int] | None = None, mask: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
         """With `hw` (see VaeConv2d.forward), `x` is flat, and the upsampled image stays in row major
-        for the conv, which wants row major anyway."""
+        for the conv, which wants row major anyway. `mask` (see `zero_padding`) is the input's."""
+        x = zero_padding(x, mask)
         if hw is None:
             x = tensor.upsample(x, scale_factor=2, runtime_shapes=self._runtime_shapes)
             return self.conv.forward(x)
@@ -502,16 +539,19 @@ class VaeResnetBlock(Module):
         if "conv_shortcut.weight" in state:
             state["conv_shortcut.weight"] = state["conv_shortcut.weight"].squeeze(2, 3)
 
-    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, hw: tuple[int, int] | None = None, mask: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
         """With `hw`, the local (H, W), `x` and the output are flat, [N, 1, H * W, C] (see
-        VaeConv2d.forward); without it, [N, H, W, C]."""
-        h = x
+        VaeConv2d.forward); without it, [N, H, W, C]. With `mask` (see `zero_padding`), the padding
+        rows are zero in what each norm and conv reads; they are not in the output."""
+        h = zero_padding(x, mask)
 
         h = self.norm1.forward(h)
-        h = self.conv1.forward(h, hw)
+        h = self.conv1.forward(zero_padding(h, mask), hw)
 
-        h = self.norm2.forward(h)
-        h = self.conv2.forward(h, hw)
+        h = self.norm2.forward(zero_padding(h, mask))
+        h = self.conv2.forward(zero_padding(h, mask), hw)
 
         if self.conv_shortcut is not None:
             x = self.conv_shortcut.forward(x)
@@ -676,10 +716,12 @@ class VaeAttention(Module):
 
         return qkv.squeeze(-1) if is_1d else qkv
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """With `mask` (see `zero_padding`), the padding tokens are zero in the norm's input and as keys
+        and values. As keys they still take part in the softmax with a score of zero."""
         identity = x  # [N, H/h, W/w, C/tp] when SP+TP active
 
-        x = self.norm.forward(x)
+        x = self.norm.forward(zero_padding(x, mask))
 
         n, h, w, _ = x.shape  # the local spatial extent when SP is active
 
@@ -707,8 +749,8 @@ class VaeAttention(Module):
         # Each device attends from its own tokens to all of them, so only K and V are gathered, as
         # token rows. The attention does not depend on the order of the keys, and gathering rows keeps
         # the gather's program independent of the image size.
-        k = _all_gather_tokens(self._ctx, k)
-        v = _all_gather_tokens(self._ctx, v)
+        k = _all_gather_tokens(self._ctx, zero_padding(k, mask))
+        v = _all_gather_tokens(self._ctx, zero_padding(v, mask))
 
         # The token counts change with the image size; with runtime_seq_len a new size builds its
         # program from the compiled kernels.
@@ -751,12 +793,14 @@ class VaeMidBlock(Module):
 
         self._num_layers = num_layers
 
-    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
-        """`hw` as in VaeResnetBlock.forward; the attention works on H * W tokens either way."""
+    def forward(
+        self, x: ttnn.Tensor, hw: tuple[int, int] | None = None, mask: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
+        """`hw` and `mask` as in VaeResnetBlock.forward; the attention works on H * W tokens either way."""
         for i in range(self._num_layers + 1):
-            x = self.resnets[i].forward(x, hw)
+            x = self.resnets[i].forward(x, hw, mask)
             if i < self._num_layers:
-                x = self.attentions[i].forward(x)
+                x = self.attentions[i].forward(x, mask)
 
         return x
 
@@ -798,13 +842,15 @@ class VaeUpBlock(Module):
         """The local height and width of the output for an input of local size `hw`."""
         return (2 * hw[0], 2 * hw[1]) if self.upsampler is not None else hw
 
-    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
-        """`hw` as in VaeResnetBlock.forward."""
+    def forward(
+        self, x: ttnn.Tensor, hw: tuple[int, int] | None = None, mask: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
+        """`hw` and `mask` as in VaeResnetBlock.forward."""
         for block in self.resnets:
-            x = block.forward(x, hw)
+            x = block.forward(x, hw, mask)
 
         if self.upsampler is not None:
-            x = self.upsampler.forward(x, hw)
+            x = self.upsampler.forward(x, hw, mask)
 
         return x
 

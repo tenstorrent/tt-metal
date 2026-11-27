@@ -717,15 +717,16 @@ class Flux2Pipeline:
             tt_latents = self._vae_decoder.preprocess_and_unpatchify(
                 latents, height=latents_height, width=latents_width
             )
+            masks = self._vae_decoder.padding_masks(height=latents_height, width=latents_width)
 
             if self._keeps_size_state(traced):
                 tracer = self._vae_decoder_tracers.get((width, height))
                 if tracer is None:
                     tracer = Tracer(self._vae_decoder.forward, device=self._mesh_device, clone_prep_inputs=False)
                     self._vae_decoder_tracers[width, height] = tracer
-                tt_decoded_output = tracer(tt_latents, traced=traced)
+                tt_decoded_output = tracer(tt_latents, masks, traced=traced)
             else:
-                tt_decoded_output = self._vae_decoder.forward(tt_latents)
+                tt_decoded_output = self._vae_decoder.forward(tt_latents, masks)
             # The decoder's output is flat, [N, 1, H * W, 3] tiled. float_to_uint8 maps it in tiles and
             # untilizes the flat tensor, and the uint8 image is then made [N, H, W, 3] as a view.
             image_hw = self._vae_decoder.output_hw((tt_latents.shape[1], tt_latents.shape[2]))
@@ -737,7 +738,7 @@ class Flux2Pipeline:
                 self._vae_decoder.output_concat_dims(),
                 ccl_manager=self._vae_ccl_manager,
             )
-            # The decoder extends latents that do not split over its devices; crop that back.
+            # The decoder extends latents that do not split over its devices with zeros; crop that back.
             output = [Image.fromarray(image[:height, :width].contiguous().numpy()) for image in decoded_output]
 
         on_event(SectionEnd("total"))
