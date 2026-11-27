@@ -11,7 +11,7 @@
 
 #include <cstddef>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt_stl/enum.hpp>
 #include <cstdint>
 #include <functional>
@@ -36,7 +36,7 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/io_window_config.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
 #include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 
 enum class AddressableCoreType : uint8_t;
@@ -509,6 +509,7 @@ private:
     uint32_t eth_interrupt_mode_base_reg_{};
     uint32_t eth_interrupt_num_vecs_{};
     uint32_t noc_max_burst_size_bytes_{};
+    uint32_t noc_max_bytes_in_packet_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -638,6 +639,7 @@ public:
     uint32_t get_num_dataflow_buffers() const { return num_dataflow_buffers_; }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
+    uint32_t get_noc_max_bytes_in_packet() const { return noc_max_bytes_in_packet_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const

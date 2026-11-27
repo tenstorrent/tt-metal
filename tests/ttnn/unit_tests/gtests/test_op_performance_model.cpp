@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include "api/ttnn/operation.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/types.hpp"

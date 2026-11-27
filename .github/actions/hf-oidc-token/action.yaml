@@ -6,8 +6,16 @@ description: >-
 
 # Requirements (set by OSPO, not by the caller):
 #  - The repository variable HF_OIDC_RESOURCE (the Hugging Face service account).
+#    The caller passes it as the `resource` input: composite actions cannot read the
+#    `vars` context.
 #  - A Hugging Face "Account CI/CD identity" for this repository.
 # The calling job must have `permissions: id-token: write`.
+
+inputs:
+  resource:
+    description: "Hugging Face service account. The caller passes vars.HF_OIDC_RESOURCE."
+    required: false
+    default: ""
 
 outputs:
   token:
@@ -21,7 +29,7 @@ runs:
       id: exchange
       shell: bash
       env:
-        HF_OIDC_RESOURCE: ${{ vars.HF_OIDC_RESOURCE }}
+        HF_OIDC_RESOURCE: ${{ inputs.resource }}
         # Never use a token file left on the runner.
         HF_TOKEN_PATH: ${{ runner.temp }}/hf-no-stored-token
         HF_HUB_DISABLE_UPDATE_CHECK: "1"

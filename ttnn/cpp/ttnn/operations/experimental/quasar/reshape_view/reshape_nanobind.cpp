@@ -34,6 +34,9 @@ ttnn::Tensor reshape_shape_vector_wrapper(
 
 void bind_reshape_view_operation(nb::module_& mod) {
     const auto* doc = R"doc(
+            Note: MX tensors (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) support only 0 cost views (below); a reshape that
+            changes the tile structure is rejected.
+
             Note: for a 0 cost view, the following conditions must be met:
                 * the last dimension must not change
                 * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension

@@ -7,7 +7,7 @@
 #include "fill_pad_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <array>
 #include <bit>
 #include <cstdint>

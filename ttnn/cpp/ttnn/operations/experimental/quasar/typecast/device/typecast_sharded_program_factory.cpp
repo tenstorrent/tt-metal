@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast_sharded_program_factory.hpp"
+#include "typecast_kernel_format.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 
 namespace ttnn::prim::qsr {
 
@@ -59,7 +60,8 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
     // Use dimension-based tile count if either input or output is block format
     bool is_block_format =
         (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B ||
-         output.dtype() == DataType::BFLOAT8_B || output.dtype() == DataType::BFLOAT4_B);
+         output.dtype() == DataType::BFLOAT8_B || output.dtype() == DataType::BFLOAT4_B || is_mx(input.dtype()) ||
+         is_mx(output.dtype()));
 
     if (is_block_format) {
         // For block formats, calculate tile count based on element dimensions
@@ -174,12 +176,12 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
     std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
         "typecast_tile_init<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+        typecast_kernel_data_format(datatype_to_dataformat_converter(input_dtype)),
+        typecast_kernel_data_format(datatype_to_dataformat_converter(output_dtype)));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+        typecast_kernel_data_format(datatype_to_dataformat_converter(input_dtype)),
+        typecast_kernel_data_format(datatype_to_dataformat_converter(output_dtype)));
 
     tt::tt_metal::KernelDescriptor compute_desc;
     compute_desc.kernel_source =

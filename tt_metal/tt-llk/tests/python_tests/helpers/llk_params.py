@@ -101,6 +101,8 @@ class MathOperation(Enum):
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
     # log_base(x); dispatched with base_scale = fp16a(1/ln 2) -> log2(x).
     LogWithBase = OpSpec("log_with_base", MathOpType.SFPU_UNARY)
+    # log_with_base with the log10 scale; Quasar only.
+    Log10 = OpSpec("log10", MathOpType.SFPU_UNARY)
     Log1p = OpSpec("log1p", MathOpType.SFPU_UNARY)
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
@@ -300,6 +302,7 @@ class MathOperation(Enum):
     # Fused GLU activations over (gate, up): silu(min(gate, limit)) * clamp(up, -limit, limit) and
     # SiTU-GLU (softcapped gate * sigmoid(gate) * softcapped up).
     SfpuClampedSiluGlu = OpSpec("CLAMPED_SILU_GLU", MathOpType.SFPU_BINARY)
+    SfpuSiluGlu = OpSpec("SILU_GLU", MathOpType.SFPU_BINARY)
     SfpuSituGlu = OpSpec("SITU_GLU", MathOpType.SFPU_BINARY)
     SfpuGcd = OpSpec("GCD", MathOpType.SFPU_BINARY)
     SfpuLcm = OpSpec("LCM", MathOpType.SFPU_BINARY)
@@ -356,6 +359,7 @@ class MathOperation(Enum):
     SfpuAddcmul = OpSpec("addcmul", MathOpType.SFPU_TERNARY)
     SfpuAddcdiv = OpSpec("addcdiv", MathOpType.SFPU_TERNARY)
     SfpuLerp = OpSpec("lerp", MathOpType.SFPU_TERNARY)
+    SfpuMac = OpSpec("mac", MathOpType.SFPU_TERNARY)
     SfpuSnakeBeta = OpSpec("snake_beta", MathOpType.SFPU_TERNARY)
 
     # =============================================================================

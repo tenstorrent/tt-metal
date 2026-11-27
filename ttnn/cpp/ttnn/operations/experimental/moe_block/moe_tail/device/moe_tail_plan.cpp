@@ -11,10 +11,10 @@
 #include <algorithm>
 #include <numeric>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/experimental/moe_block/common/kernels/tile_bytes.hpp"
