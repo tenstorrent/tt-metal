@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"  // Dropout owns PRNG initialization.
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
 #include "experimental/kernel_args.h"
 
 namespace ckl = compute_kernel_lib;
@@ -16,7 +16,8 @@ void kernel_main() {
     constexpr uint32_t int_probability = get_arg(args::int_probability);
     constexpr uint32_t int_scale_factor = get_arg(args::int_scale_factor);
 
-    uint32_t seed = get_arg(args::seed);
+    const uint32_t seed = get_arg(args::seed);
+    const uint32_t start_tile = get_arg(args::start_tile);
 
     DataflowBuffer dfb_in0_obj(dfb::in0);
     DataflowBuffer dfb_out_obj(dfb::out);
@@ -29,7 +30,7 @@ void kernel_main() {
         ckl::CopyTile<
             ckl::input(dfb::in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{dfb_in0_obj},
-        ckl::Dropout<ckl::Dst::D0>{int_probability, int_scale_factor, seed},
+        ckl::DropoutKeyed<ckl::Dst::D0>{int_probability, int_scale_factor, seed, start_tile},
         ckl::PackTile<ckl::output(
             dfb::out,
             ckl::ReservePolicy::PerBlockSize,

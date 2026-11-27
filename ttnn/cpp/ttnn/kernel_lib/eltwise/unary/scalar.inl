@@ -77,6 +77,24 @@ struct Dropout : PrngSeedTag, UnaryOp<Dropout<Slot>, Slot> {
     }
 };
 
+// DropoutKeyed — counter-based dropout. Tile i of the chain is tile start_tile + i of the stream, and its mask
+// is a function of (seed, that tile index, element position) alone, so it does not depend on which core runs
+// it or on what ran before. Nothing is seeded, so init is an ordinary static SFPU init.
+template <Dst Slot>
+struct DropoutKeyed : UnaryOp<DropoutKeyed<Slot>, Slot> {
+    uint32_t probability;
+    uint32_t scale_factor;
+    uint32_t seed;
+    uint32_t start_tile;
+    constexpr DropoutKeyed(uint32_t p, uint32_t s, uint32_t seed_, uint32_t start_tile_) noexcept :
+        probability(p), scale_factor(s), seed(seed_), start_tile(start_tile_) {}
+    constexpr DropoutKeyed() noexcept : probability(0), scale_factor(0), seed(0), start_tile(0) {}
+    static ALWI void init() { dropout_keyed_tile_init(); }
+    ALWI void exec(uint32_t i, uint32_t slot_offset) const {
+        dropout_keyed_tile(to_u32(Slot) + slot_offset, seed, start_tile + i, probability, scale_factor);
+    }
+};
+
 // rdiv is in its own header with its own init.
 template <Dst Slot>
 struct RdivUnary : UnaryOp<RdivUnary<Slot>, Slot> {
