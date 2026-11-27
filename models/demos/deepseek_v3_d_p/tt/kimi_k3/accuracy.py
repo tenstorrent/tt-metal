@@ -21,6 +21,10 @@ They are read from the environment each time a module asks, so set them before t
                              score matmul and key LayerNorm; layer 0's dense MLP (fp32 DEST); the MoE head's
                              shared expert and the tail's latent up; routed experts' x / h in bf16 (not bf8); the
                              MoE combine without its 2^-14 snap of every routed term (fp32 sums)
+    K3_ACC_ROUTED_FIDELITY   the routed experts' matmul fidelity (on: HiFi3; or a MathFidelity name). Their default
+                             LoFi truncates the 8th significant bit of the activation operand, exact for production's
+                             bfp8 x / h but biased low (~0.27 % a matmul, ~0.9 % on the routed sum) for the bf16 x / h
+                             of K3_ACC_FIDELITY; HiFi3 multiplies that bit too (the MXFP4 weights fit SrcA's high part)
     K3_ACC_COMBINE_SNAP      under K3_ACC_FIDELITY, the MoE combine's snap step instead of none: "1" or a step (on:
                              2^-20). The routed terms then sum as an int32 count of the step, bit-identical in any
                              arrival order, so K3_ACC runs are deterministic; at 2^-20 it costs nothing (A2: every
@@ -49,6 +53,7 @@ _ON = {
     "FIDELITY": "1",
     "MLA_FP32": "1",
     "COMBINE_SNAP": "9.5367431640625e-07",
+    "ROUTED_FIDELITY": "HiFi3",
 }
 
 
@@ -101,6 +106,14 @@ def combine_snap() -> float:
     """K3_ACC_COMBINE_SNAP's step (0.0: no snap); "1" means the on value, 2^-20."""
     v = knob("COMBINE_SNAP")
     return float(_ON["COMBINE_SNAP"] if v == "1" else v) if v else 0.0
+
+
+def routed_fidelity():
+    """K3_ACC_ROUTED_FIDELITY's ttnn.MathFidelity for the routed experts (None: off, the op's LoFi); "1" means HiFi3."""
+    v = knob("ROUTED_FIDELITY")
+    if not v:
+        return None
+    return getattr(ttnn.MathFidelity, _ON["ROUTED_FIDELITY"] if v == "1" else v)
 
 
 def mla_fp32() -> bool:

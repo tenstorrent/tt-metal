@@ -285,6 +285,8 @@ class TtMoEBlockFfn:
                 dtypes.shared_weights = ttnn.bfloat16
             if accuracy.fidelity():
                 dtypes.shared_fidelity = ttnn.MathFidelity.HiFi4
+            if accuracy.routed_fidelity() is not None:
+                dtypes.routed_fidelity = accuracy.routed_fidelity()
             t0 = time.time()
             res = moe_block_utils.MoEBlockResources(self.mesh, self.dims, cfg, dtypes)
             block = MoEBlock(
@@ -382,7 +384,8 @@ class TtMoEBlockFfn:
         """What the K3_ACC_* knobs change in a block (its dtypes, fidelity, x / h formats): () in production."""
         if not accuracy.any_on():
             return ()
-        return (accuracy.routed_bf8(self.layer_idx), accuracy.bf16_weights(), accuracy.fidelity())
+        return (accuracy.routed_bf8(self.layer_idx), accuracy.bf16_weights(), accuracy.fidelity(),
+                str(accuracy.routed_fidelity()))
 
     def _routed(self, block, sources=None):
         """This layer's flat expert tensors (gidx, w_gu, w_d), laid out on the device from TtMoe's bfp4 cache - or from

@@ -111,7 +111,8 @@ void bind_config(nb::module_& mod) {
     def_kwargs_init(dtypes);
     dtypes.def_rw("routed_weights", &MoEDtypes::routed_weights)
         .def_rw("shared_weights", &MoEDtypes::shared_weights)
-        .def_rw("shared_fidelity", &MoEDtypes::shared_fidelity);
+        .def_rw("shared_fidelity", &MoEDtypes::shared_fidelity)
+        .def_rw("routed_fidelity", &MoEDtypes::routed_fidelity);
 
     nb::class_<MoEBlockConfig> cfg(mod, "MoEBlockConfig", R"doc(
         The MoE block's options. Defaults are today's production defaults.

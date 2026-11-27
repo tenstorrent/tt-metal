@@ -71,6 +71,10 @@ struct MoEDtypes {
     tt::tt_metal::DataType routed_weights = tt::tt_metal::DataType::BFLOAT4_B;
     tt::tt_metal::DataType shared_weights = tt::tt_metal::DataType::BFLOAT8_B;
     tt::tt_metal::MathFidelity shared_fidelity = tt::tt_metal::MathFidelity::HiFi2;
+    // The routed experts' matmul fidelity. LoFi is exact for the default operands (bfp4 / bfp8 weights in SrcA keep
+    // their <= 5 significant bits; bfp8 x / h in SrcB keep their <= 7); bf16 x / h (FlatLayoutOptions x_bf16 / h_bf16)
+    // have 8 significant bits, and LoFi truncates the 8th, biasing every routed product low: HiFi3 keeps it.
+    tt::tt_metal::MathFidelity routed_fidelity = tt::tt_metal::MathFidelity::LoFi;
 
     bool operator==(const MoEDtypes&) const = default;
 };
