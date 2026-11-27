@@ -22,7 +22,7 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...utils import cache
 from ...utils.padding import PaddingConfig
 from ...utils.substate import rename_substate, substate
-from ...utils.tensor import bf16_tensor
+from ...utils.tensor import bf16_tensor, float32_tensor
 
 if TYPE_CHECKING:
     from ...parallel.config import DiTParallelConfig
@@ -101,7 +101,7 @@ class TimeTextProjection(Module):
         exponent = exponent / half_dim
         factor = torch.exp(exponent)
 
-        return ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
+        return ttnn.unsqueeze_to_4D(float32_tensor(factor, device=self.mesh_device))
 
     # In order to avoid calling `unsqueeze` in this function, we expect already unsqueezed rank two
     # `timestep` tensor.
