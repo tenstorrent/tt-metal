@@ -162,3 +162,15 @@ class MiniMaxH3Scheduler:
         step on device. Matches ``step()`` up to fp32 ulp.
         """
         return float(self.sigmas[i] - self.sigmas[i + 1])
+
+    def window(self, start: int, stop: int, *, to_clean: bool = False) -> "MiniMaxH3Scheduler":
+        """Steps ``[start, stop)`` of this schedule as a schedule of their own. ``to_clean`` makes the last
+        of them land on sigma 0, the model's clean estimate, instead of on the next step's sigma.
+        """
+        part = MiniMaxH3Scheduler(shift=self._shift)
+        part.sigmas = self.sigmas[start : stop + 1].clone()
+        if to_clean:
+            part.sigmas[-1] = 0.0
+        part.timesteps = self.timesteps[start:stop]
+        part.num_inference_steps = stop - start
+        return part
