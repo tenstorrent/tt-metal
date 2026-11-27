@@ -15,12 +15,11 @@
 
 void kernel_main() {
     constexpr uint32_t num_entries = get_arg(args::num_entries);
-    // L1 format of both DFBs, also the SrcS register format.
-    constexpr DataFormat format = static_cast<DataFormat>(get_arg(args::data_format));
 
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
-    using ExpOp = SfpuOp<op::Exp<>, SfpuReg::SrcS, format>;
+    constexpr uint32_t in_id = dfb::in;  // the DFB id is a compile-time constant: it names the tiles' format
+    using ExpOp = SfpuOp<op::Exp<>, SfpuReg::SrcS, in_id>;
     ExpOp::init();
 
     for (uint32_t i = 0; i < num_entries; i++) {

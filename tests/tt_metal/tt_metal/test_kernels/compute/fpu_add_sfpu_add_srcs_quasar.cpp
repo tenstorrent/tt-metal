@@ -19,15 +19,14 @@
 
 void kernel_main() {
     constexpr uint32_t num_entries = get_arg(args::num_entries);
-    // L1 format of in1 and out, also the SrcS register format.
-    constexpr DataFormat format = static_cast<DataFormat>(get_arg(args::data_format));
 
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
     constexpr uint32_t in_id = dfb::in;
-    // Input 0 is the Dest tile the FPU op on in_id, in_id left.
-    using AddOp = SfpuOp<op::Add<>, SfpuReg::SrcS, format, in_id, in_id>;
+    constexpr uint32_t in1_id = dfb::in1;
+    // in1_id: the DFB of the L1 input. in_id, in_id: input 0 is the Dest tile the FPU op on them left.
+    using AddOp = SfpuOp<op::Add<>, SfpuReg::SrcS, in1_id, in_id, in_id>;
 
     // Packer 0 packs nothing here; it is set up for the output format only.
     compute_kernel_hw_startup(in_id, in_id, dfb_out.get_id());

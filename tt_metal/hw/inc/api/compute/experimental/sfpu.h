@@ -115,14 +115,14 @@ ALWI void sfpu_srcs_check_tiles(const DFBS&... dfbs) {
  * |--------------------|--------------------------------------------------------------|-----------------------|------------------------------|----------|
  * | OP                 | The op tag (namespace op)                                    | struct                | op::*                        | True     |
  * | REG                | Dest: MATH thread. SrcS: the SrcS pipeline, SFPU thread      | SfpuReg               | SfpuReg::Dest, SfpuReg::SrcS | True     |
- * | SOURCES            | Where the tiles came from; gives their format (see each REG) | uint32_t / DataFormat |                              | True     |
+ * | SOURCES            | Where the tiles came from; gives their format (see each REG) | uint32_t              |                              | True     |
  */
 // clang-format on
 template <typename OP, SfpuReg REG, auto... SOURCES>
 struct SfpuOp {
     static_assert(
         sizeof(OP) == 0,
-        "SfpuOp<OP, SfpuReg::Dest, dfb ids...> or SfpuOp<OP, SfpuReg::SrcS, SrcS DataFormat[, Dest dfb ids...]>");
+        "SfpuOp<OP, SfpuReg::Dest, dfb ids...> or SfpuOp<OP, SfpuReg::SrcS, L1 input dfb id[, Dest dfb ids...]>");
 };
 
 // clang-format off
@@ -207,16 +207,18 @@ private:
 // clang-format off
 /**
  * OP on the SrcS pipeline, on the SFPU thread (TRISC3). Call init() once. Per tile: unpack() and pack() name the L1
- * tiles, then tile() runs the op on them.
+ * tiles, then tile() runs the op on them. SOURCES are compile-time DFB ids (constexpr uint32_t id = dfb::in;):
  *
- * | Template Parameter | Description                                                           | Type       | Valid Range                        | Required |
- * |--------------------|-----------------------------------------------------------------------|------------|------------------------------------|----------|
- * | SRCS_FMT           | Format in the SrcS register (unpack dst = pack src)                   | DataFormat | Float16, Float16_b, Float32, Int32 | True     |
- * | DEST_DFB_IDS       | Given when input 0 is a Dest tile: the DFBs it came from, as for Dest | uint32_t   |                                    | False    |
+ * | Template Parameter | Description                                                           | Type     | Valid Range                                      | Required |
+ * |--------------------|-----------------------------------------------------------------------|----------|--------------------------------------------------|----------|
+ * | L1_DFB_ID          | The DFB unpack() reads; its L1 format gives the SrcS format           | uint32_t | DFB of Float16, Float16_b, Float32, Int32 or MX  | True     |
+ * | DEST_DFB_IDS       | Given when input 0 is a Dest tile: the DFBs it came from, as for Dest | uint32_t |                                                  | False    |
  */
 // clang-format on
-template <typename OP, DataFormat SRCS_FMT, auto... DEST_DFB_IDS>
-struct SfpuOp<OP, SfpuReg::SrcS, SRCS_FMT, DEST_DFB_IDS...> {
+template <typename OP, auto L1_DFB_ID, auto... DEST_DFB_IDS>
+struct SfpuOp<OP, SfpuReg::SrcS, L1_DFB_ID, DEST_DFB_IDS...> {
+    static_assert(std::is_integral_v<decltype(L1_DFB_ID)>, "the SrcS source is the DFB id of the L1 input");
+
     // Set up unpacker 2, packer 1 and the SFPU for this op.
     ALWI static void init() {
         SFPU_SRCS((Op::init()));
@@ -228,6 +230,7 @@ struct SfpuOp<OP, SfpuReg::SrcS, SRCS_FMT, DEST_DFB_IDS...> {
     ALWI static void unpack([[maybe_unused]] const DFB& in) {
 #ifdef TRISC_ISOLATE_SFPU
         static_assert(l1_inputs == 1, "this op takes two inputs from L1: unpack(in0, in1)");
+        LLK_ASSERT(in.get_id() == L1_DFB_ID, "SfpuOp: unpack() takes the DFB the alias names");
 #endif
         SFPU_SRCS((detail::sfpu_srcs_check_tiles(in)));
         SFPU_SRCS((Op::unpack(in.get_read_ptr(), l1_format(in))));
@@ -238,6 +241,7 @@ struct SfpuOp<OP, SfpuReg::SrcS, SRCS_FMT, DEST_DFB_IDS...> {
     ALWI static void unpack([[maybe_unused]] const DFB& in0, [[maybe_unused]] const DFB& in1) {
 #ifdef TRISC_ISOLATE_SFPU
         static_assert(l1_inputs == 2, "this op takes one input from L1: unpack(in)");
+        LLK_ASSERT(in0.get_id() == L1_DFB_ID, "SfpuOp: unpack() takes the DFB the alias names as in0");
         LLK_ASSERT(l1_format(in0) == l1_format(in1), "SfpuOp: both inputs must have the same L1 format");
 #endif
         SFPU_SRCS((detail::sfpu_srcs_check_tiles(in0, in1)));
@@ -260,7 +264,7 @@ struct SfpuOp<OP, SfpuReg::SrcS, SRCS_FMT, DEST_DFB_IDS...> {
 
     // The same with Dest tile idst as input 0. The SFPU thread must hold the Dest loan: tile_regs_borrow.
     ALWI static void tile([[maybe_unused]] DstIndex idst) {
-        static_assert(sizeof...(DEST_DFB_IDS) != 0, "name the DFBs the Dest tile came from after the SrcS format");
+        static_assert(sizeof...(DEST_DFB_IDS) != 0, "name the DFBs the Dest tile came from after the L1 input's DFB");
         SFPU_SRCS((detail::sfpu_op_check_init<Op>()));
         SFPU_SRCS((Op::template run<DST_SYNC_MODE, DST_ACCUM_MODE>(idst)));
     }
@@ -269,7 +273,8 @@ struct SfpuOp<OP, SfpuReg::SrcS, SRCS_FMT, DEST_DFB_IDS...> {
 
 private:
     static_assert(detail::sfpu_dest_tiles_32x32<DEST_DFB_IDS...>, "SfpuOp takes 32x32 Dest tiles");
-    static constexpr sfpi::DataLayout layout = sfpu::sfpu_layout<SRCS_FMT>();
+    static constexpr sfpi::DataLayout layout =
+        sfpu::srcs_layout<static_cast<DataFormat>(unpack_src_format[L1_DFB_ID])>();
     static_assert(sfpu::op_takes_layout<OP, layout>, "this op does not take tiles of this format");
     static constexpr int l1_inputs =
         sfpu::math_arity<sfpu::math_for_t<OP, layout>> - (sizeof...(DEST_DFB_IDS) != 0 ? 1 : 0);

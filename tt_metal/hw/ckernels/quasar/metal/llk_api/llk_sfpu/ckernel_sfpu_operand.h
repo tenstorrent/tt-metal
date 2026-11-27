@@ -96,6 +96,17 @@ constexpr sfpi::DataLayout sfpu_layout() {
 }
 
 /**
+ * @brief SFPLOAD/SFPSTORE layout of SrcS for tiles unpacked from L1 in a format. MX formats exist only in L1 and
+ *        unpack to Float16_b; a format with no SrcS layout is a compile error.
+ *
+ * @tparam L1_FMT: Format of the tiles in L1, values = <Float16/Float16_b/Float32/Int32/MX formats>
+ */
+template <DataFormat L1_FMT>
+constexpr sfpi::DataLayout srcs_layout() {
+    return sfpu_layout<is_mx_format(L1_FMT) ? DataFormat::Float16_b : L1_FMT>();
+}
+
+/**
  * @brief The math policy of an op tag on a register layout, as math_for<OP, LAYOUT>::type. Specialized once per
  *        op, next to its math (ckernel_sfpu_<op>.h), for Dest and SrcS alike.
  *

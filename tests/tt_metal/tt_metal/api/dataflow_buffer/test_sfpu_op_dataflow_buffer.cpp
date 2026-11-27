@@ -114,7 +114,6 @@ void run_sfpu_op_dfb_case(distributed::MeshDevice& mesh_device, const SfpuOpDfbC
     // Every kernel here reads a subset of these.
     compute.compile_time_args = {
         {"num_entries", total_entries},
-        {"data_format", static_cast<uint32_t>(tt::DataFormat::Float16_b)},
         {"per_core_block_cnt", total_entries},
         {"per_core_block_size", 1u},
     };
