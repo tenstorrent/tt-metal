@@ -16,6 +16,7 @@ from ..utils.matmul import (
     get_fused_mmrs_config,
     get_matmul_config,
     get_matmul_core_grid,
+    swiglu_safe_config,
 )
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
@@ -466,6 +467,8 @@ class ColParallelLinear(Module):
                     use_addcmul=addcmul_a is not None,
                     force_transpose=force_transpose,
                 )
+            if self.fuse_swiglu:
+                matmul_config = swiglu_safe_config(matmul_config)
 
             tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
             ag_persistent_buffer = (
@@ -529,6 +532,8 @@ class ColParallelLinear(Module):
 
             if self.chunks is not None:
                 matmul_config = matmul_config or get_matmul_config(M, K, N, core_grid, default_block_size)
+                if self.fuse_swiglu:
+                    matmul_config = swiglu_safe_config(matmul_config)
                 outputs = ttnn.experimental.minimal_matmul_split(
                     x,
                     weight,
@@ -868,11 +873,14 @@ def _linear(
             dtype=dtype,
         )
 
+    config = matmul_config or get_matmul_config(rows, in_features, out_features, core_grid, default_block_size)
+    if fuse_swiglu:
+        config = swiglu_safe_config(config)
     return ttnn.experimental.minimal_matmul(
         input_tensor=x,
         weight_tensor=weight,
         bias_tensor=bias,
-        config=matmul_config or get_matmul_config(rows, in_features, out_features, core_grid, default_block_size),
+        config=config,
         fused_activation=fused_activation,
         compute_kernel_config=compute_kernel_config,
         dtype=dtype,
