@@ -81,13 +81,13 @@ CASES = [
 # fastest run, traced the mean of the runs. A case without targets only reports. A change that moves a case scales its
 # targets by the CI leg's ratio, after / before (each the mean of two runs).
 TARGETS_MS = {
-    "kimi_k3-8x4-5120": (2.38, 2.27),
-    "kimi_k3_1-4x4-sp1-2560": (3.56, 3.46),
+    "kimi_k3-8x4-5120": (2.24, 2.11),
+    "kimi_k3_1-4x4-sp1-2560": (3.20, 3.10),
     # GLM-5.3: each the mean over 3 runs of that run's number (fastest untraced sample, traced replay)
     "glm53-8x4-5120": (1.32, 1.21),
-    "glm53-xy4-sp1-2560": (1.55, 1.44),
-    "glm53-xy4-sp1-5120-packed-2560@0-2560@2560": (2.04, 1.91),
-    "glm53-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (3.08, 3.05),
+    "glm53-xy4-sp1-2560": (1.49, 1.37),
+    "glm53-xy4-sp1-5120-packed-2560@0-2560@2560": (1.99, 1.88),
+    "glm53-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (3.05, 2.95),
 }
 
 
