@@ -14,7 +14,7 @@ sparse-to-dense packing into a contiguous L1 block.
 
 from conftest import skip_for_wormhole
 from helpers.llk_params import DestAccumulation
-from helpers.pack_tiny_tile import FORMATS, TILE_DIMS, make_pack_tiny_tile_config
+from helpers.pack_tiny_tile import FORMATS, TILE_DIMS, run_pack_tiny_tile
 from helpers.param_config import parametrize
 from helpers.utils import passed_test, result_tensor
 
@@ -39,7 +39,7 @@ def test_pack_tiny_tile_block(
     run_types=None,
     loop_factor=1,
 ):
-    outcome, golden_tensor = make_pack_tiny_tile_config(
+    outcome, golden_tensor = run_pack_tiny_tile(
         tile_dims,
         num_tiles,
         formats,

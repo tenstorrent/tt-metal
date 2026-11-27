@@ -37,7 +37,7 @@ TILE_DIMS = [
 ]
 
 
-def make_pack_tiny_tile_config(
+def run_pack_tiny_tile(
     tile_dims,
     num_tiles,
     formats,
