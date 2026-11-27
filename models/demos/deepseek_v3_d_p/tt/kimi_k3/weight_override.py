@@ -26,7 +26,8 @@ Keys may carry any root ("language_model.model.", "model."): a tensor is matched
                                 consumers are all among them is set to ones - MLA input_layernorm and q_a_layernorm, the MoE
                                 post_attention_layernorm (the router then becomes bf16(fp32 gamma x fp32 W)) and
                                 routed_expert_norm; the indexer's run-time scale drops n_heads^-0.5 (already in the
-                                folded weights_proj). Off: only latent up is taken folded (prefill folds that norm itself).
+                                folded weights_proj). Retired from G6 (user decision 11-27: unfolded GPTQ); kept for decode-space experiments. Off:
+                                carriers_folded is ignored.
 
 How a layer is overridden (so no stale tensorbin can stand in for a carrier):
 * every read of the dequantized checkpoint for that layer (`weights.load_tensors`, the KDA loader, the bf8 routed
@@ -36,11 +37,15 @@ How a layer is overridden (so no stale tensorbin can stand in for a carrier):
 * its routed experts are laid out from the carrier shards (bf4, or bf8 where K3_ACC_ROUTED_BF8 covers the layer: the
   same values), not from TtMoe's bf4 cache;
 * KDA b_proj takes the ":joint" copy (prefill packs 16 consecutive heads of a TP rank per block; the per-element copy
-  would be re-rounded), and routed_expert_up_proj the folded carrier with routed_expert_norm replaced by ones (prefill
-  folds that gamma in fp32 before packing bf8, so the unfolded carrier would be re-rounded).
+  would be re-rounded). Everything else comes from carriers.safetensors, the UNFOLDED GPTQ output (user decision 11-27:
+  no pre-folded tensors): prefill applies input_layernorm, q_a_layernorm and post_attention_layernorm at run time, so
+  those consumers load exactly. carriers_folded is ignored (and a layer whose carriers_folded holds a tensor that
+  carriers.safetensors lacks is refused: decode-space output).
 
 Inexact by design in prefill (logged, not refused): KDA f_b_proj (prefill multiplies it by exp(A_log) and rounds to bf16
-on device after loading it exactly).
+on device after loading it exactly); routed_expert_up_proj (moe_tail folds routed_expert_norm into it on the host in fp32
+and packs bf16 under K3_ACC_BF16_WEIGHTS / bf8 in production: measured on teacher Grams, the re-round alone is 56.5 dB
+(bf16) / 43.8 dB (bf8) at the latent-up output; applying the norm at run time needs a moe_tail kernel change).
 """
 
 from __future__ import annotations
@@ -187,7 +192,7 @@ class WeightOverride:
                                 continue
                             rel = rel[: -len(JOINT)]  # (b_proj on prefill's grouping replaces the per-element copy)
                         elif f == "carriers_folded":
-                            if rel != LATENT_UP and not self.folded:  # (decode-folded copies: unit-gamma rule only)
+                            if not self.folded:  # (folded-space copies: the unit-gamma mode only)
                                 continue
                             folded.add(rel)
                         got[rel] = h.get_tensor(k)
