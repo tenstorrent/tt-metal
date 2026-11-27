@@ -1628,7 +1628,8 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
 {
     if constexpr (BCAST_TYPE != BroadcastType::NONE)
     {
-        init_binary_bcast<OP, BCAST_TYPE>();
+        // sfpu_bcast_{col,row}_init programs nothing; each bcast call records its own replay.
+        _sfpu_binary_bcast_init_<BCAST_TYPE>();
     }
     else if constexpr (OP == BinaryOp::MUL)
     {
@@ -1645,8 +1646,20 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     }
     else if constexpr (quasar_binary_op_is_quant(OP))
     {
-        // One op-templated quant kernel; DEQUANT's caller passes bits of -zero_point.
-        quant_family_init<quant_variant_of<OP>(), SIGN_MAGNITUDE_FORMAT>(zero_point);
+        // quant/requant/dequant_tile_init; DEQUANT's caller passes bits of -zero_point.
+        constexpr auto variant = quant_variant_of<OP>();
+        if constexpr (variant == ckernel::sfpu::QuantVariant::Quant)
+        {
+            quant_init<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT>(zero_point);
+        }
+        else if constexpr (variant == ckernel::sfpu::QuantVariant::Requant)
+        {
+            requant_init<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT>(zero_point);
+        }
+        else
+        {
+            dequant_init<APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT>(zero_point);
+        }
     }
     else if constexpr (OP == BinaryOp::ATAN2)
     {
@@ -1801,7 +1814,8 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         static_assert(TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32, "binary_bcast requires 32x32 tiles");
         static_assert(dst_rounding_mode == ckernel::DstRoundingMode::Default, "binary_bcast does not implement NearestEven rounding");
         LLK_ASSERT(math_format != DataFormat::Int32, "binary_bcast supports float formats only");
-        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_binary_bcast, (OP, BCAST_TYPE), src0_tile, src1_tile, dst_tile, VectorMode::None);
+        SFPU_BINARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, _calculate_sfpu_binary_bcast_full_tile_, (OP, BCAST_TYPE), src0_tile, src1_tile, dst_tile, VectorMode::None);
     }
     else if constexpr (OP == BinaryOp::ADD)
     {
@@ -2117,16 +2131,47 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     }
     else if constexpr (quasar_binary_op_is_quant(OP))
     {
-        SFPU_BINARY_CALL_TINY_TILE(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            TILE_SHAPE,
-            quant_family,
-            (quant_variant_of<OP>(), ITERATIONS, SIGN_MAGNITUDE_FORMAT),
-            src0_tile,
-            src1_tile,
-            dst_tile,
-            vector_mode);
+        // quant/requant/dequant_tile's functors.
+        constexpr auto variant = quant_variant_of<OP>();
+        if constexpr (variant == ckernel::sfpu::QuantVariant::Quant)
+        {
+            SFPU_BINARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                calculate_quant_int32,
+                (APPROXIMATION_MODE, ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                vector_mode);
+        }
+        else if constexpr (variant == ckernel::sfpu::QuantVariant::Requant)
+        {
+            SFPU_BINARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                calculate_requant_int32,
+                (APPROXIMATION_MODE, ITERATIONS, SIGN_MAGNITUDE_FORMAT, false /* INT8_INPUT */),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                vector_mode);
+        }
+        else
+        {
+            SFPU_BINARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                calculate_dequant_int32,
+                (APPROXIMATION_MODE, ITERATIONS, SIGN_MAGNITUDE_FORMAT, false /* INT8_INPUT */),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                vector_mode);
+        }
     }
     else if constexpr (OP == BinaryOp::FMOD)
     {
