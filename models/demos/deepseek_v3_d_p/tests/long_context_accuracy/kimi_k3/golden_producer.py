@@ -11,8 +11,8 @@ prepared golden, so the CPU work never holds the device.
 The layer is computed in FP64 (``dtype``) and its products are stored in ``STORAGE_DTYPE``, FP32
 (``storage_dtype``): a device cannot compute in FP64, so storing the FP64 result in FP32 moves a device measurement
 only by FP32 rounding (2^-24 relative), at half the bytes to read. The carried state stays FP64 in
-``resume_state_path`` (the latest complete segment's only), so an interrupted run resumes bit-identical to an
-uninterrupted one and a complete golden can be extended.
+``resume_state_path`` (the latest complete segment's only, removed once the golden is complete), so an interrupted
+run resumes bit-identical to an uninterrupted one.
 
 ``manifest.json`` is the golden's only metadata, in the long-context golden registry's format
 (``common/prefill/long_context_accuracy/fp64_golden.py``; the golden's id is its directory name): what produced it
@@ -91,7 +91,7 @@ def segment_path(run_dir: Path, index: int) -> Path:
 
 def resume_state_path(run_dir: Path, index: int) -> Path:
     """The FP64 state after segment ``index`` (``{name: tensor}``, not a product), kept for the latest complete
-    segment only."""
+    segment only and only while the golden is incomplete."""
     return Path(run_dir) / f"resume_state_{index:06d}.pt"
 
 
@@ -109,12 +109,12 @@ def _write_segment(run_dir: Path, index: int, start: int, end: int, output: torc
     publish(lambda path: torch.save(payload, path), segment_path(run_dir, index))
 
 
-def _remove_resume_states(run_dir: Path, keep: int) -> None:
-    """Remove every resume state but segment ``keep``'s. Called once the manifest lists segment ``keep`` (whose state
-    was published before the manifest), so after a crash at any point the state of the manifest's last segment is
-    there."""
+def _remove_resume_states(run_dir: Path, keep: int | None) -> None:
+    """Remove every resume state but segment ``keep``'s (all of them with ``None``, once the golden is complete).
+    Called once the manifest lists segment ``keep`` (whose state was published before the manifest), so after a crash
+    at any point the state of the manifest's last segment is there."""
     for path in Path(run_dir).glob("resume_state_*.pt"):
-        if path.name != resume_state_path(run_dir, keep).name:
+        if keep is None or path.name != resume_state_path(run_dir, keep).name:
             path.unlink()
 
 
@@ -172,7 +172,7 @@ def run_golden(
     manifest = start_or_resume(run_dir, expected, token_ids, stop)
     done = len(manifest["segments"])
     state = None
-    if done:
+    if 0 < done < stop:
         state = KDAReferenceState(**torch.load(resume_state_path(run_dir, done - 1), weights_only=True))
         print(f"resuming at segment {done}/{segments} (token {manifest['segments'][-1]['end']})", flush=True)
 
@@ -192,6 +192,7 @@ def run_golden(
 
     if len(manifest["segments"]) < segments:
         return manifest  # incomplete: no floor and no registry check yet
+    _remove_resume_states(run_dir, None)
     if "token_floor" not in manifest:
         manifest["token_floor"] = _token_floor(run_dir, segments)
         write_manifest(run_dir, manifest)
@@ -222,9 +223,8 @@ def convert_to_fp32_storage(source: Path, destination: Path) -> dict:
     ``destination``, whose directory name is the new golden id, and return the new manifest.
 
     A pure cast: every tensor of every segment file becomes ``.to(STORAGE_DTYPE)`` of the source's, checked bit for
-    bit on the file read back, whose sha256 goes to its manifest segment entry. The source's last FP64 state becomes
-    the resume state, the token ids are copied (digest checked), and the token floor is recomputed from the stored
-    rows as ``run_golden`` does (the source's is kept in ``conversion``). The manifest is written last, so a
+    bit on the file read back, whose sha256 goes to its manifest segment entry. The token ids are copied (digest
+    checked), and the token floor is recomputed from the stored rows as ``run_golden`` does (the source's is kept in ``conversion``). The manifest is written last, so a
     destination interrupted before it is no golden (the registry refuses it); a destination that already holds a
     manifest is refused."""
     source, destination = Path(source), Path(destination)
@@ -257,7 +257,6 @@ def convert_to_fp32_storage(source: Path, destination: Path) -> dict:
             raise ValueError(f"segment {index} of {destination}: {bad} are not the FP64 source cast to {STORAGE_DTYPE}")
         entry["sha256"] = _sha256(segment_path(destination, index))
         if index == len(segments) - 1:
-            publish(lambda path: torch.save(dict(payload["state"]), path), resume_state_path(destination, index))
             products = _products(payload["output"], payload["state"])
         print(f"{_now()} converted segment {index + 1}/{len(segments)} {time.perf_counter() - began:.1f} s", flush=True)
 

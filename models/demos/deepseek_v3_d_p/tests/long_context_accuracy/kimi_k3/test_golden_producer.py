@@ -88,29 +88,33 @@ def test_resumed_run_is_bit_identical_to_an_uninterrupted_one(tmp_path: Path, ex
         assert full["output"].dtype == torch.float32 and torch.equal(full["output"], resumed["output"]), index
         for name, tensor in full["state"].items():
             assert tensor.dtype == torch.float32 and torch.equal(tensor, resumed["state"][name]), (index, name)
-    # The FP64 state the resume continued from is kept for the last segment only.
+    # A complete golden keeps no resume state, and a rerun on it computes nothing and needs none.
     for run in ("full", "resumed"):
-        assert sorted(p.name for p in (tmp_path / run).glob("resume_state_*.pt")) == ["resume_state_000002.pt"]
-    full_state = torch.load(resume_state_path(tmp_path / "full", 2), weights_only=True)
-    resumed_state = torch.load(resume_state_path(tmp_path / "resumed", 2), weights_only=True)
-    assert all(t.dtype == torch.float64 and torch.equal(t, resumed_state[n]) for n, t in full_state.items())
+        assert not list((tmp_path / run).glob("resume_state_*.pt")), run
+    assert run_resumed()["segments"] == manifest["segments"]
 
-    # Segmenting changes nothing but rounding: the whole sequence in one call agrees to FP64 precision.
+    # Segmenting changes nothing but rounding: the whole sequence in one call agrees to FP32 storage precision.
     whole_output, whole_state = kda_forward_reference(table.unsqueeze(0), weights, config, dtype=torch.float64)
-    torch.testing.assert_close(full_state["recurrent"], whole_state.recurrent, rtol=0, atol=1e-12)
+    final = torch.load(tmp_path / "full" / "segment_000002.pt", weights_only=True)["state"]["recurrent"]
+    torch.testing.assert_close(final, whole_state.recurrent.float())
 
 
-@pytest.mark.parametrize("written, lists", [(False, [(0, 4)]), (True, [(0, 4), (4, 8)])], ids=["before", "after"])
+@pytest.mark.parametrize(
+    "segment, written, lists",
+    [(1, False, [(0, 4)]), (1, True, [(0, 4), (4, 8)]), (2, True, [(0, 4), (4, 8), (8, 10)])],
+    ids=["before-1", "after-1", "after-last"],
+)
 def test_a_crash_around_a_segment_manifest_write_resumes_bit_identical(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, expect_error, written: bool, lists: list
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, expect_error, segment: int, written: bool, lists: list
 ) -> None:
-    """A crash just before or just after the manifest lists segment 1 (its files already published) leaves the FP64
-    state of the manifest's last segment in place, and the resume equals an uninterrupted run bit for bit."""
+    """A crash just before or just after the manifest lists a segment (its files already published) leaves the FP64
+    state of the manifest's last segment in place; the rerun equals an uninterrupted run bit for bit and leaves no
+    resume state (after the last segment it only cleans up)."""
     run_full, *_ = make_run(tmp_path / "full")
     run_full()
 
     def crash_at_segment_1(run_dir, manifest):
-        if len(manifest["segments"]) == 2:
+        if len(manifest["segments"]) == segment + 1 and "token_floor" not in manifest:
             if written:
                 write_manifest(run_dir, manifest)
             raise Interrupted("simulated crash")
@@ -127,13 +131,14 @@ def test_a_crash_around_a_segment_manifest_write_resumes_bit_identical(
 
     run_resumed, *_ = make_run(tmp_path / "resumed")
     resumed = run_resumed()
-    assert [session["first_segment"] for session in resumed["sessions"]] == [0, len(lists)]
+    if len(lists) < 3:
+        assert [session["first_segment"] for session in resumed["sessions"]] == [0, len(lists)]
     for index in range(3):
         full = torch.load(tmp_path / "full" / f"segment_{index:06d}.pt", weights_only=True)
         got = torch.load(tmp_path / "resumed" / f"segment_{index:06d}.pt", weights_only=True)
         assert torch.equal(full["output"], got["output"]), index
         assert all(torch.equal(t, got["state"][n]) for n, t in full["state"].items()), index
-    assert sorted(p.name for p in (tmp_path / "resumed").glob("resume_state_*.pt")) == ["resume_state_000002.pt"]
+    assert not list((tmp_path / "resumed").glob("resume_state_*.pt"))
 
 
 def test_products_are_computed_in_fp64_and_stored_in_fp32(tmp_path: Path) -> None:
@@ -228,7 +233,6 @@ def test_golden_files_are_readable_by_other_users_whatever_the_umask(tmp_path: P
     modes = {path.name: stat.S_IMODE(path.stat().st_mode) for path in golden.iterdir()}
     assert sorted(modes) == [
         MANIFEST,
-        "resume_state_000002.pt",
         *(f"segment_{i:06d}.pt" for i in range(3)),
         "token_ids.pt",
     ]
@@ -251,7 +255,7 @@ def test_conversion_writes_the_golden_the_producer_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, expect_error
 ) -> None:
     """A version-1 golden converted to FP32 storage equals a version-2 run of the same inputs bit for bit: segment
-    files, FP64 resume state, products and token floor; the manifest records the source and its digest."""
+    files, products and token floor; the manifest records the source and its digest."""
     source = _version_1_golden(tmp_path / "fp64", monkeypatch)
     run, *_ = make_run(tmp_path / "direct")
     direct = run()
@@ -275,9 +279,7 @@ def test_conversion_writes_the_golden_the_producer_writes(
         assert all(
             torch.equal(t, got["state"][n]) and t.dtype == got["state"][n].dtype for n, t in want["state"].items()
         )
-    want = torch.load(resume_state_path(tmp_path / "direct", 2), weights_only=True)
-    got = torch.load(resume_state_path(tmp_path / "fp32", 2), weights_only=True)
-    assert all(t.dtype == torch.float64 and torch.equal(t, got[n]) for n, t in want.items())
+    assert not list((tmp_path / "fp32").glob("resume_state_*.pt"))
     golden = open_golden("fp32", root=tmp_path, reader=KimiK3KdaGolden)
     assert golden.token_ids().tolist() == TOKENS
     rows = golden.read_rows(["output", "state.recurrent"], 0, 8)
