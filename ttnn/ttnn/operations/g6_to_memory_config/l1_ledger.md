@@ -46,8 +46,9 @@ L1_op(core) = output_share(regime, core)                                   # sca
 
 Only one term is non-zero per regime: owner regimes into L1 carry the output share and no CB;
 `push_*` into DRAM carry nothing; `bounce` carries only the CB (its target is DRAM). Golden maxima:
-192512 B (`pull_bank`, Qwen 2078), 40960 B (L1-sharded targets), 429120 B
-(`bounce`, bf4b 2183, refinement) — all under 1347776 B. A shape whose `L1_op` exceeds the budget is
+192512 B (`pull_bank`, Qwen 2078), 40960 B (L1-sharded targets), 429696 B
+(`bounce`, bf4b 2183, refinement: `bounce_block_pages` = ceil(745 / 2) = 373, 2 · 373 · 576 B, as
+`plan_of` reports) — all under 1347776 B. A shape whose `L1_op` exceeds the budget is
 refused on the host before allocation (BB-05).
 
 ## Data-movement budget

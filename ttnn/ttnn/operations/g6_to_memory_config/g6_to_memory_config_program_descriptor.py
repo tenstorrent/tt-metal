@@ -210,22 +210,19 @@ def build_plan(input_tensor, memory_config):
 
 
 def _mover_configs(regime, movers_per_owner):
-    """(processor/NoC config, kernel source) per mover RISC; mover 0 takes the default placement."""
-    pull = (ttnn.ReaderConfigDescriptor(), PULL_KERNEL)
-    pull_second = (
-        ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
-        PULL_KERNEL,
-    )
-    push = (ttnn.WriterConfigDescriptor(), PUSH_KERNEL)
-    push_second = (
-        ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
-        PUSH_KERNEL,
-    )
+    """(processor/NoC config, kernel source, mover_index) per kernel; mover 0 takes the default placement.
+
+    bounce is one mover split into a reader and a writer, so both halves are mover 0 of 1.
+    """
+    pull = ttnn.ReaderConfigDescriptor()
+    pull_second = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1)
+    push = ttnn.WriterConfigDescriptor()
+    push_second = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0)
     if regime == "bounce":
-        return [pull, push]
+        return [(pull, PULL_KERNEL, 0), (push, PUSH_KERNEL, 0)]
     if regime.startswith("pull"):
-        return [pull, pull_second][:movers_per_owner]
-    return [push, push_second][:movers_per_owner]
+        return [(pull, PULL_KERNEL, 0), (pull_second, PULL_KERNEL, 1)][:movers_per_owner]
+    return [(push, PUSH_KERNEL, 0), (push_second, PUSH_KERNEL, 1)][:movers_per_owner]
 
 
 def create_program_descriptor(plan, input_tensor, output_tensor, program_hash):
@@ -240,15 +237,14 @@ def create_program_descriptor(plan, input_tensor, output_tensor, program_hash):
     )
     common_args = [input_tensor.buffer_address(), output_tensor.buffer_address()]
 
-    configs = _mover_configs(plan["regime"], plan["movers_per_owner"])
     kernels = []
-    for mover_index, (config, source) in enumerate(configs):
+    for config, source, mover_index in _mover_configs(plan["regime"], plan["movers_per_owner"]):
         ct_args = [
             plan["walk"],
             plan["page_size"],
             plan["num_pages"],
-            len(configs) if plan["regime"] != "bounce" else 1,
-            mover_index if plan["regime"] != "bounce" else 0,
+            plan["movers_per_owner"],
+            mover_index,
             CB_BOUNCE_PAGES,
             plan["bounce_block_pages"],
         ] + accessor_args

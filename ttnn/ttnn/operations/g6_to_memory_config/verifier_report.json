@@ -1,0 +1,2104 @@
+{
+  "summary": {
+    "total": 205,
+    "supported_pass": 91,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 26,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 88
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x16x1x256-dram_interleaved-to-l1_height_sharded_16c_32x256-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=height_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "height_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x16x1x256-l1_height_sharded_16c_32x256-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=height_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "height_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x16x6x256-l1_height_sharded_16c_32x256-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=height_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "height_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x3584-l1_width_sharded_10c_32x384-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x4352-l1_interleaved-to-l1_width_sharded_8c_32x544-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x8704-l1_width_sharded_36c_32x256-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x5120-l1_width_sharded_8c_32x640-to-l1_width_sharded_40c_32x128-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x1536-dram_interleaved-to-l1_width_sharded_8c_32x192-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x4608-l1_width_sharded_10c_32x480-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_10c_32x512-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x5120-dram_interleaved-to-l1_width_sharded_40c_32x128-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[16x128x4352-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[16x128x1536-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[16x128x5120-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x2x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x2x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x2x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x2x5120-dram_interleaved-to-l1_width_sharded_40c_32x128-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[2x128x4352-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[2x128x1536-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[2x128x5120-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x64x4352-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x64x1536-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x64x5120-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x31x3584-l1_width_sharded_10c_32x384-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x31x4352-dram_interleaved-to-l1_width_sharded_8c_32x544-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x31x9216-l1_width_sharded_36c_32x256-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x31x5120-dram_interleaved-to-l1_width_sharded_40c_32x128-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x31x5120-l1_width_sharded_8c_32x640-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x31x1536-dram_interleaved-to-l1_width_sharded_8c_32x192-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x31x4608-l1_width_sharded_10c_32x480-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x31x5120-dram_interleaved-to-l1_width_sharded_10c_32x512-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x256x4352-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x256x1536-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x256x5120-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x77x4352-dram_interleaved-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x77x1536-dram_interleaved-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x77x5120-dram_interleaved-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x129x4352-dram_interleaved-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x129x1536-dram_interleaved-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x129x5120-dram_interleaved-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x8x1x256-dram_interleaved-to-l1_height_sharded_8c_32x256-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=height_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "height_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x8x1x256-l1_height_sharded_8c_32x256-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=height_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "height_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x8x6x256-l1_height_sharded_8c_32x256-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=height_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "height_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8x3584-l1_width_sharded_10c_32x384-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8x4352-l1_interleaved-to-l1_width_sharded_8c_32x544-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8x8704-l1_width_sharded_36c_32x256-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8x5120-l1_width_sharded_8c_32x640-to-l1_width_sharded_40c_32x128-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8x1536-dram_interleaved-to-l1_width_sharded_8c_32x192-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8x4608-l1_width_sharded_10c_32x480-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_10c_32x512-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8x5120-dram_interleaved-to-l1_width_sharded_40c_32x128-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[8x128x4352-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[8x128x1536-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[8x128x5120-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x100x4352-dram_interleaved-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x100x1536-dram_interleaved-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x100x5120-dram_interleaved-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x256-dram_interleaved-to-l1_height_sharded_1c_32x256-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=height_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "height_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x256-l1_block_sharded_1c_32x256-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=block_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "block_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x6x256-l1_block_sharded_1c_32x256-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=block_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "block_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x256-l1_height_sharded_1c_32x256-to-l1_block_sharded_1c_32x256-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=height_sharded-layout=TILE-out_buffer=l1-out_scheme=block_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "height_sharded",
+          "out_scheme": "block_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x6x256-l1_height_sharded_1c_32x256-to-l1_block_sharded_1c_32x256-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=height_sharded-layout=TILE-out_buffer=l1-out_scheme=block_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "height_sharded",
+          "out_scheme": "block_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x3584-l1_width_sharded_10c_32x384-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x4352-l1_interleaved-to-l1_width_sharded_8c_32x544-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x9216-l1_width_sharded_36c_32x256-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x5120-l1_width_sharded_8c_32x640-to-l1_width_sharded_40c_32x128-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x1536-dram_interleaved-to-l1_width_sharded_8c_32x192-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x4608-l1_width_sharded_10c_32x480-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_10c_32x512-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x5120-dram_interleaved-to-l1_width_sharded_40c_32x128-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x1x5120-dram_interleaved-to-l1_width_sharded_40c_32x128-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x128x4352-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x128x1536-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x128x5120-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x16x128-dram_interleaved-to-l1_height_sharded_1c_32x128-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=height_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "height_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x32x2048-l1_width_sharded_16c_32x128-to-dram_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[1x1x16x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[1x1x1x5120-l1_width_sharded_8c_32x640-to-l1_width_sharded_40c_32x128-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=width_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "width_sharded",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[1x16x1x256-dram_interleaved-to-l1_height_sharded_16c_32x256-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=height_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "height_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[1x1x16x8704-l1_width_sharded_36c_32x256-to-l1_interleaved-alignment=h_non_aligned-dtype=BFLOAT16-in_buffer=l1-in_scheme=width_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "in_scheme": "width_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[16x128x5120-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT16-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 3,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "passed"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1536x5120-dram_interleaved-to-dram_width_sharded_8c_1536x640-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[5120x9216-dram_interleaved-to-dram_width_sharded_8c_5120x1152-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[5120x4608-dram_interleaved-to-dram_width_sharded_8c_5120x576-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[4352x5120-dram_interleaved-to-dram_width_sharded_8c_4352x640-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[5120x3584-dram_interleaved-to-dram_width_sharded_8c_5120x448-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[5120x16384-dram_interleaved-to-dram_width_sharded_8c_5120x2048-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[5120x12928-dram_interleaved-to-dram_width_sharded_8c_5120x1664-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x32768x256-l1_height_sharded_103c_320x256-to-dram_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=l1-in_scheme=height_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "height_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x8192x512-l1_height_sharded_86c_96x512-to-dram_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=l1-in_scheme=height_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "height_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x2048x1024-l1_block_sharded_64c_256x128-to-dram_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=l1-in_scheme=block_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "block_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x2048x2048-l1_block_sharded_80c_224x256-to-dram_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=l1-in_scheme=block_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "block_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x32x64x2048-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x32x64x256-l1_block_sharded_64c_256x32-to-dram_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=l1-in_scheme=block_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "block_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x1x2048x256-l1_block_sharded_64c_256x32-to-dram_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=l1-in_scheme=block_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "block_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x32x64x256-l1_block_sharded_32c_512x32-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=l1-in_scheme=block_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "block_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x64x128x512-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x64x128x64-l1_height_sharded_64c_128x64-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=l1-in_scheme=height_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "height_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x128x256x256-dram_interleaved-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "interleaved",
+          "in_buffer": "dram",
+          "out_buffer": "l1"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op[1x128x256x32-l1_height_sharded_103c_320x32-to-l1_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=l1-in_scheme=height_sharded-layout=TILE-out_buffer=l1-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "height_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "l1"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[5120x16384-dram_interleaved-to-dram_width_sharded_8c_5120x2048-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2_0]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[5120x12928-dram_interleaved-to-dram_width_sharded_8c_5120x1664-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[5120x3584-dram_interleaved-to-dram_width_sharded_8c_5120x448-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[5120x9216-dram_interleaved-to-dram_width_sharded_8c_5120x1152-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[1x1x2048x2048-l1_block_sharded_80c_224x256-to-dram_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=l1-in_scheme=block_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "block_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[5120x16384-dram_interleaved-to-dram_width_sharded_8c_5120x2048-alignment=tile_aligned-dtype=BFLOAT4_B-in_buffer=dram-in_scheme=interleaved-layout=TILE-out_buffer=dram-out_scheme=width_sharded-rank=2_1]",
+        "axes": {
+          "dtype": "BFLOAT4_B",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "tile_aligned",
+          "in_scheme": "interleaved",
+          "out_scheme": "width_sharded",
+          "in_buffer": "dram",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_golden.py::test_op_loose[1x1x2048x1024-l1_block_sharded_64c_256x128-to-dram_interleaved-alignment=tile_aligned-dtype=BFLOAT8_B-in_buffer=l1-in_scheme=block_sharded-layout=TILE-out_buffer=dram-out_scheme=interleaved-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "tile_aligned",
+          "in_scheme": "block_sharded",
+          "out_scheme": "interleaved",
+          "in_buffer": "l1",
+          "out_buffer": "dram"
+        },
+        "status": "xfail"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_repeat_then_other_program",
+        "test_name": "test_repeat_then_other_program",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_cache_key_shard_spec",
+        "test_name": "test_cache_key_shard_spec",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x16x1x256-dram_interleaved-to-l1_height_sharded_16c_32x256]",
+        "test_name": "test_placement_reported[1x16x1x256-dram_interleaved-to-l1_height_sharded_16c_32x256]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x16x1x256-l1_height_sharded_16c_32x256-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x16x1x256-l1_height_sharded_16c_32x256-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x16x6x256-l1_height_sharded_16c_32x256-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x16x6x256-l1_height_sharded_16c_32x256-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x3584-l1_width_sharded_10c_32x384-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x1x16x3584-l1_width_sharded_10c_32x384-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x4352-l1_interleaved-to-l1_width_sharded_8c_32x544]",
+        "test_name": "test_placement_reported[1x1x16x4352-l1_interleaved-to-l1_width_sharded_8c_32x544]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x8704-l1_width_sharded_36c_32x256-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x1x16x8704-l1_width_sharded_36c_32x256-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x5120-l1_width_sharded_8c_32x640-to-l1_width_sharded_40c_32x128]",
+        "test_name": "test_placement_reported[1x1x16x5120-l1_width_sharded_8c_32x640-to-l1_width_sharded_40c_32x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x1536-dram_interleaved-to-l1_width_sharded_8c_32x192]",
+        "test_name": "test_placement_reported[1x1x16x1536-dram_interleaved-to-l1_width_sharded_8c_32x192]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x4608-l1_width_sharded_10c_32x480-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x16x4608-l1_width_sharded_10c_32x480-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_10c_32x512]",
+        "test_name": "test_placement_reported[1x1x16x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_10c_32x512]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x16x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x16x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640]",
+        "test_name": "test_placement_reported[1x1x16x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "test_name": "test_placement_reported[1x1x16x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[16x128x4352-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[16x128x4352-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[16x128x1536-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[16x128x1536-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[16x128x5120-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[16x128x5120-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x2x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x2x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x2x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x2x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x2x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640]",
+        "test_name": "test_placement_reported[1x1x2x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x2x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "test_name": "test_placement_reported[1x1x2x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[2x128x4352-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[2x128x4352-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[2x128x1536-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[2x128x1536-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[2x128x5120-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[2x128x5120-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x64x4352-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x64x4352-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x64x1536-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x64x1536-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x64x5120-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x64x5120-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x31x3584-l1_width_sharded_10c_32x384-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x31x3584-l1_width_sharded_10c_32x384-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x31x4352-dram_interleaved-to-l1_width_sharded_8c_32x544]",
+        "test_name": "test_placement_reported[1x1x31x4352-dram_interleaved-to-l1_width_sharded_8c_32x544]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x31x9216-l1_width_sharded_36c_32x256-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x31x9216-l1_width_sharded_36c_32x256-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x31x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "test_name": "test_placement_reported[1x1x31x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x31x5120-l1_width_sharded_8c_32x640-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x31x5120-l1_width_sharded_8c_32x640-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x31x1536-dram_interleaved-to-l1_width_sharded_8c_32x192]",
+        "test_name": "test_placement_reported[1x1x31x1536-dram_interleaved-to-l1_width_sharded_8c_32x192]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x31x4608-l1_width_sharded_10c_32x480-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x31x4608-l1_width_sharded_10c_32x480-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x31x5120-dram_interleaved-to-l1_width_sharded_10c_32x512]",
+        "test_name": "test_placement_reported[1x1x31x5120-dram_interleaved-to-l1_width_sharded_10c_32x512]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x256x4352-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x256x4352-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x256x1536-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x256x1536-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x256x5120-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x256x5120-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x77x4352-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x77x4352-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x77x1536-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x77x1536-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x77x5120-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x77x5120-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x129x4352-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x129x4352-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x129x1536-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x129x1536-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x129x5120-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x129x5120-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x8x1x256-dram_interleaved-to-l1_height_sharded_8c_32x256]",
+        "test_name": "test_placement_reported[1x8x1x256-dram_interleaved-to-l1_height_sharded_8c_32x256]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x8x1x256-l1_height_sharded_8c_32x256-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x8x1x256-l1_height_sharded_8c_32x256-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x8x6x256-l1_height_sharded_8c_32x256-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x8x6x256-l1_height_sharded_8c_32x256-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x8x3584-l1_width_sharded_10c_32x384-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x1x8x3584-l1_width_sharded_10c_32x384-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x8x4352-l1_interleaved-to-l1_width_sharded_8c_32x544]",
+        "test_name": "test_placement_reported[1x1x8x4352-l1_interleaved-to-l1_width_sharded_8c_32x544]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x8x8704-l1_width_sharded_36c_32x256-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x1x8x8704-l1_width_sharded_36c_32x256-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x8x5120-l1_width_sharded_8c_32x640-to-l1_width_sharded_40c_32x128]",
+        "test_name": "test_placement_reported[1x1x8x5120-l1_width_sharded_8c_32x640-to-l1_width_sharded_40c_32x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x8x1536-dram_interleaved-to-l1_width_sharded_8c_32x192]",
+        "test_name": "test_placement_reported[1x1x8x1536-dram_interleaved-to-l1_width_sharded_8c_32x192]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x8x4608-l1_width_sharded_10c_32x480-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x8x4608-l1_width_sharded_10c_32x480-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x8x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_10c_32x512]",
+        "test_name": "test_placement_reported[1x1x8x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_10c_32x512]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x8x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x8x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x8x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x8x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x8x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640]",
+        "test_name": "test_placement_reported[1x1x8x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x8x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "test_name": "test_placement_reported[1x1x8x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[8x128x4352-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[8x128x4352-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[8x128x1536-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[8x128x1536-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[8x128x5120-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[8x128x5120-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x100x4352-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x100x4352-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x100x1536-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x100x1536-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x100x5120-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x100x5120-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x256-dram_interleaved-to-l1_height_sharded_1c_32x256]",
+        "test_name": "test_placement_reported[1x1x1x256-dram_interleaved-to-l1_height_sharded_1c_32x256]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x256-l1_block_sharded_1c_32x256-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x1x1x256-l1_block_sharded_1c_32x256-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x6x256-l1_block_sharded_1c_32x256-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x1x6x256-l1_block_sharded_1c_32x256-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x256-l1_height_sharded_1c_32x256-to-l1_block_sharded_1c_32x256]",
+        "test_name": "test_placement_reported[1x1x1x256-l1_height_sharded_1c_32x256-to-l1_block_sharded_1c_32x256]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x6x256-l1_height_sharded_1c_32x256-to-l1_block_sharded_1c_32x256]",
+        "test_name": "test_placement_reported[1x1x6x256-l1_height_sharded_1c_32x256-to-l1_block_sharded_1c_32x256]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x3584-l1_width_sharded_10c_32x384-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x1x1x3584-l1_width_sharded_10c_32x384-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x4352-l1_interleaved-to-l1_width_sharded_8c_32x544]",
+        "test_name": "test_placement_reported[1x1x1x4352-l1_interleaved-to-l1_width_sharded_8c_32x544]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x9216-l1_width_sharded_36c_32x256-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x1x1x9216-l1_width_sharded_36c_32x256-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x5120-l1_width_sharded_8c_32x640-to-l1_width_sharded_40c_32x128]",
+        "test_name": "test_placement_reported[1x1x1x5120-l1_width_sharded_8c_32x640-to-l1_width_sharded_40c_32x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x1536-dram_interleaved-to-l1_width_sharded_8c_32x192]",
+        "test_name": "test_placement_reported[1x1x1x1536-dram_interleaved-to-l1_width_sharded_8c_32x192]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x4608-l1_width_sharded_10c_32x480-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x1x1x4608-l1_width_sharded_10c_32x480-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_10c_32x512]",
+        "test_name": "test_placement_reported[1x1x1x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_10c_32x512]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "test_name": "test_placement_reported[1x1x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x1x12928-l1_width_sharded_8c_32x1664-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x1x16384-l1_width_sharded_8c_32x2048-to-dram_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640]",
+        "test_name": "test_placement_reported[1x1x1x5120-l1_width_sharded_40c_32x128-to-l1_width_sharded_8c_32x640]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x1x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "test_name": "test_placement_reported[1x1x1x5120-dram_interleaved-to-l1_width_sharded_40c_32x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x128x4352-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x128x4352-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x128x1536-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x128x1536-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x128x5120-dram_interleaved-to-l1_interleaved]",
+        "test_name": "test_placement_reported[1x128x5120-dram_interleaved-to-l1_interleaved]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x16x128-dram_interleaved-to-l1_height_sharded_1c_32x128]",
+        "test_name": "test_placement_reported[1x1x16x128-dram_interleaved-to-l1_height_sharded_1c_32x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_to_memory_config/test_regression.py::test_placement_reported[1x1x32x2048-l1_width_sharded_16c_32x128-to-dram_interleaved]",
+        "test_name": "test_placement_reported[1x1x32x2048-l1_width_sharded_16c_32x128-to-dram_interleaved]",
+        "status": "passed"
+      }
+    ]
+  }
+}
