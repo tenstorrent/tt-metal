@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_reshard program descriptor — PULL regime.
+"""g6_reshard program descriptor: the PULL regime.
 
-Every core of out's trimmed rectangle runs `ISSUERS_PER_CORE` instances of one gather kernel
-(issuer 0 on NCRISC/NOC0, issuer 1 on BRISC/NOC1). Each issuer reads its row range of the core's
-out block from the in0 cores holding it, straight into the out shard. No CB, no compute kernel,
-no semaphore, no per-core runtime args: per-core identity comes from the core's logical coords.
+Every core holding an out block runs one gather kernel per issuer RISC; each issuer reads its
+rows of the block from the in0 source shards straight into the out shard. No CBs, no compute
+kernel, no semaphores, no per-core runtime args: every per-core value derives in-kernel from the
+placement compile-time args and the core's logical coordinates.
 """
 
 from __future__ import annotations
@@ -17,75 +17,85 @@ from pathlib import Path
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
-GATHER_KERNEL = str(KERNEL_DIR / "g6_reshard_gather.cpp")
+GATHER_KERNEL = KERNEL_DIR / "g6_reshard_gather.cpp"
 
-TILE = 32
-
-# Block knobs (op_design.md, Blocking Model). ISSUERS_PER_CORE is 1 or 2 (one kernel per
-# data-movement RISC). BLOCK_ROWS_TILES / BLOCK_COLS_TILES of None mean the coarsest block:
-# the issuer's whole row share and the out shard's whole width.
+# --- Blocking knobs (single sources; see op_design.md, Blocking Model) -------------------------
+# Data-movement RISCs per target core that issue reads: issuer 0 on RISCV_1 / NOC0, issuer 1 on
+# RISCV_0 / NOC1.
 ISSUERS_PER_CORE = 2
+# Tile rows of one issuer block; None = the issuer's whole share of its out shard (one block).
 BLOCK_ROWS_TILES = None
+# Tile columns of one issuer block; None = the whole out shard width (one block).
 BLOCK_COLS_TILES = None
 
-# (processor, noc) of issuer k.
 _ISSUER_CONFIGS = (
     (ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
     (ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1),
 )
 
+# Common runtime args: [in_addr, out_addr, in_block_row_noc..., in_block_col_noc...].
+IN_ADDR_ARG = 0
+OUT_ADDR_ARG = 1
+
 
 def _div_up(a: int, b: int) -> int:
-    return (a + b - 1) // b
+    return -(-a // b)
 
 
 @dataclass(frozen=True)
 class Placement:
-    """A BLOCK_SHARDED placement in tile units: origin core, shard shape, orientation."""
+    """A BLOCK_SHARDED placement in tiles: grid origin, blocks per axis, shard shape, orientation."""
 
     x0: int
     y0: int
-    x1: int
-    y1: int
     shard_rows_tiles: int
     shard_cols_tiles: int
     col_major: bool
+    num_block_rows: int
+    num_block_cols: int
 
-    @staticmethod
-    def from_memory_config(memory_config: ttnn.MemoryConfig) -> "Placement":
-        spec = memory_config.shard_spec
-        box = spec.grid.bounding_box()
-        return Placement(
-            x0=box.start.x,
-            y0=box.start.y,
-            x1=box.end.x,
-            y1=box.end.y,
-            shard_rows_tiles=int(spec.shape[0]) // TILE,
-            shard_cols_tiles=int(spec.shape[1]) // TILE,
-            col_major=spec.orientation == ttnn.ShardOrientation.COL_MAJOR,
+    def core_of(self, block_row: int, block_col: int) -> tuple[int, int]:
+        """Logical core holding block (block_row, block_col)."""
+        if self.col_major:
+            return self.x0 + block_row, self.y0 + block_col
+        return self.x0 + block_col, self.y0 + block_row
+
+    def block_of(self, x: int, y: int) -> tuple[int, int]:
+        if self.col_major:
+            return x - self.x0, y - self.y0
+        return y - self.y0, x - self.x0
+
+    def trimmed_range(self) -> ttnn.CoreRange:
+        """The cores that hold a block: the grid trimmed to the block counts."""
+        nx, ny = (
+            (self.num_block_rows, self.num_block_cols) if self.col_major else (self.num_block_cols, self.num_block_rows)
         )
-
-    def num_block_rows(self, tensor_rows_tiles: int) -> int:
-        return _div_up(tensor_rows_tiles, self.shard_rows_tiles)
-
-    def num_block_cols(self, tensor_cols_tiles: int) -> int:
-        return _div_up(tensor_cols_tiles, self.shard_cols_tiles)
-
-    def block_core(self, r: int, c: int) -> tuple[int, int]:
-        """Logical core holding block (r, c)."""
-        return (self.x0 + r, self.y0 + c) if self.col_major else (self.x0 + c, self.y0 + r)
-
-    def trimmed_extent(self, num_block_rows: int, num_block_cols: int) -> tuple[int, int]:
-        """(x extent, y extent) in cores of the rectangle that holds blocks."""
-        return (num_block_rows, num_block_cols) if self.col_major else (num_block_cols, num_block_rows)
+        return ttnn.CoreRange(ttnn.CoreCoord(self.x0, self.y0), ttnn.CoreCoord(self.x0 + nx - 1, self.y0 + ny - 1))
 
 
-def tensor_tiles(padded_shape) -> tuple[int, int]:
-    """(tile rows, tile cols) of the padded 2-D view: all dims but the last folded into H."""
-    rows = 1
-    for d in list(padded_shape)[:-1]:
-        rows *= int(d)
-    return rows // TILE, int(padded_shape[-1]) // TILE
+def placement_from_shard_spec(shard_spec, tensor_rows_tiles: int, tensor_cols_tiles: int, tile_hw) -> Placement:
+    box = shard_spec.grid.bounding_box()
+    tile_h, tile_w = tile_hw
+    shard_h, shard_w = int(shard_spec.shape[0]), int(shard_spec.shape[1])
+    shard_rows_tiles, shard_cols_tiles = shard_h // tile_h, shard_w // tile_w
+    return Placement(
+        x0=box.start.x,
+        y0=box.start.y,
+        shard_rows_tiles=shard_rows_tiles,
+        shard_cols_tiles=shard_cols_tiles,
+        col_major=shard_spec.orientation == ttnn.ShardOrientation.COL_MAJOR,
+        num_block_rows=_div_up(tensor_rows_tiles, shard_rows_tiles),
+        num_block_cols=_div_up(tensor_cols_tiles, shard_cols_tiles),
+    )
+
+
+def tensor_tiles(padded_shape, tile_hw) -> tuple[int, int]:
+    """(tile rows, tile columns) of the padded 2-D view: all dims but the last fold into rows."""
+    tile_h, tile_w = tile_hw
+    outer = 1
+    for d in padded_shape[:-2]:
+        outer *= int(d)
+    return outer * int(padded_shape[-2]) // tile_h, int(padded_shape[-1]) // tile_w
 
 
 @dataclass(frozen=True)
@@ -96,91 +106,117 @@ class Plan:
     p_in: Placement
     p_out: Placement
     issuers_per_core: int
-    issuer_rows_tiles: int
     block_rows_tiles: int
     block_cols_tiles: int
 
     @property
-    def in_num_block_rows(self) -> int:
-        return self.p_in.num_block_rows(self.tensor_rows_tiles)
+    def issuer_rows_share(self) -> int:
+        return _div_up(self.p_out.shard_rows_tiles, self.issuers_per_core)
 
-    @property
-    def in_num_block_cols(self) -> int:
-        return self.p_in.num_block_cols(self.tensor_cols_tiles)
 
-    @property
-    def out_num_block_rows(self) -> int:
-        return self.p_out.num_block_rows(self.tensor_rows_tiles)
-
-    @property
-    def out_num_block_cols(self) -> int:
-        return self.p_out.num_block_cols(self.tensor_cols_tiles)
-
-    def out_core_range(self) -> ttnn.CoreRange:
-        ext_x, ext_y = self.p_out.trimmed_extent(self.out_num_block_rows, self.out_num_block_cols)
-        return ttnn.CoreRange(
-            ttnn.CoreCoord(self.p_out.x0, self.p_out.y0),
-            ttnn.CoreCoord(self.p_out.x0 + ext_x - 1, self.p_out.y0 + ext_y - 1),
+def make_plan(
+    tensor_rows_tiles: int, tensor_cols_tiles: int, page_bytes: int, p_in: Placement, p_out: Placement
+) -> Plan:
+    if not 1 <= ISSUERS_PER_CORE <= len(_ISSUER_CONFIGS):
+        raise RuntimeError(
+            f"g6_reshard: ISSUERS_PER_CORE={ISSUERS_PER_CORE}; a core has {len(_ISSUER_CONFIGS)} DM RISCs"
         )
-
-
-def make_plan(padded_shape, page_bytes: int, p_in: Placement, p_out: Placement) -> Plan:
-    assert 1 <= ISSUERS_PER_CORE <= len(_ISSUER_CONFIGS), "one issuer kernel per data-movement RISC"
-    rows, cols = tensor_tiles(padded_shape)
-    issuer_rows_tiles = _div_up(p_out.shard_rows_tiles, ISSUERS_PER_CORE)
+    issuer_rows_share = _div_up(p_out.shard_rows_tiles, ISSUERS_PER_CORE)
     return Plan(
-        tensor_rows_tiles=rows,
-        tensor_cols_tiles=cols,
+        tensor_rows_tiles=tensor_rows_tiles,
+        tensor_cols_tiles=tensor_cols_tiles,
         page_bytes=page_bytes,
         p_in=p_in,
         p_out=p_out,
         issuers_per_core=ISSUERS_PER_CORE,
-        issuer_rows_tiles=issuer_rows_tiles,
-        block_rows_tiles=BLOCK_ROWS_TILES or issuer_rows_tiles,
+        block_rows_tiles=BLOCK_ROWS_TILES or issuer_rows_share,
         block_cols_tiles=BLOCK_COLS_TILES or p_out.shard_cols_tiles,
     )
 
 
-def _in_noc_tables(device, plan: Plan) -> tuple[list[int], list[int]]:
-    """Virtual NoC coordinate of every in0 block row and block column.
+# --- Host mirror of the kernel's piece walk (plan dump only; never on the dispatch path) --------
 
-    A block row maps to one core y (ROW_MAJOR) or x (COL_MAJOR), a block column to the other, so
-    the kernel needs one table per axis instead of one entry per core. That only holds if the
-    logical→virtual map is separable; it is asserted for every core holding an in0 block.
+
+def issuer_rows(plan: Plan, r_out: int, issuer: int) -> tuple[int, int]:
+    """Tensor tile rows [lo, hi) issuer `issuer` of out block row r_out owns."""
+    block_row0 = r_out * plan.p_out.shard_rows_tiles
+    core_rows = min(plan.p_out.shard_rows_tiles, plan.tensor_rows_tiles - block_row0)
+    lo = min(issuer * plan.issuer_rows_share, core_rows)
+    hi = min(lo + plan.issuer_rows_share, core_rows)
+    return block_row0 + lo, block_row0 + hi
+
+
+def core_cols(plan: Plan, c_out: int) -> tuple[int, int]:
+    block_col0 = c_out * plan.p_out.shard_cols_tiles
+    return block_col0, block_col0 + min(plan.p_out.shard_cols_tiles, plan.tensor_cols_tiles - block_col0)
+
+
+def issuer_runs(plan: Plan, r_out: int, c_out: int, issuer: int):
+    """(source block (br, bc), run tiles) of every NoC read the issuer issues, in issue order."""
+    p_in, p_out = plan.p_in, plan.p_out
+    row_lo0, row_hi0 = issuer_rows(plan, r_out, issuer)
+    col_lo0, col_hi0 = core_cols(plan, c_out)
+    runs = []
+    for row_lo in range(row_lo0, row_hi0, plan.block_rows_tiles):
+        row_hi = min(row_lo + plan.block_rows_tiles, row_hi0)
+        for col_lo in range(col_lo0, col_hi0, plan.block_cols_tiles):
+            col_hi = min(col_lo + plan.block_cols_tiles, col_hi0)
+            br = row_lo // p_in.shard_rows_tiles
+            while br * p_in.shard_rows_tiles < row_hi:
+                piece_rows = min(row_hi, (br + 1) * p_in.shard_rows_tiles) - max(row_lo, br * p_in.shard_rows_tiles)
+                bc = col_lo // p_in.shard_cols_tiles
+                while bc * p_in.shard_cols_tiles < col_hi:
+                    piece_cols = min(col_hi, (bc + 1) * p_in.shard_cols_tiles) - max(col_lo, bc * p_in.shard_cols_tiles)
+                    one_run = piece_rows == 1 or (
+                        p_in.shard_cols_tiles == p_out.shard_cols_tiles and piece_cols == p_in.shard_cols_tiles
+                    )
+                    if one_run:
+                        runs.append(((br, bc), piece_rows * piece_cols))
+                    else:
+                        runs.extend(((br, bc), piece_cols) for _ in range(piece_rows))
+                    bc += 1
+                br += 1
+    return runs
+
+
+# --- Descriptor ---------------------------------------------------------------------------------
+
+
+def _noc_tables(device, p_in: Placement) -> tuple[list[int], list[int]]:
+    """Virtual NoC coordinate of each in0 block row and block column.
+
+    The kernel builds a source core's NoC address from one entry of each table, which holds only
+    if virtual x depends on logical x alone and virtual y on logical y alone; asserted per core.
     """
-    p = plan.p_in
-    nbr, nbc = plan.in_num_block_rows, plan.in_num_block_cols
 
-    def virt(core):
-        v = device.worker_core_from_logical_core(ttnn.CoreCoord(*core))
+    def virtual(block_row, block_col):
+        x, y = p_in.core_of(block_row, block_col)
+        v = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
         return v.x, v.y
 
-    # Block row r varies y for ROW_MAJOR (x for COL_MAJOR); block column c the other coordinate.
-    row_axis = 0 if p.col_major else 1
-    col_axis = 1 - row_axis
-    row_noc = [virt(p.block_core(r, 0))[row_axis] for r in range(nbr)]
-    col_noc = [virt(p.block_core(0, c))[col_axis] for c in range(nbc)]
-
-    for r in range(nbr):
-        for c in range(nbc):
-            v = virt(p.block_core(r, c))
-            want = [0, 0]
-            want[row_axis], want[col_axis] = row_noc[r], col_noc[c]
-            if v != tuple(want):
+    row_noc, col_noc = [], []
+    for br in range(p_in.num_block_rows):
+        vx, vy = virtual(br, 0)
+        row_noc.append(vx if p_in.col_major else vy)
+    for bc in range(p_in.num_block_cols):
+        vx, vy = virtual(0, bc)
+        col_noc.append(vy if p_in.col_major else vx)
+    for br in range(p_in.num_block_rows):
+        for bc in range(p_in.num_block_cols):
+            want = (row_noc[br], col_noc[bc]) if p_in.col_major else (col_noc[bc], row_noc[br])
+            if virtual(br, bc) != want:
                 raise RuntimeError(
-                    f"g6_reshard: logical->virtual NoC map is not separable at block ({r}, {c}) "
-                    f"core {p.block_core(r, c)}: {v} != {tuple(want)}"
+                    f"g6_reshard: virtual NoC coordinates of in0 core {p_in.core_of(br, bc)} are not separable "
+                    f"({virtual(br, bc)} vs {want})"
                 )
     return row_noc, col_noc
 
 
-def create_program_descriptor(device, plan: Plan, in_addr: int, out_addr: int) -> ttnn.ProgramDescriptor:
-    row_noc, col_noc = _in_noc_tables(device, plan)
-    common_rt_args = [in_addr, out_addr, *row_noc, *col_noc]
-
+def _compile_time_args(plan: Plan, issuer: int) -> list[int]:
     p_in, p_out = plan.p_in, plan.p_out
-    shared_ct_args = [
+    return [
         plan.issuers_per_core,
+        issuer,
         plan.block_rows_tiles,
         plan.block_cols_tiles,
         plan.page_bytes,
@@ -189,8 +225,8 @@ def create_program_descriptor(device, plan: Plan, in_addr: int, out_addr: int) -
         p_in.shard_rows_tiles,
         p_in.shard_cols_tiles,
         int(p_in.col_major),
-        plan.in_num_block_rows,
-        plan.in_num_block_cols,
+        p_in.num_block_rows,
+        p_in.num_block_cols,
         p_out.shard_rows_tiles,
         p_out.shard_cols_tiles,
         int(p_out.col_major),
@@ -198,85 +234,28 @@ def create_program_descriptor(device, plan: Plan, in_addr: int, out_addr: int) -
         p_out.y0,
     ]
 
-    core_ranges = ttnn.CoreRangeSet([plan.out_core_range()])
+
+def create_program_descriptor(plan: Plan, device, in_addr: int, out_addr: int) -> ttnn.ProgramDescriptor:
+    row_noc, col_noc = _noc_tables(device, plan.p_in)
+    common_args = [in_addr, out_addr, *row_noc, *col_noc]
+    cores = ttnn.CoreRangeSet([plan.p_out.trimmed_range()])
     kernels = []
     for issuer in range(plan.issuers_per_core):
         processor, noc = _ISSUER_CONFIGS[issuer]
         kernels.append(
             ttnn.KernelDescriptor(
-                kernel_source=GATHER_KERNEL,
-                core_ranges=core_ranges,
-                compile_time_args=[issuer, *shared_ct_args],
-                common_runtime_args=list(common_rt_args),
+                kernel_source=str(GATHER_KERNEL),
+                core_ranges=cores,
+                compile_time_args=_compile_time_args(plan, issuer),
+                common_runtime_args=common_args,
                 config=ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc),
             )
         )
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[])
 
 
-def patch_addresses(descriptor: ttnn.ProgramDescriptor, in_addr: int, out_addr: int) -> None:
-    """Rewrite the only per-call values (common RT args 0, 1) of a cached descriptor."""
-    kernels = descriptor.kernels
-    for kernel in kernels:
-        kernel.common_runtime_args[0] = in_addr
-        kernel.common_runtime_args[1] = out_addr
-    descriptor.kernels = kernels
-
-
-def describe_plan(plan: Plan) -> dict:
-    """Plan / role dump (BB-08, BB-21). Pure host arithmetic."""
-    out_range = plan.out_core_range()
-    targets = {}
-    for r in range(plan.out_num_block_rows):
-        core_rows = min(plan.p_out.shard_rows_tiles, plan.tensor_rows_tiles - r * plan.p_out.shard_rows_tiles)
-        for c in range(plan.out_num_block_cols):
-            core_cols = min(plan.p_out.shard_cols_tiles, plan.tensor_cols_tiles - c * plan.p_out.shard_cols_tiles)
-            issuers = []
-            for k in range(plan.issuers_per_core):
-                lo = min(k * plan.issuer_rows_tiles, core_rows)
-                hi = min(lo + plan.issuer_rows_tiles, core_rows)
-                row_lo, row_hi = r * plan.p_out.shard_rows_tiles + lo, r * plan.p_out.shard_rows_tiles + hi
-                col_lo, col_hi = c * plan.p_out.shard_cols_tiles, c * plan.p_out.shard_cols_tiles + core_cols
-                issuers.append(
-                    {
-                        "issuer": k,
-                        "noc": k,
-                        "rows": (row_lo, row_hi),
-                        "runs": _count_runs(plan, row_lo, row_hi, col_lo, col_hi),
-                    }
-                )
-            targets[plan.p_out.block_core(r, c)] = {"block": (r, c), "issuers": issuers}
-
-    out_cores = set(targets)
-    source_only = sorted(
-        plan.p_in.block_core(r, c)
-        for r in range(plan.in_num_block_rows)
-        for c in range(plan.in_num_block_cols)
-        if plan.p_in.block_core(r, c) not in out_cores
-    )
-    return {
-        "regime": "PULL",
-        "issuers_per_core": plan.issuers_per_core,
-        "block_rows_tiles": plan.block_rows_tiles,
-        "block_cols_tiles": plan.block_cols_tiles,
-        "kernel_core_ranges": [((out_range.start.x, out_range.start.y), (out_range.end.x, out_range.end.y))],
-        "targets": targets,
-        "source_only": source_only,
-    }
-
-
-def _count_runs(plan: Plan, row_lo: int, row_hi: int, col_lo: int, col_hi: int) -> int:
-    """Run count of an issuer range, mirroring the kernel's piece walk (block knobs included)."""
-    runs = 0
-    for b_row in range(row_lo, row_hi, plan.block_rows_tiles):
-        b_row_hi = min(b_row + plan.block_rows_tiles, row_hi)
-        for b_col in range(col_lo, col_hi, plan.block_cols_tiles):
-            b_col_hi = min(b_col + plan.block_cols_tiles, col_hi)
-            sr, sc = plan.p_in.shard_rows_tiles, plan.p_in.shard_cols_tiles
-            for br in range(b_row // sr, _div_up(b_row_hi, sr)):
-                piece_rows = min(b_row_hi, (br + 1) * sr) - max(b_row, br * sr)
-                for bc in range(b_col // sc, _div_up(b_col_hi, sc)):
-                    piece_cols = min(b_col_hi, (bc + 1) * sc) - max(b_col, bc * sc)
-                    one_run = piece_rows == 1 or (piece_cols == sc and piece_cols == plan.p_out.shard_cols_tiles)
-                    runs += 1 if one_run else piece_rows
-    return runs
+def set_buffer_addresses(descriptor: ttnn.ProgramDescriptor, in_addr: int, out_addr: int) -> None:
+    """Patch the only per-call values of a cached descriptor (in place)."""
+    for kernel in descriptor.kernels:
+        kernel.common_runtime_args[IN_ADDR_ARG] = in_addr
+        kernel.common_runtime_args[OUT_ADDR_ARG] = out_addr
