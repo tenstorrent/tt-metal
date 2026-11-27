@@ -798,7 +798,7 @@ void call_unary_sfpu_operation_quasar(
     constexpr std::uint32_t kReluThresholdBits = 0x40A00000u; // 5.0f
     if constexpr (OPERATION == SfpuType::abs)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_abs, (APPROX, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_abs, (APPROX, ITERATIONS, is_fp32_dest_acc_en), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::abs_int32)
     {
