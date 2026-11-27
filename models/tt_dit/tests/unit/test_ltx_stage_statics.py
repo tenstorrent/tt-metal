@@ -62,6 +62,7 @@ class StageStaticsTest(unittest.TestCase):
             functools=functools,
             Enum=Enum,
             ttnn=self.ops,
+            live_tracers=lambda: (),
             tensor=SimpleNamespace(from_torch=Buffer),
             bf16_tensor=Buffer,
             bf16_tensor_2dshard=Buffer,
