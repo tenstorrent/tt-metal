@@ -34,12 +34,9 @@ ALWI void negative_tile(uint32_t idst) {
         DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
-#ifndef ARCH_QUASAR
-
 ALWI void negative_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_int_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
-#endif
 }  // namespace ckernel

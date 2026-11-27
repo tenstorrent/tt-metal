@@ -1,0 +1,52 @@
+# MoE gate key = sqrt(softplus(x)) + bias (x at tile 0, bias at tile 1, key packed); fp32 Dest only.
+# Bfloat16 inputs (Float32 in _dest32_fp32); bound mostly absolute: the bias add can cancel.
+
+dest_acc: true
+
+operands:
+  - name: "x"
+    dims: [32, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-30.0, -10.01]
+        - [-9.99, -3.01]
+        - [-2.99, -0.01]
+        - [0.01, 2.99]
+        - [3.01, 19.99]
+        - [20.01, 40.0]
+        - -60.0
+        - -10.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 20.0
+        - 100.0
+  - name: "bias"
+    dims: [32, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-2.0, -0.01]
+        - [0.01, 2.0]
+        - -1.0
+        - 0.0
+        - 1.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+    atol: 3.0e-6
+    rtol: 4.0e-6
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "x", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 0}}
+      - {type: "Fpu", in0: "bias", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 1}}
+      - type: "BinarySfpu"
+        operation: [SfpuMoeGateSqrtSoftplusAddBias]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 1}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 1, out: 0}}

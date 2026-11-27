@@ -40,18 +40,6 @@ ALWI void gelu_tile(uint32_t idst) {
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
 
-#ifndef ARCH_QUASAR
-template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void gelu_tile_init_pack() {
-    PACK(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, is_fp32_dest_acc_en)));
-}
-
-template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void gelu_tile_pack(uint32_t idst) {
-    PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
-}
-
 /**
  * Init for gelu_tanh_tile. See gelu_tanh_tile() for semantics.
  */
@@ -64,15 +52,6 @@ ALWI void gelu_tanh_tile_init() {
     }
 }
 
-template <bool fast = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void gelu_tanh_tile_init_pack() {
-    if constexpr (fast) {
-        PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_fast_init));
-    } else {
-        PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init<is_fp32_dest_acc_en>));
-    }
-}
-
 // clang-format off
 /**
  * Element-wise GELU using the tanh approximation:
@@ -81,11 +60,11 @@ ALWI void gelu_tanh_tile_init_pack() {
  * Intended as a fused-activation drop-in for matmuls that need the
  * tanh-GELU (e.g. F.gelu(approximate="tanh")).
  *
- * fast = false evaluates it in FP32 with the accurate tanh on Wormhole and with FP32 DEST. On Blackhole with BF16
- * DEST (is_fp32_dest_acc_en false) it runs a fitted kernel instead (ckernel_sfpu_gelu_tanh_bf16.h): the same
- * function as x / (1 + exp(-2u)), below 1 BF16 ULP of the exact value (max 0.51 ULP) except at inputs at or
- * below -10.0625 and results within 2^-12 above the smallest normal, where it may give 0. Wormhole and Blackhole
- * give different bits there.
+ * fast = false evaluates it in FP32 with the accurate tanh on Wormhole and with FP32 DEST. On Blackhole and Quasar
+ * with BF16 DEST (is_fp32_dest_acc_en false) it runs a fitted kernel instead (ckernel_sfpu_gelu_tanh_bf16.h): the
+ * same function as x / (1 + exp(-2u)), below 1 BF16 ULP of the exact value (max 0.51 ULP, measured on Blackhole)
+ * except at inputs at or below -10.0625 and results within 2^-12 above the smallest normal, where it may give 0.
+ * Wormhole and Blackhole give different bits there.
  *
  * fast = true, for BF16 outputs, computes the same function as x / (1 + exp(-2u)) with a polynomial exp and
  * two Newton steps on the reciprocal: within 1 BF16 ULP of the FP32 tanh form where |GELU| >= 1e-3, and
@@ -106,17 +85,6 @@ ALWI void gelu_tanh_tile(uint32_t idst) {
             DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en), idst, VectorMode::RC));
     } else {
         MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
-    }
-}
-
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool fast = false>
-ALWI void gelu_tanh_tile_pack(uint32_t idst) {
-    if constexpr (fast) {
-        PACK(SFPU_UNARY_CALL(
-            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en), idst, VectorMode::RC));
-    } else {
-        PACK(SFPU_UNARY_CALL(
             DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
     }
 }
@@ -162,5 +130,42 @@ ALWI void gelu_derivative_tile(uint32_t idst) {
         VectorMode::RC));
 }
 
-#endif
+// Pack-thread variants: Quasar has no pack-thread SFPU, so these are gated off there.
+#ifndef ARCH_QUASAR
+template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void gelu_tile_init_pack() {
+    PACK(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, is_fp32_dest_acc_en)));
+}
+
+template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void gelu_tile_pack(uint32_t idst) {
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_gelu,
+        (fast_and_approx, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::RC));
+}
+
+template <bool fast = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void gelu_tanh_tile_init_pack() {
+    if constexpr (fast) {
+        PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_fast_init));
+    } else {
+        PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init<is_fp32_dest_acc_en>));
+    }
+}
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool fast = false>
+ALWI void gelu_tanh_tile_pack(uint32_t idst) {
+    if constexpr (fast) {
+        PACK(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+    } else {
+        PACK(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+    }
+}
+#endif  // !ARCH_QUASAR
 }  // namespace ckernel

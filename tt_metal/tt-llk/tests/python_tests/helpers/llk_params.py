@@ -312,6 +312,11 @@ class MathOperation(Enum):
     # where the float mask is zero, calculate_int_mask zeroes Int32 data where the mask is 0.
     SfpuMaskPosinf = OpSpec("MASK_POSINF", MathOpType.SFPU_BINARY)
     SfpuGegluTanh = OpSpec("GEGLU_TANH", MathOpType.SFPU_BINARY)
+    # DeepSeek-V4 MoE gate: key = sqrt(softplus(x)) + bias, x = in0, bias = in1. The kernel writes
+    # the score over in0 and the key over in1, whatever the out index says.
+    SfpuMoeGateSqrtSoftplusAddBias = OpSpec(
+        "MOE_GATE_SQRT_SOFTPLUS_ADD_BIAS", MathOpType.SFPU_BINARY
+    )
     SfpuIntMask = OpSpec("INT_MASK", MathOpType.SFPU_BINARY)
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)

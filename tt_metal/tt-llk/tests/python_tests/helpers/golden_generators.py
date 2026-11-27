@@ -4400,6 +4400,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuLgammaStirlingFp32: self._lgamma_stirling_fp32,
                 MathOperation.SfpuFmodInt32: self._fmod_int,
                 MathOperation.SfpuGegluTanh: self._geglu_tanh,
+                MathOperation.SfpuMoeGateSqrtSoftplusAddBias: self._moe_gate_sqrt_softplus_add_bias,
                 MathOperation.SfpuIntSumAdd: self._int_sum_add,
                 MathOperation.SfpuClampedSiluGlu: self._clamped_silu_glu,
                 MathOperation.SfpuSiluGlu: self._silu_glu,
@@ -4831,6 +4832,13 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             )
             * (b)
         )
+
+    def _moe_gate_sqrt_softplus_add_bias(self, t1, t2):
+        # calculate_moe_gate_sqrt_softplus_add_bias: sqrt(softplus(x)) + bias with x = t1 and
+        # bias = t2, softplus as torch's (beta = 1, threshold = 20), exact in float64.
+        x, bias = float(t1), float(t2)
+        softplus = x if x > 20.0 else math.log1p(math.exp(x))
+        return math.sqrt(softplus) + bias
 
     def _gt(self, t1, t2):
         return (t1 > t2).to(torch.float32)

@@ -97,18 +97,6 @@ ALWI void relu_max_tile(uint32_t idst, uint32_t param0) {
 
 ALWI void relu_max_tile_init() { MATH(SFPU_UNARY_INIT(relu_max)); }
 
-#ifndef ARCH_QUASAR
-ALWI void relu_max_tile_pack(uint32_t idst, uint32_t param0) {
-    PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _relu_max_,
-        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
-        idst,
-        VectorMode::RC,
-        param0 /*threshold*/));
-}
-
 ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -120,58 +108,12 @@ ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
-ALWI void relu_max_tile_uint32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        relu_clamp_uint,
-        (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, DataFormat::UInt32, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0 /*threshold*/));
-}
-
-ALWI void relu_max_tile_uint16(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        relu_clamp_uint,
-        (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, DataFormat::UInt16, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0 /*threshold*/));
-}
-
-ALWI void relu_max_tile_init_pack() { PACK(SFPU_UNARY_INIT(relu_max)); }
-
 ALWI void relu_min_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         relu_clamp_int,
         (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0 /*threshold*/));
-}
-
-ALWI void relu_min_tile_uint32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        relu_clamp_uint,
-        (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, DataFormat::UInt32, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0 /*threshold*/));
-}
-
-ALWI void relu_min_tile_uint16(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        relu_clamp_uint,
-        (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, DataFormat::UInt16, 8 /*ITERATIONS*/),
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
@@ -209,5 +151,64 @@ ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
 }
 
 ALWI void leaky_relu_tile_init() { MATH(SFPU_UNARY_INIT(lrelu)); }
-#endif
+
+// Quasar has no pack-thread SFPU and no UInt32/UInt16 formats.
+#ifndef ARCH_QUASAR
+ALWI void relu_max_tile_pack(uint32_t idst, uint32_t param0) {
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _relu_max_,
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
+        idst,
+        VectorMode::RC,
+        param0 /*threshold*/));
+}
+
+ALWI void relu_max_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        relu_clamp_uint,
+        (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, DataFormat::UInt32, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC,
+        param0 /*threshold*/));
+}
+
+ALWI void relu_max_tile_uint16(uint32_t idst, uint32_t param0) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        relu_clamp_uint,
+        (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, DataFormat::UInt16, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC,
+        param0 /*threshold*/));
+}
+
+ALWI void relu_max_tile_init_pack() { PACK(SFPU_UNARY_INIT(relu_max)); }
+
+ALWI void relu_min_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        relu_clamp_uint,
+        (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, DataFormat::UInt32, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC,
+        param0 /*threshold*/));
+}
+
+ALWI void relu_min_tile_uint16(uint32_t idst, uint32_t param0) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        relu_clamp_uint,
+        (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, DataFormat::UInt16, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC,
+        param0 /*threshold*/));
+}
+#endif  // !ARCH_QUASAR
 }  // namespace ckernel

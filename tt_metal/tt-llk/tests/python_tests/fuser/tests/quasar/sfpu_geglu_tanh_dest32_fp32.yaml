@@ -1,0 +1,56 @@
+# geglu_tanh(gate, up) = gelu_tanh(gate) * up: gate on [-12, 12] plus specials and +-20.
+# Float32 inputs unpacked straight to Dest (datacopy would cut them to tf32); tolerances as _dest32.
+
+dest_acc: true
+
+operands:
+  - name: "gate"
+    dims: [32, 32]
+    format: [Float32]
+    stimuli:
+      include:
+        - [-12.0, -3.01]
+        - [-2.99, -1.01]
+        - [-0.99, -0.01]
+        - [0.01, 0.99]
+        - [1.01, 2.99]
+        - [3.01, 12.0]
+        - -20.0
+        - -3.0
+        - -1.0
+        - -0.5
+        - 0.0
+        - 0.5
+        - 1.0
+        - 3.0
+        - 20.0
+  - name: "up"
+    dims: [32, 32]
+    format: [Float32]
+    stimuli:
+      include:
+        - [-8.0, -1.01]
+        - [-0.99, -0.01]
+        - [0.01, 0.99]
+        - [1.01, 8.0]
+        - -1.0
+        - 0.0
+        - 1.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+    atol: 1.0e-6
+    rtol: 2.0e-4
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "gate", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 32], indexes: {in0: 0, dest: 0}}
+      - {type: "Fpu", in0: "up", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 32], indexes: {in0: 0, dest: 1}}
+      - type: "BinarySfpu"
+        operation: [SfpuGegluTanh]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 2}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 2, out: 0}}

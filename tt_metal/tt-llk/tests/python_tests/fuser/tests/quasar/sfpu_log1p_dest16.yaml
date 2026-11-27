@@ -1,0 +1,40 @@
+# log1p(x) on x > -1: just above -1, both sides of 0, and up to 65000.
+# rtol: two bf16 ulps (measured worst case one ulp).
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-0.99, -0.51]
+        - [-0.49, -0.01]
+        - [0.0101, 0.49]
+        - [0.51, 7.99]
+        - [8.01, 999.0]
+        - -0.99609375
+        - -0.5
+        - 0.0
+        - 0.0001
+        - 0.5
+        - 1.0
+        - 1000.0
+        - 65000.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float16_b
+    atol: 1.0e-6
+    rtol: 0.016
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [Log1p]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

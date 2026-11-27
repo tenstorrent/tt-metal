@@ -1,0 +1,49 @@
+# gelu'(x) on [-14, 8] plus the kernel's region edges (+-3, 3.1719, -13.375), specials and +-20.
+# Bfloat16 inputs (Float32 in _dest32_fp32); rtol 0.01 covers the saturation to 1 (7.5e-3).
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-14.0, -13.39]
+        - [-13.36, -5.01]
+        - [-4.99, -3.01]
+        - [-2.99, -1.01]
+        - [-0.99, -0.01]
+        - [0.0101, 0.99]
+        - [1.01, 2.99]
+        - [3.01, 3.16]
+        - [3.18, 8.0]
+        - -20.0
+        - -13.375
+        - -5.0
+        - -3.0
+        - -1.0
+        - -0.5
+        - 0.0
+        - 0.0001
+        - 0.5
+        - 1.0
+        - 3.0
+        - 3.171875
+        - 20.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+    atol: 1.0e-12
+    rtol: 0.01
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [GeluDerivative]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

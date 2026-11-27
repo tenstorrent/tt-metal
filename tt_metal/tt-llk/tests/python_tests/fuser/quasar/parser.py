@@ -491,6 +491,11 @@ UNARY_SFPU_OPS = {
     MathOperation.Asinh,
     MathOperation.Acosh,
     MathOperation.Atanh,
+    MathOperation.Log1p,
+    MathOperation.Lrelu,
+    MathOperation.QuickGelu,
+    MathOperation.GeluTanh,
+    MathOperation.GeluDerivative,
 }
 
 BINARY_SFPU_OPS = {
@@ -518,6 +523,8 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuLgammaStirlingFp32,
     MathOperation.SfpuRsubInt32,
     MathOperation.SfpuDivInt32,
+    MathOperation.SfpuGegluTanh,
+    MathOperation.SfpuMoeGateSqrtSoftplusAddBias,
     MathOperation.SfpuDivInt32Floor,
     MathOperation.SfpuIntSumAdd,
     MathOperation.SfpuClampedSiluGlu,

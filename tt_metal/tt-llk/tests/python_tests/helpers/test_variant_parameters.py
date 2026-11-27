@@ -513,6 +513,37 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class SFPU_RELU_MAX_INT_THRESHOLD(TemplateParameter):
+    """Integer threshold for relu_max on Int32, emitted as its two's-complement uint32.
+
+    A macro for the same reason as :class:`SFPU_RELU_MIN_INT_THRESHOLD`; unset keeps the
+    dispatcher's 5. The field name is unique across classes (test_perf_header_gate.py).
+    """
+
+    relu_max_int_threshold: int = 5
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_RELU_MAX_INT_THRESHOLD {self.relu_max_int_threshold & 0xFFFFFFFF}u"
+
+
+@dataclass
+class SFPU_CLAMP_INT32_BOUNDS(TemplateParameter):
+    """clamp_tile_int32 bounds, emitted as two's-complement uint32 macros.
+
+    A macro pair because the dispatcher selects on ``#ifdef``; unset keeps its [-1000, 1000].
+    """
+
+    clamp_int32_min: int = -1000
+    clamp_int32_max: int = 1000
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define SFPU_CLAMP_INT32_MIN {self.clamp_int32_min & 0xFFFFFFFF}u\n"
+            f"#define SFPU_CLAMP_INT32_MAX {self.clamp_int32_max & 0xFFFFFFFF}u"
+        )
+
+
+@dataclass
 class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
     """Unary max/min scalar, emitted as fp32 bits (float) or two's-complement int32 (int).
     A macro because the dispatcher selects on ``#ifdef``; unset keeps its 0.0f / 1000 default.

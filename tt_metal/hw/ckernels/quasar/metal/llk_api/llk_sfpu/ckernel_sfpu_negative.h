@@ -29,15 +29,16 @@ inline void _calculate_negative_()
     }
 }
 
-// Element-wise negate for int32: out = -x (two's-complement negate), for the negative_tile_int32 path.
+// Element-wise negate for int32: out = -x (two's-complement negate, -INT_MIN wraps to INT_MIN), for the
+// negative_tile_int32 path.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_negative_int_()
 {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vInt val   = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = -val;
+        sfpi::vInt val = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = -val;
         sfpi::dst_reg++;
     }
 }

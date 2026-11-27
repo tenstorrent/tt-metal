@@ -6,8 +6,8 @@
 
 #include "api/compute/common_globals.h"
 
-// Blackhole only: ckernel_sfpu_moe_gate_sqrt_softplus.h is placed under the Blackhole ckernel tree.
-#if defined(ARCH_BLACKHOLE)
+// Blackhole and Quasar only: ckernel_sfpu_moe_gate_sqrt_softplus.h is placed under their ckernel trees.
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
 
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_moe_gate_sqrt_softplus.h"
@@ -61,4 +61,4 @@ ALWI void moe_gate_sqrt_softplus_add_bias_tile_init() {
 
 }  // namespace ckernel
 
-#endif  // ARCH_BLACKHOLE
+#endif  // ARCH_BLACKHOLE || ARCH_QUASAR
