@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import compare_test_and_perf as cmp
+import pytest
 
 
 def test_normalize_strips_prefix_and_quasar_suffix():
@@ -170,7 +171,25 @@ def test_bundle_stays_packed_when_the_other_side_lacks_those_axes():
     assert list(sweep.axes) == ["dest_sync_dest_acc"]
 
 
-def test_dest_reuse_exception_uses_the_separate_quasar_module():
+_REUSE_EXCEPTION = {
+    ("eltwise_binary", "eltwise_binary_dest_reuse"): (
+        "eltwise_binary_reuse_dest",
+        "eltwise_binary_reuse_dest",
+    )
+}
+
+
+@pytest.fixture
+def reuse_exception(monkeypatch):
+    """Pair eltwise_binary_dest_reuse with the separate reuse-dest module, as an exception would."""
+    monkeypatch.setattr(cmp, "CROSS_ARCH_FUNCTION_EXCEPTIONS", _REUSE_EXCEPTION)
+
+
+def test_no_function_exceptions_are_registered():
+    assert cmp.CROSS_ARCH_FUNCTION_EXCEPTIONS == {}
+
+
+def test_dest_reuse_exception_uses_the_separate_quasar_module(reuse_exception):
     left = {"eltwise_binary": Path("perf_eltwise_binary.py")}
     right = {
         "eltwise_binary": Path("quasar/perf_eltwise_binary_quasar.py"),
@@ -319,7 +338,7 @@ def test_one_sided_parametrize_is_still_a_miss(tmp_path: Path, monkeypatch):
         _forget_module(root, "test_right")
 
 
-def test_exception_is_not_consumed_when_the_home_stem_is_unmatched():
+def test_exception_is_not_consumed_when_the_home_stem_is_unmatched(reuse_exception):
     left = {"eltwise_binary": Path("perf_eltwise_binary.py")}
     right = {"eltwise_binary_reuse_dest": Path("quasar/reuse.py")}
 
@@ -329,7 +348,7 @@ def test_exception_is_not_consumed_when_the_home_stem_is_unmatched():
     assert consumed == set()
 
 
-def test_dest_reuse_exception_follows_either_arch_order():
+def test_dest_reuse_exception_follows_either_arch_order(reuse_exception):
     quasar_pair = Path("quasar/perf_eltwise_binary_quasar.py")
     quasar_extra = Path("quasar/perf_eltwise_binary_reuse_dest_quasar.py")
     blackhole = Path("perf_eltwise_binary.py")
@@ -349,7 +368,9 @@ def test_dest_reuse_exception_follows_either_arch_order():
     assert extra_on_right is False
 
 
-def test_single_pair_lookup_finds_dest_reuse_either_order(tmp_path: Path):
+def test_single_pair_lookup_finds_dest_reuse_either_order(
+    tmp_path: Path, reuse_exception
+):
     root = _python_tests_root(tmp_path)
     blackhole = root / "perf_eltwise_binary.py"
     blackhole.write_text("x = 1\n")

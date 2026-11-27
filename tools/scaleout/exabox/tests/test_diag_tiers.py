@@ -116,6 +116,30 @@ class TestDiagRunnerCli(unittest.TestCase):
                     )
                 self.assertEqual(report["tier"], new)
 
+    def test_skip_flags_skip_the_retest(self):
+        from diag_runner import run_diag
+
+        for flag in ("skip_reset", "skip_tests"):
+            with self.subTest(flag), tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    _rc, report = run_diag(
+                        "weekly",
+                        input_snapshot=d / "missing.json",
+                        output=d / "report.json",
+                        snapshot_out=d / "snapshot.json",
+                        dry_run=True,
+                        skip_triage=True,
+                        skip_qsfp_tests=True,
+                        skip_sys_triage=True,
+                        # Dry run still resolves tt-smi for the resets it prints.
+                        tt_smi_path="/usr/bin/true",
+                        **{flag: True},
+                    )
+                retest = report["phases"]["retest"]
+                self.assertEqual(retest["status"], "SKIP")
+                self.assertEqual([c["name"] for c in retest["checks"]], ["retest"])
+
     def test_docker_wrapper_feature_probe_still_matches(self):
         # run_diag_docker.sh greps diag_runner.py for this flag to tell an image
         # that predates the sys-triage phase, and drops the phase's flags if it

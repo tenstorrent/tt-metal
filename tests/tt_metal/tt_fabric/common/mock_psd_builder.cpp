@@ -213,7 +213,7 @@ tt::tt_metal::PhysicalSystemDescriptor restrict_mock_psd_to_hosts(
     erase_if(sg->mutable_asic_connectivity_graph(), [&](const auto& m) { return dropped(m.host_name()); });
     erase_if(sg->mutable_host_connectivity_graph(), [&](const auto& m) { return dropped(m.src_host_name()); });
 
-    return tt::tt_metal::deserialize_physical_system_descriptor_from_proto(p);
+    return tt::tt_metal::PhysicalSystemDescriptor(p);
 }
 
 std::vector<std::pair<int, int>> line_edges(int num_asics) {

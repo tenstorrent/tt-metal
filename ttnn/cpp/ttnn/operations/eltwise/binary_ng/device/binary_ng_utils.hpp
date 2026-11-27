@@ -13,6 +13,10 @@
 #include <string>
 #include <cstdint>
 
+namespace ttnn::operations::unary::utils {
+struct RuntimeScalars;
+}  // namespace ttnn::operations::unary::utils
+
 namespace ttnn::operations::binary_ng {
 
 enum class KernelName {
@@ -120,7 +124,8 @@ void add_activation_defines(
     std::map<std::string, std::string>& defines,
     ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     std::string_view operand,
-    std::optional<DataType> dtype = std::nullopt);
+    std::optional<DataType> dtype = std::nullopt,
+    unary::utils::RuntimeScalars* runtime_scalars = nullptr);
 
 std::uint32_t pack_scalar_runtime_arg(unary::ScalarVariant scalar, DataType dtype, bool is_quant_op);
 

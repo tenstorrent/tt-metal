@@ -415,12 +415,7 @@ def normalize(name: str) -> str:
 
 
 # (left stem, left function) -> (right stem, right function), both normalized.
-CROSS_ARCH_FUNCTION_EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {
-    ("eltwise_binary", "eltwise_binary_dest_reuse"): (
-        "eltwise_binary_reuse_dest",
-        "eltwise_binary_reuse_dest",
-    ),
-}
+CROSS_ARCH_FUNCTION_EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {}
 
 
 def module_key(path: Path) -> str:
