@@ -158,6 +158,12 @@ inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const Tenso
         cfg[THCON_PACKER0_REG1_PACK_UNTILIZE_SRC_Z_STRIDE_ADDR32] = pk_cfg.val[0];
         cfg[THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_ADDR32]       = pk_cfg.val[1];
 
+        constexpr std::uint32_t stride_cfg_mask = THCON_PACKER0_REG3_PACK_STRIDE_VAL_SOURCE_MASK | // stride offset source
+                                                  THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_MASK |   // skip masked writes
+                                                  THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_MASK |   // masked rows
+                                                  THCON_PACKER0_REG3_PACK_STRIDE_COL_MASK_MASK;    // masked columns
+        cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_VAL_SOURCE_ADDR32, 0 /*shamt*/, stride_cfg_mask, 0 /*val*/);
+
         _llk_pack_untilize_mop_config_<BLOCK_CT_DIM>(buf_desc_id);
         return;
     }
