@@ -224,6 +224,14 @@ class TtFfn(TtSharedExpert):
         )
 
     def _activate(self, gate_out: ttnn.Tensor, up_out: ttnn.Tensor) -> ttnn.Tensor:
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        out = self._activate_inner(gate_out, up_out)
+        if capture.CAPTURE is not None:  # mlp0_down_in (the GPTQ teacher capture; K3's layer 0)
+            capture.CAPTURE.tap(getattr(self, "capture_layer", None), "mlp0_down_in", out)
+        return out
+
+    def _activate_inner(self, gate_out: ttnn.Tensor, up_out: ttnn.Tensor) -> ttnn.Tensor:
         if self.activation == ACTIVATION_SITU:
             # No sub-device here, so ttnn.situ_glu's L1 fast path is in play -- but it is bounded on
             # the per-chip width, and K3's 33792 is 8448 at TP=4, past the 3072 bound. So the

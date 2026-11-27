@@ -673,7 +673,15 @@ class TtMoEBlockFfn:
             else:
                 start = int(actual_start or 0)
                 span = dict(actual_start=start, actual_end=start + int(actual_isl))
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        cap = capture.CAPTURE
+        if cap is not None:
+            cap.moe_layer = self.layer_idx
         y = block(x, weights, **span)
+        if cap is not None:  # (the GPTQ teacher capture: routing, dispatch rows, combine output, shared_down_in)
+            cap.moe(self, block, x)
+            cap.moe_layer = None
         if not getattr(block, "_logged_l1_small", False):  # (the block's persistent words, all made)
             from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import l1_small_bytes
 

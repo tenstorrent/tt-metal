@@ -24,6 +24,7 @@ from typing import Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext
 from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -191,6 +192,7 @@ class TtKimiK3Block(LightweightModule):
                 hidden_dim=config.intermediate_size,
                 fuse_tp_collectives=getattr(model_cfg, "FUSE_DENSE_FFN_TP_COLLECTIVES", False),
             )
+            self.ffn.capture_layer = layer_idx  # (the teacher capture's mlp0_down_in tap)
             if self.ffn.fuses_tp_collectives:
                 # Over all forward_chunks chunks' rows at once.
                 self.ffn.prepare_fused(seq_len * forward_chunks // mesh_device.shape[sp_axis])
@@ -238,6 +240,8 @@ class TtKimiK3Block(LightweightModule):
             attn_input_tap(self.local_idx, hidden)
         normed = self.attn_norm(hidden)
         seq_len_local = normed.shape[2]
+        if capture.CAPTURE is not None:  # (K3_CAPTURE_DIR: the GPTQ teacher capture, tt/kimi_k3/capture.py)
+            capture.CAPTURE.tap(self.layer_idx, "attn_in", normed)
 
         attn_out = self.attention.forward(normed, ctx)
         ttnn.deallocate(normed)
@@ -290,6 +294,8 @@ class TtKimiK3Block(LightweightModule):
 
         pre_ffn = residual.read()
         ffn_norm_out = self.ffn_norm(pre_ffn)
+        if capture.CAPTURE is not None:
+            capture.CAPTURE.tap(self.layer_idx, "moe_in" if self.is_moe else "mlp0_in", ffn_norm_out)
         ffn_out = self._ffn_path(ffn_norm_out, actual_isl=actual_isl, padding_side=padding_side, ctx=ctx)
         ttnn.deallocate(ffn_norm_out)
         residual.write(ffn_out)

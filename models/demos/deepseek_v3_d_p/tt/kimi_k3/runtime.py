@@ -38,6 +38,9 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         if not state_dict:
             state_dict = self._accuracy_state_dict()
         super()._build_model(state_dict)
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        capture.start(self)  # (K3_CAPTURE_DIR set: the GPTQ teacher capture; else nothing)
 
     def _accuracy_state_dict(self) -> dict:
         """K3_ACC_BF16_WEIGHTS (tt/kimi_k3/accuracy.py): a cache built without the knob holds no bf16 attention
@@ -153,7 +156,10 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         if slabs is not None:
             self._check_kda_slabs(slabs, self.model.schedule.rank_kda_layer_ids())
         self.model.kda_states = slabs
-        super().compile(kv_caches)
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        with capture.paused():  # (the warm-up forward is not calibration data)
+            super().compile(kv_caches)
 
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
         """One stage per table config, always, in config order: kvpe, the DSA index cache when the model has
@@ -366,7 +372,14 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         # Validate before replaying a trace. Device-only metadata must satisfy the same
         # aligned-start, nonempty-interval contract.
         validate_kda_bounds(bound.arguments.get("actual_start"), bound.arguments.get("actual_end"))
-        return super().prefill_chunk(*args, **kwargs)
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is None or capture.CAPTURE.paused:
+            return super().prefill_chunk(*args, **kwargs)
+        capture.CAPTURE.begin_chunk(bound.arguments.get("actual_start"), bound.arguments.get("actual_end"))
+        out = super().prefill_chunk(*args, **kwargs)
+        capture.CAPTURE.end_chunk()
+        return out
 
     def prefill_forward(self, input_tensor, kv_caches, chunks, *args, **kwargs):
         """Validate the chunks, then run the shared packed forward.

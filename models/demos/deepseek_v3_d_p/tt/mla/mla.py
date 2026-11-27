@@ -1622,6 +1622,10 @@ class ttMLA:
         → query assembly. Consumes qr (the indexer, if any, has already read it by this point) unless it is borrowed:
         the persistent q_a gather buffer, which must stay allocated."""
         num_heads_local = self.num_heads // self.tp_factor
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is not None:  # mla_qb_in: q_a_layernorm's output (replicated over TP)
+            capture.CAPTURE.tap(self.layer_idx, "mla_qb_in", qr, capture.REP)
         if self._llama4_beta is not None:
             # Mistral's per-position query temperature, applied to the normed q_a latent rather than to
             # Q: every step from here to Q (q_b_proj, head split, wkv_b1, RoPE) is linear or a per-row
@@ -1640,6 +1644,9 @@ class ttMLA:
         )
         if not qr_borrowed:
             ttnn.deallocate(qr)
+        if capture.CAPTURE is not None:  # mla_kvb1_in: q_nope per head (q_b's output, heads over TP)
+            capture.CAPTURE.tap_q_nope(self.layer_idx, tt_q, self.qk_nope_head_dim + self.qk_rope_head_dim,
+                                       self.qk_nope_head_dim)
 
         if self._early_q_reshard:
             return self._q_stem_seq_sharded(tt_q, rope_tensors, kv_actual_isl, seq_len_local, metadata)
@@ -1934,6 +1941,10 @@ class ttMLA:
         return tt_kvpe, tt_kv_nope, kv_intermediates
 
     def _apply_wkv_b2(self, t: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is not None:  # mla_kvb2_in: the attention output in kv_lora space per head
+            capture.CAPTURE.tap(self.layer_idx, "mla_kvb2_in", t, capture.HEADS)
         return ttnn.linear(
             t,
             self.wkv_b2_weight,
@@ -2132,6 +2143,10 @@ class ttMLA:
             g = self._output_gate(hidden_states, seq_len_local)
             v_out = ttnn.multiply(v_out, g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(g)
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is not None:  # mla_o_in: o_proj's input (after the output gate), heads over TP
+            capture.CAPTURE.tap(self.layer_idx, "mla_o_in", v_out)
         if self.tp_factor > 1:
             # CCL ports in the last grid column: the matmul keeps every row (GLM-5.3: 10x10 = 100 cores instead of
             # 10x8 = 80, 12 -> 10 output tiles per core).

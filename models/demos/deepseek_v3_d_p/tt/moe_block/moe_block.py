@@ -365,6 +365,10 @@ class MoEBlock:
                 **self.expert_kw,
             )
         ttnn.deallocate(arena)
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is not None:  # (the teacher capture reads the routed sum before the tail)
+            capture.CAPTURE.y_own(self, y_own)
         # (the tail in the head's row-block layout; a padded forward's span and split, as the head's)
         with _zone("MoEBlock moe_tail"):
             return ttnn.experimental.moe_block.moe_tail(
