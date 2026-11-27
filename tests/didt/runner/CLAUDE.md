@@ -34,7 +34,7 @@ Read by the tests the runner launches, never imported by `runner/`:
 | A FAIL/HANG never stops another step | one bad step must not hide others; only a failed reset inside `pin_core` aborts the run (user's rule) |
 | Reset before every attempt, fallbacks included | each result starts from a clean chip state |
 | Step status = first attempt; fallbacks never change it | the first result is the screen result |
-| Every fallback runs, in config order, own folder `<dir>_<name>` | each factor gets its own result; nothing overwritten |
+| Every fallback whose `on` names the first attempt's status runs, in config order, own folder `<dir>_<name>` | each factor gets its own result; nothing overwritten |
 | Exact node ids; no `-k`, no `-m` | substring ids pick wrong params (`iter2` matches `iter25`) |
 | Every id passes the collect gate before device work | a stale id fails in seconds, not hours |
 | HANG only from a non-empty triage CSV | FAIL and HANG must stay apart |
@@ -52,7 +52,7 @@ Read by the tests the runner launches, never imported by `runner/`:
 | new pass/fail or device parser | `runner/checks.py` or `runner/devices.py`, + a `check` name |
 | new way to launch | `runner/steps.py`, + a `runner` name |
 | a test run once per chip, all chips at once | config entry with `"runner": "each_chip"` |
-| new fallback | config `fallbacks{}`; code only for a new fallback kind |
+| new fallback | config `fallbacks{}` (`on`: which first-attempt status runs it); code only for a new fallback kind |
 | new status field | `runner/status.py` + the `status.json` section below |
 
 ## status.json
@@ -99,17 +99,18 @@ Read by the tests the runner launches, never imported by `runner/`:
 - A chip with a non-empty CSV is hung; step HANG if any chip hung, else FAIL if any failed. The attempt `log` has one
   line per chip.
 - Check is always `nd_report`, joined on the chip (the child calls itself device 0).
+- No `pin_core` (config rejects it): the first attempt already runs each chip in its own process.
+- Fallback `throttle_hang`, `on: ["HANG"]`: every chip again at `TT_MM_THROTTLE_PERF=5`, `MATMUL_ITERS=100`. ND alone is
+  FAIL with no fallback. A hang again keeps HANG, reason `hang persists at throttle 5`.
 
 ## Fallbacks and step two
 
-- Today: `throttle` (`TT_MM_THROTTLE_PERF=5`), then `pin_core` on every step.
+- Today: `throttle` (`TT_MM_THROTTLE_PERF=5`), then `pin_core` on every pytest step; `throttle_hang` on `each_chip`
+  steps.
 - `pin_core`: each failing device of the first attempt (hung, or with ND data) reruns alone via the step's `pin_id`
-  with `DIDT_DEVICE_ID=<dev>` (an `each_chip` step: its own ids on that chip only, found by BDF after the reset), at
-  twice the iterations and at least the original attempt's loop time (`DIDT_MIN_LOOP_SECONDS`, honoured by
-  `op_test_base.run_op_test`; read from the original log's iteration debug lines, for an `each_chip` step from the
-  target's `chips/chip<dev>/pytest.log`). Hang or ND is per device, never from the step status: an `each_chip` step
-  can hang on one chip and show ND on another. The mcast wkv_b1 workload logs no iteration lines and ignores
-  `DIDT_MIN_LOOP_SECONDS`. A per-chip test must pick its chip with
+  with `DIDT_DEVICE_ID=<dev>`, at twice the iterations and at least the original attempt's loop time
+  (`DIDT_MIN_LOOP_SECONDS`, honoured by `op_test_base.run_op_test`; read from the original log's iteration debug
+  lines). Hang or ND is per device, never from the step status. A per-chip test must pick its chip with
   `tests/didt/didt_chip.py` `pick_submesh`, never `submeshes[logical_chip_id]` alone: the submesh index is not the
   device id. A new per-chip test = a `pin_id` in the config, collected on a galaxy first.
 - Not reproduced on the chip alone is WARN, not PASS. A reset failure inside `pin_core` aborts the run.
