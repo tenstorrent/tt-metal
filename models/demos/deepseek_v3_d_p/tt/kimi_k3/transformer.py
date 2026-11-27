@@ -41,6 +41,19 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
 
+
+def _probe_sealed_planes(hidden, count: int):
+    """`count` copies of the live stream standing in for a capacity probe's sealed snapshots (a first rank past layer 0).
+
+    A clone for one plane: concat of a one-tensor list hands back the input itself, so the live stream and the sealed
+    plane were one buffer, and attn_res_block_stats, cached from that call, then failed on the next chunk ("program
+    cache hit on an entry built from a call that passed the same buffer in more than one tensor slot") for probes
+    starting at layers 12-23.
+    """
+    if count == 1:
+        return ttnn.clone(hidden)
+    return ttnn.concat([hidden] * count, dim=1)
+
 class TtKimiK3Transformer(LightweightModule):
     """A slice of Kimi-K3's layers, plus the tail when this rank holds it."""
 
@@ -505,7 +518,7 @@ class TtKimiK3Transformer(LightweightModule):
                 # A first rank past layer 0 exists only under the runner's PREFILL_PP_LAYER_OFFSET (capacity
                 # probes): it takes tokens, so no upstream rank sends the sealed snapshots. Stand copies of the
                 # live stream in for them, at the shape and sharding the D2D receive would give.
-                inherited = ttnn.concat([hidden] * (self.inbound_planes - 1), dim=1)
+                inherited = _probe_sealed_planes(hidden, self.inbound_planes - 1)
         else:
             hidden, inherited = self._unpack_handoff(token_ids)
         residual = self._residual_factory(hidden, inherited)
@@ -646,7 +659,7 @@ class TtKimiK3Transformer(LightweightModule):
             if self.inbound_planes > 1:
                 # A capacity probe past layer 0 (PREFILL_PP_LAYER_OFFSET), as in forward: no upstream rank sends the
                 # sealed snapshots, so copies of the live stream stand in for them.
-                inherited = ttnn.concat([hidden] * (self.inbound_planes - 1), dim=1)
+                inherited = _probe_sealed_planes(hidden, self.inbound_planes - 1)
         else:
             hidden, inherited = self._unpack_handoff(token_ids)
         residual = self._residual_factory(hidden, inherited)
