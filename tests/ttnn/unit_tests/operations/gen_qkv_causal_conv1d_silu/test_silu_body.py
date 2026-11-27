@@ -3,8 +3,8 @@
 
 """Refinement 3: the 16-bit-DEST SiLU body (Plan.silu_body).
 
-- The default rule: the quartic body (silu_pack::silu_bf16_rows) on one-tile-row plans, the library
-  body otherwise, and always the library body with a 32-bit DEST.
+- The default rule: the quartic body (silu_bf16::rows, Perf 2's load-macro schedule) on plans with fewer than
+  SILU_LIBRARY_MIN_ROWS tile-rows per core, the library body otherwise, and always the library body with a 32-bit DEST.
 - The SiLU in isolation: taps (0, 0, 0, 1) and a zero history make the convolution exact in a 16-bit
   DEST (y = x), so the output is exactly the SFPU body's SiLU of each bf16 input. Compared with the
   correctly rounded bf16 silu(x) from float64, for both bodies on a one-row and a multi-row plan,
@@ -37,7 +37,8 @@ HISTORY_ROWS = TAP_COUNT - 1
         (1, 80, False, QUARTIC),  # conv1d-001: one tile-row per core
         (4, 80, False, QUARTIC),  # conv1d-003: 80 cores x one tile-row
         (128, 80, False, LIB),  # conv1d-004: six tile-rows per core
-        (64, 64, False, LIB),  # conv1d-020
+        (64, 64, False, LIB),  # conv1d-020: five
+        (8, 64, False, QUARTIC),  # conv1d-008: three tile-rows per core (below SILU_LIBRARY_MIN_ROWS)
         (4, 80, True, LIB),  # 32-bit DEST: always the library body
     ],
 )
@@ -52,7 +53,7 @@ def test_default_silu_body(seq_tiles, ch_tiles, fp32, expected):
         fp32_dest_acc_en=fp32,
     )
     assert plan.silu_body == expected
-    assert (plan.core_seq_tiles_max == 1) == (plan.silu_body == QUARTIC) or fp32
+    assert (plan.core_seq_tiles_max < desc.SILU_LIBRARY_MIN_ROWS) == (plan.silu_body == QUARTIC) or fp32
 
 
 def _bf16_ordered(t):

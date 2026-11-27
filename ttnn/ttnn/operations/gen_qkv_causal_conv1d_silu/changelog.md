@@ -336,3 +336,151 @@ No raw-LLK or helper-bypassing path graduated this round: the shipped change is 
 For the record, the two non-graduated experiments went below the helpers in data movement, with no helper covering the protocol:
 - A read `cb_output_tiles`' `tiles_received` counter and advanced a private copy of its read pointer. That is a read-only observer of a CB another RISC consumes; no helper offers one, and the single-consumer rule needs it.
 - B read the NoC status registers (read responses received, write acks, issue counters) to track the other RISC's reads.
+
+## Perf 2 — Perf tournament round 2: 2 experiments, 1 graduated (SiLU SFPU body), 1 win blocked by a device hang
+- **Date**: 2026-11-27. BH 11×10 (110 cores), device kernel µs. Every number is one fresh-cache profiled run with the permanent stage zones on. Raw tables: `perf_experiments/perf2_coordinator/perf2_coordinator_measurements.md`.
+- **Focus**: all four `target` cases carry a PERF FOCUS note.
+  - conv1d-004 stays the primary target: it is the only one with an unmet numeric goal (stretch 117.13 µs vs 123–131 µs).
+  - 001–003 are secondary.
+  - Each was measured exactly as flagged: RM, all DRAM, bf16, `compute_kernel_config=None` (HiFi4, 16-bit DEST, `math_approx_mode` False).
+  - Only cells larger than 32 tiles were measured (018 and 021 are not).
+- **Measured breakdown** (cumulative peel, op = Perf 1 HEAD; it reproduces Perf 1):
+
+  | Variant | 004 | 001 | 002 | 003 |
+  |---|---|---|---|---|
+  | full | 127.6 | 5.94 | 6.88 | 9.54 |
+  | − SiLU | 120.6 | 5.52 | 5.81 | 8.02 |
+  | − SiLU − MAC | 112.7 | | | |
+  | DM only | 110.4 | 4.81 | 5.16 | 6.86 |
+  | writes only | 75.0 | 2.25 | 2.48 | 4.05 |
+  | sync only | 8.3 | 2.11 | 2.43 | 2.59 |
+  | compute only | 108.5 | 3.38 | 4.34 | 6.18 |
+  | compute only − SiLU | 40.4 | | | |
+  | quartic body pinned | **147.9** | | | |
+
+  - On 004 the default (library) run is critical-path bound on the **pack thread**: `compute_conv_silu` is 93.0 µs on every core (uniform) and `compute_tilize` 24.4 µs, for a TRISC_2 span of max/p50 1.11.
+  - Of the pack thread's ~117 µs, the SFPU SiLU is 63–79 µs.
+  - A faster pack thread makes the op slower: the quartic body runs 147.9 µs. The tail moves to the writer RISC's NoC1 traffic on the grid's right and bottom: `writer_out_issue` up to 55 µs, `writer_split_issue` up to 36 (injection back-pressure), and the unpack thread starves for up to 78 µs.
+  - DM-only per-core end times run 28 → 110 µs as a smooth gradient from top-left to bottom-right; NoC0 reads are uniform.
+  - On the single-row cells, read → compute → write serialize over a 2.1–2.6 µs sync floor, and the SiLU tail costs 0.42 / 1.07 / 1.52 µs on 001 / 002 / 003.
+  - **Roofline gate**: the `noc_estimate` CLI is not built, so the DRAM floor stands in (82 µs; practically 89–100). DM-only (110, p50 79) is not at roofline; the tail sets it. The SFPU runs ~27.5–35 cycles per row against a body of ~18 instructions, so it is not at roofline either.
+- **Ranked bottleneck**:
+  1. the pack-thread compute on 004 (SFPU SiLU plus window packs);
+  2. the NoC1 DM position tail, which gates every compute speedup on multi-row plans;
+  3. the single-row serialization (SiLU tail, request-rate-bound reads).
+- **Portfolio** (cap 2; breadcrumbs carry the list):
+  - **W `tile_row_stealing`** — tested;
+  - **S `silu_sfpu_schedule`** — tested;
+  - not tested: D2 dual-NoC dynamic DM (Perf 1's lead 1, which overlaps W), fused tilize + MAC (`unpack_tilizeA_B`), SiLU split across math and pack (one LReg file), a writer non-blocking split barrier (the tail cores are injection-bound), read-wide / compute-narrow.
+- **S — `silu_sfpu_schedule`: WIN, graduated.**
+  - **What it is**: a hand-scheduled raw-TTI version of the quartic body.
+    - Two `SFPLOADMACRO`s per row: one loads x and schedules y = x·(−log2 e) + 639 on the MAD sub-unit; one reloads x and schedules x·r, the bf16 round into LReg16, and the store.
+    - SFPSWAP clamps against constant LRegs, with L11 borrowed for 766 and restored to −1 after each block.
+    - G3..G1 refit as fp16 (one `SFPLOADI` each; relative error 1.140e-4 vs 1.112e-4).
+    - G4 held in L7 per DEST group.
+    - Cost: 36 cycles per row pair.
+  - **Option menu** (per SFPU pass over 004's 96 tiles per core):
+
+    | Variant | µs per pass | Correctly rounded | Notes |
+    |---|---|---|---|
+    | library | 78.3 | 90.6% | |
+    | sfpi quartic (R3) | 61.5 | 99.48% | |
+    | raw TTI | 57.8 | | bit-identical to the R3 quartic |
+    | + load macros | 49.4 | | bit-identical |
+    | + G4 in L7 | 46.6 | | bit-identical |
+    | + fp16 refit | 43.2 | | |
+    | **+ G4 once per group (graduated)** | **42.1** | **99.54%** | max 1 ULP |
+    | cubic | 38.6 | 96.4% | rel RMS 0.00562 vs library 0.00561 — a precision trade, recorded as an option, **not graduated** |
+
+  - **Whole-op, the optimizer's measurements**: single-row cells −2% to −10%. Multi-row cells with the body pinned under static ranges: 004 +12.6% and 020 +9.2% (the DM tail).
+- **W — `tile_row_stealing`: WIN on 004, NOT graduated (blocked: intermittent device hang).**
+  - **Mechanism**:
+    - Each core claims tile-row blocks from the front of its own range, then steals from the back of other ranges in its channel group.
+    - One claim word per core holds (F, B), updated with a NoC fetch-and-add (`noc_fast_atomic_increment`, INCR_GET with the value returned).
+    - Stolen blocks read their halo from DRAM.
+    - Compute and the writer learn the dynamic schedule from `cb_ctrl` and from `cb_split_requests`.
+  - **Optimizer (004)**: library 129.5 → 125.6 (flat; compute-bound); quartic 149.9 → 126.4; quartic + split 16 → **115.0**. 020: 60.6 → 55.3.
+  - **Coordinator, combined with S** (stealing + the new body + split 16), same-session A/B against Perf 1 HEAD:
+
+    | Cell | Pass 1 | Pass 2 |
+    |---|---|---|
+    | 004 | 123.6 → **112.4** | 123.7 vs 117.2 (stretch 117.13 met) |
+    | 020 | 60.7 → 52.0 | 60.6 vs 48.9 |
+    | 008 | 16.1 → 13.2 | 15.8 vs 12.9 |
+    | 019 | +3.3% | +2.4% (the owner's first claim sits on the critical path) |
+
+    The split rule's carve-out was measured too: 020 with fp32 DEST, split 16 vs 24, +3.3%.
+  - **Why it did not graduate**: the op's new `test_work_stealing.py` (bit-identity vs the static path, stress schedule, cache hits; archived in `perf2_coordinator/`) **hung in 7 of 16 suite runs**:
+    - 3 of 4 with the optimizer's exact protocol;
+    - 1 of 4 with a host pre-claim of each owner's first block;
+    - 2 of 4 with the full `NOC_RET_ADDR` (LO / MID / COORDINATE from `NOC_ID_LOGICAL`) programmed per claim and a 4-slot pre-armed sentinel ring;
+    - plus one deterministic run with a wrong (physical) return coordinate, which proved the coordinate path matters.
+  - **Signature, every time**: one reader spins in `claim_fetch_add` on its return word after `noc_async_atomic_barrier()` has passed, and every other core is done. The INCR_GET return value never lands.
+  - Every first failure seen was an eager-steal (stress) cell, but the default schedule uses the same claim path. Root cause not found. No worker kernel in tt-metal consumes an atomic's returned value today.
+  - Under the rules a hang is a correctness failure, so it cannot graduate. The full attempt is kept as `perf2_coordinator/stealing_plus_silu_attempt.diff` with its test suite.
+- **Graduated (S)**:
+  - **What was replaced**: `silu_bf16::rows` replaces Refinement 3's sfpi `silu_pack::silu_bf16_rows`, which is **deleted**. It is the op's one 16-bit-DEST fast body, selected by the existing `Plan.silu_body = 1`.
+  - **Domain**: every 16-bit-DEST plan except the carve-out below.
+  - **Carve-outs**:
+    - 32-bit DEST → library body. *Cannot*: fp32 accuracy.
+    - ≥ `SILU_LIBRARY_MIN_ROWS = 5` tile-rows per core → library body. *Measured regression*, with the new body pinned, two passes each: 004 +13.1% / +11.4%, 020 +3.7% / +3.8%.
+  - **Carve-out narrowed this round**: Refinement 3 kept the library body on **every** multi-row plan. 008 (3 rows per core) measured −8.4% / −4.1% with the new body, so it now runs it. The [1, 1024, 1952] plan (61 groups × one core × 32 rows) is flat either way and stays under the carve-out.
+  - **Kernel-head raw-LLK justification** updated in `gen_qkv_causal_conv1d_silu_compute.cpp`.
+  - No zone change: the body runs inside `compute_conv_silu`.
+- **Whole-op before → after** (same-session A/B vs Perf 1 HEAD, two passes in alternating order, µs):
+
+  | Group | Cell | Pass A | Pass B |
+  |---|---|---|---|
+  | Single-row | 001 | 6.04 → 5.84 | 6.07 → 5.87 |
+  | Single-row | 002 | 6.94 → 6.44 | 6.82 → 6.50 |
+  | Single-row | 003 | 9.52 → 8.70 | 9.58 → 8.80 (−8%) |
+  | Single-row | 005 | 6.59 → 6.12 | 6.52 → 6.07 |
+  | Single-row | 006 | 5.53 → 5.15 | 5.59 → 5.15 |
+  | Single-row | 007 | 9.68 → 8.69 | 9.60 → 8.73 (−10%) |
+  | Single-row | 010 | 7.25 → 6.95 | 7.21 → 6.82 |
+  | Single-row | 012 | 14.79 → 13.46 | 15.10 → 13.39 (−10%) |
+  | Single-row | 013 | 6.13 → 5.76 | 6.08 → 5.72 |
+  | Single-row | 014 | 8.34 → 7.84 | 8.34 → 7.85 |
+  | Single-row | 015 | 5.71 → 5.46 | 5.78 → 5.34 |
+  | Single-row | 016 | 14.40 → 13.09 | 14.30 → 13.45 |
+  | Single-row | 017 | 4.95 → 4.77 | 4.92 → 4.77 |
+  | Multi-row, now on the new body | 008 | 16.16 → 15.26 | 15.94 → 15.26 (−5%) |
+  | Unchanged (library body) | 004 | 124.3 / 131.3 → 123.9 / 124.1 | base bimodal; flat |
+  | Unchanged (library body) | 020 | 60.3 → 60.5 | 60.6 → 60.6 |
+  | Unchanged (library body) | 011 fp32 | 11.69 → 11.67 | 11.58 → 11.64 |
+  | Unchanged (library body) | 019 | 19.54 → 19.57 | 19.69 → 19.47 |
+
+  The focus case 004 is unchanged: the win that met its stretch target (stealing) is blocked.
+- **Guard set and golden**:
+  - Golden 21/21 and the op's unit directory 92/92 pass (`--no-jit-server`, local JIT).
+  - The guard set is one cell per path: RM multi-row (004, 020, 008 taps L1), RM single-row (001–003, 007 history L1, 013–017), TILE (005 single-row, 019 multi-row + fp32 + L1 + channel-paged), L1 input (006), L1 output (010), fp32 DEST (011), channel-paged (012), column window (013).
+  - No regression beyond noise.
+- **Accuracy**:
+  - Isolated SiLU (`test_silu_body.py`, taps 0,0,0,1): correctly rounded for 99.52% / 99.54% of inputs, max 1 bf16 ULP, clamp extremes exact; the library body is 90.56% / 90.62%.
+  - `test_gen_qkv_causal_conv1d_silu_precision_baseline.py`:
+
+    | Cell | PCC | rel RMS |
+    |---|---|---|
+    | 001 | 0.999987 | 0.00555 |
+    | 003 | 0.999987 | 0.00559 |
+    | 004 (library) | 0.999987 | 0.00561 |
+    | 020 (library) | 0.999987 | 0.00558 |
+    | 011 fp32 | 0.999998 | 0.00177 (ULP p99 0) |
+
+    All at or better than Refinement 3.
+- **Tests**:
+  - `test_silu_body.py`: the default rule now uses the 5-row threshold, and an 008 case was added.
+  - Harness: `perf_experiments/perf2_coordinator/test_perf2.py` (GQKV_PERF2=1; plan pins, and `base` = the pre-Perf-2 op frozen in `head/`).
+- **Issues encountered**:
+  - `/home/nbabin` hit its 9.4 GB quota mid-round, and JIT builds failed on ccache temp files. The fix was `CCACHE_DIR` on /localdev; nothing was deleted.
+  - One early hang happened after a precompile routed to the remote JIT farm. The later local-only runs reproduced it, so the farm was not the cause, but every later run used `--no-jit-server`.
+  - tracy-capture still crashes; `cpp_device_perf_report.csv` was used.
+- **Round-3 leads**:
+  - (1) Make the stealing claim safe, then graduate W (004 ≈ 112–117 µs, 020 ≈ 49–52, 008 ≈ 13), together with the new body on every 16-bit plan and split 16 on stealing plans. Either root-cause the lost INCR_GET return (a minimal claim-only stress bench would isolate it), or claim without an atomic-with-return: e.g. the group's slot-0 reader hands out blocks through semaphore-acked mailbox writes.
+  - (2) Split 16 on the multi-row one-core-per-group plan measured 73.9 vs 90.8 µs. The split default may want a per-regime rule, but static-range 004/020 lose with split 16 (Refinement 2).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::apply_activation_from_pack` / `ActivationApplyHelper<SILU>` | capability | dispatches only the library's fixed `calculate_silu`; there is no slot for a caller SFPU functor or a per-group setup / teardown hook (this body loads G4 into L7 before a DEST group and must restore LCONST_neg1 after the block) | 78 300 (library body, one SFPU pass, 004's 96 tiles per core) | 42 100 | `gen_qkv_causal_conv1d_silu_compute.cpp:279` (`silu_from_pack`), `:255` (`silu_tile_from_pack`) |
+| no helper covers this (LLK SFPU body family: `ckernel::sfpu::calculate_silu`, sfpi-compiled bodies) | capability | sfpi cannot emit SFPLOADMACRO multi-issue, results routed through LReg16, SFPSWAP against constant LRegs, or address-mode increments on a macro load; the LLK has no load-macro bf16 SiLU body. Gap closer: a load-macro bf16 SiLU in the LLK SFPU library | 61 500 (sfpi-compiled quartic, same arithmetic) | 42 100 | `gen_qkv_causal_conv1d_silu_compute.cpp:82-207` (`namespace silu_bf16`) |

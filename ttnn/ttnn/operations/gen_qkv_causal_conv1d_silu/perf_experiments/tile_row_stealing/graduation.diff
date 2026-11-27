@@ -1,0 +1,1204 @@
+--- a/ttnn/ttnn/operations/gen_qkv_causal_conv1d_silu/kernels/gen_qkv_causal_conv1d_silu_reader.cpp
++++ b/ttnn/ttnn/operations/gen_qkv_causal_conv1d_silu/kernels/gen_qkv_causal_conv1d_silu_reader.cpp
+@@ -3,34 +3,54 @@
+
+ // gen_qkv_causal_conv1d_silu reader (NCRISC).
+ //
++// Cross-core tile-row work stealing (Perf 2; CT steal_mode != STEAL_STATIC, i.e. Plan.work_stealing: some core
++// owns more than one block and a channel group has more than one core — otherwise there is nothing to steal:
++// every core claims its only block at kernel start):
++//
++//   Claim protocol (one claim word per core = program semaphore `claim_sem_id`, host-initialized to 0 at
++//   every launch, packing F = front claims (bits 0..15) and B = back claims (bits 16..31) on that core's
++//   static block range [start_s, start_s + n_s) cut into nb_s = ceil(n_s / block_rows) blocks):
++//     owner   : old = fetch_add(own word, 1)        -> block F_old of its own range   iff F_old + B_old < nb
++//     stealer : old = fetch_add(victim word, 1<<16) -> block nb - 1 - B_old of victim iff F_old + B_old < nb
++//   Race-free: every claim adds 1 to F + B, so the successful claims are exactly the first nb increments
++//   in the word's atomic order; front claims take indices 0, 1, ..., back claims nb-1, nb-2, ..., and a
++//   front index f and back index nb-1-b can only meet if f + b = nb - 1 — impossible for two claims that
++//   both saw F + B < nb (the later one saw the earlier one's increment). Failed claims only inflate the
++//   sum (each claimer stops at its first failure on a word), so the 16-bit fields cannot overflow.
++//   A core claims a block after it has reserved the block's cb_rows slot (late binding: a claim is made
++//   when the core can start loading it). Own blocks are claimed front-first; once the own range is
++//   exhausted the core probes every other group member's claim word (one 4 B NoC read
++//   each, one barrier) and steals from the BACK of the member with the most unclaimed blocks.
++//   Halo: a block contiguous with this core's previous block copies it from the previous slot (L1);
++//   any other block with t0 > 0 reads it from DRAM (RM: input rows t0-3..t0-1; TILE: one extra
++//   untilized tile-row) — the op's "core-first block, t0 > 0" path; t0 == 0 reads history.
++//   Short blocks (a range's ragged last block) are padded to a full slot (push of garbage sticks; compute
++//   pops them), so every block occupies exactly one slot of the cb_rows ring whatever order blocks come in.
++//   Consumers learn the dynamic schedule from messages:
++//     compute: cb_ctrl (CB 8), one page per block = rows | extra << 16, then CTRL_DONE;
++//     writer : cb_split_requests, one page per tile-row = {L1 dst, tile-row, rows in block, flags}, then
++//              a page with flags = REQ_DONE.
++//
++// RAW NoC (no dataflow-API wrapper): the claim is noc_fast_atomic_increment<noc_mode, program_ret_addr=true>
++// (NOC_AT_INS_INCR_GET with the previous value returned to this core's L1) — the only fetch-and-add on
++// the NoC; noc_semaphore_inc issues the same instruction but discards the returned value
++// (MEM_NOC_ATOMIC_RET_VAL_ADDR), so it cannot reserve a slot. After the response the command buffer's
++// return address is restored to MEM_NOC_ATOMIC_RET_VAL_ADDR for every later noc_semaphore_inc.
++// Gap closer: a dataflow-API noc_semaphore_fetch_add(addr, incr) -> previous value.
++//
+ // Block operations owned here (op_design.md -> Block schedule):
+ //   load_taps        once per channel group (regime tap_multicast_per_group): the group's sender core
+-//                    (slot 0) reads row 0 of tap p's tile into row 2p of the packed tap tile (2 x 32 B
+-//                    reads per (tap, channel tile)) and multicasts the packed tiles to the other cores
+-//                    of the group (kernel_lib mcast pipe). Every other core issues its first tile-row's
+-//                    input reads, then receives the taps. Taps cross DRAM once per channel instead of
+-//                    once per core: at 110 cores the per-core tap fetch (~14k tiny DRAM requests)
+-//                    measured up to 80 us ahead of the first input row.
++//                    (slot 0) reads row 0 of tap p's tile into row 2p of the packed tap tile and multicasts
++//                    the packed tiles to the other cores of the group (kernel_lib mcast pipe).
+ //   load_rows_block  one cb_rows slot per block: sticks [0,3) = halo (tokens t0-3..t0-1),
+-//                    sticks [3, 3 + 32*rows) = body. A stick is the block's contiguous channel slice
+-//                    of one token row (64 * block_ch_tiles B).
+-//                    halo source: t0 == 0          -> history rows 0..2 (read_history_halo)
+-//                                 later block      -> previous slot's last 3 body sticks (L1 -> L1)
+-//                                 core-first, t0>0 -> RM: input rows t0-3..t0-1;
+-//                                                     TILE: rows 29..31 of untilized tile-row t0/32-1
++//                    sticks [3, 3 + 32*rows) = body.
+ //                    RM:   per tile-row 32 stick reads (+ halo on the first) -> ONE barrier -> push.
+ //                          Split reader (split_rows > 0): body rows [32 - split_rows, 32) of every
+-//                          tile-row are read by the writer RISC on the other NoC, whose DRAM
+-//                          endpoints are separate ports: decode is DRAM-request-rate-bound per port
+-//                          (Refinement 2: ~12.5 ns per request per bank port). Per tile-row this
+-//                          kernel posts the row's L1 destination to cb_split_requests, reads its own
+-//                          rows, then waits for cb_split_done before pushing the rows.
++//                          tile-row are read by the writer RISC on the other NoC.
+ //                    TILE: per tile-row: issue the NEXT input tile-row's reads, then copy the
+ //                          untilized tile-row (32 contiguous sticks) into the slot -> ONE barrier.
+-//
+ // Raw NoC calls rather than read_sticks_for_tilize (tilize_helpers_dataflow.inl:146-157): that
+-// helper barriers after every stick and has no notion of a 3-row halo prefix from another source
+-// (history / previous slot); gap closer = a per-block batched-barrier mode with a caller prefix.
++// helper barriers after every stick and has no notion of a 3-row halo prefix from another source.
+
+ #include <cstdint>
+
+@@ -43,13 +63,11 @@
+
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
+-// Stage zones (MaybeDeviceZoneScope, PERMANENT — perf tournaments rank stages from them; free when the
+-// profiler is off): reader_taps_issue (group sender, once), per block reader_rows_reserve (back-pressure
+-// from compute), reader_halo_issue; per tile-row reader_rows_issue, reader_rows_barrier (incl. the tap
+-// publish on the first row), reader_split_wait (the writer's NoC1 share); TILE regime reader_tile_issue,
+-// reader_untilized_wait, reader_slot_copy.
+-// Measurement-only ablation (compiled out unless defined; wrong results by construction):
+-// GQKV_ABLATE_READS drops the input / history / halo DRAM reads (taps, CB sync and barriers stay).
++// Stage zones (MaybeDeviceZoneScope, PERMANENT): reader_taps_issue, per block reader_rows_reserve,
++// reader_halo_issue (+ reader_halo_dram nested when the halo comes from DRAM), per tile-row
++// reader_rows_issue, reader_rows_barrier, reader_split_wait; TILE reader_tile_issue,
++// reader_untilized_wait, reader_slot_copy. Dynamic mode: reader_claim (own-range claim, per block),
++// reader_steal (probe + victim claim, per stolen block and the final failed probe).
+ #ifdef GQKV_ABLATE_READS
+ #define GQKV_READ(...)
+ #else
+@@ -62,16 +80,29 @@
+ constexpr uint32_t cb_tap_tiles = 1;
+ constexpr uint32_t cb_input_tiles = 4;
+ constexpr uint32_t cb_untilized_rows = 5;
+-constexpr uint32_t cb_split_requests = 6;  // split reader: this kernel -> writer, one L1 row address per tile-row
+-constexpr uint32_t cb_split_done = 7;      // split reader: writer -> this kernel, one token per tile-row
++constexpr uint32_t cb_split_requests = 6;  // reader -> writer, one page per tile-row
++constexpr uint32_t cb_split_done = 7;      // writer -> reader, one token per tile-row (split_rows > 0)
++constexpr uint32_t cb_ctrl = 8;            // dynamic: reader -> compute, one page per block
++constexpr uint32_t cb_steal_scratch = 9;   // dynamic: atomic return word (page 0) + probe words (page 1 + v)
+
+ constexpr uint32_t TILE_DIM = 32;
+ constexpr uint32_t FACE_DIM = 16;
+ constexpr uint32_t TAP_COUNT = 4;
+ constexpr uint32_t HALO_ROWS = TAP_COUNT - 1;
+-constexpr uint32_t TAP_ROW_STRIDE = 2;  // tap p lives in row 2p of the packed tap tile (64 B aligned)
++constexpr uint32_t TAP_ROW_STRIDE = 2;
++
++constexpr uint32_t STEAL_STATIC = 0;  // nothing to steal: the static ranges, no protocol
++constexpr uint32_t STEAL_ON = 1;      // own claims, then steal from the back of the group's other ranges
++constexpr uint32_t STEAL_EAGER = 2;   // test hook only: steal first, own range after (maximal claim contention)
++
++constexpr uint32_t CTRL_DONE = 0xFFFFFFFFu;
++constexpr uint32_t REQ_DONE = 1u;
++constexpr uint32_t CLAIM_SENTINEL = 0xFFFFFFFFu;
++constexpr uint32_t FRONT_UNIT = 1u;
++constexpr uint32_t BACK_UNIT = 1u << 16;
++constexpr uint32_t NO_ROW = 0xFFFFFFFFu;
++constexpr uint32_t SCRATCH_STRIDE = 16;  // one L1-aligned slot per word (NoC read alignment)
+
+-// Self-aimed L1 -> L1 copy (dataflow_kernel_lib::local_addr: the source is this core's own L1).
+ FORCE_INLINE void copy_local(const Noc& noc, uint32_t src_addr, uint32_t dst_addr, uint32_t size_bytes) {
+     UnicastEndpoint self_ep;
+     noc.async_read(
+@@ -82,7 +113,6 @@
+         {});
+ }
+
+-// Row 0 of tap tile (0, ch_group_tile_start + c) -> row 2*tap_idx of packed tile c.
+ template <uint32_t block_ch_tiles, uint32_t tile_bytes, uint32_t elem_bytes, typename Accessor>
+ FORCE_INLINE void issue_tap_rows(
+     const Accessor& tap_acc, uint32_t tap_idx, uint32_t tap_base, uint32_t ch_group_tile_start) {
+@@ -92,17 +122,11 @@
+     for (uint32_t c = 0; c < block_ch_tiles; ++c) {
+         const uint64_t src = tap_acc.get_noc_addr(ch_group_tile_start + c);
+         const uint32_t dst = tap_base + c * tile_bytes + row_offset;
+-        noc_async_read(src, dst, face_row_bytes);                            // face 0: channels 0..15
+-        noc_async_read(src + face_bytes, dst + face_bytes, face_row_bytes);  // face 1: channels 16..31
++        noc_async_read(src, dst, face_row_bytes);
++        noc_async_read(src + face_bytes, dst + face_bytes, face_row_bytes);
+     }
+ }
+
+-// History halo: the 3 history rows of channels [c0, c0 + 32 * block_ch_tiles) -> sticks 0..2 of the slot.
+-//   token-paged   (history_page_channels == 0): [1, 3, C]      row r = page r, channel c at element c.
+-//   channel-paged (history_page_channels == P): [1, C/P, 3P]   row r of channel c = page c / P,
+-//                 element r * P + c % P. A group whose channel slice straddles pages issues one read
+-//                 per contiguous run per row; every run starts on a multiple of 32 channels (c0 and P
+-//                 are tile multiples), i.e. 64 B aligned in source and destination.
+ template <uint32_t block_ch_tiles, uint32_t history_page_channels, uint32_t elem_bytes, typename Accessor>
+ FORCE_INLINE void read_history_halo(const Accessor& history_acc, uint32_t slot_base, uint32_t ch_group_tile_start) {
+     constexpr uint32_t group_channels = block_ch_tiles * TILE_DIM;
+@@ -128,6 +152,32 @@
+     }
+ }
+
++// Atomic fetch-and-add on a (possibly remote, possibly own) claim word; returns the previous value.
++FORCE_INLINE uint32_t claim_fetch_add(uint64_t word_noc_addr, uint32_t incr, uint32_t ret_addr) {
++    volatile tt_l1_ptr uint32_t* ret = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ret_addr);
++    *ret = CLAIM_SENTINEL;
++    asm volatile("fence" ::: "memory");  // the sentinel is in L1 before the response can land
++    noc_fast_atomic_increment<noc_mode, /*program_ret_addr=*/true>(
++        noc_index,
++        write_at_cmd_buf,
++        word_noc_addr,
++        NOC_UNICAST_WRITE_VC,
++        incr,
++        31 /*wrap: none*/,
++        false /*linked*/,
++        false /*posted*/,
++        ret_addr);
++    noc_async_atomic_barrier();
++    // Later noc_semaphore_inc calls (tap multicast) return into the default scratch word again.
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_at_cmd_buf, NOC_RET_ADDR_LO, MEM_NOC_ATOMIC_RET_VAL_ADDR);
++    uint32_t v;
++    do {
++        invalidate_l1_cache();
++        v = *ret;
++    } while (v == CLAIM_SENTINEL);
++    return v;
++}
++
+ }  // namespace
+
+ void kernel_main() {
+@@ -138,10 +188,13 @@
+     constexpr uint32_t input_width_tiles = get_compile_time_arg_val(3);
+     constexpr uint32_t elem_bytes = get_compile_time_arg_val(4);
+     constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
+-    constexpr uint32_t history_page_channels = get_compile_time_arg_val(6);  // 0: token-paged history
+-    constexpr uint32_t split_rows = get_compile_time_arg_val(7);             // body rows per tile-row the writer reads
+-    constexpr bool stagger_row_walk = get_compile_time_arg_val(8) == 1;      // rotate each core's row order
+-    constexpr auto input_args = TensorAccessorArgs<9>();
++    constexpr uint32_t history_page_channels = get_compile_time_arg_val(6);
++    constexpr uint32_t split_rows = get_compile_time_arg_val(7);
++    constexpr bool stagger_row_walk = get_compile_time_arg_val(8) == 1;
++    constexpr uint32_t steal_mode = get_compile_time_arg_val(9);
++    constexpr uint32_t steal_min = get_compile_time_arg_val(10);  // min unclaimed blocks to steal from a range
++    constexpr uint32_t claim_sem_id = get_compile_time_arg_val(11);
++    constexpr auto input_args = TensorAccessorArgs<12>();
+     constexpr auto history_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+     constexpr auto tap0_args = TensorAccessorArgs<history_args.next_compile_time_args_offset()>();
+     constexpr auto tap1_args = TensorAccessorArgs<tap0_args.next_compile_time_args_offset()>();
+@@ -150,13 +203,15 @@
+     constexpr auto taps_mcast = dataflow_kernel_lib::McastArgs<
+         get_named_compile_time_arg_val("taps_mcast_ct_offset"),
+         get_named_compile_time_arg_val("taps_mcast_rt_offset")>();
++    constexpr bool dynamic = steal_mode != STEAL_STATIC;
+
+-    constexpr uint32_t channel_tile_bytes = TILE_DIM * elem_bytes;  // one channel tile of one token row
++    constexpr uint32_t channel_tile_bytes = TILE_DIM * elem_bytes;
+     constexpr uint32_t stick_bytes = block_ch_tiles * channel_tile_bytes;
+-    constexpr uint32_t untilized_row_bytes = TILE_DIM * stick_bytes;  // one untilized tile-row = 32 sticks
+-    constexpr uint32_t first_row_push = TILE_DIM + HALO_ROWS;         // halo + first tile-row
++    constexpr uint32_t untilized_row_bytes = TILE_DIM * stick_bytes;
++    constexpr uint32_t first_row_push = TILE_DIM + HALO_ROWS;
+     constexpr uint32_t tap_tiles_bytes = block_ch_tiles * tile_bytes;
+-    constexpr uint32_t own_rows = TILE_DIM - split_rows;  // body rows [0, own_rows) are read here
++    constexpr uint32_t own_rows = TILE_DIM - split_rows;
++    constexpr uint32_t full_slot_sticks = TILE_DIM * block_rows + HALO_ROWS;
+     static_assert(split_rows <= TILE_DIM, "split_rows is a row count inside one tile-row");
+     static_assert(split_rows == 0 || !tile_input, "the split reader is a ROW_MAJOR-regime lever");
+
+@@ -172,6 +227,17 @@
+     const uint32_t input_col_offset_tiles = get_arg_val<uint32_t>(arg++);
+     const uint32_t core_seq_start = get_arg_val<uint32_t>(arg++);
+     const uint32_t core_seq_tiles = get_arg_val<uint32_t>(arg++);
++    // dynamic-mode group geometry (present for every mode; unused when static)
++    const uint32_t group_first_core = get_arg_val<uint32_t>(arg++);  // logical row-major index of slot 0
++    const uint32_t cores_per_group = get_arg_val<uint32_t>(arg++);
++    const uint32_t own_slot = get_arg_val<uint32_t>(arg++);
++    const uint32_t range_base = get_arg_val<uint32_t>(arg++);  // slot s: base + (s < rem) tile-rows
++    const uint32_t range_rem = get_arg_val<uint32_t>(arg++);
++    const uint32_t grid_x = get_arg_val<uint32_t>(arg++);
++    const uint32_t grid_rows = get_arg_val<uint32_t>(arg++);
++    const uint32_t x_table = arg;  // virtual NoC x of each logical column, then y of each logical row
++    const uint32_t y_table = arg + grid_x;
++    (void)grid_rows;
+
+     const uint32_t num_blocks_this_core = (core_seq_tiles + block_rows - 1) / block_rows;
+     const uint32_t last_block_rows = core_seq_tiles - (num_blocks_this_core - 1) * block_rows;
+@@ -180,15 +246,103 @@
+     const auto history_acc = TensorAccessor(history_args, history_addr);
+     Noc noc;
+
+-    // Byte offset of this core's channel slice inside a token row of the input (column window:
+-    // the convolution channels start input_col_offset_tiles tiles into the row).
+     const uint32_t input_byte_offset = (input_col_offset_tiles + ch_group_tile_start) * channel_tile_bytes;
+
+-    // ---- load_taps: the group's sender issues the DRAM reads; receivers wait for the multicast ----
++    // ---- claim protocol state (dynamic) ----
++    const uint32_t claim_word_addr = get_semaphore(claim_sem_id);
++    const uint32_t scratch_base = dynamic ? get_write_ptr(cb_steal_scratch) : 0;
++    auto slot_range = [&](uint32_t s, uint32_t& start, uint32_t& n) {
++        start = s * range_base + (s < range_rem ? s : range_rem);
++        n = range_base + (s < range_rem ? 1 : 0);
++    };
++    auto slot_blocks = [&](uint32_t s) {
++        uint32_t start, n;
++        slot_range(s, start, n);
++        return (n + block_rows - 1) / block_rows;
++    };
++    auto slot_word = [&](uint32_t s) -> uint64_t {
++        const uint32_t i = group_first_core + s;
++        const uint32_t x = get_arg_val<uint32_t>(x_table + i % grid_x);
++        const uint32_t y = get_arg_val<uint32_t>(y_table + i / grid_x);
++        return get_noc_addr(x, y, claim_word_addr, noc_index);
++    };
++    auto block_of = [&](uint32_t s, uint32_t k, uint32_t& first_row, uint32_t& rows) {
++        uint32_t start, n;
++        slot_range(s, start, n);
++        first_row = start + k * block_rows;
++        const uint32_t left = n - k * block_rows;
++        rows = left < block_rows ? left : block_rows;
++    };
++    bool own_live = true;
++    uint32_t stolen_blocks = 0;
++    // Own range, front first.
++    auto claim_own = [&](uint32_t& first_row, uint32_t& rows) -> bool {
++        if (!own_live) {
++            return false;
++        }
++        MaybeDeviceZoneScope("reader_claim");
++        const uint32_t nb = slot_blocks(own_slot);
++        const uint32_t old = claim_fetch_add(slot_word(own_slot), FRONT_UNIT, scratch_base);
++        const uint32_t f = old & 0xFFFFu, b = old >> 16;
++        if (f + b < nb) {
++            block_of(own_slot, f, first_row, rows);
++            return true;
++        }
++        own_live = false;
++        return false;
++    };
++    // Back of the group member with the most unclaimed blocks (probe = one 4 B read per member).
++    auto claim_stolen = [&](uint32_t& first_row, uint32_t& rows) -> bool {
++        MaybeDeviceZoneScope("reader_steal");
++        for (;;) {
++            for (uint32_t v = 0; v < cores_per_group; ++v) {
++                if (v != own_slot) {
++                    noc_async_read(slot_word(v), scratch_base + SCRATCH_STRIDE * (v + 1), sizeof(uint32_t));
++                }
++            }
++            noc_async_read_barrier();
++            invalidate_l1_cache();
++            uint32_t best = cores_per_group, best_left = 0;
++            for (uint32_t v = 0; v < cores_per_group; ++v) {
++                if (v == own_slot) {
++                    continue;
++                }
++                const uint32_t w =
++                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_base + SCRATCH_STRIDE * (v + 1));
++                const uint32_t used = (w & 0xFFFFu) + (w >> 16);
++                const uint32_t nb = slot_blocks(v);
++                const uint32_t left = used < nb ? nb - used : 0;
++                if (left >= steal_min && left > best_left) {
++                    best = v;
++                    best_left = left;
++                }
++            }
++            if (best == cores_per_group) {
++                return false;  // F + B only grows: nothing the probe saw exhausted can come back
++            }
++            const uint32_t nb = slot_blocks(best);
++            const uint32_t old = claim_fetch_add(slot_word(best), BACK_UNIT, scratch_base);
++            const uint32_t f = old & 0xFFFFu, b = old >> 16;
++            if (f + b < nb) {
++                block_of(best, nb - 1 - b, first_row, rows);
++                ++stolen_blocks;
++                return true;
++            }
++        }
++    };
++    // Claim the next block for this core; false when the group has nothing left for it.
++    auto claim_next = [&](uint32_t& first_row, uint32_t& rows) -> bool {
++        if constexpr (steal_mode == STEAL_EAGER) {
++            return claim_stolen(first_row, rows) || claim_own(first_row, rows);
++        }
++        return claim_own(first_row, rows) || claim_stolen(first_row, rows);
++    };
++
++    // ---- load_taps ----
+     auto tap_sender = taps_mcast.optional_sender(noc);
+     auto tap_receiver = taps_mcast.optional_receiver(noc);
+     cb_reserve_back(cb_tap_tiles, block_ch_tiles);
+-    const uint32_t tap_base = get_write_ptr(cb_tap_tiles);  // same L1 address on every core of the group
++    const uint32_t tap_base = get_write_ptr(cb_tap_tiles);
+     if (tap_sender) {
+         MaybeDeviceZoneScope("reader_taps_issue");
+         issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(
+@@ -200,12 +354,10 @@
+         issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(
+             TensorAccessor(tap3_args, tap3_addr), 3, tap_base, ch_group_tile_start);
+     }
+-    // Called once, after the core's first tile-row reads are in flight: those reads keep landing while
+-    // the taps are distributed. Leaves every outstanding read complete.
+     bool taps_pending = true;
+     auto publish_taps_and_barrier = [&]() {
+         if (tap_sender) {
+-            noc_async_read_barrier();  // own tap rows (and the first tile-row) landed
++            noc_async_read_barrier();
+             tap_sender->send(tap_base, tap_base, tap_tiles_bytes);
+         } else if (tap_receiver) {
+             tap_receiver->receive();
+@@ -215,31 +367,69 @@
+         taps_pending = false;
+     };
+
+-    uint32_t prev_slot_base = 0;
+-    for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
+-        const uint32_t rows_this_block = (block_idx + 1 == num_blocks_this_core) ? last_block_rows : block_rows;
+-        const uint32_t block_seq_start = core_seq_start + block_idx * block_rows;  // first tile-row of the block
+-        const uint32_t slot_sticks = TILE_DIM * rows_this_block + HALO_ROWS;
++    auto post_request = [&](uint32_t dst, uint32_t row, uint32_t rows, uint32_t flags) {
++        cb_reserve_back(cb_split_requests, 1);
++        volatile tt_l1_ptr uint32_t* page =
++            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_split_requests));
++        page[0] = dst;
++        if constexpr (dynamic) {
++            page[1] = row;
++            page[2] = rows;
++            page[3] = flags;
++        }
++        cb_push_back(cb_split_requests, 1);
++    };
++    auto post_ctrl = [&](uint32_t value) {
++        cb_reserve_back(cb_ctrl, 1);
++        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_ctrl)) = value;
++        cb_push_back(cb_ctrl, 1);
++    };
+
+-        // ---- load_rows_block: one slot ----
+-        {
++    uint32_t prev_slot_base = 0;
++    uint32_t prev_rows = 0;
++    uint32_t prev_end_row = NO_ROW;  // first tile-row after this core's previous block
++    for (uint32_t block_idx = 0;; ++block_idx) {
++        uint32_t block_seq_start, rows_this_block;
++        if constexpr (!dynamic) {
++            if (block_idx == num_blocks_this_core) {
++                break;
++            }
++            rows_this_block = (block_idx + 1 == num_blocks_this_core) ? last_block_rows : block_rows;
++            block_seq_start = core_seq_start + block_idx * block_rows;
+             MaybeDeviceZoneScope("reader_rows_reserve");
+-            cb_reserve_back(cb_rows, slot_sticks);
++            cb_reserve_back(cb_rows, TILE_DIM * rows_this_block + HALO_ROWS);
++        } else {
++            {
++                MaybeDeviceZoneScope("reader_rows_reserve");
++                cb_reserve_back(cb_rows, full_slot_sticks);
++            }
++            if (!claim_next(block_seq_start, rows_this_block)) {
++                break;
++            }
+         }
+         const uint32_t slot_base = get_write_ptr(cb_rows);
++        const bool contiguous = block_idx > 0 && block_seq_start == prev_end_row;
+
+-        // Halo sticks [0, 3): tokens block_t0 - 3 .. block_t0 - 1.
+         bool halo_from_untilized = false;
++        if constexpr (dynamic) {
++            const uint32_t extra = (tile_input && block_seq_start > 0 && !contiguous) ? 1 : 0;
++            post_ctrl(rows_this_block | (extra << 16));
++            if constexpr (split_rows == 0) {
++                for (uint32_t m = 0; m < rows_this_block; ++m) {
++                    post_request(0, block_seq_start + m, rows_this_block, 0);
++                }
++            }
++        }
+         {
+             MaybeDeviceZoneScope("reader_halo_issue");
+             if (block_seq_start == 0) {
+                 read_history_halo<block_ch_tiles, history_page_channels, elem_bytes>(
+                     history_acc, slot_base, ch_group_tile_start);
+-            } else if (block_idx > 0) {
+-                // The previous block is full-height: its last 3 body sticks sit at [32*block_rows, +3).
+-                copy_local(
+-                    noc, prev_slot_base + TILE_DIM * block_rows * stick_bytes, slot_base, HALO_ROWS * stick_bytes);
++            } else if (contiguous) {
++                // The previous block's last 3 body sticks sit at [32 * prev_rows, +3) of its slot.
++                copy_local(noc, prev_slot_base + TILE_DIM * prev_rows * stick_bytes, slot_base, HALO_ROWS * stick_bytes);
+             } else if constexpr (!tile_input) {
++                MaybeDeviceZoneScope("reader_halo_dram");
+                 const uint32_t first_token = block_seq_start * TILE_DIM - HALO_ROWS;
+                 for (uint32_t r = 0; r < HALO_ROWS; ++r) {
+                     GQKV_READ(
+@@ -248,19 +438,16 @@
+                         stick_bytes);
+                 }
+             } else {
+-                halo_from_untilized = true;  // rows 29..31 of the extra untilized tile-row t0/32 - 1
++                halo_from_untilized = true;
+             }
+         }
+
+         if constexpr (!tile_input) {
+-            // Body: per tile-row, own_rows stick reads -> ONE barrier -> [writer's rows landed] -> push.
+             for (uint32_t m = 0; m < rows_this_block; ++m) {
+                 const uint32_t token0 = (block_seq_start + m) * TILE_DIM;
+                 const uint32_t dst = slot_base + (HALO_ROWS + TILE_DIM * m) * stick_bytes;
+                 if constexpr (split_rows > 0) {
+-                    cb_reserve_back(cb_split_requests, 1);
+-                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_split_requests)) = dst;
+-                    cb_push_back(cb_split_requests, 1);
++                    post_request(dst, block_seq_start + m, rows_this_block, 0);
+                 }
+                 {
+                     MaybeDeviceZoneScope("reader_rows_issue");
+@@ -286,7 +473,6 @@
+                 cb_push_back(cb_rows, m == 0 ? first_row_push : TILE_DIM);
+             }
+         } else {
+-            // Body: input tile-rows -> compute untilize -> cb_untilized_rows -> this slot.
+             const uint32_t extra_rows = halo_from_untilized ? 1 : 0;
+             const uint32_t rows_to_untilize = rows_this_block + extra_rows;
+             const uint32_t first_tile_row = block_seq_start - extra_rows;
+@@ -310,7 +496,7 @@
+             for (uint32_t j = 0; j < rows_to_untilize; ++j) {
+                 const bool next_pending = (j + 1 < rows_to_untilize);
+                 if (next_pending) {
+-                    issue_input_tile_row(first_tile_row + j + 1);  // in flight while we wait on row j
++                    issue_input_tile_row(first_tile_row + j + 1);
+                 }
+                 {
+                     MaybeDeviceZoneScope("reader_untilized_wait");
+@@ -334,9 +520,24 @@
+                 }
+             }
+         }
++        if constexpr (dynamic) {
++            if (rows_this_block < block_rows) {
++                // ragged block: pad to a full slot so the ring stays slot-aligned (compute pops the pad)
++                cb_push_back(cb_rows, TILE_DIM * (block_rows - rows_this_block));
++            }
++        }
+         prev_slot_base = slot_base;
++        prev_rows = rows_this_block;
++        prev_end_row = block_seq_start + rows_this_block;
++    }
++    if constexpr (dynamic) {
++        if (taps_pending) {
++            publish_taps_and_barrier();  // a core left without blocks still serves / receives the taps
++        }
++        post_ctrl(CTRL_DONE);
++        post_request(0, 0, 0, REQ_DONE);
++        DeviceTimestampedData("steal_blocks", stolen_blocks);
+     }
+-    // BB-03: nothing this kernel issued (reads, multicast writes, semaphore updates) is left in flight.
+     noc_async_read_barrier();
+     noc_async_write_barrier();
+     noc_async_atomic_barrier();
+--- a/ttnn/ttnn/operations/gen_qkv_causal_conv1d_silu/kernels/gen_qkv_causal_conv1d_silu_writer.cpp
++++ b/ttnn/ttnn/operations/gen_qkv_causal_conv1d_silu/kernels/gen_qkv_causal_conv1d_silu_writer.cpp
+@@ -3,25 +3,26 @@
+
+ // gen_qkv_causal_conv1d_silu writer (BRISC / NoC1) — store_block.
+ //
+-// This core owns channel tiles [ch_group_tile_start, ch_group_tile_start + block_ch_tiles) of every
+-// tile-row in its token range. Global channel tile cg routes to q if cg < Q_t, to k if
+-// cg < Q_t + K_t, else to v (page r * X_t + (cg - base_X)). Compute pushes each tile-row in groups
+-// of out_group_tiles (the last may be short); per group: wait, issue its writes, flush (source L1
+-// read out), pop — so group g is stored while compute activates group g+1. Final write barrier
+-// before return (BB-03).
++// Global channel tile cg routes to q if cg < Q_t, to k if cg < Q_t + K_t, else to v (page r * X_t + (cg - base_X)).
++// Compute pushes each tile-row in groups of out_group_tiles; per group: wait, issue its writes, flush, pop.
++// Split reader (ROW_MAJOR regime, split_rows > 0; Refinement 2): this RISC also reads body rows
++// [32 - split_rows, 32) of every input tile-row on NoC1 into the reader's slot (cb_split_requests ->
++// reads -> cb_split_done).
++// Static mode (CT dynamic == 0: nothing to steal — one block per core, or one core per channel group):
++// the core's own contiguous token range.
++// Dynamic mode (work stealing, Perf 2): the tile-rows this core stores are the ones its reader claimed (own range front-first,
++// then rows stolen from the back of other ranges of the channel group). The reader posts one
++// cb_split_requests page per tile-row, {L1 dst, tile-row, rows in its block, flags}, in block order, and
++// a final page with flags = REQ_DONE. This kernel serves them exactly like the op's writer serves its
++// split-read requests (before waiting on output block b it serves every request through the end of
++// block b + 1 when it reads a split share, through block b otherwise), recording each block's first
++// tile-row and row count in a small ring; output block b is stored to the tile-rows recorded for b.
++// Deadlock-free for the same reason as the op's writer: the request of block b + 1 is posted once
++// compute released block b - 1's slot, whose outputs this kernel has already drained; REQ_DONE is
++// posted after the reader's failed claim, which follows the same slot reservation.
+ //
+ // Raw NoC writes rather than write_sticks_after_untilize: outputs are TILE pages routed to three
+ // tensors; that helper writes RM sticks to one tensor.
+-//
+-// Split reader (ROW_MAJOR regime, split_rows > 0; Refinement 2): this RISC also reads body rows
+-// [32 - split_rows, 32) of every input tile-row on its own NoC (NoC1), whose DRAM endpoints are
+-// separate ports from the reader's (NoC0) — decode is DRAM-request-rate-bound per port. The reader
+-// posts each tile-row's L1 destination in cb_split_requests; this kernel issues the reads, waits for
+-// them, and posts a token in cb_split_done (the reader pushes the rows after it). Before waiting on
+-// output tile-row m it serves every row through the end of the NEXT block: the rows of m's block are
+-// required (compute tilizes a whole block before its first output), the next block's are the
+-// prefetch that keeps reads overlapped with compute. Deadlock-free: the next block's first request
+-// needs compute to have released block(m) - 1, whose outputs this kernel has already drained.
+
+ #include <cstdint>
+
+@@ -29,11 +30,9 @@
+
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
+-// Stage zones (MaybeDeviceZoneScope, PERMANENT — perf tournaments rank stages from them; free when the
+-// profiler is off): per served split row writer_split_req_wait, writer_split_issue, writer_split_barrier;
+-// per output group writer_out_wait (starved on compute), writer_out_issue, writer_out_flush.
+-// Measurement-only ablations (compiled out unless defined; wrong results by construction):
+-// GQKV_ABLATE_READS drops the split reader's DRAM reads, GQKV_ABLATE_WRITES the q / k / v writes.
++// Stage zones (MaybeDeviceZoneScope, PERMANENT): per served request writer_split_req_wait,
++// writer_split_issue, writer_split_barrier; per output group writer_out_wait, writer_out_issue,
++// writer_out_flush.
+ #ifdef GQKV_ABLATE_READS
+ #define GQKV_READ(...)
+ #else
+@@ -48,10 +47,12 @@
+ namespace {
+
+ constexpr uint32_t cb_output_tiles = 3;
+-constexpr uint32_t cb_split_requests = 6;  // reader -> this kernel: one L1 row address per tile-row
+-constexpr uint32_t cb_split_done = 7;      // this kernel -> reader: one token per tile-row
++constexpr uint32_t cb_split_requests = 6;
++constexpr uint32_t cb_split_done = 7;
+
+ constexpr uint32_t TILE_DIM = 32;
++constexpr uint32_t REQ_DONE = 1u;
++constexpr uint32_t BLOCK_RING = 4;  // served blocks live at once: b and b + 1
+
+ }  // namespace
+
+@@ -62,11 +63,12 @@
+     constexpr uint32_t v_tiles = get_compile_time_arg_val(3);
+     constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
+     constexpr uint32_t block_rows = get_compile_time_arg_val(5);
+-    constexpr uint32_t split_rows = get_compile_time_arg_val(6);   // 0: the reader reads every row
+-    constexpr uint32_t stick_bytes = get_compile_time_arg_val(7);  // one token row of this core's channels
+-    constexpr uint32_t out_group_tiles = get_compile_time_arg_val(8);    // compute's push quantum
+-    constexpr bool stagger_row_walk = get_compile_time_arg_val(9) == 1;  // rotate each core's row order
+-    constexpr auto q_args = TensorAccessorArgs<10>();
++    constexpr uint32_t split_rows = get_compile_time_arg_val(6);
++    constexpr uint32_t stick_bytes = get_compile_time_arg_val(7);
++    constexpr uint32_t out_group_tiles = get_compile_time_arg_val(8);
++    constexpr bool stagger_row_walk = get_compile_time_arg_val(9) == 1;
++    constexpr bool dynamic = get_compile_time_arg_val(10) != 0;
++    constexpr auto q_args = TensorAccessorArgs<11>();
+     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
+@@ -86,7 +88,6 @@
+     const auto k_acc = TensorAccessor(k_args, k_addr);
+     const auto v_acc = TensorAccessor(v_args, v_addr);
+
+-    // store_tile: global channel tile cg of tile-row r -> its q / k / v page.
+     auto store_tile = [&](uint32_t src, uint32_t r, uint32_t cg) {
+         if (cg < q_tiles) {
+             GQKV_WRITE(src, q_acc.get_noc_addr(r * q_tiles + cg), tile_bytes);
+@@ -96,49 +97,7 @@
+             GQKV_WRITE(src, v_acc.get_noc_addr(r * v_tiles + (cg - q_tiles - k_tiles)), tile_bytes);
+         }
+     };
+-
+-    // ---- split reader: serve tile-rows [0, rows_served) of this core's range ----
+-    [[maybe_unused]] uint32_t rows_served = 0;
+-    [[maybe_unused]] auto serve_split_rows_through = [&](uint32_t end) {
+-        if constexpr (split_rows > 0) {
+-            const auto input_acc = TensorAccessor(input_args, input_addr);
+-            const uint32_t input_byte_offset =
+-                (input_col_offset_tiles + ch_group_tile_start) * (stick_bytes / block_ch_tiles);
+-            for (; rows_served < end; ++rows_served) {
+-                {
+-                    MaybeDeviceZoneScope("writer_split_req_wait");
+-                    cb_wait_front(cb_split_requests, 1);
+-                }
+-                invalidate_l1_cache();  // the address was stored by the reader RISC
+-                const uint32_t dst = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_split_requests));
+-                cb_pop_front(cb_split_requests, 1);
+-                const uint32_t token0 = (core_seq_start + rows_served) * TILE_DIM;
+-                {
+-                    MaybeDeviceZoneScope("writer_split_issue");
+-                    for (uint32_t j = 0; j < split_rows; ++j) {
+-                        const uint32_t i =
+-                            TILE_DIM - split_rows +
+-                            (stagger_row_walk ? (j + ch_group_tile_start + core_seq_start) % split_rows : j);
+-                        GQKV_READ(
+-                            input_acc.get_noc_addr(token0 + i, input_byte_offset), dst + i * stick_bytes, stick_bytes);
+-                    }
+-                }
+-                {
+-                    MaybeDeviceZoneScope("writer_split_barrier");
+-                    noc_async_read_barrier();
+-                }
+-                cb_reserve_back(cb_split_done, 1);
+-                cb_push_back(cb_split_done, 1);
+-            }
+-        }
+-    };
+-
+-    for (uint32_t r = core_seq_start; r < core_seq_start + core_seq_tiles; ++r) {
+-        if constexpr (split_rows > 0) {
+-            const uint32_t m = r - core_seq_start;
+-            const uint32_t next_block_end = (m / block_rows + 2) * block_rows;
+-            serve_split_rows_through(next_block_end < core_seq_tiles ? next_block_end : core_seq_tiles);
+-        }
++    auto store_row = [&](uint32_t r) {
+         for (uint32_t c0 = 0; c0 < block_ch_tiles; c0 += out_group_tiles) {
+             const uint32_t group = (block_ch_tiles - c0 < out_group_tiles) ? (block_ch_tiles - c0) : out_group_tiles;
+             {
+@@ -158,6 +117,104 @@
+             }
+             cb_pop_front(cb_output_tiles, group);
+         }
++    };
++    // Split share of tile-row `row` (token rows [32 - split_rows, 32)) into the reader's slot at dst.
++    [[maybe_unused]] auto split_read_row = [&](uint32_t row, uint32_t dst) {
++        if constexpr (split_rows > 0) {
++            const auto input_acc = TensorAccessor(input_args, input_addr);
++            const uint32_t input_byte_offset =
++                (input_col_offset_tiles + ch_group_tile_start) * (stick_bytes / block_ch_tiles);
++            const uint32_t token0 = row * TILE_DIM;
++            {
++                MaybeDeviceZoneScope("writer_split_issue");
++                for (uint32_t j = 0; j < split_rows; ++j) {
++                    const uint32_t i = TILE_DIM - split_rows +
++                                       (stagger_row_walk ? (j + ch_group_tile_start + core_seq_start) % split_rows : j);
++                    GQKV_READ(input_acc.get_noc_addr(token0 + i, input_byte_offset), dst + i * stick_bytes, stick_bytes);
++                }
++            }
++            {
++                MaybeDeviceZoneScope("writer_split_barrier");
++                noc_async_read_barrier();
++            }
++            cb_reserve_back(cb_split_done, 1);
++            cb_push_back(cb_split_done, 1);
++        }
++    };
++
++    if constexpr (!dynamic) {
++        // ---- the op's writer ----
++        [[maybe_unused]] uint32_t rows_served = 0;
++        [[maybe_unused]] auto serve_split_rows_through = [&](uint32_t end) {
++            if constexpr (split_rows > 0) {
++                for (; rows_served < end; ++rows_served) {
++                    {
++                        MaybeDeviceZoneScope("writer_split_req_wait");
++                        cb_wait_front(cb_split_requests, 1);
++                    }
++                    invalidate_l1_cache();
++                    const uint32_t dst =
++                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_split_requests));
++                    cb_pop_front(cb_split_requests, 1);
++                    split_read_row(core_seq_start + rows_served, dst);
++                }
++            }
++        };
++        for (uint32_t r = core_seq_start; r < core_seq_start + core_seq_tiles; ++r) {
++            if constexpr (split_rows > 0) {
++                const uint32_t m = r - core_seq_start;
++                const uint32_t next_block_end = (m / block_rows + 2) * block_rows;
++                serve_split_rows_through(next_block_end < core_seq_tiles ? next_block_end : core_seq_tiles);
++            }
++            store_row(r);
++        }
++    } else {
++        // ---- dynamic: rows as claimed by the reader ----
++        uint32_t ring_first[BLOCK_RING];
++        uint32_t ring_rows[BLOCK_RING];
++        uint32_t blocks_seen = 0;    // blocks whose first request has been served
++        uint32_t rows_left = 0;      // requests still to serve in the newest seen block
++        bool done = false;
++        auto serve_one = [&]() {
++            {
++                MaybeDeviceZoneScope("writer_split_req_wait");
++                cb_wait_front(cb_split_requests, 1);
++            }
++            invalidate_l1_cache();
++            volatile tt_l1_ptr uint32_t* page =
++                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_split_requests));
++            const uint32_t dst = page[0];
++            const uint32_t row = page[1];
++            const uint32_t rows = page[2];
++            const uint32_t flags = page[3];
++            cb_pop_front(cb_split_requests, 1);
++            if (flags & REQ_DONE) {
++                done = true;
++                return;
++            }
++            if (rows_left == 0) {
++                ring_first[blocks_seen % BLOCK_RING] = row;
++                ring_rows[blocks_seen % BLOCK_RING] = rows;
++                ++blocks_seen;
++                rows_left = rows;
++            }
++            --rows_left;
++            split_read_row(row, dst);
++        };
++        constexpr uint32_t lookahead = split_rows > 0 ? 2 : 1;  // blocks served before storing block b
++        for (uint32_t b = 0;; ++b) {
++            while (!done && blocks_seen - (rows_left > 0 ? 1 : 0) < b + lookahead) {
++                serve_one();
++            }
++            if (b >= blocks_seen) {
++                break;  // REQ_DONE seen and every block stored
++            }
++            const uint32_t first = ring_first[b % BLOCK_RING];
++            const uint32_t rows = ring_rows[b % BLOCK_RING];
++            for (uint32_t m = 0; m < rows; ++m) {
++                store_row(first + m);
++            }
++        }
+     }
+     noc_async_write_barrier();
+ }
+--- a/ttnn/ttnn/operations/gen_qkv_causal_conv1d_silu/kernels/gen_qkv_causal_conv1d_silu_compute.cpp
++++ b/ttnn/ttnn/operations/gen_qkv_causal_conv1d_silu/kernels/gen_qkv_causal_conv1d_silu_compute.cpp
+@@ -3,6 +3,17 @@
+
+ // gen_qkv_causal_conv1d_silu compute.
+ //
++// Work stealing (Perf 2; CT arg 6, dynamic != 0): the block count and each block's
++// row count / TILE extra row come from the reader, which claims blocks at run time (own range front-first,
++// then steals from other ranges of the channel group). Per block the reader pushes one cb_ctrl (CB 8)
++// page = rows | extra << 16, and CTRL_DONE after its last block. The unpack thread waits and reads it,
++// math and pack receive the same word through the TRISC mailboxes (cb_api.h read_tile_value), so all three
++// threads run the same loop. A short block (rows < block_rows) is followed by 32 * (block_rows - rows)
++// padding sticks, popped after its last window: every block consumes exactly one full cb_rows slot, so
++// the slot discipline (op_design.md Key Risks: pops 1,1,1,29 / 1,1,1,32, ring of whole slots) holds in
++// any block order; cb_window_tiles is padded the same way. Static mode (dynamic == 0: nothing to steal — one
++// block per core, or one core per channel group): counts from the runtime args.
++//
+ // Per block (op_design.md -> Block schedule):
+ //   untilize_rows_block   (TILE regime) compute_kernel_lib::untilize: input tiles -> row-major
+ //                         tile-rows (the reader copies them into the cb_rows slot).
+@@ -54,6 +65,7 @@
+ #include <cstdint>
+
+ #include "api/compute/compute_kernel_hw_startup.h"
++#include "api/compute/cb_api.h"
+ #include "api/compute/bcast.h"
+ #include "api/compute/compute_kernel_api.h"
+ #include "api/compute/reconfig_data_format.h"
+@@ -166,6 +178,8 @@
+ constexpr uint32_t cb_output_tiles = 3;
+ constexpr uint32_t cb_input_tiles = 4;
+ constexpr uint32_t cb_untilized_rows = 5;
++constexpr uint32_t cb_ctrl = 8;  // dynamic: reader -> compute, one page per block
++constexpr uint32_t CTRL_DONE = 0xFFFFFFFFu;
+
+ constexpr uint32_t TILE_DIM = 32;
+ constexpr uint32_t TAP_COUNT = 4;
+@@ -264,7 +278,8 @@
+ // windowed_tilize_block: rows_this_block tile-rows x 4 windows x block_ch_tiles tiles, layout
+ // [m][p][c] in cb_window_tiles. One tilize init / uninit per block; one wait per tile-row.
+ template <uint32_t block_ch_tiles>
+-void windowed_tilize_block(DataflowBuffer& rows, DataflowBuffer& windows, uint32_t rows_this_block) {
++void windowed_tilize_block(
++    DataflowBuffer& rows, DataflowBuffer& windows, uint32_t rows_this_block, uint32_t pad_sticks = 0) {
+     constexpr auto Keep = ReconfigureRegisterDatatypeMode::NoReconfigure;
+     for (uint32_t m = 0; m < rows_this_block; ++m) {
+         {
+@@ -293,6 +308,11 @@
+             tilize_window<block_ch_tiles, InitUninitMode::Neither, Keep>(rows, windows, TILE_DIM - HALO_ROWS);
+         }
+     }
++    if (pad_sticks > 0) {
++        // dynamic: the padding of a short block (the reader keeps every block one full slot)
++        rows.wait_front(pad_sticks);
++        rows.pop_front(pad_sticks);
++    }
+ }
+
+ // conv_silu_block: rows_this_block x block_ch_tiles output tiles. Output tile (m, c) =
+@@ -368,6 +388,7 @@
+     constexpr uint32_t out_group_tiles = get_compile_time_arg_val(3);  // output tiles per push
+     constexpr uint32_t silu_variant = get_compile_time_arg_val(4);     // SiLU body (silu_from_pack)
+     constexpr bool silu_tile_stall = get_compile_time_arg_val(5) == 1;  // per-tile SFPU-after-FPU stall
++    constexpr bool dynamic = get_compile_time_arg_val(6) != 0;          // block schedule from cb_ctrl
+
+     const uint32_t core_seq_start = get_arg_val<uint32_t>(0);
+     const uint32_t core_seq_tiles = get_arg_val<uint32_t>(1);
+@@ -385,21 +406,57 @@
+     DataflowBuffer windows(cb_window_tiles);
+     DataflowBuffer outputs(cb_output_tiles);
+
+-    for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
+-        const uint32_t rows_this_block = (block_idx + 1 == num_blocks_this_core) ? last_block_rows : block_rows;
+-        if constexpr (tile_input) {
++    uint32_t block_idx = 0;
++    for (;; ++block_idx) {
++        uint32_t rows_this_block;
++        uint32_t extra_rows;
++        if constexpr (dynamic) {
++            {
++                MaybeDeviceZoneScope("compute_ctrl_wait");
++                cb_wait_front(cb_ctrl, 1);
++            }
++            const uint32_t ctrl = read_tile_value(cb_ctrl, 0, 0);  // same word on unpack, math and pack
++            cb_pop_front(cb_ctrl, 1);
++            if (ctrl == CTRL_DONE) {
++                break;
++            }
++            rows_this_block = ctrl & 0xFFFFu;
++            extra_rows = ctrl >> 16;
++        } else {
++            if (block_idx == num_blocks_this_core) {
++                break;
++            }
++            rows_this_block = (block_idx + 1 == num_blocks_this_core) ? last_block_rows : block_rows;
+             // A core whose range starts at t0 > 0 untilizes one extra tile-row on its first block:
+             // its rows 29..31 are that block's halo.
+-            const uint32_t extra_rows = (block_idx == 0 && core_seq_start > 0) ? 1 : 0;
++            extra_rows = (block_idx == 0 && core_seq_start > 0) ? 1 : 0;
++        }
++        if constexpr (tile_input) {
+             untilize_rows_block<block_ch_tiles>(rows_this_block + extra_rows);
+         }
+-        windowed_tilize_block<block_ch_tiles>(rows, windows, rows_this_block);
++        windowed_tilize_block<block_ch_tiles>(
++            rows, windows, rows_this_block, dynamic ? TILE_DIM * (block_rows - rows_this_block) : 0);
+         if (block_idx == 0) {
+             MaybeDeviceZoneScope("compute_taps_wait");
+             taps.wait_front(block_ch_tiles);  // first use: the tap fetch hid behind the first tilize
+         }
+         conv_silu_block<block_ch_tiles, out_group_tiles, silu_variant, silu_tile_stall>(
+             windows, outputs, rows_this_block);
++        if constexpr (dynamic) {
++            if (rows_this_block < block_rows) {
++                // A short block left cb_window_tiles (capacity = one full block) misaligned: the next block's
++                // windows would wrap the ring end, and the conv reads them by index from the read pointer.
++                // Push (pack) and pop (unpack) the unused remainder so every block starts at the ring start.
++                const uint32_t pad_tiles = TAP_COUNT * block_ch_tiles * (block_rows - rows_this_block);
++                windows.reserve_back(pad_tiles);
++                windows.push_back(pad_tiles);
++                windows.wait_front(pad_tiles);
++                windows.pop_front(pad_tiles);
++            }
++        }
++    }
++    if (block_idx == 0) {
++        taps.wait_front(block_ch_tiles);  // dynamic: a core left without blocks still drains the taps
+     }
+     taps.pop_front(block_ch_tiles);
+ }
+--- a/ttnn/ttnn/operations/gen_qkv_causal_conv1d_silu/gen_qkv_causal_conv1d_silu_program_descriptor.py
++++ b/ttnn/ttnn/operations/gen_qkv_causal_conv1d_silu/gen_qkv_causal_conv1d_silu_program_descriptor.py
+@@ -14,6 +14,11 @@
+     writer  (BRISC/NoC1):  cb_output_tiles -> q / k / v (per-tile routing of the channel axis);
+                            RM split reader: body rows [32 - split_rows, 32) -> the reader's cb_rows slot
+
++Work stealing (Perf 2, Plan.work_stealing): when a core owns more than one block and a channel group has more
++than one core, blocks are claimed at run time — each core takes its own range front-first, then steals blocks
++from the back of the group's other ranges (one NoC fetch-and-add claim word per core, a program semaphore).
++The reader tells compute (cb_ctrl) and the writer (cb_split_requests) which block / tile-rows it claimed.
++
+ Every block knob (block_ch_tiles, block_rows, cores_per_group) and every buffer depth is defined
+ exactly once in this module; CB capacities, loop trip counts and grid sizing derive from them.
+ """
+@@ -76,6 +81,12 @@
+ # plan_limits(split_rows=...) pins it (0 = the reader reads every row).
+ # ---------------------------------------------------------------------------------------------
+ SPLIT_READER_ROWS = 24
++# Perf 2: a work-stealing plan with the quartic body moves NoC1 load to NoC0 — stealing balances the NoC1-starved
++# bottom-right cores inside their channel group, the NoC0-starved top rows are a whole group stealing cannot
++# relieve, so a lighter NoC1 share wins (004 device kernel us, quartic + stealing, split 0 / 8 / 16 / 24:
++# 139.5 / 115.7 / 115.0 / 126.4; 020: - / 59.4 / 55.3 / 55.5). Library body + stealing + split 16: 004 124.7
++# (flat), 020 62.7 (+3% vs 60.75) — so the library body keeps SPLIT_READER_ROWS.
++SPLIT_READER_ROWS_STEALING = 16
+
+ # bank_stagger (parked, measured null): rotate each core's body-row walk by its (channel group,
+ # token range) so the grid's first requests do not all land on one bank. Measured on 001 / 002 /
+@@ -123,6 +134,29 @@
+ CB_UNTILIZED_ROWS = 5  # TILE regime: untilized tile-rows -> reader -> cb_rows
+ CB_SPLIT_REQUESTS = 6  # split reader: reader -> writer, the L1 destination of each tile-row
+ CB_SPLIT_DONE = 7  # split reader: writer -> reader, "the writer's rows of this tile-row landed"
++CB_CTRL = 8  # work stealing: reader -> compute, one page per claimed block (rows | extra << 16, or done)
++CB_STEAL_SCRATCH = 9  # work stealing: the claim's returned word + one probe word per group member
++
++# ---------------------------------------------------------------------------------------------
++# Work stealing (Perf 2). Static token ranges leave the op's time to the grid's slowest positions: on
++# conv1d-004 the bottom-right cores' NoC1 traffic (split reads + output writes) crawls and their unpack
++# starves (compute_rows_wait 55-78 us vs ~10 at the left), so a faster compute pass made the op SLOWER.
++# Claims move tile-row blocks from slow positions to fast ones inside a channel group (each core's claim
++# word = semaphore CLAIM_SEM_ID: front claims by the owner in bits 0..15, back claims by stealers in 16..31,
++# NoC fetch-and-add; kernel heads explain the protocol). Measured (BH 11x10, device kernel us, zones on):
++#   004 quartic 149.9 -> 126.4 (split 24), 115.0 (split 16: see default_split_rows); library 129.5 -> 125.6
++#   (flat: compute-bound at 6 rows per core); 020 quartic 55.5 (split 24) / 55.3 (split 16) vs library 60.75
++#   (020 library + stealing 61.45: flat); 019 (TILE, fp32) 19.54 -> 19.88 (flat).
++# Plans with nothing to steal (one block per core, or one core per channel group) keep the static ranges:
++# forcing the protocol onto one-row plans measured +0.3 us on 003 (9.64 -> 9.94).
++# ---------------------------------------------------------------------------------------------
++CLAIM_SEM_ID = 0  # the tap multicast's semaphores start at CLAIM_SEM_ID + 1
++STEAL_STATIC = 0
++STEAL_ON = 1
++STEAL_EAGER = 2  # test hook (STEAL_STRESS): steal before the own range — every claim race and DRAM halo
++STEAL_STRESS = False
++STEAL_MIN = 1  # steal from a range only while it has at least this many unclaimed blocks
++STEAL_STATE_PAGE_BYTES = 16  # one L1-aligned word per page (ctrl message, request, claim / probe word)
+
+ REGIME_RM = "rm_staged_window"
+ REGIME_TILE = "tile_untilize_staged_window"
+@@ -142,6 +176,7 @@
+     split_rows: int  # RM: body rows per tile-row read by the writer RISC on NoC1 (0: reader reads all)
+     out_group_tiles: int  # output tiles per DEST acquire = per cb_output_tiles push = per writer wait
+     silu_body: int = SILU_LIBRARY  # SFPU SiLU body for a 16-bit DEST (SILU_LIBRARY / SILU_BF16_QUARTIC)
++    work_stealing: bool = False  # tile-row blocks claimed at run time inside a channel group (Perf 2)
+
+
+ def select_regime(layout) -> str:
+@@ -160,6 +195,8 @@
+     split_rows: int = 0,
+     elem_bytes: int = 2,
+     tile_bytes: int = 2048,
++    work_stealing: bool = False,
++    cores_per_group: int = 1,
+ ):
+     """The single definition of every CB capacity: [(cb index, page bytes, pages)].
+
+@@ -176,9 +213,16 @@
+     if regime == REGIME_TILE:
+         layout.append((CB_INPUT_TILES, tile_bytes, IN_DEPTH * block_ch_tiles))
+         layout.append((CB_UNTILIZED_ROWS, tile_bytes, UNTILIZED_DEPTH * block_ch_tiles))
++    if split_rows or work_stealing:
++        # work stealing: one request per tile-row carries its index to the writer, whose look-ahead holds up
++        # to two blocks (+ the done message) unconsumed
++        depth = max(SPLIT_HANDSHAKE_DEPTH, 2 * block_rows + 2) if work_stealing else SPLIT_HANDSHAKE_DEPTH
++        layout.append((CB_SPLIT_REQUESTS, SPLIT_HANDSHAKE_PAGE_BYTES, depth))
+     if split_rows:
+-        layout.append((CB_SPLIT_REQUESTS, SPLIT_HANDSHAKE_PAGE_BYTES, SPLIT_HANDSHAKE_DEPTH))
+         layout.append((CB_SPLIT_DONE, SPLIT_HANDSHAKE_PAGE_BYTES, SPLIT_HANDSHAKE_DEPTH))
++    if work_stealing:
++        layout.append((CB_CTRL, STEAL_STATE_PAGE_BYTES, ROWS_DEPTH + 2))
++        layout.append((CB_STEAL_SCRATCH, STEAL_STATE_PAGE_BYTES, cores_per_group + 1))
+     return layout
+
+
+@@ -267,18 +311,20 @@
+     num_blocks = _div_up(core_seq_tiles_max, block_rows_fit)
+     block_rows = _div_up(core_seq_tiles_max, num_blocks)  # balanced: same block count, smallest ragged tail
+
++    # Work stealing needs something to steal: more than one block on some core and more than one core per group.
++    work_stealing = _div_up(core_seq_tiles_max, block_rows) > 1 and ranges > 1
++    if fp32_dest_acc_en:
++        body = SILU_LIBRARY
++    else:
++        body = default_silu_body(core_seq_tiles_max, work_stealing) if silu_body is None else silu_body
+     if regime != REGIME_RM:
+         split = 0  # TILE regime: w tile reads per tile-row, not 32 stick reads — nothing to split
+     elif split_rows is not None:
+         split = max(0, min(TILE_DIM, split_rows))
+     else:
+-        split = default_split_rows()
++        split = default_split_rows(work_stealing and body == SILU_BF16_QUARTIC)
+     group = default_out_group_tiles(w, dest_tiles, core_seq_tiles_max) if out_group_tiles is None else out_group_tiles
+     group = max(1, min(group, w, dest_tiles))
+-    if fp32_dest_acc_en:
+-        body = SILU_LIBRARY
+-    else:
+-        body = default_silu_body(core_seq_tiles_max) if silu_body is None else silu_body
+
+     return Plan(
+         regime=regime,
+@@ -291,6 +337,7 @@
+         split_rows=split,
+         out_group_tiles=group,
+         silu_body=body,
++        work_stealing=work_stealing,
+     )
+
+
+@@ -312,9 +359,13 @@
+     return min(block_ch_tiles, dest_tiles)
+
+
+-def default_silu_body(core_seq_tiles_max: int) -> int:
+-    """16-bit-DEST SiLU body (Refinement 3): the quartic body where a core owns one tile-row, the
+-    library body otherwise.
++def default_silu_body(core_seq_tiles_max: int, work_stealing: bool = False) -> int:
++    """16-bit-DEST SiLU body (Refinement 3, Perf 2): the quartic body where a core owns one tile-row or the plan
++    steals work, the library body otherwise (several tile-rows per core and nothing to steal).
++
++    Perf 2: with work stealing the slow positions hand their blocks to fast ones, so the quartic body's faster
++    compute shows up: 004 149.9 -> 126.4 us (split 24) / 115.0 (split 16) vs the library body's 129.5 (125.6
++    stealing); 020 55.5 vs 60.75. Refinement 3's measurements (no stealing) follow.
+
+     One tile-row per core (decode-size calls): the activation of the core's only row is a tail on
+     the critical path, so a cheaper SFPU pass is a direct win. Several tile-rows per core: the call is
+@@ -330,13 +381,14 @@
+       several:   004 129.6 (median of 3) -> ~150 (split 24; split 8: ~125-131 with a p100 tail of
+                  136 us over a p50 of 103); 020 59.3 vs 60.9
+     """
+-    return SILU_BF16_QUARTIC if core_seq_tiles_max == 1 else SILU_LIBRARY
++    return SILU_BF16_QUARTIC if (core_seq_tiles_max == 1 or work_stealing) else SILU_LIBRARY
+
+
+-def default_split_rows() -> int:
++def default_split_rows(quartic_stealing: bool = False) -> int:
+     """ROW_MAJOR split reader: body rows per tile-row the writer RISC reads on NoC1 (measured best on
+-    every profiled ROW_MAJOR cell; see SPLIT_READER_ROWS)."""
+-    return SPLIT_READER_ROWS
++    every profiled ROW_MAJOR cell; see SPLIT_READER_ROWS) — SPLIT_READER_ROWS_STEALING on a work-stealing plan
++    with the quartic body (Perf 2)."""
++    return SPLIT_READER_ROWS_STEALING if quartic_stealing else SPLIT_READER_ROWS
+
+
+ def output_l1_share(tensor_seq_tiles: int, width_tiles, num_l1_banks: int, tile_bytes: int = 2048) -> int:
+@@ -454,12 +506,21 @@
+
+     work = assign_work(plan, tensor_seq_tiles, grid_x)
+     core_ranges = _row_wise_core_range_set(plan.num_cores, grid_x)
++    steal_mode = (STEAL_EAGER if STEAL_STRESS else STEAL_ON) if plan.work_stealing else STEAL_STATIC
++    device = input_tensor.device()
+
+     # ---- circular buffers (capacities: cb_layout, the same source footprint() budgets) ----
+     cbs = [
+         _cb(index, page_bytes, pages, core_ranges, dtype)
+         for index, page_bytes, pages in cb_layout(
+-            w, block_rows, plan.regime, split_rows=plan.split_rows, elem_bytes=elem_bytes, tile_bytes=tile_bytes
++            w,
++            block_rows,
++            plan.regime,
++            split_rows=plan.split_rows,
++            elem_bytes=elem_bytes,
++            tile_bytes=tile_bytes,
++            work_stealing=plan.work_stealing,
++            cores_per_group=plan.cores_per_group,
+         )
+     ]
+
+@@ -475,6 +536,9 @@
+         history_page_channels,
+         plan.split_rows,
+         int(STAGGER_ROW_WALK),
++        steal_mode,
++        STEAL_MIN,
++        CLAIM_SEM_ID,
+     ]
+     for t in [input_tensor, history] + list(taps):
+         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+@@ -491,11 +555,31 @@
+         stick_bytes,
+         plan.out_group_tiles,
+         int(STAGGER_ROW_WALK),
++        int(plan.work_stealing),
+     ]
+     for t in list(outputs) + [input_tensor]:
+         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+     # ---- compute ----
+-    compute_ct = [w, block_rows, int(tile_input), plan.out_group_tiles, plan.silu_body, int(SILU_TILE_STALL)]
++    compute_ct = [
++        w,
++        block_rows,
++        int(tile_input),
++        plan.out_group_tiles,
++        plan.silu_body,
++        int(SILU_TILE_STALL),
++        int(plan.work_stealing),
++    ]
++
++    # Group geometry for the claim protocol: virtual NoC x of every logical column, y of every logical row
++    # (worker coordinates are separable per axis; checked).
++    grid_rows = _div_up(plan.num_cores, grid_x)
++    xs = [int(device.worker_core_from_logical_core(ttnn.CoreCoord(x, 0)).x) for x in range(grid_x)]
++    ys = [int(device.worker_core_from_logical_core(ttnn.CoreCoord(0, y)).y) for y in range(grid_rows)]
++    if plan.work_stealing:
++        for cw in work:
++            v = device.worker_core_from_logical_core(cw.core)
++            assert (int(v.x), int(v.y)) == (xs[cw.core.x], ys[cw.core.y]), "worker coordinates not separable"
++    range_base, range_rem = divmod(tensor_seq_tiles, plan.cores_per_group)
+
+     reader_rt = ttnn.RuntimeArgs()
+     writer_rt = ttnn.RuntimeArgs()
+@@ -505,12 +589,22 @@
+     input_col_offset_tiles = input_column_offset // TILE_DIM
+     for cw in work:
+         ch_group_tile_start = cw.ch_group * w
+-        reader_rt[cw.core.x][cw.core.y] = read_addrs + [
+-            ch_group_tile_start,
+-            input_col_offset_tiles,
+-            cw.core_seq_start,
+-            cw.core_seq_tiles,
+-        ]
++        slot = (cw.core.y * grid_x + cw.core.x) - cw.ch_group * plan.cores_per_group
++        reader_rt[cw.core.x][cw.core.y] = (
++            read_addrs
++            + [ch_group_tile_start, input_col_offset_tiles, cw.core_seq_start, cw.core_seq_tiles]
++            + [
++                cw.ch_group * plan.cores_per_group,  # logical row-major index of the group's slot 0
++                plan.cores_per_group,
++                slot,
++                range_base,  # slot s owns range_base + (s < range_rem) tile-rows
++                range_rem,
++                grid_x,
++                grid_rows,
++            ]
++            + xs
++            + ys
++        )
+         writer_rt[cw.core.x][cw.core.y] = write_addrs + [
+             ch_group_tile_start,
+             cw.core_seq_start,
+@@ -549,7 +643,7 @@
+     # group's slot-0 core reads them from DRAM once and multicasts the packed tap tiles to the other
+     # cores_per_group - 1 cores (groups are U consecutive row-major cores: <= 3 rectangles each).
+     taps_mcast = ttnn.Mcast(
+-        input_tensor.device(),
++        device,
+         ttnn.McastConfig(noc=READER_NOC),
+         core_ranges,
+         plan.cores_per_group,
+@@ -557,7 +651,10 @@
+         ttnn.McastCoreOrder.RowMajor,
+     )
+     descriptor = ttnn.ProgramDescriptor(cbs=cbs)
+-    taps_mcast.attach(descriptor, TAPS_MCAST_PREFIX, [reader], 0)
++    if plan.work_stealing:
++        # one claim word per core, reset to 0 by every launch (program-cache hits included)
++        descriptor.semaphores = [ttnn.SemaphoreDescriptor(id=CLAIM_SEM_ID, core_ranges=core_ranges, initial_value=0)]
++    taps_mcast.attach(descriptor, TAPS_MCAST_PREFIX, [reader], CLAIM_SEM_ID + 1 if plan.work_stealing else 0)
+     kernels = [None, None, compute]
+     kernels[READER_KERNEL_INDEX] = reader
+     kernels[WRITER_KERNEL_INDEX] = writer
+--- a/tests/ttnn/unit_tests/operations/gen_qkv_causal_conv1d_silu/test_silu_body.py
++++ b/tests/ttnn/unit_tests/operations/gen_qkv_causal_conv1d_silu/test_silu_body.py
+@@ -36,8 +36,8 @@
+     [
+         (1, 80, False, QUARTIC),  # conv1d-001: one tile-row per core
+         (4, 80, False, QUARTIC),  # conv1d-003: 80 cores x one tile-row
+-        (128, 80, False, LIB),  # conv1d-004: six tile-rows per core
+-        (64, 64, False, LIB),  # conv1d-020
++        (128, 80, False, QUARTIC),  # conv1d-004: six tile-rows per core, work stealing (Perf 2)
++        (64, 64, False, QUARTIC),  # conv1d-020: work stealing
+         (4, 80, True, LIB),  # 32-bit DEST: always the library body
+     ],
+ )
+@@ -52,7 +52,7 @@
+         fp32_dest_acc_en=fp32,
+     )
+     assert plan.silu_body == expected
+-    assert (plan.core_seq_tiles_max == 1) == (plan.silu_body == QUARTIC) or fp32
++    assert (plan.core_seq_tiles_max == 1 or plan.work_stealing) == (plan.silu_body == QUARTIC) or fp32
+
+
+ def _bf16_ordered(t):

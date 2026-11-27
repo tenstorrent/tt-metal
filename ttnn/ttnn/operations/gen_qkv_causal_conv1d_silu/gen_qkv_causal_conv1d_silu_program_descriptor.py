@@ -89,16 +89,21 @@ STAGGER_ROW_WALK = False
 # calculate_silu (fp32-accurate exp, two Newton steps); for a 16-bit DEST:
 #   SILU_LIBRARY (0): the library body — exp_21f + 3-op float->int + reciprocal with a masked Newton
 #     step, 26 SFPU instructions per row.
-#   SILU_BF16_QUARTIC (1): silu_pack::silu_bf16_rows (compute kernel) — the same z = 2^floor(y)(1+f)
-#     built by one shift, a quartic mantissa correction (relative error 1.1e-4 vs 1.7e-3), an unmasked
-#     Newton step, two rows interleaved per step. Correctly rounded for ~99.4% of inputs vs 90-98%.
-#     Measured SFPU cost of one pass over conv1d-004 (96 tiles / core, device-time difference of 2 and
-#     3 passes, GQKV_SILU_REPEAT): 62.8 us (quartic, two rows) vs 79.2 us (library); a cubic one row
-#     per step measured 66.4 (dependent-MAD stalls), a cubic two rows per step 58.8.
-# default_silu_body picks the quartic body where it wins and the library body elsewhere (see there).
+#   SILU_BF16_QUARTIC (1): silu_bf16::rows (compute kernel; Perf 2) — z = 2^floor(y)(1+f) built by one
+#     shift, a quartic mantissa correction (fp16 G3..G1 refit: relative error 1.14e-4 vs exp_21f's 1.7e-3),
+#     approx_recip + an unmasked Newton step, two rows per step, hand-scheduled raw TTI with SFPLOADMACRO
+#     multi-issue (36 cycles per row pair). Correctly rounded for ~99.5% of inputs vs ~90.6% (library),
+#     never more than 1 bf16 ULP off. Measured SFPU cost of one pass over conv1d-004 (96 tiles / core,
+#     device-time difference of 2 and 3 passes, GQKV_SILU_REPEAT): 42.1 us vs 61.5 us for Refinement 3's
+#     sfpi-compiled quartic (which it replaced) vs 78.3 us (library). Refinement 3's notes: a cubic one row
+#     per step measured 66.4 (dependent-MAD stalls); Perf 2's load-macro cubic 38.6 trades precision (96.4%
+#     correctly rounded) and is not used.
+# default_silu_body picks the quartic body except on deep-streaming plans (see there).
 # ---------------------------------------------------------------------------------------------
 SILU_LIBRARY = 0
 SILU_BF16_QUARTIC = 1
+# Plans with at least this many tile-rows per core keep the library body (default_silu_body: measured on 004 / 020).
+SILU_LIBRARY_MIN_ROWS = 5
 
 # Per-tile STALLWAIT(STALL_SFPU, MATH) before each tile's SiLU on the packer (the library SFPU start
 # issues it; redundant after the MATH_PACK semaphore wait — compute kernel, silu_from_pack). Measured
@@ -313,24 +318,26 @@ def default_out_group_tiles(block_ch_tiles: int, dest_tiles: int, core_seq_tiles
 
 
 def default_silu_body(core_seq_tiles_max: int) -> int:
-    """16-bit-DEST SiLU body (Refinement 3): the quartic body where a core owns one tile-row, the
-    library body otherwise.
+    """16-bit-DEST SiLU body: the quartic body (silu_bf16::rows), except on deep-streaming plans — at least
+    SILU_LIBRARY_MIN_ROWS tile-rows per core — which keep the library body.
 
-    One tile-row per core (decode-size calls): the activation of the core's only row is a tail on
-    the critical path, so a cheaper SFPU pass is a direct win. Several tile-rows per core: the call is
-    DRAM-bound once compute stops pacing it — with the quartic body the median core finishes ~9-13 us
-    earlier on conv1d-004 (p50 115 -> 99-106 us), but the raised aggregate DRAM demand starves the
-    cores with the longest NoC routes from the DRAM endpoints (a corner of the grid that moves with the
-    split-reader ratio: NoC1-heavy split 24 -> bottom-right, NoC0-only split 0 -> top rows), whose tail
-    sets the op time. The library body's pace keeps demand under DRAM capacity.
-    Measured (BH 11x10, device kernel us, library -> quartic):
-      one row:   001 5.89 -> 5.80   002 6.88 -> 6.56   003 9.84 -> 9.30   005 6.54 -> 6.41
-                 006 5.39 -> 5.11   010 7.23 -> 6.85   012 15.48 -> 14.36   013 6.10 -> 5.80
-                 014 8.60 -> 8.01   016 15.60 -> 14.33
-      several:   004 129.6 (median of 3) -> ~150 (split 24; split 8: ~125-131 with a p100 tail of
-                 136 us over a p50 of 103); 020 59.3 vs 60.9
+    The carve-out (Refinement 3, narrowed in Perf 2) is a measured one. With several tile-rows per core the call
+    streams DRAM long enough for a faster SFPU pass to raise the aggregate demand past what the NoC serves fairly:
+    the median core finishes earlier, but the cores with the longest routes from the DRAM endpoints straggle and
+    set the op time. Measured (BH 11x10, device kernel us, library -> Perf 2 bf16 body pinned, two passes):
+      004 (6 rows / core) 125.1 -> 141.5, 125.0 -> 139.4 (+12%); 020 (5 rows) 60.6 -> 62.9, 60.2 -> 62.5 (+4%);
+      008 (3 rows) 16.6 -> 15.2, 16.2 -> 15.5 (-4..-8%: below the threshold, the faster body wins);
+      [1, 1024, 1952] (61 groups x one core x 32 rows) 93.0 -> 92.3, 92.7 -> 93.1 (flat).
+    Perf 2's work stealing (perf_experiments/tile_row_stealing, not graduated: its NoC claim protocol hung
+    intermittently) removed the tail and made the faster body win on 004 / 020 too (004 124.8 -> 112.6).
+    One tile-row per core (decode-size calls): the activation of the core's only row is a tail on the critical
+    path, so a cheaper SFPU pass is a direct win (Perf 2 vs Refinement 3's sfpi quartic, two passes: 001 -3.2%,
+    002 -6%, 003 -8.4%, 005 -7%, 006 -7.4%, 007 -9.7%, 010 -4.9%, 012 -10.2%, 013 -6.1%, 014 -6%, 015 -6%,
+    016 -7.5%, 017 -3.3%).
+    Refinement 3 (library -> sfpi quartic): one row 001 5.89 -> 5.80, 002 6.88 -> 6.56, 003 9.84 -> 9.30;
+    several: 004 129.6 -> ~150 (split 24; split 8 ~125-131 with a p100 tail of 136 us over a p50 of 103).
     """
-    return SILU_BF16_QUARTIC if core_seq_tiles_max == 1 else SILU_LIBRARY
+    return SILU_LIBRARY if core_seq_tiles_max >= SILU_LIBRARY_MIN_ROWS else SILU_BF16_QUARTIC
 
 
 def default_split_rows() -> int:

@@ -208,6 +208,26 @@ Named boundary for "minimum": **DRAM/L1-bank traffic of the interleaved tensors 
 > (mixed / null-and-regression on single-row plans). Under the profiler the zones cost ~2–8% on the small
 > cells; `MAYBE_DEVICE_ZONE_SCOPE_OFF` compiles them out for apples-to-apples comparisons.
 
+> **Perf 2 as built (2026-11-27).** The 16-bit-DEST SiLU body (`Plan.silu_body = 1`) is now
+> `silu_bf16::rows`, a hand-scheduled raw-TTI quartic:
+> - Two `SFPLOADMACRO`s per row put five of each row's ops on two issue slots, and the clamps compare against
+>   constant LRegs.
+> - G3..G1 are fp16-refit and G4 is held in L7 for each DEST group.
+> - One pass over conv1d-004's 96 tiles per core takes 42.1 µs, vs 61.5 µs for Refinement 3's sfpi-compiled
+>   quartic (deleted) and 78.3 µs for the library body. The body is correctly rounded for 99.5% of inputs,
+>   max 1 ULP.
+>
+> `default_silu_body` keeps the library body only on plans with ≥ `SILU_LIBRARY_MIN_ROWS = 5` tile-rows per
+> core. That narrows Refinement 3's "every multi-row plan" carve-out:
+> - with the faster body pinned, 004 measured +12% and 020 +4% (a DRAM position tail under static token ranges);
+> - 008 (3 rows per core) measured −4% to −8%, so it now runs the faster body.
+>
+> Results: single-row cells are 3–10% faster, 008 is 4–6% faster, and the multi-row and fp32 cells are flat.
+>
+> Cross-core tile-row work stealing (`perf_experiments/tile_row_stealing`) took 004 to 112.4 µs (stretch
+> 117.13) with the faster body. It was **not built**: its NoC fetch-and-add claim hung intermittently on
+> device (see changelog Perf 2).
+
 Regime selection function (exact, host): `regime = "rm_staged_window" if input.layout == ttnn.ROW_MAJOR_LAYOUT else "tile_untilize_staged_window"`. The intra-regime paths that only some grids/shapes trigger (multi-block cores → L1 halo copy; core-first block with `t0 > 0` → DRAM halo / extra untilized tile-row; ragged last block) are pinned by `plan_limits` tests in the acceptance test (both regimes).
 
 ### Traffic ranking
