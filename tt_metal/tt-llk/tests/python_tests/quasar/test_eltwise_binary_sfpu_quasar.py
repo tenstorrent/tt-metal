@@ -354,9 +354,11 @@ INT_SWEEP = dict(
         MathOperation.SfpuGcd,
         MathOperation.SfpuLcm,
     ],
-    # SMAG staging is validated for ADD only.
+    # SMAG staging is validated for ADD and MUL, the two the compute API runs in SMAG.
     sign_magnitude=lambda mathop: (
-        [False, True] if mathop == MathOperation.SfpuElwadd else [False]
+        [False, True]
+        if mathop in (MathOperation.SfpuElwadd, MathOperation.SfpuElwmulInt)
+        else [False]
     ),
 )
 
