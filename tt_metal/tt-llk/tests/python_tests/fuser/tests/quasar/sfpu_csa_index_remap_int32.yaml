@@ -1,0 +1,58 @@
+# csa_index_remap<ROW_OFFSET> on Int32: [device:3 | bank:3 | bank-local row:14] -> bank << 14 | row-in-bank of the
+# window-relative position, exact. CsaIndexRemap runs ROW_OFFSET 0, CsaIndexRemapOffset 32773 (fixed in the
+# harness). Every device, each with another bank, at the first and last 64 rows of the bank, plus points on both
+# sides of the 32-row chunk, 8192-row, bank and device boundaries and the top of the 20-bit index space (ranges are
+# drawn in proportion to their width, so they are kept narrow). All inputs and results are non-negative, so the
+# harness' sign-magnitude Int32 L1 encoding reads them as the kernel's two's complement.
+# Int32 is unpacked straight to Dest and needs a 32-bit Dest; one RC_custom pass covers the whole 32x32 tile.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Int32]
+    stimuli:
+      include:
+        - [16384.0, 16447.0]
+        - [32704.0, 32767.0]
+        - [196608.0, 196671.0]
+        - [212928.0, 212991.0]
+        - [376832.0, 376895.0]
+        - [393152.0, 393215.0]
+        - [425984.0, 426047.0]
+        - [442304.0, 442367.0]
+        - [606208.0, 606271.0]
+        - [622528.0, 622591.0]
+        - [655360.0, 655423.0]
+        - [671680.0, 671743.0]
+        - [835584.0, 835647.0]
+        - [851904.0, 851967.0]
+        - [1015808.0, 1015871.0]
+        - [1032128.0, 1032191.0]
+        - 0.0
+        - 1.0
+        - 31.0
+        - 32.0
+        - 8191.0
+        - 8192.0
+        - 16383.0
+        - 16384.0
+        - 131071.0
+        - 131072.0
+        - 917504.0
+        - 1048575.0
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Int32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [64, 32]}
+      - type: "UnarySfpu"
+        operation: [CsaIndexRemap, CsaIndexRemapOffset]
+        approximation_mode: false
+        iterations: 32
+        block_size: [64, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}

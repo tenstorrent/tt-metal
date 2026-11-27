@@ -96,3 +96,14 @@ EMA_BETA = struct.unpack("<f", struct.pack("<I", EMA_BETA_BITS))[0]
 DROPOUT_SCALE = 2.0
 DROPOUT_PROBABILITY_MAX = 0x7FFFFFFF
 DROPOUT_SEED = 0xDEADBEEF
+
+# add_rsqrt_scaled multiplies x by this fp32 (about 1/3, not a power of two, so the product rounds) before
+# the add: ADD_RSQRT_FUSER_INPUT_SCALE in sfpu_operations_quasar.h.
+ADD_RSQRT_INPUT_SCALE_BITS = 0x3EAAAAAB
+ADD_RSQRT_INPUT_SCALE = struct.unpack(
+    "<f", struct.pack("<I", ADD_RSQRT_INPUT_SCALE_BITS)
+)[0]
+
+# csa_index_remap_offset's ROW_OFFSET: CSA_INDEX_REMAP_FUSER_ROW_OFFSET in sfpu_operations_quasar.h. Not a
+# multiple of 8, so the output bank moves as well as the row; past 2**15, like the Blackhole test's largest.
+CSA_INDEX_REMAP_ROW_OFFSET = 32773

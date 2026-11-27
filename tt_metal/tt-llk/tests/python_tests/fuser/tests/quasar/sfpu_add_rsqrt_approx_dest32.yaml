@@ -1,0 +1,39 @@
+# add_rsqrt_tile with APPROX (Blackhole's SQRT_10-bits body, one refinement fewer). rtol 3e-3 is Blackhole's
+# bound for that body on a 32-bit output (measured 8.8e-4). Positive arguments only, addend 1e-5. The input is
+# bf16 through the FPU datacopy (exact in SrcA), the route the other 32-bit Dest configs leave out.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [0.1, 4.0]
+        - [4.01, 8.0]
+        - [990.0, 1000.0]
+        - 0.0
+        - 0.00001
+        - 0.0001
+        - 0.001
+        - 0.01
+        - 1.0
+        - 65504.0
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Float32
+    atol: 0.0
+    rtol: 3.0e-3
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [64, 32]}
+      - type: "UnarySfpu"
+        operation: [AddRsqrt, AddRsqrtScaled]
+        approximation_mode: true
+        iterations: 32
+        fill_const_value: 1.0e-5
+        block_size: [64, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}

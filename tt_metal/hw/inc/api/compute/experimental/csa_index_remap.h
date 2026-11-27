@@ -7,11 +7,14 @@
 
 #if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
 #include "sfpu/experimental/ckernel_sfpu_csa_index_remap.h"
+#elif defined(TRISC_MATH) && defined(ARCH_QUASAR)
+// Quasar's tt-llk tree keeps its experimental SFPU kernels in common/inc/experimental (it has no common/inc/sfpu).
+#include "experimental/ckernel_sfpu_csa_index_remap.h"
 #endif
 
 namespace ckernel {
 
-#if defined(ARCH_BLACKHOLE)
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
 // Call before csa_index_remap, including when switching from another operation.
 // Re-establish the common SFPU configuration, address modifiers and counters.
 ALWI void csa_index_remap_init() { MATH(SFPU_UNARY_INIT(unused)); }
@@ -19,6 +22,7 @@ ALWI void csa_index_remap_init() { MATH(SFPU_UNARY_INIT(unused)); }
 template <std::uint32_t ROW_OFFSET>
 ALWI void csa_index_remap(std::uint32_t idst) {
     // RC_custom advances over the 32 destination rows that make up one tile.
+    // The tile holds Int32, so Dest must be 32-bit (DST_ACCUM_MODE / fp32_dest_acc_en).
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, _csa_index_remap_, (32, ROW_OFFSET), idst, VectorMode::RC_custom));
 }

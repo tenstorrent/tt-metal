@@ -1,0 +1,35 @@
+# add_rsqrt_tile's non-positive arguments, as Blackhole defines them: x + addend == 0 gives +inf and a negative
+# argument gives NaN. The addend is 1.0, so x = -1.0 lands exactly on 0 and x < -1 goes negative; x in
+# [-0.99, 4] keeps the positive side, including arguments next to 0 that only the exact fp32 add gets right.
+# AddRsqrt only: AddRsqrtScaled's fast_and_approx leaves a negative argument unspecified.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Float32]
+    stimuli:
+      include:
+        - [-8.0, -1.01]
+        - [-0.99, 4.0]
+        - -1.0
+        - -0.99999
+        - -2.0
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Float32
+    atol: 0.0
+    rtol: 1.0e-6
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [64, 32]}
+      - type: "UnarySfpu"
+        operation: [AddRsqrt]
+        approximation_mode: false
+        iterations: 32
+        fill_const_value: 1.0
+        block_size: [64, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}

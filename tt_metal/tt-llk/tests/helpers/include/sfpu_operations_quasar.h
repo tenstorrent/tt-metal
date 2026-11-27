@@ -7,6 +7,8 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "experimental/ckernel_sfpu_csa_index_remap.h"
+#include "experimental/llk_sfpu/ckernel_sfpu_add_rsqrt.h"
 #include "llk_defs.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
@@ -359,6 +361,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
         _init_rsqrt_<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::add_rsqrt || OPERATION == SfpuType::add_rsqrt_scaled)
+    {
+        init_add_rsqrt<APPROX>();
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
@@ -836,6 +842,12 @@ inline constexpr std::uint32_t FILL_ROWS_FUSER_END      = 21;
 inline constexpr std::uint32_t FILL_ROWS_CT_FUSER_BEGIN = 9;
 inline constexpr std::uint32_t FILL_ROWS_CT_FUSER_END   = 31;
 
+// add_rsqrt_scaled's INPUT_SCALE (about 1/3) and csa_index_remap_offset's ROW_OFFSET, since the fuser cannot
+// pass template arguments. Keep in sync with ADD_RSQRT_INPUT_SCALE_BITS / CSA_INDEX_REMAP_ROW_OFFSET in
+// helpers/sfpu_dispatch_constants.py.
+inline constexpr std::uint32_t ADD_RSQRT_FUSER_INPUT_SCALE      = 0x3EAAAAABu;
+inline constexpr std::uint32_t CSA_INDEX_REMAP_FUSER_ROW_OFFSET = 32773;
+
 /**
  * @brief Apply a Quasar unary SFPU op in-place on one Dest tile.
  *
@@ -851,7 +863,8 @@ inline constexpr std::uint32_t FILL_ROWS_CT_FUSER_END   = 31;
  * @param sfpu_format SFPU math format used by format-dependent ops such as comp, signbit and fill.
  * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum,
  *        cumprod and ema read it. Defaults to true so each tile is independent.
- * @param fill_const_value Constant written by fill, fill_rows and fill_rows_ct; other operations ignore it.
+ * @param fill_const_value Constant written by fill, fill_rows and fill_rows_ct, and the addend of add_rsqrt and
+ *        add_rsqrt_scaled; other operations ignore it.
  * @param idx_addr reshuffle_rows only: L1 address of the row mask minus its 16-byte header.
  * @tparam vector_mode Which faces of the tile to process. Reductions over the whole tile walk it their own way.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
@@ -877,7 +890,7 @@ void call_unary_sfpu_operation_quasar(
         TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32 ||
             (OPERATION != SfpuType::cumsum && OPERATION != SfpuType::cumprod && OPERATION != SfpuType::fill_rows && OPERATION != SfpuType::fill_rows_ct &&
              OPERATION != SfpuType::ema && OPERATION != SfpuType::reshuffle_rows && OPERATION != SfpuType::sum_int_col && OPERATION != SfpuType::sum_int_row &&
-             OPERATION != SfpuType::tiled_prod),
+             OPERATION != SfpuType::tiled_prod && OPERATION != SfpuType::csa_index_remap && OPERATION != SfpuType::csa_index_remap_offset),
         "This Quasar unary SFPU operation requires 32x32 tiles");
     constexpr std::uint32_t kReluThresholdBits = 0x40A00000u; // 5.0f
     if constexpr (OPERATION == SfpuType::abs)
@@ -1040,6 +1053,38 @@ void call_unary_sfpu_operation_quasar(
     {
         SFPU_UNARY_CALL_TINY_TILE(
             DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_rsqrt, (APPROX, ITERATIONS, is_fp32_dest_acc_en), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::add_rsqrt)
+    {
+        // rsqrt(x + addend), the Compute API defaults (no input scale, no fast mode, the default store).
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_add_rsqrt,
+            (APPROX, ITERATIONS, is_fp32_dest_acc_en, false /*FAST_APPROX*/),
+            dst_index,
+            vector_mode,
+            __builtin_bit_cast(std::uint32_t, fill_const_value));
+    }
+    else if constexpr (OPERATION == SfpuType::add_rsqrt_scaled)
+    {
+        // rsqrt(x * ADD_RSQRT_FUSER_INPUT_SCALE + addend) with every other knob non-default too.
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_add_rsqrt,
+            (APPROX, ITERATIONS, is_fp32_dest_acc_en, true /*FAST_APPROX*/, true /*typed_bf16_store*/, ADD_RSQRT_FUSER_INPUT_SCALE),
+            dst_index,
+            vector_mode,
+            __builtin_bit_cast(std::uint32_t, fill_const_value));
+    }
+    else if constexpr (OPERATION == SfpuType::csa_index_remap || OPERATION == SfpuType::csa_index_remap_offset)
+    {
+        // As csa_index_remap<ROW_OFFSET> calls it: one RC_custom pass of 32 iterations over the whole tile.
+        constexpr std::uint32_t row_offset = OPERATION == SfpuType::csa_index_remap ? 0 : CSA_INDEX_REMAP_FUSER_ROW_OFFSET;
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _csa_index_remap_, (32 /*ITERATIONS*/, row_offset), dst_index, VectorMode::RC_custom);
     }
     else if constexpr (OPERATION == SfpuType::square)
     {

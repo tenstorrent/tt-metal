@@ -6,15 +6,15 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-// Blackhole-only: the add_rsqrt SFPU functor lives only in the Blackhole llk_api tree.
-#if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
+// Blackhole and Quasar: the add_rsqrt SFPU functor lives in their llk_api trees (not Wormhole's).
+#if defined(TRISC_MATH) && (defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR))
 #include "experimental/llk_sfpu/ckernel_sfpu_add_rsqrt.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
-#if defined(ARCH_BLACKHOLE)
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
 
 /**
  * Initialize for add + rsqrt operation: result = rsqrt(x + addend)
@@ -25,6 +25,8 @@ ALWI void add_rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::init_add_
 /**
  * Perform scale + add + rsqrt operation: result = rsqrt(x * input_scale + addend)
  *
+ * fast_and_approx=true skips the NaN clamp for a negative argument, whose result is then
+ * unspecified; it does not change the accuracy for a positive one.
  * typed_bf16_store=true selects the direct BF16 store used by fused normalization.
  * input_scale applies a factor such as RMSNorm's 1/N at fp32, for a caller that
  * reduces sum(x^2) unscaled: folded into the reduce it would pass through a bf16
@@ -51,6 +53,6 @@ ALWI void add_rsqrt_tile(uint32_t idst, uint32_t addend) {
         addend));
 }
 
-#endif  // ARCH_BLACKHOLE
+#endif  // ARCH_BLACKHOLE || ARCH_QUASAR
 
 }  // namespace ckernel

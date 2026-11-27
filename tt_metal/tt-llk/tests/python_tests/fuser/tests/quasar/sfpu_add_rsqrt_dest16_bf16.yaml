@@ -1,0 +1,37 @@
+# add_rsqrt_tile on a 16-bit Dest: the kernel computes in fp32 and rounds to bf16 itself (AddRsqrtScaled through
+# the typed bf16 store). The addend is 1.0, large enough that a dropped or misread addend cannot pass; x = -1.0
+# makes a zero argument (+inf). rtol 1e-2 is Blackhole's bound: one bf16 ULP plus the rounding mode (Quasar
+# rounds ties to even).
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-0.9, -0.1]
+        - [0.1, 4.0]
+        - [4.01, 16.0]
+        - [990.0, 1000.0]
+        - -1.0
+        - 0.0
+        - 3.0
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Float16_b
+    atol: 0.0
+    rtol: 1.0e-2
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [64, 32]}
+      - type: "UnarySfpu"
+        operation: [AddRsqrt, AddRsqrtScaled]
+        approximation_mode: false
+        iterations: 32
+        fill_const_value: 1.0
+        block_size: [64, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}

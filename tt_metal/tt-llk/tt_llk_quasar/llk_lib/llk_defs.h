@@ -271,6 +271,13 @@ enum class SfpuType : std::uint32_t
     gelu_derivative,
     fill_rows,
     fill_rows_ct,
+    // add_rsqrt_tile's kernel; the Compute API inits it as rsqrt. add_rsqrt_scaled is the same kernel with
+    // the non-default template knobs, for the test harness.
+    add_rsqrt,
+    add_rsqrt_scaled,
+    // csa_index_remap's kernel at a ROW_OFFSET of 0 and at a non-zero one; the Compute API inits it as unused.
+    csa_index_remap,
+    csa_index_remap_offset,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its

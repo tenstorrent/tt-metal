@@ -1,0 +1,51 @@
+# add_rsqrt_tile: rsqrt(x + addend), the addend from fill_const_value (1e-5, RMSNorm's epsilon). AddRsqrt is the
+# Compute API default; AddRsqrtScaled also multiplies x by ~1/3 first (input_scale) and sets fast_and_approx and
+# typed_bf16_store (the latter only acts on a 16-bit Dest). Small x, where the addend dominates, up to 1e20.
+# Ranges are drawn in proportion to their width and each point as often as a unit of width, so the small
+# arguments are points and the wide magnitudes are narrow ranges.
+# All arguments stay positive: fast_and_approx leaves a negative argument unspecified, so the zero and negative
+# arguments are in sfpu_add_rsqrt_edges_dest32.yaml for AddRsqrt alone.
+#
+# Float32 goes straight to Dest: through SrcA it would lose mantissa bits (19-bit SrcA) that the golden does not
+# model, far beyond rtol 1e-6. The bf16 input route through the datacopy is in sfpu_add_rsqrt_approx_dest32.yaml.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Float32]
+    stimuli:
+      include:
+        - [0.1, 4.0]
+        - [4.01, 8.0]
+        - [990.0, 1000.0]
+        - 0.0
+        - 0.00001
+        - 0.00002
+        - 0.00005
+        - 0.0001
+        - 0.0003
+        - 0.001
+        - 0.01
+        - 1.0
+        - 65504.0
+        - 1.0e+20
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Float32
+    # Blackhole's measured SQRT_23-bits envelope is 1.3e-7 (test_sfpu_add_rsqrt.py).
+    atol: 0.0
+    rtol: 1.0e-6
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [64, 32]}
+      - type: "UnarySfpu"
+        operation: [AddRsqrt, AddRsqrtScaled]
+        approximation_mode: false
+        iterations: 32
+        fill_const_value: 1.0e-5
+        block_size: [64, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}
