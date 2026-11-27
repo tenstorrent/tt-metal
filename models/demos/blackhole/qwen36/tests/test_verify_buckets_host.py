@@ -291,10 +291,12 @@ def test_a_sampled_chained_verify_takes_the_bucket_of_its_rows_with_its_sampler_
 def test_the_engine_prepares_the_buckets_below_its_width(bucket_engine):
     eng, _ = bucket_engine
     seen = {}
-    eng.model.prepare_verify_trace = lambda pt, T, warm_positions, sample, buckets: seen.update(buckets=buckets, T=T)
+    eng.model.prepare_verify_trace = lambda pt, T, warm_positions, sample, buckets, logprobs, mask: seen.update(
+        buckets=buckets, T=T, logprobs=logprobs, mask=mask
+    )
     eng._prep_pt = torch.zeros(eng.B, eng.nb, dtype=torch.int32)
     eng._prepare_verify()
-    assert seen == {"buckets": (1, 2, 4), "T": eng.T}
+    assert seen == {"buckets": (1, 2, 4), "T": eng.T, "logprobs": True, "mask": eng.sample_on_device}
 
 
 # ----------------------------------------------------------------------------------------- the model's replay
@@ -725,7 +727,8 @@ def test_a_bucket_keeps_the_full_width_sdpa_core_split(monkeypatch):
 
 def test_prepare_sets_the_sdpa_split_and_warms_the_buckets(monkeypatch, expect_error):
     """prepare_verify_trace gives every attention layer of the verify the decode width as its SDPA split and warms the
-    verify with its buckets, once per (B, T, nb, sample, buckets); the model-owned GDN state takes no bucket."""
+    verify with its buckets, once per (B, T, nb, sample, buckets, logprobs, mask); the model-owned GDN state takes no
+    bucket."""
     from models.demos.blackhole.qwen36.tt import model as model_mod
 
     monkeypatch.setattr(ttnn, "from_torch", lambda t, **kw: t)
@@ -747,7 +750,7 @@ def test_prepare_sets_the_sdpa_split_and_warms_the_buckets(monkeypatch, expect_e
     pt = torch.arange(B * 4, dtype=torch.int32).reshape(B, 4) + 1
     m.prepare_verify_trace(pt, T, [0] * B, buckets=(4, 1, 2))
     assert [a.spec_sdpa_split_users for a in att] == [B, B]
-    assert warmed == [(B, (4, 1, 2))] and m._vfy_prepared_key == (B, T, 4, False, (1, 2, 4))
+    assert warmed == [(B, (4, 1, 2))] and m._vfy_prepared_key == (B, T, 4, False, (1, 2, 4), False, False)
     m.prepare_verify_trace(pt, T, [0] * B, buckets=(1, 2, 4))
     assert len(warmed) == 1, "the same key prepares nothing again"
     m.gdn_blocks = None

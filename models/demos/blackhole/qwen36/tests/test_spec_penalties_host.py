@@ -532,3 +532,68 @@ def test_the_class_declares_verify_penalties_and_hands_over_the_histories():
     caps = Qwen36MTPContractForCausalLM.model_capabilities
     assert caps["supports_spec_device_penalties"] is True and caps["spec_ids_are_sampled"] is True
     assert caps["supports_device_penalties"] is False, "an ordinary decode with a penalty stays host-sampled"
+
+
+def test_a_token_masked_chained_verify_with_penalties_takes_its_greedy_penalty_rows_masked_argmax(penalized):
+    """vllm-tt-plugin supports_spec_device_mask with supports_spec_device_penalties on a chained verify: the
+    submission adds the predecessor's commit to the counts (the commit trace, before the chain program) and enqueues
+    the verify alone; every live row draws but the greedy penalty rows 0 and 3, whose ids are the penalty trace's
+    float32 argmax, replayed at sample_deferred after the mask. A mask may constrain them."""
+    from models.demos.blackhole.qwen36.tt import spec_engine
+
+    eng, log, state, pen, ch = penalized
+    B, T, K = eng.B, eng.T, eng.K
+    eng.model._vfy_mask = object()
+    posts = []
+    eng.model.verify_enqueue_post = lambda **kw: posts.append(kw)
+    sampling = _sampling(
+        repetition_penalty=[1.2, 1.0, 1.0, 1.0], presence_penalty=[0.0, 0.0, 0.0, 0.5], temperature=[0.0] * B
+    )
+    prompts = {0: [3, 3, 4], 1: [5], 3: [6, 7]}
+    out = {0: [1], 1: [2], 3: [3]}
+    ids0 = torch.tensor([[7, 8, 9, 10], [11, 12, 13, 14], [0, 0, 0, 0], [21, 22, 23, 24]])
+    tokens0 = torch.tensor([[1, 7, 8, 5], [2, 11, 12, 13], [0, 0, 0, 0], [3, 21, 9, 9]])
+    starts0, nv0 = [100, 200, -1, 300], [3, 3, 0, 2]
+    state["ids"] = [ids0, torch.zeros(B, T, dtype=torch.int64)]
+    res0 = _verify(eng, tokens0, starts0, nv0, sampling, prompts, out)
+
+    payload = _chained_deferred(eng, res0, [s + T if s >= 0 else -1 for s in starts0], sampling, prompts, out)
+    assert isinstance(payload, spec_engine.DeferredVerify) and payload.chained and payload.penalties
+    assert payload.penalty_argmax == (True, False, False, True)
+    # The greedy row without a penalty draws with top-k 1; the greedy penalty rows take the penalized argmax.
+    assert payload.step.sample_plan.sampled == [False] * T + [True] * T + [False] * (2 * T)
+    assert log["traces"].index("pen_commit") < log["traces"].index("chain")
+    assert log["enqueue"][-1].kw["post"] is False and log["enqueue"][-1].kw["penalties"] is False
+    assert pen._staged["greedy"][0, 0, 0].tolist() == [1.0] * T + [0.0] * (2 * T) + [1.0] * T + [0.0] * 16
+
+    committed0, counts0 = ch._walk(res0, tokens0, nv0)
+    ch._propose(eng, starts0, committed0, counts0)
+    mask = torch.full((B, T, ENGINE_VOCAB // 32), -1, dtype=torch.int32)
+    mask[0, 1, 0] = 0b1100
+    mask[1, 2, 0] = 0b0110
+    eng.sample_deferred(payload, sampling=sampling, mask=mask, num_valid_drafts=torch.tensor([K, K, 0, K]))
+    assert posts[-1]["penalties"] is True and posts[-1]["mask"] is not None
+    assert posts[-1]["sample_plan"] is payload.step.sample_plan
+    assert log["traces"][-2:] == ["step", "drafter"]
+
+
+def _chained_deferred(eng, res, upper, sampling, prompts, outputs):
+    from models.demos.blackhole.qwen36.tests.test_spec_chain_host import _mamba
+
+    B, T, K = eng.B, eng.T, eng.K
+    rows = [s >= 0 for s in upper]
+    return eng.decode_forward(
+        torch.where(torch.tensor(rows).reshape(B, 1), -1, 0).expand(B, T),
+        torch.tensor([[s + j if r else -1 for j in range(T)] for s, r in zip(upper, rows)]),
+        num_valid_drafts=torch.full((B,), K, dtype=torch.int32),
+        accepted_counts=torch.ones(B, dtype=torch.int32),
+        page_table=torch.arange(1, B * eng.nb + 1, dtype=torch.int32).reshape(B, eng.nb),
+        spec_mode="argmax_ids",
+        mamba_state=_mamba(eng),
+        sampling=sampling,
+        defer=True,
+        predecessor=res.argmax_ids,
+        defer_sampling=True,
+        prompt_tokens=_padded(prompts, B),
+        output_tokens=_padded(outputs, B),
+    )
