@@ -263,7 +263,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        _llk_pack_reduce_mask_clear_();
         PROFILER_SYNC();
     }
     uninit_zone();
@@ -272,6 +271,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 void uninit_zone()
 {
     ZONE_SCOPED("UNINIT")
-    // The pack reduce mask clear stays at the end of TILE_LOOP above.
+    // reduce_uninit's pack half.
+    _llk_pack_reduce_mask_clear_();
 }
 #endif
