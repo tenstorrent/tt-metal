@@ -432,6 +432,10 @@ class TeacherCapture:
         cnt += torch.bincount(ids.long().flatten(), minlength=ffn.dims.num_experts)
         self.ntok[(split, layer)] = self.ntok.get((split, layer), 0) + n
         self.moe_width = int(latent.shape[-1])
+        if os.environ.get("K3_CAPTURE_RAW_Y", "") not in ("", "0"):  # (debug: the routed sum before the norm)
+            if "raw_y_own.f32" not in files:
+                files["raw_y_own.f32"] = open(d / "raw_y_own.f32", "ab")
+            files["raw_y_own.f32"].write(y_own.float().contiguous().numpy().tobytes())
         # latent_up_in: the routed sum RMS-normalised (fp64), gamma NOT applied (folded into the up weight)
         y = y_own.double()
         eps = float(getattr(self.model_cfg, "RMS_NORM_EPS", 1e-5))
