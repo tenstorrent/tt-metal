@@ -152,9 +152,9 @@ CASES = [
     BlockCase("glm53", "xy4-sp1", 2560),
     BlockCase("glm53", "xy4-sp1", 5120, chunks=((0, 0, 2560), (1, 2560, 5120))),
     BlockCase("glm53", "xy4-sp1", 10240, chunks=((0, 0, 2560), (1, 2560, 5120), (2, 5120, 7680), (3, 7680, 10240))),
-    # Kimi-K3's 4x4 stage on the same carve: one, two and four full chunks, partial and padded chunks, and K3.1's
-    # production stage (its runner's 4x4 manifests: SP=4 on mesh axis 1, one 2,560-token chunk a forward) on K3.1's own
-    # config: K3's MoE, the mesh opened with K3.1's L1_SMALL_SIZE
+    # Kimi-K3's 4x4 stage on the same carve: one, two and four full chunks, partial and padded chunks, and a
+    # K3.1-configured carve benchmark (SP=4 on mesh axis 1, one 2,560-token chunk; K3's MoE, the mesh opened with K3.1's
+    # L1_SMALL_SIZE) - not a K3.1 runner manifest's stage
     BlockCase("kimi_k3", "xy4-sp1", 2560),
     BlockCase("kimi_k3", "xy4-sp1", 5120),
     BlockCase("kimi_k3", "xy4-sp1", 2560, pad=(3 * 2560, 3 * 2560 + 1500)),
