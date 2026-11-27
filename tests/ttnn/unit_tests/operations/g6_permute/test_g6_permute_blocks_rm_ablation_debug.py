@@ -2,13 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Refinement 3 ablation of blocks_rm_gather on FLUX_74 (DRAM and L1), plus a BLOCK_PAGES sweep.
+"""Refinements 3 and 5 ablation of blocks_rm_gather / blocks_rm_bank_coalesced on FLUX_74 (DRAM and
+L1), plus a BLOCK_PAGES sweep.
 
-The ablation arms need temporary `#ifndef G6_ABLATE_READS` / `#ifndef G6_ABLATE_WRITES` guards around
-the reader's issue + barrier and the writer's noc_async_write; the shipped kernels do not carry them, so
-the stubbed arms are skipped unless G6_ABLATION_GUARDS=1. Stubbed arms keep every CB handshake and the
-gather, and their output is not checked. Run under `scripts/run_safe_pytest.sh --profile --no-py-zones`.
-DO NOT DELETE.
+The ablation arms need temporary guards in the kernels; the shipped kernels do not carry them, so the
+stubbed arms are skipped unless G6_ABLATION_GUARDS=1:
+- `#ifndef G6_ABLATE_READS` around the reader's noc_async_read calls (the barrier stays);
+- `#ifndef G6_ABLATE_COMPACT` around the coalesced reader's staging-to-slots copy loop;
+- `#ifndef G6_ABLATE_GATHER` around the writer's gather loop;
+- `#ifndef G6_ABLATE_WRITES` around the writer's noc_async_write.
+Stubbed arms keep every CB handshake and barrier, and their output is not checked. Run under
+`scripts/run_safe_pytest.sh --profile --no-py-zones`. DO NOT DELETE.
 """
 
 import importlib
@@ -32,6 +36,12 @@ ARMS = {
     "no_writes": ["G6_ABLATE_WRITES"],
     "no_reads": ["G6_ABLATE_READS"],
     "no_reads_no_writes": ["G6_ABLATE_READS", "G6_ABLATE_WRITES"],
+    "no_compact": ["G6_ABLATE_COMPACT"],
+    "no_gather": ["G6_ABLATE_GATHER"],
+    "no_copies": ["G6_ABLATE_COMPACT", "G6_ABLATE_GATHER"],
+    "no_copies_no_writes": ["G6_ABLATE_COMPACT", "G6_ABLATE_GATHER", "G6_ABLATE_WRITES"],
+    "no_copies_no_reads": ["G6_ABLATE_COMPACT", "G6_ABLATE_GATHER", "G6_ABLATE_READS"],
+    "all": ["G6_ABLATE_READS", "G6_ABLATE_WRITES", "G6_ABLATE_COMPACT", "G6_ABLATE_GATHER"],
 }
 
 

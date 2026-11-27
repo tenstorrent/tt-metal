@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_permute regime blocks_rm_gather (Refinement 1).
+"""Acceptance test for g6_permute regimes blocks_rm_gather (Refinement 1) and blocks_rm_bank_coalesced
+(Refinement 5): the same cell, one read per input page or one read of whole slots per bank run.
 
 Cell: bfloat16, ROW_MAJOR, DRAM interleaved, rank 6, dims (0, 1, 4, 2, 5, 3):
 out[n, c, i, h, j, w] = x[n, c, h, w, i, j]. Graded bit for bit. Besides the two FLUX
@@ -122,16 +123,37 @@ def test_plan_reports_regime(device):
     torch.manual_seed(42)
     shape = (1, 64, 128, 32, 2, 2)
     plan = g6_permute_plan(_to_device(_randn(shape), device), BLOCKS)
-    assert plan.regime == "blocks_rm_gather"
+    # DRAM input reads whole slots per bank run.
+    assert plan.regime == "blocks_rm_bank_coalesced"
+    assert plan.coalesced
     assert plan.tensor_units == 64 * 128
+    pages_per_unit = shape[3] * shape[4]
+    block_target = -(-regime_module.COALESCED_BLOCK_PAGES[ttnn.BufferType.DRAM] // pages_per_unit)
+    assert plan.block_h == min(plan.units_per_core_g1, plan.block_cap, block_target)
+    assert plan.read_alt_share == regime_module.COALESCED_ALT_NOC_SHARE
+    assert not plan.bank_major
+    assert plan.page_stride == 4  # 4 B payloads packed word by word
+    assert plan.staging_depth == min(regime_module.STAGING_DEPTH, plan.max_blocks_per_core)
+    # 64 pages per unit: every block starts on a whole bank round.
+    assert plan.staging_rounds == plan.block_h * pages_per_unit // plan.num_banks
+    assert plan.num_cores == len(plan.assignment)
+    assert sum(n for _, _, n in plan.assignment) == plan.tensor_units
+
+
+def test_plan_reports_gather_regime(device, monkeypatch):
+    monkeypatch.setattr(regime_module, "READ_MODE", "gather")
+    torch.manual_seed(42)
+    shape = (1, 64, 128, 32, 2, 2)
+    plan = g6_permute_plan(_to_device(_randn(shape), device), BLOCKS)
+    assert plan.regime == "blocks_rm_gather"
+    assert not plan.coalesced
     pages_per_unit = shape[3] * shape[4]
     block_target = -(-regime_module.BLOCK_PAGES // pages_per_unit)
     assert plan.block_h == min(plan.units_per_core_g1, plan.block_cap, block_target)
     # DRAM input: half the page rounds on the second NoC, issued bank by bank.
     assert plan.read_alt_share == Fraction(1, 2)
     assert plan.bank_major
-    assert plan.num_cores == len(plan.assignment)
-    assert sum(n for _, _, n in plan.assignment) == plan.tensor_units
+    assert plan.page_stride == plan.slot_bytes
 
 
 @pytest.mark.parametrize(
@@ -164,6 +186,7 @@ def test_repeat_call_reuses_program(device):
 @pytest.fixture
 def knobs(monkeypatch):
     def force(block_limit, input_depth, **extra):
+        monkeypatch.setattr(regime_module, "READ_MODE", "gather")
         monkeypatch.setattr(regime_module, "BLOCK_PAGES", None)
         monkeypatch.setattr(regime_module, "BLOCK_H_LIMIT", block_limit)
         monkeypatch.setattr(regime_module, "INPUT_DEPTH", input_depth)
@@ -224,3 +247,72 @@ def test_forced_read_paths_bit_exact(shape, block_limit, input_depth, extra, dev
     knobs(block_limit, input_depth, **extra)
     torch.manual_seed(11)
     _permute_and_check(_randn(shape), device)
+
+
+@pytest.fixture
+def coalesced_knobs(monkeypatch):
+    def force(block_limit, staging_depth, **extra):
+        monkeypatch.setattr(regime_module, "READ_MODE", "coalesced")
+        monkeypatch.setattr(regime_module, "COALESCED_BLOCK_PAGES", None)
+        monkeypatch.setattr(regime_module, "BLOCK_H_LIMIT", block_limit)
+        monkeypatch.setattr(regime_module, "STAGING_DEPTH", staging_depth)
+        for name, value in extra.items():
+            monkeypatch.setattr(regime_module, name, value)
+
+    op_module._PROGRAM_CACHE.clear()
+    yield force
+    op_module._PROGRAM_CACHE.clear()
+
+
+# id, shape, block_h limit, staging depth, other knobs. Blocks that start mid bank round (pages per unit
+# not a multiple of the bank count) and ragged last blocks, fewer pages than banks, one page per slot
+# word and pages longer than one batch, uneven NoC shares, stagger, the page-by-page copies.
+FORCED_COALESCED = [
+    ("odd_j_odd_w_mid_round", (1, 3, 5, 7, 3, 3), 2, 2, {}),
+    ("ragged_crosses_nc_depth1", (2, 8, 37, 7, 3, 3), 3, 1, {"COALESCED_BANK_STAGGER": True}),
+    ("i4_j1_two_byte_pages", (1, 3, 7, 24, 4, 1), 4, 2, {"COALESCED_ALT_NOC_SHARE": Fraction(1, 4)}),
+    ("j36_long_pages", (1, 1, 2, 64, 2, 36), 1, 2, {"COALESCED_ALT_NOC_SHARE": Fraction(3, 8)}),
+    ("w5_fewer_pages_than_banks", (1, 2, 9, 5, 1, 2), 1, 2, {"COALESCED_ALT_NOC_SHARE": Fraction(0)}),
+    ("flux73_page_by_page", (1, 32, 64, 32, 2, 2), 5, 2, {"COMPACT_BATCH_WORDS": 1, "GATHER_PAIR_BATCH": 1}),
+    ("flux73_odd_batches", (1, 32, 64, 32, 2, 2), 3, 1, {"COMPACT_BATCH_WORDS": 3, "GATHER_PAIR_BATCH": 3}),
+    ("j8_w40_batches", (1, 2, 3, 40, 4, 8), 1, 2, {"COMPACT_BATCH_WORDS": 8, "GATHER_PAIR_BATCH": 5}),
+]
+
+
+@pytest.mark.parametrize(
+    "shape, block_limit, staging_depth, extra",
+    [c[1:] for c in FORCED_COALESCED],
+    ids=[c[0] for c in FORCED_COALESCED],
+)
+def test_forced_coalesced_bit_exact(shape, block_limit, staging_depth, extra, device, coalesced_knobs):
+    coalesced_knobs(block_limit, staging_depth, **extra)
+    torch.manual_seed(13)
+    torch_input = _randn(shape)
+    plan = g6_permute_plan(_to_device(torch_input, device), BLOCKS)
+    assert plan.coalesced and plan.regime == "blocks_rm_bank_coalesced"
+    assert plan.block_h <= block_limit
+    _permute_and_check(torch_input, device)
+
+
+@pytest.mark.parametrize("shape", [(1, 32, 64, 32, 2, 2), (1, 3, 5, 7, 3, 3)], ids=["flux73", "odd_j_odd_w"])
+def test_coalesced_in_l1_bit_exact(shape, device):
+    """L1 input reads whole slots too (16 B slots, one bank per worker), in blocks of the L1 knob."""
+    op_module._PROGRAM_CACHE.clear()
+    torch.manual_seed(17)
+    torch_input = _randn(shape)
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    plan = g6_permute_plan(ttnn_input, BLOCKS)
+    assert plan.regime == "blocks_rm_bank_coalesced"
+    assert plan.read_alt_share == 0
+    pages_per_unit = shape[3] * shape[4]
+    block_target = -(-regime_module.COALESCED_BLOCK_PAGES[ttnn.BufferType.L1] // pages_per_unit)
+    assert plan.block_h == min(plan.units_per_core_g1, plan.block_cap, block_target)
+    actual = ttnn.to_torch(g6_permute(ttnn_input, BLOCKS))
+    op_module._PROGRAM_CACHE.clear()
+    _assert_bit_exact(actual, torch.permute(torch_input, BLOCKS).contiguous())

@@ -67,18 +67,31 @@ BANK_STAGGER = False
 
 # "gather" (one read per page), "coalesced" (one read of whole slots per bank run), or "auto": the read
 # mode measured faster for the input's placement (COALESCED_BUFFERS), when a coalesced block fits L1.
+# Coalesced wins in DRAM and in L1 on FLUX_73 and FLUX_74; in DRAM a page read costs a whole request at
+# a DRAM port either way, so whole 64 B slots cost little more than their 4 B payloads.
 READ_MODE = "auto"
-COALESCED_BUFFERS = (ttnn.BufferType.DRAM,)
-# Coalesced mode: input pages a block aims for, block_h = ceil(COALESCED_BLOCK_PAGES / pages_per_unit)
-# under the L1 and core caps. Each bank's read is about COALESCED_BLOCK_PAGES / num_banks slots.
-COALESCED_BLOCK_PAGES = 256
-# Coalesced mode: stages of cb_bank_staging. 2 keeps the next block's reads in flight while the reader
-# copies the current one; the allocated depth is min(STAGING_DEPTH, max_blocks_per_core).
-STAGING_DEPTH = 2
+COALESCED_BUFFERS = (ttnn.BufferType.DRAM, ttnn.BufferType.L1)
+# Coalesced mode: input pages a block aims for, per input placement (or one int for every placement):
+# block_h = ceil(block pages / pages_per_unit) under the L1 and core caps. Each bank's read is about
+# block pages / num_banks slots. DRAM has 8 banks and L1 one per worker, so L1 needs larger blocks for
+# the same read length: FLUX_74 in L1 takes 188 us at 256 pages, 68 us at 2048, 92 us at 4096.
+COALESCED_BLOCK_PAGES = {ttnn.BufferType.DRAM: 256, ttnn.BufferType.L1: 2048}
+# Coalesced mode: stages of cb_bank_staging; the allocated depth is min(STAGING_DEPTH, max_blocks_per_core).
+# 2 issues the next block's reads before the reader copies the current one. That loses once the copies
+# are batched (FLUX_74 DRAM 116 us against 89 us at 1): every core then keeps reads in flight without a
+# break, and the NoC links into the cores far from the DRAM columns congest, stalling their reads and
+# writes. One stage lets each core's reads pause during its copy.
+STAGING_DEPTH = 1
 # Coalesced mode, DRAM input only: share of each bank run read on the second NoC (as READ_ALT_NOC_SHARE).
 COALESCED_ALT_NOC_SHARE = Fraction(1, 2)
 # Coalesced mode: rotate each core's bank order by (core index mod banks), as BANK_STAGGER.
 COALESCED_BANK_STAGGER = False
+# Coalesced mode: payload words the reader loads before storing them when it copies the staged slots
+# into cb_input_slots, in whole pages (1 copies page by page). FLUX_74: 4356 -> 1030 cycles per block.
+COMPACT_BATCH_WORDS = 8
+# Page pairs whose loads the writer's gather issues before storing them (1 walks pair by pair).
+# FLUX_74: 3558 -> 2144 cycles per block.
+GATHER_PAIR_BATCH = 8
 
 
 @dataclass
@@ -127,11 +140,21 @@ def knob_key():
         BANK_STAGGER,
         READ_MODE,
         COALESCED_BUFFERS,
-        COALESCED_BLOCK_PAGES,
+        _hashable(COALESCED_BLOCK_PAGES),
         STAGING_DEPTH,
         COALESCED_ALT_NOC_SHARE,
         COALESCED_BANK_STAGGER,
+        COMPACT_BATCH_WORDS,
+        GATHER_PAIR_BATCH,
     )
+
+
+def _hashable(knob):
+    return tuple(sorted(knob.items(), key=str)) if isinstance(knob, dict) else knob
+
+
+def _per_placement(knob, buffer_type):
+    return knob.get(buffer_type) if isinstance(knob, dict) else knob
 
 
 def _align_up(value, alignment):
@@ -174,7 +197,7 @@ def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
     )
     coalesced = _coalesced_reads(buffer_type, coalesced_cap)
     if coalesced:
-        block_cap, block_pages_knob = coalesced_cap, COALESCED_BLOCK_PAGES
+        block_cap, block_pages_knob = coalesced_cap, _per_placement(COALESCED_BLOCK_PAGES, buffer_type)
     else:
         page_stride = slot_bytes
         block_cap = budget // (INPUT_DEPTH * pages_per_unit * slot_bytes + unit_row_bytes)
@@ -280,7 +303,9 @@ def reader_descriptor(
     staging: None for one read per page, or (staging_rounds, staging_depth, page_stride) for
     bank-coalesced reads through CB_BANK_STAGING."""
     coalesced_args = (
-        [0, CB_BANK_STAGING, 0, 0, plan.slot_bytes] if staging is None else [1, CB_BANK_STAGING, *staging]
+        [0, CB_BANK_STAGING, 0, 0, plan.slot_bytes, 1]
+        if staging is None
+        else [1, CB_BANK_STAGING, *staging, COMPACT_BATCH_WORDS]
     )
     ct_args = [
         CB_INPUT_SLOTS,
@@ -382,6 +407,7 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
         plan.page_stride,
         plan.out_page_bytes,
         plan.out_row_bytes,
+        GATHER_PAIR_BATCH,
         *ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args(),
     ]
 

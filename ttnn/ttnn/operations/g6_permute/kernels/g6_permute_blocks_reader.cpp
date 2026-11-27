@@ -29,6 +29,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "g6_permute_common.hpp"
 
+#include <utility>
+
 constexpr uint32_t cb_input_slots = get_compile_time_arg_val(0);
 constexpr uint32_t block_h = get_compile_time_arg_val(1);
 constexpr uint32_t pages_per_unit = get_compile_time_arg_val(2);
@@ -46,7 +48,8 @@ constexpr uint32_t cb_bank_staging = get_compile_time_arg_val(13);
 constexpr uint32_t staging_rounds = get_compile_time_arg_val(14);
 constexpr uint32_t staging_depth = get_compile_time_arg_val(15);
 constexpr uint32_t page_stride = get_compile_time_arg_val(16);
-constexpr auto input_args = TensorAccessorArgs<17>();
+constexpr uint32_t compact_batch_words = get_compile_time_arg_val(17);
+constexpr auto input_args = TensorAccessorArgs<18>();
 
 // One staging region per bank holds staging_rounds slots; region b of a block starting at page p0 holds
 // page g of bank b at slot g / num_banks - p0 / num_banks.
@@ -250,6 +253,18 @@ FORCE_INLINE void issue_block_coalesced(
     }
 }
 
+// Pages per batch of the compact: a batch issues all its loads before its first store, so their L1
+// latencies overlap (the kernel builds at -Os, which does not unroll). 1 copies page by page.
+constexpr uint32_t compact_batch =
+    compact_batch_words <= page_stride / sizeof(uint32_t) ? 1 : compact_batch_words / (page_stride / sizeof(uint32_t));
+
+template <uint32_t words, uint32_t src_step, uint32_t dst_step, uint32_t... b>
+FORCE_INLINE void copy_pages(
+    const tt_l1_ptr uint32_t* src, tt_l1_ptr uint32_t* dst, std::integer_sequence<uint32_t, b...>) {
+    const uint32_t v[] = {src[(b / words) * src_step + b % words]...};
+    ((dst[(b / words) * dst_step + b % words] = v[b]), ...);
+}
+
 // Copies the payload of every page of the block from its staging slot to page_stride-spaced pages of
 // cb_input_slots, in page order: run r's pages are num_banks pages apart there.
 FORCE_INLINE void compact_block(uint32_t first_page, uint32_t num_pages, uint32_t stage, uint32_t pages_base) {
@@ -266,7 +281,16 @@ FORCE_INLINE void compact_block(uint32_t first_page, uint32_t num_pages, uint32_
         const auto* src =
             reinterpret_cast<const tt_l1_ptr uint32_t*>(stage + bank * region_bytes + run.region_slot * slot_bytes);
         auto* dst = reinterpret_cast<tt_l1_ptr uint32_t*>(pages_base + r * page_stride);
-        for (uint32_t m = 0; m < run.count; ++m) {
+        uint32_t m = 0;
+        if constexpr (compact_batch > 1) {
+            for (; m + compact_batch <= run.count; m += compact_batch) {
+                copy_pages<words, src_step, dst_step>(
+                    src, dst, std::make_integer_sequence<uint32_t, compact_batch * words>{});
+                src += compact_batch * src_step;
+                dst += compact_batch * dst_step;
+            }
+        }
+        for (; m < run.count; ++m) {
             for (uint32_t w = 0; w < words; ++w) {
                 dst[w] = src[w];
             }
@@ -283,8 +307,7 @@ struct StagedBlock {
 };
 
 template <bool zoned, typename Accessor>
-FORCE_INLINE void issue_staged(
-    const Accessor& input, const StagedBlock& block, uint32_t stagger, uint32_t& alt_carry) {
+FORCE_INLINE void issue_staged(const Accessor& input, const StagedBlock& block, uint32_t stagger, uint32_t& alt_carry) {
     G6_ZONED_STEP(
         zoned,
         "PERM-RD-ISSUE",

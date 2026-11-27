@@ -24,7 +24,9 @@ constexpr uint32_t tensor_j = get_compile_time_arg_val(6);
 constexpr uint32_t page_stride = get_compile_time_arg_val(7);
 constexpr uint32_t out_page_bytes = get_compile_time_arg_val(8);
 constexpr uint32_t out_row_bytes = get_compile_time_arg_val(9);
-constexpr auto output_args = TensorAccessorArgs<10>();
+// Page pairs whose loads the gather issues together (g6_permute::transpose_pages).
+constexpr uint32_t gather_pair_batch = get_compile_time_arg_val(10);
+constexpr auto output_args = TensorAccessorArgs<11>();
 
 constexpr uint32_t unit_slot_bytes = tensor_w * tensor_i * page_stride;
 constexpr uint32_t unit_row_bytes = tensor_i * tensor_j * out_row_bytes;
@@ -37,7 +39,7 @@ static_assert(out_row_bytes >= out_page_bytes);
 // Per i, the [W, J] values of slots (w, i) become rows (i, j).
 FORCE_INLINE void gather_unit(uint32_t src_unit, uint32_t dst_unit) {
     for (uint32_t i = 0; i < tensor_i; ++i) {
-        g6_permute::transpose_pages<tensor_w, tensor_j, tensor_i * page_stride, out_row_bytes>(
+        g6_permute::transpose_pages<tensor_w, tensor_j, tensor_i * page_stride, out_row_bytes, gather_pair_batch>(
             src_unit + i * page_stride, dst_unit + i * tensor_j * out_row_bytes);
     }
 }
