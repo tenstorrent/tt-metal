@@ -22,6 +22,7 @@ layout changes go through row-major reshapes and permutes.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Sequence
 
 import torch
@@ -34,6 +35,18 @@ from ....utils import tensor
 from . import linear_ops_openvdn as ops
 
 Range = tuple[int, int]
+
+
+@dataclasses.dataclass
+class RowInputs:
+    """The branch's per-row inputs, computed by the caller on its own rows instead of from the whole `xv` (stage 4):
+    `beta` `[1, 1, F*S, H]` = `sigmoid(beta_proj(xv))`, `frame_mean` `[1, 1, F, hidden]` fp32 = the per-frame mean of
+    `xv`, `text_beta` `[1, 1, T, H]` the same as `beta` for the prompt rows (or None). With these the branch returns
+    the readout ungated, fp32: the caller applies `output_gate` on its own rows."""
+
+    beta: ttnn.Tensor
+    frame_mean: ttnn.Tensor
+    text_beta: ttnn.Tensor | None = None
 
 
 def to_heads(x: ttnn.Tensor, num_frames: int, num_heads: int) -> ttnn.Tensor:
@@ -313,25 +326,38 @@ class OpenVDNLinearBranch(Module):
         x = ttnn.to_layout(ttnn.reshape(x, [1, num_frames, per_frame, hidden]), ttnn.TILE_LAYOUT)
         mean = ttnn.multiply(ttnn.sum(x, dim=2, keepdim=True), 1.0 / per_frame)  # [1, F, 1, hidden]
         mean = ttnn.reshape(ttnn.to_layout(mean, ttnn.ROW_MAJOR_LAYOUT), [1, 1, num_frames, hidden])
-        mean = ttnn.to_layout(mean, ttnn.TILE_LAYOUT)
+        return self.alpha_from_mean(ttnn.to_layout(mean, ttnn.TILE_LAYOUT))
 
+    def alpha_from_mean(self, mean: ttnn.Tensor) -> ttnn.Tensor:
+        """`alpha` from the per-frame means `[1, 1, F, hidden]` fp32."""
         delta = ops.split_matmul(mean, [self.alpha_down.data], config=self.config)
         delta = ops.split_matmul(delta, [self.alpha_up.data], config=self.config)
         delta = ttnn.add(delta, self.alpha_dt_bias.data)
         return ttnn.exp(ttnn.neg(ttnn.multiply(softplus(delta), self.alpha_scale.data)))
 
+    def output_gate(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """`sigmoid(output_gate(x))` `[1, 1, N, H*d]` for the readout."""
+        return ttnn.sigmoid(self.gate_up(self.gate_down(x)))
+
     def text_state(
-        self, text_x: ttnn.Tensor, text_k_raw: ttnn.Tensor, text_v_raw: ttnn.Tensor, head_split: bool = False
+        self,
+        text_x: ttnn.Tensor | None,
+        text_k_raw: ttnn.Tensor,
+        text_v_raw: ttnn.Tensor,
+        head_split: bool = False,
+        text_beta: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """`_text_state`: `TEXT_STATE_SCALE * (B (I + A)^-1)` over all prompt rows as one chunk, `[1, H, d_v, d_k]`
-        fp32 (`head_split`: this device's heads only, see `_head_split`)."""
-        length = text_x.shape[-2]
+        fp32 (`head_split`: this device's heads only, see `_head_split`). `text_beta` (`RowInputs`) replaces
+        `text_x`."""
+        length = text_k_raw.shape[-2]
         local = local_channels = lambda t: t  # noqa: E731
         if head_split:
             local, local_channels, _ = self._head_split()
         key = self.features(local_channels(text_k_raw), "k", 1, None)
         value = self.features(local_channels(text_v_raw), "v", 1, None)
-        a, b = ops.frame_statistics(key, value, local(self.beta(text_x, 1)), config=self.config)
+        beta = self.beta(text_x, 1) if text_beta is None else heads_column(text_beta, 1)
+        a, b = ops.frame_statistics(key, value, local(beta), config=self.config)
         _, injection = ops.vdn_factor_apply(None, a, b, max_eig=1.0 + length, config=self.config)
         return ttnn.multiply(injection, self.TEXT_STATE_SCALE)
 
@@ -346,8 +372,10 @@ class OpenVDNLinearBranch(Module):
         frame_size: tuple[int, int],
         bounds: Sequence[Range],
         text_state: ttnn.Tensor | None,
+        rows: RowInputs | None = None,
     ) -> ttnn.Tensor:
-        """`_readout` over exactly the frames given. Inputs `[1, 1, F*S, *]` bf16; returns `[1, 1, F*S, H*d]` bf16."""
+        """`_readout` over exactly the frames given. Inputs `[1, 1, F*S, *]` bf16; returns `[1, 1, F*S, H*d]` bf16
+        (with `rows`: ungated, fp32)."""
         per_frame = frame_size[0] * frame_size[1]
         mark = lambda name: ops.mark(self.mesh_device, f"linear branch: {name}")  # noqa: E731
 
@@ -363,7 +391,9 @@ class OpenVDNLinearBranch(Module):
                 frame_size=frame_size,
                 bounds=bounds,
                 text_state=text_state,
+                rows=rows,
             )
+        assert rows is None, "RowInputs need the head split"
         partition = gather = None
         if self.branch_split and self.frame_split is not None:
             axis, factor, all_gather = self.frame_split
@@ -442,10 +472,12 @@ class OpenVDNLinearBranch(Module):
         frame_size: tuple[int, int],
         bounds: Sequence[Range],
         text_state: ttnn.Tensor | None,
+        rows: RowInputs | None = None,
     ) -> ttnn.Tensor:
         """`readout` with the delta-rule math split by head over the SP devices: statistics, inverse, scans, state
         gather and q . state run on this device's heads (the text state comes in already split, see `forward`),
-        from the conv and features on: everything but the small beta/alpha/gate projections; one gather at the end."""
+        from the conv and features on: everything but the small beta/alpha/gate projections; one gather at the end.
+        With `rows` those projections come from the caller and the readout is returned ungated (fp32)."""
         per_frame = frame_size[0] * frame_size[1]
         mark = lambda name: ops.mark(self.mesh_device, f"linear branch: {name}")  # noqa: E731
         local, local_channels, gather = self._head_split()
@@ -459,8 +491,10 @@ class OpenVDNLinearBranch(Module):
         )
         mark("q, k, v features (conv)")
 
-        a, b = ops.frame_statistics(key, value, local(self.beta(xv, num_frames)), config=self.config)
-        alpha_rows = local_channels(self.alpha(xv, num_frames))
+        beta = self.beta(xv, num_frames) if rows is None else heads_column(rows.beta, num_frames)
+        a, b = ops.frame_statistics(key, value, local(beta), config=self.config)
+        alpha_rows = self.alpha(xv, num_frames) if rows is None else self.alpha_from_mean(rows.frame_mean)
+        alpha_rows = local_channels(alpha_rows)
         alpha = ops.rows_to_heads(alpha_rows, num_frames, local_heads, self.head_dim)
         mark("frame statistics and alpha")
         transition, injection = ops.vdn_factor_apply(alpha, a, b, max_eig=1.0 + per_frame, config=self.config)
@@ -475,8 +509,11 @@ class OpenVDNLinearBranch(Module):
         mean_square = ttnn.multiply(ttnn.sum(ttnn.multiply(out, out), dim=-1, keepdim=True), 1.0 / self.head_dim)
         out = ttnn.multiply(out, ttnn.rsqrt(ttnn.add(mean_square, self.NORM_EPS)))
         out = from_heads(gather(ttnn.multiply(out, self.norm_weight.data)))
+        if rows is not None:
+            mark("readout")
+            return out
 
-        gate = ttnn.sigmoid(self.gate_up(self.gate_down(xv)))
+        gate = self.output_gate(xv)
         out = ttnn.typecast(ttnn.multiply(out, ttnn.typecast(gate, ttnn.float32)), ttnn.bfloat16)
         mark("readout")
         return out
@@ -492,33 +529,55 @@ class OpenVDNLinearBranch(Module):
         frame_size: tuple[int, int],
         bounds: Sequence[Range],
         skip_ends: bool = True,
-        text: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None = None,
+        text: tuple[ttnn.Tensor | None, ttnn.Tensor, ttnn.Tensor] | None = None,
+        rows: RowInputs | None = None,
     ) -> ttnn.Tensor:
         """`BidirectionalLinearBranch.forward`. xv: `[1, 1, F*S, hidden]`, q/k/v_raw: `[1, 1, F*S, H*d]` (pre-norm,
         pre-RoPE projections), text: `(text_x, text_k_raw, text_v_raw)` prompt rows or None. Returns the gated, normed
-        readout `[1, 1, F*S, H*d]` bf16 (before `to_out_linear`), zero on frames 0 and F-1 when `skip_ends`."""
+        readout `[1, 1, F*S, H*d]` bf16 (before `to_out_linear`), zero on frames 0 and F-1 when `skip_ends`.
+        With `rows` (`RowInputs`, all F frames) `xv` and `text_x` are not used (None) and the readout comes back
+        ungated, fp32."""
         per_frame = frame_size[0] * frame_size[1]
         head_split = self.branch_split == "heads" and self.frame_split is not None
-        text_state = None if text is None else self.text_state(*text, head_split=head_split)
+        text_state = None
+        if text is not None:
+            text_beta = None if rows is None else rows.text_beta
+            text_state = self.text_state(*text, head_split=head_split, text_beta=text_beta)
         ops.mark(self.mesh_device, "linear branch: text state")
         if not skip_ends:
             return self.readout(
-                xv, q_raw, k_raw, v_raw, num_frames=num_frames, frame_size=frame_size, bounds=bounds, text_state=text_state
+                xv,
+                q_raw,
+                k_raw,
+                v_raw,
+                num_frames=num_frames,
+                frame_size=frame_size,
+                bounds=bounds,
+                text_state=text_state,
+                rows=rows,
             )
         zeros = ttnn.zeros(
             [1, 1, per_frame, self.local_inner_dim],
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat16 if rows is None else ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
         )
         if num_frames <= 2:
             return ttnn.concat([zeros] * num_frames, dim=2)
         start, end = per_frame, (num_frames - 1) * per_frame
+        if rows is not None:
+            rows = RowInputs(
+                beta=rows_slice(rows.beta, start, end),
+                frame_mean=rows_slice(rows.frame_mean, 1, num_frames - 1),
+                text_beta=rows.text_beta,
+            )
         inner = self.readout(
-            *(rows_slice(t, start, end) for t in (xv, q_raw, k_raw, v_raw)),
+            None if xv is None else rows_slice(xv, start, end),
+            *(rows_slice(t, start, end) for t in (q_raw, k_raw, v_raw)),
             num_frames=num_frames - 2,
             frame_size=frame_size,
             bounds=[(lo - 1, hi - 1) for lo, hi in bounds[1 : num_frames - 1]],
             text_state=text_state,
+            rows=rows,
         )
         return ttnn.concat([zeros, inner, zeros], dim=2)

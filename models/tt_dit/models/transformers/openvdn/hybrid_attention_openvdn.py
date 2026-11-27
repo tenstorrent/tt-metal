@@ -42,7 +42,7 @@ from ....layers.linear import ColParallelLinear
 from ....utils import tensor
 from ..minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, rope_channel_permutation
 from . import linear_ops_openvdn as ops
-from .linear_branch_openvdn import OpenVDNLinearBranch, rows_slice
+from .linear_branch_openvdn import OpenVDNLinearBranch, RowInputs, rows_slice
 from .reference_openvdn import window_bounds
 from .window_softmax_openvdn import WindowLayout, WindowSoftmax
 
@@ -220,19 +220,34 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             v_1BNF, num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
         )
 
-        # The whole logical sequence on every SP device, for this device's heads.
+        # The whole sequence on every SP device, for this device's heads. The window and the linear branch take their
+        # rows by explicit ranges, so only the dense path trims the pad tail (a trim is a full copy).
         def whole(t: ttnn.Tensor) -> ttnn.Tensor:
             t = self._gather(t, dim=2, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor)
-            if t.shape[2] == length:
+            if t.shape[2] == length or (not full_cover and os.environ.get("OPENVDN_TRIM", "0") != "1"):
                 return t
             return ttnn.slice(t, [0, 0, 0, 0], [t.shape[0], t.shape[1], length, t.shape[3]])
 
         # The per-row tail (softmax gate, to_out, to_out_linear) runs on this device's rows only (stage 4;
-        # OPENVDN_LOCAL_OUT=0 runs it on the whole sequence and partitions after, as before).
+        # OPENVDN_LOCAL_OUT=0 runs it on the whole sequence and partitions after, as before). With it, the linear
+        # branch's per-row projections (beta, frame means, output gate) also run on the local rows, and x is not
+        # gathered at all (OPENVDN_LOCAL_ROWS=0 gathers x and runs them on the whole sequence).
         local_out = os.environ.get("OPENVDN_LOCAL_OUT", "1") == "1" and self.sp_factor > 1
+        local_rows = (
+            local_out
+            and not full_cover
+            and self.linear_attention.branch_split == "heads"
+            and os.environ.get("OPENVDN_LOCAL_ROWS", "1") == "1"
+        )
         x_local = x_1BND
-        x_1BND, q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE = (
-            whole(t) for t in (x_1BND, q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE)
+        rows = branch_gate = None
+        if local_rows:
+            rows, branch_gate = self._row_inputs(x_local, layout, padded_len)
+            x_1BND = None
+        else:
+            x_1BND = whole(x_1BND)
+        q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE = (
+            whole(t) for t in (q_1BNF, k_1BNF, v_1BNF, q_BHNE, k_BHNE, v_BHNE)
         )
         self._mark("projections and SP gather")
 
@@ -272,24 +287,28 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             text = None
             if self.enable_text_state and layout.text_len:
                 ts, te = layout.text_start, layout.text_start + layout.text_len
-                text = tuple(rows_slice(t, ts, te) for t in (x_1BND, k_1BNF, v_1BNF))
+                text = tuple(None if t is None else rows_slice(t, ts, te) for t in (x_1BND, k_1BNF, v_1BNF))
             readout = self.linear_attention(
-                *(rows_slice(t, vs, ve) for t in (x_1BND, q_1BNF, k_1BNF, v_1BNF)),
+                *(None if t is None else rows_slice(t, vs, ve) for t in (x_1BND, q_1BNF, k_1BNF, v_1BNF)),
                 num_frames=layout.num_frames,
                 frame_size=(layout.frame_height, layout.frame_width),
                 bounds=bounds,
                 skip_ends=self.anchor_frames == "both",
                 text=text,
+                rows=rows,
             )
             self._mark("linear branch")
             if local_out:
                 # The video rows' readout placed in the whole sequence (zero elsewhere), then this device's rows.
                 width = readout.shape[-1]
-                pieces = [self._zero_rows(vs, width)] if vs else []
+                pieces = [self._zero_rows(vs, width, readout.dtype)] if vs else []
                 pieces.append(readout)
                 if ve < padded_len:
-                    pieces.append(self._zero_rows(padded_len - ve, width))
+                    pieces.append(self._zero_rows(padded_len - ve, width, readout.dtype))
                 readout = to_local(ttnn.concat(pieces, dim=2))
+                if branch_gate is not None:  # ungated fp32 readout: the output gate on the local rows
+                    readout = ttnn.multiply(readout, ttnn.typecast(branch_gate, ttnn.float32))
+                    readout = ttnn.typecast(readout, ttnn.bfloat16)
                 readout = self._gather(readout, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
                 out = ttnn.add(out, self.to_out_linear(readout))
         if local_out:
@@ -327,12 +346,52 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
     def _mark(self, name: str) -> None:
         ops.mark(self.mesh_device, name)
 
-    def _zero_rows(self, rows: int, width: int) -> ttnn.Tensor:
-        key = ("zeros", rows, width)
+    def _row_inputs(
+        self, x_local: ttnn.Tensor, layout: HybridLayout, padded_len: int
+    ) -> tuple[RowInputs, ttnn.Tensor]:
+        """The linear branch's per-row projections on this device's rows `x_local` `[1, 1, N / SP, hidden]`:
+        `RowInputs` (beta gathered to the whole sequence, a few columns wide; per-frame means as a 0/1 frame-selector
+        matmul on the local rows, exact bf16 products summed in fp32, partial sums added over SP) and the output gate
+        for the local rows."""
+        branch = self.linear_attention
+        vs, ve = layout.video_start, layout.video_end
+        beta = self._gather(
+            ttnn.sigmoid(branch.beta_proj(x_local)), dim=2, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor
+        )
+        sums = ttnn.matmul(
+            self._frame_selector(layout, padded_len), x_local, dtype=ttnn.float32, compute_kernel_config=self.gate_config
+        )
+        sums = self._gather(sums, dim=1, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor)
+        sums = ttnn.sum(sums, dim=1, keepdim=True)
+        sums = ttnn.slice(sums, [0, 0, 0, 0], [1, 1, layout.num_frames, sums.shape[-1]])
+        text_beta = None
+        if layout.text_len:
+            text_beta = rows_slice(beta, layout.text_start, layout.text_start + layout.text_len)
+        rows = RowInputs(
+            beta=rows_slice(beta, vs, ve),
+            frame_mean=ttnn.multiply(sums, 1.0 / layout.tokens_per_frame),
+            text_beta=text_beta,
+        )
+        return rows, branch.output_gate(x_local)
+
+    def _frame_selector(self, layout: HybridLayout, padded_len: int) -> ttnn.Tensor:
+        """`[1, 1, F_pad, padded / SP]` bf16 per device: 1 where a local row belongs to video frame f."""
+        key = ("frames", layout, padded_len)
         if key not in self._cache:
-            self._cache[key] = ttnn.zeros(
-                [1, 1, rows, width], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device
+            frames = layout.num_frames + (-layout.num_frames % ttnn.TILE_SIZE)
+            sel = torch.zeros(1, 1, frames, padded_len)
+            for f in range(layout.num_frames):
+                start = layout.video_start + f * layout.tokens_per_frame
+                sel[0, 0, f, start : start + layout.tokens_per_frame] = 1.0
+            self._cache[key] = tensor.from_torch(
+                sel, device=self.mesh_device, dtype=ttnn.bfloat16, mesh_axes=[None, None, None, self.sp_mesh_axis]
             )
+        return self._cache[key]
+
+    def _zero_rows(self, rows: int, width: int, dtype: ttnn.DataType = ttnn.bfloat16) -> ttnn.Tensor:
+        key = ("zeros", rows, width, dtype)
+        if key not in self._cache:
+            self._cache[key] = ttnn.zeros([1, 1, rows, width], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
         return self._cache[key]
 
     def _valid_rows(self, length: int, padded_len: int) -> ttnn.Tensor:
