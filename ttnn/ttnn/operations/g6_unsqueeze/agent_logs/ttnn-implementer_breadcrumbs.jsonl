@@ -1,0 +1,4 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/g6_unsqueeze/test_g6_unsqueeze.py","mode":"plain","cases":4,"notes":"first device run after fixing ttnn.div_up AttributeError","ts":"2026-11-27T11:21:33-05:00"}
+{"event":"test_run","status":"pass","mode":"plain+dev","cases":4,"notes":"acceptance 4/4 bit-exact; dev watcher clean","ts":"2026-11-27T11:58:35-05:00"}
+{"event":"test_run","status":"pass","mode":"probe-dev","notes":"probes 005/006: ragged W, rank1/rank3, idle tail cores, uneven split, 301 tiles over 110 cores, depth-2 multi-block (401 tiles 1 core, 700 tiles 2 cores), repeat-call identity: all bit-exact","ts":"2026-11-27T11:58:35-05:00"}
+{"event":"perf","p1_kernel_ns":[1417,1451],"p2_kernel_ns":[1299,1327],"zones_ns":{"SETUP":23,"LOAD-ISSUE":97,"LOAD-WAIT":255,"MOVE-STORE-ISSUE":417,"STORE-WAIT":260},"notes":"1 tile/core; move stage largest; stock ttnn 3.32us","ts":"2026-11-27T11:58:35-05:00"}
