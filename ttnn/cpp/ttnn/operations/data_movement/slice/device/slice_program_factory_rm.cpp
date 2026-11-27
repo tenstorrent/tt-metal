@@ -9,19 +9,18 @@
 
 #include <optional>
 #include <tuple>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
@@ -537,7 +536,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
     };
 }
 
-tt::tt_metal::experimental::ProgramRunArgs SliceRmProgramFactory::override_runtime_arguments(
+ProgramRunArgs SliceRmProgramFactory::override_runtime_arguments(
     const SliceParams& /*args*/,
     const SliceInputs& tensor_args,
     Tensor& output,

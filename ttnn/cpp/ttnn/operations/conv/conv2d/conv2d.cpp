@@ -8,11 +8,11 @@
 #include <string>
 #include <utility>
 
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -99,6 +99,7 @@ Result conv2d_L1(
 
     // Use weights_dtype from config if set, otherwise use weight tensor's dtype
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor_.dtype());
+    ttnn::verify_numerical_configuration(device->arch(), compute_config_);
     DeviceComputeKernelConfig compute_config =
         compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor_.dtype(), weight_dtype));
 

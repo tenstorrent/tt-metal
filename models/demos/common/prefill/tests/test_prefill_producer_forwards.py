@@ -12,10 +12,14 @@ import numpy as np
 import pytest
 import torch
 
+from models.demos.common.prefill.media_stub import stub_media_key
 from models.demos.common.prefill.prefill_chunk import (
     EMPTY_CHUNK,
+    MediaRef,
     PrefillChunk,
     decode_forward_metadata,
+    decode_media_refs,
+    metadata_size_bytes,
     pad_chunks,
     validate_chunks,
 )
@@ -30,7 +34,7 @@ def env(monkeypatch):
     def set_env(forward_chunks=1, sp=8):
         monkeypatch.setattr(producer, "CHUNK_SIZE", C)
         monkeypatch.setattr(producer, "MAX_SEQ_LEN", MAX_SEQ_LEN)
-        monkeypatch.setattr(producer, "GLOBAL_MESH_SHAPE", (sp, 4))
+        monkeypatch.setattr(producer, "SP_FACTOR", sp)
         monkeypatch.setattr(producer, "MTP_LEVELS", 0)
         monkeypatch.setattr(producer, "FORWARD_CHUNKS", forward_chunks)
 
@@ -191,6 +195,10 @@ def test_packed_payload(env):
     assert mtp is None
     assert rows.shape == (sp, 1, forward_chunks * C // sp)
     chunks = decode_forward_metadata(list(struct.unpack(f"<{len(metadata) // 4}i", metadata)), forward_chunks)
+    # Runs ending in a partial chunk go last, whole, so its pad rows fall past the MoE dispatch loop's bound and each
+    # slot's chunks stay one run.
+    pushes = [pushes[2], pushes[0], pushes[1]]
+    validate_chunks(chunks, chunk_size=C, forward_chunks=forward_chunks, num_users=2, max_seq_len=MAX_SEQ_LEN)
     assert chunks == [PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes] + [EMPTY_CHUNK]
     s = C // sp
     for k, p in enumerate(pushes):
@@ -237,6 +245,99 @@ def check_packed_run(forwards, stats, cfg):
     assert {s: fill.real_len for s, fill in stats.resident.items()} == {s: p.actual_end for s, p in last.items()}
     assert stats.total_pushes == len(forwards)
     assert stats.total_chunks == sum(len(p) for p in forwards)
+
+
+@pytest.mark.parametrize("forward_chunks", [1, 2])
+def test_payload_lists_media(env, monkeypatch, forward_chunks):
+    env(forward_chunks=forward_chunks)
+    monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(producer, "MEDIA", [(1000, 100), (3000, 10)])
+    pool = list(range(2 * C))
+    pushes = [producer.ChunkPush(0, k, k * C, (k + 1) * C, 2 * C) for k in range(2)]
+    image = (1000, 1100, stub_media_key(100, 0))
+    if forward_chunks == 1:
+        forwards = [([p], [MediaRef(0, *image)]) for p in pushes]
+    else:
+        forwards = [(pushes, [MediaRef(0, *image), MediaRef(1, *image)])]
+    for forward, refs in forwards:
+        _, _, metadata = producer._forward_payload(forward, lambda slot_id: pool)
+        assert decode_media_refs(metadata, forward_chunks, 2) == refs
+
+
+def test_payload_refuses_overlapping_media(env, monkeypatch, expect_error):
+    env()
+    monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(producer, "MEDIA", [(100, 50), (120, 10)])
+    with expect_error(ValueError, "overlaps"):
+        producer._forward_payload([producer.ChunkPush(0, 0, 0, C, C)], lambda slot_id: list(range(C)))
+
+
+@pytest.mark.parametrize("forward_chunks", [1, 2])
+def test_media_metadata_keeps_its_size_without_images(env, monkeypatch, forward_chunks):
+    """With media on, a forward with no image and the shutdown sentinel are as long as the runner's H2D metadata."""
+    env(forward_chunks=forward_chunks)
+    monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(producer, "MEDIA", [(3 * C, 10)])  # past this request's prompt
+    _, _, metadata = producer._forward_payload([producer.ChunkPush(0, 0, 0, C, C)], lambda slot_id: list(range(C)))
+    assert len(metadata) == len(producer._shutdown_payload()[2]) == metadata_size_bytes(forward_chunks, 2)
+
+
+def test_payload_skips_media_past_the_prompt(env, monkeypatch):
+    env()
+    monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(producer, "MEDIA", [(100, 50), (C - 60, 100)])
+    _, _, metadata = producer._forward_payload([producer.ChunkPush(0, 0, 0, C - 10, C - 10)], lambda s: list(range(C)))
+    assert decode_media_refs(metadata, 1, 2) == [MediaRef(0, 100, 150, stub_media_key(50, 0))]
+
+
+@pytest.mark.parametrize(
+    "media, max_refs, message",
+    [
+        ("100", "2", "want start:num_tokens"),
+        ("-5:10", "2", "want start:num_tokens"),
+        ("100:0", "2", "want start:num_tokens"),
+        ("300:10,100:10", "2", "sorted and not overlap"),
+        ("100:50,120:10", "2", "sorted and not overlap"),
+        ("1000:30", "2", "past PREFILL_MAX_SEQ_LEN"),
+        ("100:10,200:10", "1", "PREFILL_MEDIA_MAX_REFS >= 2"),
+    ],
+)
+def test_media_config_rejected_up_front(monkeypatch, expect_error, media, max_refs, message):
+    for name in (
+        "SP_FACTOR",
+        "CHUNK_SIZE",
+        "FORWARD_CHUNKS",
+        "MAX_SEQ_LEN",
+        "H2D_METADATA_SIZE_BYTES",
+        "MEDIA",
+        "MEDIA_MAX_REFS",
+    ):
+        monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reload below
+    monkeypatch.setenv("PREFILL_MAX_SEQ_LEN", "1024")
+    monkeypatch.setenv("PREFILL_PRODUCER_MEDIA", media)
+    monkeypatch.setenv("PREFILL_MEDIA_MAX_REFS", max_refs)
+    with expect_error(AssertionError, message):
+        producer._load_env_config(check_budget=False)
+
+
+def test_media_config_needs_max_refs(monkeypatch, expect_error):
+    for name in (
+        "SP_FACTOR",
+        "CHUNK_SIZE",
+        "FORWARD_CHUNKS",
+        "MAX_SEQ_LEN",
+        "H2D_METADATA_SIZE_BYTES",
+        "MEDIA",
+        "MEDIA_MAX_REFS",
+    ):
+        monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reload below
+    monkeypatch.setenv("PREFILL_PRODUCER_MEDIA", "100:50")
+    monkeypatch.delenv("PREFILL_MEDIA_MAX_REFS", raising=False)
+    with expect_error(AssertionError, "PREFILL_MEDIA_MAX_REFS"):
+        producer._load_env_config(check_budget=False)
+    monkeypatch.setenv("PREFILL_MEDIA_MAX_REFS", "-1")
+    with expect_error(AssertionError, "must be >= 0"):
+        producer._load_env_config(check_budget=False)
 
 
 @pytest.mark.parametrize("interleave", ["round_robin", "random"])
@@ -302,7 +403,15 @@ def test_packed_respects_max_requests(env, interleave):
 
 
 def test_import_config_defers_budget_check(monkeypatch, expect_error):
-    for name in ("GLOBAL_MESH_SHAPE", "CHUNK_SIZE", "MAX_SEQ_LEN", "FORWARD_CHUNKS", "CHUNK_METADATA_SIZE_BYTES"):
+    for name in (
+        "SP_FACTOR",
+        "CHUNK_SIZE",
+        "MAX_SEQ_LEN",
+        "FORWARD_CHUNKS",
+        "H2D_METADATA_SIZE_BYTES",
+        "MEDIA",
+        "MEDIA_MAX_REFS",
+    ):
         monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reloads below
     monkeypatch.delenv("PREFILL_CHUNK_SIZE", raising=False)
     monkeypatch.setenv("PREFILL_FORWARD_TOKENS_BUDGET", str(8 * C))
@@ -332,12 +441,13 @@ def test_slot_lengths_from_env(monkeypatch, expect_error):
         monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", bad)
         with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_LENGTHS"):
             producer._slot_lengths_from_env(4, 16)
-    # The last chunk is padded: with 5120-token chunks a 262144-token cache holds 51 whole chunks (261120 tokens).
-    monkeypatch.setattr(producer, "CHUNK_SIZE", 5120)
-    monkeypatch.setattr(producer, "MAX_SEQ_LEN", 262144)
-    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", "261120")
-    assert producer._slot_lengths_from_env(1, 51) == {0: 261120}
-    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", "261121")
+    # The last chunk is padded: the cache holds only whole chunks, so the longest slot is a whole-chunk multiple.
+    chunk, cache = 5 * C, 51 * 5 * C + 1  # 51 whole chunks plus a remainder the padded last chunk cannot use
+    monkeypatch.setattr(producer, "CHUNK_SIZE", chunk)
+    monkeypatch.setattr(producer, "MAX_SEQ_LEN", cache)
+    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", str(51 * chunk))
+    assert producer._slot_lengths_from_env(1, 51) == {0: 51 * chunk}
+    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", str(51 * chunk + 1))
     with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_LENGTHS"):
         producer._slot_lengths_from_env(1, 51)
 
@@ -369,3 +479,45 @@ def test_resolve_slot_prompts_keeps_slot_lengths(env, monkeypatch, expect_error)
     monkeypatch.setenv("PREFILL_PRODUCER_SLOT_TRACES", "/no/such/trace")
     with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_TRACES"):
         producer._resolve_slot_prompts(cfg)
+
+
+@pytest.mark.parametrize("forward_chunks", [1, 2, 4])
+def test_packed_forward_mtp_blocks(env, monkeypatch, forward_chunks):
+    """With MTP a forward's lookahead is one num_mtp_tokens block per chunk position after every chunk's ids: block k
+    is what a one-chunk forward of chunk k sends, an empty position's is all pad, and one chunk per forward sends
+    exactly today's block."""
+    env(forward_chunks=forward_chunks)
+    levels = 2
+    monkeypatch.setattr(producer, "MTP_LEVELS", levels)
+    sp, n_mtp = 8, producer.num_mtp_tokens(levels)
+    pools = {s: list(range(1000 * (s + 1), 1000 * (s + 1) + MAX_SEQ_LEN)) for s in range(3)}
+    # A full chunk whose prompt continues, a full chunk that ends its prompt one token later, a partial one.
+    pushes = [
+        producer.ChunkPush(0, 0, 0, C, 3 * C),
+        producer.ChunkPush(1, 1, C, 2 * C, 2 * C + 1),
+        producer.ChunkPush(2, 0, 0, 700, 700),
+    ][:forward_chunks]
+    rows, mtp, _ = producer._forward_payload(pushes, pools.get)
+    assert rows.shape == (sp, 1, forward_chunks * C // sp)
+    assert mtp.shape == (sp, 1, forward_chunks * n_mtp) and mtp.dtype == np.uint32
+    ordered = producer._partial_runs_last(pushes)
+    for k in range(forward_chunks):
+        block = mtp[:, :, k * n_mtp : (k + 1) * n_mtp]
+        if k < len(ordered):
+            p = ordered[k]
+            expected = producer._mtp_rows(pools[p.slot_id], p.actual_start, p.actual_isl, actual_end=p.actual_end)
+            np.testing.assert_array_equal(block, expected)
+        else:
+            assert (block == producer.MTP_PAD_TOKEN_ID).all()
+    if forward_chunks == 1:
+        p = pushes[0]
+        np.testing.assert_array_equal(
+            mtp, producer._mtp_rows(pools[p.slot_id], p.actual_start, p.actual_isl, actual_end=p.actual_end)
+        )
+
+
+def test_packed_shutdown_payload_has_every_mtp_block(env, monkeypatch):
+    env(forward_chunks=4)
+    monkeypatch.setattr(producer, "MTP_LEVELS", 1)
+    rows, mtp, _ = producer._shutdown_payload()
+    assert mtp.shape == (8, 1, 4 * producer.num_mtp_tokens(1))

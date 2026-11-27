@@ -19,7 +19,6 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache
 from ...utils.conv3d import (
     ConvDims,
     _ntuple,
@@ -1998,9 +1997,8 @@ class WanVAEDecoderAdapter:
     """Torch-in (BCTHW), torch-out (output_type-dependent) VAE decoder for the Wan VAE.
 
     Applies per-channel mean/std denormalize, runs the TT-NN decoder, and transfers the result to
-    host with output_type-aware pre-fn / permute. Weights are loaded via ``cache.load_model``;
-    ``reload_weights``/``deallocate_weights`` are idempotent and intended to be driven by the
-    caller (e.g. via ``register_coresident_exclusions``).
+    host with output_type-aware pre-fn / permute. The caller loads ``decoder`` with
+    ``decoder_spec`` before ``decode``.
     """
 
     def __init__(
@@ -2069,24 +2067,17 @@ class WanVAEDecoderAdapter:
     def torch_state_dict(self) -> dict[str, torch.Tensor]:
         return self._torch_vae.state_dict()
 
-    def is_loaded(self) -> bool:
-        return self._decoder.is_loaded()
-
-    def deallocate_weights(self) -> None:
-        self._decoder.deallocate_weights()
-
-    def reload_weights(self) -> None:
+    @property
+    def decoder_spec(self) -> dict:
         blocking_key = conv3d_blocking_hash(self._decoder)
-        subfolder = f"vae_{blocking_key}" if blocking_key else "vae"
-        cache.load_model(
-            self._decoder,
-            model_name=os.path.basename(self._checkpoint_name),
-            subfolder=subfolder,
-            parallel_config=self._parallel_config,
-            mesh_shape=tuple(self.device.shape),
-            mesh_device=self.device,
-            get_torch_state_dict=lambda: self._torch_vae.state_dict(),
-        )
+        return {
+            "model_name": os.path.basename(self._checkpoint_name),
+            "subfolder": f"vae_{blocking_key}" if blocking_key else "vae",
+            "parallel_config": self._parallel_config,
+            "mesh_shape": tuple(self.device.shape),
+            "mesh_device": self.device,
+            "get_torch_state_dict": lambda: self._torch_vae.state_dict(),
+        }
 
     @torch.no_grad()
     def decode(self, latents: torch.Tensor, *, output_type: str) -> torch.Tensor:
@@ -2105,7 +2096,6 @@ class WanVAEDecoderAdapter:
             dtype=self._decoder.dtype,
         )
 
-        self.reload_weights()
         tt_video_BCTHW, new_logical_h, new_logical_w = self._decoder(
             tt_latents_BTHWC, logical_h, t_chunk_size=self._t_chunk_size, logical_w=logical_w
         )

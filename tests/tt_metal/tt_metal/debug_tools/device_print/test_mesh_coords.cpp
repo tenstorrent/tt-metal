@@ -10,13 +10,13 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_config.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/mesh_config.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 #include <internal/mesh_device.hpp>
 
 #include "debug_tools_fixture.hpp"
@@ -84,15 +84,15 @@ void ConfigureDevicePrintForCoord(
 // so the DEVICE_PRINT output directly matches what was configured in the DEVICE_PRINT filter.
 distributed::MeshWorkload BuildMeshCoordWorkload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::MeshWorkload workload;
-    constexpr experimental::NodeCoord kNode = {0, 0};
-    const experimental::KernelSpecName kKernel{"mesh_coord_print"};
+    constexpr NodeCoord kNode = {0, 0};
+    const KernelSpecName kKernel{"mesh_coord_print"};
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         auto [row, col] = GetGlobalCoord(internal::get_device(*mesh_device, coord)->id());
 
-        experimental::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "dprint_mesh_coord",
-            .kernels = {experimental::KernelSpec{
+            .kernels = {KernelSpec{
                 .unique_id = kKernel,
                 .source =
                     std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/device_print/print_mesh_coord.cpp"},
@@ -100,11 +100,10 @@ distributed::MeshWorkload BuildMeshCoordWorkload(const std::shared_ptr<distribut
                 .compile_time_args = {{"row", row}, {"col", col}},
                 .hw_config = DevicePrintFixture::SingleThreadDmConfig(mesh_device->arch()),
             }},
-            .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {kKernel}, .target_nodes = kNode}},
+            .work_units = {WorkUnitSpec{.name = "main", .kernels = {kKernel}, .target_nodes = kNode}},
         };
 
-        workload.add_program(
-            distributed::MeshCoordinateRange(coord, coord), experimental::MakeProgramFromSpec(*mesh_device, spec));
+        workload.add_program(distributed::MeshCoordinateRange(coord, coord), Program(*mesh_device, spec));
     }
     return workload;
 }

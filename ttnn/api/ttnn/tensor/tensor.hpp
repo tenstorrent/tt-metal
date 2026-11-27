@@ -12,16 +12,16 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/tensor/host_tensor.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
 
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 
 #include <tt_stl/optional_reference.hpp>
 
@@ -158,6 +158,12 @@ public:
         float pad_value) const;
 
     [[nodiscard]] Tensor cpu(bool blocking = true, std::optional<QueueId> cq_id = std::nullopt) const;
+
+    // See ttnn::cpu_shards.
+    [[nodiscard]] std::vector<Tensor> cpu_shards(
+        const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+        bool blocking = true,
+        std::optional<QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor unpad(
         const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end) const;

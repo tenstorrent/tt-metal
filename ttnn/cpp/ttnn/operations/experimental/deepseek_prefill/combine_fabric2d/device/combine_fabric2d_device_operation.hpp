@@ -41,5 +41,6 @@ ttnn::Tensor combine_fabric2d(
     uint32_t num_links,
     uint32_t fwd_vc_pages,
     tt::tt_fabric::Topology topology,
-    const tt::tt_metal::MemoryConfig& memory_config);
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const std::optional<ttnn::Tensor>& forwarding_buffer = std::nullopt);
 }  // namespace ttnn::prim

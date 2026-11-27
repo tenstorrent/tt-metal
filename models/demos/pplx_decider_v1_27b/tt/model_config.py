@@ -52,7 +52,8 @@ class PplxDeciderModelArgs(Qwen36ModelArgs):
             logger.info(
                 f"pplx prefill CCL: fused_dist_norm={self.prefill_fused_dist_norm} agmm_bf8={self.prefill_agmm_bf8} "
                 f"ccl_topology={self.ccl_topology()} (num_devices={self.num_devices}, "
-                f"fabric={ttnn.get_fabric_config()}) tuned sdpa={self.prefill_sdpa_config_fn is not None} "
+                f"fabric={ttnn.get_fabric_config(self.mesh_device)}) "
+                f"tuned sdpa={self.prefill_sdpa_config_fn is not None} "
                 f"agmm={self.prefill_agmm_config_fn is not None} rs={self.prefill_rs_hparams} "
                 f"rs_bf8={self.prefill_rs_bf8} small_m_max={self.prefill_small_m_max}"
             )
@@ -77,7 +78,7 @@ class PplxDeciderModelArgs(Qwen36ModelArgs):
             ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         )
-        fabric = ttnn.get_fabric_config()
+        fabric = ttnn.get_fabric_config(self.mesh_device)
         if self.num_devices > 2 and fabric in ring_fabrics:
             return ttnn.Topology.Ring
         if mode == "ring" and not getattr(self, "_ccl_ring_warned", False):

@@ -8,17 +8,18 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_stats_selector.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <bit>
 #include <cstdint>
@@ -28,7 +29,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_program_artifacts(
     const LayerNormParams& operation_attributes,
@@ -37,9 +38,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     const std::optional<CoreRangeSet>& core_range_set) {
     using namespace sharded_layernorm_helpers;
 
-    // For sharded layernorm, core ranges are derived from tensor shard spec.
+    // For sharded layernorm, core ranges are derived from tensor shard spec, or for an interleaved input from the
+    // block grid the program config splits it over.
     // If core_range_set is provided, validate that every core this program will touch is within it.
-    const auto& input_shard_spec = tensor_args.input.shard_spec();
+    const std::optional<ShardSpec> input_shard_spec =
+        tensor_args.input.is_sharded()
+            ? tensor_args.input.shard_spec()
+            : interleaved_block_shard_spec(
+                  tensor_args.input,
+                  std::get<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config));
     TT_FATAL(input_shard_spec.has_value(), "Sharded layernorm requires input tensor to have a shard spec");
 
     if (core_range_set.has_value()) {
@@ -109,8 +116,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     const std::uint32_t tile_width = a.tensor_spec().tile().get_width();
 
-    std::uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / tile_width;
-    bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
+    // An interleaved input or output is read or written by tile id from the block grid: no shard to reshard to.
+    const bool interleaved_input = !a.is_sharded();
+    const bool interleaved_output = !output.is_sharded();
+    std::uint32_t block_wt_resharded =
+        interleaved_output ? block_wt : output.shard_spec().value().shape[1] / tile_width;
+    bool skip_write_back = interleaved_output || output.shard_spec().value() == input_shard_spec.value();
     // The write-back reads runtime arguments that only the post-all-gather stage supplies, so the
     // build that compiles it is the build where those arguments exist.
     const bool writes_back = is_post_all_gather && !skip_write_back;
@@ -163,22 +174,29 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     const std::uint32_t logical_K = a.logical_shape()[-1];
 
     // Compute grid and worker distribution using helper structs
-    auto grid = GridParams::compute(a, block_ht, device->compute_with_storage_grid_size());
+    auto grid = GridParams::compute(a, input_shard_spec.value(), block_ht, device->compute_with_storage_grid_size());
     auto workers = WorkerDistribution::compute(grid, block_ht);
     auto core_ranges = CoreRanges::compute(grid, workers);
 
     // Get all storage cores
-    ShardSpec output_shard_spec = output.shard_spec().value();
+    ShardSpec output_shard_spec = interleaved_output ? input_shard_spec.value() : output.shard_spec().value();
     bool output_row_wise = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     CoreRangeSet all_storage_cores = output_shard_spec.grid;
-    std::vector<uint32_t> storage_core_noc_x;
-    std::vector<uint32_t> storage_core_noc_y;
-    std::vector<CoreCoord> storage_core_coords =
-        corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), output_row_wise);
-    for (auto core : storage_core_coords) {
-        storage_core_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
-        storage_core_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+    if (writes_back) {
+        // The writer names each storage core by the output shard it holds (ShardView): storage core i, in the
+        // shard grid's orientation order, must hold output shard i (at most one shard per core).
+        const std::vector<CoreCoord> storage_core_coords =
+            corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), output_row_wise);
+        const auto output_bds = output.tensor_spec().compute_buffer_sharding_args().buffer_distribution_spec();
+        TT_FATAL(
+            output_bds.has_value() && output_bds->num_shards() <= output_bds->cores().size() &&
+                output_bds->num_shards() <= storage_core_coords.size() &&
+                std::equal(
+                    storage_core_coords.begin(),
+                    storage_core_coords.begin() + output_bds->num_shards(),
+                    output_bds->cores().begin()),
+            "Sharded layernorm write-back needs output shard i on storage core i, at most one shard per core");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -329,6 +347,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         // RMSNorm doesn't use Welford in this kernel path.
         .welford_fp32_alias = use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en,
         .use_two_stage_reduce = grid.use_two_stage_reduce,
+        .interleaved_input = interleaved_input,
+        .interleaved_output = interleaved_output,
         .sizes = dfb_sizes,
         .reciprocal_dfb_size_bytes = reciprocal_dfb_size_bytes,
         // The column mask is one tile-row wide: block_wt tiles, holding only 1.0 or 0.0 in bfloat16.
@@ -402,10 +422,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .last_core_width_index = last_core_width_index,
         .is_post_all_gather = is_post_all_gather,
         .writes_back = writes_back,
+        .interleaved_io = interleaved_input || interleaved_output,
+        .block_ht = block_ht,
         .num_distributed_devices = num_distributed_devices,
         .reader_noc = reader_noc,
-        .storage_core_noc_x = std::move(storage_core_noc_x),
-        .storage_core_noc_y = std::move(storage_core_noc_y),
         .num_storage_cores = (std::uint32_t)all_storage_cores.num_cores()};
 
     // The write-back segment block's length is measured per node while the run args are built, and

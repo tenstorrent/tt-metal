@@ -14,7 +14,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 

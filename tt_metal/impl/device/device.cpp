@@ -9,15 +9,15 @@
 #include "device_impl.hpp"
 
 #include <core_descriptor.hpp>
-#include <host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <initializer_list>
-#include <sub_device.hpp>
-#include <sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "impl/device/mock_allocator.hpp"
-#include <tt-metalium/program_cache.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt_metal.hpp>
+#include <tt-metalium/utils/program_cache.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -32,7 +32,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "allocator.hpp"
+#include "tt-metalium/mesh/allocator.hpp"
 #include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
@@ -40,19 +40,19 @@
 #include "program/slow_dispatch.hpp"
 #include "memory_tracking/memory_stats_shm.hpp"
 #include "memory_tracking/shm_tracking_processor.hpp"
-#include <tt-metalium/graph_tracking.hpp>
-#include "core_coord.hpp"
-#include "device.hpp"
+#include <tt-metalium/observability/capture_hooks.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include "tt-metalium/mesh/legacy/device.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/dispatch_query_manager.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include "tt-metalium/program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
@@ -853,18 +853,18 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
 HWCommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     MetalContext::instance(this->get_context_id()).device_manager()->check_dispatch_mode(using_fast_dispatch_);
     TT_FATAL(using_fast_dispatch_, "Fast dispatch must be enabled to use command_queue");
-    auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+    // An explicit id never consults the (deprecated) thread-local selection.
+    const uint8_t actual_cq_id = cq_id.has_value() ? *cq_id : MetalContext::current_command_queue_id_for_thread();
     TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *command_queues_[actual_cq_id];
 }
 
 SystemMemoryManager& Device::sysmem_manager() {
-    // SystemMemoryManager handles mock devices internally with stubs
-    // For mock devices, ensure lazy initialization if not already done
+    // Mock and emulated devices skip init_command_queue_host, so their manager is created here on first use.
     if (!sysmem_manager_) {
-        sysmem_manager_ =
-            std::make_unique<SystemMemoryManager>(MetalEnvAccessor(*env_).impl(), *context_, this->id_, 1);
+        sysmem_manager_ = std::make_unique<SystemMemoryManager>(
+            MetalEnvAccessor(*env_).impl(), *context_, this->id_, this->num_hw_cqs());
     }
     return *sysmem_manager_;
 }
