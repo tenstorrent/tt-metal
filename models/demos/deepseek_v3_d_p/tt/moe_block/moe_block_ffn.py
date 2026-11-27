@@ -271,7 +271,9 @@ class TtMoEBlockFfn:
             if opts.combine_snap is not None:  # (else the config's default snap)
                 cfg.combine_snap = opts.combine_snap
             elif accuracy.fidelity():  # (K3_ACC_FIDELITY: no 2^-14 snap of the routed terms - fp32 sums, any order)
-                cfg.combine_snap = 0.0
+                # (K3_ACC_COMBINE_SNAP: a snap step instead, e.g. 2^-20: the terms on a fixed grid sum exactly in any
+                # order while the sum stays below 2^24 steps, so the combine is deterministic again)
+                cfg.combine_snap = float(os.environ.get("K3_ACC_COMBINE_SNAP", "0") or 0.0)
             # (the model's slab, the one its mesh opened L1_SMALL for: moe_impl.moe_block_words_slab)
             cfg.words_slab_bytes = self.words_slab
             dtypes = moe_block_utils.MoEDtypes()
