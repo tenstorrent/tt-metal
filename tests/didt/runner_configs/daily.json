@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "hang_secs": 30,
+  "reset": {"cmd": "tt-smi -glx_reset_auto", "tries": 3, "timeout": 600},
+  "smi": {"cmd": "tt-smi -s --snapshot_no_tty", "timeout": 120},
+  "collect": {"cmd": "pytest --collect-only -q -p no:benchmark", "timeout": 600},
+  "fallbacks": {
+    "throttle": {"env": {"TT_MM_THROTTLE_PERF": "5"}, "opts": []},
+    "pin_core": {"kind": "pin_core", "hang_reset": {"cmd": "tt-smi -r", "timeout": 600}}
+  },
+  "steps": [
+    {
+      "key": "nd:minimal",
+      "pin_id": "tests/didt/test_minimal_matmul.py::test_specific_chip_minimal_matmul[blackhole-bf16_HiFi2-galaxy-galaxy_chip_0]",
+      "runner": "pytest",
+      "ids": ["tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy]"],
+      "opts": ["--didt-workload-iterations=1000", "--determinism-check-interval=50", "--timeout=0"],
+      "env": {},
+      "timeout": null,
+      "check": "nd_report",
+      "fallbacks": ["throttle", "pin_core"],
+      "note": "minimal matmul on all 32 chips; settings of the gwdt matmul:minimal step"
+    }
+  ]
+}

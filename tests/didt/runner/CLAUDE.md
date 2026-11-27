@@ -1,11 +1,11 @@
 # didt_runner: rules for extending it
 
-Read before changing `tests/didt/didt_runner.py`, `tests/didt/didt_runner_config.json` or anything in `tests/didt/runner/`.
+Read before changing `tests/didt/didt_runner.py`, `tests/didt/runner_configs/` or anything in `tests/didt/runner/`.
 
 ## What it is
 
 - One galaxy, one command, every configured DIDT ND/hang screen.
-- `didt_runner_config.json` says what runs, how, and which fallbacks.
+- `runner_configs/<tier>.json` (daily, weekly, install) says what runs, how, and which fallbacks.
 - `status.json` is the only result. People and the sweep page read it.
 - Its job: name the failing chip, then the core, by hardware identity.
 
@@ -13,7 +13,7 @@ Read before changing `tests/didt/didt_runner.py`, `tests/didt/didt_runner_config
 
 ```
 didt_runner.py               CLI: args, chip snapshot, run dir, exit code
- -> runner/config.py         strict loader of didt_runner_config.json; all errors at once, before device work
+ -> runner/config.py         strict loader of runner_configs/<tier>.json; all errors at once, before device work
  -> runner/steps.py          run loop: collect gate, reset, attempt, tt-smi, fallbacks (throttle, pin_core)
      -> runner/checks.py     log parsers and verdicts (Status), GDDR errors from tt-smi, loop time
      -> runner/devices.py    failing devices[] of one attempt, identity joined from chips on `dev`
@@ -80,7 +80,7 @@ Read by the tests the runner launches, never imported by `runner/`:
 2. Determinism check on (interval > 0) if the test uses `OpTestBase`: no ND lines otherwise.
 3. Set `nd_core_block` / `nd_core_grid_size` in the test for per-core data.
 4. Key: `nd:<short-name>`; folder follows the key.
-5. Config entry with `note` saying why it is there.
+5. Config entry, in every tier of `runner_configs/` that should run it, with `note` saying why it is there.
 6. Unit test: shipped config builds the new step list in order.
 
 ## Adding a check or parser

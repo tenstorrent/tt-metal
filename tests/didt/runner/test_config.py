@@ -11,7 +11,7 @@ import pytest
 
 from tests.didt.runner.config import ConfigError, load
 
-SHIPPED = Path(__file__).parents[1] / "didt_runner_config.json"
+SHIPPED = Path(__file__).parents[1] / "runner_configs" / "weekly.json"
 
 STEP = {
     "key": "nd:x",
@@ -54,6 +54,36 @@ def _with_step(**changes):
     cfg = copy.deepcopy(BASE)
     cfg["steps"][0].update(changes)
     return cfg
+
+
+CONFIGS = SHIPPED.parent
+
+
+def test_every_shipped_tier_loads():
+    assert sorted(p.stem for p in CONFIGS.glob("*.json")) == ["daily", "install", "weekly"]
+    for path in CONFIGS.glob("*.json"):
+        load(path)
+
+
+def test_daily_is_minimal_matmul_with_its_fallbacks():
+    weekly = {s.key: s for s in load(SHIPPED).steps}
+    daily = load(CONFIGS / "daily.json")
+    assert [s.key for s in daily.steps] == ["nd:minimal"]
+    s = daily.steps[0]
+    assert [f.name for f in s.fallbacks] == ["throttle", "pin_core"]
+    assert (s.ids, s.opts, s.env, s.pin_id) == (
+        weekly["nd:minimal"].ids,
+        weekly["nd:minimal"].opts,
+        weekly["nd:minimal"].env,
+        weekly["nd:minimal"].pin_id,
+    )
+    assert daily.hang_secs == load(SHIPPED).hang_secs
+
+
+def test_install_matches_weekly_today():
+    # Separate files because the install check and the weekly screen are expected to diverge; drop this then.
+    install = json.loads((CONFIGS / "install.json").read_text())
+    assert install == json.loads(SHIPPED.read_text())
 
 
 def test_shipped_config_steps():
