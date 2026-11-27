@@ -246,6 +246,34 @@ int main(int,char** argv) {
  // An unknown wrapper never results in an unsafe persistent skip.
  failed.gpp="/usr/bin/c++";assert(run_prewarm({failed},out.string()+"/","",7,"",false)==0);
  assert(summary[0]==1 && summary[2]==1 && summary[3]==0);
+ // Source identity follows the root includes even when the compiler is installed elsewhere.
+ req.gpp="/usr/bin/c++"; req.targets[0].srcs={src}; req.targets[0].defines.clear();
+ std::ofstream(src)<<"int probe = 1;\n";
+ auto includes=[&](const fs::path& tree){return "-I. -I.. -I"+tree.string()+"/";};
+ req.targets[0].includes=includes(root); req.kernel_name="external";
+ auto own_tree=[&](){return run_prewarm({req},out.string()+"/","",7,root.string()+"/",false);};
+ assert(own_tree()==1);
+ std::ofstream(src)<<"static_assert(false, \"edited body\");\n";
+ assert(own_tree()==0 && summary[2]==1);
+ std::ofstream(src)<<"int probe = 2;\n";
+ assert(own_tree()==1);
+ // A matching commit or compiler cannot make a foreign include tree safe to replay.
+ const std::string commit(40,'c'); req.tree_commit=commit;
+ setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT",commit.c_str(),1);
+ for(const auto& foreign : std::vector<std::string>{root.string()+"-sibling", root.string()+"/../other", "/other/tree"}) {
+  req.targets[0].includes=includes(foreign)+" "+includes(root);
+  assert(own_tree()==0 && summary[8]==1);
+ }
+ req.gpp=compiler; req.targets[0].includes=includes("/other/tree");
+ assert(own_tree()==0 && summary[8]==1);
+ req.gpp="/usr/bin/c++"; req.targets[0].includes=includes(root);
+ auto foreign_target=req.targets[0]; foreign_target.includes=includes("/other/tree");
+ req.targets.push_back(foreign_target); assert(own_tree()==0 && summary[8]==1);
+ req.targets.pop_back(); req.tree_commit=std::string(40,'d');
+ assert(own_tree()==0);
+ unsetenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT"); req.tree_commit.clear();
+ req.targets[0].includes=""; assert(own_tree()==0);
+ req.targets[0].includes=includes(root); assert(own_tree()==1);
  std::cout<<"integration: stale arguments reproduced; unchanged skip, actual source/header/shadow/recipe/toolchain invalidation, explicit retry, success and exact summary counts passed\n";
 }
 """
