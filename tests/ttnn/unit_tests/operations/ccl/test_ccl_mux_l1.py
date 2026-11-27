@@ -19,7 +19,10 @@ NUM_WORKERS_PER_LINK = 2
 RING_SIZE = 128 * 1024
 
 DEVICE_PARAMS = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1540000}
-NEIGHBOR_EXCHANGE_DEVICE_PARAMS = {**DEVICE_PARAMS, "fabric_config": ttnn.FabricConfig.FABRIC_1D_NEIGHBOR_EXCHANGE}
+NEIGHBOR_EXCHANGE_DEVICE_PARAMS = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D_NEIGHBOR_EXCHANGE,
+    "trace_region_size": 1540000,
+}
 
 
 def _run_all_gather_async(mesh_device, enable_trace, num_buffers_per_channel=8):
@@ -85,9 +88,7 @@ def _run_strided_all_gather(mesh_device, enable_trace):
 
 
 def _run_all_gather(mesh_device, enable_trace):
-    # FabricMuxV2Config, WorkloadDescriptor unicast factory: ttnn.all_gather takes it under
-    # FABRIC_1D_NEIGHBOR_EXCHANGE and runs a mux on WH and BH (2 or more workers per direction). Under FABRIC_1D it
-    # would take multicast here, which has no mux.
+    # mux is used in unicast factory with FABRIC_1D_NEIGHBOR_EXCHANGE and 2 or more workers per direction.
     run_all_gather_impl(
         mesh_device,
         ag_output_shape=[1, 1, 256, 2048],
