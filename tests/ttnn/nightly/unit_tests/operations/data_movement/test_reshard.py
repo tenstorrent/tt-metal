@@ -8,6 +8,7 @@ import torch
 import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
+from tests.ttnn.unit_tests.operations.data_movement.test_interleaved_to_sharded import _run_row_major_dram
 
 
 @pytest.mark.parametrize("channels", [1, 2, 3, 4, 5, 6, 7, 9, 10, 17, 33, 65])
@@ -38,3 +39,12 @@ def test_reshard_unaligned_height_sharded_scratch_race(device, channels, input_b
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
     passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
     assert passing, output
+
+
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("grid", ["one_row", "full"])
+@pytest.mark.parametrize("rows_per_core", [7, 100, 513])
+@pytest.mark.parametrize("row_bytes", [32, 48, 128, 240, 256, 512])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.uint32])
+def test_interleaved_to_sharded_row_major_dram_matrix(device, dtype, row_bytes, rows_per_core, grid, orientation):
+    _run_row_major_dram(device, dtype, row_bytes, rows_per_core, grid, orientation)

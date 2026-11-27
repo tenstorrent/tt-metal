@@ -12,6 +12,12 @@
 // Forked rather than converted in place because the legacy file is still bound by factories on the
 // legacy positional-arg API.
 //
+// Under I2S_BANK_RUNS (set by the interleaved_to_sharded factory for short Blackhole DRAM rows) the
+// kernel takes a second path instead: it reads each DRAM bank's sticks for this shard as one contiguous
+// run into the scratchpad, I2S_BANK_RUNS_PAGE_STRIDE bytes per stick, then copies each stick to its
+// place in the shard. That path uses the whole scratchpad as staging and ignores num_trids and the
+// alignment args.
+//
 // The binding names below (dfb::in, scratch::scratch, tensor::src) and the named argument set are this
 // fork's interface: every later consumer inherits them, so they are taken from the kernel's own
 // vocabulary rather than any one op's locals, and are not renamed once a consumer exists. scratch::scratch

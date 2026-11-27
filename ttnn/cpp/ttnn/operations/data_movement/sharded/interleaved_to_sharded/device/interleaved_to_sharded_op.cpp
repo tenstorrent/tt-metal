@@ -161,7 +161,12 @@ ttsl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
     if (tensor_args.output_tensor.has_value()) {
         hash = ttsl::hash::hash_objects(hash, tensor_args.output_tensor->tensor_spec());
     }
-    return hash;
+    if (input_tensor.layout() == Layout::TILE) {
+        return hash;
+    }
+    // Free L1 picks the row-major reader path (and its scratch size), so key on the result.
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return ttsl::hash::hash_objects(hash, interleaved_to_sharded_row_major_scratch_size(input_tensor, output_spec));
 }
 
 Tensor interleaved_to_sharded(
