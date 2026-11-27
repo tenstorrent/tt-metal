@@ -14,7 +14,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "g6_pad_fill.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_fill_tile = get_compile_time_arg_val(0);
@@ -40,11 +40,18 @@ void kernel_main() {
     const auto x_accessor = TensorAccessor(x_args, x_addr, tile_bytes);
     const uint32_t fill_addr = get_write_ptr(cb_fill_tile);
 
-    // build_fill_segments: only the bytes the segments send.
+    // build_fill_segments: only the bytes the segments send; zeros as one span (the gaps between
+    // segments are never sent, so zeroing them is harmless).
     {
         DeviceZoneScopedN("G6PAD_FILL_BUILD");
-        for (uint32_t k = 0; k < num_segments; ++k) {
-            dataflow_kernel_lib::fill_l1_range<elem_bytes>(fill_addr + seg_offset[k], seg_bytes[k], fill_bits);
+        constexpr uint32_t span_begin = seg_offset[0];
+        constexpr uint32_t span_end = seg_offset[num_segments - 1] + seg_bytes[num_segments - 1];
+        if (fill_bits == 0) {
+            g6_pad::fill_constant<elem_bytes>(cb_fill_tile, span_begin, span_end - span_begin, 0);
+        } else {
+            for (uint32_t k = 0; k < num_segments; ++k) {
+                g6_pad::fill_constant<elem_bytes>(cb_fill_tile, seg_offset[k], seg_bytes[k], fill_bits);
+            }
         }
     }
 

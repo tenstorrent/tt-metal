@@ -14,7 +14,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "g6_pad_fill.hpp"
 #include "g6_pad_new_storage_walk.hpp"
 
 void kernel_main() {
@@ -43,7 +43,7 @@ void kernel_main() {
         fill_addr = get_write_ptr(cb_fill_tile);
         if (core_has_fill_only) {
             DeviceZoneScopedN("G6PAD_FILL_BUILD");
-            dataflow_kernel_lib::fill_l1_range<elem_bytes>(fill_addr, tile_bytes, fill_bits);
+            g6_pad::fill_constant<elem_bytes>(cb_fill_tile, 0, tile_bytes, fill_bits);
         }
     }
 
