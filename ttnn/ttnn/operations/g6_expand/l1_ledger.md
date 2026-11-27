@@ -35,6 +35,8 @@ W=512 → `1 * 2 * 2048 = 4 KiB`; W ≤ 256 → `2 KiB`.
 Totals per tier (W = 512, 128 cores, BH): DRAM writes 524 288 B; DRAM reads ≤ (128 + 16) × 128 B ≈ 18 KiB (≈ 3.5 % of writes); NoC cross-core 0 B; core-local L1 replicate 2 KiB per (core, column).
 
 > Cheapest-traffic split considered: R2, column-group multicast — x DRAM reads drop from ≈ 18 KiB to 2 KiB (16 KiB, ≈ 3 % of the op's DRAM bytes) at the cost of ≈ 256 KiB of on-chip multicast and a semaphore handshake per column group. Implemented: R1, column-major linear split with per-core row-0 fetch. Deferred because the saved DRAM bytes are a few percent of a write-bound op and R2 puts a cross-core handshake on the critical path of a ~1.5 µs call; R1's column-major order keeps each column's cores a consecutive run, so R2 layers onto it without changing the writer.
+>
+> Refinement 3: R2 was built (knob `COL_GROUP_MCAST`, `ttnn.Mcast` channel `bcast_mcast`, `handshake=False`, semaphores from id 1) and measured slower: W=512 device kernel ns, same harness, medians of 7 calls, two runs each: R1 linear split 2318 / 2278; column groups (g=5, column-major order) without multicast 2544 / 2524, with R2 multicast 2807 / 2801; column groups (row-major order) without multicast 2193 / 2200, with R2 multicast 2627 / 2615. It is parked at 0; no CB changes (a receiver lands the slot at its own `cb_bcast_tiles` base, the same address as the injector's slot 0). The column-aligned row-major placement it needs is kept without multicast. Its data-movement budget: x reads = one 64 B face-0 row + one 64 B face-1 row per core (80 × 128 B at W=512, down from ≈ 95 × 128 B); out unchanged.
 
 ## Implementation notes (ttnn-implementer)
 

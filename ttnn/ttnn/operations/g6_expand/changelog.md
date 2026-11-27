@@ -70,3 +70,33 @@
   (5 build paths × 4 geometries, including a single core with 16 columns and one with 66 columns,
   i.e. two blocks with the split gated off). test_g6_expand_knob_sweep.py was extended with
   half_tile / fetch_reqs / fanout / split fields.
+
+## Refinement 3 — Column-group multicast of the broadcast tile (regime R2) on W=512
+- Date: 2026-11-27
+- What was done: built regime R2 behind host knobs in `g6_expand_program_descriptor.py`:
+  - `COL_GROUP_SPLIT` — column-aligned placement: g = min(Ht, split_cores // num_cols) cores per
+    output column, each core inside one column (g=5, 80 cores at W=512). Order knob
+    `COL_GROUP_ROW_WISE`. Falls back to R1's linear split when g < 2.
+  - `COL_GROUP_MCAST` — the first core of each group fetches + replicates (face 1 still built by its
+    BRISC), then multicasts the 1 KiB slot to the group: `ttnn.Mcast` with
+    `McastFixedSenderConfig(0)` and `handshake=False`, `McastArgs` `optional_sender` / `optional_receiver`
+    on the reader. Receivers skip fetch and replicate (role is a runtime argument on both kernels).
+    With the knob off, the channel is attached as absent (`ttnn.attach_absent_mcast`).
+  - Measured (W=512, same harness, medians of 7): W=512 device kernel ns, same harness, medians of 7 calls, two runs each: R1 linear split 2318 / 2278; column groups (g=5, column-major order) without multicast 2544 / 2524, with R2 multicast 2807 / 2801; column groups (row-major order) without multicast 2193 / 2200, with R2 multicast 2627 / 2615.
+    R2 loses because the receivers wait, in series, for the injector's fetch, its replicate and the
+    multicast. Column-major groups also cost about 0.25 µs, because the cores of one column (one DRAM
+    bank) cluster in one grid column.
+  - Shipped default: `COL_GROUP_SPLIT=1`, `COL_GROUP_ROW_WISE=True`, `COL_GROUP_MCAST=0` (R2 parked as a live
+    knob). Perf bench W=512 2237 / 2199 → 2161 / 2184 / 2176 ns. Guards are flat: their tile assignment
+    is unchanged.
+  - Reused: the R1 reader/writer pipeline, `cb_bcast_tiles` (multicast lands in slot 0), the replicate
+    split. Added: the group placement branch, the multicast role branches, three knobs.
+- Accuracy achieved: bit-exact (int16-view equality) on W ∈ {512, 256, 207, 196, 185} and (2,1,1,96),
+  in all 5 placement / multicast variants.
+- Golden test progress: 20/20 passing
+- Issues encountered: in a kernel that is not a template, `McastArgs::sender()` / `receiver()` cannot
+  be named inside `if constexpr` for an absent channel, so I used `optional_sender()` /
+  `optional_receiver()`. `tracy-capture` crashed or truncated the profile on some runs (capture side;
+  those runs were repeated).
+- Tests added: tests/ttnn/unit_tests/operations/g6_expand/test_g6_expand_col_group_mcast.py (5 variants × 6
+  shapes, set G6E_REPS for profiling).

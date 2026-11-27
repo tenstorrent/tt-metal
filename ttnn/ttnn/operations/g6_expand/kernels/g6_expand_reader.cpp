@@ -24,10 +24,17 @@
 //                      straight from the slot it built (perf lamp "write issue on one RISC"); the
 //                      writer derives the same split. Writes are flushed before the slot could be
 //                      re-reserved and barriered before return (BB-03).
+//   R2 (runtime role, Refinement 3): ROLE_SELF fetches + replicates as above; ROLE_INJECTOR (first
+//                      core of a column group, one column per core) does the same, then multicasts the
+//                      finished slot to the group through the McastArgs sender pipe (channel
+//                      "bcast_mcast"); ROLE_RECEIVER skips fetch + replicate and lands the slot from
+//                      receiver().receive(). Absent channel (R1) => the role is always ROLE_SELF.
 // No helper applies: the op is pure byte movement (compute-path broadcast would change bits; R5).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 namespace {
 
@@ -73,6 +80,11 @@ void kernel_main() {
     constexpr uint32_t sem_face1_built_id = get_compile_time_arg_val(14);
     constexpr auto input_args = TensorAccessorArgs<15>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto bcast_mcast = dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("bcast_mcast_ct_offset"),
+        get_named_compile_time_arg_val("bcast_mcast_rt_offset")>();
+    constexpr uint32_t ROLE_INJECTOR = 1;
+    constexpr uint32_t ROLE_RECEIVER = 2;
 
     constexpr uint32_t face_rows = face_bytes / face_row_bytes;
     // Slot = one CB page: the whole tile, or (half_tile) only faces 0/1 — the tile's two
@@ -97,6 +109,7 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t output_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t start_t = get_arg_val<uint32_t>(0);
     const uint32_t n_t = get_arg_val<uint32_t>(1);
+    const uint32_t role = get_arg_val<uint32_t>(2);
     if (n_t == 0) {
         return;
     }
@@ -116,77 +129,107 @@ void kernel_main() {
             cb_reserve_back(cb_bcast_tiles, block_cols);
         }
         const uint32_t block_base = get_write_ptr(cb_bcast_tiles);
-        {
-            DeviceZoneScopedN("G6E_FETCH");
-            for (uint32_t j = 0; j < block_cols; ++j) {
-                const uint32_t col = first_col + c0 + j;
-                const uint32_t slot = block_base + j * slot_bytes;
-                if constexpr (replicate_split) {
-                    // face 1 is the writer's: touch only face 0.
-                    noc_async_read(input_accessor.get_noc_addr(col, 0), slot, row_fetch_bytes);
-                } else if constexpr (row_fetch_requests == 1) {
-                    // One request: face 0 whole + row 0 of face 1 (rows other than row 0 are
-                    // overwritten by the replicate, so x's padding never reaches out).
-                    noc_async_read(input_accessor.get_noc_addr(col, 0), slot, face_bytes + row_fetch_bytes);
-                } else {
-                    noc_async_read(input_accessor.get_noc_addr(col, 0), slot, row_fetch_bytes);
-                    noc_async_read(input_accessor.get_noc_addr(col, face_bytes), slot + face_bytes, row_fetch_bytes);
+        if constexpr (bcast_mcast.active) {
+            if (role == ROLE_RECEIVER) {
+                // One column per core: the injector's finished slot lands at this core's slot 0.
+                DeviceZoneScopedN("G6E_MCAST_RECV");
+                Noc noc;  // optional_*: well-formed (inactive) when the channel is absent (R1)
+                if (auto pipe = bcast_mcast.optional_receiver(noc)) {
+                    pipe->receive();
                 }
             }
-            noc_async_read_barrier();
         }
-        {
-            DeviceZoneScopedN("G6E_REPLICATE");
-            for (uint32_t j = 0; j < block_cols; ++j) {
-                const uint32_t slot = block_base + j * slot_bytes;
-                if constexpr (cpu_face_rows > 1) {
-                    fill_rows<face_row_bytes>(slot, slot + face_row_bytes, cpu_face_rows - 1);
-                    if constexpr (!replicate_split) {
-                        fill_rows<face_row_bytes>(
-                            slot + face_bytes, slot + face_bytes + face_row_bytes, cpu_face_rows - 1);
-                    }
-                }
-                if constexpr (!half_tile && (cpu_faces23 || replicate_split)) {
-                    fill_rows<face_row_bytes>(slot, slot + 2 * face_bytes, face_rows);
-                    if constexpr (!replicate_split) {
-                        fill_rows<face_row_bytes>(slot + face_bytes, slot + 3 * face_bytes, face_rows);
-                    }
-                }
-                if constexpr (per_col_publish) {
-                    cb_push_back(cb_bcast_tiles, 1);
-                }
-            }
-            if constexpr (noc_doubling && noc_fanout) {
-                // Fan-out: every remaining chunk of rows copies the final CPU-built prefix, so all
-                // copies of the block are in flight under ONE barrier (no level-by-level waits).
-                constexpr uint32_t prefix_bytes = cpu_face_rows * face_row_bytes;
+        if (role != ROLE_RECEIVER) {
+            {
+                DeviceZoneScopedN("G6E_FETCH");
                 for (uint32_t j = 0; j < block_cols; ++j) {
+                    const uint32_t col = first_col + c0 + j;
                     const uint32_t slot = block_base + j * slot_bytes;
-                    const uint64_t src0 = get_noc_addr(slot);
-                    const uint64_t src1 = get_noc_addr(slot + face_bytes);
-                    for (uint32_t off = prefix_bytes; off < face_bytes; off += prefix_bytes) {
-                        noc_async_read(src0, slot + off, prefix_bytes);
-                        noc_async_read(src1, slot + face_bytes + off, prefix_bytes);
+                    if constexpr (replicate_split) {
+                        // face 1 is the writer's: touch only face 0.
+                        noc_async_read(input_accessor.get_noc_addr(col, 0), slot, row_fetch_bytes);
+                    } else if constexpr (row_fetch_requests == 1) {
+                        // One request: face 0 whole + row 0 of face 1 (rows other than row 0 are
+                        // overwritten by the replicate, so x's padding never reaches out).
+                        noc_async_read(input_accessor.get_noc_addr(col, 0), slot, face_bytes + row_fetch_bytes);
+                    } else {
+                        noc_async_read(input_accessor.get_noc_addr(col, 0), slot, row_fetch_bytes);
+                        noc_async_read(
+                            input_accessor.get_noc_addr(col, face_bytes), slot + face_bytes, row_fetch_bytes);
                     }
                 }
                 noc_async_read_barrier();
-            } else if constexpr (noc_doubling) {
-                for (uint32_t rows = cpu_face_rows; rows < face_rows; rows *= 2) {
-                    const uint32_t bytes = rows * face_row_bytes;
+            }
+            {
+                DeviceZoneScopedN("G6E_REPLICATE");
+                for (uint32_t j = 0; j < block_cols; ++j) {
+                    const uint32_t slot = block_base + j * slot_bytes;
+                    if constexpr (cpu_face_rows > 1) {
+                        fill_rows<face_row_bytes>(slot, slot + face_row_bytes, cpu_face_rows - 1);
+                        if constexpr (!replicate_split) {
+                            fill_rows<face_row_bytes>(
+                                slot + face_bytes, slot + face_bytes + face_row_bytes, cpu_face_rows - 1);
+                        }
+                    }
+                    if constexpr (!half_tile && (cpu_faces23 || replicate_split)) {
+                        fill_rows<face_row_bytes>(slot, slot + 2 * face_bytes, face_rows);
+                        if constexpr (!replicate_split) {
+                            fill_rows<face_row_bytes>(slot + face_bytes, slot + 3 * face_bytes, face_rows);
+                        }
+                    }
+                    if constexpr (per_col_publish) {
+                        cb_push_back(cb_bcast_tiles, 1);
+                    }
+                }
+                if constexpr (noc_doubling && noc_fanout) {
+                    // Fan-out: every remaining chunk of rows copies the final CPU-built prefix, so all
+                    // copies of the block are in flight under ONE barrier (no level-by-level waits).
+                    constexpr uint32_t prefix_bytes = cpu_face_rows * face_row_bytes;
                     for (uint32_t j = 0; j < block_cols; ++j) {
                         const uint32_t slot = block_base + j * slot_bytes;
-                        noc_async_read(get_noc_addr(slot), slot + bytes, bytes);
-                        noc_async_read(get_noc_addr(slot + face_bytes), slot + face_bytes + bytes, bytes);
+                        const uint64_t src0 = get_noc_addr(slot);
+                        const uint64_t src1 = get_noc_addr(slot + face_bytes);
+                        for (uint32_t off = prefix_bytes; off < face_bytes; off += prefix_bytes) {
+                            noc_async_read(src0, slot + off, prefix_bytes);
+                            noc_async_read(src1, slot + face_bytes + off, prefix_bytes);
+                        }
+                    }
+                    noc_async_read_barrier();
+                } else if constexpr (noc_doubling) {
+                    for (uint32_t rows = cpu_face_rows; rows < face_rows; rows *= 2) {
+                        const uint32_t bytes = rows * face_row_bytes;
+                        for (uint32_t j = 0; j < block_cols; ++j) {
+                            const uint32_t slot = block_base + j * slot_bytes;
+                            noc_async_read(get_noc_addr(slot), slot + bytes, bytes);
+                            noc_async_read(get_noc_addr(slot + face_bytes), slot + face_bytes + bytes, bytes);
+                        }
+                        noc_async_read_barrier();
+                    }
+                }
+                if constexpr (noc_faces23) {
+                    for (uint32_t j = 0; j < block_cols; ++j) {
+                        const uint32_t slot = block_base + j * slot_bytes;
+                        noc_async_read(get_noc_addr(slot), slot + half_bytes, half_bytes);
                     }
                     noc_async_read_barrier();
                 }
             }
-            if constexpr (noc_faces23) {
-                for (uint32_t j = 0; j < block_cols; ++j) {
-                    const uint32_t slot = block_base + j * slot_bytes;
-                    noc_async_read(get_noc_addr(slot), slot + half_bytes, half_bytes);
+        }
+        if constexpr (bcast_mcast.active) {
+            if (role == ROLE_INJECTOR) {
+                DeviceZoneScopedN("G6E_MCAST_SEND");
+                if constexpr (replicate_split) {
+                    noc_semaphore_wait_min(sem_face1_built, 1);  // writer's face 1 of the slot built
                 }
-                noc_async_read_barrier();
+                Noc noc;
+                if (auto pipe = bcast_mcast.optional_sender(noc)) {
+                    pipe->send(block_base, block_base, slot_bytes);  // group's slot 0 == this slot
+                }
+            }
+        }
+        if constexpr (per_col_publish) {
+            if (role == ROLE_RECEIVER) {
+                cb_push_back(cb_bcast_tiles, block_cols);
             }
         }
         if constexpr (!per_col_publish) {
@@ -204,7 +247,7 @@ void kernel_main() {
                 const uint32_t slot = block_base + j * slot_bytes;
                 uint32_t page = (img * Ht + (seg_end - mine - col * Ht)) * Wt + wt;
                 if constexpr (replicate_split) {
-                    if (mine > 0) {
+                    if (mine > 0 && role != ROLE_RECEIVER) {
                         noc_semaphore_wait_min(sem_face1_built, c0 + j + 1);  // face 1 of this slot built
                     }
                 }

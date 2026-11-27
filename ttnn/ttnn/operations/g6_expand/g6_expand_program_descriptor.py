@@ -26,6 +26,7 @@ TILE_W = 32
 FACE_ROWS = 16
 COL_BLOCK_CAP = 64  # tiles (128 KiB of bf16) — L1 clamp on col_block
 REGIME = "R1-colmajor-row0fetch"
+REGIME_R2 = "R2-colgroup-mcast"
 # Replication mechanism (perf lamp): rows per face the reader RISC-V builds before local NoC
 # doubling copies take over; 2 * FACE_ROWS = all rows by RISC-V stores (no NoC copies).
 REPLICATE_CPU_ROWS = 16
@@ -60,6 +61,22 @@ REPLICATE_NOC_FANOUT = 0
 # columns (no slot reuse); otherwise the reader builds the whole slot.
 REPLICATE_SPLIT = 1
 SEM_FACE1_BUILT = 0
+# Regime R2 (Refinement 3): column-group placement + multicast of the broadcast slot.
+#   COL_GROUP_SPLIT = 1 — place g = min(Ht, split_cores // num_cols) cores per output column
+#     (column-major core order, so a group is a vertical run of the grid), each core inside one
+#     column. Applies only when g >= 2; otherwise R1's linear split is used.
+#   COL_GROUP_MCAST = 1 (needs COL_GROUP_SPLIT) — only the first core of each group (injector) fetches
+#     + replicates; it multicasts the finished slot to the other g-1 cores (ttnn.Mcast / McastArgs).
+#     0 with COL_GROUP_SPLIT = 1 is the diagnostic "same placement, every core fetches" variant.
+COL_GROUP_SPLIT = 1
+COL_GROUP_MCAST = 0
+# Core order of the R2 groups: False = column-major (a group is a vertical run of one grid column,
+# a single multicast rectangle when the grid height is a multiple of g); True = row-major (R1's own
+# order; groups that wrap a grid row become 2 rectangles).
+COL_GROUP_ROW_WISE = True
+MCAST_PREFIX = "bcast_mcast"
+SEM_MCAST_FIRST = 1  # mcast semaphores are allocated from here (SEM_FACE1_BUILT is 0)
+ROLE_SELF, ROLE_INJECTOR, ROLE_RECEIVER = 0, 1, 2
 
 CB_BCAST_TILES = 0  # broadcast tiles: row 0 fetched + replicated in place; also the write source
 
@@ -104,28 +121,57 @@ def _build(input_tensor, output_tensor, grid):
 
     # ---- Work split: column-major linear order over output tiles ----
     split_cores = _split_core_count(grid, total_tiles)
-    split_grid = ttnn.num_cores_to_corerangeset(split_cores, grid, True)
-    (num_cores, all_cores, core_group_1, core_group_2, n_g1, n_g2) = ttnn.split_work_to_cores(
-        split_grid, total_tiles, row_wise=True
-    )
-    range_sizes = []
-    for group, n_t in ((core_group_1, n_g1), (core_group_2, n_g2)):
-        if n_t == 0:
-            continue
-        range_sizes += [n_t] * len(_ordered_cores(group))
-    cores = _ordered_cores(all_cores)
-    assert len(cores) == len(range_sizes) == num_cores
-    stride = CORE_ORDER_STRIDE
-    while math.gcd(stride, num_cores) != 1:
-        stride += 1
-    assignments = []  # (core, start_t, n_t)
-    start_t = 0
-    for k, n_t in enumerate(range_sizes):
-        assignments.append((cores[(k * stride) % num_cores], start_t, n_t))
-        start_t += n_t
-    assert start_t == total_tiles, (start_t, total_tiles)
+    group_size = min(Ht, split_cores // num_cols) if COL_GROUP_SPLIT else 0
+    mcast = None
+    if group_size >= 2:
+        # R2 placement: core k = col * group_size + i owns segment i of column col.
+        num_cores = num_cols * group_size
+        all_cores = ttnn.num_cores_to_corerangeset(num_cores, grid, COL_GROUP_ROW_WISE)
+        cores = list(ttnn.corerange_to_cores(all_cores, row_wise=COL_GROUP_ROW_WISE))
+        assert len(cores) == num_cores
+        seg_base, seg_rem = divmod(Ht, group_size)
+        assignments = []  # (core, start_t, n_t, role)
+        for col in range(num_cols):
+            off = 0
+            for i in range(group_size):
+                n_t = seg_base + (1 if i < seg_rem else 0)
+                role = ROLE_SELF if not COL_GROUP_MCAST else (ROLE_INJECTOR if i == 0 else ROLE_RECEIVER)
+                assignments.append((cores[col * group_size + i], col * Ht + off, n_t, role))
+                off += n_t
+        stride = 1
+        if COL_GROUP_MCAST:
+            mcast = ttnn.Mcast(
+                input_tensor.device(),
+                ttnn.McastConfig(handshake=False),
+                all_cores,
+                group_size,
+                ttnn.McastFixedSenderConfig(sender_index=0),
+                ttnn.McastCoreOrder.RowMajor if COL_GROUP_ROW_WISE else ttnn.McastCoreOrder.ColumnMajor,
+            )
+    else:
+        group_size = 0
+        split_grid = ttnn.num_cores_to_corerangeset(split_cores, grid, True)
+        (num_cores, all_cores, core_group_1, core_group_2, n_g1, n_g2) = ttnn.split_work_to_cores(
+            split_grid, total_tiles, row_wise=True
+        )
+        range_sizes = []
+        for group, n_t in ((core_group_1, n_g1), (core_group_2, n_g2)):
+            if n_t == 0:
+                continue
+            range_sizes += [n_t] * len(_ordered_cores(group))
+        cores = _ordered_cores(all_cores)
+        assert len(cores) == len(range_sizes) == num_cores
+        stride = CORE_ORDER_STRIDE
+        while math.gcd(stride, num_cores) != 1:
+            stride += 1
+        assignments = []
+        start_t = 0
+        for k, n_t in enumerate(range_sizes):
+            assignments.append((cores[(k * stride) % num_cores], start_t, n_t, ROLE_SELF))
+            start_t += n_t
+    assert sum(a[2] for a in assignments) == total_tiles
 
-    max_cols_per_core = max((s + n - 1) // Ht - s // Ht + 1 for _, s, n in assignments)
+    max_cols_per_core = max((s + n - 1) // Ht - s // Ht + 1 for _, s, n, _r in assignments)
     col_block = min(max_cols_per_core, COL_BLOCK_CAP)
     num_col_blocks_max = _div_up(max_cols_per_core, col_block)
     bcast_depth = 1 if num_col_blocks_max == 1 else 2
@@ -183,9 +229,9 @@ def _build(input_tensor, output_tensor, grid):
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
-    for core, s, n in assignments:
-        reader_rt[core.x][core.y] = [s, n]
-        writer_rt[core.x][core.y] = [s, n]
+    for core, s, n, role in assignments:
+        reader_rt[core.x][core.y] = [s, n, role]
+        writer_rt[core.x][core.y] = [s, n, role]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_expand_reader.cpp"),
@@ -205,12 +251,18 @@ def _build(input_tensor, output_tensor, grid):
     )
 
     descriptor = ttnn.ProgramDescriptor(
-        kernels=[reader_kernel, writer_kernel],
         semaphores=[ttnn.SemaphoreDescriptor(id=SEM_FACE1_BUILT, core_ranges=all_cores, initial_value=0)],
         cbs=[cb_bcast_tiles],
     )
+    if mcast is not None:
+        # Each core owns one column => its slot is the CB base on every core (same landing address).
+        assert num_col_blocks_max == 1
+        mcast.attach(descriptor, MCAST_PREFIX, [reader_kernel], SEM_MCAST_FIRST)
+    else:
+        ttnn.attach_absent_mcast(reader_kernel, MCAST_PREFIX)
+    descriptor.kernels = [reader_kernel, writer_kernel]
     plan = {
-        "regime": REGIME,
+        "regime": REGIME_R2 if mcast is not None else REGIME,
         "num_cores": num_cores,
         "total_tiles": total_tiles,
         "Ht": Ht,
@@ -230,6 +282,9 @@ def _build(input_tensor, output_tensor, grid):
         "row_fetch_requests": ROW_FETCH_REQUESTS,
         "replicate_noc_fanout": int(bool(REPLICATE_NOC_FANOUT)),
         "replicate_split": replicate_split,
+        "col_group_size": group_size,
+        "col_group_mcast": int(mcast is not None),
+        "col_group_row_wise": int(bool(COL_GROUP_ROW_WISE)),
     }
     return descriptor, plan
 

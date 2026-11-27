@@ -61,9 +61,13 @@ void kernel_main() {
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_t = get_arg_val<uint32_t>(0);
     const uint32_t n_t = get_arg_val<uint32_t>(1);
+    // R2 role (RT): a receiver's slot arrives whole by multicast — no face-1 fetch / build here.
+    constexpr uint32_t ROLE_RECEIVER = 2;
+    const uint32_t role = get_arg_val<uint32_t>(2);
     if (n_t == 0) {
         return;
     }
+    [[maybe_unused]] const bool build_face1 = replicate_split && role != ROLE_RECEIVER;
 
     const auto output_accessor = TensorAccessor(output_args, output_addr, page_size);
 
@@ -71,7 +75,7 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t first_col = start_t / Ht;
     [[maybe_unused]] uint32_t slot_base = 0;
     [[maybe_unused]] volatile tt_l1_ptr uint32_t* sem_face1_built = nullptr;
-    if constexpr (replicate_split) {
+    if (build_face1) {
         DeviceZoneScopedN("G6E_WR_FETCH");
         const uint32_t input_addr = get_common_arg_val<uint32_t>(1);
         const auto input_accessor = TensorAccessor(input_args, input_addr, page_size);
@@ -95,7 +99,7 @@ void kernel_main() {
         const uint32_t wt = col - img * Wt;
         uint32_t page = (img * Ht + (t - col * Ht)) * Wt + wt;
 
-        if constexpr (replicate_split) {
+        if (build_face1) {
             DeviceZoneScopedN("G6E_WR_REPLICATE");
             const uint32_t j = col - first_col;
             const uint32_t slot = slot_base + j * slot_bytes;
