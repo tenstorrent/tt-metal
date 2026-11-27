@@ -619,6 +619,8 @@ class TeacherCapture:
             (d / f"gram_{point}.json").write_text(
                 json.dumps(
                     {"n_tokens": g.n, "shape": list(g.g.shape), "K": K, "x_dtype": g.dtype,
+                     "gamma_applied": meta["gamma_applied"][point],
+                     "source": "recomputed" if meta["recomputed"][point] else "tapped",
                      "note": POINT_NOTES.get(point, ""), "sum": "plain sum of x x^T over the tokens (not divided by T), "
                      f"fp64 accumulation of fp32 partials over <= {GRAM_BLOCK} tokens"},
                     indent=1,
