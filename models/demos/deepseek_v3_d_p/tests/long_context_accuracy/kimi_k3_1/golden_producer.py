@@ -699,7 +699,8 @@ def run_chain(
             state_path(run_dir, index),
         )
         stage("save")
-        entry = {"start": start, "end": end, "seconds": round(time.perf_counter() - began, 2), "stages": stages}
+        elapsed = time.perf_counter() - began
+        entry = {"start": start, "end": end, "seconds": round(elapsed, 2), "stages": stages}
         if trace is not None:
             entry["checks"] = trace_checks(trace, start, end, products, extra, keys, model.dsa_dims)
             stage("trace checks")
@@ -713,9 +714,11 @@ def run_chain(
             manifest["products"] = product_schemas(payload, keys, kda)
         manifest["segments"].append(entry)
         write_manifest(run_dir, manifest)
+        # The rate from the unrounded time: a short segment can take under 5 ms, which rounds to 0.00 s.
+        rate = (end - start) / elapsed if elapsed > 0 else float("inf")
         log(
-            f"segment {index + 1}/{segments} done {entry['seconds']:.1f} s ({(end - start) / entry['seconds']:.1f} "
-            f"rows/s) rss {entry['max_rss_gb']} GB " + json.dumps(entry.get("checks", {}))
+            f"segment {index + 1}/{segments} done {entry['seconds']:.1f} s ({rate:.1f} rows/s) "
+            f"rss {entry['max_rss_gb']} GB " + json.dumps(entry.get("checks", {}))
         )
     if len(manifest["segments"]) == segments:
         problems = manifest_problems(run_dir.name, manifest)

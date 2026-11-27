@@ -556,6 +556,19 @@ def test_fp64_chain_refuses_a_different_run(tmp_path: Path, expect_error):
             )
 
 
+def test_fp64_chain_logs_a_segment_that_takes_no_measurable_time(tmp_path: Path, monkeypatch):
+    """A segment faster than the 0.01 s the manifest rounds its time to (a short last segment on a fast host) still
+    logs and completes: the logged rate comes from the unrounded time, never from the stored 0.0 s."""
+
+    monkeypatch.setattr(producer, "time", SimpleNamespace(perf_counter=lambda: 0.0))
+    model, _ = _tiny_chain()
+    with torch.no_grad():
+        manifest = producer.run_chain(
+            run_dir=tmp_path, model=model, token_ids=torch.arange(6) % 50, segment=4, sampled=[5], identity=IDENTITY
+        )
+    assert [s["seconds"] for s in manifest["segments"]] == [0.0, 0.0]
+
+
 def test_chain_model_reads_each_checkpoint_tensor_into_its_slot(tmp_path: Path):
     """`ChainModel.from_checkpoint` on a tiny checkpoint whose every tensor is distinct puts each one where its
     checkpoint name says: per layer the pre-attention (`self_attention_res_*`) and pre-FFN (`mlp_res_*`) queries, the
