@@ -167,7 +167,7 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 // Grid and worker distribution
 //////////////////////////////////////////////////////////////////////////////
 
-GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
+GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size, bool is_post_all_gather) {
     auto spec = input.shard_spec().value();
     const uint32_t tile_height = input.tensor_spec().tile().get_height();
     uint32_t M = input.physical_volume() / input.padded_shape()[-1];
@@ -182,7 +182,7 @@ GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord
     }
     uint32_t nb = get_num_blocks(mcast, rw, gs, spec);
     bool rectangular = spec.grid.num_cores() == gs.x * gs.y;
-    bool two_stage = rectangular && should_use_two_stage_reduce(mcast, rw, gs, compute_with_storage_grid_size);
+    bool two_stage = !is_post_all_gather && rectangular && should_use_two_stage_reduce(mcast, rw, gs, compute_with_storage_grid_size);
     return GridParams{
         .shard_spec = spec,
         .grid_size = gs,
