@@ -26,6 +26,7 @@ from helpers.matmul_sweep import (
     unpack_matmul_fits_perf_ring,
 )
 from helpers.param_config import (
+    flat_axes,
     input_output_formats,
     max_dest_tiles,
     parametrize,
@@ -106,11 +107,39 @@ def matmul_combos(
     }
 
     return [
-        (format, accumulation, dest_sync, dims)
+        (
+            format,
+            accumulation,
+            dest_sync,
+            matrix_b[1] // TILE_DIM,
+            matrix_a[0] // TILE_DIM,
+            matrix_a[1] // TILE_DIM,
+        )
         for format in formats
         for accumulation in _acc_modes(format)
         for dest_sync in DEST_SYNC_MODES
-        for dims in dimensions[_max_tiles(format, accumulation, dest_sync)]
+        for matrix_a, matrix_b in dimensions[
+            _max_tiles(format, accumulation, dest_sync)
+        ]
+    ]
+
+
+MATMUL_AXIS_NAMES = ("formats", "dest_acc", "dest_sync", "ct_dim", "rt_dim", "kt_dim")
+
+
+def matmul_block_combos(formats, dest_acc):
+    """matmul_combos as (formats, dest_acc, dest_sync, (in0 dims, in1 dims)), the shape the Blackhole block sweeps name their ids by."""
+    return [
+        (
+            fmt,
+            acc,
+            sync,
+            (
+                [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
+                [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
+            ),
+        )
+        for fmt, acc, sync, ct_dim, rt_dim, kt_dim in matmul_combos(formats, dest_acc)
     ]
 
 
@@ -131,7 +160,7 @@ PERF_MATMUL_COMBOS = matmul_combos(
 
 
 def _gate_key(p):
-    (formats, dest_acc, dest_sync, (matrix_a, matrix_b)), fid = p
+    (formats, dest_acc, dest_sync, ct_dim, rt_dim, kt_dim), fid = p
     return is_production_key(
         fid,
         dest_sync == DestSync.Half,
@@ -139,14 +168,14 @@ def _gate_key(p):
         formats.input_format,
         formats.input_format,
         formats.output_format,
-        matrix_a[0] // TILE_DIM,
-        matrix_b[1] // TILE_DIM,
-        matrix_a[1] // TILE_DIM,
+        rt_dim,
+        ct_dim,
+        kt_dim,
     )
 
 
 def _gate_family(p):
-    (formats, dest_acc, dest_sync, _dims), fid = p
+    (formats, dest_acc, dest_sync, *_dims), fid = p
     return (fid, dest_sync, dest_acc, formats.input_format, formats.output_format)
 
 
@@ -154,33 +183,40 @@ _PERF_GATE = perf_gate_selection(
     [(c, f) for c in PERF_MATMUL_COMBOS for f in ALL_MATH_FIDELITIES],
     _gate_key,
     _gate_family,
-    lambda p: (id(p[0]), p[1]),
+    lambda p: (repr(p[0]), p[1]),
 )
 
 
 def perf_gate_keep(params) -> bool:
     """The perf CI runner's ids on Blackhole (helpers/matmul_prod_census.py)."""
+    combo = tuple(params[axis] for axis in MATMUL_AXIS_NAMES)
     return (
-        not perf_gate_applies()
-        or (id(params["combos"]), params["math_fidelity"]) in _PERF_GATE
+        not perf_gate_applies() or (repr(combo), params["math_fidelity"]) in _PERF_GATE
     )
 
 
 @pytest.mark.perf
 @parametrize(
-    combos=PERF_MATMUL_COMBOS,
+    **flat_axes(MATMUL_AXIS_NAMES, PERF_MATMUL_COMBOS),
     math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_perf_matmul(
     perf_report,
-    combos,
+    formats,
+    dest_acc,
+    dest_sync,
+    ct_dim,
+    rt_dim,
+    kt_dim,
     math_fidelity,
 ):
-
-    formats, dest_acc, dest_sync, (matrix_a, matrix_b) = combos
-
     # Calculate all matmul dimensions using helper function
-    dims = generate_tile_dims((matrix_a, matrix_b))
+    dims = generate_tile_dims(
+        (
+            [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
+            [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
+        )
+    )
 
     variant_tile_count = dims.rt_dim * dims.ct_dim * dims.kt_dim
     # PERF_ADDRESS rings are PERF_RING_TILES (tests/helpers/include/perf.h).

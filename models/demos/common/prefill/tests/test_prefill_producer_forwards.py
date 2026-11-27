@@ -12,10 +12,14 @@ import numpy as np
 import pytest
 import torch
 
+from models.demos.common.prefill.media_stub import stub_media_key
 from models.demos.common.prefill.prefill_chunk import (
     EMPTY_CHUNK,
+    MediaRef,
     PrefillChunk,
     decode_forward_metadata,
+    decode_media_refs,
+    metadata_size_bytes,
     pad_chunks,
     validate_chunks,
 )
@@ -243,6 +247,99 @@ def check_packed_run(forwards, stats, cfg):
     assert stats.total_chunks == sum(len(p) for p in forwards)
 
 
+@pytest.mark.parametrize("forward_chunks", [1, 2])
+def test_payload_lists_media(env, monkeypatch, forward_chunks):
+    env(forward_chunks=forward_chunks)
+    monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(producer, "MEDIA", [(1000, 100), (3000, 10)])
+    pool = list(range(2 * C))
+    pushes = [producer.ChunkPush(0, k, k * C, (k + 1) * C, 2 * C) for k in range(2)]
+    image = (1000, 1100, stub_media_key(100, 0))
+    if forward_chunks == 1:
+        forwards = [([p], [MediaRef(0, *image)]) for p in pushes]
+    else:
+        forwards = [(pushes, [MediaRef(0, *image), MediaRef(1, *image)])]
+    for forward, refs in forwards:
+        _, _, metadata = producer._forward_payload(forward, lambda slot_id: pool)
+        assert decode_media_refs(metadata, forward_chunks, 2) == refs
+
+
+def test_payload_refuses_overlapping_media(env, monkeypatch, expect_error):
+    env()
+    monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(producer, "MEDIA", [(100, 50), (120, 10)])
+    with expect_error(ValueError, "overlaps"):
+        producer._forward_payload([producer.ChunkPush(0, 0, 0, C, C)], lambda slot_id: list(range(C)))
+
+
+@pytest.mark.parametrize("forward_chunks", [1, 2])
+def test_media_metadata_keeps_its_size_without_images(env, monkeypatch, forward_chunks):
+    """With media on, a forward with no image and the shutdown sentinel are as long as the runner's H2D metadata."""
+    env(forward_chunks=forward_chunks)
+    monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(producer, "MEDIA", [(3 * C, 10)])  # past this request's prompt
+    _, _, metadata = producer._forward_payload([producer.ChunkPush(0, 0, 0, C, C)], lambda slot_id: list(range(C)))
+    assert len(metadata) == len(producer._shutdown_payload()[2]) == metadata_size_bytes(forward_chunks, 2)
+
+
+def test_payload_skips_media_past_the_prompt(env, monkeypatch):
+    env()
+    monkeypatch.setattr(producer, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(producer, "MEDIA", [(100, 50), (C - 60, 100)])
+    _, _, metadata = producer._forward_payload([producer.ChunkPush(0, 0, 0, C - 10, C - 10)], lambda s: list(range(C)))
+    assert decode_media_refs(metadata, 1, 2) == [MediaRef(0, 100, 150, stub_media_key(50, 0))]
+
+
+@pytest.mark.parametrize(
+    "media, max_refs, message",
+    [
+        ("100", "2", "want start:num_tokens"),
+        ("-5:10", "2", "want start:num_tokens"),
+        ("100:0", "2", "want start:num_tokens"),
+        ("300:10,100:10", "2", "sorted and not overlap"),
+        ("100:50,120:10", "2", "sorted and not overlap"),
+        ("1000:30", "2", "past PREFILL_MAX_SEQ_LEN"),
+        ("100:10,200:10", "1", "PREFILL_MEDIA_MAX_REFS >= 2"),
+    ],
+)
+def test_media_config_rejected_up_front(monkeypatch, expect_error, media, max_refs, message):
+    for name in (
+        "SP_FACTOR",
+        "CHUNK_SIZE",
+        "FORWARD_CHUNKS",
+        "MAX_SEQ_LEN",
+        "H2D_METADATA_SIZE_BYTES",
+        "MEDIA",
+        "MEDIA_MAX_REFS",
+    ):
+        monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reload below
+    monkeypatch.setenv("PREFILL_MAX_SEQ_LEN", "1024")
+    monkeypatch.setenv("PREFILL_PRODUCER_MEDIA", media)
+    monkeypatch.setenv("PREFILL_MEDIA_MAX_REFS", max_refs)
+    with expect_error(AssertionError, message):
+        producer._load_env_config(check_budget=False)
+
+
+def test_media_config_needs_max_refs(monkeypatch, expect_error):
+    for name in (
+        "SP_FACTOR",
+        "CHUNK_SIZE",
+        "FORWARD_CHUNKS",
+        "MAX_SEQ_LEN",
+        "H2D_METADATA_SIZE_BYTES",
+        "MEDIA",
+        "MEDIA_MAX_REFS",
+    ):
+        monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reload below
+    monkeypatch.setenv("PREFILL_PRODUCER_MEDIA", "100:50")
+    monkeypatch.delenv("PREFILL_MEDIA_MAX_REFS", raising=False)
+    with expect_error(AssertionError, "PREFILL_MEDIA_MAX_REFS"):
+        producer._load_env_config(check_budget=False)
+    monkeypatch.setenv("PREFILL_MEDIA_MAX_REFS", "-1")
+    with expect_error(AssertionError, "must be >= 0"):
+        producer._load_env_config(check_budget=False)
+
+
 @pytest.mark.parametrize("interleave", ["round_robin", "random"])
 @pytest.mark.parametrize("forward_chunks", [2, 4])
 def test_packed_schedule(env, forward_chunks, interleave):
@@ -306,7 +403,15 @@ def test_packed_respects_max_requests(env, interleave):
 
 
 def test_import_config_defers_budget_check(monkeypatch, expect_error):
-    for name in ("SP_FACTOR", "CHUNK_SIZE", "MAX_SEQ_LEN", "FORWARD_CHUNKS", "CHUNK_METADATA_SIZE_BYTES"):
+    for name in (
+        "SP_FACTOR",
+        "CHUNK_SIZE",
+        "MAX_SEQ_LEN",
+        "FORWARD_CHUNKS",
+        "H2D_METADATA_SIZE_BYTES",
+        "MEDIA",
+        "MEDIA_MAX_REFS",
+    ):
         monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reloads below
     monkeypatch.delenv("PREFILL_CHUNK_SIZE", raising=False)
     monkeypatch.setenv("PREFILL_FORWARD_TOKENS_BUDGET", str(8 * C))

@@ -6,6 +6,7 @@ block float operands. The bodies are test_matmul and test_matmul_mix."""
 
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import DestAccumulation, DestSync, MathFidelity
 from test_matmul import generate_format_aware_matmul_combinations
 from test_matmul import test_matmul as _matmul_body
@@ -55,8 +56,18 @@ def sampled(combos):
     ]
 
 
+def block_combos(formats):
+    """(formats, dest_acc, (in0 dims, in1 dims)): the ids' shape here and test_matmul_mix's combination."""
+    return [
+        (fmt, acc, ([rt * TILE_DIM, kt * TILE_DIM], [kt * TILE_DIM, ct * TILE_DIM]))
+        for fmt, acc, ct, rt, kt in generate_format_aware_matmul_combinations(
+            formats, DEST_ACC_MODES
+        )
+    ]
+
+
 def fold_params(formats):
-    combos = sampled(generate_format_aware_matmul_combinations(formats, DEST_ACC_MODES))
+    combos = sampled(block_combos(formats))
     return [
         (fidelity, combo)
         for fidelity in (MathFidelity.HiFi3, MathFidelity.HiFi4)
@@ -96,7 +107,15 @@ FOLD_MIX = fold_params(
     ],
 )
 def test_matmul_fold_cells(math_fidelity, format_dest_acc_and_dims):
-    _matmul_body(math_fidelity, format_dest_acc_and_dims)
+    formats, dest_acc, (in0_dims, in1_dims) = format_dest_acc_and_dims
+    _matmul_body(
+        math_fidelity,
+        formats,
+        dest_acc,
+        in1_dims[1] // TILE_DIM,
+        in0_dims[0] // TILE_DIM,
+        in0_dims[1] // TILE_DIM,
+    )
 
 
 @pytest.mark.nightly  # test_matmul_mix, its body, is nightly too

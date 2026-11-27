@@ -10,7 +10,7 @@ from conftest import skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
-from helpers.golden_generators import MatmulGolden, get_golden_generator
+from helpers.golden_generators import TILE_DIM, MatmulGolden, get_golden_generator
 from helpers.llk_params import (
     ALL_MATH_FIDELITIES,
     DEST_ACC_MODES,
@@ -28,6 +28,7 @@ from helpers.matmul_sweep import (
 )
 from helpers.param_config import (
     build_param_id,
+    flat_axes,
     input_output_formats,
     max_dest_tiles,
     parametrize,
@@ -79,7 +80,7 @@ def generate_format_aware_matmul_combinations(
     3. When dest_acc=Yes: max 4 tiles (32-bit dest register)
     4. When dest_acc=No: max 8 tiles (16-bit dest register)
 
-    Returns: List of (format, dest_acc, dimensions) tuples
+    Returns: List of (formats, dest_acc, ct_dim, rt_dim, kt_dim) tuples
     """
     combinations = []
 
@@ -89,7 +90,18 @@ def generate_format_aware_matmul_combinations(
                 dest_acc == DestAccumulation.Yes or is_dest_acc_needed(fmt)
             )
             dimensions_list = generate_matmul_dimension_combinations(max_tiles)
-            combinations.extend([(fmt, dest_acc, dims) for dims in dimensions_list])
+            combinations.extend(
+                [
+                    (
+                        fmt,
+                        dest_acc,
+                        input_B_dims[1] // TILE_DIM,
+                        input_A_dims[0] // TILE_DIM,
+                        input_A_dims[1] // TILE_DIM,
+                    )
+                    for input_A_dims, input_B_dims in dimensions_list
+                ]
+            )
 
     return combinations
 
@@ -104,34 +116,36 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 )
 
 
+MATMUL_AXIS_NAMES = ("formats", "dest_acc", "ct_dim", "rt_dim", "kt_dim")
+
 # Blackhole builds one ELF per block shape (its compile-time block keys), where the run-time dims of main shared one per
 # format: 1 in 16 combinations run on the block keys, one per format, accumulate mode and fidelity in smoke and the rest of
 # them nightly; the others run nightly on main's form, which shares one ELF per format as main did. Every id keeps main's name.
 MATMUL_SMOKE_STRIDE = 16
 
 
-class _MainFormCombination(tuple):
-    """A test_matmul combination of the nightly ids: the block runs main's form (see matmul_main_form)."""
+class _MainFormKt(int):
+    """kt_dim of a nightly test_matmul id: the block runs main's form (see matmul_main_form)."""
 
 
 def _matmul_params():
-    names = ("math_fidelity", "format_dest_acc_and_dims")
+    names = ("math_fidelity", *MATMUL_AXIS_NAMES)
     blackhole = get_chip_architecture() == ChipArchitecture.BLACKHOLE
     params = []
     smoke_cells = set()
     for offset, math_fidelity in enumerate(ALL_MATH_FIDELITIES):
         for i, combination in enumerate(ALL_MATMUL_COMBINATIONS):
-            param_id = build_param_id(names, (math_fidelity, combination))
+            values = (math_fidelity, *combination)
+            param_id = build_param_id(names, values)
             cell = (math_fidelity, str(combination[0]), combination[1])
             if not blackhole:
-                params.append(pytest.param(math_fidelity, combination, id=param_id))
+                params.append(pytest.param(*values, id=param_id))
             elif (i + offset) % MATMUL_SMOKE_STRIDE == 0:
                 smoke = cell not in smoke_cells
                 smoke_cells.add(cell)
                 params.append(
                     pytest.param(
-                        math_fidelity,
-                        combination,
+                        *values,
                         id=param_id,
                         marks=() if smoke else pytest.mark.nightly,
                     )
@@ -139,8 +153,8 @@ def _matmul_params():
             else:
                 params.append(
                     pytest.param(
-                        math_fidelity,
-                        _MainFormCombination(combination),
+                        *values[:-1],
+                        _MainFormKt(values[-1]),
                         id=param_id,
                         marks=pytest.mark.nightly,
                     )
@@ -148,11 +162,17 @@ def _matmul_params():
     return params
 
 
-@pytest.mark.parametrize("math_fidelity,format_dest_acc_and_dims", _matmul_params())
+@pytest.mark.parametrize(
+    "math_fidelity,formats,dest_acc,ct_dim,rt_dim,kt_dim", _matmul_params()
+)
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
     math_fidelity,
-    format_dest_acc_and_dims,
+    formats,
+    dest_acc,
+    ct_dim,
+    rt_dim,
+    kt_dim,
     boot_mode=BootMode.DEFAULT,
     row_mop=False,
     transpose=False,
@@ -163,12 +183,10 @@ def test_matmul(
     dyn_switch=None,
     blocks=1,
 ):
-    torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
+    torch_format = format_dict[formats.output_format]
 
-    formats = format_dest_acc_and_dims[0]
-    dest_acc = format_dest_acc_and_dims[1]
-    input_A_dimensions = format_dest_acc_and_dims[2][0]
-    input_B_dimensions = format_dest_acc_and_dims[2][1]
+    input_A_dimensions = [rt_dim * TILE_DIM, kt_dim * TILE_DIM]
+    input_B_dimensions = [kt_dim * TILE_DIM, ct_dim * TILE_DIM]
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -322,10 +340,7 @@ def test_matmul(
         ),
     ]
     # the nightly ids of test_matmul run main's form, unless LLK_SWEEP_ALL=1 asks for every keyed build
-    if (
-        isinstance(format_dest_acc_and_dims, _MainFormCombination)
-        and os.environ.get("LLK_SWEEP_ALL") != "1"
-    ):
+    if isinstance(kt_dim, _MainFormKt) and os.environ.get("LLK_SWEEP_ALL") != "1":
         templates = matmul_main_form(templates)
     configuration = TestConfig(
         source,
@@ -387,10 +402,10 @@ ROW_MOP_COMBINATIONS = generate_format_aware_matmul_combinations(
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
-    format_dest_acc_and_dims=ROW_MOP_COMBINATIONS,
+    **flat_axes(MATMUL_AXIS_NAMES, ROW_MOP_COMBINATIONS),
 )
-def test_matmul_row_mop(math_fidelity, format_dest_acc_and_dims):
-    test_matmul(math_fidelity, format_dest_acc_and_dims, row_mop=True)
+def test_matmul_row_mop(math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim):
+    test_matmul(math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, row_mop=True)
 
 
 # The unpack's row base addresses through GPRs and WRCFG under Auto TTSync (Blackhole only) on every block shape; full
@@ -400,13 +415,19 @@ def test_matmul_row_mop(math_fidelity, format_dest_acc_and_dims):
 @pytest.mark.llk_sweep
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
-    format_dest_acc_and_dims=ROW_MOP_COMBINATIONS,
+    **flat_axes(MATMUL_AXIS_NAMES, ROW_MOP_COMBINATIONS),
     dest_sync=[DestSync.Half, DestSync.Full],
 )
-def test_matmul_unpack_ttsync(math_fidelity, format_dest_acc_and_dims, dest_sync):
+def test_matmul_unpack_ttsync(
+    math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, dest_sync
+):
     test_matmul(
         math_fidelity,
-        format_dest_acc_and_dims,
+        formats,
+        dest_acc,
+        ct_dim,
+        rt_dim,
+        kt_dim,
         unpack_ttsync=True,
         dest_sync=dest_sync,
     )
@@ -417,13 +438,19 @@ def test_matmul_unpack_ttsync(math_fidelity, format_dest_acc_and_dims, dest_sync
 @pytest.mark.llk_sweep
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
-    format_dest_acc_and_dims=ROW_MOP_COMBINATIONS,
+    **flat_axes(MATMUL_AXIS_NAMES, ROW_MOP_COMBINATIONS),
     dest_sync=[DestSync.Half, DestSync.Full],
 )
-def test_matmul_unpack_ttsync_excl(math_fidelity, format_dest_acc_and_dims, dest_sync):
+def test_matmul_unpack_ttsync_excl(
+    math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, dest_sync
+):
     test_matmul(
         math_fidelity,
-        format_dest_acc_and_dims,
+        formats,
+        dest_acc,
+        ct_dim,
+        rt_dim,
+        kt_dim,
         unpack_ttsync=True,
         dest_sync=dest_sync,
         unpack_ttsync_excl=True,
@@ -445,13 +472,13 @@ TRANSPOSE_DIMS_32 = [
     ([128, 64], [64, 32]),  # 4x1, k 2
 ]
 TRANSPOSE_COMBINATIONS = [
-    (fmt, acc, dims)
+    (fmt, acc, dims_B[1] // TILE_DIM, dims_A[0] // TILE_DIM, dims_A[1] // TILE_DIM)
     for fmt in input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float32], same=True
     )
     for acc in DEST_ACC_MODES
     if not (fmt.input_format == DataFormat.Float32 and acc == DestAccumulation.No)
-    for dims in (
+    for dims_A, dims_B in (
         TRANSPOSE_DIMS_32 if acc == DestAccumulation.Yes else TRANSPOSE_DIMS_16
     )
 ]
@@ -462,12 +489,21 @@ TRANSPOSE_COMBINATIONS = [
 @pytest.mark.llk_sweep
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
-    format_dest_acc_and_dims=TRANSPOSE_COMBINATIONS,
+    **flat_axes(MATMUL_AXIS_NAMES, TRANSPOSE_COMBINATIONS),
     row_mop=[False, True],
 )
-def test_matmul_transpose(math_fidelity, format_dest_acc_and_dims, row_mop):
+def test_matmul_transpose(
+    math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, row_mop
+):
     test_matmul(
-        math_fidelity, format_dest_acc_and_dims, row_mop=row_mop, transpose=True
+        math_fidelity,
+        formats,
+        dest_acc,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        row_mop=row_mop,
+        transpose=True,
     )
 
 
@@ -621,10 +657,18 @@ STREAM_NARROW_COMBINATIONS = generate_format_aware_matmul_combinations(
 @pytest.mark.llk_sweep
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
-    format_dest_acc_and_dims=STREAM_NARROW_COMBINATIONS,
+    **flat_axes(MATMUL_AXIS_NAMES, STREAM_NARROW_COMBINATIONS),
 )
-def test_matmul_stream_narrow(math_fidelity, format_dest_acc_and_dims):
-    test_matmul(math_fidelity, format_dest_acc_and_dims, dest_sync=DestSync.Full)
+def test_matmul_stream_narrow(math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim):
+    test_matmul(
+        math_fidelity,
+        formats,
+        dest_acc,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        dest_sync=DestSync.Full,
+    )
 
 
 # A dynamic throttle change between k steps (matmul_dyn_switch_test.cpp: even steps run the form of the init, odd ones the
@@ -685,9 +729,15 @@ def test_matmul_dyn_switch_rest(
 
 
 def _dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch):
+    rt_dim, kt_dim = (d // TILE_DIM for d in dims[0])
+    ct_dim = dims[1][1] // TILE_DIM
     test_matmul(
         math_fidelity,
-        (formats, DestAccumulation.No, dims),
+        formats,
+        DestAccumulation.No,
+        ct_dim,
+        rt_dim,
+        kt_dim,
         row_mop=row_mop,
         dest_sync=dest_sync,
         source="sources/matmul_dyn_switch_test.cpp",
@@ -702,17 +752,21 @@ def _dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch):
 @skip_for_wormhole
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
-    format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
+    **flat_axes(MATMUL_AXIS_NAMES, ALL_MATMUL_COMBINATIONS),
     dest_sync=[DestSync.Half, DestSync.Full],
 )
-def test_matmul_blocks(math_fidelity, format_dest_acc_and_dims, dest_sync):
-    formats, dest_acc, dims = format_dest_acc_and_dims
-    md = generate_tile_dims((dims[0], dims[1]))
-    if (
-        matmul_pack_form(
-            formats, dest_sync, math_fidelity, md.rt_dim, md.ct_dim, md.kt_dim
-        )
-        == 0
-    ):
+def test_matmul_blocks(
+    math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, dest_sync
+):
+    if matmul_pack_form(formats, dest_sync, math_fidelity, rt_dim, ct_dim, kt_dim) == 0:
         pytest.skip("per-tile pack")
-    test_matmul(math_fidelity, format_dest_acc_and_dims, dest_sync=dest_sync, blocks=3)
+    test_matmul(
+        math_fidelity,
+        formats,
+        dest_acc,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        dest_sync=dest_sync,
+        blocks=3,
+    )

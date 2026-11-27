@@ -51,7 +51,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
-from perf_matmul import matmul_combos
+from perf_matmul import matmul_block_combos
 
 pytestmark = pytest.mark.llk_sweep
 LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
@@ -829,7 +829,7 @@ def _cases():
         fmt, acc_mode, sync_mode = _format(a, b, out), _ACC[acc], _SYNC[sync]
         grid = [
             c
-            for c in matmul_combos(formats=[fmt], dest_acc=[acc_mode])
+            for c in matmul_block_combos(formats=[fmt], dest_acc=[acc_mode])
             if c[2] == sync_mode
         ]
         if grid:

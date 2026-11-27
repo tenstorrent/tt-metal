@@ -75,4 +75,8 @@ Tensor concat_impl(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
 
+// Max buffer alignment across inputs and the resolved output buffer type (RM width-concat NOC rule).
+uint32_t rm_width_concat_common_alignment(
+    const std::vector<Tensor>& tensors, const tt::tt_metal::MemoryConfig& output_mem_config);
+
 }  // namespace ttnn::operations::data_movement

@@ -122,6 +122,6 @@ for fmt, sync in product(FMTS[:2], (DestSync.Half, DestSync.Full)):
 def test_perf_math_matmul_cov(
     math_fidelity, matmul_config, throttle, num_blocks, perf_report
 ):
-    pmm.test_perf_math_matmul(
-        math_fidelity, matmul_config, throttle, num_blocks, perf_report
+    pmm.run_perf_math_matmul(
+        math_fidelity, matmul_config, throttle, num_blocks, False, perf_report
     )
