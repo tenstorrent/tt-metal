@@ -50,8 +50,12 @@ case "$CMD" in
       if [ "$CMD" = test ]; then do_run scripts/run_safe_pytest.sh "$@"; else do_run bash -c "$*"; fi; exit $?
     fi
     echo "[xrun] Slurm login node: running on the reserved node, not here"
-    # Precompile gave wrong device results on a reserved node (cause unknown), so run plain.
-    if [ "$CMD" = test ]; then INNER="scripts/run_safe_pytest.sh --no-precompile $(printf "%q " "$@")"; else INNER="$*"; fi
+    # Precompile stays on (2026-11-27, bh-lb-a10u24: 104 golden tests identical with and without it, 2.4x faster).
+    # Its compile workers are capped by XRUN_PRECOMPILE_WORKERS (env.sh): RLIMIT_NPROC on a reserved node is per user
+    # across all of its processes and threads, and nproc workers hit it (posix_spawnp: Operation not permitted).
+    # XRUN_PRECOMPILE=0 turns it off.
+    PC=""; [ "${XRUN_PRECOMPILE:-1}" = 0 ] && PC="--no-precompile "
+    if [ "$CMD" = test ]; then INNER="scripts/run_safe_pytest.sh $PC$(printf "%q " "$@")"; else INNER="$*"; fi
     if [ -n "${XRUN_DRY_RUN:-}" ]; then echo "[xrun:$MODE] $HERE/on-node \"$INNER\""; exit 0; fi
     exec "$HERE/on-node" "$INNER" ;;
   *) echo "usage: xrun build [--no-wait] [args] | test <args> | run \"<cmd>\" | mode   (mode now: $MODE)"; exit 2 ;;

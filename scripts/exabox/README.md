@@ -25,6 +25,8 @@ setting can be overridden from the environment.
 | `XRUN_BUILD_PARTITION` | `cpu_only` | partition for builds |
 | `XRUN_BUILD_EXCLUDE` | empty | build nodes to avoid, comma-separated (e.g. ones with a full `/tmp`) |
 | `XRUN_TOOLCHAIN` | `cmake/x86_64-linux-gcc-12-toolchain.cmake` | toolchain file for `build_tt_metal.sbatch` |
+| `XRUN_PRECOMPILE_WORKERS` | `16` | precompile compile workers on the reserved node (exported as `PRECOMPILE_WORKERS`); not nproc, the node's per-user process limit (`ulimit -u` 512) counts every thread of yours there |
+| `XRUN_PRECOMPILE` | `1` | `0` runs tests on the reserved node without precompile |
 
 Without `NODE_JOB` or `XRUN_RESERVATION_NAME`, `on-node` uses your only running job outside the build
 partition, and stops with a message if there are none or several.

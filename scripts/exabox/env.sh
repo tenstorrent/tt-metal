@@ -15,6 +15,11 @@ export XRUN_LOGS="${XRUN_LOGS:-$XRUN_DATA/logs}"
 export XRUN_BUILD_PARTITION="${XRUN_BUILD_PARTITION:-cpu_only}"
 export XRUN_BUILD_EXCLUDE="${XRUN_BUILD_EXCLUDE:-}"      # comma-separated build nodes to avoid (e.g. full /tmp)
 export XRUN_TOOLCHAIN="${XRUN_TOOLCHAIN:-cmake/x86_64-linux-gcc-12-toolchain.cmake}"
+# Precompile compile workers on the reserved node. Not nproc: a node's process limit (ulimit -u, 512 on the exabox) counts
+# every thread of the user, other sessions on the same node included. run_safe_pytest.sh and eval_test_runner.sh read
+# PRECOMPILE_WORKERS. XRUN_PRECOMPILE=0 runs tests without precompile.
+export XRUN_PRECOMPILE_WORKERS="${XRUN_PRECOMPILE_WORKERS:-16}"
+export PRECOMPILE_WORKERS="${PRECOMPILE_WORKERS:-$XRUN_PRECOMPILE_WORKERS}"
 unset _xrun_here
 
 # The eval harness: keep its DB and run output on the shared filesystem (no node-local /localdev, and
