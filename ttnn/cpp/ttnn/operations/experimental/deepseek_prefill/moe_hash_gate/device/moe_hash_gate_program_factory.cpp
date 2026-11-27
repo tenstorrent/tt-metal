@@ -6,11 +6,11 @@
 
 #include <bit>
 
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_hash_gate {
 
@@ -37,7 +37,7 @@ tt::tt_metal::ProgramDescriptor MoeHashGateDeviceOperation::ProgramFactory::crea
     ProgramDescriptor desc;
 
     auto grid = device->compute_with_storage_grid_size();
-    auto num_tiles = scores.buffer()->num_pages();
+    auto num_tiles = scores.mesh_buffer().num_pages();
     uint32_t tile_width = scores.tensor_spec().page_config().get_tile().get_width();
     uint32_t tile_height = scores.tensor_spec().page_config().get_tile().get_height();
     auto width_tiles = scores.padded_shape()[-1] / tile_width;
@@ -230,8 +230,11 @@ tt::tt_metal::ProgramDescriptor MoeHashGateDeviceOperation::ProgramFactory::crea
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.named_compile_time_args = std::move(compute_named_compile_time_args);
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity =
+            (fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false,
         .math_approx_mode = false,

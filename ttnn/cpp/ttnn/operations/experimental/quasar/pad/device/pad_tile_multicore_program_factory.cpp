@@ -7,19 +7,19 @@
 #include <algorithm>
 #include <filesystem>
 #include <vector>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 using ttnn::operations::data_movement::get_num_pages;
@@ -76,7 +76,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t page_size = output.buffer()->page_size();
+    uint32_t page_size = output.mesh_buffer().page_size();
     uint32_t multi_buffering_size = 2;
 
     TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
@@ -95,6 +95,18 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
                  ttnn::operations::data_movement::float_to_uint16(pad_value)});
             break;
         case DataType::FLOAT32: packed_pad_value = std::bit_cast<uint32_t>(pad_value); break;
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2:
+            // Validated to be 0: a zero-filled page is the MX zero tile.
+            TT_FATAL(pad_value == 0.0f, "MX pad tiles can only be zero-filled");
+            packed_pad_value = 0;
+            break;
         default:
             packed_pad_value = 0;
             TT_ASSERT(
@@ -151,7 +163,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
             {{"num_dims", num_dims},
              {"page_size", page_size},
              {"pad_value", packed_pad_value},
-             {"element_size", static_cast<uint32_t>(output.element_size())}},
+             {"element_size", tt::tt_metal::is_mx(output.dtype()) ? 1u : static_cast<uint32_t>(output.element_size())}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };

@@ -6,6 +6,7 @@
 #include <csetjmp>
 
 int __attribute__((noinline)) main();
+void __attribute__((noinline)) on_erisc_exit();
 
 static std::jmp_buf gJumpBuf;
 
@@ -28,6 +29,7 @@ extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
     if (setjmp(gJumpBuf)) {
         // Returned from the longjmp
         // Do not run main() again
+        on_erisc_exit();
     } else {
         main();
     }

@@ -20,7 +20,11 @@ from torch import nn
 
 from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint, Qwen38CheckpointRowReader
 from models.demos.blackhole.qwen38_flash_next.reference import build_ngram_hash_spec, ngram_token_ids
-from models.demos.blackhole.qwen38_flash_next.tests.helpers.model import qwen4_exp_transformers, requires_transformers
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.model import (
+    link_into_hub_blobs,
+    qwen4_exp_transformers,
+    requires_transformers,
+)
 from models.demos.blackhole.qwen38_flash_next.tt.ple import Qwen38HostPLEEmbedding, Qwen38PLE, Qwen38PLEWeights
 from models.demos.blackhole.qwen38_flash_next.ttnn.ple import Qwen38ResidentPLELookup, ngram_token_ids_decode_step
 
@@ -145,6 +149,7 @@ class _SyntheticCheckpoint(Qwen38Checkpoint):
     def __init__(self, root: Path, weight_map: dict[str, str], file_guard=None) -> None:
         self.root = Path(root).resolve()
         self._file_guard = file_guard
+        self._admitted = {}
         self.weight_map = dict(weight_map)
         self.shards = tuple(sorted(set(weight_map.values())))
 
@@ -296,6 +301,53 @@ def test_row_reader_fails_closed_when_the_admitted_inode_changes(expect_error, t
         rewritten.advise([0])
     replaced.close()
     rewritten.close()
+
+
+def _hub_checkpoint(tmp_path: Path) -> tuple[_SyntheticCheckpoint, dict[str, str]]:
+    """The synthetic checkpoint as a hub snapshot (links into ``blobs/``) and its weight map."""
+
+    snapshot = tmp_path / "snapshots" / "rev"
+    snapshot.mkdir(parents=True)
+    weight_map = _synthetic_checkpoint(snapshot).weight_map
+    link_into_hub_blobs(snapshot)
+    return _SyntheticCheckpoint(snapshot, weight_map), weight_map
+
+
+def test_hub_snapshot_rows_read_the_admitted_blob_and_never_a_retargeted_link(expect_error, tmp_path) -> None:
+    name = _table_name(1)
+    indices = torch.tensor([[1, 2], [3, 1]])
+    checkpoint, weight_map = _hub_checkpoint(tmp_path)
+    admitted = checkpoint.file(weight_map[name])
+    assert admitted.parent == (tmp_path / "blobs").resolve() and not admitted.is_symlink()
+    reader = Qwen38CheckpointRowReader(checkpoint, name)
+    expected = checkpoint.tensor_rows(name, indices)
+    _assert_bitwise_equal(reader.read(indices), expected)
+
+    # A link retargeted after admission (to another part's blob) is never followed.
+    link = checkpoint.root / weight_map[name]
+    retarget = os.readlink(checkpoint.root / weight_map[_table_name(2)])
+    link.unlink()
+    link.symlink_to(retarget)
+    _assert_bitwise_equal(checkpoint.tensor_rows(name, indices), expected)
+    _assert_bitwise_equal(reader.read(indices), expected)
+
+    # Replacing the admitted blob is the identity drift the reader refuses.
+    replacement = tmp_path / "replacement.tmp"
+    replacement.write_bytes(admitted.read_bytes())
+    os.replace(replacement, admitted)
+    with expect_error(RuntimeError, match="identity drifted"):
+        reader.read_rows([0])
+    reader.close()
+
+
+def test_hub_snapshot_link_to_a_non_regular_file_is_refused(expect_error, tmp_path) -> None:
+    checkpoint, weight_map = _hub_checkpoint(tmp_path)
+    link = checkpoint.root / weight_map[_table_name(0)]
+    link.unlink()
+    os.mkfifo(tmp_path / "blobs" / "fifo")
+    link.symlink_to(Path("../../blobs/fifo"))
+    with expect_error(ValueError, match="must resolve to a regular file"):
+        Qwen38CheckpointRowReader(checkpoint, _table_name(0))
 
 
 def test_resident_lookup_matches_the_host_oracle_bitwise(expect_error, tmp_path) -> None:

@@ -5,6 +5,7 @@
 #include "optimizers/adamw.hpp"
 
 #include <fmt/format.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -25,7 +26,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "optimizers/adamw_composite.hpp"
-#include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/muon_composite.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
@@ -34,6 +34,7 @@
 #include "xtensor/core/xtensor_forward.hpp"
 
 using ttml::test_utils::adamw::error_metrics;
+using ttml::test_utils::adamw::to_tt_fp32;
 
 struct AdamWCase {
     std::array<std::size_t, 4> shape;  // (B, H, S, C)
@@ -44,12 +45,15 @@ struct AdamWCase {
     float weight_decay{0.0f};
     bool amsgrad{false};
     std::string name;
+    // The gradient is passed in fp32, unrounded, as accumulating it in fp32 leaves it; otherwise rounded to bf16.
+    bool fp32_grad{false};
 };
 
 // Custom printer for AdamWCase used by gtest to make test output readable
 void PrintTo(const AdamWCase& pc, std::ostream* os) {
     *os << fmt::format(
-        "AdamWCase(name='{}', shape=[{},{},{},{}], lr={}, beta1={}, beta2={}, eps={}, wd={}, amsgrad={})",
+        "AdamWCase(name='{}', shape=[{},{},{},{}], lr={}, beta1={}, beta2={}, eps={}, wd={}, amsgrad={}, "
+        "fp32_grad={})",
         pc.name,
         pc.shape[0],
         pc.shape[1],
@@ -60,7 +64,8 @@ void PrintTo(const AdamWCase& pc, std::ostream* os) {
         pc.beta2,
         pc.epsilon,
         pc.weight_decay,
-        pc.amsgrad);
+        pc.amsgrad,
+        pc.fp32_grad);
 }
 
 class AdamWComparisonTest : public ::testing::TestWithParam<AdamWCase> {
@@ -212,7 +217,7 @@ static void run_step_and_compare(const AdamWCase& pc) {
 
     // AdamW implementation
     auto theta_fused = autograd::create_tensor(to_tt_bf16(w0), true);
-    theta_fused->set_grad(to_tt_bf16(g0));
+    theta_fused->set_grad(pc.fp32_grad ? to_tt_fp32(g0) : to_tt_bf16(g0));
     ttml::serialization::NamedParameters params_fused{{"theta", theta_fused}};
 
     ttml::optimizers::AdamWConfig fused_cfg;
@@ -242,6 +247,8 @@ static void run_step_and_compare(const AdamWCase& pc) {
 
     cpu_opt.step(w_cpu, g_cpu);
     opt_fused.step();
+    // Fused AdamW reads an fp32 gradient as it is, without casting it.
+    EXPECT_EQ(theta_fused->get_grad().dtype(), pc.fp32_grad ? ttnn::DataType::FLOAT32 : ttnn::DataType::BFLOAT16);
 
     auto result_fused = theta_fused->get_value();
     auto result_fused_cpu = core::to_xtensor(result_fused);
@@ -733,6 +740,30 @@ TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
         /* weight_decay */ 0.0f));
 }
 
+TEST_F(AdamWValidationTest, RejectsTilesOtherThan32x32) {
+    // In 16x32 tiles a 32x32 param is 2 tiles, where the compute kernels' count, in 32x32 tiles, is 1.
+    const auto in_16x32_tiles = [] {
+        return ttml::test_utils::filled_on_device_in_tiles({1, 1, 32, 32}, 0.5F, {16, 32});
+    };
+    EXPECT_THAT(
+        [&] {
+            ttml::metal::adamw(
+                in_16x32_tiles(),
+                in_16x32_tiles(),
+                in_16x32_tiles(),
+                in_16x32_tiles(),
+                /* max_exp_avg_sq */ std::nullopt,
+                /* lr */ 1e-3f,
+                /* beta1 */ 0.9f,
+                /* beta2 */ 0.999f,
+                /* beta1_pow */ 0.9f,
+                /* beta2_pow */ 0.999f,
+                /* epsilon */ 1e-8f,
+                /* weight_decay */ 0.0f);
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("tiles must be 32x32, got 16x32")));
+}
+
 // ====================================================================
 // AMSGrad Tests
 // Test AdamW with AMSGrad variant enabled
@@ -749,6 +780,17 @@ static const AdamWCase kAMSGradCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(AdamWAMSGrad, AdamWComparisonTest, ::testing::ValuesIn(kAMSGradCases), CaseName);
+
+// An fp32 gradient on a bf16 parameter: the gradient's circular buffer takes fp32 tiles, the rest of the launch stays
+// bf16.
+static const AdamWCase kFp32GradientCases[] = {
+    {{1, 1, 128, 512}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Fp32Grad_lr1e2", true},
+    {{2, 4, 32, 256}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Fp32Grad_lr1e4", true},
+    {{1, 8, 32, 128}, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.01f, false, "Fp32Grad_WeightDecay", true},
+    {{1, 4, 64, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Fp32Grad_AMSGrad", true},
+};
+
+INSTANTIATE_TEST_SUITE_P(AdamWFp32Gradient, AdamWComparisonTest, ::testing::ValuesIn(kFp32GradientCases), CaseName);
 
 // ====================================================================
 // Stochastic Rounding Tests
@@ -980,8 +1022,7 @@ TEST(ParamGroupDefaultsTest, FloatFieldsArePerGroupOptions) {
         return names;
     };
     const std::vector<std::string> adamw_keys = {"beta1", "beta2", "epsilon", "lr", "weight_decay"};
-    EXPECT_EQ(keys(param_group_defaults(AdamWConfig{})), adamw_keys);  // not amsgrad / stochastic_rounding
-    EXPECT_EQ(keys(param_group_defaults(AdamWFullPrecisionConfig{})), adamw_keys);
+    EXPECT_EQ(keys(param_group_defaults(AdamWConfig{})), adamw_keys);           // not amsgrad / stochastic_rounding
     EXPECT_EQ(keys(param_group_defaults(AdamWCompositeConfig{})), adamw_keys);  // not kahan_summation
     const std::vector<std::string> sgd_keys = {"dampening", "lr", "momentum", "weight_decay"};
     EXPECT_EQ(keys(param_group_defaults(SGDConfig{})), sgd_keys);  // not nesterov
@@ -994,6 +1035,24 @@ TEST(ParamGroupDefaultsTest, FloatFieldsArePerGroupOptions) {
     const auto defaults = param_group_defaults(config);
     EXPECT_FLOAT_EQ(defaults.at("lr"), 0.123F);
     EXPECT_FLOAT_EQ(defaults.at("weight_decay"), 0.5F);
+}
+
+// A restored step count continues the bias correction bit for bit: reset() to t steps gives the powers t calls to
+// advance() give, so the next step matches an uninterrupted run. std::pow would round differently (0.9^3 is
+// 0.7289999 as a float product, 0.729 from pow), which fp32 parameters keep.
+TEST(BetaPowersTest, ResetContinuesTheRunningProduct) {
+    using namespace ttml::optimizers;
+    const std::vector<ParamGroup> groups{{.params = {}, .options = {{"beta1", 0.9F}, {"beta2", 0.999F}}}};
+    BetaPowers running;
+    running.reset(groups, 0);
+    for (size_t steps = 1; steps <= 1000; ++steps) {
+        (void)running.advance(0, 0.9F, 0.999F);
+        BetaPowers restored;
+        restored.reset(groups, steps);
+        BetaPowers continued = running;
+        ASSERT_EQ(restored.advance(0, 0.9F, 0.999F), continued.advance(0, 0.9F, 0.999F))
+            << "after " << steps << " steps";
+    }
 }
 
 // ====================================================================

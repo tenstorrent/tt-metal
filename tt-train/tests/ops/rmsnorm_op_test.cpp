@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-umd-workload/cluster.hpp>
 #include <utility>
 #include <vector>
@@ -23,6 +24,7 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/common/rmsnorm_common.hpp"
 #include "metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp"
 #include "metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp"
 #include "metal/ops/rmsnorm_fw/rmsnorm_fw.hpp"
@@ -32,6 +34,7 @@
 
 using ::testing::HasSubstr;
 using ::testing::ThrowsMessage;
+using ttml::metal::ops::rmsnorm::kMaxRowSlices;
 
 class RMSNormOpTest : public ::testing::Test {
 protected:
@@ -328,16 +331,13 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Backward_Batch) {
  * 2. Backward pass: gradients computed by both implementations match
  * 3. All outputs and gradients are finite (no NaN/Inf values)
  *
- * @param shape Input tensor shape [N, C, H, W] where:
- *   - N: batch size
- *   - C: number of channels (normalized dimension)
- *   - H: height
- *   - W: width
+ * @param shape Input tensor shape [B, N, S, C]; RMSNorm normalizes over the last dim, C
  *
  * Test cases cover various scenarios:
  * - Alignment: C % 32 == 0 (aligned) vs C % 32 != 0 (unaligned/masking)
  * - Memory: fits in L1 cache vs exceeds L1 cache capacity
- * - Block size: odd C (block_size=1) vs even C (block_size=2)
+ * - Block size: set by the tile count Wt = ceil(C / 32), not by the parity of C: the forward uses the largest of
+ *   3, 2, 1 that divides Wt, the backward the largest of 2, 1
  * - Scale: small to very large C dimensions
  *
  * @param train_gamma With false, gamma is frozen: the kernel skips dL/dgamma and gamma gets no gradient.
@@ -418,8 +418,8 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape, const b
 // against the composite implementation across different scenarios:
 //
 // - Memory usage patterns: L1 cache fit vs overflow
-// - Tensor alignment: 32-byte aligned vs unaligned (masking required)
-// - Block sizes: odd vs even C dimensions
+// - Width alignment: C % 32 == 0 vs not (masking required)
+// - Block sizes: 1 and 2 in both passes; the forward also uses 3 when 3 divides a core's tiles of the row
 // - Scale testing: small to very large tensor dimensions
 // - Training scenarios: realistic model shapes (NanoLlama, etc.)
 // ============================================================================
@@ -428,36 +428,40 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Basic_Small) {
     CompareKernelVsComposite({1U, 1U, 2U, 32U});
 }
 
+// Which L1 path a whole row takes on Blackhole: the backward keeps the row in L1 up to about C = 7.4K; the forward
+// keeps everything in L1 up to about C = 11K and everything but gamma up to about C = 22K. Wider rows stream.
+// Most single tile-rows below are cut into 16 slices that stay in L1; RMSNormModes' _WholeRows cases keep whole rows.
+
 // Test aligned dimensions (C % 32 == 0) that fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
     // C = 1024 (32 * 32), fits in L1 cache
     CompareKernelVsComposite({1U, 1U, 1U, 1024U});
 
-    // C = 4096 (32 * 128), largest size that fits in L1 cache (1 << 12)
+    // C = 4096 (32 * 128), fits in L1 cache in both passes
     CompareKernelVsComposite({1U, 1U, 1U, 4096U});
 }
 
-// Regression: Qwen3-32B hidden size. C = 5120 (Wt = 160) previously tripped the backward's
-// under-counted L1 fit-check into the "everything fits in L1" path and then OOM'd on CB allocation.
+// Qwen3-32B hidden size, C = 5120 (Wt = 160): its single tile-row is split into column slices. RMSNormModes keeps
+// the whole-row regression of this width.
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_Qwen3_32B_Hidden) {
     CompareKernelVsComposite({1U, 1U, 32U, 5120U});
 }
 
-// Test aligned dimensions (C % 32 == 0) that fit in L1 except for gamma
-TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_L1ExceptGamma) {
-    // C = 8192 (1 << 13), fits in L1 except gamma parameter
+// Test aligned dimensions (C % 32 == 0) where a whole row fits in L1 for the forward and not for the backward
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_BwDoesNotFitInL1) {
+    // C = 8192 (1 << 13): as 16 slices of 16 tiles both passes stay in L1. Plain_1x32x1x8191_WholeRows covers the row.
     CompareKernelVsComposite({1U, 1U, 1U, 8192U});
 }
 
-// Test aligned dimensions (C % 32 == 0) that don't fit in L1 cache
-TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_DoesNotFitInL1) {
-    // C = 16384 (1 << 14), does not fit in L1 cache
+// Test aligned dimensions (C % 32 == 0) where a whole row fits in the forward's L1 except for gamma
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FwL1ExceptGamma) {
+    // C = 16384 (1 << 14): as 16 slices of 32 tiles both passes stay in L1. Plain_1x32x1x16384_WholeRows covers rows.
     CompareKernelVsComposite({1U, 1U, 1U, 16384U});
 }
 
 // Test aligned dimensions (C % 32 == 0) with very large C
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_VeryLargeC) {
-    // C = 1048576 (1 << 20), very large C dimension (1M elements)
+    // C = 1048576 (1 << 20), very large C dimension (1M elements), both passes stream
     CompareKernelVsComposite({1U, 1U, 1U, 1048576U});
 }
 
@@ -470,40 +474,61 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FitsInL1) {
     CompareKernelVsComposite({1U, 1U, 1U, 4095U});
 }
 
-// Test unaligned dimensions (C % 32 != 0) that don't fit in L1 cache
-TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_DoesNotFitInL1) {
-    // C = 16383 (1 << 14 - 1), requires masking, does not fit in L1
+// Test unaligned dimensions (C % 32 != 0) where a whole row fits in the forward's L1 except for gamma
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FwL1ExceptGamma) {
+    // C = 16383 ((1 << 14) - 1): 16 slices of 32 tiles that stay in L1, and only the last masks.
     CompareKernelVsComposite({1U, 1U, 1U, 16383U});
 }
 
 // Test unaligned dimensions (C % 32 != 0) with very large C
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_VeryLargeC) {
-    // C = 1048575 (1 << 20 - 1), very large C with masking
+    // C = 1048575 ((1 << 20) - 1), very large C with masking, both passes stream
     CompareKernelVsComposite({1U, 1U, 1U, 1048575U});
 
-    // C = 1048558 (1 << 20 - 18), very large C with different masking pattern
+    // C = 1048558 ((1 << 20) - 18), very large C with different masking pattern
     CompareKernelVsComposite({1U, 1U, 1U, 1048558U});
 }
 
-// Test block_size = 1 (C is odd)
-TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize1_OddC) {
+// Test block_size = 1: a core's tiles of the row have no divisor 2 or 3. RMSNormModes also streams 24540 whole.
+TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize1) {
+    CompareKernelVsComposite({1U, 1U, 1U, 160U});  // C = 160, Wt = 5, kept whole
+    // C = 223, Wt = 7, requires masking: 4 slices of 2 tiles (block size 2), the last overlapping 1
+    CompareKernelVsComposite({1U, 1U, 1U, 223U});
+    // C = 12500, Wt = 391, requires masking: 16 slices of 25 tiles, the last overlapping 9
+    CompareKernelVsComposite({1U, 1U, 1U, 12500U});
+    // C = 24540, Wt = 767, requires masking: 16 slices of 48 tiles (block sizes 3 and 2), the last overlapping 1
+    CompareKernelVsComposite({1U, 1U, 1U, 24540U});
+}
+
+// Test the forward's block_size = 3 on a sliced row. Plain_1x32x1x12480_WholeRows covers it on the paths that don't
+// keep everything in L1.
+TEST_F(RMSNormOpTest, RMSNorm_Compare_FwBlockSize3) {
+    // C = 12480, Wt = 390: 16 slices of 25 tiles (block size 1), the last overlapping 10
+    CompareKernelVsComposite({1U, 1U, 1U, 12480U});
+    // C = 24480, Wt = 765: 16 slices of 48 tiles, the forward's block size 3, the last overlapping 3
+    CompareKernelVsComposite({1U, 1U, 1U, 24480U});
+}
+
+// Test block_size = 2 with odd C (Wt = 2 and 4), which requires masking (C % 32 = 1 and 31)
+TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_OddC) {
     CompareKernelVsComposite({1U, 1U, 1U, 33U});   // C = 33 (odd)
     CompareKernelVsComposite({1U, 1U, 1U, 127U});  // C = 127 (odd)
 }
 
-// Test block_size = 2 (C is even)
+// Test block_size = 2 with even C (Wt = 2 and 4), which also requires masking (C % 32 = 2 and 30)
 TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_EvenC) {
     CompareKernelVsComposite({1U, 1U, 1U, 34U});   // C = 34 (even)
     CompareKernelVsComposite({1U, 1U, 1U, 126U});  // C = 126 (even)
 }
 
-// Frozen gamma (e.g. under LoRA): the backward skips dL/dgamma, on the resident and the streaming path. add_grad drops
+// Frozen gamma (e.g. under LoRA): the backward skips dL/dgamma, on whole rows and on a sliced row. add_grad drops
 // the gradient of a frozen gamma by itself, so the program cache is what shows the skip: after a trained run of the
 // same shape, the frozen run compiles exactly one program, the backward without dL/dgamma.
 TEST_F(RMSNormOpTest, RMSNorm_Compare_FrozenGamma) {
     auto* device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
-    for (const auto& shape : {std::vector<uint32_t>{1U, 1U, 32U, 1024U}, std::vector<uint32_t>{1U, 1U, 1U, 16384U}}) {
+    for (const auto& shape :
+         {std::vector<uint32_t>{1U, 1U, 4096U, 512U}, std::vector<uint32_t>{1U, 1U, 1U, 16384U}}) {
         CompareKernelVsComposite(shape, /* train_gamma */ true);
         const auto num_programs = device->num_program_cache_entries();
         CompareKernelVsComposite(shape, /* train_gamma */ false);
@@ -518,7 +543,7 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoLlama) {
 }
 
 // Test training-like shapes with LLaMA 7B dimensions
-TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoGPT) {
+TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_Llama7B) {
     CompareKernelVsComposite({1U, 1U, 512U, 4096U});
 }
 
@@ -530,8 +555,8 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
 
 // Test different masking patterns with larger batches
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_Masking_Patterns) {
-    CompareKernelVsComposite({32U, 1U, 1024U, 4091U});  // C % 32 = 11
-    CompareKernelVsComposite({32U, 1U, 1024U, 4079U});  // C % 32 = 31
+    CompareKernelVsComposite({32U, 1U, 1024U, 4091U});  // C % 32 = 27
+    CompareKernelVsComposite({32U, 1U, 1024U, 4079U});  // C % 32 = 15
     CompareKernelVsComposite({32U, 1U, 1024U, 4097U});  // C % 32 = 1
 }
 
@@ -605,14 +630,35 @@ xt::xarray<float> as_stored(const xt::xarray<float>& a, const ttnn::DataType dty
     return ttml::core::to_xtensor(to_device(a, dtype));
 }
 
-// Heads get RMS spread over 2^-2 .. 2^3, so normalizing over the wrong columns cannot pass. The gate reaches into
-// both saturation tails of sigmoid.
+// Plain mode: dy += a * out, with a = 1 and 2 on alternate tile-rows, so sum(out * dy) dominates dx and a dropped,
+// doubled or another tile-row's slice partial in the backward moves dx several times past kDxTol.
+void add_output_multiple(Inputs& in, const Shape& s) {
+    const uint32_t C = s.head_dim;
+    for (uint32_t b = 0; b < s.batch; ++b) {
+        for (uint32_t t = 0; t < s.seq; ++t) {
+            const size_t row = s.head_major_index(b, 0U, t, 0U);
+            double sum_sq = 0.0;
+            for (uint32_t c = 0; c < C; ++c) {
+                sum_sq += static_cast<double>(in.x.data()[row + c]) * in.x.data()[row + c];
+            }
+            const double inv = 1.0 / std::sqrt(sum_sq / C + kEps);
+            const double a = (t / tt::constants::TILE_HEIGHT) % 2U == 0U ? 1.0 : 2.0;
+            for (uint32_t c = 0; c < C; ++c) {
+                in.dy.data()[row + c] += static_cast<float>(a * in.x.data()[row + c] * in.gamma.data()[c] * inv);
+            }
+        }
+    }
+}
+
+// Heads and tile-rows get RMS spread over 2^-2 .. 2^3, so normalizing over the wrong columns, or with the sum of x^2
+// of another tile-row, cannot pass. The gate reaches into both saturation tails of sigmoid.
 Inputs make_inputs(const Shape& s, const uint32_t seed, const ttnn::DataType x_dtype, const bool gated) {
     auto x = ttml::test_utils::make_uniform_xarray<float>(s.head_major(), -1.0F, 1.0F, seed);
     for (uint32_t b = 0; b < s.batch; ++b) {
         for (uint32_t h = 0; h < s.heads; ++h) {
-            const float scale = std::exp2(static_cast<float>(static_cast<int>(h % 6U) - 2));
             for (uint32_t t = 0; t < s.seq; ++t) {
+                const uint32_t tile_row = t / tt::constants::TILE_HEIGHT;
+                const float scale = std::exp2(static_cast<float>(static_cast<int>((h + tile_row) % 6U) - 2));
                 for (uint32_t c = 0; c < s.head_dim; ++c) {
                     x.data()[s.head_major_index(b, h, t, c)] *= scale;
                 }
@@ -623,13 +669,18 @@ Inputs make_inputs(const Shape& s, const uint32_t seed, const ttnn::DataType x_d
     if (gated) {
         gate = as_stored(ttml::test_utils::make_uniform_xarray<float>(s.head_merged(), -20.0F, 20.0F, seed + 1U));
     }
-    return Inputs{
+    Inputs in{
         .x = as_stored(x, x_dtype),
         .gate = std::move(gate),
         .gamma = as_stored(ttml::test_utils::make_uniform_xarray<float>(
             std::vector<uint32_t>{1U, 1U, 1U, s.head_dim}, 0.5F, 1.5F, seed + 2U)),
-        .dy = as_stored(ttml::test_utils::make_uniform_xarray<float>(s.head_merged(), -1.0F, 1.0F, seed + 3U)),
+        .dy = ttml::test_utils::make_uniform_xarray<float>(s.head_merged(), -1.0F, 1.0F, seed + 3U),
     };
+    if (!gated) {
+        add_output_multiple(in, s);
+    }
+    in.dy = as_stored(in.dy);
+    return in;
 }
 
 double sigmoid(const double z) {
@@ -739,13 +790,16 @@ struct RMSNormCase {
     Shape shape;
     bool gated = false;
     ttnn::DataType dtype = ttnn::DataType::BFLOAT16;
+    uint32_t max_row_slices = ttml::metal::ops::rmsnorm::kMaxRowSlices;
+    bool nightly = false;
 };
 
 std::string rmsnorm_case_name(const ::testing::TestParamInfo<RMSNormCase>& info) {
     const auto& c = info.param;
-    return std::string(c.gated ? "Gated_" : "Plain_") + std::to_string(c.shape.batch) + "x" +
-           std::to_string(c.shape.seq) + "x" + std::to_string(c.shape.heads) + "x" + std::to_string(c.shape.head_dim) +
-           (c.dtype == ttnn::DataType::FLOAT32 ? "_fp32" : "_bf16");
+    return std::string(c.nightly ? "NIGHTLY_" : "") + (c.gated ? "Gated_" : "Plain_") +
+           std::to_string(c.shape.batch) + "x" + std::to_string(c.shape.seq) + "x" + std::to_string(c.shape.heads) +
+           "x" + std::to_string(c.shape.head_dim) + (c.dtype == ttnn::DataType::FLOAT32 ? "_fp32" : "_bf16") +
+           (c.max_row_slices == 1U ? "_WholeRows" : "");
 }
 
 std::vector<RMSNormCase> rmsnorm_cases() {
@@ -769,10 +823,37 @@ std::vector<RMSNormCase> rmsnorm_cases() {
     const std::vector<Shape> plain_shapes = {
         // C % 32 != 0 masks the last tile.
         Shape{1, 32, 1, 1000},
-        // With fp32 input the forward keeps everything but gamma in L1 and the backward streams.
-        Shape{1, 32, 1, 8192},
+        // The Qwen3.8 hidden norm: 32 tile-rows of 160 tiles are split into column slices over several cores each; on
+        // 11x10, 6 slices of 27 whose last moves back over 2 tiles of the one before it.
+        Shape{1, 1024, 1, 5120},
+        // 37 tile-rows of 77 tiles: on 11x10, 5 slices of 16 (block size 2) whose last overlaps 3 tiles across two
+        // blocks, row-groups of 2 and of 1 rows in two core groups, and only the last slice masks.
+        Shape{1, 1184, 1, 2463},
+        // One tile-row of 27 tiles: 7 slices of 4 tiles, the last overlapping 1 tile and masked.
+        Shape{1, 32, 1, 863},
+        // 131 tile-rows of 74 tiles: 3 slices of 25 whose last overlaps 1 tile (block size 1), with row-groups of 4
+        // and of 3 rows in two core groups.
+        Shape{1, 4192, 1, 2368},
+        // One tile-row of 512 tiles as 16 slices of 32, the most the planner makes: each partial is 1/16 of the sum.
+        Shape{1, 32, 1, 16384},
+    };
+    // As 5120, with only the last slice masking the partial last tile, which 1000, 2463 and 863 also cover.
+    const std::vector<Shape> nightly_plain_shapes = {
+        Shape{1, 1024, 1, 5119},
+    };
+    // These widths would be sliced, so they keep whole rows to cover the whole-row paths.
+    const std::vector<Shape> whole_row_shapes = {
+        // Regression: the Qwen3-32B hidden size tripped the backward's under-counted L1 fit-check into the "everything
+        // fits in L1" path and then OOM'd on CB allocation.
+        Shape{1, 32, 1, 5120},
+        // With fp32 input the forward keeps everything but gamma in L1 and the backward streams; C % 32 != 0 masks.
+        Shape{1, 32, 1, 8191},
         // With fp32 input both stream.
         Shape{1, 32, 1, 16384},
+        // Forward block size 3 (Wt = 390): bf16 keeps everything but gamma in L1, fp32 streams. The backward streams.
+        Shape{1, 32, 1, 12480},
+        // Wt = 767 has no divisor 2 or 3: both passes stream with block size 1, and C % 32 != 0 masks.
+        Shape{1, 32, 1, 24540},
     };
     std::vector<RMSNormCase> cases;
     for (const auto dtype : {ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32}) {
@@ -781,6 +862,12 @@ std::vector<RMSNormCase> rmsnorm_cases() {
         }
         for (const auto& s : plain_shapes) {
             cases.push_back({.shape = s, .gated = false, .dtype = dtype});
+        }
+        for (const auto& s : nightly_plain_shapes) {
+            cases.push_back({.shape = s, .gated = false, .dtype = dtype, .nightly = true});
+        }
+        for (const auto& s : whole_row_shapes) {
+            cases.push_back({.shape = s, .gated = false, .dtype = dtype, .max_row_slices = 1U});
         }
     }
     return cases;
@@ -799,18 +886,23 @@ TEST_P(RMSNormOpParamTest, MatchesReference) {
     const auto gamma = to_device(in.gamma);
     const auto dy = to_device(in.dy);
 
-    const auto fw = ttml::metal::rmsnorm_fw(x, gamma, /* return_intermediates */ true, kEps, gate);
-    expect_close(ttml::core::to_xtensor(fw[0].value()), ref.out, "out");
-    expect_close(ttml::core::to_xtensor(fw[1].value()), ref.rms, "rms");
+    // Only the prims take max_row_slices, so dL_dgamma is summed from its components here instead of by rmsnorm_bw.
+    const auto fw =
+        ttnn::prim::ttml_rmsnorm_fw(x, gamma, gate, /* return_intermediates */ true, kEps, c.max_row_slices);
+    ASSERT_EQ(fw.size(), 2U);
+    expect_close(ttml::core::to_xtensor(fw[0]), ref.out, "out");
+    expect_close(ttml::core::to_xtensor(fw[1]), ref.rms, "rms");
 
     for (const bool compute_dgamma : {true, false}) {
         const std::string suffix = compute_dgamma ? "" : " without dgamma";
-        const auto bw = ttml::metal::rmsnorm_bw(x, gamma, fw[1].value(), dy, compute_dgamma, gate);
+        const auto bw = ttnn::prim::ttml_rmsnorm_bw(x, gamma, fw[1], dy, gate, compute_dgamma, c.max_row_slices);
         ASSERT_EQ(bw.size(), 3U);
         expect_close(ttml::core::to_xtensor(bw[0].value()), ref.dx, "dx" + suffix, kDxTol);
         ASSERT_EQ(bw[1].has_value(), compute_dgamma);
         if (compute_dgamma) {
-            expect_close(ttml::core::to_xtensor(bw[1].value()), ref.dgamma, "dgamma");
+            const xt::xarray<double> components = xt::cast<double>(ttml::core::to_xtensor(bw[1].value()));
+            const xt::xarray<double> dgamma = xt::sum(components, {0, 1, 2}, xt::keep_dims);
+            expect_close(dgamma, ref.dgamma, "dgamma");
         }
         ASSERT_EQ(bw[2].has_value(), c.gated);
         if (c.gated) {
@@ -843,18 +935,48 @@ TEST_F(RMSNormOpTest, GatedPreallocatedOutputsOnCachedProgram) {
 
     for (const bool compute_dgamma : {true, false}) {
         const std::string suffix = compute_dgamma ? "" : " without dgamma";
-        // Caches the programs with launches on other inputs into fresh outputs. Everything stays alive, so no buffer
-        // below can reuse their addresses.
+        // Caches the programs with preallocated launches on other inputs into other outputs, since the program key
+        // covers which optional tensors are passed. Everything stays alive, so no buffer below can reuse their
+        // addresses.
         const auto num_programs_before = device->num_program_cache_entries();
         const auto first = make_inputs(s, 29U, dtype, /* gated */ true);
         const auto first_x = to_device(first.x, dtype);
         const auto first_gate = to_device(first.gate);
         const auto first_gamma = to_device(first.gamma);
         const auto first_dy = to_device(first.dy);
-        const auto first_fw =
-            ttml::metal::rmsnorm_fw(first_x, first_gamma, /* return_intermediates */ true, kEps, first_gate);
-        const auto first_bw =
-            ttml::metal::rmsnorm_bw(first_x, first_gamma, first_fw[1].value(), first_dy, compute_dgamma, first_gate);
+        const auto first_out = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
+        const auto first_rms = ttml::core::zeros(ttnn::Shape(s.rms()), device);
+        const auto first_da = ttml::core::zeros(ttnn::Shape(s.head_major()), device);
+        const auto first_dgamma_components =
+            compute_dgamma ? std::make_optional(ttml::core::zeros(ttnn::Shape(s.head_major()), device)) : std::nullopt;
+        const auto first_dgate = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
+        ttnn::prim::ttml_rmsnorm_fw(
+            first_x,
+            first_gamma,
+            first_gate,
+            /* return_intermediates */ true,
+            kEps,
+            kMaxRowSlices,
+            first_rms,
+            first_out);
+        ttnn::prim::ttml_rmsnorm_bw(
+            first_x,
+            first_gamma,
+            first_rms,
+            first_dy,
+            first_gate,
+            compute_dgamma,
+            kMaxRowSlices,
+            first_da,
+            first_dgamma_components,
+            first_dgate);
+        // Preallocated outputs, made before the entry count: core::zeros fills them on the device with a program.
+        const auto out = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
+        const auto rms = ttml::core::zeros(ttnn::Shape(s.rms()), device);
+        const auto da = ttml::core::zeros(ttnn::Shape(s.head_major()), device);
+        const auto dgamma_components =
+            compute_dgamma ? std::make_optional(ttml::core::zeros(ttnn::Shape(s.head_major()), device)) : std::nullopt;
+        const auto dgate = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
         const auto num_programs = device->num_program_cache_entries();
         // Else the program cache is off and the unchanged count below proves nothing.
         ASSERT_GT(num_programs, num_programs_before) << "program cache not populated" << suffix;
@@ -865,29 +987,24 @@ TEST_F(RMSNormOpTest, GatedPreallocatedOutputsOnCachedProgram) {
         const auto gate = to_device(in.gate);
         const auto gamma = to_device(in.gamma);
         const auto dy = to_device(in.dy);
-        const auto out = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
-        const auto rms = ttml::core::zeros(ttnn::Shape(s.rms()), device);
-        const auto da = ttml::core::zeros(ttnn::Shape(s.head_major()), device);
-        const auto dgamma_components =
-            compute_dgamma ? std::make_optional(ttml::core::zeros(ttnn::Shape(s.head_major()), device)) : std::nullopt;
-        const auto dgate = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
 
-        const auto fw = ttnn::prim::ttml_rmsnorm_fw(x, gamma, gate, /* return_intermediates */ true, kEps, rms, out);
-        const auto bw =
-            ttnn::prim::ttml_rmsnorm_bw(x, gamma, rms, dy, gate, compute_dgamma, da, dgamma_components, dgate);
+        const auto fw =
+            ttnn::prim::ttml_rmsnorm_fw(x, gamma, gate, /* return_intermediates */ true, kEps, kMaxRowSlices, rms, out);
+        const auto bw = ttnn::prim::ttml_rmsnorm_bw(
+            x, gamma, rms, dy, gate, compute_dgamma, kMaxRowSlices, da, dgamma_components, dgate);
         EXPECT_EQ(device->num_program_cache_entries(), num_programs) << suffix;
 
-        EXPECT_EQ(fw[0].buffer()->address(), out.buffer()->address());
-        EXPECT_EQ(fw[1].buffer()->address(), rms.buffer()->address());
-        EXPECT_EQ(bw[0]->buffer()->address(), da.buffer()->address());
-        EXPECT_EQ(bw[2]->buffer()->address(), dgate.buffer()->address());
+        EXPECT_EQ(fw[0].mesh_buffer().address(), out.mesh_buffer().address());
+        EXPECT_EQ(fw[1].mesh_buffer().address(), rms.mesh_buffer().address());
+        EXPECT_EQ(bw[0]->mesh_buffer().address(), da.mesh_buffer().address());
+        EXPECT_EQ(bw[2]->mesh_buffer().address(), dgate.mesh_buffer().address());
         expect_close(ttml::core::to_xtensor(out), ref.out, "preallocated out" + suffix);
         expect_close(ttml::core::to_xtensor(rms), ref.rms, "preallocated rms" + suffix);
         expect_close(ttml::core::to_xtensor(da), ref.dx, "preallocated dx" + suffix, kDxTol);
         expect_close(ttml::core::to_xtensor(dgate), ref.dgate, "preallocated dgate" + suffix);
         ASSERT_EQ(bw[1].has_value(), compute_dgamma);
         if (compute_dgamma) {
-            EXPECT_EQ(bw[1]->buffer()->address(), dgamma_components->buffer()->address());
+            EXPECT_EQ(bw[1]->mesh_buffer().address(), dgamma_components->mesh_buffer().address());
             const xt::xarray<double> components = xt::cast<double>(ttml::core::to_xtensor(*dgamma_components));
             const xt::xarray<double> dgamma = xt::sum(components, {0, 1, 2}, xt::keep_dims);
             expect_close(dgamma, ref.dgamma, "preallocated dgamma");
@@ -954,6 +1071,7 @@ TEST_F(RMSNormOpTest, GatedRejectsMismatchedBackwardTensors) {
                 x,
                 /* gate */ std::nullopt,
                 /* compute_dgamma */ true,
+                kMaxRowSlices,
                 std::nullopt,
                 std::nullopt,
                 ttml::core::zeros(ttnn::Shape(s.head_merged()), device));
@@ -969,11 +1087,109 @@ TEST_F(RMSNormOpTest, GatedRejectsMismatchedBackwardTensors) {
                 dy,
                 gate,
                 /* compute_dgamma */ false,
+                kMaxRowSlices,
                 std::nullopt,
                 ttml::core::zeros(ttnn::Shape(s.head_major()), device),
                 std::nullopt);
         }),
         ThrowsMessage<std::runtime_error>(HasSubstr("compute_dgamma is false")));
+}
+
+TEST_F(RMSNormOpTest, RejectsMaxRowSlicesOutOfRange) {
+    const Shape s{1, 32, 1, 1024};
+    const auto in = make_inputs(s, 47U, ttnn::DataType::BFLOAT16, /* gated */ false);
+    const auto x = to_device(in.x);
+    const auto gamma = to_device(in.gamma);
+    const auto dy = to_device(in.dy);
+    const auto rms = ttml::metal::rmsnorm_fw(x, gamma)[1].value();
+
+    for (const uint32_t max_row_slices : {0U, kMaxRowSlices + 1U}) {
+        const std::string label = "max_row_slices = " + std::to_string(max_row_slices);
+        EXPECT_THAT(
+            ([&] {
+                return ttnn::prim::ttml_rmsnorm_fw(
+                    x, gamma, /* gate */ std::nullopt, /* return_intermediates */ true, kEps, max_row_slices);
+            }),
+            ThrowsMessage<std::runtime_error>(HasSubstr("max_row_slices must be in")))
+            << label;
+        EXPECT_THAT(
+            ([&] {
+                return ttnn::prim::ttml_rmsnorm_bw(
+                    x, gamma, rms, dy, /* gate */ std::nullopt, /* compute_dgamma */ true, max_row_slices);
+            }),
+            ThrowsMessage<std::runtime_error>(HasSubstr("max_row_slices must be in")))
+            << label;
+    }
+}
+
+namespace {
+
+// The tests that use these shapes only cover the sliced or the whole-row path if the planner splits their rows the way
+// they expect. Every slice they get is far inside L1, so every fit check passes.
+struct RowSplitExpectation {
+    const char* label;
+    std::vector<uint32_t> shape;
+    bool sliced;
+};
+
+const std::vector<RowSplitExpectation>& row_split_expectations() {
+    static const std::vector<RowSplitExpectation> expectations = {
+        {"Plain_1x32x1x1000", {1U, 1U, 32U, 1000U}, true},
+        {"Plain_1x1024x1x5120", {1U, 1U, 1024U, 5120U}, true},
+        {"NIGHTLY_Plain_1x1024x1x5119", {1U, 1U, 1024U, 5119U}, true},
+        {"Plain_1x1184x1x2463", {1U, 1U, 1184U, 2463U}, true},
+        {"Plain_1x32x1x863", {1U, 1U, 32U, 863U}, true},
+        {"Plain_1x4192x1x2368", {1U, 1U, 4192U, 2368U}, true},
+        // The _WholeRows cases force whole rows because these widths would be sliced.
+        {"Plain_1x32x1x5120_WholeRows, RMSNorm_Compare_Aligned_Qwen3_32B_Hidden", {1U, 1U, 32U, 5120U}, true},
+        {"Plain_1x32x1x8191_WholeRows", {1U, 1U, 32U, 8191U}, true},
+        {"Plain_1x32x1x16384, Plain_1x32x1x16384_WholeRows", {1U, 1U, 32U, 16384U}, true},
+        {"Plain_1x32x1x12480_WholeRows", {1U, 1U, 32U, 12480U}, true},
+        {"Plain_1x32x1x24540_WholeRows", {1U, 1U, 32U, 24540U}, true},
+        {"RMSNorm_Compare_FrozenGamma, whole rows", {1U, 1U, 4096U, 512U}, false},
+        {"RMSNorm_Compare_FrozenGamma, sliced row", {1U, 1U, 1U, 16384U}, true},
+        {"DistinctKeys, sliced tile row", {1U, 1U, 32U, 1024U}, true},
+    };
+    return expectations;
+}
+
+ttml::metal::ops::rmsnorm::RowSlicePlan plan_row_split(
+    const tt::tt_metal::CoreCoord grid, const std::vector<uint32_t>& shape) {
+    const uint32_t tile_rows =
+        shape[0] * shape[1] * ((shape[2] + tt::constants::TILE_HEIGHT - 1U) / tt::constants::TILE_HEIGHT);
+    const uint32_t Wt = (shape[3] + tt::constants::TILE_WIDTH - 1U) / tt::constants::TILE_WIDTH;
+    return ttml::metal::ops::rmsnorm::plan_row_slices(
+        grid, tile_rows, Wt, kMaxRowSlices, [](uint32_t, uint32_t) { return true; });
+}
+
+}  // namespace
+
+// The expectations hold on a 13x10 grid, so they don't depend on the machine the tests run on. The planner itself is
+// pinned on several grids by rmsnorm_planner_test.cpp.
+TEST_F(RMSNormOpTest, TestShapesGetTheirIntendedRowSplit) {
+    const tt::tt_metal::CoreCoord grid{13U, 10U};
+    for (const auto& e : row_split_expectations()) {
+        const auto plan = plan_row_split(grid, e.shape);
+        EXPECT_EQ(plan.num_slices > 1U, e.sliced)
+            << e.label << ": " << plan.num_slices << " slices on a " << grid.x << "x" << grid.y << " grid";
+    }
+}
+
+// On a smaller grid some of the shapes meant to be sliced run whole rows: still correct, but the sliced path they are
+// there for goes untested. Says so with a skip; never fails.
+TEST_F(RMSNormOpTest, TestShapesAreSlicedOnThisDevice) {
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    std::string uncovered;
+    for (const auto& e : row_split_expectations()) {
+        if (e.sliced && plan_row_split(grid, e.shape).num_slices == 1U) {
+            uncovered += std::string(uncovered.empty() ? "" : "; ") + "on this " + std::to_string(grid.x) + "x" +
+                         std::to_string(grid.y) + " grid " + e.label +
+                         " runs whole rows, so the sliced path is not covered";
+        }
+    }
+    if (!uncovered.empty()) {
+        GTEST_SKIP() << uncovered;
+    }
 }
 
 // ============================================================================
@@ -1246,6 +1462,7 @@ void run_rmsnorm_fw_preallocated(bool return_intermediates) {
             /*gate=*/std::nullopt,
             return_intermediates,
             kCacheTestEps,
+            kMaxRowSlices,
             preallocated_rms,
             preallocated_output);
         const auto entries_after = device->num_program_cache_entries();
@@ -1277,8 +1494,8 @@ void run_rmsnorm_fw_preallocated(bool return_intermediates) {
     }
 
     if (!return_intermediates) {
-        // With no rms to write, a preallocated one is rejected rather than ignored, also on a hit of the cached
-        // program: the op has no hit-only validation, so ttnn validates hits as misses.
+        // With no rms to write, a preallocated one is rejected rather than ignored. The program key covers which
+        // optional tensors are passed, so this launch misses, and validation rejects it before a program is built.
         const auto launch = static_cast<uint32_t>(launches.size());
         const auto in = make_forward_inputs(shape, launch, x_range_of_launch(launch));
         const auto preallocated_rms = test_utils::filled_on_device(rms_shape, kNotWritten);
@@ -1290,6 +1507,7 @@ void run_rmsnorm_fw_preallocated(bool return_intermediates) {
                     /*gate=*/std::nullopt,
                     /*return_intermediates=*/false,
                     kCacheTestEps,
+                    kMaxRowSlices,
                     preallocated_rms,
                     /*preallocated_output=*/std::nullopt);
             }),
@@ -1351,8 +1569,7 @@ TEST_F(RMSNormCacheHitTest, Forward_PreallocatedOutputsAcrossOptionalPresence_Tw
     run_rmsnorm_fw_preallocated(/*return_intermediates=*/true);
 }
 
-// The op only returns the output, so only the output's presence flips, and a preallocated rms is rejected once the
-// program is cached as well as before.
+// The op only returns the output, so only the output's presence flips, and a preallocated rms is rejected.
 TEST_F(RMSNormCacheHitTest, Forward_NoIntermediates_PreallocatedOutputsAcrossOptionalPresence_TwoCoreGroups) {
     run_rmsnorm_fw_preallocated(/*return_intermediates=*/false);
 }
@@ -1364,12 +1581,15 @@ TEST_F(RMSNormCacheHitTest, Forward_NoIntermediates_PreallocatedOutputsAcrossOpt
 // outputs are off. The one-tile-row shapes go first, so that a program reused for the two-core-group shape
 // leaves most of its rows unwritten, and the launch without rms goes before the one with it, so that a launch
 // reusing the other's program leaves its rms unwritten rather than writing one through the rms slot's address 0.
-// The last launches repeat earlier keys and must hit their programs, the single-core one included.
+// The last launches repeat earlier keys and must hit their programs, the single-core one included. A tile row of 32
+// tiles is split into column slices, and max_row_slices = 1 keeps it whole on one core, so the knob is a key of its
+// own.
 TEST_F(RMSNormCacheHitTest, Forward_DistinctKeysCompileDistinctPrograms_TwoCoreGroups) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     const std::vector<uint32_t> one_tile_row = {1U, 1U, 32U, kCacheTestC};
     const std::vector<uint32_t> one_tile_row_masked = {1U, 1U, 32U, kMaskedC};
+    const std::vector<uint32_t> one_wide_tile_row = {1U, 1U, 32U, 1024U};
     const auto two_core_groups = test_utils::two_core_group_rows_shape(kCacheTestC);
     KeptTensors kept;
 
@@ -1378,30 +1598,42 @@ TEST_F(RMSNormCacheHitTest, Forward_DistinctKeysCompileDistinctPrograms_TwoCoreG
         std::vector<uint32_t> shape;
         bool return_intermediates;
         bool new_key;
+        uint32_t max_row_slices = kMaxRowSlices;
     };
     const std::vector<Launch> launches = {
         {"one tile row", one_tile_row, true, true},
         {"one tile row, C = 40", one_tile_row_masked, true, true},
         {"two core groups, no rms", two_core_groups, false, true},
         {"two core groups", two_core_groups, true, true},
+        {"sliced tile row, no rms", one_wide_tile_row, false, true},
+        {"sliced tile row", one_wide_tile_row, true, true},
+        {"wide tile row, whole", one_wide_tile_row, true, true, 1U},
         {"one tile row, C = 40 again", one_tile_row_masked, true, false},
         {"two core groups again", two_core_groups, true, false},
         {"two core groups, no rms again", two_core_groups, false, false},
+        {"sliced tile row again", one_wide_tile_row, true, false},
+        {"wide tile row, whole again", one_wide_tile_row, true, false, 1U},
     };
     for (uint32_t launch = 0; launch < launches.size(); ++launch) {
         const auto& spec = launches[launch];
         const std::string label = "launch " + std::to_string(launch) + " (" + spec.label + ")";
         const auto in = make_forward_inputs(spec.shape, launch, x_range_of_launch(launch));
         const auto entries_before = device->num_program_cache_entries();
-        const auto result = metal::rmsnorm_fw(in.x.tensor, in.gamma.tensor, spec.return_intermediates, kCacheTestEps);
+        const auto result = ttnn::prim::ttml_rmsnorm_fw(
+            in.x.tensor,
+            in.gamma.tensor,
+            /*gate=*/std::nullopt,
+            spec.return_intermediates,
+            kCacheTestEps,
+            spec.max_row_slices);
         expect_cache(entries_before, spec.new_key ? CacheExpectation::Miss : CacheExpectation::Hit, label);
-        ASSERT_TRUE(result[0].has_value()) << label;
-        ASSERT_EQ(result[1].has_value(), spec.return_intermediates) << label;
-        expect_rmsnorm_fw_matches_reference(*result[0], result[1], in, kCacheTestEps, label);
+        ASSERT_EQ(result.size(), spec.return_intermediates ? 2U : 1U) << label;
+        const auto rms = spec.return_intermediates ? std::make_optional(result[1]) : std::nullopt;
+        expect_rmsnorm_fw_matches_reference(result[0], rms, in, kCacheTestEps, label);
         kept.add_inputs(in, label);
-        kept.add(*result[0], label + " output");
-        if (spec.return_intermediates) {
-            kept.add(*result[1], label + " rms");
+        kept.add(result[0], label + " output");
+        if (rms.has_value()) {
+            kept.add(*rms, label + " rms");
         }
     }
 
@@ -1484,6 +1716,7 @@ TEST_F(RMSNormCacheHitTest, Backward_PreallocatedOutputsAcrossOptionalPresence_T
                 in.dL_dout.tensor,
                 /*gate=*/std::nullopt,
                 /*compute_dgamma=*/true,
+                kMaxRowSlices,
                 preallocated_dL_da,
                 preallocated_dL_dgamma_components),
             label);
@@ -1512,12 +1745,14 @@ TEST_F(RMSNormCacheHitTest, Backward_PreallocatedOutputsAcrossOptionalPresence_T
 }
 
 // The backward counterpart of Forward_DistinctKeysCompileDistinctPrograms_TwoCoreGroups, over the input shape:
-// the logical width at an equal padded width, then the number of tile rows, then both again.
+// the logical width at an equal padded width, then the number of tile rows, then a sliced tile row and the same row
+// kept whole, then all again.
 TEST_F(RMSNormCacheHitTest, Backward_DistinctKeysCompileDistinctPrograms_TwoCoreGroups) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     const std::vector<uint32_t> one_tile_row = {1U, 1U, 32U, kCacheTestC};
     const std::vector<uint32_t> one_tile_row_masked = {1U, 1U, 32U, kMaskedC};
+    const std::vector<uint32_t> one_wide_tile_row = {1U, 1U, 32U, 1024U};
     const auto two_core_groups = test_utils::two_core_group_rows_shape(kCacheTestC);
     KeptTensors kept;
 
@@ -1525,13 +1760,18 @@ TEST_F(RMSNormCacheHitTest, Backward_DistinctKeysCompileDistinctPrograms_TwoCore
         const char* label;
         std::vector<uint32_t> shape;
         bool new_key;
+        uint32_t max_row_slices = kMaxRowSlices;
     };
     const std::vector<Launch> launches = {
         {"one tile row", one_tile_row, true},
         {"one tile row, C = 40", one_tile_row_masked, true},
         {"two core groups", two_core_groups, true},
+        {"sliced tile row", one_wide_tile_row, true},
+        {"wide tile row, whole", one_wide_tile_row, true, 1U},
         {"one tile row, C = 40 again", one_tile_row_masked, false},
         {"two core groups again", two_core_groups, false},
+        {"sliced tile row again", one_wide_tile_row, false},
+        {"wide tile row, whole again", one_wide_tile_row, false, 1U},
     };
     for (uint32_t launch = 0; launch < launches.size(); ++launch) {
         const auto& spec = launches[launch];
@@ -1540,7 +1780,13 @@ TEST_F(RMSNormCacheHitTest, Backward_DistinctKeysCompileDistinctPrograms_TwoCore
         const auto entries_before = device->num_program_cache_entries();
         const auto result = plain_backward_outputs(
             ttnn::prim::ttml_rmsnorm_bw(
-                in.x.tensor, in.gamma.tensor, in.rms.tensor, in.dL_dout.tensor, /*gate=*/std::nullopt),
+                in.x.tensor,
+                in.gamma.tensor,
+                in.rms.tensor,
+                in.dL_dout.tensor,
+                /*gate=*/std::nullopt,
+                /*compute_dgamma=*/true,
+                spec.max_row_slices),
             label);
         expect_cache(entries_before, spec.new_key ? CacheExpectation::Miss : CacheExpectation::Hit, label);
         expect_rmsnorm_bw_matches_reference(result[0], result[1], in, label);
@@ -1553,10 +1799,10 @@ TEST_F(RMSNormCacheHitTest, Backward_DistinctKeysCompileDistinctPrograms_TwoCore
 }
 
 // ----------------------------------------------------------------------------
-// Gated mode (see Section 4): the gate is one more input and dL_dgate one more output, and the program key holds the
-// head count, which is 0 without a gate. The inputs and references are Section 4's, at its kEps. Launch k scales x by
-// 2^k, which is exact, and negates gamma on odd k, so that a launch that reads another launch's x, rms or gamma fails
-// the reference check; each launch draws its own gate and dL_dout.
+// Gated mode (see Section 4): the gate is one more input and dL_dgate one more output, and the program key covers the
+// gate's spec, which gives its presence and the head count. The inputs and references are Section 4's, at its kEps.
+// Launch k scales x by 2^k, which is exact, and negates gamma on odd k, so that a launch that reads another launch's x,
+// rms or gamma fails the reference check; each launch draws its own gate and dL_dout.
 // ----------------------------------------------------------------------------
 
 namespace {
@@ -1808,6 +2054,7 @@ TEST_F(RMSNormCacheHitTest, GatedForward_PreallocatedOutputsAcrossOptionalPresen
             in.gate,
             /*return_intermediates=*/true,
             kEps,
+            kMaxRowSlices,
             preallocated_rms,
             preallocated_output);
         const auto entries_after = device->num_program_cache_entries();
@@ -1883,6 +2130,7 @@ TEST_F(RMSNormCacheHitTest, GatedBackward_PreallocatedOutputsAcrossOptionalPrese
             in.dL_dout,
             in.gate,
             /*compute_dgamma=*/true,
+            kMaxRowSlices,
             preallocated_dL_da,
             preallocated_dL_dgamma_components,
             preallocated_dL_dgate);
@@ -1952,9 +2200,10 @@ TEST_F(RMSNormCacheHitTest, Forward_GateAndHeadCountCompileDistinctPrograms_TwoC
 // The backward counterpart of Forward_GateAndHeadCountCompileDistinctPrograms_TwoCoreGroups, each mode without and with
 // compute_dgamma, which a frozen gamma turns off. In each mode the launch without dL_dgamma goes first: a launch with
 // it that reused that program would leave its dL_dgamma_components unwritten, while in the other order a launch
-// without it would write them through the absent output's address 0. Once the programs are cached, hits must still
-// reject a preallocated dL_dgamma_components without compute_dgamma and a preallocated dL_dgate without a gate: the op
-// has no hit-only validation, so ttnn validates hits as misses.
+// without it would write them through the absent output's address 0. Once the programs are cached, a preallocated
+// dL_dgamma_components without compute_dgamma and a preallocated dL_dgate without a gate must still be rejected. The
+// program key covers which optional tensors are passed, so these launches miss, and validation rejects them before a
+// program is built.
 TEST_F(RMSNormCacheHitTest, Backward_GateHeadCountAndDgammaCompileDistinctPrograms_TwoCoreGroups) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
@@ -2005,6 +2254,7 @@ TEST_F(RMSNormCacheHitTest, Backward_GateHeadCountAndDgammaCompileDistinctProgra
                 plain.dL_dout,
                 /*gate=*/std::nullopt,
                 /*compute_dgamma=*/true,
+                kMaxRowSlices,
                 std::nullopt,
                 std::nullopt,
                 preallocated_dL_dgate);
@@ -2021,6 +2271,7 @@ TEST_F(RMSNormCacheHitTest, Backward_GateHeadCountAndDgammaCompileDistinctProgra
                 gated.dL_dout,
                 gated.gate,
                 /*compute_dgamma=*/false,
+                kMaxRowSlices,
                 std::nullopt,
                 preallocated_dL_dgamma_components,
                 std::nullopt);

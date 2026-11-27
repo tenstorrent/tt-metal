@@ -4,7 +4,6 @@
 
 #include "rmsnorm_fw_device_operation.hpp"
 
-#include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "metal/ops/common/rmsnorm_common.hpp"
 #include "rmsnorm_fw_program_factory.hpp"
@@ -24,6 +23,12 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
     const auto& gamma_tensor = tensor_args.gamma;
     const auto& preallocated_rms_tensor = tensor_args.preallocated_rms;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
+    TT_FATAL(
+        args.max_row_slices >= 1U && args.max_row_slices <= rmsnorm::kMaxRowSlices,
+        "{}: max_row_slices must be in [1, {}], got {}",
+        op,
+        rmsnorm::kMaxRowSlices,
+        args.max_row_slices);
     check_device_tensor(
         input_tensor,
         op,
@@ -103,17 +108,11 @@ tensor_return_value_t RMSNormForwardDeviceOperation::create_output_tensors(
     return output_tensors;
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor, which optional tensors are
+// passed). It is custom only to skip the canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    // 0 is the ungated mode, which differs from gated mode with a single head.
-    const uint32_t num_heads =
-        tensor_args.gate.has_value() ? get_num_heads_of_head_merged(input_tensor, tensor_args.gate.value()) : 0U;
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormForwardDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape, num_heads);
-
-    return hash;
+    return tt::tt_metal::operation::hash_operation<RMSNormForwardDeviceOperation>(args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::rmsnorm_fw::device
@@ -126,12 +125,13 @@ ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation::tensor_retu
     const std::optional<ttnn::Tensor>& gate,
     bool return_intermediates,
     float epsilon,
+    uint32_t max_row_slices,
     const std::optional<ttnn::Tensor>& preallocated_rms,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     using OperationType = ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation;
 
-    auto operation_attributes =
-        OperationType::operation_attributes_t{.return_intermediates = return_intermediates, .epsilon = epsilon};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .return_intermediates = return_intermediates, .epsilon = epsilon, .max_row_slices = max_row_slices};
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .gamma = gamma_tensor,

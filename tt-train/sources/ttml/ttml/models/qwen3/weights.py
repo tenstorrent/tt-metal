@@ -278,9 +278,9 @@ def load_weights_from_hf(
       runs serially in the main thread (concurrent device ops race on the
       program-cache binary commit -- same as the sharded path below).
 
-    - ``sharded=True`` (lazy + FSDP path): the model has already been
-      ``fully_shard``-ed and materialized, so each parameter is allocated
-      already-sharded. Each HF weight is uploaded distributed to match the
+    - ``sharded=True`` (FSDP path): the model has already been
+      ``fully_shard``-ed (and materialized, if built lazily), so each parameter
+      is already sharded. Each HF weight is uploaded distributed to match the
       destination parameter's existing placements, so the full unsharded weight
       never lands on a single device (only its per-device slice does; the full
       tensor stays in host RAM). The materialized parameter's value is loaded
@@ -321,7 +321,7 @@ def load_weights_from_hf(
     sharded_mappers: dict = {}
     if sharded:
         device = ttml.autograd.AutoContext.get_instance().get_device()
-        replicate_mapper = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
+        replicate_mapper = ttml.core.distributed.replicate_to_mesh_mapper(device)
         for name in ttml_params:
             sharding = Sharding.from_tensor(ttml_params[name])
             mapper = sharding.derive_mapper()

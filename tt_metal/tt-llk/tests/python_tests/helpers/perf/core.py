@@ -24,8 +24,9 @@ from ..logger import logger
 from ..metrics import compute_metrics, export_counters, export_metrics
 from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
-from ..test_config import BuildMode, ProfilerBuild, TestConfig
+from ..test_config import LLK_CODE_SHIFT, BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+from . import window_hash
 from .schema import (
     FLAG_HEADERS,
     FORMAT_HEADERS,
@@ -43,11 +44,15 @@ from .schema import (
 )
 from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
 
+CODE_SHIFTS = [int(s) for s in os.environ.get("LLK_CODE_SHIFTS", "").split()]
+
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
 # match the marker values the kernels record; a mismatch silently empties the
 # TILE_LOOP mask in postprocess_tile_loop (no KeyError raised).
 INIT_MARKER = "INIT"
 TILE_LOOP_MARKER = "TILE_LOOP"
+# counters.h counted_zones: a bit per fixed zone id (ZONE_ID_INIT 0, ZONE_ID_TILE_LOOP 1)
+COUNT_INIT, COUNT_TILE_LOOP = 1 << 0, 1 << 1
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
@@ -70,10 +75,9 @@ ALL_PERF_RUN_TYPES = [
     PerfRunType.UNPACK_ISOLATE,
     PerfRunType.MATH_ISOLATE,
     PerfRunType.PACK_ISOLATE,
-    PerfRunType.L1_CONGESTION,
 ]
 
-# Run-type → kernel components for the ELF_SIZE column. L1_CONGESTION omitted.
+# Run-type → kernel components for the ELF_SIZE column.
 _CODE_SIZE_COMPONENTS = {
     PerfRunType.L1_TO_L1: ["unpack", "math", "pack"],
     PerfRunType.UNPACK_ISOLATE: ["unpack"],
@@ -795,6 +799,7 @@ def _selected_run_types(run_types):
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
+    SHIFT_REPORTS: ClassVar[dict] = {}
     COUNTER_REPORT: ClassVar[Any] = None  # Set by counter_report fixture
 
     def __init__(
@@ -813,6 +818,7 @@ class PerfConfig(TestConfig):
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_vector_ext: bool = False,
+        include_dirs: list = None,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -848,11 +854,14 @@ class PerfConfig(TestConfig):
             skip_build_header,
             compile_time_formats,
             requires_vector_ext=requires_vector_ext,
+            include_dirs=include_dirs,
         )
 
     @staticmethod
     def _dataclass_name_and_values(obj):
         """Return (name, value) pairs for dataclass fields, used as columns for the report."""
+        if getattr(obj, "perf_report_compile_only", False):
+            return []
         return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
 
     @staticmethod
@@ -975,13 +984,41 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
+    def _read_counters_of_launch(self, variant_counter_results, run_index):
+        # A counted zone without its readout raises (counters.py) and fails the test instead of leaving a blank window.
+        if TestConfig.counted_zones_address() is None:
+            return  # ttsim: no launch word, nothing counts
+        counter_results = read_counters(
+            location=TestConfig.TENSIX_LOCATION,
+            zones=self.counted_zones,
+            token=self.launch_token,
+        )
+        counter_results["run_index"] = run_index
+        variant_counter_results.append(counter_results)
+
     def run(self, perf_report: PerfReport, run_count=1):
         if not self.run_configs:
             pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
+        if not CODE_SHIFTS:
+            self._run_at_position(perf_report, run_count, first=True, last=True)
+            return
+        try:
+            for i, shift in enumerate(CODE_SHIFTS):
+                TestConfig.CODE_SHIFT = shift
+                self._run_at_position(
+                    perf_report if i == 0 else PerfConfig.SHIFT_REPORTS[shift],
+                    run_count,
+                    first=i == 0,
+                    last=i == len(CODE_SHIFTS) - 1,
+                )
+        finally:
+            TestConfig.CODE_SHIFT = LLK_CODE_SHIFT
 
+    def _run_at_position(self, perf_report: PerfReport, run_count, first, last):
         results = []
         counter_results_list = []
         code_sizes = {}
+        window_rows = []
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:
@@ -999,7 +1036,9 @@ class PerfConfig(TestConfig):
                 self.build_elfs()
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-            pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+            if last:
+                pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+            return
 
         PerfConfig.TEST_COUNTER += 1
 
@@ -1019,6 +1058,8 @@ class PerfConfig(TestConfig):
             elf_dir = (
                 TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
             )
+            if TestConfig.BUILD_MODE == BuildMode.CONSUME and not elf_dir.is_dir():
+                pytest.skip("no ELFs: the compile session did not reach this test")
             components = _CODE_SIZE_COMPONENTS.get(run_type)
             # 4-TRISC tests include SFPU_ISOLATE; L1_TO_L1 code size must count sfpu.elf too.
             if run_type == PerfRunType.L1_TO_L1 and any(
@@ -1030,16 +1071,31 @@ class PerfConfig(TestConfig):
                     TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")
                     for c in components
                 )
+                window_rows += [
+                    (
+                        run_type.name,
+                        c,
+                        (
+                            window_hash.fingerprint(
+                                TestConfig.OBJDUMP, elf_dir / f"{c}.elf"
+                            )
+                            if window_hash.enabled() and first
+                            else ""
+                        ),
+                    )
+                    for c in components
+                ]
 
             variant_raw_data = []
             variant_counter_results = []
+            # The measured launches count TILE_LOOP only: INIT's readout would sit between INIT and TILE_LOOP.
+            self.counted_zones = (
+                COUNT_TILE_LOOP if TestConfig.ENABLE_PERF_COUNTERS else 0
+            )
             for run_index in range(run_count):
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
-                # Counter config is written by BRISC from built-in array (local L1 write).
-                # Python NOC write is skipped to avoid L1 controller state change that
-                # causes ~7 cycle overhead on Float16 unpack operations.
 
                 profiler_data = Profiler.get_data(
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
@@ -1047,27 +1103,27 @@ class PerfConfig(TestConfig):
                 assert_zones_dont_overlap(profiler_data)
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
-                    try:
-                        counter_results = read_counters(
-                            location=TestConfig.TENSIX_LOCATION
-                        )
-                        if counter_results is not None and not counter_results.empty:
-                            counter_results["run_index"] = run_index
-                            variant_counter_results.append(counter_results)
-                    except Exception as e:
-                        logger.warning("Error reading counters: {}", e)
+                    self._read_counters_of_launch(variant_counter_results, run_index)
 
                 # Tag profiler data with run index for proper L1-to-L1 pairing
                 profiler_data.df["run_index"] = run_index
                 variant_raw_data.append(profiler_data)
 
+            if TestConfig.ENABLE_PERF_COUNTERS:
+                # INIT counts in launches of its own, the same code up to INIT's end; their timing is not used.
+                self.counted_zones = COUNT_INIT
+                for run_index in range(run_count):
+                    self.write_runtimes_to_L1()
+                    self.run_elf_files()
+                    self.wait_for_tensix_operations_finished()
+                    self._read_counters_of_launch(variant_counter_results, run_index)
+            self.counted_zones = 0
+
             get_stats = Profiler.STATS_FUNCTION[run_type]
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
-            # Only the no-counter build must produce wall-clock stats; a counter build may return counters alone.
-            counter_only_build = TestConfig.ENABLE_PERF_COUNTERS
-            if not stats_df.empty or not counter_only_build:
-                PerfConfig._validate_profiler_stats(stats_df, run_type)
-                results.append(stats_df)
+            # Both builds record the zones' wall clock; a run without it fails, counters on included.
+            PerfConfig._validate_profiler_stats(stats_df, run_type)
+            results.append(stats_df)
 
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)
@@ -1112,6 +1168,20 @@ class PerfConfig(TestConfig):
             self.passed_runtimes,
         )
         perf_report.append(combined, label=self.test_name)
+        if first:
+            window_hash.write_rows(
+                TestConfig.perf_run_dir(),
+                self.test_name,
+                PerfConfig._build_sweep_frame(
+                    code_sizes,
+                    self.formats_config,
+                    self.unpack_to_dest,
+                    self.dest_acc,
+                    self.passed_templates,
+                    self.passed_runtimes,
+                ),
+                window_rows,
+            )
 
         # Append raw counter data to the separate counter report
         if counter_results_list and PerfConfig.COUNTER_REPORT is not None:

@@ -49,6 +49,7 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
     bool output_concat_heads,
     const std::optional<ttnn::Tensor>& attn_mask_block_map) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -115,6 +116,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& attention_sink) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -155,6 +157,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& attention_sink) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -244,7 +247,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    bool dynamic_local_n) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -312,7 +316,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         circular_kv_cache,
         logical_n_tensor,
         logical_l_tensor,
-        kv_valid_end_tensor);
+        kv_valid_end_tensor,
+        dynamic_local_n);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
@@ -472,6 +477,7 @@ ttnn::Tensor flash_mla_prefill(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -504,6 +510,7 @@ ttnn::Tensor chunked_flash_mla_prefill(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -539,6 +546,7 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<int64_t> chunk_start_idx) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 

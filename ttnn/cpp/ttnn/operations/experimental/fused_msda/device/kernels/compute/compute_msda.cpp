@@ -110,12 +110,20 @@ static_assert(!TILED_GEOMETRY || POINTS_PER_BLOCK >= fused_msda_tiled_geometry::
 
 // Runtime args: [0] output tiles, then CONSTANTS_PER_LEVEL uint32 per level,
 // in the order fused_msda_program_factory.cpp::append_axis_constants emits.
+// With MSDA_DEVICE_COUNTS defined, [0] is unused: the reader derives the tile
+// count on device and passes it through MSDA_TILE_COUNT_CB.
 constexpr uint32_t CONSTANTS_PER_AXIS = fused_msda_tiled_geometry::CONSTANTS_PER_AXIS;
 
 void kernel_main() {
     compute_kernel_hw_startup(input_cb_index, scalar_cb_index, output_cb_index);
 
+#ifdef MSDA_DEVICE_COUNTS
+    CircularBuffer(MSDA_TILE_COUNT_CB).wait_front(1);
+    const uint32_t num_output_tiles = read_tile_value(MSDA_TILE_COUNT_CB, 0, 0);
+    CircularBuffer(MSDA_TILE_COUNT_CB).pop_front(1);
+#else
     const uint32_t num_output_tiles = get_arg_val<uint32_t>(0);
+#endif
 
     // Per-level normalized -> pixel constants, folded on the host so that
     // align_corners / locations_in_grid_space / from_offsets never become a

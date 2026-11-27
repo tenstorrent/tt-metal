@@ -10,7 +10,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/device_operation.hpp"  // ttnn::device_operation::launch
 #include "ttnn/operation.hpp"         // tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 namespace ttnn::experimental::prim {
 

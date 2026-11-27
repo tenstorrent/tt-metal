@@ -7,10 +7,10 @@
 
 #include "moreh_clip_grad_norm_step1_device_operation.hpp"
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm_step1 {
 
@@ -57,7 +57,7 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
 
     for (uint32_t j = 0; j < num_inputs; ++j) {
         const auto& input_shape_without_padding = inputs.at(j).logical_shape();
-        origin_hw_vec.emplace_back(input_shape_without_padding[2], input_shape_without_padding[3]);
+        origin_hw_vec.emplace_back(input_shape_without_padding[-2], input_shape_without_padding[-1]);
     }
 
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(norm_type);

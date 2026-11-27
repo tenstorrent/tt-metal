@@ -8,7 +8,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_defs.h"
 #include "llk_math_eltwise_sfpu_common.h"
 #include "llk_sfpu/ckernel_sfpu_srcs.h"
@@ -31,7 +31,7 @@ inline void llk_sfpu_srcs_configure_pack_impl(
     const std::uint32_t l1_addr_16B,
     const DataFormat srcs_format,
     const DataFormat l1_format) {
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK1>(
         srcs_shape, l1_addr_16B, static_cast<std::uint32_t>(l1_format));
     _llk_pack_hw_configure_<p_pacr::PACK1, false>(srcs_format, ckernel::ReluConfig::none());
 }
@@ -69,7 +69,7 @@ inline void llk_sfpu_srcs_unary_init(
     const ckernel::TensorShape srcs_shape =
         llk_sfpu_srcs_slice_shape_impl(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
 
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP2_SLICE0>(
         srcs_shape, l1_in_addr_16B, static_cast<std::uint32_t>(unpack_S_src_format));
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
@@ -109,10 +109,12 @@ inline void llk_sfpu_srcs_binary_init(
     const ckernel::TensorShape srcs_shape =
         llk_sfpu_srcs_slice_shape_impl(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
 
-    const std::uint8_t bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP2_SLICE0>(
         srcs_shape, l1_in0_addr_16B, static_cast<std::uint32_t>(unpack_S_src_format));
-    const std::uint8_t bfd_b = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice1>(
+    constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP2_SLICE0;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP2_SLICE1>(
         srcs_shape, l1_in1_addr_16B, static_cast<std::uint32_t>(unpack_S_src_format));
+    constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP2_SLICE1;
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
 
@@ -129,8 +131,8 @@ inline void llk_sfpu_srcs_unary_impl(
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
     const std::uint32_t slice_count = ckernel::trisc::srcs_dims::slice_count(srcs_32bit_mode);
 
-    const std::uint8_t bfd_unpack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice0>();
-    const std::uint8_t bfd_pack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>();
+    const std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP2_SLICE0;
+    const std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK1;
 
     for (std::uint32_t i = 0; i < num_tiles; ++i) {
         _llk_unpack_srcs_<INSTRN_COUNT>(bfd_unpack, i * slice_count);  // Sets dvalid for SFPU to read
@@ -156,7 +158,7 @@ inline void llk_sfpu_srcs_binary_impl(
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
     const std::uint32_t slice_count = ckernel::trisc::srcs_dims::slice_count(srcs_32bit_mode);
 
-    const std::uint8_t bfd_pack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>();
+    const std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK1;
 
     for (std::uint32_t i = 0; i < num_tiles; ++i) {
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, i * slice_count);

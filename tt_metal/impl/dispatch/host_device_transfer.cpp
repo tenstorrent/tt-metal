@@ -8,21 +8,20 @@
 #include <set>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/graph_tracking.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 
-#include "impl/allocator/allocator.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/emulation/host_sanitizers.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tracy/Tracy.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace tt::tt_metal::slow_dispatch {
 

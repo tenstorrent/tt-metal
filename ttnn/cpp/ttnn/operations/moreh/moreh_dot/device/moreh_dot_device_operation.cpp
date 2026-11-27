@@ -11,8 +11,7 @@
 
 namespace ttnn::operations::moreh::moreh_dot {
 
-void MorehDotOperation::validate(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+void MorehDotOperation::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_a;
     const auto& input_b = tensor_args.input_b;
 
@@ -24,7 +23,24 @@ void MorehDotOperation::validate(
     TT_FATAL(a_shape_wo_padding[3] == b_shape_wo_padding[3], "Shape without padding must be the same.");
 
     TT_FATAL(
-        input_a.dtype() == DataType::BFLOAT16 || input_a.dtype() == DataType::BFLOAT8_B, "Unsupported data format");
+        input_a.dtype() == DataType::BFLOAT16,
+        "Unsupported data format {}, only BFLOAT16 is supported",
+        input_a.dtype());
+    TT_FATAL(
+        input_b.dtype() == input_a.dtype(),
+        "input_b dtype {} must match input_a dtype {}",
+        input_b.dtype(),
+        input_a.dtype());
+    TT_FATAL(
+        operation_attributes.dtype == input_a.dtype(),
+        "Output dtype {} must match input dtype {}",
+        operation_attributes.dtype,
+        input_a.dtype());
+    TT_FATAL(
+        !tensor_args.output.has_value() || tensor_args.output->dtype() == input_a.dtype(),
+        "Output tensor dtype {} must match input dtype {}",
+        tensor_args.output.has_value() ? tensor_args.output->dtype() : input_a.dtype(),
+        input_a.dtype());
     TT_FATAL(
         input_a.storage_type() == StorageType::DEVICE and input_b.storage_type() == StorageType::DEVICE,
         "Operands to matmul need to be on device!");

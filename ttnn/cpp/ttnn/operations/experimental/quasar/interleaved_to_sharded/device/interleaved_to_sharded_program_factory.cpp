@@ -7,21 +7,20 @@
 #include <cmath>
 
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
@@ -85,10 +84,10 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     CoreCoord end_core = cores.back();
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
+    bool src_is_dram = src_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     if (input.layout() == Layout::TILE) {
@@ -132,12 +131,17 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         if (keep_l1_aligned) {
             padded_offset_bytes = tt::align(input_unit_size, hal::get_l1_alignment());
         } else {
-            padded_offset_bytes = tt::align(input_unit_size, input.buffer()->alignment());
+            padded_offset_bytes = tt::align(input_unit_size, input.mesh_buffer().alignment());
         }
     }
 
     uint32_t num_input_units = num_units_per_shard;
-    uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
+    // MX tiles (1056 B for the 8-bit formats) are walked by the packer / unpacker and the tile readers at the format's
+    // tile stride, so the staging rings must be sized to that stride (L1 aligned), not padded to the 64 B DRAM page
+    // alignment.
+    const bool mx_tiles = tt::tt_metal::is_mx(input.dtype()) || tt::tt_metal::is_mx(output.dtype());
+    uint32_t output_page_size =
+        tt::align(output_unit_size, mx_tiles ? hal::get_l1_alignment() : dst_buffer->alignment());
 
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
@@ -148,7 +152,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     bool use_scratch = (src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned;
     uint32_t scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
 
-    uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
+    uint32_t input_page_size = tt::align(input_unit_size, mx_tiles ? hal::get_l1_alignment() : src_buffer->alignment());
 
     bool is_tile = (input.layout() == Layout::TILE);
 

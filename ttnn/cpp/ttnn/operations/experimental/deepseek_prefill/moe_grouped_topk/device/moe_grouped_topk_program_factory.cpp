@@ -6,11 +6,11 @@
 
 #include <bit>
 
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
 
@@ -352,8 +352,11 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.named_compile_time_args = std::move(compute_named_compile_time_args);
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity =
+            (fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false,
         .unpack_to_dest_mode = unpack_to_dest_mode,

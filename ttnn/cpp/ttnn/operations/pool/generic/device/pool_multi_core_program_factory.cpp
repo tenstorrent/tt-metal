@@ -2,25 +2,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
-#include "tt-metalium/circular_buffer_config.hpp"
-#include "tt-metalium/constants.hpp"
-#include "tt-metalium/tensor_accessor_args.hpp"
-#include "tt-metalium/tt_backend_api_types.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer_config.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
+#include "tt-metalium/workload/legacy/tensor_accessor_args.hpp"
+#include "tt-metalium/data_formats/data_format.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
-#include "tt-metalium/host_buffer.hpp"
-#include "tt-metalium/buffer.hpp"
+#include "tt-metalium/memory/buffer/host_buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <cstdint>
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "ttnn/tensor/storage.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <algorithm>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -251,7 +251,7 @@ std::vector<uint32_t> generate_core_starting_indices(
         const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {
             // this core has no output
-            starting_indices.push_back(0);
+            starting_indices.insert(starting_indices.end(), repeat_factor, 0);
             continue;
         }
         TT_ASSERT(item.input_range.start == op_trace_metadata[output_shard_start]);
@@ -911,15 +911,24 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     // Get device arch for compute kernel config initialization
     auto device_arch = input.device()->arch();
 
+    const bool default_fp32_acc = (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit;
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    // Only avg pool multiplies (by the scalar); max pool ignores fidelity, so its default is left unchanged.
+    const auto default_math_fidelity =
+        (params.is_avg_pool && params.is_large_kernel && device_arch == tt::ARCH::WORMHOLE_B0)
+            ? tt::tt_metal::MathFidelity::HiFi3
+            : tt::tt_metal::MathFidelity::HiFi4;
+
     // Initialize device compute kernel config with user-provided config or defaults
     auto device_compute_kernel_config = init_device_compute_kernel_config(
         device_arch,
         compute_kernel_config,
-        tt::tt_metal::MathFidelity::HiFi4,
-        false,                                                             // math_approx_mode
-        (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,  // fp32_dest_acc_en
-        false,                                                             // packer_l1_acc
-        (params.is_large_kernel && return_indices) || indexes_32_bit       // dst_full_sync_en
+        default_math_fidelity,
+        false,                                                        // math_approx_mode
+        default_fp32_acc,                                             // fp32_dest_acc_en
+        false,                                                        // packer_l1_acc
+        (params.is_large_kernel && return_indices) || indexes_32_bit  // dst_full_sync_en
     );
 
     const auto pool_defines_map = get_defines(pool_type);

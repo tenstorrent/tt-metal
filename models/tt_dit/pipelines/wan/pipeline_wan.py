@@ -24,11 +24,13 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.wan.dbcache import ExpertCacheRunner, WanDBCacheConfig
+from models.tt_dit.pipelines.wan.policy import served_resolutions
 from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
 from models.tt_dit.solvers import solver_for_scheduler
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.conv3d import conv3d_configs
 from models.tt_dit.utils.dbcache import DBCacheConfig
+from models.tt_dit.utils.hf_local_mirror import ensure_cached
 from models.tt_dit.utils.tensor import float32_tensor
 from models.tt_dit.utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from models.tt_dit.utils.tracing import Tracer
@@ -42,16 +44,10 @@ _UNSET = object()  # sentinel for "use config default" in WanPipelineConfig.defa
 
 _DEFAULT_CHECKPOINT = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 
-# The supported video sizes, (width, height): Wan 2.2's 480p and 720p sizes in 16:9 and 9:16.
-_RESOLUTIONS_480P = ((832, 480), (480, 832))
-_RESOLUTIONS_720P = ((1280, 720), (720, 1280))
-
 # The spatial lengths the transformer runs at, in tokens per latent frame: those of the 480p and
 # 720p sizes. Each size is padded to the smallest that fits it, so sizes with the same token count
 # share traces and buffers.
 _SPATIAL_BUCKETS_PER_FRAME = (1560, 3600)
-
-_DEFAULT_RESOLUTION = (832, 480)
 
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (2, 4): {
@@ -88,8 +84,6 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "dynamic_load": False,
         "topology": ttnn.Topology.Linear,
         "is_fsdp": True,
-        # 720p runs out of DRAM in the VAE decoder.
-        "resolutions": _RESOLUTIONS_480P,
         "spatial_buckets_per_frame": _SPATIAL_BUCKETS_PER_FRAME,
     },
     (2, 4): {
@@ -109,7 +103,6 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "is_fsdp": False,
         "vae_t_chunk_size": None,  # full-T
-        "resolutions": _RESOLUTIONS_720P + _RESOLUTIONS_480P,
         "spatial_buckets_per_frame": _SPATIAL_BUCKETS_PER_FRAME,
     },
     (4, 32): {
@@ -120,6 +113,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "is_fsdp": False,
         "vae_t_chunk_size": None,
+        "spatial_buckets_per_frame": _SPATIAL_BUCKETS_PER_FRAME,
         "sdpa_t_fracture_w_only": True,
     },
 }
@@ -191,8 +185,8 @@ class WanPipelineConfig:
         """The preset for ``mesh_shape``.
 
         ``height`` and ``width`` configure that single size, and ``resolutions`` a list of
-        (width, height); otherwise the preset's sizes apply, by default 832x480. The spatial
-        buckets default to the preset's when its sizes apply, and to none otherwise.
+        (width, height); otherwise the sizes `policy.served_resolutions` gives for the mesh apply.
+        The spatial buckets default to the preset's when those sizes apply, and to none otherwise.
         """
         preset_dict = _PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH
         preset = preset_dict.get(tuple(mesh_shape), {})
@@ -206,7 +200,7 @@ class WanPipelineConfig:
         if height is not None and width is not None:
             resolutions = ((width, height),)
         if resolutions is None:
-            resolutions = preset.get("resolutions", (_DEFAULT_RESOLUTION,))
+            resolutions = served_resolutions(mesh_shape)
             if spatial_buckets_per_frame is None:
                 spatial_buckets_per_frame = preset.get("spatial_buckets_per_frame", ())
         if spatial_buckets_per_frame is None:
@@ -269,7 +263,7 @@ class WanPipelineConfig:
             num_frames=num_frames,
             cfg_enabled=cfg_enabled,
             max_sequence_length=max_sequence_length,
-            checkpoint_name=checkpoint_name,
+            checkpoint_name=ensure_cached(checkpoint_name),
             cache_config=WanDBCacheConfig.coerce(cache_config) if cache_config is not None else None,
         )
 
@@ -519,26 +513,22 @@ class WanPipeline(PipelineAPIMixin):
             or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=5.0)
         )
 
-        if self.dynamic_load:
-            # setup models that cannot be loaded together with the corresponding model.
-            # The module loading utility will take care of the necessary unloading.
-            if ttnn.device.is_blackhole():
-                self.transformer.register_coresident_exclusions(self.transformer_2)
-                self.transformer_2.register_coresident_exclusions(self.transformer)
-            else:
-                # WH T3K has tighter DRAM — include VAE in the unload chain so
-                # transformers and VAE never coexist in DRAM across pipeline runs.
-                self.transformer.register_coresident_exclusions(self.transformer_2, *vae_decoders)
-                self.transformer_2.register_coresident_exclusions(self.transformer, *vae_decoders)
-                for decoder in vae_decoders:
-                    decoder.register_coresident_exclusions(self.transformer, self.transformer_2)
+        hi, lo = self.transformer, self.transformer_2
+        # WH T3K has tighter DRAM: under dynamic load the transformers and VAE never coexist in DRAM.
+        swap_vae = self.dynamic_load and not ttnn.device.is_blackhole()
+        for vae in vaes_by_blockings.values():
+            self.residency.register(vae.decoder, vae.decoder_spec, evicts=[hi, lo] if swap_vae else [])
+        for idx, (model, other) in enumerate([(hi, lo), (lo, hi)]):
+            evicts = ([other] if self.dynamic_load else []) + (vae_decoders if swap_vae else [])
+            self.residency.register(model, self._transformer_spec(idx), evicts=evicts)
+        self.residency.register(self._text_encoder.encoder, self._text_encoder.encoder_spec)
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer(1)
         self._prepare_transformer(0)
         self._prepare_text_encoder()
-        for vae in vaes_by_blockings.values():
-            vae.reload_weights()
+        for decoder in vae_decoders:
+            self.residency.load(decoder)
 
         self._boundary_ratio = config.boundary_ratio
         self._expand_timesteps = config.expand_timesteps
@@ -653,16 +643,23 @@ class WanPipeline(PipelineAPIMixin):
         return buffer
 
     def _prepare_text_encoder(self) -> None:
-        self._text_encoder.prepare()
+        self.residency.load(self._text_encoder.encoder)
+
+    def _transformer_spec(self, idx: int) -> dict:
+        """The `cache.load_model` keywords of expert ``idx``; subclasses override it to load other weights."""
+        checkpoint = self.transformer_states[idx].checkpoint
+        return {
+            "model_name": checkpoint.model_name,
+            "subfolder": checkpoint.subfolder,
+            "parallel_config": self.parallel_config,
+            "mesh_shape": tuple(self.mesh_device.shape),
+            "mesh_device": self.mesh_device,
+            "is_fsdp": self.is_fsdp,
+            "get_torch_state_dict": checkpoint.state_dict,
+        }
 
     def _prepare_transformer(self, idx: int) -> None:
-        state = self.transformer_states[idx]
-        state.checkpoint.load(
-            state.model,
-            mesh_device=self.mesh_device,
-            parallel_config=self.parallel_config,
-            is_fsdp=self.is_fsdp,
-        )
+        self.residency.load(self.transformer_states[idx].model)
 
     def _step(
         self,
@@ -823,7 +820,8 @@ class WanPipeline(PipelineAPIMixin):
                 for r in ts.cache_runners.values()
             ):
                 for r in ts.cache_runners.values():
-                    r.release_traces()
+                    for tracer in (r.head, r.body, r.tail):
+                        tracer.release_trace()
                 ts.cache_runners.clear()
             runner = ts.cache_runners.get(padded_sequence_length)
             if runner is None:
@@ -1177,8 +1175,10 @@ class WanPipeline(PipelineAPIMixin):
         on_event(SectionStart("vae"))
         # The decoder's CCL buffers are cached by shape, so each size would keep its own; the
         # untraced decode can release them instead.
+        vae = self._vaes[size]
+        self.residency.load(vae.decoder)
         with self.vae_ccl_manager.transient_ping_pong_buffers():
-            video_torch = self._vaes[size].decode(latents, output_type=output_type)
+            video_torch = vae.decode(latents, output_type=output_type)
 
         if output_type == "uint8":
             video = video_torch.numpy()
@@ -1192,10 +1192,3 @@ class WanPipeline(PipelineAPIMixin):
 
     def synchronize_devices(self) -> None:
         ttnn.synchronize_device(self.mesh_device)
-
-    def release_traces(self) -> None:
-        for tracer in self._step_tracers.values():
-            tracer.release_trace()
-        for ts in self.transformer_states:
-            for runner in ts.cache_runners.values():
-                runner.release_traces()

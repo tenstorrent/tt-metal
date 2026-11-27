@@ -5,10 +5,10 @@
 
 #include <algorithm>
 #include <span>
-#include <tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/buffers/semaphore.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <map>
 #include <string>
 #include <variant>
@@ -17,12 +17,11 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "dispatch/command_queue_common.hpp"
-#include "device.hpp"
+#include "tt-metalium/mesh/legacy/device.hpp"
 #include "dispatch.hpp"
 #include "fd_kernel.hpp"
-#include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "prefetch.hpp"
 #include "context/context_descriptor.hpp"
 #include "debug/inspector/inspector.hpp"
@@ -32,15 +31,12 @@
 #include "device/device_manager.hpp"
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
-#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hostdev/realtime_profiler_msgs.h"
 
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/dprint_server.hpp"
-#include "impl/debug/debug_helpers.hpp"
 #include "hostdev/device_print_structures.h"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
-#include "hostdevcommon/dprint_common.h"
 
 using namespace tt::tt_metal;
 

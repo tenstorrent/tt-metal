@@ -16,29 +16,29 @@
 #include "optional"
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <vector>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // Per-core reader/writer arg vectors (geometry unchanged from the shared RM factory). Reader vector:
-//   [0]=src abs addr (aligned-down)+width_offset, [1]=padded_stick, [2]=unpadded_stick, [3]=stick_offset,
-//   [4]=num_dims, [5]=start_id, [6..8]=num_sticks(x3), [9..)=num_output_sticks_per_dim, num_input_sticks_
-//   per_dim, id_per_dim (each num_dims). Writer vector: {num_sticks, out_row_elems, in_row_bytes, out_row_bytes}.
+//   [0]=src abs addr (aligned-down)+width_offset, [1]=unpadded_stick, [2]=stick_offset, [3]=num_dims,
+//   [4]=start_id, [5..7]=num_sticks(x3), [8..)=num_output_sticks_per_dim, num_input_sticks_per_dim,
+//   id_per_dim (each num_dims). Writer vector: {num_sticks, out_row_elems, in_row_bytes, out_row_bytes}.
 static std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>
 get_padded_slice_runtime_args_rm_sharded_output(
     const Tensor& input_tensor,
@@ -55,8 +55,6 @@ get_padded_slice_runtime_args_rm_sharded_output(
     bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-
-    int input_page_size = input_shape[-1] * input_tensor.element_size();
 
     uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];
@@ -80,10 +78,10 @@ get_padded_slice_runtime_args_rm_sharded_output(
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
 
@@ -93,10 +91,9 @@ get_padded_slice_runtime_args_rm_sharded_output(
     const int slice_row_size_bytes = static_cast<int>(actual_output_shape[-1] * input_tensor.element_size());
 
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
-    uint32_t start_addr = input_tensor.buffer()->address();
+    uint32_t start_addr = input_tensor.mesh_buffer().address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,
-        input_page_size,
         output_row_size_bytes,
         output_row_size_bytes_offset,
         num_dims,
@@ -163,8 +160,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
         }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] += width_offset;
-        reader_kernel_args[2] = this_input_row_size_bytes;
-        uint32_t addr_offset = 5;
+        reader_kernel_args[1] = this_input_row_size_bytes;
+        uint32_t addr_offset = 4;
         reader_kernel_args[addr_offset++] = start_id;
         reader_kernel_args[addr_offset++] = this_core_num_sticks;
         reader_kernel_args[addr_offset++] = this_core_num_sticks;
@@ -218,13 +215,13 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     uint32_t slice_row_size_bytes = (actual_output_shape[-1] * a.element_size()) / num_cores_channels;
 
     TT_FATAL(
-        output.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
+        output.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
         "padded_slice output buffer must be L1 (sharded).");
 
-    auto src_buffer_alignment = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = a.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     TT_FATAL(
@@ -233,7 +230,10 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         output_row_size_bytes,
         dst_buffer_alignment);
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
-    const bool is_non_aligned = (output_row_size_bytes % alignment) != 0;
+    // A start that isn't aligned to the source buffer needs the non-aligned path too: the aligned path would
+    // issue a NoC read from the misaligned address, which a DRAM source (64 B on Blackhole) rounds down.
+    const uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
+    const bool is_non_aligned = (output_row_size_bytes % alignment) != 0 || (begins_bytes % src_buffer_alignment) != 0;
 
     // The shard row is wider than the slice row (channels padded to the shard alignment): the reader
     // zero-fills each row's tail from a zeroed scratchpad, which the shared factory's pad-row writer did.
@@ -304,7 +304,6 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     reader.runtime_arg_schema = {
         .runtime_arg_names = {
             "src_byte_offset",
-            "padded_stick_size",
             "unpadded_stick_size",
             "stick_size_offset",
             "num_dims",
@@ -333,8 +332,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     auto per_core = get_padded_slice_runtime_args_rm_sharded_output(
         a, output, output_tensor_start, actual_output_shape, iter_cores);
 
-    const uint32_t start_addr = a.buffer()->address();
-    const uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
+    const uint32_t start_addr = a.mesh_buffer().address();
     const uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
     ProgramRunArgs run_args;
@@ -353,16 +351,15 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             reader_rtas,
             core,
             {{"src_byte_offset", src_byte_offset},
-             {"padded_stick_size", r[1]},
-             {"unpadded_stick_size", r[2]},
-             {"stick_size_offset", r[3]},
-             {"num_dims", r[4]},
-             {"start_id", r[5]},
-             {"num_sticks_per_core", r[6]},
-             {"num_sticks_per_core_read", r[7]},
-             {"num_read_per_barrier", r[8]}});
-        // Vararg tail: r[9 ..) == num_output_sticks_per_dim, num_input_sticks_per_dim, id_per_dim.
-        reader_run.advanced_options.runtime_varargs[core] = std::vector<uint32_t>(r.begin() + 9, r.end());
+             {"unpadded_stick_size", r[1]},
+             {"stick_size_offset", r[2]},
+             {"num_dims", r[3]},
+             {"start_id", r[4]},
+             {"num_sticks_per_core", r[5]},
+             {"num_sticks_per_core_read", r[6]},
+             {"num_read_per_barrier", r[7]}});
+        // Vararg tail: r[8 ..) == num_output_sticks_per_dim, num_input_sticks_per_dim, id_per_dim.
+        reader_run.advanced_options.runtime_varargs[core] = std::vector<uint32_t>(r.begin() + 8, r.end());
 
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
         AddRuntimeArgsForNode(writer_rtas, core, {{"num_units", w[0]}});

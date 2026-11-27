@@ -4,16 +4,12 @@
 
 #pragma once
 
-#include <stdint.h>
-#include <functional>
+#include <cstdint>
 #include <memory>
-#include <mutex>
 #include <unordered_map>
-#include <utility>
-#include <variant>
 #include <vector>
 
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 
 namespace tt::tt_metal {
 

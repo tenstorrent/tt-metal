@@ -7,6 +7,7 @@
 #include <optional>
 #include <sstream>
 
+#include "core/distributed/distributed.hpp"
 #include "core/tt_profiler.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
@@ -65,12 +66,14 @@ void AutoContext::reset_graph() {
 }
 
 void AutoContext::open_device(
-    const tt::tt_metal::distributed::MeshShape& mesh_shape, const std::vector<int>& device_ids) {
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    const std::vector<int>& device_ids,
+    std::size_t num_command_queues) {
     if (m_device) {
         throw std::runtime_error("open_device was called after the device was created.");
     }
     m_mesh_shape = mesh_shape;
-    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids);
+    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids, num_command_queues);
 }
 
 void AutoContext::close_profiler() {
@@ -81,7 +84,14 @@ void AutoContext::close_device() {
     // The CCL semaphores are L1 buffers of the mesh being closed; the next mesh allocates its own, and a set kept
     // from this one would point at addresses the next mesh hands out to other buffers.
     m_ccl_resources.reset();
+    // The intra-mesh sockets hold buffers of the mesh being closed too.
+    if (m_socket_manager) {
+        m_socket_manager->clear_intra_mesh_sockets();
+    }
     m_device_constants.clear();
+    // Its axes and sizes were derived from the mesh being closed.
+    m_parallelism_context.reset();
+    m_gradient_reduce_dtype = std::nullopt;
     m_device = nullptr;
     // Drop the process-global fabric config that open_device_mesh may have
     // installed via enable_fabric(). Without this, fabric stays armed for
@@ -132,6 +142,10 @@ void AutoContext::initialize_distributed_context(int argc, char** argv) {
     m_distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 }
 
+bool AutoContext::is_distributed_context_initialized() const {
+    return m_distributed_context != nullptr;
+}
+
 core::TTProfiler& AutoContext::get_profiler() {
     if (!m_profiler) {
         m_profiler = std::make_unique<core::TTProfiler>();
@@ -167,9 +181,13 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
 }
 
 ParallelismContext::ParallelismContext(
-    const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) {
+    const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) :
+    m_cp_config(config.cp.value_or(ContextParallelConfig{})) {
+    const bool enable_ddp = config.enable_ddp;
+    const bool enable_tp = config.enable_tp;
+    const bool enable_cp = config.cp.has_value();
     const uint32_t num_enabled_parallelisms =
-        (uint32_t)config.enable_ddp + (uint32_t)config.enable_cp + (uint32_t)config.enable_tp;
+        (uint32_t)enable_ddp + (uint32_t)enable_cp + (uint32_t)enable_tp;
     const auto& mesh_shape = mesh_device.shape();
 
     // Check if this is a line topology (one dimension is 1, e.g., [1, 32] or [32, 1])
@@ -182,9 +200,9 @@ ParallelismContext::ParallelismContext(
             "For line mesh topology (shape {}), exactly one parallelism type must be enabled. "
             "Got: ddp={}, tp={}, cp={}",
             mesh_shape,
-            config.enable_ddp,
-            config.enable_tp,
-            config.enable_cp);
+            enable_ddp,
+            enable_tp,
+            enable_cp);
 
         // Find the non-trivial axis (the one with size > 1)
         uint32_t active_axis = 0;
@@ -196,13 +214,13 @@ ParallelismContext::ParallelismContext(
         }
 
         // Assign the single enabled parallelism to the active axis
-        if (config.enable_ddp) {
+        if (enable_ddp) {
             m_ddp_axis = active_axis;
             m_num_ddp_devices = mesh_shape[active_axis];
-        } else if (config.enable_cp) {
+        } else if (enable_cp) {
             m_cp_axis = active_axis;
             m_num_cp_devices = mesh_shape[active_axis];
-        } else if (config.enable_tp) {
+        } else if (enable_tp) {
             m_tp_axis = active_axis;
             m_num_tp_devices = mesh_shape[active_axis];
         }
@@ -217,18 +235,29 @@ ParallelismContext::ParallelismContext(
 
         // Axis assignment order: DP -> CP -> TP
         uint32_t axis = 0;
-        if (config.enable_ddp && mesh_shape[axis] > 1U) {
+        if (enable_ddp && mesh_shape[axis] > 1U) {
             m_ddp_axis = axis++;
             m_num_ddp_devices = mesh_shape[m_ddp_axis.value()];
         }
-        if (config.enable_cp && mesh_shape[axis] > 1U) {
+        if (enable_cp && mesh_shape[axis] > 1U) {
             m_cp_axis = axis++;
             m_num_cp_devices = mesh_shape[m_cp_axis.value()];
         }
-        if (config.enable_tp && mesh_shape[axis] > 1U) {
+        if (enable_tp && mesh_shape[axis] > 1U) {
             m_tp_axis = axis++;
             m_num_tp_devices = mesh_shape[m_tp_axis.value()];
         }
+    }
+
+    // ring_shift pairs even and odd devices, so CP needs an even ring of at least 2. Check it at setup rather than
+    // at the first ring step.
+    if (m_cp_axis.has_value()) {
+        TT_FATAL(
+            m_num_cp_devices >= 2U && m_num_cp_devices % 2U == 0U,
+            "Context parallelism needs an even CP axis of at least 2 devices (mesh shape {}, CP axis {} has {})",
+            mesh_shape,
+            m_cp_axis.value(),
+            m_num_cp_devices);
     }
 }
 
@@ -248,6 +277,15 @@ void AutoContext::initialize_parallelism_context(const DistributedConfig& config
         throw std::runtime_error("ParallelismContext is already initialized.");
     }
     m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), config);
+}
+
+void AutoContext::set_gradient_reduce_dtype(std::optional<ttnn::DataType> dtype) {
+    core::distributed::check_reduce_dtype(dtype);
+    m_gradient_reduce_dtype = dtype;
+}
+
+std::optional<ttnn::DataType> AutoContext::get_gradient_reduce_dtype() const {
+    return m_gradient_reduce_dtype;
 }
 
 const uint32_t ParallelismContext::get_ddp_size() const {

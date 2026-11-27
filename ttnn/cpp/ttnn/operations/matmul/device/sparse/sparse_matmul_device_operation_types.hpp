@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "tt-metalium/global_circular_buffer.hpp"
+#include "tt-metalium/memory/cross_program/global_circular_buffer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
@@ -38,8 +38,8 @@ struct SparseMatmulParams {
     // in1 delivered over the Tensor prefetcher's PrefetcherPipes instead of read from DRAM: every pipe
     // of one create_prefetcher_pipes_for_tensor_prefetcher call, whose receivers are this matmul's
     // workers, fed by a request that streams the grouped weight with this op's sparsity as its group
-    // selector. Empty means none. As with MatmulParams::prefetcher_pipes, the pipes must outlive any
-    // cached program built against them.
+    // selector. Empty means none. As with MatmulParams::prefetcher_pipes, pipes re-carved in place of these
+    // reuse the programs cached for them.
     ttnn::PrefetcherPipeList prefetcher_pipes;
 };
 

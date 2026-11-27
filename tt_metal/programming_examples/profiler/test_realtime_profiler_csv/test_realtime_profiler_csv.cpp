@@ -7,10 +7,10 @@
 // Similar to test_multi_op but uses the real-time profiler (D2H socket) and
 // RegisterProgramRealtimeProfilerCallback to stream records to a CSV.
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 
 #include <fmt/compile.h>
@@ -92,7 +92,7 @@ static void RunPrograms(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
         distributed::MeshWorkload workload;
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
 
         CreateKernel(
             program,

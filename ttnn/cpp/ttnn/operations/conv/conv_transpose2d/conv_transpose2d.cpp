@@ -7,7 +7,7 @@
 #include <array>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tuple>
 #include <utility>
 
@@ -74,6 +74,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     // Use weights_dtype from config if set, otherwise use weight tensor's dtype
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
+    ttnn::verify_numerical_configuration(device->arch(), compute_config_);
     DeviceComputeKernelConfig compute_config =
         compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor.dtype(), weight_dtype));
 
@@ -1256,7 +1257,7 @@ ConvTranspose2dResultWithOptions conv_transpose2d(
     bool return_output_dim,
     bool return_weights_and_bias) {
     using namespace operations::conv::conv_transpose2d;
-    operations::conv::validate_stride(stride);
+    operations::conv::validate_conv_params(in_channels, out_channels, batch_size, kernel_size, stride, groups);
     // Determine execution path based on configuration and input properties
     ConvT2dExecutionPath path = determine_conv_transpose2d_execution_path(input_tensor, dram_slice_config_);
 

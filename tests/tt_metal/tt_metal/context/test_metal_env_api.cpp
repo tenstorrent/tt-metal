@@ -5,16 +5,24 @@
 #include <gtest/gtest.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/device/mock_device_util.hpp"
+#include "impl/drisc_service/seat_lock.hpp"
+#include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
@@ -176,8 +184,8 @@ TEST(MetalEnv, EmptyPathIsNotMock) {
 
 // --- Fabric configuration tests ---
 
-TEST(MetalEnv, FabricConfigDescriptorDefaults) {
-    FabricConfigDescriptor desc;
+TEST(MetalEnv, FabricSettingsDefaults) {
+    FabricSettings desc;
     EXPECT_EQ(desc.fabric_config, tt_fabric::FabricConfig::DISABLED);
     EXPECT_EQ(desc.reliability_mode, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     EXPECT_FALSE(desc.num_routing_planes.has_value());
@@ -193,7 +201,7 @@ MetalEnvDescriptor wormhole_mock_descriptor() {
 }
 
 TEST(MetalEnv, ConfigureFabricStoresDescriptor) {
-    FabricConfigDescriptor fc;
+    FabricSettings fc;
     fc.fabric_config = tt_fabric::FabricConfig::FABRIC_1D;
     fc.reliability_mode = tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
     fc.num_routing_planes = 4;
@@ -204,7 +212,7 @@ TEST(MetalEnv, ConfigureFabricStoresDescriptor) {
     MetalEnv env(wormhole_mock_descriptor());
     env.configure_fabric(fc);
 
-    const auto& stored = env.get_fabric_config_descriptor();
+    const auto& stored = env.get_fabric_settings();
     EXPECT_EQ(stored.fabric_config, tt_fabric::FabricConfig::FABRIC_1D);
     EXPECT_EQ(stored.reliability_mode, tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     EXPECT_TRUE(stored.num_routing_planes.has_value());
@@ -216,7 +224,7 @@ TEST(MetalEnv, ConfigureFabricStoresDescriptor) {
 
 TEST(MetalEnv, DefaultFabricConfigIsDisabled) {
     MetalEnv env(wormhole_mock_descriptor());
-    EXPECT_EQ(env.get_fabric_config_descriptor().fabric_config, tt_fabric::FabricConfig::DISABLED);
+    EXPECT_EQ(env.get_fabric_settings().fabric_config, tt_fabric::FabricConfig::DISABLED);
 }
 
 // Without configure_fabric, the mesh binding comes from TT_MESH_ID / TT_MESH_HOST_RANK (mesh 0 when unset; host rank
@@ -224,7 +232,7 @@ TEST(MetalEnv, DefaultFabricConfigIsDisabled) {
 TEST(MetalEnv, DefaultMeshBindingComesFromRtOptions) {
     MetalEnv env(wormhole_mock_descriptor());
     const auto& rtoptions = MetalEnvAccessor(env).impl().get_rtoptions();
-    const auto& desc = env.get_fabric_config_descriptor();
+    const auto& desc = env.get_fabric_settings();
     EXPECT_EQ(desc.mesh_id, rtoptions.get_fabric_mesh_id());
     EXPECT_EQ(desc.host_rank, rtoptions.get_fabric_mesh_host_rank());
 }
@@ -236,12 +244,12 @@ TEST(MetalEnv, ConfigureFabricMeshBindingFromDescriptor) {
         {.fabric_config = tt_fabric::FabricConfig::FABRIC_1D,
          .mesh_id = tt_fabric::MeshId{3},
          .host_rank = tt_fabric::MeshHostRankId{1}});
-    EXPECT_EQ(env.get_fabric_config_descriptor().mesh_id, tt_fabric::MeshId{3});
-    EXPECT_EQ(env.get_fabric_config_descriptor().host_rank, tt_fabric::MeshHostRankId{1});
+    EXPECT_EQ(env.get_fabric_settings().mesh_id, tt_fabric::MeshId{3});
+    EXPECT_EQ(env.get_fabric_settings().host_rank, tt_fabric::MeshHostRankId{1});
 
     env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D});
-    EXPECT_EQ(env.get_fabric_config_descriptor().mesh_id, tt_fabric::MeshId{0});
-    EXPECT_EQ(env.get_fabric_config_descriptor().host_rank, tt_fabric::MESH_HOST_RANK_UNSET);
+    EXPECT_EQ(env.get_fabric_settings().mesh_id, tt_fabric::MeshId{0});
+    EXPECT_EQ(env.get_fabric_settings().host_rank, tt_fabric::MESH_HOST_RANK_UNSET);
 }
 
 TEST(MetalEnv, ConfigureFabricLastCallWins) {
@@ -251,7 +259,7 @@ TEST(MetalEnv, ConfigureFabricLastCallWins) {
         {.fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
          .fabric_tensix_config = tt_fabric::FabricTensixConfig::MUX});
 
-    EXPECT_EQ(env.get_fabric_config_descriptor().fabric_config, tt_fabric::FabricConfig::FABRIC_2D);
+    EXPECT_EQ(env.get_fabric_settings().fabric_config, tt_fabric::FabricConfig::FABRIC_2D);
     EXPECT_EQ(MetalEnvAccessor(env).impl().get_fabric_config(), tt_fabric::FabricConfig::FABRIC_2D);
     EXPECT_EQ(MetalEnvAccessor(env).impl().get_fabric_tensix_config(), tt_fabric::FabricTensixConfig::MUX);
 }
@@ -260,7 +268,7 @@ TEST(MetalEnv, ConfigureFabricNormalizesRoutingPlanes) {
     MetalEnv env(wormhole_mock_descriptor());
     env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D});
 
-    EXPECT_FALSE(env.get_fabric_config_descriptor().num_routing_planes.has_value());
+    EXPECT_FALSE(env.get_fabric_settings().num_routing_planes.has_value());
     EXPECT_EQ(MetalEnvAccessor(env).impl().get_num_fabric_active_routing_planes(), std::numeric_limits<uint8_t>::max());
 
     env.configure_fabric({});
@@ -294,7 +302,7 @@ TEST(MetalEnv, QueryThenConfigureFabric) {
     EXPECT_GT(env.get_num_available_devices(), 0u);
 
     env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D});
-    EXPECT_EQ(env.get_fabric_config_descriptor().fabric_config, tt_fabric::FabricConfig::FABRIC_1D);
+    EXPECT_EQ(env.get_fabric_settings().fabric_config, tt_fabric::FabricConfig::FABRIC_1D);
 }
 
 TEST(MetalEnv, AccessorFabricConfigMatchesRequest) {
@@ -378,7 +386,7 @@ TEST(MetalEnv, DispatchFabricKeepsSystemMesh) {
 
     EXPECT_EQ(accessor.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
     // The request the user made (nothing) is unchanged; only the runtime fabric config moved.
-    EXPECT_EQ(env.get_fabric_config_descriptor().fabric_config, tt_fabric::FabricConfig::DISABLED);
+    EXPECT_EQ(env.get_fabric_settings().fabric_config, tt_fabric::FabricConfig::DISABLED);
 
     auto& cp_after = accessor.get_control_plane();
     EXPECT_EQ(cp_after.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
@@ -444,6 +452,101 @@ TEST(MetalEnv, FailedCreateUnitMeshesDoesNotLeakContext) {
     }
 
     EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
+}
+
+// Seat locks against a real MetalEnv. Needs Blackhole silicon whose firmware turns the DRAM programmable cores on.
+// Seat locks exclude each other within one process too, so this process stands in for another one (a DRISC service
+// client, say). Opens no device, so no DRISC is touched whatever the override says.
+class MetalEnvSeatLocks : public ::testing::Test {
+protected:
+    static constexpr const char* override_var = "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES";
+
+    void SetUp() override {
+        if (const char* value = std::getenv(override_var)) {
+            saved_override_ = value;
+        }
+        // Unset, metal decides from the firmware.
+        unsetenv(override_var);
+        MetalEnv env;
+        const auto& cluster = MetalEnvAccessor(env).impl().get_cluster();
+        if (cluster.arch() != tt::ARCH::BLACKHOLE || cluster.get_target_device_type() != tt::TargetDevice::Silicon) {
+            GTEST_SKIP() << "Seat locks guard the DRAM programmable cores of Blackhole silicon only";
+        }
+        if (!dram_cores_on(env)) {
+            GTEST_SKIP() << "This firmware leaves the DRAM programmable cores off";
+        }
+        for (const ChipId chip : cluster.all_chip_ids()) {
+            const uint64_t asic_id = cluster.get_unique_chip_ids().at(chip);
+            for (const CoreCoord& core : cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::NOC0)) {
+                seats_.push_back({
+                    .asic_id = asic_id,
+                    .noc0_x = static_cast<uint32_t>(core.x),
+                    .noc0_y = static_cast<uint32_t>(core.y),
+                });
+            }
+        }
+    }
+
+    void TearDown() override {
+        if (saved_override_.has_value()) {
+            setenv(override_var, saved_override_->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv(override_var);
+        }
+    }
+
+    static bool dram_cores_on(MetalEnv& env) {
+        return MetalEnvAccessor(env).impl().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    }
+
+    // The seat of every DRAM core a MetalEnv programs on this host.
+    std::vector<internal::drisc_service::SeatId> seats_;
+
+private:
+    std::optional<std::string> saved_override_;
+};
+
+// While another process holds the seats, a MetalEnv turns its DRAM programmable cores off, fails when they are forced
+// on, and turns them on again once the seats are free.
+TEST_F(MetalEnvSeatLocks, LeavesDramCoresWhoseSeatsAreHeld) {
+    std::vector<internal::drisc_service::SeatLock> held;
+    for (const internal::drisc_service::SeatId& seat : seats_) {
+        std::optional<internal::drisc_service::SeatLock> lock =
+            internal::drisc_service::SeatLock::try_acquire_client(seat);
+        ASSERT_TRUE(lock.has_value()) << "another process holds the seat of DRAM core (" << seat.noc0_x << ", "
+                                      << seat.noc0_y << ")";
+        held.push_back(std::move(*lock));
+    }
+    {
+        MetalEnv env;
+        EXPECT_FALSE(dram_cores_on(env)) << "metal turned its DRAM programmable cores on while their seats were held";
+    }
+    setenv(override_var, "1", /*overwrite=*/1);
+    try {
+        MetalEnv env;
+        ADD_FAILURE() << "metal started with its DRAM programmable cores forced on while their seats were held";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string_view(e.what()).find("holds the seat of"), std::string_view::npos) << e.what();
+    }
+    unsetenv(override_var);
+    held.clear();
+    MetalEnv env;
+    EXPECT_TRUE(dram_cores_on(env)) << "metal kept its DRAM programmable cores off after the seats were freed";
+}
+
+// One held seat turns every DRAM core off, so metal must give back the seats it took before reaching the held one.
+TEST_F(MetalEnvSeatLocks, ReleasesEverySeatWhenOneIsHeld) {
+    ASSERT_FALSE(seats_.empty());
+    const std::optional<internal::drisc_service::SeatLock> last =
+        internal::drisc_service::SeatLock::try_acquire_client(seats_.back());
+    ASSERT_TRUE(last.has_value()) << "another process holds the seat of the last DRAM core";
+    MetalEnv env;
+    ASSERT_FALSE(dram_cores_on(env)) << "metal turned its DRAM programmable cores on while a seat was held";
+    for (size_t i = 0; i + 1 < seats_.size(); i++) {
+        EXPECT_TRUE(internal::drisc_service::SeatLock::try_acquire_exclusive(seats_[i]).has_value())
+            << "metal kept the seat of DRAM core (" << seats_[i].noc0_x << ", " << seats_[i].noc0_y
+            << ") with its DRAM programmable cores off";
+    }
 }
 
 }  // namespace tt::tt_metal

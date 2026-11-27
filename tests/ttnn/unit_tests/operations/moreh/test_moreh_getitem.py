@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_getitem import (
     run_getitem_RAW_MAJOR,
     run_moreh_geitem_tilized_one_index,

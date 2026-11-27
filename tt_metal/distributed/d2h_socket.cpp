@@ -12,17 +12,19 @@
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include "tt_metal/distributed/pcie_core_writer.hpp"
+#include "tt_metal/distributed/noc_pinned_buffer.hpp"
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include <tt-umd/driver_atomics.hpp>
 #include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/hw/inc/hostdev/socket.h"
+#include "impl/debug/inspector/inspector.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/l2cpu_lim.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"  // emule::pump_device
 #endif
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
@@ -128,23 +130,17 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
         "System Memory Allocation Error: D2H socket buffer must be aligned to the PCIe alignment.");
     bytes_sent_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
 
-    tt::tt_metal::HostBuffer host_buffer_view(
-        ttsl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
-    pinned_memory_ =
-        tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
-
-    const auto& noc_addr =
-        pinned_memory_->get_noc_addr(internal::get_device(*mesh_device, sender_core_.device_coord)->id());
-    TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for D2H socket pinned memory.");
-    TT_FATAL(
-        noc_addr.value().device_id == internal::get_device(*mesh_device, sender_core_.device_coord)->id(),
-        "Pinned Memory used for D2H sockets must be mapped to the same device as the sender core. D2H Sockets cannot "
-        "communicate with remote devices.");
-
+    const NocPinnedBuffer pinned = pin_host_memory_for_noc(
+        *mesh_device,
+        device_range,
+        ttsl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words),
+        internal::get_device(*mesh_device, sender_core_.device_coord)->id(),
+        "D2H socket");
+    pinned_memory_ = pinned.pinned_memory;
     return PinnedBufferInfo{
-        .pcie_xy_enc = noc_addr.value().pcie_xy_enc,
-        .addr_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull),
-        .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
+        .pcie_xy_enc = pinned.pcie_xy_enc,
+        .addr_lo = static_cast<uint32_t>(pinned.addr & 0xFFFFFFFFull),
+        .addr_hi = static_cast<uint32_t>(pinned.addr >> 32)};
 }
 
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device) {
@@ -160,8 +156,13 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
     auto* device = internal::get_device(*mesh_device, sender_core_.device_coord);
     auto device_id = device->id();
     auto& sysmem_mgr = device->sysmem_manager();
+    TT_FATAL(
+        sysmem_mgr.aux_region_allocator().has_d2h_fallback_reserve(),
+        "D2H socket on device {} needs the hugepage fallback (no 64-bit PCIe addressing and no IOMMU), but the "
+        "device's command queues have no fallback reserve; DRAM-backed command queues don't provide one.",
+        device_id);
 
-    auto [data_host_ptr, data_dev_addr] = sysmem_mgr.allocate_region(fifo_size_);
+    auto [data_host_ptr, data_dev_addr] = sysmem_mgr.aux_region_allocator().allocate(fifo_size_);
     hugepage_data_host_ptr_ = static_cast<uint32_t*>(data_host_ptr);
     std::memset(hugepage_data_host_ptr_, 0, fifo_size_);
 
@@ -361,9 +362,9 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
     // The hugepage fallback segfaults on mock (sysmem is stubbed); force the pinned path.
-    auto& ctx = mesh_device->impl().metal_context();
+    const auto& cluster = mesh_device->impl().metal_env().get_cluster();
     bool can_use_pinned_memory =
-        !d2h_uses_hugepage_fallback(ctx) || ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+        !cluster.needs_d2h_hugepage_fallback() || cluster.get_target_device_type() == tt::TargetDevice::Mock;
 
     PinnedBufferInfo data_info;
     PinnedBufferInfo bytes_sent_info;
@@ -393,7 +394,7 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
 
         auto* device = internal::get_device(*mesh_device, sender_core_.device_coord);
         auto& sysmem_mgr = device->sysmem_manager();
-        auto [bs_host_ptr, bs_dev_addr] = sysmem_mgr.allocate_region(sizeof(uint32_t));
+        auto [bs_host_ptr, bs_dev_addr] = sysmem_mgr.aux_region_allocator().allocate(sizeof(uint32_t));
         hugepage_bytes_sent_host_ptr_ = static_cast<volatile uint32_t*>(bs_host_ptr);
         *const_cast<uint32_t*>(hugepage_bytes_sent_host_ptr_) = 0;
 
@@ -430,6 +431,8 @@ D2HSocket::D2HSocket(
         return;
     }
     init_common(mesh_device);
+    Inspector::host_socket_created(
+        config_buffer_.get(), sender_core_, /*is_sender=*/true, fifo_size_, /*data_buffer_address=*/0);
 }
 
 D2HSocket::D2HSocket(
@@ -767,6 +770,8 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
             }
         }
     }
+    // The next read's wait starts from bytes_sent_.
+    bytes_sent_ = bytes_sent_value;
 }
 
 void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {

@@ -64,12 +64,7 @@ def test_run_unpadding_test(input_tensor_shape, output_tensor_start, output_tens
     inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
     # Create tensor on host
-    a = ttnn.Tensor(
-        inp.reshape(-1).tolist(),
-        input_tensor_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    a = ttnn.from_torch(inp.reshape(input_tensor_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     # Unpad inputs on host
     output_tensor_shape = tuple(output_tensor_end[i] - output_tensor_start[i] for i in range(len(input_tensor_shape)))
@@ -91,6 +86,21 @@ def test_run_unpadding_test(input_tensor_shape, output_tensor_start, output_tens
     assert a_pt.shape == output_tensor_shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
+
+
+def test_unpad_docstring_example():
+    # The Tensor.unpad docstring example; the end index is exclusive.
+    inp = torch.tensor(
+        [[0, 0, 0, 0, 0], [0, 1, 2, 3, 0], [0, 4, 5, 6, 0], [0, 7, 8, 9, 0], [0, 0, 0, 0, 0]],
+        dtype=torch.bfloat16,
+    ).reshape(1, 1, 5, 5)
+    a = ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    a_pt = a.unpad([0, 0, 1, 1], [1, 1, 4, 4]).to_torch()
+
+    a_ref = torch.arange(1, 10, dtype=torch.bfloat16).reshape(1, 1, 3, 3)
+    assert a_pt.shape == a_ref.shape
+    assert torch.equal(a_pt, a_ref)
 
 
 # Pad, run op, unpad
@@ -126,18 +136,8 @@ def test_run_padding_and_add_test(input_tensor_shape, output_tensor_shape, input
         input_tensor_start[3] : output_tensor_end[3],
     ] = ones
 
-    a_pad = ttnn.Tensor(
-        inp_padded.reshape(-1).tolist(),
-        output_tensor_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
-    b_pad = ttnn.Tensor(
-        ones_padded.reshape(-1).tolist(),
-        output_tensor_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    a_pad = ttnn.from_torch(inp_padded.reshape(output_tensor_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    b_pad = ttnn.from_torch(ones_padded.reshape(output_tensor_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     # Run add op on device with padded tensors
     a_dev = a_pad.to(ttnn.TILE_LAYOUT).to(device)
@@ -177,12 +177,7 @@ def test_run_tile_padding_test(input_tensor_shape, pad_value):
     inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
     # Create tensor on host
-    a = ttnn.Tensor(
-        inp.reshape(-1).tolist(),
-        input_tensor_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    a = ttnn.from_torch(inp.reshape(input_tensor_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     # Pad inputs on host
     a_pad = a.pad_to_tile(pad_value)
@@ -221,12 +216,7 @@ def test_run_tile_unpadding_test(input_tensor_shape, output_tensor_shape):
     inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
     # Create tensor on host
-    a = ttnn.Tensor(
-        inp.reshape(-1).tolist(),
-        input_tensor_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    a = ttnn.from_torch(inp.reshape(input_tensor_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     # Unpad inputs on host
     a_unpad = a.unpad_from_tile(output_tensor_shape)
@@ -259,18 +249,8 @@ def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value, device):
     ones = torch.ones(*input_tensor_shape)
 
     # Create tensor on host
-    a = ttnn.Tensor(
-        inp.reshape(-1).tolist(),
-        input_tensor_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
-    b = ttnn.Tensor(
-        ones.reshape(-1).tolist(),
-        input_tensor_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    a = ttnn.from_torch(inp.reshape(input_tensor_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    b = ttnn.from_torch(ones.reshape(input_tensor_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     # Pad inputs on host
     a_pad = a.pad_to_tile(pad_value)

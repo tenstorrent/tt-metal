@@ -7,15 +7,15 @@
 // then perform vector addition tile by tile. Because of sharding to L1, DRAM nor NoC is not involved.
 // Data copy is avoided and reader and writer kernels are not needed.
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "tt-metalium/buffer.hpp"
-#include "tt-metalium/buffer_types.hpp"
-#include "tt-metalium/constants.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt_stl/fmt.hpp>
 
 #include <cstddef>
@@ -62,11 +62,12 @@ CBHandle MakeCircularBufferBFP16(
     uint32_t n_tiles,
     const std::shared_ptr<distributed::MeshBuffer>& l1_buf) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_HW;
+    const Buffer& l1_device_buf = *l1_buf->get_device_buffer(distributed::MeshCoordinate(0, 0));
     CircularBufferConfig cb_config = CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}})
                                          .set_page_size(cb, tile_size)
                                          // IMPORTANT: assign L1 buffer address to circular buffer directly so that
                                          // no extra allocation and data copy
-                                         .set_globally_allocated_address(*(l1_buf->get_backing_buffer()));
+                                         .set_globally_allocated_address(l1_device_buf);
     return CreateCircularBuffer(program, core, cb_config);
 }
 
@@ -144,7 +145,7 @@ int main(int argc, char** argv) {
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     const auto& config = test_configs.at(sharding_type);
 

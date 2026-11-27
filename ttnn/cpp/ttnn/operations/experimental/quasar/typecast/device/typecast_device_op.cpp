@@ -6,7 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 using namespace tt::tt_metal;
 
@@ -38,7 +38,9 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
         return false;
     }
 
-    if (args.input_dtype != DataType::BFLOAT8_B && args.input_dtype != DataType::BFLOAT4_B) {
+    // BFP and MX tiles have no per-datum size (datum_size() throws); their shards are whole tiles.
+    if (args.input_dtype != DataType::BFLOAT8_B && args.input_dtype != DataType::BFLOAT4_B &&
+        !is_mx(args.input_dtype)) {
         if ((shard_spec.shape[1] * tt::datum_size(act_df)) % hal::get_l1_alignment() != 0) {
             return false;
         }
@@ -96,6 +98,27 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.is_allocated(),
         "Operands to Typecast need to be allocated in buffers on the device. Buffer is null.");
 
+    // MX data formats exist in TILE layout only. The unpacker expands MX to Float16_b and the packer converts
+    // back (the same as bf16 <-> MX in binary_ng), so MX <-> bf16 / fp32 / MX goes through the plain copy +
+    // typecast_tile kernel. MX to or from an integer or fp8 type is not validated on Quasar: reject it.
+    if (is_mx(args.input_dtype) || is_mx(args.output_dtype)) {
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE,
+            "Typecast with an MX data format requires TILE layout (input dtype {}, output dtype {}, layout {})",
+            args.input_dtype,
+            args.output_dtype,
+            input_tensor.layout());
+        const auto mx_partner_ok = [](DataType dt) {
+            return is_mx(dt) || dt == DataType::BFLOAT16 || dt == DataType::FLOAT32;
+        };
+        TT_FATAL(
+            mx_partner_ok(args.input_dtype) && mx_partner_ok(args.output_dtype),
+            "Quasar typecast supports an MX data format only to or from bfloat16, float32 or another MX format "
+            "(input dtype {}, output dtype {}); convert integer / fp8 types through bfloat16 first",
+            args.input_dtype,
+            args.output_dtype);
+    }
+
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             args.sub_core_grids.has_value() == false,
@@ -111,9 +134,9 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
 
     if (input_tensor.is_sharded()) {
         const uint32_t l1_alignment = hal::get_l1_alignment();
-        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
+        const uint32_t page_size_bytes = input_tensor.mesh_buffer().page_size();
         TT_FATAL(
-            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
+            page_size_bytes == input_tensor.mesh_buffer().aligned_page_size(),
             "Typecast operation requires sharded input tensor page size ({} bytes) to be aligned to L1 ({} bytes)",
             page_size_bytes,
             l1_alignment);

@@ -103,20 +103,24 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
             0);
 
         // Enter recording mode: capture next replay_len instructions
-        lltt::record<lltt::NoExec>(0, replay_len);
-
-        // Emit instructions into replay buffer via instrn_buffer (runtime-safe)
-        for (std::uint32_t face = 0; face < num_faces; face++)
-        {
-            const bool is_last_face          = (face == num_faces - 1);
-            const std::uint32_t replay_pacrs = is_last_face ? (pacrs_per_face - 1) : pacrs_per_face;
-
-            for (std::uint32_t p = 0; p < replay_pacrs; p++)
+        ckernel::load_replay_buf(
+            0,
+            replay_len,
+            [&]
             {
-                const bool is_last_pacr_of_face = (p == pacrs_per_face - 1);
-                TT_INSN(is_last_pacr_of_face ? pacr_mod2 : pacr_mod0);
-            }
-        }
+                // Emit instructions into replay buffer via instrn_buffer (runtime-safe)
+                for (std::uint32_t face = 0; face < num_faces; face++)
+                {
+                    const bool is_last_face          = (face == num_faces - 1);
+                    const std::uint32_t replay_pacrs = is_last_face ? (pacrs_per_face - 1) : pacrs_per_face;
+
+                    for (std::uint32_t p = 0; p < replay_pacrs; p++)
+                    {
+                        const bool is_last_pacr_of_face = (p == pacrs_per_face - 1);
+                        TT_INSN(is_last_pacr_of_face ? pacr_mod2 : pacr_mod0);
+                    }
+                }
+            });
     }
 
     // --- Program MOP ---
@@ -127,7 +131,7 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
     // END_OP0: W++ (next Tile32x32 slot)
     // END_OP1: Z=0 (reset for next tile's face traversal)
 
-    const std::uint32_t start_op = (replay_len > 0) ? lltt::replay_insn(0, replay_len) : TT_OP_NOP;
+    const std::uint32_t start_op = (replay_len > 0) ? TT_OP_REPLAY(0, replay_len, 0, 0) : TT_OP_NOP;
 
     ckernel::ckernel_template tmp(
         1,        // OUTER (placeholder — overwritten by mop_cfg[0] in _llk_pack_block_contiguous_)

@@ -9,14 +9,15 @@
 #include <span>
 #include <vector>
 
+#include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
-#include "circular_buffer_constants.h"
-#include "core_coord.hpp"
-#include "device.hpp"
-#include "hal_types.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer_constants.h"
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include "tt-metalium/mesh/legacy/device.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "hostdev/remote_dfb_constants.h"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/context/metal_context.hpp"
@@ -24,18 +25,21 @@
 #include "impl/device/device_manager.hpp"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include "impl/dispatch/host_transfer_stats.hpp"
 #include "impl/emulation/host_sanitizers.hpp"
 #include "impl/internal/service/service_core_manager_impl.hpp"
+#include "impl/allocator/allocator.hpp"
+#include "kernel_config_buffer_impl.hpp"
 #include "kernels/kernel.hpp"
 #include "llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "program_impl.hpp"
-#include "tt_metal.hpp"
+#include "tt-metalium/execution/slow_dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include <internal/service/service_core_manager.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"
@@ -47,19 +51,41 @@ namespace {
 
 void ConfigureKernelGroup(
     Program& program,
-    uint32_t programmable_core_type_index,
     const KernelGroup* kernel_group,
     IDevice& device,
     const CoreCoord& logical_core,
-    const Hal& hal) {
-    uint32_t kernel_config_base =
-        hal.get_dev_addr(hal.get_programmable_core_type(programmable_core_type_index), HalL1MemAddrType::KERNEL_CONFIG);
+    uint32_t kernel_text_base) {
     for (auto kernel_id : kernel_group->kernel_ids) {
         // Need the individual offsets of each bin
         // TODO: make configure take a std::span
         program.impl().get_kernel(kernel_id)->configure(
-            &device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets.data());
+            &device, logical_core, kernel_text_base, kernel_group->kernel_text_offsets.data());
     }
+}
+
+// Bytes ConfigureKernelGroup writes: every kernel's configure() writes all of its binaries.
+uint64_t kernel_group_binary_bytes(Program& program, const KernelGroup* kernel_group, IDevice& device) {
+    const uint64_t build_key = MetalContext::instance(extract_context_id(&device))
+                                   .build_env_manager()
+                                   .get_device_build_env(device.build_id())
+                                   .build_key();
+    uint64_t bytes = 0;
+    for (auto kernel_id : kernel_group->kernel_ids) {
+        for (const auto* binary : program.impl().get_kernel(kernel_id)->binaries(build_key)) {
+            bytes += binary->get_packed_size();
+        }
+    }
+    return bytes;
+}
+
+template <typename Data>
+void write_program_config(
+    MetalContext& metal_ctx, ChipId device_id, const CoreCoord& core, const Data& data, uint64_t addr) {
+    ScopedHostTransfer upload(
+        &metal_ctx.host_transfer_stats(),
+        HostTransferCategory::ProgramConfigSlowDispatch,
+        std::span(data).size_bytes());
+    metal_ctx.get_cluster().write_core(device_id, core, data, addr);
 }
 
 // Returns true iff the program has kernels and every core it targets is a DRAM programmable core.
@@ -84,7 +110,64 @@ bool program_targets_only_dram_cores(const Program& program, const Hal& hal) {
 
 }  // namespace
 
-void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_slow_dispatch) {
+uint32_t GetKernelTextBase(
+    const Hal& hal,
+    const Program& program,
+    uint32_t programmable_core_type_index,
+    ChipId device_id,
+    const CoreCoord& logical_core,
+    const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
+    const HalProgrammableCoreType core_type = hal.get_programmable_core_type(programmable_core_type_index);
+    const auto kernel_config_base = static_cast<uint32_t>(hal.get_dev_addr(core_type, HalL1MemAddrType::KERNEL_CONFIG));
+    if (kernel_config_buffer == nullptr || core_type != HalProgrammableCoreType::TENSIX) {
+        return kernel_config_base;
+    }
+    // Shifted back by the text section's offset in the block, so the section starts at the shard.
+    return static_cast<uint32_t>(kernel_config_buffer->address(device_id, logical_core)) -
+           program.impl().get_program_config(programmable_core_type_index).kernel_text_offset;
+}
+
+void SetKernelTextOffsets(
+    dev_msgs::launch_msg_t& launch_msg,
+    const Hal& hal,
+    const Program& program,
+    uint32_t programmable_core_type_index,
+    ChipId device_id,
+    const CoreCoord& logical_core,
+    const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
+    if (kernel_config_buffer == nullptr ||
+        hal.get_programmable_core_type(programmable_core_type_index) != HalProgrammableCoreType::TENSIX) {
+        return;
+    }
+    // Firmware finds each binary at kernel_config_base + its offset, in 32-bit arithmetic, so the offset reaches the
+    // shard wherever it is. kernel_config_base stays at KERNEL_CONFIG, where the rest of the block is.
+    const uint32_t shift =
+        GetKernelTextBase(hal, program, programmable_core_type_index, device_id, logical_core, kernel_config_buffer) -
+        static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG));
+    for (uint32_t& kernel_text_offset : launch_msg.view().kernel_config().kernel_text_offset()) {
+        kernel_text_offset += shift;
+    }
+}
+
+void PrepareProgram(IDevice& device, Program& program) {
+#ifdef TT_METAL_USE_EMULE
+    if (MetalContext::instance(extract_context_id(&device)).get_cluster().get_target_device_type() !=
+        tt::TargetDevice::Emule)
+#endif
+    {
+        program.impl().compile(&device);
+    }
+    program.impl().finalize_dataflow_buffer_configs();
+    if (!program.impl().is_finalized()) {
+        program.impl().finalize_offsets(&device);
+    }
+}
+
+void ConfigureDeviceWithProgram(
+    IDevice& device,
+    Program& program,
+    bool force_slow_dispatch,
+    const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
     ZoneScoped;
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     // This function is shared between FD and SD.
@@ -107,6 +190,13 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
     is_emulated = metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 #endif
 
+    // The block goes in each core type's KERNEL_CONFIG window, except the Tensix kernel binaries when they run from a
+    // kernel config buffer. Checked before the allocations below, so a program that does not fit fails without
+    // changing allocator or program state.
+    TT_FATAL(
+        kernel_config_buffer == nullptr || !is_emulated, "A kernel config buffer is not supported on emulated devices");
+    program.impl().check_kernel_config_fits(&device, kernel_config_buffer);
+
     try {
         program.impl().prepare_ephemeral_allocation(validation_device);
         program.impl().allocate_circular_buffers(validation_device);
@@ -114,7 +204,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
         program.impl().validate_circular_buffer_region(validation_device);
         program.impl().allocate_dataflow_buffers(validation_device);
         // Pre-size Metal 2.0 RTA/CRTA buffers from schema when not already reserved
-        // (e.g. MakeProgramFromSpec). Idempotent if SetProgramRunArgs already sized them.
+        // (e.g. the Program constructor). Idempotent if Program::set_program_run_args already sized them.
         program.impl().reserve_runtime_arg_buffers();
         // Metal 2.0 scratchpads stack on the DFB allocations, so allocate them AFTER the DFBs are placed.
         // Scratchpads are passed as implicit CRTAs, so they must be allocated before the CRTAs are committed.
@@ -139,20 +229,30 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = metal_ctx.hal();
     uint32_t max_dfbs = hal.get_num_dataflow_buffers();
+    auto* transfer_stats = &metal_ctx.host_transfer_stats();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal.get_core_type(index);
         for (const auto& logical_core : logical_cores) {
             KernelGroup* kernel_group = program.impl().kernels_on_core(logical_core, index);
             CoreCoord physical_core = device.virtual_core_from_logical_core(logical_core, core_type);
+            const uint64_t kernel_config_base =
+                hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
             // Skip binary writing for emulated mode (JIT compilation happens in execute_program_emulated)
             if (!is_emulated) {
-                ConfigureKernelGroup(program, index, kernel_group, device, logical_core, hal);
+                ScopedHostTransfer binary_upload(
+                    transfer_stats,
+                    HostTransferCategory::ProgramBinariesSlowDispatch,
+                    transfer_stats->enabled() ? kernel_group_binary_bytes(program, kernel_group, device) : 0);
+                ConfigureKernelGroup(
+                    program,
+                    kernel_group,
+                    device,
+                    logical_core,
+                    GetKernelTextBase(hal, program, index, device_id, logical_core, kernel_config_buffer));
             }
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
-                uint64_t kernel_config_base =
-                    hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
                 const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
                 const bool scans_remote_cb_configs =
@@ -186,7 +286,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                         }
                     }  // PROF_END("CBS")
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).cb_offset;
-                    metal_ctx.get_cluster().write_core(device_id, physical_core, circular_buffer_config_vec, addr);
+                    write_program_config(metal_ctx, device_id, physical_core, circular_buffer_config_vec, addr);
                 }
 
                 if (!dfbs_on_core.empty()) {
@@ -197,8 +297,12 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                         logical_core, dfbs_on_core, dfb_config_vec);
 
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
-                    metal_ctx.get_cluster().write_core(
-                        device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
+                    write_program_config(
+                        metal_ctx,
+                        device_id,
+                        physical_core,
+                        std::span<const uint8_t>(dfb_config_vec.data(), bytes_written),
+                        addr);
                 }
 
                 // CrossNodeDFB dense index in the worker kernel-config window. Full host
@@ -232,11 +336,10 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                         // core's shard of the dedicated config Buffer.
                         const auto& page =
                             program.impl().get_cross_node_dfb(participant.remote_dfb_id).config_page(logical_core);
-                        metal_ctx.get_cluster().write_core(
-                            device_id, physical_core, page, participant.config_page_addr);
+                        write_program_config(metal_ctx, device_id, physical_core, page, participant.config_page_addr);
                     }
                     uint64_t addr = kernel_config_base + cross_node_dfb_offset;
-                    metal_ctx.get_cluster().write_core(device_id, physical_core, cross_node_dfb_vec, addr);
+                    write_program_config(metal_ctx, device_id, physical_core, cross_node_dfb_vec, addr);
                 }
 
                 // PrefetcherPipe dense index only config pages written to device when the PrefetcherPipe is created.
@@ -251,15 +354,25 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                     std::vector<uint32_t> prefetcher_pipe_vec =
                         program_dispatch::build_prefetcher_pipe_config_payload(program.impl(), persistent_it->second);
                     uint64_t addr = kernel_config_base + prefetcher_pipe_offset;
-                    metal_ctx.get_cluster().write_core(device_id, physical_core, prefetcher_pipe_vec, addr);
+                    write_program_config(metal_ctx, device_id, physical_core, prefetcher_pipe_vec, addr);
                 }
             }
+            ScopedHostTransfer semaphore_upload(
+                transfer_stats,
+                HostTransferCategory::ProgramConfigSlowDispatch,
+                transfer_stats->enabled()
+                    ? program.impl().semaphores_on_core(logical_core, core_type).size() * sizeof(uint32_t)
+                    : 0);
             program.impl().init_semaphores(device, logical_core, index);
         }
     }
 }
 
-void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow_dispatch) {
+void WriteRuntimeArgsToDevice(
+    IDevice& device,
+    Program& program,
+    bool force_slow_dispatch,
+    const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
     ZoneScoped;
     auto device_id = device.id();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
@@ -270,6 +383,10 @@ void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow
     if (!force_slow_dispatch) {
         metal_ctx.device_manager()->check_dispatch_mode(/*fast_dispatch=*/false);
     }
+    program.impl().validate_scratchpad_bindings();
+    // Some callers write runtime args before configuring the program, so check here too that the block fits where
+    // the args land.
+    program.impl().check_kernel_config_fits(&device, kernel_config_buffer);
 
     const auto& hal = metal_ctx.hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
@@ -300,14 +417,14 @@ void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
-                                    "{}",
+                                    "[{}]",
                                     __FUNCTION__,
                                     rt_args.size(),
                                     logical_core.str(),
                                     physical_core.str(),
                                     rt_args_addr,
-                                    rt_args);
-                                metal_ctx.get_cluster().write_core(device_id, physical_core, rt_args, rt_args_addr);
+                                    fmt::join(rt_args, ", "));
+                                write_program_config(metal_ctx, device_id, physical_core, rt_args, rt_args_addr);
                             }
 
                             const auto& common_rt_args = kernel->common_runtime_args();
@@ -316,15 +433,15 @@ void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
-                                    "{}",
+                                    "[{}]",
                                     __FUNCTION__,
                                     common_rt_args.size(),
                                     logical_core.str(),
                                     physical_core.str(),
                                     common_rt_args_addr,
-                                    common_rt_args);
-                                metal_ctx.get_cluster().write_core(
-                                    device_id, physical_core, common_rt_args, common_rt_args_addr);
+                                    fmt::join(common_rt_args, ", "));
+                                write_program_config(
+                                    metal_ctx, device_id, physical_core, common_rt_args, common_rt_args_addr);
                             }
                         }
                     }
@@ -339,7 +456,11 @@ void WaitProgramDone(IDevice& device, const Program& program) {
     llrt::internal_::wait_for_idle(metal_ctx, device.id(), program.impl().logical_cores());
 }
 
-void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispatch) {
+void LaunchProgramAsync(
+    IDevice& device,
+    Program& program,
+    bool force_slow_dispatch,
+    const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
     ZoneScoped;
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
@@ -362,21 +483,12 @@ void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispa
             "completed on this device.");
     }
 
-#ifdef TT_METAL_USE_EMULE
-    if (metal_ctx.get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
-#endif
-    {
-        program.impl().compile(&device);
-    }
-    program.impl().finalize_dataflow_buffer_configs();
-    if (!program.impl().is_finalized()) {
-        program.impl().finalize_offsets(&device);
-    }
+    PrepareProgram(device, program);
 
     // First configure (allocate buffers + write configs/binaries), then write runtime args.
     // This allows us to allocate ephemeral scratchpad buffers, and pass their locations as implicit CRTAs.
-    ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
-    WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
+    ConfigureDeviceWithProgram(device, program, force_slow_dispatch, kernel_config_buffer);
+    WriteRuntimeArgsToDevice(device, program, force_slow_dispatch, kernel_config_buffer);
 
 #ifdef TT_METAL_USE_EMULE
     if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
@@ -404,21 +516,39 @@ void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispa
             auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
             // Raw runtime id matches Tracy / fast dispatch; profiler ingest encodes with device_id once.
             kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
+            // A copy, so per-core kernel text offsets never stay in the group's launch message.
+            dev_msgs::launch_msg_t launch_msg = kg->launch_msg;
+            SetKernelTextOffsets(
+                launch_msg, hal, program, programmable_core_type_index, device_id, logical_core, kernel_config_buffer);
 
             auto physical_core = device.virtual_core_from_logical_core(logical_core, core_type);
             if (force_slow_dispatch) {
                 tt::llrt::send_reset_go_signal(MetalEnvAccessor(metal_ctx.get_env()).impl(), device_id, physical_core);
             }
 
-            tt::llrt::write_launch_msg_to_core(
-                MetalEnvAccessor(metal_ctx.get_env()).impl(),
-                device_id,
+            WriteLaunchMsgToCore(
+                device,
                 physical_core,
-                kg->launch_msg.view(),
+                launch_msg.view(),
                 kg->go_msg.view(),
                 hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
         }
     }
+}
+
+void WriteLaunchMsgToCore(
+    IDevice& device,
+    const CoreCoord& virtual_core,
+    dev_msgs::launch_msg_t::View launch_msg,
+    dev_msgs::go_msg_t::ConstView go_msg,
+    bool send_go) {
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
+    ScopedHostTransfer upload(
+        &metal_ctx.host_transfer_stats(),
+        HostTransferCategory::ProgramConfigSlowDispatch,
+        launch_msg.size() + (send_go ? go_msg.size() : 0));
+    tt::llrt::write_launch_msg_to_core(
+        MetalEnvAccessor(metal_ctx.get_env()).impl(), device.id(), virtual_core, launch_msg, go_msg, send_go);
 }
 
 }  // namespace tt::tt_metal::slow_dispatch

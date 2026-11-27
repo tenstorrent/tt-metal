@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast_program_factory.hpp"
+#include "typecast_kernel_format.hpp"
 
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::prim::qsr {
 
@@ -34,7 +35,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     const auto* device = input.device();
 
     // Get number of pages (tiles for TILE layout, rows for ROW_MAJOR layout)
-    const uint32_t num_pages = input.buffer()->num_pages();
+    const uint32_t num_pages = input.mesh_buffer().num_pages();
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -114,12 +115,12 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
         "typecast_tile_init<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+        typecast_kernel_data_format(datatype_to_dataformat_converter(input_dtype)),
+        typecast_kernel_data_format(datatype_to_dataformat_converter(output_dtype)));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+        typecast_kernel_data_format(datatype_to_dataformat_converter(input_dtype)),
+        typecast_kernel_data_format(datatype_to_dataformat_converter(output_dtype)));
 
     const char* const path =
         "ttnn/cpp/ttnn/operations/experimental/quasar/typecast/device/kernels/compute/eltwise_typecast.cpp";
@@ -301,12 +302,12 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
     std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
         "typecast_tile_init<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+        typecast_kernel_data_format(datatype_to_dataformat_converter(input_dtype)),
+        typecast_kernel_data_format(datatype_to_dataformat_converter(output_dtype)));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+        typecast_kernel_data_format(datatype_to_dataformat_converter(input_dtype)),
+        typecast_kernel_data_format(datatype_to_dataformat_converter(output_dtype)));
 
     const auto* path =
         "ttnn/cpp/ttnn/operations/experimental/quasar/typecast/device/kernels/compute/eltwise_typecast.cpp";

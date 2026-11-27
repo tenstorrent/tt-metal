@@ -17,7 +17,7 @@ kernel path.
 import torch
 import ttnn
 
-# Tile size in bytes per dtype (tt_metal/api/tt-metalium/tt_backend_api_types.hpp).
+# Tile size in bytes per dtype (tt_metal/api/tt-metalium/data_formats/data_format.hpp).
 # bfloat8_b is a block-float format: 32*32 one-byte mantissas plus 16 shared-exponent
 # bytes per 16x16 face -> 1024 + 4*16 = 1088.
 DTYPE_TILE_BYTES = {

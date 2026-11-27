@@ -9,7 +9,7 @@
 #include <variant>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
 
@@ -32,6 +32,7 @@
 #include "reshape.hpp"
 #include "reshape_common.hpp"
 #include "device/reshape_device_operation.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -381,6 +382,14 @@ ttnn::Tensor reshape_tiled(
     bool explicit_memory_config,
     const bool skip_padding_fill,
     const bool pad_value_explicit) {
+    TT_FATAL(
+        !tt::tt_metal::is_mx(tensor.dtype()),
+        "Quasar reshape of MX tensors ({}) supports only metadata-only views (unchanged last dim and a "
+        "tile-aligned or unchanged second-to-last dim); reshapes that change the tile structure copy sub-tile "
+        "face rows and need an MX-aware kernel. Got {} -> {}.",
+        tensor.dtype(),
+        tensor.logical_shape(),
+        logical_shape);
     // fill_implicit_tile_padding takes float; integer pad is not bit-exact for all dtypes/values.
     const float fill_value = detail::pad_value_as_float(pad_value, tensor.dtype());
     // squeeze input tensor and requested shape to 3D
@@ -458,7 +467,7 @@ ttnn::Tensor reshape_tiled(
             MemoryConfig interleaved_output_mem_config{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
             auto interleaved_output_spec = tt::tt_metal::TensorSpec(
                 requested_shape_3d,
-                tt::tt_metal::TensorLayout::fromPaddedShape(
+                tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                     tensor3d.dtype(),
                     tensor3d.tensor_spec().page_config(),
                     interleaved_output_mem_config,
@@ -525,7 +534,7 @@ ttnn::Tensor reshape_tiled(
         // passed here ends up baked into the layout's alignment, so synthetic_spec.physical_shape()
         // exactly matches the requested padded shape, even if compute_padded_shape ever produced
         // dimensions that exceed tile alignment (e.g., due to shard-aware padding).
-        auto synthetic_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+        auto synthetic_layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             tensor3d.dtype(),
             tensor3d.tensor_spec().page_config(),
             MemoryConfig(updated_mem_config.buffer_type()),

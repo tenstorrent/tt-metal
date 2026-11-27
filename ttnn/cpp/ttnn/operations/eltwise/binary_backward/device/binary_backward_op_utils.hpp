@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string_view>
 
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "ttnn/tensor/shape/shape.hpp"
@@ -25,6 +25,8 @@ struct BinaryBackwardKernelSpec {
     // Fused multiply+reduce compute kernel for broadcast cases. Empty here: broadcast rows
     // use the composite reduce_to_shape path in binary_backward.cpp; follow-up wires this.
     std::string_view broadcast_reduce_kernel_path;
+    // 1 = reader streams only grad (c_0); 3 = also input (c_1) + other (c_2). Mismatch deadlocks reader.
+    uint8_t num_input_tensors = 3;
 };
 
 const BinaryBackwardKernelSpec& kernel_spec(BinaryBackwardOpType op_type);

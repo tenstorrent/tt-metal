@@ -3,22 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
-#include <tt_metal/api/tt-metalium/core_coord.hpp>
-#include <tt_metal/api/tt-metalium/work_split.hpp>
-#include <tt_metal/api/tt-metalium/host_api.hpp>
+#include <tt_metal/api/tt-metalium/vocabulary/core_coord.hpp>
+#include <tt_metal/api/tt-metalium/utils/work_split.hpp>
+#include <tt_metal/api/tt-metalium/workload/legacy/host_api.hpp>
 #include <tt_metal/impl/buffers/semaphore.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include "ttnn_test_fixtures.hpp"
-#include "tt_metal/api/tt-metalium/cluster.hpp"
+#include "tt_metal/api/tt-metalium/discovery/cluster.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -43,7 +43,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -1055,14 +1055,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
     Tensor device_output_tensor_2 = ttnn::create_device_tensor(device_input_tensor_2.tensor_spec(), this->device_);
 
     // Update both per-core and common runtime args with new addresses
-    program_descriptor.kernels[0].runtime_args[0].second = {
-        device_input_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[0].common_runtime_args = {
-        device_input_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[1].runtime_args[0].second = {
-        device_output_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[1].common_runtime_args = {
-        device_output_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[0].runtime_args[0].second = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[0].common_runtime_args = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].runtime_args[0].second = {device_output_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].common_runtime_args = {device_output_tensor_2.buffer()->address(), num_tiles, 0};
 
     ttnn::generic_op(std::vector{device_input_tensor_2, device_output_tensor_2}, program_descriptor);
     Tensor golden_2 = ttnn::exp(device_input_tensor_2);
@@ -1098,7 +1094,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorValidId) {
         .cbs = {},
     };
 
-    EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
+    EXPECT_NO_THROW({ tt::tt_metal::Program program(*this->device_, program_descriptor); });
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMax) {
@@ -1122,7 +1118,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMa
         .cbs = {},
     };
 
-    EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
+    EXPECT_THROW({ tt::tt_metal::Program program(*this->device_, program_descriptor); }, std::exception);
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorDuplicateIdOnOverlappingCores) {
@@ -1152,7 +1148,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorDuplicateIdOnOverl
         .cbs = {},
     };
 
-    EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
+    EXPECT_THROW({ tt::tt_metal::Program program(*this->device_, program_descriptor); }, std::exception);
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappingCores) {
@@ -1181,7 +1177,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappi
         .cbs = {},
     };
 
-    EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
+    EXPECT_NO_THROW({ tt::tt_metal::Program program(*this->device_, program_descriptor); });
 }
 
 class MeshDevice1x4FabricFixture : public MeshDeviceFixtureBase {
@@ -1328,6 +1324,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         // The mux map goes in program-local L1 on this device's mux cores, so the config's addresses are offsets.
         // The writer waits for the address the mux publishes and adds it to them.
         tt::tt_fabric::FabricMuxConfig mux_config(
+            *mesh_device_,
             1,  // num_workers_per_direction
             0,  // num_header_only_channels
             1,  // num_buffers_per_channel
@@ -1482,12 +1479,12 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         if (has_forward) {
             const auto dst_node_id = mesh_device_->get_fabric_node_id(MeshCoordinate(0, ring_index + 1));
             fwd_mux_rt = mux_config.get_fabric_mux_run_time_args<ProgramDescriptor>(
-                src_node_id, dst_node_id, 0, program_desc, mux_fwd_core);
+                *mesh_device_, src_node_id, dst_node_id, 0, program_desc, mux_fwd_core);
         }
         if (has_backward) {
             const auto dst_node_id = mesh_device_->get_fabric_node_id(MeshCoordinate(0, ring_index - 1));
             bwd_mux_rt = mux_config.get_fabric_mux_run_time_args<ProgramDescriptor>(
-                src_node_id, dst_node_id, 0, program_desc, mux_bwd_core);
+                *mesh_device_, src_node_id, dst_node_id, 0, program_desc, mux_bwd_core);
         }
 
         // Kernel Descriptors
@@ -1627,6 +1624,7 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
     // Append fabric connection args - this modifies sender_runtime_args and adds semaphores/defines to descriptor
     tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(0);
     tt::tt_fabric::append_routing_plane_connection_manager_rt_args<ProgramDescriptor>(
+        *sender_device,
         sender_fabric_node_id,
         std::vector<tt::tt_fabric::eth_chan_directions>{tt::tt_fabric::eth_chan_directions::EAST},
         std::vector<uint32_t>{},

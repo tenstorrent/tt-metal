@@ -37,7 +37,7 @@ enum class p_dim_stride_target
  * @param to_store: Value written to addr.
  * @return The value read back from addr after the store.
  */
-static inline __attribute__((always_inline)) std::uint32_t store_then_load(volatile std::uint32_t *addr, std::uint32_t to_store)
+inline __attribute__((always_inline)) std::uint32_t store_then_load(volatile std::uint32_t *addr, std::uint32_t to_store)
 {
     std::uint32_t result;
     __asm volatile("sw %2, %1; lw %0, %1" : "=r"(result) : "m"(*addr), "r"(to_store));
@@ -238,7 +238,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
 
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(((unpack_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(((unpack_src_format & 0x1F) == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) ? 1 : 0);
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
@@ -313,7 +313,7 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
 
-    cfg_reg_rmw_tensix<THCON_SEC1_REG1_Unp_LF8_4b_exp_RMW>(((unpack_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG1_Unp_LF8_4b_exp_RMW>(((unpack_src_format & 0x1F) == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) ? 1 : 0);
 
     cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B)); // update gpr which holds tile size B
@@ -346,26 +346,6 @@ inline void _llk_unpack_set_srcb_dummy_valid_()
     // bank pointer. Wormhole uses a preceding stall only because it has no such operand.
     TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-}
-
-/**
- * @brief Zero both banks of one source register.
- *
- * A face shorter than the rows the math op reads fills only its own rows. The rest keep the previous op's data.
- * Unpacks never write those rows, so zeroing both banks once at init keeps them zero for this op.
- * Math moves (MOVD2A, MOVD2B, MOVB2A) do write them, so re-run the init after any op that writes SrcA or SrcB.
- * Without Stall_Clr_Cntrl the clear waits for the Matrix Unit to release both banks, so it cannot zero operands
- * the previous op still uses. The stalls keep the unpackers from writing during the clear, which drops those writes.
- *
- * @tparam src: Source register to clear, values = <SrcA/SrcB>
- */
-template <Srcs src>
-inline void _llk_unpack_clear_src_banks_()
-{
-    static_assert(src == SrcA || src == SrcB, "src must be SrcA or SrcB");
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-    TTI_UNPACR_NOP(src, 0, 0, 0, 0, 0 /*Stall_Clr_Cntrl*/, 1 /*Bank_Clr_Ctrl: both banks*/, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, src == SrcA ? p_stall::UNPACK0 : p_stall::UNPACK1);
 }
 
 /**

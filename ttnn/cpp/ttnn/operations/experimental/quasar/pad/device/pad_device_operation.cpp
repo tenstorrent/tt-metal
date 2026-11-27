@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "pad_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -18,6 +18,7 @@
 #include "ttnn/operations/experimental/quasar/pad/device/pad_rm_sharded_width_only_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/pad/device/pad_tile_multicore_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/pad/device/pad_tile_program_factory.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 namespace ttnn::prim::qsr {
@@ -157,8 +158,22 @@ void PadDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
                 input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
-                input_tensor.dtype() == DataType::UINT16 || input_tensor.dtype() == DataType::BFLOAT8_B,
+                input_tensor.dtype() == DataType::UINT16 || input_tensor.dtype() == DataType::BFLOAT8_B ||
+                tt::tt_metal::is_mx(input_tensor.dtype()),
             "Cannot pad tilized tensor with specified format");
+        // An MX tile is 32-element blocks with a shared scale, so the kernels can only copy whole input tiles
+        // and emit whole pad tiles. A zero-filled page is the MX zero tile (zero scale, zero elements); any
+        // other fill value would need an MX-aware encoder.
+        TT_FATAL(
+            !tt::tt_metal::is_mx(input_tensor.dtype()) || operation_attributes.pad_value == 0.0f,
+            "ttnn.pad on MX tensors ({}) supports only pad_value 0 (whole zero tiles); got {}",
+            input_tensor.dtype(),
+            operation_attributes.pad_value);
+        TT_FATAL(
+            !tt::tt_metal::is_mx(input_tensor.dtype()) || (input_tensor.logical_shape()[2] % TILE_HEIGHT == 0 &&
+                                                           input_tensor.logical_shape()[3] % TILE_WIDTH == 0),
+            "ttnn.pad on MX tensors needs a tile-aligned input (no implicit tile padding to overwrite), got {}",
+            input_tensor.logical_shape());
     } else if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
@@ -184,17 +199,18 @@ void PadDeviceOperation::validate_on_program_cache_miss(
         uint32_t shard_width = input_tensor.shard_spec().has_value()
                                    ? input_tensor.shard_spec().value().shape[1]
                                    : input_tensor.nd_shard_spec().value().shard_shape[-1];
-        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
+        const uint32_t page_size_bytes = input_tensor.mesh_buffer().page_size();
         const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
-            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
+            page_size_bytes == input_tensor.mesh_buffer().aligned_page_size(),
             "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes",
             shard_width,
             page_size_bytes,
             alignment_requirement);
     }
 
-    if (operation_attributes.output_mem_config.is_sharded()) {
+    // element_size() is undefined for MX (a TILE-only format); this row-major page-alignment check does not apply.
+    if (operation_attributes.output_mem_config.is_sharded() && !tt::tt_metal::is_mx(input_tensor.dtype())) {
         uint32_t output_shard_width =
             operation_attributes.output_mem_config.shard_spec().has_value()
                 ? operation_attributes.output_mem_config.shard_spec().value().shape[1]
@@ -215,7 +231,7 @@ tt::tt_metal::TensorSpec PadDeviceOperation::compute_output_specs(
     const auto& input_tensor = tensor_args.input;
     return tt::tt_metal::TensorSpec(
         operation_attributes.output_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,

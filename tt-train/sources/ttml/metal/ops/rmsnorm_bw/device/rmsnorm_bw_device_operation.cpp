@@ -4,7 +4,6 @@
 
 #include "rmsnorm_bw_device_operation.hpp"
 
-#include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "metal/ops/common/rmsnorm_common.hpp"
 #include "rmsnorm_bw_program_factory.hpp"
@@ -25,6 +24,12 @@ void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_da_tensor = tensor_args.preallocated_da;
     const auto& preallocated_dgamma_components_tensor = tensor_args.preallocated_dgamma_components;
     const auto& preallocated_dgate_tensor = tensor_args.preallocated_dgate;
+    TT_FATAL(
+        args.max_row_slices >= 1U && args.max_row_slices <= rmsnorm::kMaxRowSlices,
+        "{}: max_row_slices must be in [1, {}], got {}",
+        op,
+        rmsnorm::kMaxRowSlices,
+        args.max_row_slices);
 
     check_device_tensor(
         input_tensor,
@@ -127,17 +132,11 @@ tensor_return_value_t RMSNormBackwardDeviceOperation::create_output_tensors(
     };
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor, which optional tensors are
+// passed). It is custom only to skip the canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t RMSNormBackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    // 0 is the ungated mode, which differs from gated mode with a single head.
-    const uint32_t num_heads =
-        tensor_args.gate.has_value() ? get_num_heads_of_head_merged(input_tensor, tensor_args.gate.value()) : 0U;
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormBackwardDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape, num_heads);
-
-    return hash;
+    return tt::tt_metal::operation::hash_operation<RMSNormBackwardDeviceOperation>(args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::rmsnorm_bw::device
@@ -151,12 +150,14 @@ ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation::tensor_ret
     const ttnn::Tensor& dL_dout_tensor,
     const std::optional<ttnn::Tensor>& gate,
     bool compute_dgamma,
+    uint32_t max_row_slices,
     const std::optional<ttnn::Tensor>& preallocated_da,
     const std::optional<ttnn::Tensor>& preallocated_dgamma_components,
     const std::optional<ttnn::Tensor>& preallocated_dgate) {
     using OperationType = ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{.compute_dgamma = compute_dgamma};
+    auto operation_attributes =
+        OperationType::operation_attributes_t{.compute_dgamma = compute_dgamma, .max_row_slices = max_row_slices};
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .gamma = gamma_tensor,

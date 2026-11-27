@@ -17,6 +17,7 @@ on:
           - llama3.1-8b-dp-galaxy
           - llama3.3-70b-galaxy
           - qwen3-32b-galaxy
+          - glm53-flash
           - qwen3.6-27b
           - qwen3.6-35b-a3b
           - gpt-oss-120b
@@ -36,6 +37,7 @@ on:
           - deepseek-v3-tg
           - deepseek-v3-b1
           - z-image-turbo
+          - ideogram-4
           - resnet50
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"

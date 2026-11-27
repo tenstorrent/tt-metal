@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 from diffusers.models.transformers.transformer_wan import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
+from huggingface_hub import constants as hf_constants
 from loguru import logger
 
 if not os.environ.get("TT_DIT_DEBUG"):
@@ -25,7 +26,6 @@ from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import DistributedLayerNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils import cache
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel, torch_pad
 from ....utils.substate import pop_substate, rename_substate
@@ -897,10 +897,17 @@ class WanCheckpoint:
             name,
             subfolder=subfolder,
             trust_remote_code=True,
+            # diffusers ignores HF_HUB_OFFLINE for sharded checkpoints and queries the hub for the shard
+            # list unless local_files_only is set (huggingface/diffusers#11948).
+            local_files_only=hf_constants.HF_HUB_OFFLINE,
         )
         torch_transformer.eval()
         self._config = torch_transformer.config
         self._state_dict = torch_transformer.state_dict()
+
+    @property
+    def model_name(self) -> str:
+        return os.path.basename(self._name)
 
     @property
     def subfolder(self) -> str:
@@ -941,24 +948,4 @@ class WanCheckpoint:
             is_fsdp=is_fsdp,
             model_type=model_type,
             lora_enabled=lora_enabled,
-        )
-
-    def load(
-        self,
-        model: WanTransformer3DModel,
-        *,
-        mesh_device: ttnn.MeshDevice,
-        parallel_config: DiTParallelConfig,
-        is_fsdp: bool,
-    ) -> None:
-        """Load (or reload) weights for a previously-built transformer."""
-        cache.load_model(
-            tt_model=model,
-            get_torch_state_dict=lambda: self._state_dict,
-            model_name=os.path.basename(self._name),
-            subfolder=self._subfolder,
-            parallel_config=parallel_config,
-            mesh_shape=tuple(mesh_device.shape),
-            mesh_device=mesh_device,
-            is_fsdp=is_fsdp,
         )
