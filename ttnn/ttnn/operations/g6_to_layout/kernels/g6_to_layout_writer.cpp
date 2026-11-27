@@ -27,7 +27,8 @@ void kernel_main() {
     constexpr uint32_t width = get_compile_time_arg_val(7);
     constexpr uint32_t col_group_width_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(9);
-    constexpr auto output_args = TensorAccessorArgs<10>();
+    constexpr uint32_t out_page_stride = get_compile_time_arg_val(10);
+    constexpr auto output_args = TensorAccessorArgs<11>();
 
     constexpr uint32_t datum_bytes = tile_bytes / (TILE_DIM * TILE_DIM);
     constexpr uint32_t tile_row_bytes = TILE_DIM * datum_bytes;
@@ -59,7 +60,9 @@ void kernel_main() {
 
         for (uint32_t col = col_begin; col < col_end; col += block_width_tiles) {
             const uint32_t col_offset = col * tile_row_bytes;
-            const uint32_t bytes_left = row_bytes - col_offset;
+            // A row's alignment padding is part of its own page slot, so the last segment of a
+            // row fills the slot: whole DRAM bursts instead of byte-masked partial writes.
+            const uint32_t bytes_left = out_page_stride - col_offset;
             const uint32_t block_bytes =
                 (col_end - col < block_width_tiles ? col_end - col : block_width_tiles) * tile_row_bytes;
             const uint32_t segment_bytes = bytes_left < block_bytes ? bytes_left : block_bytes;

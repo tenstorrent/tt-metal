@@ -254,7 +254,7 @@ def create_program(plan: Plan, input_tensor: ttnn.Tensor, output_tensor: ttnn.Te
     ]
     reader_ct_args = [CB_TILES_IN, *walk_ct_args]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    writer_ct_args = [CB_ROWS_OUT, *walk_ct_args]
+    writer_ct_args = [CB_ROWS_OUT, *walk_ct_args, output_tensor.buffer_aligned_page_size()]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     compute_ct_args = [CB_TILES_IN, CB_ROWS_OUT, plan.block_width_tiles]
 
