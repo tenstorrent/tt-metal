@@ -18,6 +18,7 @@ SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
+from diag.triage import name_root_ports  # noqa: E402
 from diag.verdict import verdict_lines  # noqa: E402
 
 CHIP = "0000:46:00.0 (UBB2/U6)"
@@ -89,6 +90,33 @@ class TestVerdict(unittest.TestCase):
         )
         self.assertIn("fans and airflow", lines[0])
         self.assertEqual(lines[-1], "Final verdict: WARN: 1 warning(s)")
+
+    def test_root_port_aer_names_the_chip_and_its_tray(self):
+        bridge = Check(
+            name="triage_hostside_bridge_aer",
+            status=WARN,
+            details="31/32 clean; bridge 0000:40:01.4: 1 correctable",
+            ip="pcie",
+        )
+        name_root_ports(bridge, {"0000:40:01.4": "0000:44:00.0", "0000:40:01.1": "0000:41:00.0"})
+        self.assertEqual(
+            bridge.details, "31/32 clean; bridge 0000:40:01.4 (root port of 0000:44:00.0 (UBB2/U4)): 1 correctable"
+        )
+        self.assertEqual(bridge.parts, ["0000:44:00.0 (UBB2/U4)"])
+        (line, _) = verdict_lines(report(phase("triage", bridge)))
+        self.assertIn("| 0000:44:00.0 (UBB2/U4) | reseat UBB2's host PCIe cable;", line)
+
+    def test_a_passing_finding_is_left_as_written(self):
+        clean = Check(name="triage_hostside_bridge_aer", status=PASS, details="32/32 bridge(s) clean 0000:40:01.4")
+        name_root_ports(clean, {"0000:40:01.4": "0000:44:00.0"})
+        self.assertEqual((clean.details, clean.parts), ("32/32 bridge(s) clean 0000:40:01.4", []))
+
+    def test_chips_on_several_trays_keep_that_tray(self):
+        two_trays = Check(
+            name="pcie_link", status=WARN, details="x1", ip="pcie", parts=[CHIP, "0000:c3:00.0 (UBB3/U3)"]
+        )
+        (line, _) = verdict_lines(report(phase("snapshot", two_trays)))
+        self.assertIn("reseat that tray's host PCIe cable", line)
 
 
 if __name__ == "__main__":

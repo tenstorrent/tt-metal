@@ -7,6 +7,7 @@ then one final line. Printed last, so the end of the log says what needs fixing.
 from __future__ import annotations
 
 from .eth_summary import _one_line
+from .galaxy import parse_bdf_physical
 from .model import FAIL, WARN
 
 _LOST = "tt-smi -glx_reset and recount; if still missing, check that tray's 12 V and its host PCIe cable"
@@ -28,9 +29,13 @@ DEFAULT_DO = "see the check's details and its log"
 
 
 def _do(check: dict) -> str:
+    """What to do, with 'that tray' made the tray when every chip at fault is on one."""
     if check["name"].startswith("reset_"):
-        return _LOST
-    return DO_BY_CHECK.get(check["name"]) or DO_BY_IP.get(check.get("ip", "other"), DEFAULT_DO)
+        do = _LOST
+    else:
+        do = DO_BY_CHECK.get(check["name"]) or DO_BY_IP.get(check.get("ip", "other"), DEFAULT_DO)
+    trays = {pos[0] for pos in map(parse_bdf_physical, check.get("parts") or []) if pos}
+    return do.replace("that tray", f"UBB{trays.pop()}") if len(trays) == 1 else do
 
 
 def verdict_lines(report: dict) -> list[str]:

@@ -16,7 +16,9 @@ from typing import Sequence
 
 from .common import default_tt_metal_path, emit_result, emit_running, log, run_with_timeout
 from .external import normalize_external_check
-from .model import PASS, SKIP, WARN, Check, Phase
+from .galaxy import BDF_RE, format_bdf, name_chips
+from .model import FAIL, PASS, SKIP, WARN, Check, Phase
+from .resets import chip_root_ports
 
 # First-step triage tools, run after the tier's post-test reset. They live in
 # tools/scaleout/kmd_triage: host_side.sh reads host, PCIe and driver state out
@@ -85,6 +87,21 @@ def normalize_triage_check(payload: dict, gating: bool) -> Check:
         hold_warn_at=PASS if advisory_warn else None,
         gating_flag="--triage-gating",
     )
+
+
+def name_root_ports(check: Check, chip_of_port: dict[str, str]) -> None:
+    """Name the chip behind each root port a WARN/FAIL finding mentions, e.g.
+    'bridge 0000:40:01.4 (root port of 0000:44:00.0 (UBB2/U4))', and fill parts
+    with the chips it names, so the CSV and the verdict say which tray."""
+    if check.status not in (WARN, FAIL):
+        return
+
+    def named(m):
+        chip = chip_of_port.get(m[0].lower())
+        return f"{m[0]} (root port of {format_bdf(chip)})" if chip else m[0]
+
+    check.details = BDF_RE.sub(named, check.details)
+    check.parts = name_chips([check.details])
 
 
 def run_triage(
@@ -178,6 +195,9 @@ def run_triage(
                     parse_error = "JSON has no 'checks' list"
             except (OSError, ValueError) as e:
                 parse_error = repr(e)
+        chip_of_port = {port: chip for chip, port in chip_root_ports().items()}
+        for c in checks:
+            name_root_ports(c, chip_of_port)
 
         if timed_out:
             status = WARN

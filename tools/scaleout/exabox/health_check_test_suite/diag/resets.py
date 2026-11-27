@@ -23,11 +23,11 @@ from .snapshot_checks import validate_snapshot
 RESET_FLAGS = ("-glx_reset",)
 
 
-def chip_root_ports(sys_root: Path = Path("/sys")) -> set[str]:
-    """The PCIe root ports the chips hang off. Read before a reset: a chip the
+def chip_root_ports(sys_root: Path = Path("/sys")) -> dict[str, str]:
+    """Each chip's PCIe root port, by chip BDF. Read before a reset: a chip the
     reset drops leaves sysfs, and with it the only record of its root port."""
     devices = (sys_root / "devices").resolve()
-    ports = set()
+    ports = {}
     for f in read_pcie_functions(sys_root):
         try:
             parts = (sys_root / "bus" / "pci" / "devices" / f.bdf).resolve().relative_to(devices).parts
@@ -35,21 +35,25 @@ def chip_root_ports(sys_root: Path = Path("/sys")) -> set[str]:
             continue
         # ("pci0000:40", "0000:40:01.1", ..., "0000:41:00.0"): the root port is second.
         if len(parts) >= 3:
-            ports.add(parts[1])
+            ports[f.bdf] = parts[1]
     return ports
 
 
 def rescan_root_ports(ports: set[str], sys_root: Path = Path("/sys")) -> list[str]:
     """Rescan each root port, or the whole bus when none is known, so a chip that
     came back from the reset is enumerated again. Returns what could not be
-    rescanned; writing needs root."""
+    rescanned; writing needs root, and a run without it is one line, not one per port."""
     targets = [sys_root / "bus" / "pci" / "devices" / p / "rescan" for p in sorted(ports)]
-    errors = []
+    errors, denied = [], 0
     for target in targets or [sys_root / "bus" / "pci" / "rescan"]:
         try:
             target.write_text("1")
+        except PermissionError:
+            denied += 1
         except OSError as e:
-            errors.append(f"{target}: {e.strerror or e}")
+            errors.append(f"rescan failed: {target}: {e.strerror or e}")
+    if denied:
+        errors.insert(0, f"root-port rescan needs root ({denied} port(s) skipped)")
     return errors
 
 
@@ -94,7 +98,7 @@ def reset_loop(
         post_reset_phases.append((sp.name, sp))
         print_phase_summary(sp.name, asdict(sp))
 
-    ports = set() if dry_run else chip_root_ports(sys_root)
+    ports = set() if dry_run else set(chip_root_ports(sys_root).values())
     for i, flag in enumerate(plan):
         check_name = f"reset_{i+1}_{flag.lstrip('-')}"
         emit_running(check_name)
@@ -124,7 +128,7 @@ def reset_loop(
         if missing:
             details += f" missing: {', '.join(missing)}"
         if rescan_errors:
-            details += f" (rescan failed: {'; '.join(rescan_errors)})"
+            details += f" ({'; '.join(rescan_errors)})"
         phase.add(
             Check(
                 name=check_name,

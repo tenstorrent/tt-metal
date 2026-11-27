@@ -100,6 +100,18 @@ class TestResetLoop(unittest.TestCase):
         self.assertIn("rescan failed", check.details)
         self.assertIn("0000:40:01.1", check.details)
 
+    def test_a_rescan_without_root_is_one_line(self):
+        with mock.patch.object(Path, "write_text", side_effect=PermissionError(13, "Permission denied")):
+            (check,) = self._loop(("-glx_reset",)).checks
+        self.assertEqual(check.status, PASS)
+        self.assertIn("(root-port rescan needs root (32 port(s) skipped))", check.details)
+        self.assertNotIn("Permission denied", check.details)
+
+    def test_each_chip_maps_to_its_root_port(self):
+        ports = resets.chip_root_ports(self.root)
+        self.assertEqual(len(ports), 32)
+        self.assertEqual(ports["0000:44:00.0"], "0000:40:04.1")
+
     def test_no_tier_resets_with_tt_smi_r(self):
         self.assertEqual(resets.RESET_FLAGS, ("-glx_reset",))
         for name, tier in TIERS.items():
