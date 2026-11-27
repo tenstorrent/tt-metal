@@ -9,6 +9,10 @@ endif()
 
 add_subdirectory(umd)
 
+# tt-insight carries the streaming profiler's records from the device to the host. It finds its own device compiler
+# and SIMDe.
+add_subdirectory(tt-insight)
+
 # Propagate ENABLE_TRACY into Tracy's option before add_subdirectory(tracy).
 # Tracy's add_subdirectory must always run: it creates Tracy::TracyClient, which many
 # targets link against unconditionally. With TRACY_ENABLE=OFF it becomes a no-op stub.

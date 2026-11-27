@@ -122,6 +122,7 @@ target_link_libraries(
         protobuf::libprotobuf
         ttexalens::elf
         Taskflow::Taskflow
+        tt_insight::tt_insight
 )
 
 target_include_directories(

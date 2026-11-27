@@ -145,6 +145,9 @@ target_link_libraries(
 
 tt_reuse_precompile_headers(tt_metal TT::CommonPCH)
 
+# The streaming profiler's public records are views of tt-insight's records.
+target_link_libraries(tt_metal PUBLIC tt_insight::tt_insight)
+
 target_include_directories(
     tt_metal
     PUBLIC

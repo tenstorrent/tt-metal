@@ -10,3 +10,7 @@
 	path = tt_metal/third_party/tt-cluster-descriptors
 	url = https://github.com/tenstorrent/tt-cluster-descriptors.git
 	branch = main
+[submodule "tt_metal/third_party/tt-insight"]
+	path = tt_metal/third_party/tt-insight
+	url = https://github.com/tenstorrent/tt-insight.git
+	branch = main

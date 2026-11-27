@@ -308,6 +308,7 @@ set(TT_METAL_SOURCES
     impl/host_api/tt_metal.cpp
     impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
+    impl/streaming_profiler/capture.cpp
     impl/streaming_profiler/ops_csv.cpp
     impl/streaming_profiler/service.cpp
     impl/streaming_profiler/tracy_consumer.cpp
