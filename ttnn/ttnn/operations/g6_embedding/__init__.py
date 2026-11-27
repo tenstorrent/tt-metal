@@ -5,9 +5,20 @@ from .g6_embedding import (
     EXCLUSIONS,
     INPUT_TAGGERS,
     SUPPORTED,
+    dump_core_roles,
     g6_embedding,
-    select_plan,
     validate,
 )
+from .g6_embedding_program_descriptor import Plan, plan_for_shapes, select_plan
 
-__all__ = ["g6_embedding", "select_plan", "validate", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS"]
+__all__ = [
+    "EXCLUSIONS",
+    "INPUT_TAGGERS",
+    "SUPPORTED",
+    "Plan",
+    "dump_core_roles",
+    "g6_embedding",
+    "plan_for_shapes",
+    "select_plan",
+    "validate",
+]
