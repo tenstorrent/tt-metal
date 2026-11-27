@@ -19,14 +19,16 @@ constexpr bool is_non_aligned = false;
 #endif
 
 #ifdef ZERO_FILL_PAST_END
-// Writes `size` bytes of zeros to L1 at `addr`, which is 16 B aligned; `size` is whole 2-byte elements.
+// Writes `size` bytes of zeros to L1 at `addr`, which is 16 B aligned: whole words, then the tail byte by byte.
 inline void zero_fill_stick(uint32_t addr, uint32_t size) {
     volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
-    for (uint32_t i = 0; i < size / sizeof(uint32_t); i++) {
+    const uint32_t num_words = size / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_words; i++) {
         words[i] = 0;
     }
-    if (size % sizeof(uint32_t) != 0) {
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr + size - sizeof(uint16_t))[0] = 0;
+    volatile tt_l1_ptr uint8_t* bytes = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(addr);
+    for (uint32_t i = num_words * sizeof(uint32_t); i < size; i++) {
+        bytes[i] = 0;
     }
 }
 #endif

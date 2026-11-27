@@ -1359,11 +1359,25 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             compute_config,
             device);
 
+        TT_FATAL(
+            !dram_slice_config_.has_value() ||
+                (dram_slice_config_->slice_height > 0) == (dram_slice_config_->slice_width > 0),
+            "Fixed 2D DRAM slices need both slice_height and slice_width, got {} and {}",
+            dram_slice_config_.has_value() ? dram_slice_config_->slice_height : 0,
+            dram_slice_config_.has_value() ? dram_slice_config_->slice_width : 0);
         if (dram_slice_config_.has_value() && dram_slice_config_->is_fixed()) {
             // Fixed 2D slices: every slice has this output size, whatever the input size, and the conv of each
             // pads only before the input (see Conv2dSliceAttr::get_input_slice_and_padding). The first slice's
             // layout stands for all.
-            TT_FATAL(conv2d_slice_attr->enable_fixed_slices(), "Conv2D supports fixed 2D DRAM slices");
+            TT_FATAL(conv2d_slice_attr->enable_fixed_slices(), "Conv2D does not support fixed 2D DRAM slices");
+            TT_FATAL(
+                dram_slice_config_->slice_width % tt::constants::TILE_HEIGHT == 0,
+                "The width of fixed 2D DRAM slices ({}) must be whole tiles",
+                dram_slice_config_->slice_width);
+            TT_FATAL(
+                conv_config.output_layout == tt_metal::Layout::TILE,
+                "Fixed 2D DRAM slices need a tiled conv output, got {}",
+                conv_config.output_layout);
             output_height = dram_slice_config_->slice_height;
             output_width = dram_slice_config_->slice_width;
             auto [input_slice, input_slice_end] =

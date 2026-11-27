@@ -7,6 +7,7 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "sliding_window.hpp"
 #include "op_slicing/op_slicing.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 
 using namespace tt::tt_metal;
@@ -41,6 +42,11 @@ void bind_sliding_window(nb::module_& mod) {
     py_op_slice_config.def(
         "__init__",
         [](Op2DSliceConfig* self, uint32_t slice_height, uint32_t slice_width) {
+            TT_FATAL(
+                slice_height > 0 && slice_width > 0,
+                "Fixed 2D slices need a slice_height and slice_width above 0, got {} and {}",
+                slice_height,
+                slice_width);
             new (self) Op2DSliceConfig{.slice_height = slice_height, .slice_width = slice_width};
         },
         nb::kw_only(),

@@ -5,6 +5,7 @@
 #include "slice_write_device_operation.hpp"
 
 #include <algorithm>
+#include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -87,6 +88,21 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
         !input_tensor.is_sharded() || input_tensor.padded_shape().rank() == 4,
         "Sharded input tensor should be of rank 4. Got {}",
         input_tensor.padded_shape().rank());
+    // The tiled sharded-input factories need a start on whole tiles. This runs on a cache hit too: the runtime-shapes
+    // factory's key leaves out the start, so a W start of 16 would otherwise reuse a program built for a start of 0.
+    if (input_tensor.is_sharded() && input_tensor.layout() == Layout::TILE) {
+        TT_FATAL(
+            args.slice_start[-1] == 0,
+            "Slice write expects output start for the last dimension to be 0, got {}",
+            args.slice_start[-1]);
+        TT_FATAL(
+            args.slice_start[-2] % tt::constants::TILE_HEIGHT == 0,
+            "Slice write expects output start for the second last dimension to be a multiple of tile height, got {}",
+            args.slice_start[-2]);
+    }
+    // The runtime-shapes factory compiles the output's accessor args, which a sharded output would tie to its shape.
+    TT_FATAL(
+        !clips || !output_tensor.is_sharded(), "slice_write with runtime_shapes needs an interleaved output tensor");
 }
 
 ttsl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(

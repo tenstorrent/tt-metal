@@ -250,10 +250,8 @@ ProgramDescriptor slice_write_tiled_sharded_input_descriptor(
 
     log_debug(tt::LogOp, "Slice Write Input Shape : {} ,Actual Input Shape: {}", input_shape, input_shape);
     TT_FATAL(input.dtype() == output.dtype(), "Input & output should have the same dtype");
-    TT_FATAL(output_tensor_start[-1] == 0, "Slice write expects output start for the last dimension to be 0");
-    TT_FATAL(
-        output_tensor_start[-2] % TILE_HEIGHT == 0,
-        "Slice write expects output start for the second last dimension to be a multiple of tile height");
+    // The start checks are in validate_on_program_cache_miss, which also runs on a hit: the runtime-shapes factory's
+    // key leaves out the start.
 
     TT_FATAL(
         input_padded_shape[-2] % TILE_HEIGHT == 0,

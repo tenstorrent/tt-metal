@@ -781,6 +781,18 @@ Result conv2d_DRAM(
         !conv_config.override_output_sharding_config,
         "Conv2D DRAM slicing doesn't support override_output_sharding_config.");
 
+    // Fixed slices serve every input size with one program set per layer. Folding and the matmul path run on the
+    // whole image, so their programs follow its size; they are rejected rather than the fixed config ignored.
+    const bool fixed_slices = dram_slice_config_.has_value() && dram_slice_config_->is_fixed();
+    TT_FATAL(
+        !fixed_slices || !mm_conv,
+        "Conv2D fixed 2D DRAM slices don't support a conv that runs as a matmul (kernel {}x{}, stride {}x{})",
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1]);
+    const auto unfolded_stride = stride;
+
     // Fold the input tensor if required - this may update mm_conv after folding
     ttnn::Tensor input_tensor_on_device = fold_input_tensor_if_required(
         input_tensor,
@@ -795,6 +807,10 @@ Result conv2d_DRAM(
         padding_n4,
         mm_conv,
         conv_config);
+    // Folding sets the stride to 1.
+    TT_FATAL(
+        !fixed_slices || stride == unfolded_stride,
+        "Conv2D fixed 2D DRAM slices don't support kernel-stride folding; set enable_kernel_stride_folding=False");
     if (!is_device_tensor(input_tensor_on_device)) {
         input_tensor_on_device =
             ttnn::operations::core::to_device(input_tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
@@ -896,7 +912,6 @@ Result conv2d_DRAM(
     const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
 
     // With fixed slices the whole call is to serve every input size, the flatten included.
-    const bool fixed_slices = dram_slice_config_.has_value() && dram_slice_config_->is_fixed();
     dram_output_tensor = ttnn::reshape(
         dram_output_tensor,
         flattened_output_shape,
