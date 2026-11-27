@@ -9,6 +9,8 @@ and builds its device input while the device runs chunk ``c`` and the host score
 checked (``BlockScorer.check_chunk``); the first chunk with a violation stops the run. After the last chunk the
 carried state is read, the run is scored into metric tiers and checked against the context length's run bars.
 
+First the host heap is set to keep freed memory for reuse (``_retain_freed_heap``, one ``LC_HEAP`` line).
+
 Progress (a 1M run takes minutes; a stage silent beyond its expected time is stuck): a timestamped ``LC_STAGE`` line
 when each stage outside the chunk loop starts and ends (golden open, weight load, identity, device build, then
 carried state and score run), and one ``LC_CHUNK`` line per chunk with the case, chunk i/N, rows [lo, hi), elapsed
@@ -21,6 +23,8 @@ JSON line.
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import json
 import math
 import time
@@ -91,6 +95,22 @@ def _format_seconds(seconds: float) -> str:
     return f"{seconds:.1f}s" if math.isfinite(seconds) else "?"
 
 
+# glibc mallopt parameters (malloc.h) and the values that keep freed heap in the process (int range: mallopt takes
+# an int, so the MALLOC_*_ environment values of m06n.12 do not fit).
+_HEAP_REUSE = {"M_MMAP_THRESHOLD": (-3, 2**31 - 1), "M_TRIM_THRESHOLD": (-1, 2**31 - 1), "M_TOP_PAD": (-2, 2**30)}
+
+
+def _retain_freed_heap() -> dict[str, int]:
+    """Make glibc keep freed host heap for reuse (no mmap per large block, no trim, 1 GiB top pad) instead of
+    returning it to the OS: scoring allocates the same large temporaries every chunk, and zero-faulting fresh pages
+    for each dominated it (m06n.12: DSA scoring 2.2x and KDA 5.5x faster, results bit-identical). Process-wide and
+    lasting: freed heap up to the scoring peak stays resident, for tt-metal's host allocations too. In code, not in
+    ``MALLOC_*`` environment variables, so every launcher times the same. Returns each ``mallopt`` result (1 set,
+    0 refused)."""
+    libc = ctypes.CDLL(ctypes.util.find_library("c"))
+    return {name: libc.mallopt(param, value) for name, (param, value) in _HEAP_REUSE.items()}
+
+
 def run_case(case: LongContextCase, context_len: int, mesh: Any, checkpoint: Path) -> Result:
     """Run ``case`` over rows ``[0, context_len)`` on ``mesh`` and return its ``Result``; the caller asserts
     ``result.passed``. Raises the registry's ``GoldenError`` on a missing or mismatched golden, before any device
@@ -103,6 +123,11 @@ def run_case(case: LongContextCase, context_len: int, mesh: Any, checkpoint: Pat
     bars = case.bars[context_len]
     tag = f"{case.id} {context_len}"
     began = time.perf_counter()
+    heap = _retain_freed_heap()
+    logger.info(
+        f"LC_HEAP {tag}: glibc mallopt "
+        + " ".join(f"{name}={_HEAP_REUSE[name][1]} (set {ok})" for name, ok in heap.items())
+    )
     seconds: dict[str, float] = {}
 
     @contextmanager

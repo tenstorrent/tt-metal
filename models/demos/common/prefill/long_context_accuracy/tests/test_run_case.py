@@ -220,6 +220,12 @@ def test_run_scores_every_chunk_in_order_and_logs_progress(golden_root, log_line
     assert tiers[2][0]["state_error"] == 0.0
     stage_names = ["golden open", "weight load", "identity", "device build", "carried state", "score run"]
     assert set(result.seconds) == {*stage_names, "chunk_golden", "chunk_wait", "chunk_device", "chunk_score", "total"}
+    heap = [line for line in log_lines if line.startswith("LC_HEAP")]
+    assert heap == [
+        "LC_HEAP tiny-block 10: glibc mallopt "
+        "M_MMAP_THRESHOLD=2147483647 (set 1) M_TRIM_THRESHOLD=2147483647 (set 1) M_TOP_PAD=1073741824 (set 1)"
+    ], heap
+    assert log_lines.index(heap[0]) < min(i for i, line in enumerate(log_lines) if line.startswith("LC_STAGE"))
     stages = [line for line in log_lines if line.startswith("LC_STAGE")]
     assert [line.removeprefix("LC_STAGE tiny-block 10: ").split(" done in ")[0] for line in stages] == [
         text for name in stage_names for text in (f"{name} ...", name)
