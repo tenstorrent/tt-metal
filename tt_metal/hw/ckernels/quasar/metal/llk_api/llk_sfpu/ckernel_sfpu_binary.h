@@ -11,6 +11,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_add.h"
 #include "ckernel_sfpu_conversions.h"
+#include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_operand.h"
@@ -75,15 +76,18 @@ inline void calculate_sfpu_binary_two_row(
 }
 
 /**
- * @brief LLK caller for binary SFPU operations, currently supports ADD, SUB, RSUB, MUL and DIV.
+ * @brief LLK caller for binary SFPU operations: ADD, SUB, RSUB, MUL, DIV, XLOGY, NEXTAFTER and NEXTAFTER_BF16.
  *
  * @note DIV special cases (matching BH semantics):
  *   - 0 / 0 -> NaN
  *   - x / 0 -> ±inf, sign of x
  *   - x / x -> 1.0 (forced exact, regardless of reciprocal rounding)
+ * @note XLOGY is in0 * ln(in1): NaN for a negative or NaN in1, in0 * -inf for +-0 and denormal in1.
+ * @note NEXTAFTER / NEXTAFTER_BF16 step in0 one fp32 / bfloat16 ULP toward in1 (in1 when they are equal); a
+ *       subnormal result is flushed to zero by the store, and a NaN operand gives NaN.
  *
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
- * @tparam BINOP: selects which binary op to compute (ADD, SUB, RSUB, MUL or DIV)
+ * @tparam BINOP: selects which binary op to compute
  * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB, RSUB)
  * @tparam dst_rounding_mode: bf16 narrowing applied to ADD/SUB/RSUB results (no-op if is_fp32_dest_acc_en).
  *         DIV ignores this and always rounds RNE, to match BH semantics.
@@ -101,8 +105,9 @@ inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::MUL ||
-            BINOP == BinaryOp::DIV,
-        "calculate_sfpu_binary only supports ADD, SUB, RSUB, MUL and DIV");
+            BINOP == BinaryOp::DIV || BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::NEXTAFTER ||
+            BINOP == BinaryOp::NEXTAFTER_BF16,
+        "calculate_sfpu_binary only supports ADD, SUB, RSUB, MUL, DIV, XLOGY, NEXTAFTER and NEXTAFTER_BF16");
     static_assert(
         dst_rounding_mode == DstRoundingMode::Default || BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB ||
             BINOP == BinaryOp::RSUB,
@@ -125,6 +130,9 @@ inline void calculate_sfpu_binary(
         rne_bias = kBf16RneBias;
         rne_mask = kBf16RneMask;
     }
+    [[maybe_unused]] constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    [[maybe_unused]] constexpr std::int32_t kAbsMask = 0x7FFFFFFF;
+    [[maybe_unused]] constexpr std::int32_t kInfBits = 0x7F800000;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         if constexpr (BINOP == BinaryOp::ADD && !round_to_bf16_rne) {
@@ -169,6 +177,66 @@ inline void calculate_sfpu_binary(
                     // truncates by default).
                     result = float32_to_bf16_rne(result, rne_bias, rne_mask);
                 }
+            } else if constexpr (BINOP == BinaryOp::XLOGY) {
+                // ln(in1) on the register rather than through Dest, with the log op's body. Its 32-bit Dest
+                // polynomial in both Dest modes: sfpu_binary_init does not know the Dest mode, and log_init
+                // programs that polynomial's constants. Zero and denormal in1 give -inf.
+                sfpi::vFloat log_in1 = calculate_log_body<
+                    false /*FAST_APPROX*/,
+                    false /*HAS_BASE_SCALING*/,
+                    true /*is_fp32_dest_acc_en*/>(in1, 0 /*log_base_scale_factor*/);
+                if constexpr (!is_fp32_dest_acc_en) {
+                    // Narrow the log to the 16-bit Dest's bfloat16 (SFPSTORE keeps the high half) before the
+                    // product, as Blackhole does. A shift pair rather than a materialised 0xFFFF0000 mask.
+                    constexpr std::uint32_t kBf16DroppedBits = 16;
+                    log_in1 = sfpi::as<sfpi::vFloat>(
+                        (sfpi::as<sfpi::vUInt>(log_in1) >> kBf16DroppedBits) << kBf16DroppedBits);
+                }
+                result = log_in1 * in0;
+                // NaN for a negative in1 and for a NaN in1, as on Blackhole. The log body already returns NaN
+                // there, but it flushes a negative denormal to +0 (-inf); this guard reads in1's own sign. The
+                // NaN test is on the bit pattern: sfpi's vFloat equality compares integer patterns, so
+                // `in1 == nan` would match one NaN encoding only. Flat v_ifs, not one `||` condition.
+                v_if(in1 < 0.0f) { result = nan; }
+                v_endif;
+                v_if((sfpi::as<sfpi::vInt>(in1) & kAbsMask) > kInfBits) { result = nan; }
+                v_endif;
+            } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
+                // Step in0 one representable value toward in1 on its bit pattern: consecutive floats of one
+                // sign are consecutive integers, so that is one ULP at in0's own magnitude. bfloat16 keeps its
+                // mantissa in the top 16 bits of the fp32 register, so one of its ULPs is 0x10000 there.
+                constexpr int kUlpStep = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
+                // Flat v_ifs, every value declared up front: the predication pass does not survive nesting here.
+                sfpi::vInt bits = sfpi::as<sfpi::vInt>(in0);
+                sfpi::vInt step = 0;  // in0 == in1 keeps in0
+                // The pattern grows away from zero for either sign, so the direction depends on in0's sign too.
+                v_if(in0 < in1 && in0 >= 0.0f) { step = kUlpStep; }
+                v_endif;
+                v_if(in0 < in1 && in0 < 0.0f) { step = -kUlpStep; }
+                v_endif;
+                v_if(in0 > in1 && in0 > 0.0f) { step = -kUlpStep; }
+                v_endif;
+                v_if(in0 > in1 && in0 <= 0.0f) { step = kUlpStep; }
+                v_endif;
+                result = sfpi::as<sfpi::vFloat>(bits + step);
+                // Zeros: neither zero reaches its neighbour by stepping its own pattern, and the answer's sign
+                // comes from in1. Tested on the magnitudes so that -0.0 takes the same path as +0.0.
+                sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
+                sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
+                sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
+                v_if(mag_a == 0.0f && in1 > 0.0f) { result = tiny; }
+                v_endif;
+                v_if(mag_a == 0.0f && in1 < 0.0f) { result = -tiny; }
+                v_endif;
+                // Equal zeros return in1's zero: nextafter(+0, -0) is -0.
+                v_if(mag_a == 0.0f && mag_b == 0.0f) { result = in1; }
+                v_endif;
+                // A NaN operand propagates; classified on the integer pattern (exponent all ones, non-zero
+                // mantissa), last so it wins over the direction and zero arms.
+                v_if((bits & kAbsMask) > kInfBits) { result = nan; }
+                v_endif;
+                v_if((sfpi::as<sfpi::vInt>(in1) & kAbsMask) > kInfBits) { result = nan; }
+                v_endif;
             }
 
             if constexpr (
@@ -180,6 +248,29 @@ inline void calculate_sfpu_binary(
         }
         sfpi::dst_reg++;
     }
+}
+
+/**
+ * @brief calculate_sfpu_binary in the Blackhole template order, <APPROX, BINOP, ITERATIONS, is_fp32_dest_acc_en>.
+ *
+ * The Compute API headers shared with Blackhole (xlogy.h, nextafter.h) spell the call in that order; this forwards it
+ * to the Quasar order above. Each call resolves to exactly one of the two: an int ITERATIONS cannot bind to the
+ * Quasar template's bool is_fp32_dest_acc_en, nor a bool to its DstRoundingMode, and a call that names only three
+ * arguments leaves this one's is_fp32_dest_acc_en undeduced.
+ *
+ * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
+ */
+template <
+    bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    int ITERATIONS,
+    bool is_fp32_dest_acc_en,
+    DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+inline void calculate_sfpu_binary(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    calculate_sfpu_binary<APPROXIMATION_MODE, BINOP, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS, TILE_SHAPE>(
+        dst_index_in0, dst_index_in1, dst_index_out);
 }
 
 /**
@@ -249,7 +340,8 @@ inline void calculate_binary_comp_fp32(
 
 /**
  * @brief Initialisation hook for binary SFPU kernels.
- * For DIV, programs the Newton-Raphson reciprocal constant; no-op for MUL.
+ * For DIV, programs the Newton-Raphson reciprocal constant; for XLOGY, the 32-bit Dest log constants in
+ * vConstFloatPrgm0-2 (log_init); no-op for the other ops.
  *
  * @tparam APPROXIMATION_MODE: forwarded to the op-specific init
  * @tparam BINOP: selects which op's init to run
@@ -260,6 +352,8 @@ inline void sfpu_binary_init() {
         // DIV always runs the Newton-refined _sfpu_reciprocal_<2>, so the Newton constant is
         // needed in every mode, not just the non-approximate one.
         _init_reciprocal_</*APPROXIMATION_MODE=*/false>();
+    } else if constexpr (BINOP == BinaryOp::XLOGY) {
+        log_init<APPROXIMATION_MODE, false /*FAST_APPROX*/, true /*is_fp32_dest_acc_en*/>();
     }
 }
 

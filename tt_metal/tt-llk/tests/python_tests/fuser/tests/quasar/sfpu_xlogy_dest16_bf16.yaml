@@ -1,0 +1,61 @@
+# xlogy(x, y) = x * ln(y) on a 16-bit Dest: x of both signs; y positive or zero (x * -inf). Negative
+# y (NaN) is covered by sfpu_xlogy_dest32: a 16-bit Dest does not carry a NaN through the pack.
+#
+# atol / rtol: as on Blackhole the log is truncated to bfloat16 before the product, so the result
+# carries that truncation plus its own rounding (measured worst case 1.5e-2 relative, 2 bf16 ulps);
+# rtol 0.03 is twice that. ln(y) itself (the log op's body, ~1 fp32 ulp) adds nothing measurable,
+# also where x * ln(y) is near 0, so atol is only a 1e-6 floor.
+#
+# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
+# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), and stimuli are finite intervals
+# and points (no inf, NaN, -0 or INT_MIN).
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-4.0, -1.01]
+        - [-0.99, -0.01]
+        - [0.01, 0.99]
+        - [1.01, 4.0]
+        - -2.0
+        - -1.0
+        - 0.5
+        - 1.0
+        - 2.0
+  - name: "input_B"
+    dims: [32, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [0.001, 0.49]
+        - [0.51, 0.99]
+        - [1.01, 1.99]
+        - [2.01, 100.0]
+        - 0.0
+        - 0.5
+        - 1.0
+        - 2.0
+        - 1000.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float16_b
+    atol: 1.0e-6
+    rtol: 0.03
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 0}}
+      - {type: "Fpu", in0: "input_B", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 1}}
+      - type: "BinarySfpu"
+        operation: [SfpuXlogy]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 2}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 2, out: 0}}
