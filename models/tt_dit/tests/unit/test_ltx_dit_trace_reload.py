@@ -108,6 +108,7 @@ def _pipeline(base, model, *, dynamic_load=True, traced=True, beside=()):
     ]
     p.transformer_states[0].model.weight_cache_subfolder = lambda: "sub"
     p.parallel_config, p.mesh_device, p.is_fsdp = None, SimpleNamespace(shape=(2, 4)), False
+    p.ccl_manager = None
     p._trace_state = {}
     p._dit_weight_addresses = weakref.WeakKeyDictionary()
     return p
