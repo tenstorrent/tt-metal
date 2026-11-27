@@ -217,6 +217,9 @@ Tensor prod_nc_impl(
     ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
     ttnn::prim::validate_reduce_op_default_tile(input, "ttnn.prod", "the input");
+    if (!dims.empty()) {
+        ttnn::prim::validate_reduce_op_default_tile(output, "ttnn.prod", "the output");
+    }
     auto mem_cfg = memory_config.value_or(input.memory_config());
     const Tensor input_padded = input.layout() == Layout::TILE ? ttnn::fill_implicit_tile_padding(input, 1.0f) : input;
 

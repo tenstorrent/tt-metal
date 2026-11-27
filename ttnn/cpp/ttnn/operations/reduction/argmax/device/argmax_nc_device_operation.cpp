@@ -14,6 +14,9 @@ namespace ttnn::prim {
 void ArgMaxNCDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     ttnn::prim::validate_reduce_op_default_tile(tensor_args.input, "ArgMax", "the input");
+    if (tensor_args.preallocated_output.has_value()) {
+        ttnn::prim::validate_reduce_op_default_tile(*tensor_args.preallocated_output, "ArgMax", "the output");
+    }
     const auto& input = tensor_args.input;
 
     TT_FATAL(

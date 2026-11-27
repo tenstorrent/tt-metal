@@ -442,6 +442,15 @@ std::vector<Tensor> topk(
 
     TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
     ttnn::prim::validate_reduce_op_default_tile(input_tensor, "ttnn.topk", "the input");
+    if (indices_tensor.has_value()) {
+        ttnn::prim::validate_reduce_op_default_tile(*indices_tensor, "ttnn.topk", "the indices");
+    }
+    if (preallocated_output_tensors.has_value()) {
+        ttnn::prim::validate_reduce_op_default_tile(
+            std::get<0>(*preallocated_output_tensors), "ttnn.topk", "the output values");
+        ttnn::prim::validate_reduce_op_default_tile(
+            std::get<1>(*preallocated_output_tensors), "ttnn.topk", "the output indices");
+    }
 
     // Analyze input tensor properties to determine required transformations
     std::size_t rank_st = input_tensor.logical_shape().rank();

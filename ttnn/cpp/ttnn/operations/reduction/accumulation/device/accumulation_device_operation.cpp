@@ -15,6 +15,9 @@ using namespace tt::tt_metal;
 void AccumulationDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     ttnn::prim::validate_reduce_op_default_tile(tensor_args.input_tensor, "Accumulation", "the input");
+    if (tensor_args.opt_output.has_value()) {
+        ttnn::prim::validate_reduce_op_default_tile(*tensor_args.opt_output, "Accumulation", "the output");
+    }
     const auto& input_tensor{tensor_args.input_tensor};
     const auto& input_shape{input_tensor.logical_shape()};
     const auto& optional_out{tensor_args.opt_output};
