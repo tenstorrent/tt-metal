@@ -31,6 +31,7 @@ SHIFTS="$(sed -n 's/.*LLK_CODE_SHIFTS:-\([0-9 ]*\).*/\1/p' "$LLK/tests/run_llk_p
 CODE=()
 if [[ -n "${CODE_POSITIONS:=}" ]]; then
   SHIFTS="$CODE_POSITIONS"
+  DEADLINE=$(( DEADLINE - 60 ))
   CODE=(--points "$OUT/stage1.points.csv" --base-map "$BASELINE/**/*.windowhash" --stable "${STABLE_MODULES:-}"
     --map "$LLK/perf_data/runs/**/*.windowhash")
 fi
