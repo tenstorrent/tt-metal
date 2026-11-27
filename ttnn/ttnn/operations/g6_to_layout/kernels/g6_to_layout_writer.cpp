@@ -1,105 +1,90 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_to_layout writer (RISCV_0 / NoC1) — block operation `store_block`.
+// g6_to_layout writer (BRISC / NoC1): store_live_rows.
 //
-// cb_rows holds each segment as 32 rows of segment_width * 64 B. For every live row the writer
-// issues one write of seg_bytes to output page n*H + ht*32 + i at byte offset
-// chunk * segment_width * 64: tile padding rows and columns never reach the output.
-// Waits are cumulative per segment so writing starts as soon as compute packs a segment; the
-// block's pages are released once, after its writes have left L1.
+// Same block walk as the reader. Per block: one cb_wait_front of the nominal block_tiles pages,
+// one NoC write per live row of the block's live column bytes, one noc_async_writes_flushed,
+// one cb_pop_front. Raw NoC: write_sticks_after_untilize derives its CB row stride and pop count
+// from the written bytes, which breaks on ragged column blocks and on blocks spanning images.
 //
-// write_sticks_after_untilize is not used: it maps tile-row r to page r*32 (wrong for multi-image
-// h_non_aligned shapes), re-derives the row stride from the row bytes (wrong for a ragged last
-// column chunk) and barriers per tile-row.
-
-#include <cstdint>
+// Output rows are addressed only through get_noc_addr(page, offset): the RM page stride is
+// round_up(W * 2, alignment), not W * 2.
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/dataflow_buffer.h"
 #include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb_rows_id = get_compile_time_arg_val(0);
-    constexpr uint32_t segment_width = get_compile_time_arg_val(1);
-    constexpr uint32_t block_segments = get_compile_time_arg_val(2);
-    constexpr uint32_t num_col_chunks = get_compile_time_arg_val(3);
-    constexpr uint32_t tensor_h_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t height = get_compile_time_arg_val(5);
-    constexpr uint32_t width = get_compile_time_arg_val(6);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t out_page_bytes = get_compile_time_arg_val(8);
-    constexpr bool bank_stagger = get_compile_time_arg_val(9) != 0;
+    constexpr uint32_t TILE_DIM = 32;
+
+    constexpr uint32_t cb_rows_out = get_compile_time_arg_val(0);
+    constexpr uint32_t block_height_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t block_width_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t tensor_tile_rows = get_compile_time_arg_val(3);
+    constexpr uint32_t tensor_tile_cols = get_compile_time_arg_val(4);
+    constexpr uint32_t image_tile_rows = get_compile_time_arg_val(5);
+    constexpr uint32_t height = get_compile_time_arg_val(6);
+    constexpr uint32_t width = get_compile_time_arg_val(7);
+    constexpr uint32_t col_group_width_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(9);
     constexpr auto output_args = TensorAccessorArgs<10>();
 
-    constexpr uint32_t TILE_DIM = 32;
-    constexpr uint32_t row_bytes = out_page_bytes;
-    constexpr uint32_t row_stride = segment_width * (tile_bytes / TILE_DIM);
-    constexpr uint32_t segment_bytes = segment_width * tile_bytes;
+    constexpr uint32_t datum_bytes = tile_bytes / (TILE_DIM * TILE_DIM);
+    constexpr uint32_t tile_row_bytes = TILE_DIM * datum_bytes;
+    constexpr uint32_t cb_row_stride = block_width_tiles * tile_row_bytes;
+    constexpr uint32_t block_tiles = block_height_tiles * block_width_tiles;
+    constexpr uint32_t row_bytes = width * datum_bytes;
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t start_segment = get_arg_val<uint32_t>(0);
-    const uint32_t num_segments = get_arg_val<uint32_t>(1);
-    // Rows go to consecutive pages, i.e. consecutive DRAM banks; starting each core at its own row
-    // keeps the grid's lockstep writes spread over the banks instead of all on one.
-    const uint32_t row_rotation = get_arg_val<uint32_t>(2);
+    const uint32_t unit_begin = get_arg_val<uint32_t>(0);
+    const uint32_t unit_end = get_arg_val<uint32_t>(1);
 
-    const auto output = TensorAccessor(output_args, output_addr, out_page_bytes);
-    DataflowBuffer cb_rows(cb_rows_id);
+    const auto output = TensorAccessor(output_args, output_addr, row_bytes);
 
-    const uint32_t end_segment = start_segment + num_segments;
-    uint32_t segment = start_segment;
-    while (segment < end_segment) {
-        DeviceZoneScopedN("store_block");
-        const uint32_t remaining = end_segment - segment;
-        const uint32_t block_segs = remaining < block_segments ? remaining : block_segments;
-        uint32_t block_addr = 0;
-        for (uint32_t s = 0; s < block_segs; ++s, ++segment) {
-            // Per-segment waits stay unzoned: one zone per segment would exhaust the per-RISC
-            // marker budget on narrow tensors (hundreds of segments per core).
-            cb_rows.wait_front((s + 1) * segment_width);
-            if (s == 0) {
-                block_addr = cb_rows.get_read_ptr();
-            }
-            const uint32_t tile_row = segment / num_col_chunks;
-            const uint32_t chunk = segment - tile_row * num_col_chunks;
-            const uint32_t n = tile_row / tensor_h_tiles;
-            const uint32_t ht = tile_row - n * tensor_h_tiles;
-            const uint32_t rows_left = height - ht * TILE_DIM;
-            const uint32_t rows_live = rows_left < TILE_DIM ? rows_left : TILE_DIM;
-            const uint32_t byte_offset = chunk * row_stride;
-            const uint32_t bytes_left = row_bytes - byte_offset;
-            const uint32_t seg_bytes = bytes_left < row_stride ? bytes_left : row_stride;
-            const uint32_t first_page = n * height + ht * TILE_DIM;
-
-            const uint32_t segment_addr = block_addr + s * segment_bytes;
-            if constexpr (bank_stagger) {
-                uint32_t row = row_rotation < rows_live ? row_rotation : row_rotation % rows_live;
-                uint32_t row_addr = segment_addr + row * row_stride;
-                for (uint32_t k = 0; k < rows_live; ++k) {
-                    noc_async_write(row_addr, output.get_noc_addr(first_page + row, byte_offset), seg_bytes);
-                    ++row;
-                    row_addr += row_stride;
-                    if (row == rows_live) {
-                        row = 0;
-                        row_addr = segment_addr;
-                    }
-                }
-            } else {
-                uint32_t row_addr = segment_addr;
-                for (uint32_t row = 0; row < rows_live; ++row, row_addr += row_stride) {
-                    noc_async_write(row_addr, output.get_noc_addr(first_page + row, byte_offset), seg_bytes);
-                }
-            }
+    DeviceZoneScopedN("g6_writer");
+    uint32_t unit = unit_begin;
+    while (unit < unit_end) {
+        const uint32_t group = unit / tensor_tile_rows;
+        const uint32_t first_tile_row = unit - group * tensor_tile_rows;
+        uint32_t rows = block_height_tiles;
+        if (tensor_tile_rows - first_tile_row < rows) {
+            rows = tensor_tile_rows - first_tile_row;
         }
-        {
-            DeviceZoneScopedN("writes_flushed");
+        if (unit_end - unit < rows) {
+            rows = unit_end - unit;
+        }
+        const uint32_t col_begin = group * col_group_width_tiles;
+        const uint32_t col_end =
+            col_begin + col_group_width_tiles < tensor_tile_cols ? col_begin + col_group_width_tiles : tensor_tile_cols;
+
+        for (uint32_t col = col_begin; col < col_end; col += block_width_tiles) {
+            const uint32_t col_offset = col * tile_row_bytes;
+            const uint32_t bytes_left = row_bytes - col_offset;
+            const uint32_t block_bytes =
+                (col_end - col < block_width_tiles ? col_end - col : block_width_tiles) * tile_row_bytes;
+            const uint32_t segment_bytes = bytes_left < block_bytes ? bytes_left : block_bytes;
+
+            cb_wait_front(cb_rows_out, block_tiles);
+            const uint32_t block_base = get_read_ptr(cb_rows_out);
+            uint32_t image = first_tile_row / image_tile_rows;
+            uint32_t ht = first_tile_row - image * image_tile_rows;
+            for (uint32_t t = 0; t < rows; ++t) {
+                const uint32_t rows_left = height - ht * TILE_DIM;
+                const uint32_t live_rows = rows_left < TILE_DIM ? rows_left : TILE_DIM;
+                const uint32_t first_page = image * height + ht * TILE_DIM;
+                uint32_t src = block_base + t * block_width_tiles * tile_bytes;
+                for (uint32_t r = 0; r < live_rows; ++r, src += cb_row_stride) {
+                    noc_async_write(src, output.get_noc_addr(first_page + r, col_offset), segment_bytes);
+                }
+                if (++ht == image_tile_rows) {
+                    ht = 0;
+                    ++image;
+                }
+            }
             noc_async_writes_flushed();
+            cb_pop_front(cb_rows_out, block_tiles);
         }
-        cb_rows.pop_front(block_segs * segment_width);
+        unit += rows;
     }
-    {
-        DeviceZoneScopedN("write_barrier");
-        noc_async_write_barrier();
-    }
+    noc_async_write_barrier();
 }
