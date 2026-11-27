@@ -15,3 +15,5 @@
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T09:55:43-05:00"}
 {"event":"test_run","result":"fail","detail":"golden slice c20/c29/c37/c43/c48 + loose c29/c37/c48: 7/8 pass; loose c29 specials 775 bit mismatches got 0x7F80 expected 0xFFFF","ts":"2026-11-27T09:55:43-05:00"}
 {"event":"hypothesis","detail":"host bf8b rendering: NaN iff group exp 0xFF and datum bit6 set and low6 nonzero; torch fp32->bf16 renders every NaN 0xFFFF (verified host-only). Packer path gives +-inf. Fix: reader marks NaN datums per block on cb_nan_marks (reader->writer), writer stores 0xFFFF in row stage before writes.","ts":"2026-11-27T09:58:11-05:00"}
+{"event":"test_run","status":"pass","test":"eval/golden_tests/g6_to_layout/test_golden.py -k BFLOAT8_B","detail":"8/8 target cells pass incl. loose c29 bf16_specials bit-exact (NaN marks reader->writer patch); 2 xfail are Refinement 2 RM cells","ts":"2026-11-27T10:16:48-05:00"}
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/g6_to_layout/test_g6_to_layout.py","detail":"31/31 regression net","ts":"2026-11-27T10:16:48-05:00"}
