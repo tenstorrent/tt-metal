@@ -71,10 +71,11 @@ constexpr uint32_t OUT_SEQ_END = gn_sc_args::OUT_SEQ_END;
 constexpr uint32_t BF16_TILE_BYTES = 2048;  // the group map (always bf16)
 constexpr uint32_t F32_TILE_BYTES = 4096;
 constexpr uint32_t BF16_ONE = 0x3F80;
-constexpr uint32_t ALIGN = 64;             // DRAM read alignment (BH)
-constexpr uint32_t ROW0_READ_BYTES = 64;   // TILE pilot / gamma: one read of a face's row 0 (bf16: rows 0-1)
-constexpr uint32_t MAX_LANES = 32;         // group lanes in one tile row
-constexpr uint32_t PILOT_SLOT_BYTES = 16;  // sharded TILE pilot: one 16 B read per group lane
+constexpr uint32_t ALIGN = gn_sc_args::STAGE_ALIGN;  // DRAM read alignment (BH)
+constexpr uint32_t ROW0_READ_BYTES = gn_sc_args::FACE_ROW0_READ_BYTES;
+constexpr uint32_t MAX_LANES = gn_sc_args::MAX_GROUP_LANES;
+constexpr uint32_t PILOT_SLOT_BYTES = gn_sc_args::PILOT_SLOT_BYTES;
+constexpr uint32_t RM_PILOT_ALIGN = gn_sc_args::RM_PILOT_ALIGN;
 // bfloat8_b tile (Refinement 7): a 64 B exponent section - one shared exponent byte per 16-lane face row, face-major
 // (face f row r at f * 16 + r) - then one sign | 7-bit magnitude byte per element (hidden bit at bit 6), face-major.
 constexpr uint32_t BFP8_EXP_BYTES = 64;
@@ -548,8 +549,8 @@ void kernel_main() {
                     for (; l < lb && c < col_base + P; ++l, c += CG) {
                         kv[l] = c - col_base;  // local channel in the source stick
                     }
-                    const uint32_t b0 = (kv[lc] * 2) & ~15u;
-                    const uint32_t b1 = (kv[l - 1] * 2 + 2 + 15) & ~15u;
+                    const uint32_t b0 = (kv[lc] * 2) & ~(RM_PILOT_ALIGN - 1);
+                    const uint32_t b1 = (kv[l - 1] * 2 + 2 + RM_PILOT_ALIGN - 1) & ~(RM_PILOT_ALIGN - 1);
                     const uint32_t src_x = get_arg_val<uint32_t>(cols_arg + col);
                     noc_async_read(get_noc_addr(src_x, root_y, in_addr + b0), staging + pos, b1 - b0);
                     for (uint32_t j = lc; j < l; ++j) {
@@ -633,9 +634,9 @@ void kernel_main() {
                 noc_async_write_barrier();
             }
             for (uint32_t i = 0; i < n_staged; ++i) {
-                const uint32_t src = get_arg_val<uint32_t>(staged_arg + 3 * i) * STICK;
-                const uint32_t pos = get_arg_val<uint32_t>(staged_arg + 3 * i + 1) * STICK;
-                const uint32_t len = get_arg_val<uint32_t>(staged_arg + 3 * i + 2) * STICK;
+                const uint32_t src = get_arg_val<uint32_t>(staged_arg + gn_sc_args::STAGED_WORDS * i) * STICK;
+                const uint32_t pos = get_arg_val<uint32_t>(staged_arg + gn_sc_args::STAGED_WORDS * i + 1) * STICK;
+                const uint32_t len = get_arg_val<uint32_t>(staged_arg + gn_sc_args::STAGED_WORDS * i + 2) * STICK;
                 const uint32_t dst = stage_base + i * TR_BYTES;
                 if (pos > 0) {
                     noc_async_write(tmpl, get_noc_addr(dst), pos);

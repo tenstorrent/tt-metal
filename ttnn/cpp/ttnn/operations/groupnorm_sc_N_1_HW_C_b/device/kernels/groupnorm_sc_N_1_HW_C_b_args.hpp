@@ -50,6 +50,13 @@ constexpr uint32_t OUT_SEQ_PAGES = 8;
 constexpr uint32_t OUT_SEQ_PAGE_BYTES = 16;
 constexpr uint32_t STAGED_WORDS = 3;  // (shard stick, position, sticks) per staged row
 
+// Staging layout: the planner sizes the affine / pilot staging CB from these, the reader lays its reads out by them.
+constexpr uint32_t MAX_GROUP_LANES = 32;       // group lanes in one tile row
+constexpr uint32_t FACE_ROW0_READ_BYTES = 64;  // TILE pilot / gamma: one read of a face's row 0 (bf16: rows 0-1)
+constexpr uint32_t PILOT_SLOT_BYTES = 16;      // sharded TILE pilot: one 16 B read per group lane
+constexpr uint32_t STAGE_ALIGN = 64;           // staging and DRAM read alignment
+constexpr uint32_t RM_PILOT_ALIGN = 16;        // sharded RM pilot: alignment of each column's span of stick 0
+
 // Reader compile-time args; TensorAccessorArgs of input, gamma, beta follow from COUNT, then OUT_PAGE_BYTES, then
 // the output's TensorAccessorArgs.
 namespace reader_ct {

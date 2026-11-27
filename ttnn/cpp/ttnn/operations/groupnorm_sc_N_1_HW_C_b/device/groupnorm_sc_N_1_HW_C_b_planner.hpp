@@ -12,6 +12,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include "groupnorm_sc_N_1_HW_C_b_device_operation_types.hpp"
+#include "kernels/groupnorm_sc_N_1_HW_C_b_args.hpp"
 
 // The C++ form of the Python planner (plan_or_raise, _choose_gx, _plan_sharded, _distribute, footprint_bytes).
 // Integers in, integers out; every refusal is PlanNotImplemented with the Python's message.
@@ -45,9 +46,6 @@ struct PlanInputs {
     uint32_t shard_grid_num_cores = 0;
     uint32_t sh = 0, sw = 0;                  // shard shape
     uint32_t x0 = 0, y0 = 0, gx = 0, gy = 0;  // shard grid bounding box
-    // Out of place, the output shard's aligned bytes when the output was NOT yet allocated when l1_budget was read
-    // (the Python subtracted it); 0 when the output already lies below the measured budget, or in place.
-    uint32_t out_shard_bytes = 0;
     bool operator==(const PlanInputs&) const = default;
 };
 
@@ -59,8 +57,9 @@ struct CoreWork {
     uint32_t root_x = 0, root_y = 0;
     uint32_t xs = 0, vc = 0, l0 = 0, off0 = 0, g_unit = 0;
     uint32_t n_img = 1, n_seg = 1, seg_img0 = 0;
-    std::vector<uint32_t> ops;                    // op words (args header OP_*)
-    std::vector<std::array<uint32_t, 3>> staged;  // (shard stick, position in its tile row, sticks)
+    std::vector<uint32_t> ops;  // op words (args header OP_*)
+    // (shard stick, position in its tile row, sticks) per staged row
+    std::vector<std::array<uint32_t, gn_sc_args::STAGED_WORDS>> staged;
     uint32_t rm_credit_pages = 0;
     std::vector<uint32_t> pilot_cols;  // logical x of the unit's columns
     uint32_t w_valid = 0;

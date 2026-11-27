@@ -18,6 +18,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "kernels/groupnorm_sc_N_1_HW_C_b_args.hpp"
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
@@ -71,8 +72,6 @@ CBDescriptor gn_shard_cb(
     }
     return d;
 }
-
-uint32_t gn_elem_bytes(DataType dtype) { return dtype == DataType::FLOAT32 ? 4u : 2u; }
 
 CoreRangeSet gn_core_set(const std::vector<CoreCoord>& cores) {
     std::vector<CoreRange> ranges;
@@ -168,7 +167,7 @@ ProgramDescriptor GroupnormScN1HwCbProgramFactory::create_descriptor(
     const bool aff_bfp8 = fmt.aff_dtype == DataType::BFLOAT8_B;
     const DataType amap_dtype = aff_bfp8 ? DataType::BFLOAT16 : fmt.aff_dtype;
     const uint32_t amap_tile = tile_size(amap_dtype);
-    const uint32_t aff_elem = gn_elem_bytes(amap_dtype);
+    const uint32_t aff_elem = tt::datum_size(datatype_to_dataformat_converter(amap_dtype));
     const tt::DataFormat bf16_df = tt::DataFormat::Float16_b;
     const tt::DataFormat f32_df = tt::DataFormat::Float32;
     const uint32_t bf16_tile = tile_size(DataType::BFLOAT16);
@@ -576,7 +575,7 @@ void GroupnormScN1HwCbProgramFactory::override_runtime_arguments(
         }
     }
 
-    // Shard-backed CBs, found by CB index; re-pointed only when their buffer moved.
+    // Shard-backed CBs, found by CB index; re-pointed on every hit.
     for (const auto& circular_buffer : program.circular_buffers()) {
         if (!circular_buffer->globally_allocated()) {
             continue;

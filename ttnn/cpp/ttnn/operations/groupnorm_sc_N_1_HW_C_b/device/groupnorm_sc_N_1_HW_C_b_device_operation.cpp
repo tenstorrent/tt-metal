@@ -133,6 +133,11 @@ void gn_validate_output(const GroupnormScN1HwCbParams& attrs, const GroupnormScN
         attrs.in_place || !gn_shares_buffer(out, t.input),
         "{}: output_tensor shares the input's buffer; pass in_place=True (BLOCK_SHARDED) for an in-place call",
         kOp);
+    // In place, the kernels write over the input's shard: the only output is the input itself.
+    TT_FATAL(
+        !attrs.in_place || out.buffer() == t.input.buffer(),
+        "{}: in_place=True writes the result over the input; output_tensor must be the input tensor",
+        kOp);
 }
 
 }  // namespace
@@ -226,9 +231,8 @@ void check_support(const GroupnormScN1HwCbParams& attrs, const GroupnormScN1HwCb
         gn_exclude_if(alignment == "hw_non_aligned", "{memory_layout: BLOCK_SHARDED, alignment: hw_non_aligned}");
         gn_exclude_if(alignment == "c_non_aligned", "{memory_layout: BLOCK_SHARDED, alignment: c_non_aligned}");
     }
-
-    // Shape-class gate: the plan (throws PlanNotImplemented).
-    static_cast<void>(planner::solve_plan(planner::plan_inputs(attrs, t)));
+    // The shape-class gate (PlanNotImplemented) is compute_program_hash's plan solve, the launch's first step after
+    // the output allocation.
 }
 
 GroupnormScN1HwCbDeviceOperation::program_factory_t GroupnormScN1HwCbDeviceOperation::select_program_factory(

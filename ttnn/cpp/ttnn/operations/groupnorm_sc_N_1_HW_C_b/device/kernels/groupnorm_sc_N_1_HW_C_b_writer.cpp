@@ -237,9 +237,9 @@ void kernel_main() {
                 // own tile rows); its valid sticks go back to the output shard by a local NoC copy.
                 constexpr uint32_t STICK = P * 2;
                 for (uint32_t i = 0; i < n_staged; ++i) {
-                    const uint32_t dst = get_arg_val<uint32_t>(staged_arg + 3 * i) * STICK;
-                    const uint32_t pos = get_arg_val<uint32_t>(staged_arg + 3 * i + 1) * STICK;
-                    const uint32_t len = get_arg_val<uint32_t>(staged_arg + 3 * i + 2) * STICK;
+                    const uint32_t dst = get_arg_val<uint32_t>(staged_arg + gn_sc_args::STAGED_WORDS * i) * STICK;
+                    const uint32_t pos = get_arg_val<uint32_t>(staged_arg + gn_sc_args::STAGED_WORDS * i + 1) * STICK;
+                    const uint32_t len = get_arg_val<uint32_t>(staged_arg + gn_sc_args::STAGED_WORDS * i + 2) * STICK;
                     cb_wait_front(cb_rm_stage_out, W);
                     noc_async_write(get_read_ptr(cb_rm_stage_out) + pos, get_noc_addr(out_addr + dst), len);
                     noc_async_write_barrier();

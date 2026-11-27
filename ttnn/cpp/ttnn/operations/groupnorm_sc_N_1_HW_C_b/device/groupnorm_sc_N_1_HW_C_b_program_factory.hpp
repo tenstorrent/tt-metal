@@ -33,7 +33,7 @@ struct GroupnormScN1HwCbProgramFactory {
         const GroupnormScN1HwCbParams& attrs, const GroupnormScN1HwCbInputs& tensors, Tensor& output);
 
     // Cache hit: rewrites the per-core address slots (reader IN/GAMMA/BETA/OUT, writer OUT), compute EPS_BITS (left
-    // out of the key), and re-points the shard-backed CBs by CB index when their buffer moved.
+    // out of the key), and re-points the shard-backed CBs by CB index, on every hit.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const GroupnormScN1HwCbParams& attrs,

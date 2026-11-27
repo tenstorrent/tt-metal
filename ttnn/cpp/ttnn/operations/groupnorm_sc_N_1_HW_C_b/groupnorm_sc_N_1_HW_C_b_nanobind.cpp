@@ -51,7 +51,33 @@ std::optional<int32_t> tuning_int(const nb::dict& tuning, const char* key) {
     return nb::cast<int32_t>(nb::int_(value));
 }
 
-// The package's TUNING_OVERRIDES (tests monkeypatch it) is read on every call and passed to the C++ op.
+struct TuningOverrides {
+    std::optional<int32_t> max_resident_chunks;
+    std::optional<int32_t> chunk_tiles_target;
+    std::optional<int32_t> max_cores;
+    bool chunk_zones = false;
+};
+
+// The package's TUNING_OVERRIDES (tests monkeypatch it) is read on every call. ttnn::bind_function calls the bound
+// function with the GIL released, so the dict is read under a re-acquired GIL, and no Python object outlives the call
+// (a function-static one would be released after the interpreter finalizes).
+TuningOverrides read_tuning_overrides() {
+    const nb::gil_scoped_acquire gil;
+    const nb::dict tuning =
+        nb::cast<nb::dict>(nb::module_::import_("ttnn.operations.groupnorm_sc_N_1_HW_C_b").attr("TUNING_OVERRIDES"));
+    bool chunk_zones = false;
+    if (tuning.contains("chunk_zones")) {
+        const nb::object zones = tuning["chunk_zones"];
+        chunk_zones = !zones.is_none() && nb::cast<bool>(nb::bool_(zones));
+    }
+    return TuningOverrides{
+        .max_resident_chunks = tuning_int(tuning, "max_resident_chunks"),
+        .chunk_tiles_target = tuning_int(tuning, "chunk_tiles_target"),
+        .max_cores = tuning_int(tuning, "max_cores"),
+        .chunk_zones = chunk_zones,
+    };
+}
+
 Tensor groupnorm_with_tuning(
     const Tensor& input_tensor,
     int num_groups,
@@ -60,13 +86,7 @@ Tensor groupnorm_with_tuning(
     float eps,
     bool in_place,
     const std::optional<Tensor>& output_tensor) {
-    static const nb::object package = nb::module_::import_("ttnn.operations.groupnorm_sc_N_1_HW_C_b");
-    const nb::dict tuning = nb::cast<nb::dict>(package.attr("TUNING_OVERRIDES"));
-    bool chunk_zones = false;
-    if (tuning.contains("chunk_zones")) {
-        const nb::object zones = tuning["chunk_zones"];
-        chunk_zones = !zones.is_none() && nb::cast<bool>(nb::bool_(zones));
-    }
+    const TuningOverrides tuning = read_tuning_overrides();
     return ttnn::groupnorm_sc_N_1_HW_C_b(
         input_tensor,
         num_groups,
@@ -75,10 +95,10 @@ Tensor groupnorm_with_tuning(
         eps,
         in_place,
         output_tensor,
-        tuning_int(tuning, "max_resident_chunks"),
-        tuning_int(tuning, "chunk_tiles_target"),
-        tuning_int(tuning, "max_cores"),
-        chunk_zones);
+        tuning.max_resident_chunks,
+        tuning.chunk_tiles_target,
+        tuning.max_cores,
+        tuning.chunk_zones);
 }
 
 }  // namespace

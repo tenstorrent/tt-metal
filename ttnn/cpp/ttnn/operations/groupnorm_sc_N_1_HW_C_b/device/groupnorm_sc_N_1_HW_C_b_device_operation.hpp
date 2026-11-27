@@ -14,7 +14,8 @@
 
 namespace ttnn::operations::groupnorm_sc_N_1_HW_C_b {
 
-// Call order per launch: create_output_tensors, compute_program_hash (solves the memoized plan), then on a hit
+// Call order per launch: create_output_tensors, compute_program_hash (solves the memoized plan; the planner gate,
+// PlanNotImplemented), then on a hit
 // validate_on_program_cache_hit + the factory's override_runtime_arguments, on a miss
 // validate_on_program_cache_miss + create_descriptor.
 struct GroupnormScN1HwCbDeviceOperation {
@@ -26,7 +27,7 @@ struct GroupnormScN1HwCbDeviceOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    // The whole contract (structure, SUPPORTED / EXCLUSIONS, the plan) and the preallocated output.
+    // The support contract (structure, SUPPORTED / EXCLUSIONS) and the preallocated output.
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     // An equal key passed the miss validator: only the preallocated output (and its aliasing) is checked again.
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
@@ -37,8 +38,8 @@ struct GroupnormScN1HwCbDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// The Python validate(): structural ValueErrors (std::invalid_argument), SUPPORTED / EXCLUSIONS
-// (UnsupportedAxisValue / ExcludedCell) and the planner gate (PlanNotImplemented), in the Python's order.
+// The Python validate() up to its planner gate: structural ValueErrors (std::invalid_argument) and SUPPORTED /
+// EXCLUSIONS (UnsupportedAxisValue / ExcludedCell), in the Python's order. The planner gate is the launch's.
 void check_support(const GroupnormScN1HwCbParams& attrs, const GroupnormScN1HwCbInputs& t);
 
 }  // namespace ttnn::operations::groupnorm_sc_N_1_HW_C_b

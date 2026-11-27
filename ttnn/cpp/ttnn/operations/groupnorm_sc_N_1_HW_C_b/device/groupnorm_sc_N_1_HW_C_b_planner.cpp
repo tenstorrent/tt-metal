@@ -19,6 +19,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/indestructible.hpp>
 
 #include "kernels/groupnorm_sc_N_1_HW_C_b_args.hpp"
@@ -34,11 +35,11 @@ constexpr int64_t kChunkTilesTarget = 32;                // streaming quantum ta
 constexpr int64_t kInputStreamDepth = 2;                 // D_IN: TILE input stream depth (chunks)
 constexpr int64_t kRmStickDepth = 2;                     // D_RM: RM stick CB depth (chunks)
 constexpr int64_t kOutputChunks = 2;                     // D_OUT: output chunks at minimum
-constexpr int64_t kMaxGroupLanes = 32;                   // group lanes in one tile row
-constexpr int64_t kFaceRow0ReadBytes = 64;               // one 64 B row-0 read of faces 0 / 1
-constexpr int64_t kPilotSlotBytes = 16;                  // sharded TILE pilot: one 16 B read per lane
-constexpr int64_t kStageAlign = 64;                      // staging alignment
-constexpr int64_t kRmPilotAlign = 16;                    // sharded RM pilot span alignment
+constexpr int64_t kMaxGroupLanes = gn_sc_args::MAX_GROUP_LANES;
+constexpr int64_t kFaceRow0ReadBytes = gn_sc_args::FACE_ROW0_READ_BYTES;
+constexpr int64_t kPilotSlotBytes = gn_sc_args::PILOT_SLOT_BYTES;
+constexpr int64_t kStageAlign = gn_sc_args::STAGE_ALIGN;
+constexpr int64_t kRmPilotAlign = gn_sc_args::RM_PILOT_ALIGN;
 
 int64_t ceil_div(int64_t a, int64_t b) { return (a + b - 1) / b; }  // a >= 0, b > 0 at every call
 int64_t floor_div(int64_t a, int64_t b) {
@@ -54,7 +55,7 @@ int64_t elem_bytes(DataType dtype) {
         dtype == DataType::BFLOAT16 || dtype == DataType::FLOAT32,
         "groupnorm_sc_N_1_HW_C_b: no stick element size for dtype {}",
         dtype);
-    return dtype == DataType::FLOAT32 ? 4 : 2;
+    return tt::datum_size(datatype_to_dataformat_converter(dtype));
 }
 
 // Python Formats properties.
@@ -370,7 +371,7 @@ struct Segment {
 
 struct RmPieces {
     std::vector<uint32_t> ops;
-    std::vector<std::array<uint32_t, 3>> staged;
+    std::vector<std::array<uint32_t, gn_sc_args::STAGED_WORDS>> staged;
 };
 
 // Python _rm_core_ops.
@@ -378,7 +379,7 @@ RmPieces rm_core_ops(const std::vector<Segment>& segs, int64_t tr, int64_t h) {
     struct Item {
         size_t si;
         int64_t t;
-        std::optional<std::array<uint32_t, 3>> trip;
+        std::optional<std::array<uint32_t, gn_sc_args::STAGED_WORDS>> trip;
     };
     std::vector<Item> items;
     for (size_t si = 0; si < segs.size(); ++si) {
@@ -393,7 +394,7 @@ RmPieces rm_core_ops(const std::vector<Segment>& segs, int64_t tr, int64_t h) {
                 items.push_back(
                     {si,
                      t,
-                     std::array<uint32_t, 3>{
+                     std::array<uint32_t, gn_sc_args::STAGED_WORDS>{
                          static_cast<uint32_t>(st),
                          static_cast<uint32_t>(st - lo),
                          static_cast<uint32_t>(std::min(b, hi) - st)}});
@@ -522,8 +523,9 @@ Plan plan_sharded(const PlanInputs& in) {
         simple = simple && v % tr == 0;
     }
 
-    // out_shard_bytes is 0 whenever the output already lies below the measured budget (plan_inputs).
-    const int64_t l1_budget = static_cast<int64_t>(in.l1_budget) - in.out_shard_bytes;
+    // The Python subtracted the out-of-place output shard, which it allocated after reading the budget. Here the
+    // output is allocated before plan_inputs reads the budget, so the budget already excludes it.
+    const int64_t l1_budget = in.l1_budget;
 
     const int64_t rows_nominal = ceil_div(sh, tr);
     std::vector<int64_t> rows_full(gy);
@@ -712,7 +714,7 @@ Plan plan_sharded(const PlanInputs& in) {
         const auto [n_first, n_img] = band_images(y);
         const auto& segs = seg_rows[y];
         std::vector<uint32_t> ops;
-        std::vector<std::array<uint32_t, 3>> staged;
+        std::vector<std::array<uint32_t, gn_sc_args::STAGED_WORDS>> staged;
         int64_t rm_credit_pages = 0;
         if (is_rm) {
             ops = rm_pieces[y].ops;
@@ -801,7 +803,6 @@ struct PlanInputsHash {
         mix(p.y0);
         mix(p.gx);
         mix(p.gy);
-        mix(p.out_shard_bytes);
         return h;
     }
 };
@@ -856,8 +857,6 @@ PlanInputs plan_inputs(const GroupnormScN1HwCbParams& attrs, const GroupnormScN1
         in.y0 = static_cast<uint32_t>(bbox.start_coord.y);
         in.gx = static_cast<uint32_t>(bbox.end_coord.x - bbox.start_coord.x + 1);
         in.gy = static_cast<uint32_t>(bbox.end_coord.y - bbox.start_coord.y + 1);
-        // The output shard (out of place) is allocated before the plan, so the budget already excludes it.
-        in.out_shard_bytes = 0;
     }
     return in;
 }
