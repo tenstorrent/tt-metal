@@ -38,6 +38,7 @@ struct ConnectivityValidationConfig {
     std::optional<std::string> deployment_descriptor_path = std::nullopt;
     std::optional<std::string> fsd_path = std::nullopt;
     bool fail_on_warning = false;
+    bool check_fw_bundle_version = true;
 };
 
 // ============================================================================
