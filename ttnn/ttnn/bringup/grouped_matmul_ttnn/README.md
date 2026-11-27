@@ -1,7 +1,11 @@
 # ttnn.bringup.grouped_matmul (grouped_matmul_ttnn)
 
 ## What it does
-New op (Python ProgramDescriptor, no TTNN source). y[g] = x[g] @ w[g] for x [1, G, M, K], w [1, G, K, N] -> [1, G, M, N]
+Since NC.1 (2026-11-27) the native C++ op `ttnn.grouped_matmul` (ttnn/cpp/ttnn/operations/grouped_matmul: device
+operation, planner, program factory, kernels under device/kernels; the device program cache, no prepared program);
+`ttnn.bringup.grouped_matmul` calls it. The pre-port Python route (prepared ProgramDescriptor) is kept for tests only as
+`ttnn.bringup.grouped_matmul_ttnn.generic.grouped_matmul_generic`. Originally a new op (Python ProgramDescriptor, no
+TTNN source). y[g] = x[g] @ w[g] for x [1, G, M, K], w [1, G, K, N] -> [1, G, M, N]
 (TILE, DRAM interleaved, any tile dtypes). One grid row a group, GX = min(grid width, N / 32) columns; core (cx, g)
 computes all M rows x PN(cx) column tiles of group g:
 - x: the row's column-0 core reads each [M x block_w] K block from DRAM and multicasts it along the row (READY / VALID
@@ -49,6 +53,10 @@ Always dispatched as a prepared program (ttnn.bringup.prepare_program / run_prep
   core ranges); the Python wrapper 18 / 11 us either path. Today's core set ("rect", 11 a bank) 147.8 / 121.1 us.
   On the matmul-capped 11 x 10 grid (`grid=max_grid`: the east bands in columns 6-10, as a model inside a gather-hide
   sub-device needs): band 10 one group 130.3 / 114.2 us, today 151.1 / 131.7, host 84.3 / 53.9 vs 80.2 / 51.2 us.
+- NC.1 native C++ op vs the Python prepared route (8x4, tests in deepseek_v41_flash_d_p tests/woa/test_gmm_native_layer.py,
+  the model's wo_a knobs, output buffer passed): bit-identical (max abs diff 0, repeats 0, no program-cache growth on
+  fresh buffers); host a warm call 20-26 us vs 63-85 us (interleaved 256 / 160 rows: 21.0 / 23.2 vs 85.2 / 63.2; bank:
+  25.5 / 25.9 vs 68.9 / 67.7); device equal (149.97 / 130.59 / 129.48 / 112.28 vs 149.93 / 130.61 / 129.86 / 112.29 us).
 
 ## Limits
 - G <= the grid's rows; batch shape [1, G]; M, K, N multiples of 32; interleaved DRAM tensors.

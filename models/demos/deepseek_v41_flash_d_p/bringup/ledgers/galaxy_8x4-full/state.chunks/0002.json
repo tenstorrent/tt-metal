@@ -51,6 +51,75 @@
   },
   "waiting": null
  },
+ "NC.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "628f0d7f358fe3d2f590d08789272f6c76673794",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "ed363aaf-0f4f-4408-af9a-f1eae02f29df"
+  },
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 3.0,
+  "history": [
+   {
+    "s": 2611.3,
+    "status": "FAIL",
+    "t": "2026-11-27T22:22:17"
+   },
+   {
+    "reused": [
+     "NC.1#test_determinism",
+     "NC.1#test_acceptance",
+     "NC.1#test_grouped_matmul",
+     "NC.1#test_gmm_native_layer"
+    ],
+    "s": 3.0,
+    "status": "PASS",
+    "t": "2026-11-27T22:36:31"
+   }
+  ],
+  "last_run": "2026-11-27T22:36:28",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/NC.1.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": {
+   "reused": [
+    "NC.1#test_determinism",
+    "NC.1#test_acceptance",
+    "NC.1#test_grouped_matmul",
+    "NC.1#test_gmm_native_layer"
+   ],
+   "units": {
+    "NC.1#test_acceptance": "b773b2cd8b9ea693",
+    "NC.1#test_determinism": "c26da7b1e4bbee94",
+    "NC.1#test_gmm_native_layer": "10f80a48acc1a1ff",
+    "NC.1#test_grouped_matmul": "4fe544e855344a59"
+   }
+  },
+  "started": "2026-11-27T22:36:25",
+  "status": "PASS",
+  "units": {
+   "NC.1#test_acceptance": "PASS",
+   "NC.1#test_determinism": "PASS",
+   "NC.1#test_gmm_native_layer": "PASS",
+   "NC.1#test_grouped_matmul": "PASS"
+  },
+  "waiting": null
+ },
  "PB.8R": {
   "ab_pending": null,
   "agent": {

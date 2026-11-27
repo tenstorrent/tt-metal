@@ -1832,3 +1832,34 @@
 - No device runs, no model code. Rule 20: no per-chunk value touched.
 - Re-run: `PYTHONPATH=$PWD python3 -m models.demos.deepseek_v41_flash_d_p.tests.woa.woa_ladder_report`; then
   `gate FIX.40 --spec $BRINGUP_SPEC --check`.
+
+## NC.1 (perf, attempt 1): the native C++ ttnn.grouped_matmul in place of the Python prepared route
+
+- Expected saving a chunk (written before measuring): device ~0 (the same kernels, same K order: the port moved them to
+  ttnn/cpp/ttnn/operations/grouped_matmul/device/kernels with a shared args header); host ~0 to -10 us a wo_a call (the
+  port's own single-chip bench, wo_a_8x160: steady 110 us native vs 117 us generic), x 21 calls (layers 0-20 under
+  DECODER_SKIP=decode) / 40 = 0 to -0.4 ms a chunk. Within the wall noise: judged by construction (no Python program
+  build or key a call) and on the layer check's numbers.
+- What: the port (native checkout, git diff f39977aa64b 49384eeffde) applied with `git apply`, no conflicts (the fork
+  was unchanged since its base; WA.4 / WA.5 touched only model / test files); `cmake --build build --target install`
+  (incremental, rc 0). ttnn.bringup.grouped_matmul -> grouped_matmul_ttnn.grouped_matmul = ttnn.grouped_matmul (C++);
+  model code unchanged. Departures from "as is": (1) the port's pre_migration conftest opened its mesh with no fabric:
+  now FABRIC_2D (owner rule, always 2D); (2) the pre-port Python route copied (byte for byte, a test-only header note) to
+  ttnn/ttnn/bringup/grouped_matmul_ttnn/generic/ (grouped_matmul_generic + its kernels; equal to the port's
+  generated/agentic_port/perf/grouped_matmul_generic); (3) tests/woa/test_woa_probe.py / test_woa_layout_probe.py
+  imported bank_program / _prepared from the removed Python module: now from generic/ (import only).
+- No setting: the brief keeps the Python route reachable for the test only and allows no tt/settings.py change; no
+  model A/B switch exists (ab measure not run: the brief says layer-level checks only, model-wide at the end of the ports).
+- Layer check tests/woa/test_gmm_native_layer.py (BATCH_SHARED, resident runner, 0 model loads, ~20 s): fixed-seed
+  bfp8 of the real shapes (real inputs need a model run). Two runs (mine, the gate's): mismatch / repeat / cache growth
+  0 in every case (interleaved / bank x 256 / 160 rows); host a warm call native 21.0-29.4 us vs generic 63.2-114.3 us
+  (the box's host drifts between runs; native ~1/3 in both); native_direct (ttnn.grouped_matmul without the
+  ttnn.bringup wrapper) 0.4-1.7 us less (DS41-398); device equal within 0.4 us. Saving a chunk: ~45-85 us x 21 calls
+  (layers 0-20) = ~1-1.8 ms host, ~2-3.4 ms at 40 layers; device 0. Report results/NC.1_layer.md (the test writes it).
+- Gate: PASS (test_acceptance 49 passed, the fork's test_grouped_matmul 6 passed, test_gmm_native_layer, determinism
+  from attempt 1).
+- Rule 20: no per-chunk value touched (no model code changed); the C++ op's cache key holds no addresses (0 growth on
+  fresh buffers / new data / another layer's weight).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.1 --spec $BRINGUP_SPEC --check`; layer test
+  alone: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_gmm_native_layer.py"`.

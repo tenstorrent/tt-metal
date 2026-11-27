@@ -34,7 +34,9 @@ import time
 import pytest
 import torch
 from ttnn.bringup.grouped_matmul_ttnn import bank
-from ttnn.bringup.grouped_matmul_ttnn.grouped_matmul import bank_program
+from ttnn.bringup.grouped_matmul_ttnn.generic.grouped_matmul import (  # (NC.1: the pre-port Python route, test only)
+    bank_program,
+)
 
 import ttnn
 from models.demos.common.bringup.core.metrics import record

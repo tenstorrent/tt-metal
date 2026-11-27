@@ -4,6 +4,23 @@ Source: none (new op), deepseek_v41_flash_d_p P.81 (OWNER 2026-11-18: attention 
 
 ## Changes
 
+### NC.1: the native C++ op (2026-11-27, deepseek_v41_flash_d_p NC.1)
+- What: the tt_ops_code_gen native_migrate port applied as is (native checkout, git diff f39977aa64b 49384eeffde):
+  ttnn.grouped_matmul in ttnn/cpp/ttnn/operations/grouped_matmul (device operation, planner, program factory, nanobind
+  binding with the bank layout cast; kernels moved to device/kernels with a shared args header grouped_matmul_args.hpp);
+  grouped_matmul.py keeps `plan` / `supported` / `column_split` and aliases `grouped_matmul = ttnn.grouped_matmul`. The
+  pre-port Python route copied to generic/ (grouped_matmul_generic, kernels; test only). The port's pre-migration suite
+  (tests/ttnn/unit_tests/operations/grouped_matmul/pre_migration) opens its mesh with FABRIC_2D (owner rule).
+- Why: OWNER 2026-11-27: native C++ ops instead of Python prepared programs (host time a call, no Python program build).
+- Measured (8x4, tests/woa/test_gmm_native_layer.py): bit-identical to the Python route at the model's wo_a calls (256 /
+  160 rows, interleaved and bank, today's knobs), repeats 0, 0 program-cache entries added on fresh buffers / new data;
+  host 63-85 -> 21-26 us a call; device unchanged.
+- Cores: unchanged (interleaved G x GX = 88; bank 80 on the 8x4, <= 110).
+- Files: ttnn/cpp/ttnn/operations/grouped_matmul/*, ttnn/cpp/ttnn/operations/CMakeLists.txt,
+  ttnn/cpp/ttnn-nanobind/__init__.cpp, grouped_matmul.py, generic/, README.md, ../INDEX.md,
+  tests/ttnn/unit_tests/operations/grouped_matmul/pre_migration/. Used by: deepseek_v41_flash_d_p tt/attention.py
+  `_out_wo` (unchanged code).
+
 ### Initial op (2026-11-19)
 - What: `ttnn.bringup.grouped_matmul(x, w, dtype=None, compute_kernel_config=None, output_tensor=None,
   memory_config=None, max_grid=None, block_w=None, depth=2, rt=1)`: y[g] = x[g] @ w[g] for x [1, G, M, K], w

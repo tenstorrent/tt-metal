@@ -135,7 +135,9 @@ def test_woa_layout_probe(mesh_device):
         import importlib
         import statistics
 
-        gm = importlib.import_module("ttnn.bringup.grouped_matmul_ttnn.grouped_matmul")
+        gm = importlib.import_module(
+            "ttnn.bringup.grouped_matmul_ttnn.generic.grouped_matmul"
+        )  # (NC.1: pre-port route)
         mg = (c.grid.x, c.grid.y) if hasattr(c.grid, "x") else c.grid
         rp = ttnn.bringup.run_prepared
         pps = {"today": (gm._prepared(c.x, c.w, out, c.ckc, c.grid, c.bw, c.depth, c.rt), c.w)}

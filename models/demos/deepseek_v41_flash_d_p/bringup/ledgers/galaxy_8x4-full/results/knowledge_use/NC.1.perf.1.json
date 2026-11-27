@@ -1,0 +1,102 @@
+{
+ "used": [
+  {
+   "id": "DS41-390",
+   "how": "kept today's block_w / knobs on both routes (same K order) so C++ vs Python must be exactly 0; judged by bytes, not by off-vs-on of different knobs",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "cache-growth check on fresh x / w / output buffers with an allocation shifted in between (an address-keyed cache would miss)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-277",
+   "how": "fresh weight buffers (a second layer's w) in the cache and mismatch checks: a program keyed short of its io geometry would write wrong pages",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-345",
+   "how": "kept the model's matmul-capped grid (max_grid, 11 x 10) for both routes and the bank layout (tt/attention.woa_layout)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the resident runner keeps the old _ttnn.so after a C++ build until it restarts; it had yielded here, so a start picked up the new build (no entry says a running runner restarts on a build: resident.py docstring does)",
+  "ttnn.bringup's PYTHON_OPS registration wraps an op that is already a C++ FastOperation in a second one (+0.7-2.3 us a call): DS41-398"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: the port runs the model's wo_a shapes as is (8 x [256|160, 4096] @ [4096, 1024]); test_gmm_native_layer.py device us equal to the Python route"
+  }
+ ],
+ "cited_only": [
+  "DS41-398"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "NC.1",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-27T22:35:33",
+  "head": "ef0e6766b7c",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.1_layer.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/NC.1.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_gmm_native_layer.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_layout_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_probe.py",
+   "tests/ttnn/unit_tests/operations/grouped_matmul/pre_migration/conftest.py",
+   "tests/ttnn/unit_tests/operations/grouped_matmul/pre_migration/gmm_helpers.py",
+   "tests/ttnn/unit_tests/operations/grouped_matmul/pre_migration/test_acceptance.py",
+   "tests/ttnn/unit_tests/operations/grouped_matmul/pre_migration/test_golden_cut.py",
+   "tests/ttnn/unit_tests/operations/grouped_matmul/pre_migration/test_grouped_matmul_host_perf.py",
+   "ttnn/cpp/ttnn-nanobind/__init__.cpp",
+   "ttnn/cpp/ttnn/operations/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_device_operation.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_device_operation.hpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_device_operation_types.hpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_planner.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_planner.hpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/grouped_matmul_program_factory.hpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/kernels/gmm_bank_reader.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/kernels/gmm_compute.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/kernels/gmm_reader.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/kernels/gmm_writer.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/device/kernels/grouped_matmul_args.hpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/grouped_matmul.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/grouped_matmul.hpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/grouped_matmul_nanobind.cpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/grouped_matmul_nanobind.hpp",
+   "ttnn/cpp/ttnn/operations/grouped_matmul/sources.cmake",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/README.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/generic/__init__.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/generic/grouped_matmul.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/generic/kernels/gmm_bank_reader.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/generic/kernels/gmm_compute.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/generic/kernels/gmm_reader.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/generic/kernels/gmm_writer.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/grouped_matmul.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_bank_reader.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_compute.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_reader.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_writer.cpp"
+  ]
+ }
+}
