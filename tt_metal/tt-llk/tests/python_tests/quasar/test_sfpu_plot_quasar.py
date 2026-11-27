@@ -25,7 +25,7 @@ CASES. Run one op (from tests/python_tests, Quasar simulator):
 
 import math
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -169,7 +169,7 @@ class Case:
 
     op: MathOperation
     spec: StimuliSpec
-    fmt: InputOutputFormat = BF16
+    fmt: InputOutputFormat = field(default_factory=lambda: BF16)
     expect_pass: bool = True
     name: Optional[str] = None
     approx_mode: ApproximationMode = ApproximationMode.No
