@@ -4,7 +4,7 @@
 
 The TTNN IsIn operation, `ttnn.experimental.isin`, checks, for every value of an `elements` tensor, whether the same value appears anywhere in a `test_elements` tensor.
 
-The operation is a host-side wrapper around a single device operation. The wrapper flattens both inputs to 1-D row-major tensors. The device operation splits `elements` into chunks that fit in a core's L1 memory and assigns whole chunks to cores. Each core compares every value of its chunks with the values of `test_elements`, one pair at a time, until it finds a match. The comparisons run on one of the core's data-movement processors. Finally, the wrapper restores the shape and layout.
+Both tensors are flattened: isin treats each of them as one 1-D list of values instead of processing rows independently.
 
 ## Brief Functional Description
 
