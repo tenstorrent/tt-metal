@@ -527,6 +527,73 @@ def test_relay_chunk_scan_adds_the_entry_state_and_b_in_fp32(mesh_device):
         torch.testing.assert_close(ttnn.to_torch(local_carry), expected, rtol=0, atol=1e-6, msg=f"carry device={index}")
 
 
+def _round_operand(tensor: torch.Tensor) -> torch.Tensor:
+    """FP32 values rounded, nearest-even, to the 9 mantissa bits the FPU multiplier reads (round_fp32_operands)."""
+    bits = tensor.float().contiguous().view(torch.int32).to(torch.int64)
+    bits = (bits + 0x1FFF + ((bits >> 14) & 1)) & ~0x3FFF
+    return bits.to(torch.int32).view(torch.float32)
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4")],
+    indirect=["mesh_device", "device_params"],
+)
+def test_relay_chunk_scan_round_fp32_operands(mesh_device):
+    """round_fp32_operands (K3_ACC_KDA_ROUND) rounds the correction's FP32 FPU operands, the landed entry state each
+    correction core multiplies by included, to the multiplier's 9 mantissa bits instead of letting the source registers
+    truncate them, and leaves the relay itself alone. With every E = 0 (each hop S + B, exact in FP32), F(0) = 0 and
+    a tiny F(I) on the 9-bit grid, a chunk's output is F(I) @ entry through an eps-dominated gated norm (FP32 output),
+    so a truncated entry state or chunk output shows as a scale bias: rounded, it goes, and the carries, which only the
+    relay cores form, stay bit-identical."""
+    sp_size, _ = _sp_tp(mesh_device)
+    relay = _relay(mesh_device)
+    transforms = _Transforms(mesh_device, relay, seed=29, output_dtype=ttnn.float32)
+    generator = torch.Generator().manual_seed(29)
+    b = (0.1 * torch.randn(sp_size, _HEADS, _KEY, _KEY, generator=generator)).bfloat16().float()
+    transforms.a, transforms.b = torch.eye(_KEY).expand_as(b).clone(), b
+    transforms.packed = _pack(mesh_device, transforms.a, b)
+    transforms.zero = torch.zeros_like(transforms.zero)
+    # |x| ~ 3e-6: mean x^2 ~ 1e-11 against epsilon 1e-6, so the norm passes x's scale through.
+    transforms.identity = _round_operand(1e-5 * transforms.identity)
+    transforms.inputs = _inputs(
+        mesh_device, relay, transforms.zero, transforms.identity, transforms.final_e, transforms.final_b
+    )
+    actual_start = make_actual_start(mesh_device, 0)
+    entries, _ = transforms.reference(0)
+
+    def run(round_operands: bool):
+        relay.round_fp32_operands = round_operands
+        output, carry = _run(relay, transforms, actual_start)
+        outputs = [ttnn.to_torch(t).double() for t in ttnn.get_device_tensors(output)]
+        carries = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(carry)]
+        for tensor in (output, carry):
+            ttnn.deallocate(tensor)
+        return outputs, carries
+
+    truncated, truncated_carries = run(False)
+    rounded, rounded_carries = run(True)
+    for index, (a, b_) in enumerate(zip(truncated_carries, rounded_carries, strict=True)):
+        assert_bit_identical(a, b_, name=f"carry device {index}")
+
+    def bias_and_error(outputs) -> tuple[float, float]:
+        dot = norm = error = 0.0
+        for index, local in enumerate(outputs):
+            rank, _ = _rank_tp(mesh_device, index)
+            expected = transforms.normalize(transforms.identity.double() @ entries[rank].unsqueeze(1))
+            got = transforms.head_major(local)
+            dot += float((got * expected).sum())
+            norm += float((expected * expected).sum())
+            error += float(((got - expected) ** 2).sum())
+        return dot / norm - 1.0, (error / norm) ** 0.5
+
+    bias_off, error_off = bias_and_error(truncated)
+    bias_on, error_on = bias_and_error(rounded)
+    print(f"relay round_fp32_operands: bias {bias_off:+.3e} -> {bias_on:+.3e}, nrmse {error_off:.3e} -> {error_on:.3e}")
+    assert abs(bias_on) <= max(0.1 * abs(bias_off), 2e-5), "rounding should remove the truncation bias"
+    assert error_on < error_off, "rounding should reduce the error"
+
+
 @_MESH
 def test_relay_chunk_scan_rejects_low_fidelity(mesh_device, expect_error):
     """Below HiFi3 the norm's FPU products truncate 1 / rms and the squares: HiFi2 is refused when the relay is built."""

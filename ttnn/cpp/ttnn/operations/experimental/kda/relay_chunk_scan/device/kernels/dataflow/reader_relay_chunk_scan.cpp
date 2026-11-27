@@ -43,6 +43,21 @@ constexpr uint32_t num_chunks = Chronology::local_rows / tt::constants::TILE_HEI
 constexpr uint32_t terms_arg = Chronology::next_common;
 constexpr uint32_t weight_arg = terms_arg + 1;
 
+#ifdef KDA_ROUND_SEED
+// K3_ACC_KDA_ROUND (round_fp32_operands): each seed column is rounded in place as it lands, nearest-even, to the 9
+// mantissa bits the FPU multiplier reads from srcA (fpu_operand_round.hpp). Here the seed only feeds the products with
+// the chunk differences, whose srcA would truncate it; the relay core keeps its own exact copy. One RISC-V pass over
+// the column's FP32 words, before compute sees it. Compiled in only when the factory defines KDA_ROUND_SEED.
+FORCE_INLINE void round_seed_column(uint32_t address, uint32_t words) {
+    invalidate_l1_cache();
+    tt_l1_ptr uint32_t* value = reinterpret_cast<tt_l1_ptr uint32_t*>(address);
+    for (uint32_t i = 0; i < words; ++i) {
+        const uint32_t bits = value[i];
+        value[i] = (bits + 0x1FFFu + ((bits >> 14) & 1u)) & 0xFFFFC000u;
+    }
+}
+#endif
+
 // Every correction core of a head corrects its share of the head's chunks from the seeds its relay core writes into
 // it, and moves the head's W for its own matmul and the head's other cores (the writer moves x).
 void kernel_main() {
@@ -118,6 +133,9 @@ void kernel_main() {
         cb_reserve_back(cb, state_tiles);
         for (uint32_t j = 0; j < kt; ++j) {
             kda_counter::wait(landed, counted + j + 1);
+#ifdef KDA_ROUND_SEED
+            round_seed_column(get_write_ptr(cb), kt * (get_tile_size(cb) / sizeof(uint32_t)));
+#endif
             cb_push_back(cb, kt);
         }
     };

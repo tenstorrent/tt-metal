@@ -89,10 +89,10 @@ void bind_relay_chunk_scan(nb::module_& mod) {
                 and every rank's final carry is written back into that entry, in place (nothing past the slab).
             slab_index_scale (int, optional): Defaults to 1.
             slab_index_offset (int, optional): Defaults to 0.
-            round_fp32_operands (bool, optional): round the correction's fp32 FPU operands (FI - F0, the chunk
-                outputs, their squares, 1 / rms and an FLOAT32 gated-norm output) to the 9 mantissa bits the
-                FPU multiplier reads, nearest-even, before they are packed, instead of the source registers'
-                truncation. Defaults to False.
+            round_fp32_operands (bool, optional): round the correction's fp32 FPU operands (the landed seeds,
+                FI - F0, the chunk outputs, their squares, 1 / rms and an FLOAT32 gated-norm output) to the 9
+                mantissa bits the FPU multiplier reads, nearest-even, instead of the source registers'
+                truncation; the relay cores' exact views are unchanged. Defaults to False.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: TILE-layout ``[B, local_rows, H*K]`` gated-norm outputs, token-major,

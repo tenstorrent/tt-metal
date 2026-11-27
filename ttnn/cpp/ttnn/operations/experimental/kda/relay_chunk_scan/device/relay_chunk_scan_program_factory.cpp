@@ -654,6 +654,10 @@ tt::tt_metal::ProgramDescriptor build_program(
         .compile_time_args = std::move(reader_ct),
         .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
+    // The seeds' rounding is compiled in only when asked for, so the reader is otherwise unchanged.
+    if (attrs.round_fp32_operands) {
+        reader.defines.emplace_back("KDA_ROUND_SEED", "1");
+    }
     tt::tt_metal::KernelDescriptor writer{
         .kernel_source = std::string(kernel_dir) + "dataflow/writer_relay_chunk_scan.cpp",
         .core_ranges = correction_set,
