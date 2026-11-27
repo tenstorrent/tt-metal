@@ -78,6 +78,14 @@ inline void kahan_step_tile() {
 #define QSR_DUMMY_UNPACK(dfb_id)
 #endif
 
+// Quasar binds the pack destination buffer at pack_init; pack_reconfig_data_format only changes the format
+// there, so every switch of pack destination needs a pack_init. WH/BH need no re-init.
+#ifdef ARCH_QUASAR
+#define QSR_PACK_INIT(dfb_id) pack_init(dfb_id)
+#else
+#define QSR_PACK_INIT(dfb_id)
+#endif
+
 void kernel_main() {
     constexpr auto default_acc_value = get_arg(args::default_acc_value);
 
@@ -148,10 +156,12 @@ void kernel_main() {
         dfb_acc_obj.reserve_back(ONE_TILE);
 
         pack_reconfig_data_format(dfb::acc);
+        QSR_PACK_INIT(dfb::acc);
         pack_tile(DST_ACC, dfb::acc);
 #ifdef COMPENSATED_SUM
         dfb_comp_obj.reserve_back(ONE_TILE);
         pack_reconfig_data_format(dfb::comp);
+        QSR_PACK_INIT(dfb::comp);
         pack_tile(DST_COMP, dfb::comp);
 #endif
         tile_regs_release();
@@ -222,16 +232,19 @@ void kernel_main() {
 
             dfb_out_obj.reserve_back(ONE_TILE);
             pack_reconfig_data_format(dfb::acc, dfb::out);  // Needed for fp32_acc_to_dest=True
+            QSR_PACK_INIT(dfb::out);
             pack_tile(DST_RESULT, dfb::out);
             dfb_out_obj.push_back(ONE_TILE);
 
             dfb_acc_obj.reserve_back(ONE_TILE);
 
             pack_reconfig_data_format(dfb::out, dfb::acc);  // Needed for fp32_acc_to_dest=True
+            QSR_PACK_INIT(dfb::acc);
             pack_tile(DST_RESULT, dfb::acc);
 #ifdef COMPENSATED_SUM
             dfb_comp_obj.reserve_back(ONE_TILE);
             pack_reconfig_data_format(dfb::acc, dfb::comp);
+            QSR_PACK_INIT(dfb::comp);
             pack_tile(DST_COMP, dfb::comp);
 #endif
 
