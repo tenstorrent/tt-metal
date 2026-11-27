@@ -1,155 +1,125 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader of g6_embedding: fetch_index_block + gather_rows_block.
+// g6_embedding reader (RISCV_1, NoC0): fill_index_window, then gather_rows_block per block.
 //
-// Raw NoC reads instead of dataflow_kernel_lib::read_sticks_for_tilize: that helper reads contiguous
-// sticks (page id = start + row), while the gather's page id is an index value loaded from L1. Its
-// reserve -> reads -> one barrier -> push structure is kept per block.
+// Raw NoC rather than dataflow_kernel_lib::read_sticks_for_tilize: that helper reads consecutive
+// page ids, while the gather's page id is a per-row value loaded from L1 (idx[r]), and the window
+// fill reads a byte sub-range of an index page into a scratch CB that tilize never consumes.
 //
-// The index values never leave the device: each row block's indices are read into a reader-private
-// slot of dfb::index_values and loaded by this RISC to address the table rows.
+// Every DRAM read keeps local and NoC addresses congruent mod 64 (Blackhole DRAM read rule):
+// index offsets are multiples of 128, row slices start at multiples of block_width_tiles * 64, and
+// CB slots are multiples of the same.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/dataflow_buffer.h"
-#include "experimental/kernel_args.h"
-
-#ifdef G6_EMBEDDING_ZONES
 #include "api/debug/kernel_profiler.hpp"
-#define G6_ZONE(name) DeviceZoneScopedN(name)
-#else
-#define G6_ZONE(name)
-#endif
+#include "api/tile_constants.h"
+
+using tt::constants::TILE_HEIGHT;
 
 void kernel_main() {
-    constexpr uint32_t block_col_tiles = get_arg(args::block_col_tiles);
-    constexpr uint32_t block_tile_rows = get_arg(args::block_tile_rows);
-    constexpr uint32_t col_blocks_per_row = get_arg(args::col_blocks_per_row);
-    constexpr uint32_t tensor_tile_rows = get_arg(args::tensor_tile_rows);
-    constexpr uint32_t tile_rows_per_image = get_arg(args::tile_rows_per_image);
-    constexpr uint32_t token_extent = get_arg(args::token_extent);
-    constexpr uint32_t row_segment_bytes = get_arg(args::row_segment_bytes);
-    constexpr uint32_t index_slot_bytes = get_arg(args::index_slot_bytes);
-    // Odd rows go out on the other NoC (dynamic NoC mode): narrow segments are bound by the DRAM
-    // request rate, which a second NoC raises.
-    constexpr bool read_noc_split = get_arg(args::read_noc_split) != 0;
+    constexpr uint32_t cb_index_window = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_gathered_rows = get_compile_time_arg_val(1);
+    constexpr uint32_t block_width_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t width_blocks_per_row = get_compile_time_arg_val(3);
+    constexpr uint32_t block_tile_rows = get_compile_time_arg_val(4);
+    constexpr uint32_t tile_rows_per_image = get_compile_time_arg_val(5);
+    constexpr uint32_t tokens_per_image = get_compile_time_arg_val(6);
+    constexpr uint32_t index_window_tile_rows = get_compile_time_arg_val(7);
+    constexpr uint32_t row_slice_bytes = get_compile_time_arg_val(8);
+    constexpr auto index_args = TensorAccessorArgs<9>();
+    constexpr auto weight_args = TensorAccessorArgs<index_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t tile_height = 32;
-    constexpr uint32_t index_bytes = sizeof(uint32_t);
-    constexpr uint32_t tile_row_index_bytes = tile_height * index_bytes;
-    constexpr uint32_t block_pages = block_tile_rows * block_col_tiles;
-    // One tile-row of the staging block: 32 rows of one column segment = block_col_tiles tiles.
-    constexpr uint32_t staging_tile_row_bytes = tile_height * row_segment_bytes;
-    static_assert(index_slot_bytes == block_tile_rows * tile_row_index_bytes);
+    constexpr uint32_t index_slot_bytes = TILE_HEIGHT * sizeof(uint32_t);
+    constexpr uint32_t index_row_bytes = tokens_per_image * sizeof(uint32_t);
+    constexpr uint32_t unit_bytes = TILE_HEIGHT * row_slice_bytes;
 
-    const uint32_t first_block = get_arg(args::first_block);
-    const uint32_t num_blocks = get_arg(args::num_blocks);
+    const uint32_t index_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t weight_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t first_unit = get_arg_val<uint32_t>(0);
+    const uint32_t num_units = get_arg_val<uint32_t>(1);
 
-    DataflowBuffer dfb_index(dfb::index_values);
-    DataflowBuffer dfb_rows(dfb::gathered_rows);
-    const auto index_acc = TensorAccessor(tensor::index);
-    const auto weight_acc = TensorAccessor(tensor::weight);
+    const auto index_accessor = TensorAccessor(index_args, index_addr);
+    const auto weight_accessor = TensorAccessor(weight_args, weight_addr);
 
-    auto read_barrier = [] {
-        noc_async_read_barrier(noc_index);
-        if constexpr (read_noc_split) {
-            noc_async_read_barrier(1 - noc_index);
+    const uint32_t core_tile_row_end = (first_unit + num_units - 1) / width_blocks_per_row + 1;
+
+    // Reader-private scratch: reserved once, addressed in place, never pushed.
+    cb_reserve_back(cb_index_window, index_window_tile_rows);
+    const uint32_t window_base = get_write_ptr(cb_index_window);
+    uint32_t window_first = first_unit / width_blocks_per_row;
+    uint32_t window_end = 0;
+
+    // Loads the indices of tile rows [first, first + window) of this core: one read per image
+    // segment, bytes past the image's last token never read.
+    auto fill_index_window = [&](uint32_t first) {
+        DeviceZoneScopedN("IDX_FILL");
+        window_first = first;
+        window_end = first + index_window_tile_rows;
+        if (window_end > core_tile_row_end) {
+            window_end = core_tile_row_end;
         }
-    };
-
-    // Only logical positions are read: a partial last tile-row reads valid_rows indices, never the
-    // next image's page or page padding.
-    auto valid_rows = [](uint32_t tile_row_in_image) -> uint32_t {
-        const uint32_t remaining = token_extent - tile_row_in_image * tile_height;
-        return remaining < tile_height ? remaining : tile_height;
-    };
-
-    // Issues the index reads of one row block into a fresh slot; retired by the caller's next barrier.
-    auto fetch_index_block = [&](uint32_t row_block) {
-        G6_ZONE("fetch_index_block");
-        dfb_index.reserve_back(1);
-        const uint32_t slot = dfb_index.get_write_ptr();
-        for (uint32_t t = 0; t < block_tile_rows; ++t) {
-            const uint32_t g = row_block * block_tile_rows + t;
-            if (g >= tensor_tile_rows) {
-                break;
+        uint32_t slot_l1 = window_base;
+        for (uint32_t tile_row = window_first; tile_row < window_end;) {
+            const uint32_t image = tile_row / tile_rows_per_image;
+            const uint32_t h_first = tile_row - image * tile_rows_per_image;
+            uint32_t h_end = h_first + (window_end - tile_row);
+            if (h_end > tile_rows_per_image) {
+                h_end = tile_rows_per_image;
             }
-            const uint32_t image = g / tile_rows_per_image;
-            const uint32_t tr = g - image * tile_rows_per_image;
-            noc_async_read(
-                index_acc.get_noc_addr(image, tr * tile_row_index_bytes),
-                slot + t * tile_row_index_bytes,
-                valid_rows(tr) * index_bytes);
+            const uint32_t byte_begin = h_first * index_slot_bytes;
+            uint32_t byte_end = h_end * index_slot_bytes;
+            if (byte_end > index_row_bytes) {
+                byte_end = index_row_bytes;
+            }
+            noc_async_read(index_accessor.get_noc_addr(image, byte_begin), slot_l1, byte_end - byte_begin);
+            slot_l1 += (h_end - h_first) * index_slot_bytes;
+            tile_row += h_end - h_first;
         }
-        dfb_index.push_back(1);
+        noc_async_read_barrier();
     };
 
-    // Issues one read per valid token of the row block; rows past valid_rows keep stale bytes and
-    // become the unspecified padding rows of the result.
-    auto gather_rows_block = [&](uint32_t row_block, uint32_t col_block, uint32_t staging) {
-        G6_ZONE("gather_rows_block");
-        const auto* indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_index.get_read_ptr());
-        const uint32_t col_offset = col_block * row_segment_bytes;
-        for (uint32_t t = 0; t < block_tile_rows; ++t) {
-            const uint32_t g = row_block * block_tile_rows + t;
-            if (g >= tensor_tile_rows) {
-                break;
-            }
-            const uint32_t rows = valid_rows(g % tile_rows_per_image);
-            const uint32_t tile_row_base = staging + t * staging_tile_row_bytes;
-            for (uint32_t r = 0; r < rows; ++r) {
-                const uint8_t noc = read_noc_split ? static_cast<uint8_t>(noc_index ^ (r & 1)) : noc_index;
-                noc_async_read(
-                    weight_acc.get_noc_addr(indices[t * tile_height + r], col_offset, noc),
-                    tile_row_base + r * row_segment_bytes,
-                    row_segment_bytes,
-                    noc);
-            }
-        }
-    };
+    fill_index_window(window_first);
 
-    uint32_t row_block = first_block / col_blocks_per_row;
-    uint32_t col_block = first_block - row_block * col_blocks_per_row;
-
-    // The index read is the core's first transaction: every row read of the core depends on it.
-    fetch_index_block(row_block);
-    {
-        G6_ZONE("index_barrier");
-        read_barrier();
-    }
-    dfb_index.wait_front(1);
-
-    for (uint32_t b = 0; b < num_blocks; ++b) {
+    uint32_t unit = first_unit;
+    for (uint32_t units_left = num_units; units_left > 0;) {
+        const uint32_t block_units = units_left < block_tile_rows ? units_left : block_tile_rows;
+        const uint32_t block_pages = block_units * block_width_tiles;
         {
-            G6_ZONE("rows_reserve");
-            dfb_rows.reserve_back(block_pages);
+            DeviceZoneScopedN("GATHER_SLOT_WAIT");
+            cb_reserve_back(cb_gathered_rows, block_pages);
         }
-        gather_rows_block(row_block, col_block, dfb_rows.get_write_ptr());
-
-        const bool row_block_ends = col_block + 1 == col_blocks_per_row;
-        const bool more_blocks = b + 1 < num_blocks;
-        // Prefetch the next row block's indices behind this block's row reads so one barrier
-        // retires both and the index latency leaves the critical path.
-        if (row_block_ends && more_blocks) {
-            fetch_index_block(row_block + 1);
+        uint32_t unit_l1 = get_write_ptr(cb_gathered_rows);
+        {
+            DeviceZoneScopedN("GATHER_ISSUE");
+            for (uint32_t u = 0; u < block_units; ++u, ++unit, unit_l1 += unit_bytes) {
+                const uint32_t tile_row = unit / width_blocks_per_row;
+                const uint32_t width_block = unit - tile_row * width_blocks_per_row;
+                if (tile_row >= window_end) {
+                    // Gathers in flight write cb_gathered_rows, not the window, and every index
+                    // they use was already loaded into a register, so the window can be refilled.
+                    fill_index_window(tile_row);
+                }
+                const uint32_t h = tile_row % tile_rows_per_image;
+                const uint32_t tokens_left = tokens_per_image - h * TILE_HEIGHT;
+                const uint32_t rows_valid = tokens_left < TILE_HEIGHT ? tokens_left : TILE_HEIGHT;
+                const volatile tt_l1_ptr uint32_t* indices = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
+                    window_base + (tile_row - window_first) * index_slot_bytes);
+                const uint32_t column_offset = width_block * row_slice_bytes;
+                uint32_t row_l1 = unit_l1;
+                // Rows past rows_valid are tile padding: left as stale L1, never read from the table.
+                for (uint32_t r = 0; r < rows_valid; ++r, row_l1 += row_slice_bytes) {
+                    noc_async_read(weight_accessor.get_noc_addr(indices[r], column_offset), row_l1, row_slice_bytes);
+                }
+            }
         }
         {
-            G6_ZONE("rows_barrier");
-            read_barrier();
+            DeviceZoneScopedN("GATHER_WAIT");
+            noc_async_read_barrier();
         }
-        dfb_rows.push_back(block_pages);
-
-        if (row_block_ends) {
-            dfb_index.pop_front(1);
-            col_block = 0;
-            ++row_block;
-            if (more_blocks) {
-                dfb_index.wait_front(1);
-            }
-        } else {
-            ++col_block;
-        }
+        cb_push_back(cb_gathered_rows, block_pages);
+        units_left -= block_units;
     }
 }
