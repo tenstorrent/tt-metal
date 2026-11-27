@@ -1507,7 +1507,7 @@ def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, ti
     """Runs every dtype, layout and interleaved buffer type the ttnn.tilize docstring lists, with each tile height its
     ``tile`` line lists.
 
-    BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value. An input that the docstring's
+    BFLOAT16 inputs leave out NaN, as the docstring requires, and -0.0 as well. An input that the docstring's
     architecture rules leave out is an xfail on that architecture (see ``_architecture_xfail``).
     """
     check_readable(dtype, layout, buffer_type)
@@ -1519,7 +1519,7 @@ def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, ti
         request.applymarker(pytest.mark.xfail(reason=reason, strict=False))
     memory_config = interleaved_memory_config(buffer_type)
     input_tensor = ttnn.from_torch(
-        full_range_input(shape, dtype, nan=dtype != ttnn.bfloat16),
+        full_range_input(shape, dtype, nan=dtype != ttnn.bfloat16, negative_zero=dtype != ttnn.bfloat16),
         dtype=dtype,
         layout=layout,
         device=device,
@@ -1531,7 +1531,7 @@ def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, ti
     assert output.dtype == dtype
     assert list(output.tile.tile_shape) == [tile_height, 32]
     assert output.memory_config() == memory_config
-    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output))
 
 
 @pytest.mark.parametrize(
@@ -1563,7 +1563,7 @@ def test_tilize_wide_rows_multicore(device, dtype, shape):
 @pytest.mark.parametrize("input_dtype, output_dtype", docstring_dtype_conversion_params(ttnn.tilize, "input", "output"))
 def test_tilize_docstring_dtype_conversions(input_dtype, output_dtype, device):
     """Runs each output dtype the ttnn.tilize docstring lists for an input of another dtype, with values that both
-    dtypes hold exactly and no NaN. Zeros are compared by value. An output that the docstring's Quasar rule leaves out
+    dtypes hold exactly and no NaN or -0.0. An output that the docstring's Quasar rule leaves out
     is an xfail on Quasar, without running."""
     check_readable(input_dtype, output_dtype)
     if is_quasar() and output_dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
@@ -1581,4 +1581,4 @@ def test_tilize_docstring_dtype_conversions(input_dtype, output_dtype, device):
 
     assert output.dtype == output_dtype
     assert output.layout == ttnn.TILE_LAYOUT
-    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=False)
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output))
