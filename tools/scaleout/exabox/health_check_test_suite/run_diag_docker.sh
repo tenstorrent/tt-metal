@@ -111,8 +111,8 @@ TT_BMC_API_URL / TT_BMC_API_TOKEN via the same 0600 --env-file, on every tier:
 Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail):
       --dry-run              Print intended subprocess calls without executing
                              destructive steps
-      --skip-reset           Skip the reset loop phase entirely
-      --skip-tests           Skip the gtest phase entirely
+      --skip-reset           Skip every reset, and so the retest
+      --skip-tests           Skip the tests and the retest
       --skip-triage          Skip the post-test reset and the triage phase
       --triage-gating        Let triage FAILs gate the run (default: held at WARN)
       --triage-dir PATH      Host triage scripts dir; mounted read-only
