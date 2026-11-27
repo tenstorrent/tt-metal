@@ -39,7 +39,6 @@ from typing import Sequence
 
 from .common import emit_result, emit_running, log, run_with_timeout, write_command_log
 from .galaxy import (
-    BDF_RE,
     EXPECTED_CHIP_COUNT,
     QSFP_PORT_IDS,
     UBB_ETH_PORT_OF,
@@ -47,6 +46,7 @@ from .galaxy import (
     format_bdf,
     format_link_end,
     format_port,
+    name_chips,
     parse_bdf_physical,
 )
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
@@ -408,8 +408,7 @@ def _where(dev: int, channel: int | None, chip_bdfs: dict[int, str]) -> str:
 def name_parts(check: Check) -> Check:
     """Name the chips a check's findings point at in ``check.parts``, so the
     verdict and the CSV can say which chip to look at."""
-    texts = [f["text"] for f in check.data.get("findings", [])]
-    check.parts = list(dict.fromkeys(format_bdf(b) for t in texts for b in BDF_RE.findall(t)))
+    check.parts = name_chips(f["text"] for f in check.data.get("findings", []))
     return check
 
 

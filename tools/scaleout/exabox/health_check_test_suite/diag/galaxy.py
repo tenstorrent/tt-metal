@@ -50,6 +50,13 @@ EXPECTED_CHIP_COUNT = 32
 EXPECTED_BDFS = tuple(expected_bdf(tray, asic) for tray in range(1, 5) for asic in range(1, 9))
 
 
+def name_chips(texts) -> list[str]:
+    """Every Galaxy chip the texts mention, once each, as format_bdf names it;
+    BDFs that are not a chip (root ports, NICs) are left out."""
+    bdfs = (b for t in texts for b in BDF_RE.findall(t))
+    return list(dict.fromkeys(format_bdf(b) for b in bdfs if b.lower() in EXPECTED_BDFS))
+
+
 # Per-ASIC eth port classification on a BH Galaxy UBB.
 # Keys are ASIC_LOCATION (1..8 within a UBB). Each value is the port-index
 # bitmask for its connection type. Ports are ETH0..ETH11 (bits 0..11).
@@ -153,6 +160,7 @@ def format_link_end(bdf: str, channel: int) -> str:
     pos = parse_bdf_physical(bdf)
     port = UBB_ETH_PORT_OF.get((pos[1], channel)) if pos else None
     return f"{format_bdf(bdf)} ch{channel}" + (f", {format_port(*port)}" if port else "")
+
 
 # BH Galaxy board ID prefixes → hardware revision.
 # board_id source: tt-smi -s `device_info[].board_info.board_id` (hex string).

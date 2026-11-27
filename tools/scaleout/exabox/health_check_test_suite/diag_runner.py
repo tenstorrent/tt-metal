@@ -36,6 +36,7 @@ _SUITE_DIR = str(Path(__file__).resolve().parent)
 if _SUITE_DIR not in sys.path:
     sys.path.insert(0, _SUITE_DIR)
 
+from diag.captures import capture_events  # noqa: E402
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
@@ -472,6 +473,13 @@ def run_diag(
             ),
         )
     _finish(report, qsfp_phase, t0, summary=True, all_skip_stays_skip=True)
+
+    # The SEL and the kernel log since the run began: reads only, and evidence
+    # for the verdict rather than findings, so the phase never votes.
+    captures_phase = Phase(name="captures", gates=False)
+    t0 = time.time()
+    _guarded(captures_phase, "captures", SKIP, lambda: capture_events(captures_phase, dry_run, logs_dir, started))
+    _finish(report, captures_phase, t0, summary=True, all_skip_stays_skip=True)
 
     # Phase 8: the sys-triage bundle, when the host has the package. After the
     # QSFP tests for the same reason they follow triage: it opens every chip
