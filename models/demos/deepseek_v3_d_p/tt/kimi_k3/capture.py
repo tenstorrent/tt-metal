@@ -490,8 +490,8 @@ class TeacherCapture:
                     "moe_ids": "checkpoint expert ids",
                 },
             }
-            for (l, point), g in sorted(self.grams.items()):
-                if l != layer or g.g is None:
+            for (l, point), g in sorted(((k, g) for k, g in self.grams.items() if k[0] == layer), key=lambda kg: kg[0][1]):
+                if g.g is None:
                     continue
                 g.g.numpy().tofile(d / f"gram_{point}.f64")
                 K = int(g.g.shape[-1])
