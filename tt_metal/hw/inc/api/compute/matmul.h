@@ -945,7 +945,12 @@ ALWI void matmul_init(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
-    MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
+    // LLK_SIZE_MODE_GDN: main's math, as the forms put chunk_gdn_prep over the kernel config buffer
+    if constexpr (LLK_SIZE_MODE_GDN) {
+        MATH((mm_main::llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
+    } else {
+        MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
+    }
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 #else
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
@@ -1015,7 +1020,11 @@ ALWI void matmul_tiles(
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
 #ifndef ARCH_QUASAR
 #ifdef ARCH_BLACKHOLE
-    MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE>(idst)));
+    if constexpr (LLK_SIZE_MODE_GDN) {
+        MATH((mm_main::llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
+    } else {
+        MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE>(idst)));
+    }
 #else
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
 #endif
