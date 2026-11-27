@@ -268,6 +268,28 @@ def test_moreh_adamw_compute_kernel_options(
     )
 
 
+@pytest.mark.parametrize("compute_kernel_options", [None, False], ids=["default_config", "fp32_dest_acc_en=False"])
+def test_moreh_adamw_bfloat8_b_requires_fp32_dest_acc(compute_kernel_options, device, expect_error):
+    shape = [32, 32]
+    torch.manual_seed(0)
+    tensors = [
+        ttnn.from_torch(torch.rand(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(4)
+    ]
+    with expect_error(RuntimeError, "requires compute_kernel_config.fp32_dest_acc_en"):
+        ttnn.operations.moreh.adamw(
+            *tensors,
+            1e-2,
+            0.5,
+            0.555,
+            1e-08,
+            0.3,
+            8,
+            False,
+            compute_kernel_config=get_compute_kernel_options(compute_kernel_options),
+        )
+
+
 def torch_adamw_step(param, grad, exp_avg, exp_avg_sq, max_exp_avg_sq, lr, betas, eps, weight_decay, amsgrad, step):
     """CPU reference for one moreh_adamw step (decoupled weight decay).
 
