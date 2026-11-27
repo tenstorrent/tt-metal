@@ -14,7 +14,7 @@ usage() {
 	cat << EOF
 Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links] [--mgd <path>]
 
-Run the deployment test suite (Ethernet, DRAM, PCIe read/write, NOC, DIDT).
+Run the deployment test suite (Ethernet, DRAM, PCIe read/write on every chip, NOC, DIDT).
 Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
@@ -282,10 +282,11 @@ run_tests() {
 	run_test 'DRAM tests' $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py &&
 		last_dram_ok=1 || last_dram_ok=0
 
-	run_test 'PCIe read test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Reading Host/size:1073741824/page_size:32768/readers:1/writers:0/host_copy:0/iterations:5/manual_time' --device-id=0 &&
+	# Every MMIO chip reads/writes the host at once; fails if any chip moves no data.
+	run_test 'PCIe read test' run_benchmark ./build/tools/mem_bench --full --benchmark_filter='All MMIO Devices Reading Host/size:1073741824/page_size:32768/readers:1/writers:0/iterations:5/manual_time' &&
 		last_pcie_read_ok=1 || last_pcie_read_ok=0
 
-	run_test 'PCIe write test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Writing Host/size:1073741824/page_size:32768/readers:0/writers:1/host_copy:0/iterations:5/manual_time' --device-id=0 &&
+	run_test 'PCIe write test' run_benchmark ./build/tools/mem_bench --full --benchmark_filter='All MMIO Devices Writing Host/size:1073741824/page_size:32768/readers:0/writers:1/iterations:5/manual_time' &&
 		last_pcie_write_ok=1 || last_pcie_write_ok=0
 
 	emit_section 'Test results'
