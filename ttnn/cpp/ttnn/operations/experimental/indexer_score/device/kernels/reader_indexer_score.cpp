@@ -632,7 +632,6 @@ void kernel_main() {
     constexpr uint32_t schedule_group_rows = get_named_compile_time_arg_val("schedule_group_rows");
     constexpr uint32_t schedule_max_bands = get_named_compile_time_arg_val("schedule_max_bands");
     constexpr uint32_t schedule_ring_size = get_named_compile_time_arg_val("schedule_ring_size");
-    constexpr uint32_t schedule_rotate = get_named_compile_time_arg_val("schedule_rotate");
     constexpr uint32_t schedule_units = get_named_compile_time_arg_val("schedule_units");
     const uint32_t q_addr = get_common_arg_val<uint32_t>(indexer_common::reader::Q);
     const uint32_t k_addr = get_common_arg_val<uint32_t>(indexer_common::reader::K);
@@ -642,9 +641,7 @@ void kernel_main() {
     constexpr uint32_t group_stride = schedule_group_rows;
     constexpr uint32_t num_groups = schedule_groups;
     const auto schedule = indexer_schedule::for_core<fused_ring_enabled>(
-        core_id,
-        group_stride,
-        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate});
+        core_id, group_stride, {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols});
     const uint32_t row_group0 = schedule.row_group;
     const uint32_t band0 = schedule.band_start;
     const uint32_t num_bands = schedule.band_count;
@@ -724,13 +721,8 @@ void kernel_main() {
         shard_span.set_valid_k_len_tiles(kv_len_tiles);
         const uint32_t band_iters = stream_heads ? max_bands : num_bands;
         for (uint32_t phase = 0; phase < num_groups; ++phase) {
-            auto ring_schedule = indexer_ring_schedule::for_lane<
-                fused_physical_sp,
-                k_len_tiles,
-                k_tiles_per_unit,
-                schedule_blocks,
-                schedule_cols,
-                schedule_rotate>(band0);
+            auto ring_schedule = indexer_ring_schedule::
+                for_lane<fused_physical_sp, k_len_tiles, k_tiles_per_unit, schedule_blocks, schedule_cols>(band0);
             const uint32_t group = row_group0 + phase * group_stride;
             const uint32_t q_row_start = group * q_tiles_per_unit;
             if constexpr (fuse_single) {
