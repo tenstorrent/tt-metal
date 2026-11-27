@@ -12,7 +12,7 @@ They are read from the environment each time a module asks, so set them before t
                              or a comma list of layer indices
     K3_ACC_BF16_WEIGHTS      bf16 for every weight that is bf16 in the published checkpoint: KDA input / output
                              projections, MLA q_a / q_b / kv_a / kv_b / o / g projections, indexer wq_b / wk, the
-                             MoE head's shared expert + latent down and the tail's latent up
+                             MoE head's shared expert + latent down and the tail's latent up, layer 0's dense MLP
     K3_ACC_KV                "bf16": the DSA layers' kvpe cache in bf16 (BF16_RM) instead of scaled FP8
     K3_ACC_FIDELITY          HiFi4 where the op takes a compute config: KDA input / output projections, scan and
                              affine prefix, gated norm output in fp32; MLA projections (fp32 DEST only where the

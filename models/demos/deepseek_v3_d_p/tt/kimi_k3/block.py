@@ -24,7 +24,7 @@ from typing import Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy, capture
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext
 from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -183,7 +183,8 @@ class TtKimiK3Block(LightweightModule):
                 topology=tp_topology,
                 tp_axis=tp_axis,
                 activations_dtype=shared_expert_activations_dtype,
-                weights_dtype=shared_expert_weights_dtype,
+                # (bf16 under K3_ACC_BF16_WEIGHTS: tt/kimi_k3/accuracy.py)
+                weights_dtype=accuracy.weight_dtype(shared_expert_weights_dtype),
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
                 activation=getattr(model_cfg, "DENSE_FFN_ACTIVATION", ACTIVATION_SILU),

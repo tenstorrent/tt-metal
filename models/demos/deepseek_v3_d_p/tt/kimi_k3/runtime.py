@@ -51,7 +51,11 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         adapter's moe_block_checkpoint) and let the build write them beside the production ones. {} otherwise (also
         when every layer already has them). The cache must be writable."""
         from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
-        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import layer_is_stale, load_attention_weights
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import (
+            layer_is_stale,
+            load_attention_weights,
+            load_dense_ffn_weights,
+        )
         from models.demos.deepseek_v3_d_p.tt.moe_impl import model_adapter
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
@@ -66,12 +70,13 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             return {}
         checkpoint = model_adapter(model_cfg).moe_block_checkpoint()
         logger.warning(f"K3_ACC_BF16_WEIGHTS: layers {stale} read their attention weights from {checkpoint}")
-        return {
-            "layers": [
-                load_attention_weights(checkpoint, i, model_cfg=model_cfg) if i in stale else {}
-                for i in range(first, first + n)
-            ]
-        }
+        def layer(i):  # (a dense layer's MLP is bf16-origin too)
+            state = load_attention_weights(checkpoint, i, model_cfg=model_cfg)
+            if i < model_cfg.NUM_DENSE_LAYERS:
+                state.update(load_dense_ffn_weights(checkpoint, i))
+            return state
+
+        return {"layers": [layer(i) if i in stale else {} for i in range(first, first + n)]}
 
     @property
     def activation_planes(self) -> int:

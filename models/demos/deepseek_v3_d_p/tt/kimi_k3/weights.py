@@ -197,6 +197,12 @@ def load_layer_state_dict(
     return state_dict
 
 
+def load_dense_ffn_weights(checkpoint_dir: Path, layer_idx: int) -> dict:
+    """A dense layer's MLP, {"ffn_weights": {gate_proj, up_proj, down_proj}} (as load_layer_state_dict groups it)."""
+    prefix = layer_prefix(Path(checkpoint_dir), layer_idx)
+    return {"ffn_weights": load_tensors(Path(checkpoint_dir), {a: prefix + k for a, k in DENSE_FFN_KEYS.items()})}
+
+
 def load_routed_expert_weights(checkpoint_dir: Path, layer_idx: int, num_experts: int) -> list[dict]:
     """The layer's routed experts, renamed from the checkpoint's `w1`/`w3`/`w2`.
 
@@ -285,7 +291,12 @@ def _attention_cache_globs(layer_idx: int, model_cfg: type) -> tuple[str, ...]:
     from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
 
     if layer_idx not in model_cfg.mla_layer_ids():
-        return kda_current_cache_globs(f"layer_{layer_idx}.kda", kimi_k3_kda_config(), kimi_k3_projection_dtype())
+        dense = (
+            tuple(f"layer_{layer_idx}.ffn.{p}_dtype_BFLOAT16_layout_TILE.tensorbin" for p in DENSE_FFN_KEYS)
+            if accuracy.bf16_weights() and layer_idx < model_cfg.NUM_DENSE_LAYERS
+            else ()
+        )
+        return dense + kda_current_cache_globs(f"layer_{layer_idx}.kda", kimi_k3_kda_config(), kimi_k3_projection_dtype())
     mla = (
         tuple(f"layer_{layer_idx}.mla.{name}_dtype_BFLOAT16_layout_TILE.tensorbin" for name in _MLA_BF16_ORIGIN)
         if accuracy.bf16_weights()
