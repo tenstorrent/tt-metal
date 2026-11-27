@@ -1637,6 +1637,45 @@ class TestComparisonOnlyMultiRank:
             (graph_report.DATABASE_SCHEMA_VERSION,)
         ]
 
+    def _write_rank_files(self, directory, tensor_id_by_rank, world_size=2):
+        for rank, tensor_id in tensor_id_by_rank.items():
+            path = directory / graph_report.rank_comparison_records_name(rank, world_size)
+            path.write_text(json.dumps(self._records(tensor_id)))
+
+    def test_merged_files_are_removed(self, tmp_path):
+        self._write_rank_files(tmp_path, {0: 7, 1: 8})
+        graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["db.sqlite"]
+
+    def test_a_rank_without_records_is_not_merged_again(self, tmp_path):
+        """Tests sharing a report_name flush into one directory. A rank with no records in the second writes no file,
+        so its file from the first, if left, was merged again: a UNIQUE constraint error on rank 0, and the second
+        flush's records lost. Seen on a two-rank Blackhole LoudBox run."""
+        self._write_rank_files(tmp_path, {0: 7, 1: 8})
+        graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        self._write_rank_files(tmp_path, {0: 9})
+        db_path = graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        rows = _query_db(db_path, "SELECT tensor_id, rank FROM local_tensor_comparison_records ORDER BY tensor_id")
+        assert rows == [(7, 0), (8, 1), (9, 0)]
+
+    def test_files_are_removed_when_the_merge_fails(self, tmp_path, expect_error):
+        """So the failure isn't repeated by every later flush into the same directory."""
+        self._write_rank_files(tmp_path, {0: 7, 1: 8})
+        graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        self._write_rank_files(tmp_path, {0: 7})  # Already in the database, as from a rerun of the same test.
+        with expect_error(sqlite3.IntegrityError, "UNIQUE constraint failed"):
+            graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["db.sqlite"]
+
+    def test_files_of_another_world_size_are_not_merged(self, tmp_path):
+        """Left by an earlier run of another size into the same directory; their ranks may not exist in this one."""
+        self._write_rank_files(tmp_path, {0: 7, 1: 8})
+        self._write_rank_files(tmp_path, {3: 9}, world_size=4)
+        db_path = graph_report.import_rank_comparison_records(tmp_path, world_size=2)
+        rows = _query_db(db_path, "SELECT tensor_id, rank FROM local_tensor_comparison_records ORDER BY tensor_id")
+        assert rows == [(7, 0), (8, 1)]
+        assert (tmp_path / graph_report.rank_comparison_records_name(3, 4)).exists()
+
     def test_rank_records_files_are_not_taken_for_captures(self, tmp_path):
         """A later graph report import into the same directory skips them, as it skips comparison_records.json."""
         report_dir = tmp_path / "reports_in"
@@ -1665,7 +1704,9 @@ class TestComparisonOnlyMultiRank:
         monkeypatch.setattr(ttnn, "distributed_context_barrier", lambda: calls.append("barrier"))
         monkeypatch.setattr(ttnn, "save_config_to_json_file", lambda path: calls.append("config"))
         monkeypatch.setattr(
-            graph_report, "import_rank_comparison_records", merge or (lambda path: calls.append("merge"))
+            graph_report,
+            "import_rank_comparison_records",
+            merge or (lambda path, **kwargs: calls.append(("merge", kwargs))),
         )
         fixture = graph_report._run_pytest_graph_report_fixture(
             SimpleNamespace(fixturenames=[], getfixturevalue=lambda name: None)
@@ -1676,7 +1717,7 @@ class TestComparisonOnlyMultiRank:
     @pytest.mark.parametrize(
         "rank, has_records, expected_calls",
         [
-            (0, True, ["flush", "barrier", "merge", "barrier", "config"]),
+            (0, True, ["flush", "barrier", ("merge", {"world_size": 2}), "barrier", "config"]),
             (1, True, ["flush", "barrier", "barrier", "config"]),
             (1, False, ["barrier", "barrier", "config"]),
         ],
@@ -1702,7 +1743,7 @@ class TestComparisonOnlyMultiRank:
     def test_rank_0_merge_error_still_releases_the_other_ranks(self, monkeypatch, tmp_path, expect_error):
         calls = []
 
-        def failing_merge(path):
+        def failing_merge(path, **kwargs):
             raise ValueError("merge failed")
 
         with expect_error(ValueError, "merge failed"):

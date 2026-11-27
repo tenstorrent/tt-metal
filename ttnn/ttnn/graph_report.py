@@ -187,7 +187,7 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
                 ttnn.distributed_context_barrier()
                 try:
                     if rank == 0:
-                        import_rank_comparison_records(report_path)
+                        import_rank_comparison_records(report_path, world_size=world_size)
                 finally:
                     # Release the other ranks even if rank 0's merge raised, or they wait here forever.
                     ttnn.distributed_context_barrier()
@@ -344,31 +344,41 @@ def rank_comparison_records_name(rank: int, world_size: int) -> str:
     return f"comparison_records{_rank_file_suffix(rank, world_size)}.json"
 
 
-def import_rank_comparison_records(report_dir: Union[str, Path], db_name: str = "db.sqlite") -> Path:
+def import_rank_comparison_records(
+    report_dir: Union[str, Path], db_name: str = "db.sqlite", world_size: Optional[int] = None
+) -> Path:
     """Merge every rank's comparison-only records (``comparison_records_<r>_of_<N>.json``) into ``db_name``.
 
     In comparison-only mode on a multi-rank run each rank writes its records to its own file, since the ranks would
     otherwise all write the same database at once; rank 0 merges them here, tagging each rank's rows with its rank.
     Like ``ttnn.graph.flush_comparison_records_to_db`` on a single process, it adds to an existing database.
+
+    With ``world_size``, only files of a run that size are merged. The files merged are removed afterwards, also when
+    the merge fails: a rank with no records writes no file, so a file left behind would be merged again by the next
+    flush into the same directory (as when tests share a report_name).
     """
     report_dir = Path(report_dir)
     db_path = report_dir / db_name
     rank_files = []
     for path in report_dir.glob("comparison_records_*_of_*.json"):
         m = _RANK_COMPARISON_RECORDS_NAME_RE.match(path.name)
-        if m:
+        if m and (world_size is None or int(m.group(2)) == world_size):
             rank_files.append((int(m.group(1)) - 1, path))
-    conn = sqlite3.connect(db_path)
     try:
-        cursor = conn.cursor()
-        create_database_schema(cursor)
-        save_database_schema_version(cursor)
-        for rank, path in sorted(rank_files):
-            with open(path, "r") as f:
-                import_tensor_comparison_records(cursor, json.load(f), rank=rank)
-        conn.commit()
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            create_database_schema(cursor)
+            save_database_schema_version(cursor)
+            for rank, path in sorted(rank_files):
+                with open(path, "r") as f:
+                    import_tensor_comparison_records(cursor, json.load(f), rank=rank)
+            conn.commit()
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        for _, path in rank_files:
+            path.unlink(missing_ok=True)
     return db_path
 
 
