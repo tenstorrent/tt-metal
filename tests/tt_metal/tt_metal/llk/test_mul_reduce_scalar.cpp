@@ -105,23 +105,25 @@ bool check_result(
 // Quasar only accepts the 2.0 host API.
 bool run_mul_reduce_scalar_test_quasar(distributed::MeshDevice& mesh_device, const MulReduceScalarConfig& config) {
     namespace sn = tt::tt_metal::unit_tests::llk::single_node_dfb;
-    const uint32_t tile_byte_size = tt::tile_size(tt::DataFormat::Float16_b);
+    // The stimulus and golden are bf16, so every DFB and the tile size use it.
+    constexpr tt::DataFormat format = tt::DataFormat::Float16_b;
+    const uint32_t tile_byte_size = tt::tile_size(format);
     auto [packed_input0, packed_input1] = make_inputs(config, config.num_tiles * tile_byte_size);
     const std::vector<uint32_t> result_vec = sn::run(
         mesh_device,
         {.name = "mul_reduce_scalar_quasar",
          .inputs =
              {{.data = packed_input0,
-               .format = tt::DataFormat::Float16_b,
+               .format = format,
                .num_tiles = config.num_tiles,
                .accessor = "in0",
                .num_entries = config.num_tiles},
               {.data = packed_input1,
-               .format = tt::DataFormat::Float16_b,
+               .format = format,
                .num_tiles = config.num_tiles,
                .accessor = "in1",
                .num_entries = config.num_tiles}},
-         .output = {.format = tt::DataFormat::Float16_b, .num_tiles = 1, .accessor = "out", .num_entries = 1},
+         .output = {.format = format, .num_tiles = 1, .accessor = "out", .num_entries = 1},
          .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/mul_reduce_scalar_2_0.cpp",
          .compile_time_args = {{"num_tiles", config.num_tiles}},
          .hw_config = ComputeHardwareConfig{.fpu_math_fidelity = config.math_fidelity}});

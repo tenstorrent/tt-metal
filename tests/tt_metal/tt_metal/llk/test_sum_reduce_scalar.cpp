@@ -128,20 +128,21 @@ bool check_result(
 // Quasar only accepts the 2.0 host API.
 bool run_sum_reduce_scalar_test_quasar(distributed::MeshDevice& mesh_device, const SumReduceScalarConfig& config) {
     namespace sn = tt::tt_metal::unit_tests::llk::single_node_dfb;
-    const tt::DataFormat out_format = config.fp32_dest_acc ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // The stimulus is bf16, so the input DFB and its tile size use it.
+    constexpr tt::DataFormat in_format = tt::DataFormat::Float16_b;
+    const tt::DataFormat out_format = config.fp32_dest_acc ? tt::DataFormat::Float32 : in_format;
     // Smaller tiles go in the DFB tile metadata, so the kernel sees the right faces.
     const std::optional<tt::tt_metal::Tile> tile =
         config.tile_height == tt::constants::TILE_HEIGHT && config.tile_width == tt::constants::TILE_WIDTH
             ? std::nullopt
             : std::optional<tt::tt_metal::Tile>(tt::tt_metal::Tile({config.tile_height, config.tile_width}));
-    const std::vector<uint32_t> packed_input =
-        make_input(config, config.num_tiles * sn::tile_bytes(tt::DataFormat::Float16_b, tile));
+    const std::vector<uint32_t> packed_input = make_input(config, config.num_tiles * sn::tile_bytes(in_format, tile));
     const std::vector<uint32_t> result_vec = sn::run(
         mesh_device,
         {.name = "sum_reduce_scalar_quasar",
          .inputs =
              {{.data = packed_input,
-               .format = tt::DataFormat::Float16_b,
+               .format = in_format,
                .num_tiles = config.num_tiles,
                .accessor = "in",
                .num_entries = config.num_tiles,
