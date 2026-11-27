@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_pad: shared output-tile classification for the new_storage_tiles reader and writer.
+// g6_pad: shared output-unit classification for the new_storage reader and writer (tiles: unit = output
+// tile; rows: unit = (output row, row chunk)).
 // Both kernels walk the same flat output-tile range with the same predicate (op_design.md,
 // "Tile classification"); the host never enumerates tiles.
 
@@ -49,6 +50,11 @@ struct OutTileWalker {
     bool source_bearing() const { return j0 < in_lead0 && j1 < in_lead1 && ht < in_tiles_h && wt < in_tiles_w; }
 
     uint32_t source_page() const { return ((j0 * in_lead1 + j1) * in_tiles_h + ht) * in_tiles_w + wt; }
+
+    // new_storage_rows: the walker's "tile row" is one row and its "tile column" is one row chunk, so a
+    // unit is (row, chunk); these give the input / output row (= page) index of the current unit.
+    uint32_t source_row() const { return (j0 * in_lead1 + j1) * in_tiles_h + ht; }
+    uint32_t out_row() const { return (j0 * out_lead1 + j1) * out_tiles_h + ht; }
 
     bool last_input_tile_row() const { return ht == in_tiles_h - 1; }
     bool last_input_tile_col() const { return wt == in_tiles_w - 1; }

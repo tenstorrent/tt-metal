@@ -101,7 +101,8 @@ SUPPORTED = {
     # values (17/17 golden TILE cells + int32 TILE in test_g6_pad_dtypes.py). ROW_MAJOR stays out: the
     # new_storage_rows regime is not built.
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32],
-    "layout": [ttnn.TILE_LAYOUT],
+    # Refinement 1: ROW_MAJOR via the new_storage_rows regime (row pages, same reader/writer split).
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "memory_config": ["dram", "l1"],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
@@ -130,9 +131,16 @@ KNOBS = {
     "band_block_tiles": 0,
     # new_storage_tiles: output tiles per block (0 = whole per-core range, clamped by the L1 cap).
     "block_tiles": 0,
-    # new_storage_tiles: cb_input_tiles depth in blocks (clamped to the number of blocks per core).
+    # new_storage_tiles / new_storage_rows: cb_input_tiles depth in blocks (clamped to blocks per core).
     "input_depth_blocks": 2,
+    # new_storage_rows: bytes per row chunk (0 = auto: split each output row into enough 64 B-aligned
+    # chunks that rows x chunks covers the grid, never below min_row_chunk_bytes, capped by L1).
+    "row_chunk_bytes": 0,
+    # new_storage_rows: smallest chunk the auto split will cut (per-unit NoC/handshake overhead floor).
+    "min_row_chunk_bytes": 1024,
 }
+
+DRAM_READ_ALIGN = 64  # Blackhole DRAM read alignment: every row-chunk offset / CB slot is a multiple
 
 
 # ---------------------------------------------------------------------------
@@ -310,8 +318,42 @@ def make_plan(input_tensor, out_shape, value, knobs):
         # never restated: a knob change lands here and in the CB sizing together).
         depth = max(1, knobs["input_depth_blocks"])
         plan["block_tiles_cap"] = (L1_BUDGET_BYTES - tile_bytes) // (depth * tile_bytes)
-    else:
-        raise UnsupportedAxisValue(f"g6_pad: regime {regime} is not built")
+    else:  # new_storage_rows: unit = (output row, row chunk); page = one row
+        A = DRAM_READ_ALIGN
+        in_row_bytes = in_shape[-1] * elem_bytes
+        out_row_bytes = out_shape[-1] * elem_bytes
+        out_lead = _lead2(out_shape)
+        n_rows = out_lead[0] * out_lead[1] * out_shape[-2]
+        depth = max(1, knobs["input_depth_blocks"])
+        # L1 (BB-05): fill page + depth slots of one unit must fit -> largest legal chunk.
+        chunk_cap = (L1_BUDGET_BYTES // (1 + depth)) // A * A
+        chunk = knobs["row_chunk_bytes"]
+        if not chunk:
+            splits = -(-grid_cores // n_rows)
+            chunk = -(-out_row_bytes // splits)
+            chunk = max(chunk, knobs["min_row_chunk_bytes"])
+        chunk = -(-chunk // A) * A
+        chunk = min(chunk, chunk_cap)
+        if chunk >= out_row_bytes:
+            chunk = out_row_bytes  # whole row per unit
+        slot_bytes = -(-chunk // A) * A
+        n_chunks = -(-out_row_bytes // chunk)
+        plan["slot_bytes"] = slot_bytes
+        plan["row_chunk_bytes"] = chunk
+        plan["in_row_bytes"] = in_row_bytes
+        plan["out_row_bytes"] = out_row_bytes
+        plan["out_lead"] = out_lead
+        # Walker geometry: "tile rows" are rows, "tile columns" are row chunks.
+        plan["out_tiles_h"] = out_shape[-2]
+        plan["out_tiles_w"] = n_chunks
+        plan["in_tiles_h"] = in_shape[-2]
+        plan["in_tiles_w"] = -(-in_row_bytes // chunk)
+        plan["n_units"] = n_rows * n_chunks
+        plan["edge_row"] = 0
+        plan["edge_col"] = 0
+        plan["block_tiles"] = knobs["block_tiles"]
+        plan["input_depth_blocks"] = knobs["input_depth_blocks"]
+        plan["block_tiles_cap"] = max(1, (L1_BUDGET_BYTES - slot_bytes) // (depth * slot_bytes))
     plan["ncores"] = min(grid_cores, -(-plan["n_units"] // max(1, knobs["min_units_per_core"])))
     return plan
 
@@ -377,7 +419,7 @@ def g6_pad(input_tensor, padding, value=0.0):
         last_plan = plan
         return ttnn.generic_op([output], desc)
 
-    # new_storage_tiles
+    # new_storage_tiles / new_storage_rows
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(out_shape),
         input_tensor.dtype,

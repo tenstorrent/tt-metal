@@ -99,10 +99,12 @@ def build_extension_descriptor(plan, tensor):
 
 
 def build_new_storage_descriptor(plan, input_tensor, output_tensor):
-    """new_storage_tiles: assemble every output page once in L1 and write it once."""
+    """new_storage_tiles / new_storage_rows: assemble every output page (tile, or row chunk) once in L1
+    and write it once. Same kernels; rows_mode CT flag selects the row-page addressing."""
     device = input_tensor.device()
     all_cores, ranges, units_g1 = _core_assignment(plan, device)
-    tile_bytes = plan["tile_bytes"]
+    rows_mode = plan["regime"] == "new_storage_rows"
+    tile_bytes = plan["slot_bytes"] if rows_mode else plan["tile_bytes"]  # CB page / slot stride
 
     block_tiles = min(plan["block_tiles"] or units_g1, units_g1, plan["block_tiles_cap"])
     num_blocks_max = -(-units_g1 // block_tiles)
@@ -124,10 +126,13 @@ def build_new_storage_descriptor(plan, input_tensor, output_tensor):
         plan["in_lead"][0],
         plan["in_lead"][1],
     ]
+    rows_ct = [int(rows_mode), plan.get("row_chunk_bytes", 0), plan.get("in_row_bytes", 0)]
     reader_ct = [CB_INPUT_TILES, tile_bytes, block_tiles] + geom
+    reader_ct += rows_ct + [input_tensor.buffer_aligned_page_size()]
     reader_ct += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     writer_ct = [CB_FILL_TILE, CB_INPUT_TILES, plan["elem_bytes"], tile_bytes, block_tiles] + geom
     writer_ct += [plan["edge_row"], plan["edge_col"]]
+    writer_ct += rows_ct + [plan.get("out_row_bytes", 0), output_tensor.buffer_aligned_page_size()]
     writer_ct += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
 
     reader_rt = ttnn.RuntimeArgs()

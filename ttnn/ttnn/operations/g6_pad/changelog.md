@@ -24,3 +24,18 @@
   - `test_g6_pad_dtypes.py` (fp32 / int32 / uint32 / rank 2 / L1);
   - `test_g6_pad_precision_baseline.py`;
   - `test_g6_pad_perf_ab.py` (p1 added).
+
+## Refinement 1 — ROW_MAJOR layout (`new_storage_rows` regime)
+- Date: 2026-11-27
+- What was done: built the design's `new_storage_rows` regime natively, with no host-side layout conversion and one device program per call. `SUPPORTED["layout"]` now holds `[TILE, ROW_MAJOR]`.
+  - Reused: `select_regime`, `make_plan`, the descriptor cache, `build_new_storage_descriptor`, the NCRISC reader / BRISC writer kernels, `OutTileWalker`, the `cb_input_tiles` nominal-push block discipline and `cb_fill_tile`.
+  - Added: a `rows_mode` CT flag in the shared reader/writer. A unit is (output row, row chunk): the walker's tile row is a row and its tile column is a 64 B-aligned row chunk, and `source_row()` / `out_row()` were added to the walker.
+  - Added knobs `row_chunk_bytes` (0 = auto) and `min_row_chunk_bytes` (1024). In auto mode each row is split into enough chunks that rows × chunks covers the grid, with the chunk L1-capped. This puts `[5,8192]` on 112 units and `[5,3,2560]` on 120 units, both spread over 110 cores.
+  - Reader: reads only the input part of each source-bearing chunk into the start of its slot. Fill-only rows and chunks are never read.
+  - Writer: fill-only units are written from the fill page before the input wait. The row tail `[d_w, D_w)` is filled in place: RISC stores up to the next 16 B boundary, then one local NoC copy from the fill page. Every output page is written once.
+  - The fill page larger than 4 KB is RISC-seeded and grown by local NoC doubling. Tile pages are ≤ 4 KB, so the tiles path is unchanged.
+- Accuracy achieved: bit-exact on all cells (exact gate, PCC = 1.0, RMS = 0). Shapes: the 6 golden RM cases, plus `[3,7,45]` bf16 hw, `[2,3,33,1000]` fp32 multi-chunk + tail, `[4,600]` fp32 L1, `[1,1,2,4097]` i32, `[200,64]` bf16, and a 9-way chunk/block knob sweep.
+- Golden test progress: all 7 former `xfail_expected` ROW_MAJOR cells pass, including the loose `special_values` cell on 262. In the targeted slice (RM + TILE representatives), 17/17 pass. The unit dir passes 93/93.
+- Perf (BH, device ns, 110 cores): `[5,8192]` fp32 RM 2,856; `[5,3,2560]` bf16 RM 1,590; `[1,1,196,196]` bf16 RM 1,485.
+- Issues encountered: none in the op. The Tracy wrapper splits a multi-word `-k` expression, so use single-token filters with `--profile`.
+- Tests added: `test_g6_pad_row_major.py` (11 regime-pinned cases plus a knob sweep). `test_g6_pad_perf_ab.py` gained 3 ROW_MAJOR guard cases (`-k rm`).

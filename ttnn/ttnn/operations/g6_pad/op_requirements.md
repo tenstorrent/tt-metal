@@ -27,7 +27,7 @@
 
 The perf-1 contract (p1 = `[5,12,128,128]` float32 TILE DRAM, `padded_dims=leading`, `alignment=tile_aligned`, rank 4) is fully inside SUPPORTED at Phase 0. No generality refinement is needed to unlock it.
 
-### [ ] Refinement 1 — ROW_MAJOR layout (`new_storage_rows` regime)
+### [x] Refinement 1 — ROW_MAJOR layout (`new_storage_rows` regime)
 
 **Goal**: add `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]` by building the design's deferred `new_storage_rows` regime natively in the kernels, for every TARGET dtype (bf16, fp32, int32, uint32) on DRAM and L1 interleaved. The page is one row of `D_{r-1} · elem_bytes`. Each input row is read once into the start of a 64 B-aligned CB page, and its tail `[d_{r-1}, D_{r-1})` is filled in L1 (`fill_l1_range`). Fill-only rows (new leading or dim -2 rows) are written from a fill row page and never read. Every output page is written once. This moves the 7 `xfail_expected` cells to passing:
 - cases 260 `[1,1,1,1]` u32 and 264 `[1,1,1,8]` u32 (`w`);

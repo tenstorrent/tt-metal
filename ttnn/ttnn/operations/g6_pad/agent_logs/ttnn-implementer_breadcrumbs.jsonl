@@ -17,3 +17,6 @@
 {"event":"test_run","status":"pass","test":"test_g6_pad.py + test_g6_pad_knobs.py","result":"25/25 dev+plain; knob sweep 15/15","perf":{"p2":"13522->9212 ns","p3":"4773->3607 ns","p4":"11009->7576 ns","16x1x1536":"5726->4441 ns"},"lever":"BAND_NOC0_SHARE=(2,5): band units split BRISC/NoC1 + NCRISC/NoC0","ts":"2026-11-27T04:31:10-05:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/g6_pad/test_g6_pad.py","detail":"26 passed dev+prod; golden 59 passed 29 xfailed","ts":"2026-11-27T21:24:57+01:00"}
 {"event":"perf","detail":"band_lanes=2 default: p2 14.0->11.9us p3 5.8->5.0 p4 12.0->9.8; patch via local NoC: [1,196,128] 3.0->2.0us, [1,1,196,196] 4.5->3.0us (residual 0.85us = column-fragment RISC stores); min_units_per_core 32/64 slower everywhere","ts":"2026-11-27T21:32:22+01:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-11-27T21:45:58+01:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T21:46:02+01:00"}
+{"event":"test_run","status":"pass","tests":"unit dir 93/93; golden -k ROW_MAJOR+TILE reps 17/17; row_major --dev 20/20","ts":"2026-11-27T21:50:33+01:00"}
