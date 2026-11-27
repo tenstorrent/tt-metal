@@ -31,11 +31,13 @@ def test_typecast_bf16_mx_round_trip(device, dtype):
     bf16 = to_device(device, x, ttnn.bfloat16)
     mx = ttnn.typecast(bf16, dtype)
     assert mx.dtype == dtype
+    # The device quantizes the bf16-rounded input, so a value near a rounding boundary can land on the other side of
+    # it versus the host quantizing the float32 input: compare with the format's floor, not exactly.
     check(mx_round_trip(x, dtype), ttnn.to_torch(mx), pcc_floor(dtype))
     back = ttnn.typecast(mx, ttnn.bfloat16)
     assert back.dtype == ttnn.bfloat16
-    # bf16 -> MX -> bf16 holds exactly the MX values
-    check(mx_round_trip(x, dtype), ttnn.to_torch(back), 0.9999)
+    # MX -> bf16 is lossless, so the round trip must hold exactly the values the MX tensor held.
+    check(ttnn.to_torch(mx), ttnn.to_torch(back), 0.9999)
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
