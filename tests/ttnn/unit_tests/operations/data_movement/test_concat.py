@@ -1435,8 +1435,11 @@ def test_concat_dtype_uint8_sharded_s2s_tiled(device):
     assert torch.equal(got, torch.cat(torch_inputs, dim=3))
 
 
-# INT8 regression: the Int8 CB format is sign-magnitude, so unpack/pack turned -128 into 0.
-def test_concat_dtype_int8_min_value_sharded_s2s_tiled(device):
+# INT8 -128 regression (#67429): the Int8 CB format is sign-magnitude, so unpack/pack turned -128 into 0.
+# Both inputs are TILE and height sharded, so a last-dim concat reaches ConcatS2STiledProgramFactory with and without
+# groups. A width that is not a multiple of 32 cannot reach it: the factory requires logical and padded width to match.
+@pytest.mark.parametrize("groups", [1, 2])
+def test_concat_dtype_int8_min_value_sharded_s2s_tiled(device, groups):
     shape = [1, 1, 64, 64]
     xs = [int8_with_min_value(shape, seed=seed) for seed in (0, 1)]
     ts = [
@@ -1447,9 +1450,11 @@ def test_concat_dtype_int8_min_value_sharded_s2s_tiled(device):
     ]
     out_cfg = height_sharded_l1_config([1, 1, 64, 128], 2)
 
-    got = ttnn.to_torch(ttnn.concat(ts, dim=-1, memory_config=out_cfg).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    out = ttnn.concat(ts, dim=-1, memory_config=out_cfg, groups=groups)
 
-    assert torch.equal(got, torch.cat(xs, dim=-1))
+    assert out.memory_config() == out_cfg
+    got = ttnn.to_torch(out.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(got, ttnn.concat.golden_function(xs, 3, groups))
 
 
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.concat))

@@ -1156,12 +1156,17 @@ def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
     assert_exact(x.permute(0, 1, 3, 2), ttnn.to_torch(output), signed_zeros=False)
 
 
-# INT8 regression: the Int8 CB format is sign-magnitude, so unpack/pack turned -128 into 0.
-# The row_major cases cover the WH factory path; BH stages 8-bit RM through UINT32 and passes regardless.
-# Routing (interleaved): the last-two swap (0,1,3,2) goes to ttnn::transpose; the other tile cases reach prim::permute.
-# (0,3,1,2) moves one tile dim, so it selects MultiCoreTileRowInvariant with its transpose_wh compute kernel;
-# (3,2,1,0) moves both, so it selects MultiCoreTiledGeneric (transpose_xw_tiled compute kernel).
-# A rank 5 last-two swap is not decomposed to transpose, so it reaches MultiCoreTileInvariant with swap_hw (transpose_wh).
+# INT8 -128 regression (#67429): the Int8 CB format is sign-magnitude, so unpack/pack turned -128 into 0.
+# Tile routing (interleaved): the last-two swap (0,1,3,2) goes to ttnn::transpose, which reaches
+# TransposeWHProgramFactory; the other tile cases reach prim::permute.
+#   (0,3,1,2) moves one tile dim, so it selects MultiCoreTileRowInvariant with its transpose_wh compute kernel.
+#   (3,2,1,0) moves both, so it selects MultiCoreTiledGeneric (transpose_xw_tiled compute kernel).
+#   A rank 5 last-two swap is not decomposed to transpose, so it reaches MultiCoreTileInvariant with swap_hw
+#   (transpose_wh).
+#   The [2, 3, 50, 70] cases use the same two factories with tile padding on both of the last two dims.
+# Row-major routing (interleaved): (0,1,3,2) and the 2D swap go through ttnn::transpose -> prim::permute ->
+# MultiCoreBlockedGeneric on Wormhole and Blackhole. Blackhole stages 8-bit row-major input through UINT32 only when
+# it is sharded (#61827), so these interleaved cases run the factory itself on both architectures.
 @pytest.mark.parametrize(
     "layout, shape, dims",
     [
@@ -1169,10 +1174,21 @@ def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
         (ttnn.TILE_LAYOUT, [1, 2, 2, 64, 64], (0, 1, 2, 4, 3)),
         (ttnn.TILE_LAYOUT, [2, 32, 64, 64], (0, 3, 1, 2)),
         (ttnn.TILE_LAYOUT, [32, 32, 32, 32], (3, 2, 1, 0)),
+        (ttnn.TILE_LAYOUT, [2, 3, 50, 70], (0, 3, 1, 2)),
+        (ttnn.TILE_LAYOUT, [2, 3, 50, 70], (3, 2, 1, 0)),
         (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 64, 64], (0, 1, 3, 2)),
         (ttnn.ROW_MAJOR_LAYOUT, [64, 64], (1, 0)),
     ],
-    ids=["tile_wh", "tile_invariant_rank5", "tile_row_invariant", "tile_generic", "row_major_4d", "row_major_2d"],
+    ids=[
+        "tile_wh",
+        "tile_invariant_rank5",
+        "tile_row_invariant",
+        "tile_generic",
+        "tile_row_invariant_unaligned",
+        "tile_generic_unaligned",
+        "row_major_4d",
+        "row_major_2d",
+    ],
 )
 def test_permute_int8_min_value(device, layout, shape, dims):
     x = int8_with_min_value(shape)

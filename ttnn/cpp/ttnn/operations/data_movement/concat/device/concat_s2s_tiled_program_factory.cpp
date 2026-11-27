@@ -113,7 +113,6 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
         get_num_tiles_per_shard(output.shard_spec().value());
 
     TT_FATAL(inputs.at(0).get().dtype() == inputs.at(1).get().dtype(), "Input tensor data types must match");
-    // INT8 CBs use UInt8: the sign-magnitude Int8 format would turn -128 into 0.
     const tt::DataFormat data_format = cb_dataformat_for(inputs.at(0).get().dtype());
     const uint32_t tile_size = tt::tile_size(data_format);
 
@@ -188,7 +187,8 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
     // >> (input_tensors[0].padded_shape()[-1] / groups % TILE_WIDTH == 0
     // >> && input_tensors[1].padded_shape()[-1] / groups % TILE_WIDTH == 0)
     constexpr uint32_t MAX_1_BYTE_TILES_PER_BATCH = 16;
-    // 32-bit Dest halves per-tile capacity; floor sub-2-byte elements at 2 to stay inside Dest when 8-bit ints are promoted.
+    // 32-bit Dest halves per-tile capacity; floor sub-2-byte elements at 2 to stay inside Dest when 8-bit ints are
+    // promoted.
     const uint32_t effective_element_size = ttnn::operations::data_movement::requires_32bit_dest(data_format)
                                                 ? std::max<uint32_t>(inputs[0].get().element_size(), 2u)
                                                 : inputs[0].get().element_size();

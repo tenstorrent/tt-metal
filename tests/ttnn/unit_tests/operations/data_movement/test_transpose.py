@@ -46,12 +46,17 @@ def test_transpose_block_float_tile(device, shape, dims, dtype):
         assert_equal(expected, output)
 
 
-# INT8 regression: the Int8 CB format is sign-magnitude, so unpack/pack turned -128 into 0.
-# Sharded cases give each core whole [H, W] blocks, which routes to the sharded WH factories: tile_height_sharded to
-# TransposeWHShardedProgramFactory, row_major_height_sharded to TransposeWHShardedRMProgramFactory writing the output
-# shard directly, and row_major_height_sharded_staged (9 tile rows per block) to its output-staging path. On BH the 8-bit
-# RM cases are staged through interleaved L1 and pass regardless, so only WH exercises the sharded RM factory; the
-# row_major_interleaved case likewise covers the WH factory path.
+# INT8 -128 regression (#67429): the Int8 CB format is sign-magnitude, so unpack/pack turned -128 into 0.
+# Factories reached by ttnn.transpose of the last two dims:
+#   tile_interleaved, tile_interleaved_unaligned: TransposeWHProgramFactory (Wormhole and Blackhole).
+#   tile_height_sharded: TransposeWHShardedProgramFactory (Wormhole and Blackhole).
+#   row_major_interleaved: ttnn::transpose -> prim::permute -> MultiCoreBlockedGeneric (Wormhole and Blackhole).
+#   row_major_height_sharded: TransposeWHShardedRMProgramFactory writing the output shard directly on Wormhole.
+#   row_major_height_sharded_staged: the same factory with its output-staging path on Wormhole; 288 rows are 9 tile
+#     rows, and the factory stages its output only when it has more than 8.
+# On Blackhole, sharded 8-bit row-major input is moved to interleaved L1 first (pack_untilize_dest truncation in the
+# sharded RM factory), so the two sharded row-major cases reach MultiCoreBlockedGeneric there, and only Wormhole
+# exercises TransposeWHShardedRMProgramFactory.
 @pytest.mark.parametrize(
     "shape, layout, num_shard_cores",
     [

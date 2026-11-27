@@ -52,7 +52,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreRowInv
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     uint32_t input_rm_page_size = detail::page_size(input_tensor);
     uint32_t output_rm_page_size = detail::page_size(tensor_return_value);
 
@@ -174,7 +174,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    // INT8 CBs use UInt8: the sign-magnitude Int8 format would turn -128 into 0.
     tt::DataFormat cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     uint32_t w_block_size = constants::TILE_WIDTH;
     uint32_t input_cb_page_size = w_block_size * input_tensor.element_size();
@@ -322,7 +321,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
         .advanced_options = {.num_runtime_varargs = 3 * N},
     };
 
-    // 8-bit ints go through 32-bit Dest; BH RM Int8 (and sharded UInt8) is routed via UInt32 in prim::permute.
+    // 8-bit ints go through 32-bit Dest; BH sharded RM 8-bit ints are staged via UInt32 in prim::permute.
     bool fp32_dest_acc_en = requires_32bit_dest(cb_data_format_output);
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
     // UnpackToDest lowers to UnpackToDestFp32; only safe for 32-bit formats. 8-bit ints must

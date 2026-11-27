@@ -101,7 +101,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    // INT8 CBs use UInt8: the sign-magnitude Int8 format would turn -128 into 0.
     tt::DataFormat cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
     uint32_t num_tiles = detail::num_tiles(tensor_return_value);
@@ -302,7 +301,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    // INT8 CBs use UInt8: the sign-magnitude Int8 format would turn -128 into 0.
     tt::DataFormat cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
 
@@ -724,7 +722,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
 
     all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
 
-    // INT8 CBs use UInt8: the sign-magnitude Int8 format would turn -128 into 0.
     tt::DataFormat cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     // Each cb_in entry has misalignment spare bytes for the reader to bounce a misaligned source line into place.
     // Quasar's unpacker steps through a DFB one whole tile per entry, so there the reader bounces through a scratchpad.

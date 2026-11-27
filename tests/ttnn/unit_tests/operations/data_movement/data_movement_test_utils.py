@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Inputs over each dtype's whole range and an exact comparison, for tests of ops that must not change values."""
+"""Inputs over each dtype's whole range, an exact comparison, and shared memory-config helpers, for tests of ops
+that must not change values."""
 
 import math
 
@@ -130,10 +131,10 @@ def convertible_input(shape, input_dtype, output_dtype, seed=0):
 
 
 def int8_with_min_value(shape, seed=0):
-    """Random int8 values in which every third element is -128, the one value the sign-magnitude Int8 format loses."""
-    x = torch.randint(-128, 128, shape, generator=torch.Generator().manual_seed(seed), dtype=torch.int8)
-    x.view(-1)[::3] = -128
-    return x
+    """Whole-range int8 values in which every third element is -128, the one value the sign-magnitude Int8 format loses."""
+    values = full_range_input(shape, ttnn.int8, seed=seed)
+    values.view(-1)[::3] = -128
+    return values
 
 
 def height_sharded_l1_config(shape, num_cores):

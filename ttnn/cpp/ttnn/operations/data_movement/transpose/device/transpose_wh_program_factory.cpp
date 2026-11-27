@@ -46,7 +46,6 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
     uint32_t wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
 
-    // INT8 CBs use UInt8: the sign-magnitude Int8 format would turn -128 into 0.
     tt::DataFormat src0_dfb_data_format = cb_dataformat_for(input_tensor.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_dfb_data_format);
     tt::DataFormat dst_dfb_data_format = cb_dataformat_for(output_tensor.dtype());
