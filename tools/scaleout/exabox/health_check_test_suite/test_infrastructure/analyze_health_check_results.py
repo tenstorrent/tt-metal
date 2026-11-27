@@ -234,12 +234,9 @@ def _hexint(v):
 
 
 def _max_asic_temp(report: dict):
-    c = _find_check(report, "asic_thermal_precheck")
-    if not c:
-        return ""
-    temps = (c.get("data", {}) or {}).get("all_temps_c", {}) or {}
-    vals = [float(v) for v in temps.values() if v not in ("", None)]
-    return round(max(vals), 1) if vals else ""
+    c = _find_check(report, "asic_thermal_precheck") or {}
+    t = (c.get("data", {}) or {}).get("hottest_temp_c")
+    return round(float(t), 1) if t not in ("", None) else ""
 
 
 def _gddr_temp_and_uncorr(report: dict):
