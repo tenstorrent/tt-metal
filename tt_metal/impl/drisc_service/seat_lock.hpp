@@ -14,7 +14,7 @@
 namespace tt::tt_metal::internal::drisc_service {
 
 // One DRISC. All seats of a chip share one file in $TT_DRISC_SEAT_LOCK_DIR (default /dev/shm/tt-drisc-seats),
-// chip-<asic id>.lock. Seat i = noc0_y * 256 + noc0_x owns:
+// chip-<asic id>.lock. Seat i = noc0_y * 64 + noc0_x (physical NOC0 coordinates) owns:
 //   lock byte 2i      a write lock by an exclusive owner (tt-metal's DRAM programmable cores) or a sole client; a read
 //                     lock while clients share it.
 //   lock byte 2i + 1  the gate: a write lock for the length of one client's attach.

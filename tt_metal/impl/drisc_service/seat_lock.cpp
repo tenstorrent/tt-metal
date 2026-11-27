@@ -47,18 +47,27 @@ std::string chip_file(uint64_t asic_id) {
     return fmt::format("{}/chip-{}.lock", dir, asic_id);
 }
 
+// A Blackhole NoC node id has 6 bits per coordinate (NOC_ADDR_NODE_ID_BITS), so NOC0 x and y are below this.
+constexpr uint32_t noc0_coord_limit = 1u << 6;
+
+// Each seat's locks: its lock byte, then its gate byte.
+constexpr off_t lock_bytes_per_seat = 2;
+
+// Each seat's data: its last client generation.
+constexpr off_t data_bytes_per_seat = sizeof(uint32_t);
+
 uint32_t seat_index(const SeatId& seat) {
     TT_FATAL(
-        seat.noc0_x < 256 && seat.noc0_y < 256,
+        seat.noc0_x < noc0_coord_limit && seat.noc0_y < noc0_coord_limit,
         "drisc_service: seat ({}, {}) is outside the NoC grid",
         seat.noc0_x,
         seat.noc0_y);
-    return (seat.noc0_y * 256) + seat.noc0_x;
+    return (seat.noc0_y * noc0_coord_limit) + seat.noc0_x;
 }
 
-off_t lock_byte(uint32_t index) { return 2 * static_cast<off_t>(index); }
+off_t lock_byte(uint32_t index) { return lock_bytes_per_seat * index; }
 off_t gate_byte(uint32_t index) { return lock_byte(index) + 1; }
-off_t gen_offset(uint32_t index) { return 4 * static_cast<off_t>(index); }
+off_t gen_offset(uint32_t index) { return data_bytes_per_seat * index; }
 
 // Opens `path` with `flags`, creating it with mode 0666 when missing, set the way create_dir sets the dir's. Never
 // follows a symlink: whoever owns the dir could point a seat file at a file the caller can write. An existing file is
