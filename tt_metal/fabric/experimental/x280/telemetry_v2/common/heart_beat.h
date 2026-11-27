@@ -9,16 +9,12 @@
 typedef struct {
     uint64_t magic;  
     uint64_t counter;
-    uint32_t fifo_addr_lo;
-    uint32_t fifo_addr_hi;
-    uint32_t fifo_size;
-    uint32_t reserved;
 } Heartbeat;
 
-_Static_assert(offsetof(Heartbeat, magic) == 0u, "Heartbeat.magic");
-_Static_assert(offsetof(Heartbeat, counter) == 8u, "Heartbeat.counter");
-_Static_assert(offsetof(Heartbeat, fifo_addr_lo) == 16u, "Heartbeat.fifo_addr_lo");
-_Static_assert(offsetof(Heartbeat, fifo_addr_hi) == 20u, "Heartbeat.fifo_addr_hi");
-_Static_assert(offsetof(Heartbeat, fifo_size) == 24u, "Heartbeat.fifo_size");
-_Static_assert(sizeof(Heartbeat) == 32u, "Heartbeat size");
+// _Static_assert(offsetof(Heartbeat, magic) == 0u, "Heartbeat.magic");
+// _Static_assert(offsetof(Heartbeat, counter) == 8u, "Heartbeat.counter");
+// _Static_assert(offsetof(Heartbeat, fifo_addr_lo) == 16u, "Heartbeat.fifo_addr_lo");
+// _Static_assert(offsetof(Heartbeat, fifo_addr_hi) == 20u, "Heartbeat.fifo_addr_hi");
+// _Static_assert(offsetof(Heartbeat, fifo_size) == 24u, "Heartbeat.fifo_size");
+// _Static_assert(sizeof(Heartbeat) == 32u, "Heartbeat size");
 

@@ -51,15 +51,26 @@ void heart_beat() {
     }
 }
 
+void write_data_to_socket(const uint8_t* bytes, size_t num_bytes) {
+
+}
+
 int main(uint64_t hartid) {
     if (hartid == 0) {
         g_heartbeat->counter = 0;
-        g_heartbeat->fifo_addr_lo = g_socket_config->fifo_addr_lo;
-        g_heartbeat->fifo_addr_hi = g_socket_config->fifo_addr_hi;
-        g_heartbeat->fifo_size = g_socket_config->fifo_size;
-
         x280_fence_ow();
         g_heartbeat->magic = X280_STANDALONE_HEARTBEAT_MAGIC;  
+
+        // Make sure config is there.
+        // TODO: Should we give up at some point.
+        for(;;) {
+            x280_fence_iorw();
+            if (g_socket_config.is_d2h == 1 &&
+                g_socket_config.fifo_size >= 1) {
+                break;
+            } 
+            x280_pause();
+        }
 
         uint64_t next_work = x280_mtime() + g_ticks_per_2s;
         for(;;) {

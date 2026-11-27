@@ -31,7 +31,7 @@ namespace {
 constexpr uint32_t kFifoSize = 4096;          // bytes; PCIe-aligned
 constexpr uint32_t kPageSize = 64;            // bytes per message
 constexpr uint32_t kConfigAddr = 0x08133000;  // LIM; must avoid 0x08131C00 (heartbeat) and 0x08132000 (table) TODO: Put this in a common spot, both sides need this.
-//constexpr auto kRunTime = std::chrono::seconds(30);
+constexpr auto kRunTime = std::chrono::seconds(30);
 
 std::optional<Heartbeat> read_heartbeat(
     const std::shared_ptr<x280::X280MetalTransport>& transport, 
@@ -86,25 +86,22 @@ int main() {
 
     // Check the hartbeat shit.
     if (!heart_beat.has_value()) {
+        std::cout << "No heartbeat \n";
         return 1;
+    }    
+
+    std::vector<uint32_t> page(kPageSize / sizeof(uint32_t));
+    const auto deadline = std::chrono::steady_clock::now() + kRunTime;
+    uint32_t pages_read = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (socket.has_data()) {
+            socket.read(page.data(), 1);
+            ++pages_read;
+            std::cout << "page " << pages_read << ": word0=0x" << std::hex << page[0] << std::dec << "\n";
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
     }
-
-    std::cout << "fifo size = " << heart_beat->fifo_size << "\n";
-
-    
-
-    // std::vector<uint32_t> page(kPageSize / sizeof(uint32_t));
-    // const auto deadline = std::chrono::steady_clock::now() + kRunTime;
-    // uint32_t pages_read = 0;
-    // while (std::chrono::steady_clock::now() < deadline) {
-    //     if (socket.has_data()) {
-    //         socket.read(page.data(), 1);
-    //         ++pages_read;
-    //         std::cout << "page " << pages_read << ": word0=0x" << std::hex << page[0] << std::dec << "\n";
-    //     } else {
-    //         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    //     }
-    // }
 
     // std::cout << "Read " << pages_read << " pages; device bytes_sent=" << socket.bytes_sent() << "\n";
     mesh->close();
