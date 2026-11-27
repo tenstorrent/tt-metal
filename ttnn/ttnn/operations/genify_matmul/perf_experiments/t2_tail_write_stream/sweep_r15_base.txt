@@ -1,0 +1,17 @@
+q128_gu                         107988 flat
+q128_in                          49415 bank
+q128_down                        40443 bank
+q128_out                         22577 bank
+q128_qkvg                        46830 bank
+f256_qkv                        286164 bank
+f256_attn                       107047 bank
+f256_ff1                        637646 flat
+f256_ff2                        270565 bank
+f256_ctx                        251554 bank
+f1_lin2_fp32                    172078 bank
+f1_lin2                         178180 bank
+f1_tmod                        1357429 bank
+f1_lin1                          10494 bank
+x_embedder                       48175 rect
+proj_out                         58351 rect_t
+te_qkv_bf16_hifi4               180989 bank

@@ -1,0 +1,1526 @@
+{
+ "summary": {
+  "total": 2213,
+  "supported_pass": 94,
+  "supported_fail": 1,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 2088,
+  "xpass_drift": 0,
+  "xfail_wrong_mode": 0,
+  "xfail_other": 0,
+  "invalid_skipped": 0,
+  "invalid_unexpected": 0,
+  "infeasible_skipped": 0,
+  "no_axes_found": 30
+ },
+ "note": "Compact copy of <results_dir>/verifier_report.json (full file 1.3 MB, over the repo's 500 KB limit). Non-xfail categories are listed in full; xfail_expected is summarised per blocking axis value.",
+ "xfail_expected_by_unsupported_axis_value": {
+  "alignment=K_NON_ALIGNED": 37,
+  "alignment=N_NON_ALIGNED": 28,
+  "dtype=BFLOAT8_B": 652,
+  "dtype=FLOAT32": 623,
+  "epilogue=ADDCMUL": 375,
+  "epilogue=BIAS": 382,
+  "epilogue=BIAS_RELU": 374,
+  "epilogue=SWIGLU": 377,
+  "fp32_dest_acc_en=FALSE": 937,
+  "placement=BLOCK_SHARDED": 461,
+  "placement=DRAM_SHARDED": 517,
+  "placement=HEIGHT_SHARDED": 462,
+  "weight_batch=BATCHED": 364,
+  "weight_dtype=BFLOAT4_B": 645,
+  "weight_dtype=BFLOAT8_B": 718,
+  "weight_dtype=FLOAT32": 18
+ },
+ "by_category": {
+  "supported_pass": [
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op[A1x2048_B2048x1536-alignment=m_non_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "m_non_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op[A1x1x32x1024_B1024x2048-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op[A1x384x1536_B1536x1024-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op[A1x1x2048x256_B256x512-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x256_B256x6144-alignment=m_non_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "m_non_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x6144_B6144x6144-alignment=m_non_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "m_non_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x2048x128_B128x3072-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x2048x6144_B6144x9216-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x256x6144_B6144x9216-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x2048x9216_B9216x6144-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x256x9216_B9216x6144-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x2304x6144_B6144x9216-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x2304x12288_B12288x6144-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x2048x12288_B12288x6144-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x2048x3072_B3072x128-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x1152x9216_B9216x6144-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_golden.py::test_op_loose[A1x256x15360_B15360x3072-alignment=tile_aligned-dtype=BFLOAT16-epilogue=none-fp32_dest_acc_en=True-layout=TILE-placement=interleaved-weight_batch=single-weight_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_basic_matmul",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_auto_matmul_on_subdevice",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_auto_linear_on_subdevice",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_reuse_default_grid",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_reuse_custom_grid_at_origin",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_reuse_on_subdevice",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast1d_default_grid[True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast1d_default_grid[False]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast1d_custom_grid_at_origin[4-4-True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast1d_custom_grid_at_origin[4-4-False]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast1d_custom_grid_at_origin[8-2-True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast1d_custom_grid_at_origin[8-2-False]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast1d_on_subdevice[True]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast1d_on_subdevice[False]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast2d_default_grid",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast2d_custom_grid_at_origin[4-4]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast2d_custom_grid_at_origin[4-2]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_mcast2d_on_subdevice",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_pytorch_2_0_failed_cases[784-192-576]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "m_non_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_padded_2d_matmul[1376-height]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_padded_2d_matmul[1376-width]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_padded_2d_matmul[1375-height]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_padded_2d_matmul[1375-width]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_padded_1d_matmul[True-height]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "m_non_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_padded_1d_matmul[False-height]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "m_non_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_tutorial_matmul",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_tutorial_matmul_inputs_and_output_in_l1_memory",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_core_grid",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_with_core_grid[1]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_with_core_grid[7]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_wide_matmul_with_argument_for_core_grid_set_to_device_grid[2048-2048-30-1]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "m_non_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_wide_matmul_with_argument_for_core_grid_set_to_device_grid[2048-2048-30-8]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "m_non_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_wide_matmul_with_argument_for_core_grid_set_to_device_grid[2048-2048-61-1]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "m_non_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_wide_matmul_with_argument_for_core_grid_set_to_device_grid[2048-2048-61-8]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "m_non_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_tall_matmul_with_argument_for_core_grid_set_to_device_grid[32-2048-1024-1]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_tall_matmul_with_argument_for_core_grid_set_to_device_grid[32-2048-1024-8]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_tall_matmul_with_argument_for_core_grid_set_to_device_grid[32-2048-2048-1]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_tall_matmul_with_argument_for_core_grid_set_to_device_grid[32-2048-2048-8]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_with_transpose_a_or_b[1-1-1024-64-512]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_with_transpose_and_configs[1-1-1024-64-512_0]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_with_transpose_and_configs[1-1-1024-64-512_1]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_with_transpose_and_configs[1-1-1024-64-512_2]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_with_transpose_and_configs[1-1-1024-64-512_3]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_with_transpose_and_configs[1-1-1024-64-512_4]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_falcon_query_key_value_matmul[4672-4544-128-1]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_alternating_dst_sync_mode_matmul[32-32-32]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_alternating_dst_sync_mode_matmul[32-32-128]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_alternating_dst_sync_mode_matmul[32-128-32]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_alternating_dst_sync_mode_matmul[32-128-128]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_alternating_dst_sync_mode_matmul[128-32-32]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_alternating_dst_sync_mode_matmul[128-32-128]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_alternating_dst_sync_mode_matmul[128-128-32]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_alternating_dst_sync_mode_matmul[128-128-128]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_optional_output_argument[1-1-1024-64-512]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast[32-1024-1024]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast[1024-1024-32]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in0-2,3-5,7]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in0-1,4-6,5]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in0-6,1-7,4]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in0-3,3-6,6]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in0-3,2-3,6]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in0-full_width_offset]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in1-2,3-5,7]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in1-1,4-6,5]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in1-6,1-7,4]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in1-3,3-6,6]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in1-3,2-3,6]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_on_subdevice_1d_mcast_full_grid[mcast_in1-full_width_offset]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_linear__minimal_matmul[4096-4096-4096]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_linear_granular_write_ordering[4096-512-2048]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_linear_dtypes[bf16-bf16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_linear_padded_wan_shapes[9472-5120-1280]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_linear_padded_wan_shapes[9472-5120-3456]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_linear_padded_wan_shapes[9472-3456-5120]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_linear__linear[False-1024-1024-384-batch_sizes0]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_linear_with_core_grid[False-1024-1024-384-1]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_linear_with_core_grid[False-1024-1024-384-8]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "tile_aligned",
+     "weight_batch": "single"
+    },
+    "status": "passed"
+   }
+  ],
+  "no_axes_found": [
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_regression.py::test_magnitude[small-A1x384x1536_B1536x1024]",
+    "test_name": "test_magnitude[small-A1x384x1536_B1536x1024]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_regression.py::test_magnitude[small-A1x64x16384_B16384x512]",
+    "test_name": "test_magnitude[small-A1x64x16384_B16384x512]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_regression.py::test_magnitude[small-A1x2048_B2048x1536]",
+    "test_name": "test_magnitude[small-A1x2048_B2048x1536]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_regression.py::test_magnitude[large-A1x384x1536_B1536x1024]",
+    "test_name": "test_magnitude[large-A1x384x1536_B1536x1024]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_regression.py::test_magnitude[large-A1x64x16384_B16384x512]",
+    "test_name": "test_magnitude[large-A1x64x16384_B16384x512]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_regression.py::test_magnitude[large-A1x2048_B2048x1536]",
+    "test_name": "test_magnitude[large-A1x2048_B2048x1536]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_regression.py::test_all_positive[A1x384x1536_B1536x1024]",
+    "test_name": "test_all_positive[A1x384x1536_B1536x1024]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_regression.py::test_all_positive[A1x64x16384_B16384x512]",
+    "test_name": "test_all_positive[A1x64x16384_B16384x512]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_regression.py::test_all_positive[A1x2048_B2048x1536]",
+    "test_name": "test_all_positive[A1x2048_B2048x1536]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_regression.py::test_repeated_calls_bit_identical",
+    "test_name": "test_repeated_calls_bit_identical",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-3072_0-LoFi-fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-3072_0-LoFi-fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-3072_0-LoFi-no_fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-3072_0-LoFi-no_fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-3072_1-LoFi-fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-3072_1-LoFi-fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-3072_1-LoFi-no_fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-3072_1-LoFi-no_fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-1024_0-LoFi-fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-1024_0-LoFi-fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-1024_0-LoFi-no_fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-1024_0-LoFi-no_fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-1024_1-LoFi-fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-1024_1-LoFi-fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-1024_1-LoFi-no_fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-1024_1-LoFi-no_fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-4096_0-LoFi-fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-4096_0-LoFi-fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-4096_0-LoFi-no_fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-4096_0-LoFi-no_fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-4096_1-LoFi-fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-4096_1-LoFi-fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-1024-4096_1-LoFi-no_fp32]",
+    "test_name": "test_bert_linear_batch7[2688-1024-4096_1-LoFi-no_fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-4096-1024_0-LoFi-fp32]",
+    "test_name": "test_bert_linear_batch7[2688-4096-1024_0-LoFi-fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-4096-1024_0-LoFi-no_fp32]",
+    "test_name": "test_bert_linear_batch7[2688-4096-1024_0-LoFi-no_fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-4096-1024_1-LoFi-fp32]",
+    "test_name": "test_bert_linear_batch7[2688-4096-1024_1-LoFi-fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_bert_linear_batch7[2688-4096-1024_1-LoFi-no_fp32]",
+    "test_name": "test_bert_linear_batch7[2688-4096-1024_1-LoFi-no_fp32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_tilize_hpadding_matmul",
+    "test_name": "test_tilize_hpadding_matmul",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_run_tilize_matmul_test",
+    "test_name": "test_run_tilize_matmul_test",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_ttnn_matmul[32-32-32]",
+    "test_name": "test_ttnn_matmul[32-32-32]",
+    "status": "skipped"
+   },
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_lm_head_decode_linear",
+    "test_name": "test_lm_head_decode_linear",
+    "status": "skipped"
+   }
+  ],
+  "supported_fail": [
+   {
+    "nodeid": "eval/golden_tests/genify_matmul/test_translated.py::test_matmul_same_shape_but_invalid[input_a0-input_b0]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "weight_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "placement": "interleaved",
+     "epilogue": "none",
+     "alignment": "m_non_aligned",
+     "weight_batch": "single"
+    },
+    "status": "failed",
+    "failure_category": "other"
+   }
+  ]
+ }
+}

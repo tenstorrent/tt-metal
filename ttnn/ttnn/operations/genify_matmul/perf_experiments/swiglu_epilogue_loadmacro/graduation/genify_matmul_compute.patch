@@ -1,0 +1,15 @@
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp
+@@ -249,8 +249,10 @@
+                     DataFormatReconfig::Enabled,
+                     TileAddressing::Strided),
+                 Dst::D1>{partials_dfb, StridedTileRange{swiglu_up_base, swiglu_stride}},
+-            SwiGluMul<swiglu_fp32_grade, Dst::D0, Dst::D1, Dst::D0>{},
+-            PackTile<output(cb_output_tiles, ReservePolicy::PerOuter, PushPolicy::PerOuter)>{out_dfb});
++            SwiGluMul<swiglu_fp32_grade>{},  // result lands in the up slot (D1)
++            PackTile<
++                output(cb_output_tiles, ReservePolicy::PerOuter, PushPolicy::PerOuter),
++                SwiGluMul<swiglu_fp32_grade>::out_slot>{out_dfb});
+         partials_buf.pop_front(block_tiles);
+     } else if constexpr (is_addcmul) {
+         partials_buf.wait_front(block_tiles);

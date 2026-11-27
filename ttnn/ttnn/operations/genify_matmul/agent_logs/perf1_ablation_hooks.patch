@@ -1,0 +1,80 @@
+--- a/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py
++++ b/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py
+@@ -1053,10 +1053,26 @@
+         _attach_act_stream(descriptor, writer, core_ranges, device)
+     else:
+         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
++    _ablate_hook(readers, writer, compute)  # PERF1-ABLATION (temporary; agent_logs/perf1_ablation_hooks.patch)
+     descriptor.kernels = [*readers, writer, compute]
+     return descriptor
+ 
+ 
++def _ablate_hook(readers, writer, compute):  # PERF1-ABLATION
++    import os as _os
++
++    abl = set(_os.environ.get("GENIFY_ABLATE", "").split(","))
++    rd = [("ABLATE_READS", "1")] * ("reads" in abl) + [("ABLATE_MCAST", "1")] * ("mcast" in abl)
++    for r in readers:
++        if rd:
++            r.defines = rd
++    if "writes" in abl:
++        writer.defines = [("ABLATE_WRITES", "1")]
++    cd = [("SKIP_COMPUTE", "1")] * ("matmul" in abl) + [("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1")] * ("epi" in abl)
++    if cd:
++        compute.defines = cd
++
++
+ def _attach_act_stream(descriptor, writer, core_ranges, device):
+     """R1b: one channel over the whole split (one group: every core needs every A K-block), a fixed
+     in-group injector (ACT_STREAM_INJECTOR in row-wise order) on the writer RISC's NoC. A flat split's
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_reader.cpp
+@@ -425,10 +425,18 @@
+                             if constexpr (reads_act || reads_weight) {
+                                 {
+                                     MaybeDeviceZoneScope("rd_issue");
++#ifdef ABLATE_READS
++                                    if (false) {
++#else
+                                     if (batch_valid && reads_act && load_act) {
++#endif
+                                         read_act(act_l1, a_row_base, k0, blk_rows, k_valid);
+                                     }
++#ifdef ABLATE_READS
++                                    if (false) {
++#else
+                                     if (batch_valid && reads_weight && load_weight) {
++#endif
+                                         read_weight(weight_l1, b_base, k0, k_valid, blk_cols);
+                                     }
+                                 }
+@@ -436,7 +444,11 @@
+                                 noc_async_read_barrier();  // one barrier per K-block, both operands
+                             }
+                             // R1a: A over its line, then B over its line (fixed order on every core).
++#ifdef ABLATE_MCAST
++                            if constexpr (false) {
++#else
+                             if constexpr (operand_mcast) {
++#endif
+                                 if (load_act) {
+                                     MaybeDeviceZoneScope("rd_mcast_a");
+                                     line_deliver<operand_mcast, a_sends>(
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
+@@ -220,7 +220,9 @@
+                                     (batch * tensor_m_tiles + row0 + blk_r0 + blk_row) * out_n_tiles + col0 + blk_c0;
+                                 uint32_t l1 = l1_base + r * out_block_n_tiles * o_tile_bytes;
+                                 for (uint32_t n = 0; n < blk_cols; ++n) {
++#ifndef ABLATE_WRITES
+                                     noc_async_write(l1, out_acc.get_noc_addr(page + n), o_tile_bytes);
++#endif
+                                     l1 += o_tile_bytes;
+                                 }
+                             }
+# Perf 1 ablation hooks (perf-only, apply with `git apply`, never commit applied). GENIFY_ABLATE = comma list of
+#   reads   reader R1/R1a NoC reads skipped (barrier, CB sync, mcast kept)
+#   mcast   R1a line deliveries skipped on both sides
+#   writes  writer noc_async_write skipped (wait / flush / pop kept)
+#   matmul  SKIP_COMPUTE on the compute kernel (matmul_block helper and kw walk: math+unpack LLK calls elided)
+#   epi     CKL_ELTWISE_CHAIN_SKIP_COMPUTE (eltwise_chain epilogues)

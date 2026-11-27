@@ -1,0 +1,132 @@
+--- a/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py
++++ b/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py
+@@ -104,6 +104,19 @@
+ # unpacks per K step). Measured on PERF FOCUS 1 (LoFi, block 6x28): 2x2 477.8 us vs 1x4 463.7 us, so
+ # the wide subblock stays the default.
+ SUBBLOCK_MIN_UNPACK = False
++# Progressive output knob (perf experiment progressive_output_multiblock). A one-block-per-core K-walk
++# (S2) emits its whole output -- and every core's output at once -- only after its last K-block, so the
++# write stream is a tail. Split the region into this many N-blocks (A re-delivered per N-block, the
++# cheaper operand to re-read: fewer, larger tiles than bf4b B), keep block_k, hold the whole block's
++# output in cb_output_tiles (Blocking.depth_out) so block i's epilogue never waits on its own writes,
++# and spend the freed cb_partials L1 on operand depth (<= PROGRESSIVE_MAX_DEPTH K-blocks). Requires
++# cn % block_n == 0 (no padded compute) and the same DEST subblock area. Measured on PERF FOCUS 1
++# (2048x5120x8704 bf4b LoFi swiglu, 6x28 -> 2 x 6x14, 2x2 subblock, operand depth 4): 466.6 -> 473.4 us
++# (flat, the 87 us epilogue already hides the writes), 429.8 -> 410.1 us (-4.6%) with the epilogue
++# stubbed. Regressions: 2048x5120x4160 bf4b (+20%, DM-bound), 2048x6144x3072 addcmul (+11%),
++# 256x6144x18432 R1b swiglu (+5%). 1 = off.
++PROGRESSIVE_N_BLOCKS = 1
++PROGRESSIVE_MAX_DEPTH = 4
+ Q_N_MAX = 4  # subblock quantum on core_n_tiles (a 4-tile subblock always exists)
+ # Core-assignment knob: a factorization whose per-core output tiles W are within (1 + GRID_W_SLACK)
+ # of the best W competes on aggregate DRAM read traffic (R summed over the used cores). R1 has no
+@@ -287,6 +300,9 @@
+     # ACT_STREAM_DEPTH on an R1b K-walk. The L1 solve and the CB sizes both read them here.
+     depth_act: int = DEPTH_ACT
+     depth_weight: int = DEPTH_WEIGHT
++    # cb_output_tiles depth in write batches (DEPTH_OUT, or the whole block's row groups under
++    # PROGRESSIVE_N_BLOCKS so a block's output never back-pressures its own epilogue).
++    depth_out: int = DEPTH_OUT
+ 
+     @property
+     def use_partials(self):
+@@ -552,20 +568,23 @@
+     return best
+ 
+ 
+-def _footprint(geom, bm, bn, bk, partials, out_in_place=False, depth_weight=None, act_cb=True, depth_act=None):
++def _footprint(
++    geom, bm, bn, bk, partials, out_in_place=False, depth_weight=None, act_cb=True, depth_act=None, depth_out=None
++):
+     """F(block_m, block_n, block_k) of l1_ledger.md, epilogue terms included (E_bias, E_addcmul).
+     An epilogue always needs cb_partials (the matmul's last K-block lands there). `out_in_place`: the
+     output CB is backed on the output tensor's own L1 shard (R4), so it adds no CB bytes. `act_cb` False:
+     A is consumed straight from its resident shard (R2 / single-K-shard R3), no cb_act_tiles."""
+     depth_act = DEPTH_ACT if depth_act is None else depth_act
+     depth_weight = DEPTH_WEIGHT if depth_weight is None else depth_weight
++    depth_out = DEPTH_OUT if depth_out is None else depth_out
+     sb_h, _ = choose_subblock(bm, bn, geom.dest_limit)
+     partials = partials or geom.epilogue != "none"
+     return (
+         (depth_act * bm * bk * geom.a_tile_bytes if act_cb else 0)
+         + depth_weight * bk * bn * geom.b_tile_bytes
+         + (bm * bn * geom.p_tile_bytes if partials else 0)
+-        + (0 if out_in_place else DEPTH_OUT * sb_h * geom.out_block_n(bn) * geom.o_tile_bytes)
++        + (0 if out_in_place else depth_out * sb_h * geom.out_block_n(bn) * geom.o_tile_bytes)
+         + bn * geom.row_tile_bytes  # cb_bias_row / cb_gate_row: one N-block row
+         + DEPTH_RESIDUAL * sb_h * bn * geom.r_tile_bytes  # cb_residual_tiles
+     )
+@@ -619,6 +638,44 @@
+     return None
+ 
+ 
++def _progressive_split(geom: Geometry, grid: GridChoice, budget: int, whole: "Blocking"):
++    """PROGRESSIVE_N_BLOCKS: the chosen split's S2 walk (whole region, K-walk) split into N-blocks (see
++    the knob). Applied AFTER choose_split -- ranking it inside the split choice charges the A re-reads to
++    the grid and demotes it (PERF FOCUS 1 then picked a 10x10 7x28 grid: 539.6 us). None when off, not
++    an S2 walk, or when the split would pad compute, lose DEST subblock area, miss the operand mode, or
++    not fit."""
++    nb = PROGRESSIVE_N_BLOCKS
++    cm, cn = grid.core_m_tiles, grid.core_n_tiles
++    s2 = (
++        whole.block_m_tiles == cm
++        and whole.block_n_tiles == cn
++        and whole.num_k_blocks > 1
++        and not (whole.weight_resident or whole.act_resident)
++    )
++    if nb <= 1 or whole.block_batches != 1 or grid.core_batches != 1 or not s2:
++        return None
++    bn = _round_up(_cdiv(cn, nb), geom.q_n_min)
++    if bn >= cn or cn % bn:
++        return None
++    sb_h, sb_w = choose_subblock(cm, bn, geom.dest_limit)
++    if sb_h * sb_w != whole.sb_h * whole.sb_w:
++        return None
++    depth_out = cm // sb_h  # the whole block's row groups
++    best = None
++    for depth in range(max(whole.depth_act, whole.depth_weight), PROGRESSIVE_MAX_DEPTH + 1):
++        if _footprint(geom, cm, bn, whole.block_k_tiles, True, depth_weight=depth, depth_act=depth, depth_out=depth_out) > budget:
++            break
++        best = depth
++    if best is None:
++        return None
++    blk = replace(
++        _make_blocking(geom, 1, cm, bn, whole.block_k_tiles, (best, best)), depth_out=depth_out
++    )
++    if operand_mode(geom, grid, blk) != operand_mode(geom, grid, whole):
++        return None
++    return blk
++
++
+ def _stream_depths(geom: Geometry, grid: GridChoice):
+     """ACT_STREAM_DEPTH for both operand rings when the split can run R1b (its K-walk), else None."""
+     probe = Blocking(1, grid.core_m_tiles, 1, geom.tensor_k_tiles, 1, geom.tensor_k_tiles, 1, 1)
+@@ -643,9 +700,10 @@
+         blk.use_partials,
+         depth_weight=blk.depth_weight,
+         depth_act=blk.depth_act,
++        depth_out=blk.depth_out,
+     )
+     for batch in sorted((d for d in _divisors(groups) if d <= OUT_WRITE_BATCH_ROW_GROUPS), reverse=True):
+-        if base + DEPTH_OUT * (batch - 1) * row_group_bytes <= budget:
++        if base + blk.depth_out * (batch - 1) * row_group_bytes <= budget:
+             return replace(blk, write_batch=batch)
+     return blk
+ 
+@@ -754,6 +812,7 @@
+     gx, gy = grid_size.x, grid_size.y
+     budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
+     grid, blocking = choose_split(geom, gx, gy, budget)
++    blocking = _progressive_split(geom, grid, budget, blocking) or blocking
+     return geom, grid, blocking, (gx, gy)
+ 
+ 
+@@ -915,7 +974,7 @@
+             CB_OUTPUT_TILES,
+             out.dtype,
+             geom.o_tile_bytes,
+-            DEPTH_OUT * blk.write_batch * blk.sb_h * out_block_n_tiles,
++            blk.depth_out * blk.write_batch * blk.sb_h * out_block_n_tiles,
+             core_ranges,
+         ),
+     ]

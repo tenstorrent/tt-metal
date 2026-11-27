@@ -1,0 +1,295 @@
+diff --git a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
+index 678e48e..11bd911 100644
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_writer.cpp
+@@ -40,6 +40,8 @@
+ //   wr_a_inject / wr_a_receive   one R1b A K-walk (injector: reads + multicasts; receiver: acks + waits)
+ //   wr_a_barrier / wr_a_send     (Refinement 15) the fixed injector's per-K-block read barrier / multicast (incl. acks)
+ //   wr_a_rotate   one R1b A K-walk under rotating injectors (sends on this core's turns, receives otherwise)
++//   wr_a_issue    (rotating) an injector's turn reads that were not issued ahead (its slots were busy, or the paced
++//                 issue had not finished by the turn); wr_a_wait  a non-injector round's wait for the data flag
+ #include <cstdint>
+ #include "api/dataflow/dataflow_api.h"
+ #include "api/dataflow/noc.h"
+@@ -52,6 +54,8 @@
+ #include "ttnn/ttnn/operations/genify_matmul/kernels/a_segments.hpp"
+ #include "ttnn/ttnn/operations/genify_matmul/kernels/line_stream.hpp"
+ #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kschedule.hpp"
++#include "genify_matmul_rx_split.hpp"
++#include <type_traits>
+ 
+ // R1b bank-local stream (Refinement 15): output column c of a core's region is col0 + c * GM_OUT_STRIDE (the B
+ // units' bank stride, in output columns); 1 = adjacent columns.
+@@ -61,10 +65,15 @@
+ // R1b rotating injectors (Refinement 15, host ACT_STREAM_INJECTORS): the `act` channel's senders take turns, A
+ // K-block round r is read and multicast by injector r % GM_ACT_INJECTORS, each injector reading its NEXT turn (round
+ // r + injectors, the other of two transaction ids) while the others multicast, so the stream runs near the multicast
+-// rate instead of one core's read + multicast rate. When the next turn's slots are already free the read is issued
+-// BEFORE sending r (hidden under the wait for r's acks; issued after the send it holds this core's ack of round r + 1
+-// for the whole issue: 13.6 us rounds instead of ~5 on Qwen M = 128); otherwise after the send, never blocking the
+-// send on compute (blocking cost FLUX attn-out 107 -> 135 us). 1 = one fixed injector.
++// rate instead of one core's read + multicast rate. 1 = one fixed injector.
++// Tournament 2 (perf_experiments/t2p2_act_stream_rounds): the ack and the wait of a round are split
++// (genify_matmul_rx_split.hpp). An injector starts its next turn's reads only AFTER its send and after its ack of
++// round r + 1, never in front of the send (HEAD issued it before the send whenever the slots were free: ~3 us in front
++// of every first-cycle send), and issues them ONE TILE PER POLL of the data flag while it waits for the other
++// injectors' rounds: paced by its own request injection, its read responses take only the multicast's spare NoC
++// bandwidth (a burst slowed each overlapped round ~1.3 us). Turn reads still pending at the turn are issued then;
++// a turn whose slots never freed in time is issued (blocking) at the turn, never blocking a send on compute.
++// Qwen3.8 M = 128 gate_up, bank split, A alone 47.4 -> 41.6 us; FLUX context_embedder whole op 248 -> 231 us.
+ #ifndef GM_ACT_INJECTORS
+ #define GM_ACT_INJECTORS 1
+ #endif
+@@ -236,16 +245,65 @@ void kernel_main() {
+         read_act_kblock(act_ring_base + (r % act_cb_blocks) * act_block_bytes, blk_r0, blk_rows, r % num_k_blocks);
+         dataflow_kernel_lib::set_read_trid(noc, 0);
+     };
++    // Rotating injectors: this injector's next turn whose reads are not started yet (>= act_rounds: none), and the
++    // read cursor of the turn being issued one tile per poll (cur_left tiles to go; contiguous A only).
++    [[maybe_unused]] uint32_t act_pending = act_rounds;
++    [[maybe_unused]] uint32_t act_acked = 0;  // rounds below this were acked ahead (an injector's ack after its send)
++    [[maybe_unused]] uint32_t cur_turn = 0, cur_left = 0, cur_page = 0, cur_l1 = 0, cur_k = 0, cur_kv = 0;
+     if constexpr (act_stream && act_injectors > 1) {
+         if (a_sender) {
+             for (uint32_t r = 0; r < act_injectors && r < act_rounds; ++r) {
+                 if (mc_act.should_send(r)) {
+-                    issue_turn(r);  // this injector's first turn
++                    issue_turn(r);  // this injector's first turn (the ring is empty: no stream traffic yet)
++                    act_pending = r + act_injectors;
+                     break;
+                 }
+             }
+         }
+     }
++    using ActRx = std::conditional_t<
++        act_stream && (act_injectors > 1),
++        gm_rx::SplitReceiver<std::remove_cv_t<decltype(mc_act)>, get_named_compile_time_arg_val("act_rt_offset")>,
++        gm_rx::NoReceiver>;
++    [[maybe_unused]] auto cur_issue = [&](uint32_t n) {
++        dataflow_kernel_lib::set_read_trid(noc, turn_trid(cur_turn));
++        for (; n && cur_left; --n) {
++#ifndef GM_ABLATE_A
++            noc_async_read(a_acc.get_noc_addr(cur_page + cur_k), cur_l1, a_tile_bytes);
++#endif
++            cur_l1 += a_tile_bytes;
++            --cur_left;
++            if (++cur_k == cur_kv) {  // the K-block's next A row (the slot's row stride is block_k)
++                cur_k = 0;
++                cur_page += tensor_k_tiles;
++                cur_l1 += (block_k_tiles - cur_kv) * a_tile_bytes;
++            }
++        }
++        dataflow_kernel_lib::set_read_trid(noc, 0);
++    };
++    // Start the pending turn when its previous turn is sent (the two trids alternate) and its slots are free.
++    [[maybe_unused]] auto try_start_turn = [&]() {
++        const uint32_t p = act_pending;
++        if (!a_sender || cur_left != 0 || p >= act_rounds || p >= act_seq + act_injectors ||
++            !cb_pages_reservable_at_back(cb_act_tiles, (p - act_seq + 1) * act_block_tiles)) {
++            return;
++        }
++        act_pending += act_injectors;
++        if constexpr (a_segments::num > 1) {
++            MaybeDeviceZoneScope("wr_a_issue");
++            issue_turn(p);  // segmented A: one burst
++        } else {
++            uint32_t blk_r0, blk_rows;
++            round_rows(p, blk_r0, blk_rows);
++            const uint32_t j = p % num_k_blocks;
++            cur_turn = p;
++            cur_kv = (j == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
++            cur_left = blk_rows * cur_kv;
++            cur_page = (row0 + blk_r0) * tensor_k_tiles + j * block_k_tiles;
++            cur_l1 = act_ring_base + (p % act_cb_blocks) * act_block_bytes;
++            cur_k = 0;
++        }
++    };
+     // R1a split lines: this core's A row line (rotating injectors); round r = (block, K-block) of the walk.
+     constexpr uint32_t a_line_span = act_line ? mc_act.num_senders : 1;
+     // K tiles [k_lo, k_hi) of round r's A K-block (its block rows), into the slot-shaped buffer at `l1` (the line
+@@ -350,37 +408,58 @@ void kernel_main() {
+                     // lockstep and the injector multicasts its own freshly read slot to the same address.
+                     if constexpr (act_injectors > 1) {
+                         MaybeDeviceZoneScope("wr_a_rotate");
++                        ActRx rx(noc);
+                         for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+                             const uint32_t r = act_seq;
+                             if (a_sender && mc_act.should_send(r)) {
+-                                const uint32_t next = r + act_injectors;
+-                                bool next_issued = next >= act_rounds;
+-                                if (!next_issued &&
+-                                    cb_pages_reservable_at_back(cb_act_tiles, (next - act_seq + 1) * act_block_tiles)) {
++                                if (cur_left != 0 && cur_turn == r) {
+                                     MaybeDeviceZoneScope("wr_a_issue");
+-                                    issue_turn(next);  // slots free: the next turn's read hides under r's acks
+-                                    next_issued = true;
++                                    cur_issue(cur_left);  // the paced reads not issued by now
++                                }
++                                if (act_pending == r) {
++                                    MaybeDeviceZoneScope("wr_a_issue");
++                                    issue_turn(r);  // its slots were busy until now: blocking
++                                    act_pending += act_injectors;
+                                 }
+                                 {
+                                     MaybeDeviceZoneScope("wr_a_barrier");
+                                     dataflow_kernel_lib::async_read_barrier_with_trid(noc, turn_trid(r));
+                                 }
+                                 const uint32_t slot = act_ring_base + (r % act_cb_blocks) * act_block_bytes;
+-                                MaybeDeviceZoneScope("wr_a_send");
++                                {
++                                    MaybeDeviceZoneScope("wr_a_send");
+ #ifdef GM_ABLATE_A_SEND
+-                                a_sender->send(slot, slot, 32);
++                                    a_sender->send(slot, slot, 32);
+ #else
+-                                a_sender->send(slot, slot, act_block_bytes);
++                                    a_sender->send(slot, slot, act_block_bytes);
+ #endif
++                                }
+                                 cb_push_back(cb_act_tiles, act_block_tiles);
+                                 ++act_seq;
+-                                if (!next_issued) {
+-                                    issue_turn(next);  // after the send: compute frees the slots meanwhile
++                                // Round r + 1's ack BEFORE this injector starts its next turn (the ack gates r + 1's
++                                // send; this core consumed round r - 1's flag before its own turn).
++                                if (act_seq < act_rounds && !mc_act.should_send(act_seq) &&
++                                    cb_pages_reservable_at_back(cb_act_tiles, act_block_tiles)) {
++                                    rx.ack(act_seq);
++                                    act_acked = act_seq + 1;
+                                 }
++                                try_start_turn();
+                             } else {
+                                 MaybeDeviceZoneScope("wr_a_recv1");
+-                                cb_reserve_back(cb_act_tiles, act_block_tiles);
+-                                a_receiver->receive(r);
++                                if (act_acked <= r) {
++                                    cb_reserve_back(cb_act_tiles, act_block_tiles);
++                                    rx.ack(r);
++                                }
++                                try_start_turn();
++                                {
++                                    MaybeDeviceZoneScope("wr_a_wait");
++                                    while (!rx.ready(r)) {
++                                        if (cur_left != 0) {
++                                            cur_issue(1);  // one read per poll: paced by the NoC's own injection
++                                        }
++                                    }
++                                    rx.wait(r);
++                                }
+                                 cb_push_back(cb_act_tiles, act_block_tiles);
+                                 ++act_seq;
+                             }
+diff --git a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_rx_split.hpp b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_rx_split.hpp
+new file mode 100644
+index 0000000..875bb52
+--- /dev/null
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_rx_split.hpp
+@@ -0,0 +1,108 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++#pragma once
++
++// R1b rotating A stream: a multicast receiver whose readiness ACK and data WAIT are separate calls
++// (tournament 2, perf_experiments/t2p2_act_stream_rounds).
++//
++// RAW justification (bypasses dataflow_kernel_lib ReceiverPipe::receive(round), mcast_pipe.inl): receive() fuses
++// "ack round r's sender" with "wait for round r's data", so an injector could not ack round r + 1 and THEN spend
++// ~3 us of RISC time issuing its next turn's A reads: either the issue sat in front of its own send (HEAD: issued
++// before the send whenever the next turn's slots were free -- every first-cycle round) or in front of its ack of
++// round r + 1 (which gates round r + 1's send). With the two halves apart the issue leaves the critical path, and a
++// core polls the data-ready flag itself, so an injector issues its next turn's reads one tile per poll while it
++// waits for the other injectors' rounds. The mechanism is the pipe's own: consumer_ready.up(sender of round r), then
++// wait / clear the data-ready flag, from the same semaphore bindings and sender coordinate table the pipe uses
++// (template-parameter extraction from McastArgs::ReceiverPipeType: nothing is duplicated host-side). The protocol is
++// unchanged -- a core acks round r only after it consumed round r - 1's flag -- so this is a pure reordering of the
++// RISC's work. Helper follow-up: ReceiverPipe::receive_ack(round) / ready(round) / receive_wait(round).
++
++#include <cstdint>
++#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
++
++namespace gm_rx {
++
++template <typename T>
++struct RxTraits;
++
++template <
++    typename DataReadyBinding,
++    bool PRE_HANDSHAKE,
++    typename ConsumerReadyBinding,
++    dataflow_kernel_lib::DataReadySignal SIGNAL,
++    uint32_t NUM_SENDERS,
++    typename SenderCoordinates>
++struct RxTraits<dataflow_kernel_lib::detail::ReceiverPipeImpl<
++    DataReadyBinding,
++    PRE_HANDSHAKE,
++    ConsumerReadyBinding,
++    SIGNAL,
++    NUM_SENDERS,
++    SenderCoordinates>> {
++    using DataReady = DataReadyBinding;
++    using ConsumerReady = ConsumerReadyBinding;
++    using Coords = SenderCoordinates;
++    static constexpr bool pre_handshake = PRE_HANDSHAKE;
++    static constexpr dataflow_kernel_lib::DataReadySignal signal = SIGNAL;
++    static constexpr uint32_t num_senders = NUM_SENDERS;
++};
++
++// Stand-in for writers without a rotating A stream (kernel_main is not a template: both faces must compile).
++struct NoReceiver {
++    FORCE_INLINE explicit NoReceiver(const Noc&) {}
++    FORCE_INLINE void ack(uint32_t) {}
++    FORCE_INLINE bool ready(uint32_t) const { return true; }
++    FORCE_INLINE void wait(uint32_t) {}
++};
++
++// MC = the McastArgs type, RT_BASE its runtime-arg offset. receive(r) == ack(r); wait(r).
++template <typename MC, uint32_t RT_BASE>
++class SplitReceiver {
++    using T = RxTraits<typename MC::ReceiverPipeType>;
++    static_assert(T::pre_handshake, "the split ack needs the receiver handshake");
++    static constexpr bool counter = T::signal == dataflow_kernel_lib::DataReadySignal::Counter;
++
++public:
++    FORCE_INLINE explicit SplitReceiver(const Noc& noc) :
++        noc_(noc),
++        data_ready_(dataflow_kernel_lib::detail::make_mcast_semaphore<typename T::DataReady{}>()),
++        consumer_ready_(dataflow_kernel_lib::detail::make_mcast_semaphore<typename T::ConsumerReady{}>()),
++        coords_(dataflow_kernel_lib::detail::PositionalMcastRuntime<RT_BASE>::coordinates(
++            MC::runtime_layout.sender_coordinates)) {}
++
++    // "My slot for round r is free": increment round r's sender's consumer-ready counter. Call it only after
++    // wait(r - 1) (Flag: the sender may set this core's flag as soon as every core acked).
++    FORCE_INLINE void ack(uint32_t round) {
++        const uint32_t s = round % T::num_senders;
++        consumer_ready_.up(
++            noc_,
++            coords_[dataflow_kernel_lib::mcast_wire::SENDER_COORD_WORDS * s + dataflow_kernel_lib::mcast_wire::SENDER_X],
++            coords_[dataflow_kernel_lib::mcast_wire::SENDER_COORD_WORDS * s + dataflow_kernel_lib::mcast_wire::SENDER_Y],
++            1);
++    }
++    // Non-blocking: has round r's data landed?
++    FORCE_INLINE bool ready(uint32_t round) const {
++        if constexpr (counter) {
++            return data_ready_.value() >= round + 1;
++        } else {
++            return data_ready_.value() == VALID;
++        }
++    }
++    // Wait for round r's data and consume its signal.
++    FORCE_INLINE void wait(uint32_t round) {
++        if constexpr (counter) {
++            data_ready_.wait_min(round + 1);
++        } else {
++            data_ready_.wait(VALID);
++            data_ready_.set(INVALID);
++        }
++    }
++
++private:
++    Noc noc_;
++    decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<typename T::DataReady{}>()) data_ready_;
++    decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<typename T::ConsumerReady{}>()) consumer_ready_;
++    typename T::Coords coords_;
++};
++
++}  // namespace gm_rx

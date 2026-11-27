@@ -1,0 +1,264 @@
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kwalk.hpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kwalk.hpp
+@@ -34,6 +34,12 @@
+ //     K-block" mode (its Out target re-loads the partials into DEST per subblock, with a reconfig + copy init +
+ //     matmul re-init per subblock). Bit-identical to the walk + the whole-block identity copy.
+ //     Measured whole op (text-encoder MLP gate 512x5120x16384, bf16 x bfp8, HiFi2): 404.1 -> 379.3 us.
++//  4. stream_out takes a row-group emitter (Emit): the identity copy above (EmitCopy, the default) or the caller's
++//     epilogue -- genify_matmul streams the swiglu epilogue this way (EmitSwiglu, genify_matmul_compute.cpp,
++//     perf_experiments/t2p2_swiglu_stream_epilogue): silu(gate) * up of each fronted row group is packed one row group
++//     behind the walk. Bit-identical to the walk + the eltwise_chain epilogue over the whole block. Measured whole op:
++//     FLUX.2 single-stream FF1 2304x6144x18432 bf16 HiFi2 2157.0 -> 2097.2 us (compute-only 2130.9 -> 2069.5: the
++//     streamed SFPU passes ride the walk's math-thread slack); flat where the walk is math-issue-bound (LoFi bfp4).
+ //
+ // Dynamic throttle: the firmware flag is read once per subblock pass (stock reads it per call); a
+ // throttled pass runs the stock throttled call and the custom state is re-armed on the way back.
+@@ -42,6 +48,7 @@
+ // multi-column column walk, sb_h > sb_w > 1 -- 16-bit DEST only -- is not expressed: the caller keeps the helper).
+ 
+ #include <cstdint>
++#include <type_traits>
+ #include "api/compute/matmul.h"
+ #include "api/compute/pack.h"
+ #include "api/compute/tile_move_copy.h"
+@@ -169,11 +176,49 @@
+     }
+ }
+ 
++// stream_out row-group emitters. An emitter moves ONE fronted row group of partials (rg_tiles tiles at the read
++// pointer) into out_cb (out_tiles(rg_tiles) tiles, reserved by emit_row_group at the write pointer). init() runs after
++// the copy init (unpack A / math A2D on partials_cb, packer on out_cb's format, L1 accumulation off); the walk re-inits
++// the matmul (and its address modifiers) after every emitted row group, so an emitter may reprogram the math thread.
++struct NoEmit {};  // default: the identity copy (EmitCopy)
++template <uint32_t batch>
++struct EmitCopy {
++    static constexpr uint32_t out_tiles(uint32_t rg_tiles) { return rg_tiles; }
++    ALWI void init() const {}
++    ALWI void operator()(uint32_t partials_cb, uint32_t out_cb, uint32_t rg_tiles) const {
++        copy_tiles<batch>(partials_cb, out_cb, 0, 0, rg_tiles);
++    }
++};
++
++template <typename E>
++ALWI void emit_row_group(const E& emit, uint32_t in1_cb, uint32_t partials_cb, uint32_t out_cb, uint32_t rg_tiles) {
++    cb_wait_front(partials_cb, rg_tiles);
++    reconfig_data_format_srca(in1_cb, partials_cb);
++    copy_init(partials_cb);
++    PACK((pack_reconfig_data_format(out_cb)));
++    PACK((llk_pack_reconfig_l1_acc(0)));
++    emit.init();
++    const uint32_t ot = E::out_tiles(rg_tiles);
++    cb_reserve_back(out_cb, ot);
++    emit(partials_cb, out_cb, rg_tiles);
++    cb_push_back(out_cb, ot);
++    cb_pop_front(partials_cb, rg_tiles);
++}
++
++template <typename E, typename Emit>
++ALWI E pick_emit(const Emit& e) {
++    if constexpr (std::is_same_v<E, Emit>) {
++        return e;
++    } else {
++        return E{};
++    }
++}
++
+ // Accumulate one (in0_num_subblocks x sb_h) x (in1_num_subblocks x sb_w) block over the gm_ks K deliveries into
+ // partials_cb (fp32, packer L1 acc), tile row-major, row stride block_n. Waits / pops in0 and in1 per K-block;
+ // reserves the whole block in partials_cb before. stream_out == false: pushes it after (it ends fronted there
+-// for the epilogue). stream_out == true (epilogue none): see the head comment (3.); out_cb receives the
+-// block row group by row group (reserve / push per row group) and partials_cb ends empty.
++// for the epilogue). stream_out == true: see the head comment (3., 4.); `emit` moves the block to out_cb row group by
++// row group (reserve / push per row group: EmitCopy = identity, or the caller's epilogue) and partials_cb ends empty.
+ // Leaves packer L1 accumulation enabled (caller disables it, as with the helper).
+ template <
+     uint32_t sb_h,
+@@ -185,14 +230,16 @@
+     uint32_t last_block_k,
+     bool stream_out = false,
+     typename In0SourceFn = DefaultIn0,
+-    typename PostKBlockFn = NoPostKBlock>
++    typename PostKBlockFn = NoPostKBlock,
++    typename Emit = NoEmit>
+ ALWI void matmul_accumulate_interm(
+     uint32_t in0_cb,
+     uint32_t in1_cb,
+     uint32_t partials_cb,
+     uint32_t out_cb = 0,
+     In0SourceFn in0_source = {},
+-    PostKBlockFn post_k_block = {}) {
++    PostKBlockFn post_k_block = {},
++    Emit emit_arg = {}) {
+     constexpr uint32_t block_m = in0_num_subblocks * sb_h;
+     constexpr uint32_t block_n = in1_num_subblocks * sb_w;
+     constexpr uint32_t block_tiles = block_m * block_n;
+@@ -201,6 +248,8 @@
+     constexpr uint32_t in1_block_tiles = block_k * block_n;
+     constexpr uint32_t copy_batch = sb_h * sb_w;  // the walk's own DEST-half budget
+     static_assert(Walk<sb_h, sb_w>::contiguous, "multi-column column walk (sb_h > sb_w > 1): use the helper");
++    using E = std::conditional_t<std::is_same_v<Emit, NoEmit>, EmitCopy<copy_batch>, Emit>;
++    const E emit = pick_emit<E>(emit_arg);
+ 
+     reconfig_data_format(in1_cb, in0_cb);  // SrcA = in1, SrcB = in0
+     PACK((pack_reconfig_data_format(partials_cb)));
+@@ -249,20 +298,12 @@
+             if constexpr (stream_out) {
+                 if (last_kb) {
+                     cb_push_back(partials_cb, rg_tiles);
+-                    if (m > 0) {  // copy the previous row group, one behind the walk
+-                        cb_wait_front(partials_cb, rg_tiles);
+-                        reconfig_data_format_srca(in1_cb, partials_cb);
+-                        copy_init(partials_cb);
+-                        PACK((pack_reconfig_data_format(out_cb)));
+-                        PACK((llk_pack_reconfig_l1_acc(0)));
+-                        cb_reserve_back(out_cb, rg_tiles);
+-                        copy_tiles<copy_batch>(partials_cb, out_cb, 0, 0, rg_tiles);
+-                        cb_push_back(out_cb, rg_tiles);
+-                        cb_pop_front(partials_cb, rg_tiles);
++                    if (m > 0) {  // emit the previous row group, one behind the walk
++                        emit_row_group(emit, in1_cb, partials_cb, out_cb, rg_tiles);
+                         // back to the walk
+                         reconfig_data_format_srca(partials_cb, in1_cb);
+                         PACK((pack_reconfig_data_format(partials_cb)));
+-                        PACK((llk_pack_reconfig_l1_acc(1)));
++                        PACK((llk_pack_reconfig_l1_acc(kb > 0 ? 1 : 0)));  // a one-K-block walk never accumulates
+                         matmul_block_init(in0_cb, in1_cb, /*transpose=*/0, sb_w, sb_h, block_k);
+                         MATH((set_addrmods()));
+                     }
+@@ -274,19 +315,11 @@
+         post_k_block(kb, KS::n, last_kb);
+     }
+     if constexpr (stream_out) {
+-        // the last row group: the only serialized part of the streamed copy (the others ride the last K-block).
++        // the last row group: the only serialized part of the streamed copy / epilogue (the others ride the last K-block).
+         // PERMANENT zone (free with the profiler off); one execution per block, as the old per-block cmp_epilogue.
+         // OCCUPANCY: includes the wait on the packer's last row group and the reserve on out_cb (writer drain).
+         MaybeDeviceZoneScope("cmp_out_tail");
+-        cb_wait_front(partials_cb, rg_tiles);
+-        reconfig_data_format_srca(in1_cb, partials_cb);
+-        copy_init(partials_cb);
+-        PACK((pack_reconfig_data_format(out_cb)));
+-        PACK((llk_pack_reconfig_l1_acc(0)));
+-        cb_reserve_back(out_cb, rg_tiles);
+-        copy_tiles<copy_batch>(partials_cb, out_cb, 0, 0, rg_tiles);
+-        cb_push_back(out_cb, rg_tiles);
+-        cb_pop_front(partials_cb, rg_tiles);
++        emit_row_group(emit, in1_cb, partials_cb, out_cb, rg_tiles);
+     } else {
+         cb_push_back(partials_cb, block_tiles);
+     }
+--- a/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp
++++ b/ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_compute.cpp
+@@ -24,6 +24,15 @@
+ //                     SFPU AddBinary of the streamed residual (no DEST reuse ahead of an FPU op).
+ // The bias / gate row is waited once before the first batch's epilogue and popped after the last.
+ //
++// swiglu on the raw K-walk (tournament 2, perf_experiments/t2p2_swiglu_stream_epilogue): the epilogue is a stream_out
++// row-group emitter of kw::matmul_accumulate_interm (EmitSwiglu below), not a separate eltwise_chain pass after the
++// walk: the last K-block pushes cb_partials row group by row group and silu(gate) * up of each fronted row group is
++// packed one row group behind the walk; only the last row group stays serialized (zone cmp_out_tail). Same element
++// (SwiGluMul), same DEST layout (gate 2i, up 2i + 1, result in up), bit-identical output. RAW-LLK (copy_tile /
++// pack_tile around the chain's own SwiGluMul element instead of eltwise_chain), justified by measurement: the chain
++// cannot run per row group inside the walk's last K-block. FLUX.2 single-stream FF1 2304x6144x18432 bf16 HiFi2
++// 2157.0 -> 2097.2 us; every other swiglu cell flat (bit-identical everywhere). The helper walk (not kwalk_expressible:
++// residency, sb_h > sb_w > 1) keeps the chain epilogue below.
+ // SwiGluMul (Perf 2): rewritten as a hand-scheduled SFPLOADMACRO instruction stream -- isolated focus epilogue
+ // 61.8 -> 46.6 us (bf16 grade), fp32 grade 75.7 -> 54.9 us, same precision; RAW-LLK, justified at the head of
+ // genify_matmul_swiglu_sfpu.hpp; do NOT "fix" it back. The result now lands in the up slot (D1, out_slot).
+@@ -81,10 +90,11 @@
+ // is OCCUPANCY: cmp_matmul includes the helper's per-K-block cb_wait_front on A / B (unpack thread) and
+ // the reserve on cb_partials / cb_output_tiles (pack thread); cmp_epilogue includes the writer's
+ // back-pressure on cb_output_tiles. Ablate (SKIP_COMPUTE / CKL_ELTWISE_CHAIN_SKIP_COMPUTE) before ranking.
+-//   cmp_matmul     the block's whole K-walk (matmul_block / kw::matmul_accumulate_interm); on the epilogue-none raw
+-//                  walk it includes the streamed identity copy of the last K-block's row groups
+-//   cmp_out_tail   (epilogue-none raw walk, inside cmp_matmul) the copy of the block's last row group, after the walk
+-//   cmp_epilogue   the fused epilogue over the accumulated block (bias / swiglu / addcmul)
++//   cmp_matmul     the block's whole K-walk (matmul_block / kw::matmul_accumulate_interm); on the epilogue-none and
++//                  swiglu raw walks it includes the streamed identity copy / swiglu of the last K-block's row groups
++//   cmp_out_tail   (epilogue-none / swiglu raw walk, inside cmp_matmul) the copy / swiglu of the block's last row
++//                  group, after the walk
++//   cmp_epilogue   the fused epilogue over the accumulated block (bias / addcmul; swiglu on the helper walk only)
+ 
+ namespace ckl = compute_kernel_lib;
+ 
+@@ -197,6 +207,67 @@
+ // (the host's k_head_ramp only compacts 1 x sb_w walks).
+ static_assert(!gm_ks::compact_a || sb_h == 1, "GM_COMPACT_A needs 1 x sb_w subblocks");
+ 
++// swiglu row-group emitter of the raw K-walk (stream_out, genify_matmul_kwalk.hpp emit_row_group): one fronted row
++// group of cb_partials (sb_h rows x block_n) -> sb_h * half_n output tiles in row-major order, the chain epilogue's
++// numerics (copy_tile gate -> DEST 2i, up -> 2i + 1, SwiGluMul, pack the up slot). Pairs per DEST acquire: the walk's
++// own DEST-half budget (sb_h * sb_w tiles), two slots per output tile.
++template <bool fp32_grade>
++struct EmitSwiglu {
++    static constexpr uint32_t half_n_div = half_n > 0 ? half_n : 1;  // half_n == 0 only off the swiglu path
++    static constexpr uint32_t pairs = (sb_h * sb_w) / 2 > 0 ? (sb_h * sb_w) / 2 : 1;
++    static constexpr uint32_t out_tiles(uint32_t rg_tiles) { return rg_tiles / 2; }
++    ALWI void init() const { ckl::SwiGluMul<fp32_grade>::init(); }
++    ALWI void operator()(uint32_t partials_cb, uint32_t out_cb, uint32_t rg_tiles) const {
++        const uint32_t ot = rg_tiles / 2;
++        for (uint32_t t0 = 0; t0 < ot; t0 += pairs) {
++            const uint32_t n = ot - t0 < pairs ? ot - t0 : pairs;
++            tile_regs_acquire();
++            for (uint32_t i = 0; i < n; ++i) {
++                const uint32_t t = t0 + i;
++                // natural pairs: gate 2t, up 2t + 1; permuted halves: row t / half_n, gate row * block_n + t % half_n,
++                // up gate + half_n
++                const uint32_t gate = swiglu_natural_pairs ? 2 * t : (t / half_n_div) * block_n_tiles + (t % half_n_div);
++                copy_tile(partials_cb, gate, 2 * i);
++                copy_tile(partials_cb, gate + swiglu_up_base, 2 * i + 1);
++            }
++            for (uint32_t i = 0; i < n; ++i) {
++                ckl::SwiGluMul<fp32_grade>::exec_impl(2 * i);
++            }
++            tile_regs_commit();
++            tile_regs_wait();
++            for (uint32_t i = 0; i < n; ++i) {
++                pack_tile<true>(2 * i + 1, out_cb, t0 + i);
++            }
++            tile_regs_release();
++        }
++    }
++};
++constexpr bool swiglu_stream = is_swiglu && kwalk_expressible;
++
++// The streamed swiglu walk, in a template so a non-swiglu kernel never instantiates EmitSwiglu / the stream walk.
++template <bool on>
++ALWI void run_swiglu_stream(uint32_t own_kb) {
++    if constexpr (on) {
++        constexpr bool swiglu_fp32_grade = silu_fp32_precision && DST_ACCUM_MODE;
++        kw::matmul_accumulate_interm<
++            sb_h,
++            sb_w,
++            in0_num_subblocks,
++            in1_num_subblocks,
++            block_k_tiles,
++            num_k_blocks,
++            last_block_k_tiles,
++            /*stream_out=*/true>(
++            cb_act_tiles,
++            cb_weight_tiles,
++            cb_partials,
++            cb_output_tiles,
++            OwnShardSource{own_kb},
++            RetireOwnRoundSlot{own_kb},
++            EmitSwiglu<swiglu_fp32_grade>{});
++    }
++}
++
+ template <ckl::LastBlockTarget target>
+ ALWI void run_matmul(
+     CircularBuffer& act_buf,
+@@ -358,6 +429,12 @@
+             residual_dfb(is_addcmul ? cb_residual_tiles : cb_partials), out_dfb(cb_output_tiles);
+         for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+             for (uint32_t bi = 0; bi < block_batches; ++bi) {
++                if constexpr (swiglu_stream) {
++                    // the swiglu epilogue streamed inside the walk (cmp_matmul; its last row group: cmp_out_tail)
++                    MaybeDeviceZoneScope("cmp_matmul");
++                    run_swiglu_stream<swiglu_stream>(own_kb);
++                    continue;  // no row (bias / gate) and no residency on a swiglu raw walk
++                }
+                 {
+                     MaybeDeviceZoneScope("cmp_matmul");
+                     if constexpr (!kwalk_expressible) {
