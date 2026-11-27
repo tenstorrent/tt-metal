@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_expand: broadcast x (d_0, d_1, 1, W) along dim 2 into a new DRAM-interleaved TILE tensor.
+"""g6_expand: x (d_0, d_1, 1, W) broadcast along dim 2 to (d_0, d_1, H_out, W), bit-exact.
 
-out[n, c, h, w] = x[n, c, 0, w], bit-identical. One device program per call: the
-`column_group_broadcast` regime (op_design.md) — each column group's sender reads its x pages once,
-expands row 0 of each tile into all 32 rows in L1, and multicasts the expanded tiles along its grid
-row; every core of the rectangle writes its own out tile rows of those columns.
+One device program per call (regime ``column_group_broadcast``, op_design.md): column groups
+along grid y each read their x pages once, expand row 0 of every page into a full tile in
+place, multicast the expanded tiles along their grid row, and every core of the rectangle
+writes its own out rows of those columns.
 """
 
 from __future__ import annotations
@@ -16,13 +16,9 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .g6_expand_program_descriptor import (
-    DEFAULT_KNOBS,
-    TILE_FACE_SHAPE,
-    TILE_SHAPE,
-    PlanKnobs,
-    bind_tensor_addresses,
-    get_program_artifacts,
-    plan_report,
+    REGIME,
+    bind_buffer_addresses,
+    create_program_descriptor,
     select_plan,
 )
 
@@ -32,14 +28,13 @@ from .g6_expand_program_descriptor import (
 # ---------------------------------------------------------------------------
 
 
-def _output_shape(shape, sizes):
+def _resolved_out_shape(shape, sizes):
     return [int(d) if int(s) == -1 else int(s) for d, s in zip(shape, sizes)]
 
 
 def tag_alignment(inputs, axes):
-    """Tile alignment of the OUTPUT shape (sizes with every -1 replaced by x's size)."""
     scenario = inputs[0]
-    out_shape = _output_shape(scenario["shape"], scenario["sizes"])
+    out_shape = _resolved_out_shape(scenario["shape"], scenario["sizes"])
     if out_shape[-1] % 32:
         return "w_non_aligned"
     if out_shape[-2] % 32:
@@ -75,26 +70,23 @@ EXCLUSIONS = []
 # ---------------------------------------------------------------------------
 
 
-def _check_call_contract(input_tensor, sizes):
-    """Input requirements of the contract; violations are caller errors (ValueError)."""
+def validate(input_tensor, sizes):
     shape = list(input_tensor.shape)
+    sizes = list(sizes)
     if len(shape) != 4:
-        raise ValueError(f"g6_expand: input must have rank 4, got rank {len(shape)}")
-    if not isinstance(sizes, (list, tuple)):
-        raise ValueError(f"g6_expand: sizes must be a list or tuple, got {type(sizes).__name__}")
-    sizes = [int(s) for s in sizes]
+        raise ValueError(f"g6_expand: input must have rank 4, got shape {shape}")
     if len(sizes) != len(shape):
-        raise ValueError(f"g6_expand: sizes {sizes} must have the rank of the input ({len(shape)})")
+        raise ValueError(f"g6_expand: sizes {sizes} must have the input's rank {len(shape)}")
     for s in sizes:
-        if s < -1 or s == 0:
-            raise ValueError(f"g6_expand: sizes {sizes} holds {s}; every size must be -1 or >= 1")
+        if int(s) < -1 or int(s) == 0:
+            raise ValueError(f"g6_expand: sizes {sizes} must hold -1 or positive ints")
     for k, (d, s) in enumerate(zip(shape, sizes)):
-        if d != 1 and s not in (-1, d):
+        if d != 1 and int(s) not in (-1, d):
             raise ValueError(f"g6_expand: sizes[{k}]={s} differs from the input's non-unit size {d}")
-        if k != 2 and d == 1 and s not in (-1, 1):
-            raise ValueError(f"g6_expand: sizes[{k}]={s} expands dim {k}; only dim 2 may be expanded")
+        if k != 2 and d == 1 and int(s) not in (-1, 1):
+            raise ValueError(f"g6_expand: only dim 2 may be expanded, got sizes[{k}]={s}")
     if shape[2] != 1:
-        raise ValueError(f"g6_expand: the input must hold one row per image (dim 2 == 1), got {shape[2]}")
+        raise ValueError(f"g6_expand: input dim 2 must be 1, got shape {shape}")
     if not ttnn.is_tensor_storage_on_device(input_tensor):
         raise ValueError("g6_expand: input must be on a device")
     memory_config = input_tensor.memory_config()
@@ -105,22 +97,16 @@ def _check_call_contract(input_tensor, sizes):
         raise ValueError(f"g6_expand: input must be DRAM interleaved, got {memory_config}")
     if input_tensor.layout == ttnn.TILE_LAYOUT:
         tile = input_tensor.tile
-        if list(tile.tile_shape) != list(TILE_SHAPE) or list(tile.face_shape) != list(TILE_FACE_SHAPE):
+        if list(tile.tile_shape) != [32, 32] or list(tile.face_shape) != [16, 16]:
             raise ValueError(
-                f"g6_expand: tile {list(tile.tile_shape)} / face {list(tile.face_shape)} is not "
-                f"{list(TILE_SHAPE)} / {list(TILE_FACE_SHAPE)}"
+                f"g6_expand: tile {list(tile.tile_shape)} / face {list(tile.face_shape)} must be 32x32 / 16x16"
             )
-    return sizes
-
-
-def validate(input_tensor, sizes):
-    sizes = _check_call_contract(input_tensor, sizes)
 
     axes = {
         "dtype": input_tensor.dtype,
         "layout": input_tensor.layout,
     }
-    scenario = {"shape": list(input_tensor.shape), "sizes": list(sizes)}
+    scenario = {"shape": shape, "sizes": sizes}
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger((scenario,), axes)
 
@@ -132,22 +118,78 @@ def validate(input_tensor, sizes):
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"g6_expand: unsupported combination (refinement candidate): {exc}")
 
-    return sizes
+
+# ---------------------------------------------------------------------------
+# Program artifact cache (BB-07): one descriptor per key; a hit only binds addresses.
+# ---------------------------------------------------------------------------
+
+_PROGRAM_CACHE = {}
+
+
+def _cache_key(input_tensor, out_shape):
+    device = input_tensor.device()
+    grid = device.compute_with_storage_grid_size()
+    memory_config = input_tensor.memory_config()
+    return (
+        tuple(input_tensor.padded_shape),
+        tuple(out_shape),
+        input_tensor.dtype,
+        input_tensor.layout,
+        tuple(input_tensor.tile.tile_shape),
+        memory_config.buffer_type,
+        memory_config.memory_layout,
+        device.id(),
+        (grid.x, grid.y),
+    )
+
+
+def _plan_for(input_tensor, out_shape):
+    key = _cache_key(input_tensor, out_shape)
+    entry = _PROGRAM_CACHE.get(key)
+    if entry is None:
+        plan = select_plan(input_tensor, out_shape)
+        entry = {"plan": plan, "program": None}
+        _PROGRAM_CACHE[key] = entry
+    return entry
+
+
+def _report(plan):
+    keys = (
+        "num_col_groups",
+        "num_row_groups",
+        "core_src_col_tiles",
+        "core_out_row_tiles",
+        "block_src_col_tiles",
+        "block_out_row_tiles",
+        "src_block_depth",
+        "seed_rows",
+        "num_cores",
+        "l1_bytes_per_core",
+    )
+    report = {"regime": REGIME}
+    report.update({k: plan[k] for k in keys})
+    report["core_roles"] = dict(plan["core_roles"])
+    return report
+
+
+def g6_expand_plan(input_tensor: ttnn.Tensor, sizes) -> dict:
+    """The plan g6_expand(input_tensor, sizes) runs (BB-08); core_roles is the role dump (BB-21)."""
+    validate(input_tensor, sizes)
+    out_shape = _resolved_out_shape(list(input_tensor.shape), list(sizes))
+    return _report(_plan_for(input_tensor, out_shape)["plan"])
 
 
 # ---------------------------------------------------------------------------
-# Public entry points
+# Public entry point
 # ---------------------------------------------------------------------------
 
 
 def g6_expand(input_tensor: ttnn.Tensor, sizes) -> ttnn.Tensor:
-    """Return a new tensor of shape `sizes` (-1 keeps x's size) with x's row repeated along dim 2."""
-    return _g6_expand(input_tensor, sizes, DEFAULT_KNOBS)
+    validate(input_tensor, sizes)
 
+    out_shape = _resolved_out_shape(list(input_tensor.shape), list(sizes))
+    entry = _plan_for(input_tensor, out_shape)
 
-def _g6_expand(input_tensor: ttnn.Tensor, sizes, knobs: PlanKnobs) -> ttnn.Tensor:
-    sizes = validate(input_tensor, sizes)
-    out_shape = _output_shape(input_tensor.shape, sizes)
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(out_shape),
         input_tensor.dtype,
@@ -155,12 +197,10 @@ def _g6_expand(input_tensor: ttnn.Tensor, sizes, knobs: PlanKnobs) -> ttnn.Tenso
         input_tensor.device(),
         input_tensor.memory_config(),
     )
-    _, descriptor, address_slots = get_program_artifacts(input_tensor, output_tensor, out_shape, knobs)
-    bind_tensor_addresses(descriptor, address_slots, input_tensor, output_tensor)
-    return ttnn.generic_op([input_tensor, output_tensor], descriptor)
 
+    if entry["program"] is None:
+        entry["program"] = create_program_descriptor(input_tensor, output_tensor, entry["plan"])
+    program = entry["program"]
+    bind_buffer_addresses(program, input_tensor, output_tensor)
 
-def g6_expand_plan(input_tensor: ttnn.Tensor, sizes, knobs: PlanKnobs = DEFAULT_KNOBS) -> dict:
-    """The plan `g6_expand(input_tensor, sizes)` runs: regime, block knobs, core count and roles."""
-    sizes = validate(input_tensor, sizes)
-    return plan_report(select_plan(input_tensor, _output_shape(input_tensor.shape, sizes), knobs))
+    return ttnn.generic_op([input_tensor, output_tensor], program["descriptor"])
