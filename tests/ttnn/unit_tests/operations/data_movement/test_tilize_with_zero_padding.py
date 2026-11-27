@@ -2,12 +2,27 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 import ttnn
 
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import tilize_with_zero_padding
 from tests.ttnn.utils_for_testing import assert_equal
+from tt_py_test_utils_common.utility_functions import is_quasar
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_conversion_params,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    convertible_input,
+    full_range_input,
+)
 
 shapes = [[[1, 1, 30, 32]], [[3, 1, 315, 384]], [[1, 1, 100, 7104]]]
 
@@ -42,3 +57,80 @@ def test_tilize_with_zero_padding_test(input_shapes, tilize_with_zero_padding_ar
 
     torch_golden = tilize_with_zero_padding(torch_input)
     assert_equal(torch_golden, torch_output)
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.tilize_with_zero_padding))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.tilize_with_zero_padding))
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (2, 3, 50, 70),  # pads both of the last two dimensions
+        (2, 50, 64),  # pads only the second-to-last dimension
+        (1, 1, 40, 2000),  # a last dimension of more than 1024
+        (2, 2, 2, 50, 50),  # rank 5
+        (100,),  # rank 1
+    ],
+    ids=["height_and_width", "height", "wide", "rank5", "rank1"],
+)
+def test_tilize_with_zero_padding_docstring_supported_inputs(input_shape, dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.tilize_with_zero_padding docstring lists.
+
+    The data must come back unchanged. For inputs of rank 2 or more, the padded shape must be the input's padded shape
+    with the last two dimensions rounded up to multiples of 32, and the padding must hold zeros. BFLOAT16 inputs leave out NaN, as the
+    docstring requires, and -0.0 as well. An input that the docstring's Quasar rule leaves out is an xfail on
+    Quasar, without running.
+    """
+    check_readable(dtype, layout, buffer_type)
+    if is_quasar() and dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+        pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 inputs on Quasar")
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input(input_shape, dtype, nan=dtype != ttnn.bfloat16, negative_zero=dtype != ttnn.bfloat16),
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+    output = ttnn.tilize_with_zero_padding(input_tensor)
+
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert output.dtype == dtype
+    assert output.memory_config() == memory_config
+    assert list(output.shape) == list(input_shape)
+    input_values = ttnn.to_torch(input_tensor).to(torch.float64)
+    if len(input_shape) < 2:
+        # The docstring states the padded shape only for inputs of rank 2 or more.
+        assert_exact(input_values, ttnn.to_torch(output))
+        return
+    input_padded_shape = list(input_tensor.padded_shape)
+    padded_shape = [*input_padded_shape[:-2], *((size + 31) // 32 * 32 for size in input_padded_shape[-2:])]
+    assert list(output.padded_shape) == padded_shape
+    expected = torch.zeros(padded_shape, dtype=torch.float64)
+    expected[tuple(slice(0, size) for size in input_shape)] = input_values
+    assert_exact(expected, ttnn.from_device(output).to_torch_with_padded_shape())
+
+
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype", docstring_dtype_conversion_params(ttnn.tilize_with_zero_padding, "input", "output")
+)
+def test_tilize_with_zero_padding_docstring_dtype_conversions(input_dtype, output_dtype, device):
+    """Runs each output dtype the ttnn.tilize_with_zero_padding docstring lists for an input of another dtype, with values that both
+    dtypes hold exactly and no NaN or -0.0. An output that the docstring's Quasar rule leaves out
+    is an xfail on Quasar, without running."""
+    check_readable(input_dtype, output_dtype)
+    if is_quasar() and output_dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+        pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 outputs on Quasar")
+    if is_quasar() and os.getenv("TT_METAL_SIMULATOR") and (input_dtype, output_dtype) == (ttnn.bfloat16, ttnn.float32):
+        pytest.skip("Quasar ttsim does not model the BFLOAT16 to FLOAT32 packer conversion")
+    shape = (2, 3, 50, 70)
+    input_tensor = ttnn.from_torch(
+        convertible_input(shape, input_dtype, output_dtype),
+        dtype=input_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    output = ttnn.tilize_with_zero_padding(input_tensor, output_dtype=output_dtype)
+
+    assert output.dtype == output_dtype
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output))

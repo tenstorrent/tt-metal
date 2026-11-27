@@ -11,15 +11,20 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     check_readable,
+    docstring_dtype_conversion_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    convertible_input,
+    full_range_input,
+)
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
-from tt_py_test_utils_common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole, is_quasar
 
 torch.manual_seed(0)
 
@@ -1266,13 +1271,16 @@ def test_tilize_with_val_padding_docstring_supported_inputs(
     """Runs every dtype, layout and interleaved buffer type the ttnn.tilize_with_val_padding docstring lists.
 
     The output shapes follow the docstring's output_tensor_shape rules. The data must come back unchanged and the
-    padding must hold pad_value. BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value.
+    padding must hold pad_value. BFLOAT16 inputs leave out NaN, as the docstring requires, and -0.0 as well.
+    An input that the docstring's Quasar rule leaves out is an xfail on Quasar, without running.
     """
     check_readable(dtype, layout, buffer_type)
+    if is_quasar() and dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+        pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 inputs on Quasar")
     memory_config = interleaved_memory_config(buffer_type)
     pad_value = _DOCSTRING_PAD_VALUES[dtype]
     input_tensor = ttnn.from_torch(
-        full_range_input(input_shape, dtype, nan=dtype != ttnn.bfloat16),
+        full_range_input(input_shape, dtype, nan=dtype != ttnn.bfloat16, negative_zero=dtype != ttnn.bfloat16),
         dtype=dtype,
         layout=layout,
         device=device,
@@ -1288,7 +1296,7 @@ def test_tilize_with_val_padding_docstring_supported_inputs(
     expected = torch.full(output_tensor_shape, pad_value, dtype=torch.float64)
     expected[tuple(slice(0, size) for size in input_shape)] = ttnn.to_torch(input_tensor).to(torch.float64)
     actual = ttnn.from_device(output).to_torch_with_padded_shape()
-    assert_exact(expected, actual, signed_zeros=dtype != ttnn.bfloat16)
+    assert_exact(expected, actual)
 
 
 _TILIZE_VAL_MODULES = {"ttnn": ttnn, "quasar": ttnn.experimental.quasar}
@@ -1335,3 +1343,29 @@ def test_tilize_with_val_padding_returns_host_tile_input(module_name, entry):
     assert output.storage_type() == ttnn.StorageType.HOST
     assert output.layout == ttnn.TILE_LAYOUT
     assert torch.equal(ttnn.to_torch(output), torch_input)
+
+
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype", docstring_dtype_conversion_params(ttnn.tilize_with_val_padding, "input", "output")
+)
+def test_tilize_with_val_padding_docstring_dtype_conversions(input_dtype, output_dtype, device):
+    """Runs each output dtype the ttnn.tilize_with_val_padding docstring lists for an input of another dtype, with values that both
+    dtypes hold exactly and no NaN or -0.0. An output that the docstring's Quasar rule leaves out
+    is an xfail on Quasar, without running."""
+    check_readable(input_dtype, output_dtype)
+    if is_quasar() and output_dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+        pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 outputs on Quasar")
+    if is_quasar() and os.getenv("TT_METAL_SIMULATOR") and (input_dtype, output_dtype) == (ttnn.bfloat16, ttnn.float32):
+        pytest.skip("Quasar ttsim does not model the BFLOAT16 to FLOAT32 packer conversion")
+    shape = (2, 3, 50, 70)
+    input_tensor = ttnn.from_torch(
+        convertible_input(shape, input_dtype, output_dtype),
+        dtype=input_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    output = ttnn.tilize_with_val_padding(input_tensor, (2, 3, 64, 96), 0.0, dtype=output_dtype)
+
+    assert output.dtype == output_dtype
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output))
