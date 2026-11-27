@@ -2603,7 +2603,7 @@
 # K3's 1M request at 2.5k chunks; its golden is an 8192-token vLLM prompt, so the golden's 8k is PCC'd and the
 # rest of the 1M timed, as K3 does at 55k of 1M. Perf is gated against its own kimi_k3_1 sc1 baseline (24 layers are no baseline for 93).
 # [2/2] runs the same request packed: four 2,560-token chunks per forward, the production shape (kimi_k3_1_packed.json,
-# one slot fewer for the traced packed forward's scratch slot), traced with D2H acks, against the same golden, perf
+# three slots fewer: its four-chunk forward needs 43 MB/bank more at compile, and 100 ran stage 0 out of DRAM), traced with D2H acks, against the same golden, perf
 # gated on kimi_k3_1/sc1_packed in perf_baselines.json. The bound grew 60 -> 70, taken from the 8x4 GLM-5.3 SC1 job.
 - name: "(Kimi-K3.1) disaggregated prefill L24 2x[4,4] KV accuracy 8k@2.5k + perf 1M@2.5k, SC1"
   cmd: |
