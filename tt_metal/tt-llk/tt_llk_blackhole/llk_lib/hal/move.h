@@ -12,6 +12,7 @@
 #include "dev_mem_map.h"
 #include "sync.h"
 #include "utils/gpr.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::move
@@ -269,7 +270,7 @@ struct Transfer<SrcA, Dst>
     SourceValidity source_validity  = SourceValidity::Wait;
 
     /** @brief Encode the transfer when it consists of exactly one instruction. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /** @brief Describe a MOVB2D or MOVDBGB2D transfer. */
@@ -287,7 +288,7 @@ struct Transfer<SrcB, Dst>
     SourceValidity source_validity  = SourceValidity::Wait;
 
     /** @brief Encode the transfer when it consists of exactly one instruction. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /** @brief Describe a MOVD2B transfer. */
@@ -303,7 +304,7 @@ struct Transfer<Dst, SrcB>
     bool source_32bit_low           = false;
 
     /** @brief Encode the transfer when it consists of exactly one instruction. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /** @brief Describe an asynchronous LOADIND transfer from L1 to GPRs. */
@@ -316,7 +317,7 @@ struct Transfer<L1, Gpr>
     Completion completion = Completion::IssueOnly;
 
     /** @brief Encode the transfer when completion does not append a wait. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /** @brief Describe a posted STOREIND transfer from GPRs to L1. */
@@ -329,7 +330,7 @@ struct Transfer<Gpr, L1>
     Completion completion = Completion::IssueOnly;
 
     /** @brief Encode the transfer when completion does not append a wait. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /** @brief Describe a fixed-width STOREIND transfer from GPRs to SrcA. */
@@ -340,7 +341,7 @@ struct Transfer<Gpr, SrcA>
     IndirectSrcAddress destination {};
 
     /** @brief Encode the one-instruction transfer. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /** @brief Describe a fixed-width STOREIND transfer from GPRs to SrcB. */
@@ -351,7 +352,7 @@ struct Transfer<Gpr, SrcB>
     IndirectSrcAddress destination {};
 
     /** @brief Encode the one-instruction transfer. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /** @brief Describe an immediate STOREREG or indirect STOREIND MMIO write. */
@@ -363,7 +364,7 @@ struct Transfer<Gpr, Mmio>
     Completion completion = Completion::IssueOnly;
 
     /** @brief Encode the transfer when completion does not append a wait. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /** @brief Describe an asynchronous direct LOADREG MMIO read. */
@@ -375,7 +376,7 @@ struct Transfer<Mmio, Gpr>
     Completion completion = Completion::IssueOnly;
 
     /** @brief Encode the transfer when completion does not append a wait. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /** @brief Describe Blackhole's supported L1-to-L1 XMOV composite. */
@@ -387,7 +388,7 @@ struct Transfer<L1, L1>
     BlockCount16B size {};
     Completion completion = Completion::IssueOnly;
 
-    constexpr std::uint32_t get_operation() const = delete;
+    constexpr hal::Operation get_operation() const = delete;
 };
 
 namespace detail
@@ -1016,65 +1017,65 @@ inline constexpr __attribute__((always_inline)) std::uint32_t relative_row(const
     return static_cast<std::uint32_t>(offset) & 0x3ffu;
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<SrcA, Dst>::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation Transfer<SrcA, Dst>::get_operation() const
 {
     detail::validate(*this);
     hal::detail::require(detail::operation_count(*this) == 1u, "multi-instruction MOVA2D descriptors must use run()");
-    return detail::encode(*this, 0u);
+    return hal::detail::make_operation(detail::encode(*this, 0u));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<SrcB, Dst>::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation Transfer<SrcB, Dst>::get_operation() const
 {
     detail::validate(*this);
     hal::detail::require(detail::operation_count(*this) == 1u, "multi-instruction MOVB2D descriptors must use run()");
-    return detail::encode(*this, 0u);
+    return hal::detail::make_operation(detail::encode(*this, 0u));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Dst, SrcB>::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation Transfer<Dst, SrcB>::get_operation() const
 {
     detail::validate(*this);
     hal::detail::require(detail::operation_count(*this) == 1u, "multi-instruction MOVD2B descriptors must use run()");
-    return detail::encode(*this, 0u);
+    return hal::detail::make_operation(detail::encode(*this, 0u));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<L1, Gpr>::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation Transfer<L1, Gpr>::get_operation() const
 {
     detail::validate(*this);
     hal::detail::require(detail::operation_count(*this) == 1u, "completed LOADIND descriptors must use run()");
-    return detail::encode(*this);
+    return hal::detail::make_operation(detail::encode(*this));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Gpr, L1>::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation Transfer<Gpr, L1>::get_operation() const
 {
     detail::validate(*this);
     hal::detail::require(detail::operation_count(*this) == 1u, "completed STOREIND descriptors must use run()");
-    return detail::encode(*this);
+    return hal::detail::make_operation(detail::encode(*this));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Gpr, SrcA>::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation Transfer<Gpr, SrcA>::get_operation() const
 {
     detail::validate(*this);
-    return detail::encode(*this);
+    return hal::detail::make_operation(detail::encode(*this));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Gpr, SrcB>::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation Transfer<Gpr, SrcB>::get_operation() const
 {
     detail::validate(*this);
-    return detail::encode(*this);
+    return hal::detail::make_operation(detail::encode(*this));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Gpr, Mmio>::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation Transfer<Gpr, Mmio>::get_operation() const
 {
     detail::validate(*this);
     hal::detail::require(detail::operation_count(*this) == 1u, "completed MMIO-write descriptors must use run()");
-    return detail::encode(*this);
+    return hal::detail::make_operation(detail::encode(*this));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Mmio, Gpr>::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation Transfer<Mmio, Gpr>::get_operation() const
 {
     detail::validate(*this);
     hal::detail::require(detail::operation_count(*this) == 1u, "completed LOADREG descriptors must use run()");
-    return detail::encode(*this);
+    return hal::detail::make_operation(detail::encode(*this));
 }
 
 namespace detail
@@ -1083,8 +1084,7 @@ namespace detail
 template <auto Operation, std::size_t Fragment = 0u>
 inline __attribute__((always_inline)) void emit_matrix_transfer()
 {
-    constexpr std::uint32_t instruction = encode(Operation, Fragment);
-    TTI_INSN(instruction);
+    hal::detail::run_immediate<encode(Operation, Fragment)>();
 
     if constexpr (Fragment + 1u < operation_count(Operation))
     {
@@ -1125,8 +1125,7 @@ inline __attribute__((always_inline)) void run_static(const Transfer<Dst, SrcB>)
 template <auto Operation>
 inline __attribute__((always_inline)) void emit_scalar_transfer()
 {
-    constexpr std::uint32_t instruction = encode(Operation);
-    TTI_INSN(instruction);
+    hal::detail::run_immediate<encode(Operation)>();
 
     if constexpr (Operation.completion == Completion::Wait)
     {
@@ -1152,16 +1151,14 @@ template <auto Operation>
 inline __attribute__((always_inline)) void run_static(const Transfer<Gpr, SrcA>)
 {
     static_assert(detail::is_valid(Operation), "invalid GPR-to-SrcA transfer descriptor");
-    constexpr std::uint32_t instruction = encode(Operation);
-    TTI_INSN(instruction);
+    hal::detail::run_immediate<encode(Operation)>();
 }
 
 template <auto Operation>
 inline __attribute__((always_inline)) void run_static(const Transfer<Gpr, SrcB>)
 {
     static_assert(detail::is_valid(Operation), "invalid GPR-to-SrcB transfer descriptor");
-    constexpr std::uint32_t instruction = encode(Operation);
-    TTI_INSN(instruction);
+    hal::detail::run_immediate<encode(Operation)>();
 }
 
 template <auto Operation>
@@ -1189,8 +1186,7 @@ inline __attribute__((always_inline)) void run_static(const Transfer<L1, L1>)
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Buffer_size, hal::cfg::Sec::S0, Operation.size.value>(),
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Transfer_direction, hal::cfg::Sec::S0, 3u>());
 
-    constexpr std::uint32_t instruction = encode_xmov_launch();
-    TTI_INSN(instruction);
+    hal::detail::run_immediate<encode_xmov_launch()>();
 
     if constexpr (Operation.completion == Completion::Wait)
     {
@@ -1204,7 +1200,7 @@ inline __attribute__((always_inline)) void emit_runtime_matrix_transfer(
 {
     if (Fragment < count)
     {
-        TT_INSN(Fragment + 1u == count ? final_instruction : intermediate_instruction);
+        hal::run(hal::detail::make_operation(Fragment + 1u == count ? final_instruction : intermediate_instruction));
 
         if constexpr (Fragment + 1u < MaxMatrixTransferInstructions)
         {
@@ -1244,7 +1240,7 @@ template <typename Operation>
 inline __attribute__((always_inline)) void run_runtime_scalar(const Operation transfer)
 {
     validate(transfer);
-    TT_INSN(encode(transfer));
+    hal::run(hal::detail::make_operation(encode(transfer)));
     if (transfer.completion == Completion::Wait)
     {
         hal::sync::wait::stall(hal::sync::StallTarget::All, hal::sync::StallCondition::ScalarIdle);
@@ -1264,13 +1260,13 @@ inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, L1> t
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, SrcA> transfer)
 {
     validate(transfer);
-    TT_INSN(encode(transfer));
+    hal::run(hal::detail::make_operation(encode(transfer)));
 }
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, SrcB> transfer)
 {
     validate(transfer);
-    TT_INSN(encode(transfer));
+    hal::run(hal::detail::make_operation(encode(transfer)));
 }
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, Mmio> transfer)
@@ -1291,7 +1287,7 @@ inline __attribute__((always_inline)) void run_runtime(const Transfer<L1, L1> tr
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Destination_address, hal::cfg::Sec::S0>(transfer.destination.block),
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Buffer_size, hal::cfg::Sec::S0>(transfer.size.value),
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Transfer_direction, hal::cfg::Sec::S0, 3u>());
-    TT_INSN(encode_xmov_launch());
+    hal::run(hal::detail::make_operation(encode_xmov_launch()));
 
     if (transfer.completion == Completion::Wait)
     {
