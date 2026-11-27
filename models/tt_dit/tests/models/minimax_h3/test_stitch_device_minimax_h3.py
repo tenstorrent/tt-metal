@@ -319,31 +319,6 @@ def test_strip_stitch_matches_gather_stitch_bitwise(mesh_device):
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING_L1, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize("waves_per_call", [2, 4])
-def test_batched_calls_match_one_wave_per_call_bitwise(mesh_device, waves_per_call):
-    """Several waves per decoder call give the canvases of one wave per call."""
-    import numpy as np
-
-    vae, chunk = _stub_decoder_vae(mesh_device)
-    vae.stitch_exchange = "strips"
-    # 10 chunks are 9 waves at this canvas: full calls, then a single wave at either size.
-    chunks = [torch.randn_like(chunk) for _ in range(10)]
-    outputs = {}
-    for per_call in (1, waves_per_call):
-        vae.waves_per_call = per_call
-        vae._profile = vae._empty_profile()
-        outputs[per_call] = vae._decode_clips_device_stitched(chunks, "yuv420")
-        assert vae._profile["waves"] == 9, f"{vae._profile['waves']} waves"
-
-    assert len(outputs[waves_per_call]) == len(outputs[1]) == len(chunks)
-    for index, (batched, single) in enumerate(zip(outputs[waves_per_call], outputs[1])):
-        assert batched.shape == single.shape and batched.dtype == single.dtype == np.uint8
-        differing = int((batched != single).sum())
-        assert differing == 0, f"chunk {index}: {differing} of {single.size} planar bytes differ"
-
-
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING_L1, indirect=["mesh_device", "device_params"])
 def test_packed_spare_columns_match_one_chunk_per_wave_bitwise(mesh_device):
     """At a 32 px overlap (4x6 grid, two spare mesh columns) packed waves give the canvases of one chunk per wave."""
     import numpy as np

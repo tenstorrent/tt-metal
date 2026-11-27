@@ -142,23 +142,6 @@ def split_tiles(length: int, tile_size: int, min_overlap: int, ratio: int) -> tu
     return starts, [tile_size] * num_tiles, overlaps
 
 
-def wave_calls(num_waves: int, waves_per_call: int) -> list[list[int]]:
-    """Wave indices per decoder call: full calls of `waves_per_call`, then the rest one wave each.
-
-    Only two call sizes ever run, so warming one full call covers every clip length.
-    """
-    full = num_waves - num_waves % waves_per_call
-    return [list(range(i, i + waves_per_call)) for i in range(0, full, waves_per_call)] + [
-        [i] for i in range(full, num_waves)
-    ]
-
-
-def call_tokens(waves: list[torch.Tensor]) -> torch.Tensor:
-    """Waves of `(devices, tokens, channels)` as one upload: `ShardTensorToMesh(dim=0)` hands each
-    device its unit of every wave, as a batch in wave order."""
-    return waves[0] if len(waves) == 1 else torch.stack(waves, dim=1).flatten(0, 1)
-
-
 def strip_waves(num_chunks: int, grid_cols: int, mesh_cols: int, pack_spare_columns: bool = False) -> list[dict]:
     """Chunks per wave of the strip stitch.
 
@@ -324,7 +307,6 @@ class MiniMaxH3Vae:
         readback_uint8: bool = False,
         waves_per_device: int = 1,
         stitch_exchange: str = "strips",
-        waves_per_call: int = 1,
         decode_tile_overlap: int | None = None,
     ) -> None:
         if task not in ("t2va", "ref2va"):
@@ -368,9 +350,6 @@ class MiniMaxH3Vae:
         self.profile = profile
         assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
         self.waves_per_device = waves_per_device
-        # Strip stitch only: waves decoded by one decoder call, each device taking one unit of each.
-        assert waves_per_call >= 1, f"waves_per_call must be >= 1, got {waves_per_call}"
-        self.waves_per_call = waves_per_call
         self.log_profile = True
         self._encoder_state: dict[str, torch.Tensor] | None = None
         self._decoder_state: dict[str, torch.Tensor] | None = None
@@ -1204,13 +1183,9 @@ class MiniMaxH3Vae:
             profile["upload"] += time.perf_counter() - mark
             return tokens
 
-        def stage(call):
-            prepared = [prepare_host(wave) for wave in call]
-            return (
-                [n_units for n_units, _, _ in prepared],
-                prepared[0][1],
-                upload(call_tokens([b for *_, b in prepared])),
-            )
+        def stage(wave):
+            n_units, shape, batch = prepare_host(wave)
+            return n_units, shape, upload(batch)
 
         canvases = _ClipList(on_clip)
         pending: list = []
@@ -1260,64 +1235,55 @@ class MiniMaxH3Vae:
                 canvases.append(pending.pop(0).result())
                 profile["readback_join"] += time.perf_counter() - mark
 
-        calls = wave_calls(len(waves), self.waves_per_call)
-        staged = stage([waves[i] for i in calls[0]])
-        for call_index, call in enumerate(calls):
-            unit_counts, (num_frames, height, width), tokens = staged
+        staged = stage(waves[0])
+        for wave_index, wave in enumerate(waves):
+            n_units, (num_frames, height, width), tokens = staged
             staged = None
 
             mark = time.perf_counter()
-            decoded_call = decoder(tokens)
-            # The stitch below takes one unit per device, a wave at a time.
-            decoded_waves = [decoded_call] if len(call) == 1 else [entry(decoded_call, i) for i in range(len(call))]
-            del decoded_call
-            profile["device"] += time.perf_counter() - mark
+            decoded = decoder(tokens)
+            decoded = ttnn.typecast(decoded, ttnn.float32)
+            pixels = self._unpatchify(decoded, num_frames, height, width)
+            column = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
+            strip, edge = stitcher.column(column, grid_rows, y_overlaps, edge_width)
+            ttnn.deallocate(column)
+            strip = ttnn.mesh_partition(strip, dim=-2, cluster_axis=0)
+            strips = ttnn.all_gather(strip, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
+            ttnn.deallocate(strip)
+            edges = None
+            if edge is not None:
+                edge = ttnn.mesh_partition(edge, dim=-2, cluster_axis=0)
+                edges = ttnn.all_gather(edge, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
+                ttnn.deallocate(edge)
+            elapsed = time.perf_counter() - mark
+            profile["device"] += elapsed
+            profile["waves"] += 1
+            profile["units"] += n_units
 
-            for wave_index, n_units in zip(call, unit_counts):
-                wave = waves[wave_index]
-                mark = time.perf_counter()
-                decoded = ttnn.typecast(decoded_waves.pop(0), ttnn.float32)
-                pixels = self._unpatchify(decoded, num_frames, height, width)
-                column = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
-                strip, edge = stitcher.column(column, grid_rows, y_overlaps, edge_width)
-                ttnn.deallocate(column)
-                strip = ttnn.mesh_partition(strip, dim=-2, cluster_axis=0)
-                strips = ttnn.all_gather(strip, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
-                ttnn.deallocate(strip)
-                edges = None
-                if edge is not None:
-                    edge = ttnn.mesh_partition(edge, dim=-2, cluster_axis=0)
-                    edges = ttnn.all_gather(edge, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
-                    ttnn.deallocate(edge)
-                elapsed = time.perf_counter() - mark
-                profile["device"] += elapsed
-                profile["waves"] += 1
-                profile["units"] += n_units
+            if wave_index + 1 < len(waves):
+                staged = stage(waves[wave_index + 1])
 
-                if wave_index == call[0] and call_index + 1 < len(calls):
-                    staged = stage([waves[i] for i in calls[call_index + 1]])
-
-                for k in range(len(wave["mains"])):
-                    readback(row_stage(strips, edges, k * grid_cols), str(pixels.dtype))
-                if wave["extra"] is not None:
-                    held = len(wave["extra"][1])
-                    held_strips.append(entry(strips, grid_cols, held))
-                    if edges is not None:
-                        held_edges.append(entry(edges, grid_cols, held))
-                ttnn.deallocate(strips)
+            for k in range(len(wave["mains"])):
+                readback(row_stage(strips, edges, k * grid_cols), str(pixels.dtype))
+            if wave["extra"] is not None:
+                held = len(wave["extra"][1])
+                held_strips.append(entry(strips, grid_cols, held))
                 if edges is not None:
-                    ttnn.deallocate(edges)
-                if wave["flush"]:
-                    strips_e = ttnn.concat(held_strips, dim=0)
-                    edges_e = ttnn.concat(held_edges, dim=0) if held_edges else None
-                    for kept in held_strips + held_edges:
-                        ttnn.deallocate(kept)
-                    held_strips, held_edges = [], []
-                    canvas_rows = row_stage(strips_e, edges_e, 0)
-                    ttnn.deallocate(strips_e)
-                    if edges_e is not None:
-                        ttnn.deallocate(edges_e)
-                    readback(canvas_rows, str(pixels.dtype))
+                    held_edges.append(entry(edges, grid_cols, held))
+            ttnn.deallocate(strips)
+            if edges is not None:
+                ttnn.deallocate(edges)
+            if wave["flush"]:
+                strips_e = ttnn.concat(held_strips, dim=0)
+                edges_e = ttnn.concat(held_edges, dim=0) if held_edges else None
+                for kept in held_strips + held_edges:
+                    ttnn.deallocate(kept)
+                held_strips, held_edges = [], []
+                canvas_rows = row_stage(strips_e, edges_e, 0)
+                ttnn.deallocate(strips_e)
+                if edges_e is not None:
+                    ttnn.deallocate(edges_e)
+                readback(canvas_rows, str(pixels.dtype))
         if pending:
             mark = time.perf_counter()
             canvases.extend(future.result() for future in pending)

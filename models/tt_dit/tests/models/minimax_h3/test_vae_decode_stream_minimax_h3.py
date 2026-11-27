@@ -3,8 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device-free checks on `MiniMaxH3Vae._decode`'s temporal assembly: the batch path gives the frames
-the inline split did before `split_clip`, and the streamed path wires its assembly to the device decode.
-Also the planning of a decoder call that takes several waves."""
+the inline split did before `split_clip`, and the streamed path wires its assembly to the device decode."""
 
 import numpy as np
 import pytest
@@ -160,27 +159,6 @@ def test_the_streamed_decode_closes_the_assembly_when_the_device_raises(fake_str
         vae._decode(torch.zeros(1, 1, 16, 2, 2), "yuv420", on_frames=lambda frames: None)
     (stream,) = fake_stream.made
     assert stream.closed
-
-
-@pytest.mark.parametrize("waves_per_call", [1, 2, 4])
-@pytest.mark.parametrize("num_waves", [1, 8, 11, 13])
-def test_wave_calls_decode_each_wave_once_in_order(num_waves, waves_per_call):
-    calls = vm.wave_calls(num_waves, waves_per_call)
-    assert [index for call in calls for index in call] == list(range(num_waves))
-    # Full calls first, then single waves: the only two sizes the warm-up compiles.
-    sizes = [len(call) for call in calls]
-    full = num_waves // waves_per_call
-    assert sizes == [waves_per_call] * full + [1] * (num_waves - full * waves_per_call)
-
-
-def test_a_batched_call_hands_each_device_its_unit_of_every_wave():
-    devices = 32
-    waves = [torch.randn(devices, 5, 3) for _ in range(4)]
-    call = vm.call_tokens(waves)
-    # `ShardTensorToMesh(dim=0)` splits dim 0 evenly in device order.
-    for device, shard in enumerate(call.chunk(devices, dim=0)):
-        for index, wave in enumerate(waves):
-            torch.testing.assert_close(shard[index], wave[device], rtol=0, atol=0)
 
 
 @pytest.mark.parametrize(

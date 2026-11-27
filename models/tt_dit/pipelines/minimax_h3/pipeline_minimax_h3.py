@@ -1044,8 +1044,6 @@ class MiniMaxH3Pipeline:
             pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
             readback_uint8=self.vae_output_type == "uint8",
             waves_per_device=self.vae_waves_per_device,
-            # Waves per decoder call of the yuv420 strip stitch (default 1: one unit per device per call).
-            waves_per_call=int(os.environ.get("H3_VAE_WAVES_PER_CALL", "1")),
             # Decode tile overlap in px (default: the VAE's 64); set, the strip stitch also packs every spare column.
             decode_tile_overlap=int(os.environ["H3_VAE_TILE_OVERLAP"]) if "H3_VAE_TILE_OVERLAP" in os.environ else None,
         )
@@ -3111,9 +3109,7 @@ class MiniMaxH3Pipeline:
             height, width = canvas
             num_latents = chunk_latents
             if canvas == full_canvas:
-                # One full decoder call: `waves_per_call` full waves (the count is one more than it decodes).
-                chunks = self._vae.waves_per_call * (wave_size // full) + 1
-                num_latents = config.tokens_chunk_size * chunks - config.token_drop
+                num_latents = config.tokens_chunk_size * (wave_size // full + 1) - config.token_drop
             latents = torch.zeros(1, config.latent_channels, num_latents, height // ratio, width // ratio)
             self._vae.decode(latents, output_type="yuv420")
         self._host_log(f"VAE decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
