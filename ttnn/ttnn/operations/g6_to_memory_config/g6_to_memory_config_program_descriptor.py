@@ -26,6 +26,9 @@ PUSH_KERNEL = KERNEL_DIR / "g6_to_memory_config_writer.cpp"
 # Block knobs. Every CT/RT value, loop trip count and the CB capacity derive from these.
 BOUNCE_DEPTH = 2  # bounce blocks in flight: the reader fills block k+1 while the writer drains block k
 MOVERS_PER_OWNER = 1  # data-movement RISCs sharing one owner's block (1 or 2)
+# Pages per bounce NoC write: 0 = the whole run contiguous in the target (a sharded DRAM target holds a
+# shard row back to back in one bank), 1 = one write per page, N = runs capped at N pages.
+BOUNCE_WRITE_RUN_PAGES = 0
 L1_OP_BUDGET_BYTES = 1347776  # per-core L1 the model leaves the op (BB-05)
 
 CB_BOUNCE_PAGES = 0
@@ -204,6 +207,7 @@ def build_plan(input_tensor, memory_config):
         "movers_per_owner": MOVERS_PER_OWNER if regime != "bounce" else 1,
         "bounce_depth": BOUNCE_DEPTH,
         "bounce_block_pages": bounce_block_pages,
+        "bounce_write_run_pages": BOUNCE_WRITE_RUN_PAGES,
         "cb_bounce_pages": cb_pages,
         "l1_op_bytes": dst_share_pages * page_size + cb_pages * page_size,
     }
@@ -247,6 +251,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, program_hash):
             mover_index,
             CB_BOUNCE_PAGES,
             plan["bounce_block_pages"],
+            plan["bounce_write_run_pages"],
         ] + accessor_args
         runtime_args = ttnn.RuntimeArgs()
         for (x, y), args in plan["core_args"].items():
@@ -259,6 +264,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, program_hash):
                 runtime_args=runtime_args,
                 common_runtime_args=common_args,
                 config=config,
+                defines=[(d, "1") for d in __import__('os').environ.get('G6_ABLATE', '').split(',') if d],
             )
         )
 

@@ -12,7 +12,8 @@
 //   4 mover_index           this RISC's share of the owner's block, < movers_per_owner
 //   5 cb_bounce_pages       bounce staging CB (bounce walk only)
 //   6 bounce_block_pages    pages per bounce block (bounce walk only)
-//   7.. source TensorAccessorArgs, then target TensorAccessorArgs
+//   7 bounce_write_run_pages  cap on pages per bounce write; 0 = the whole run contiguous in the target
+//   8.. source TensorAccessorArgs, then target TensorAccessorArgs
 // Common runtime args: 0 source base address, 1 target base address.
 // Per-core runtime args: WALK_SHARD: [owned_shard_id]; WALK_BANK: none; WALK_BOUNCE: [start_page, core_pages].
 
@@ -37,7 +38,8 @@ constexpr uint32_t movers_per_owner = get_compile_time_arg_val(3);
 constexpr uint32_t mover_index = get_compile_time_arg_val(4);
 constexpr uint32_t cb_bounce_pages = get_compile_time_arg_val(5);
 constexpr uint32_t bounce_block_pages = get_compile_time_arg_val(6);
-constexpr auto src_args = TensorAccessorArgs<7>();
+constexpr uint32_t bounce_write_run_pages = get_compile_time_arg_val(7);
+constexpr auto src_args = TensorAccessorArgs<8>();
 constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
 static_assert(walk <= WALK_BOUNCE, "unknown walk");

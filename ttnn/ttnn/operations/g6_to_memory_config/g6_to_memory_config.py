@@ -199,6 +199,7 @@ def _cache_key(input_tensor, memory_config):
         _memory_key(memory_config),
         descriptor_module.BOUNCE_DEPTH,
         descriptor_module.MOVERS_PER_OWNER,
+        descriptor_module.BOUNCE_WRITE_RUN_PAGES,
         descriptor_module.L1_OP_BUDGET_BYTES,
     )
 

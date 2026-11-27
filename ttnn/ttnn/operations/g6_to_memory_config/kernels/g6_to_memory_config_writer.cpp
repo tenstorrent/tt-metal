@@ -62,6 +62,26 @@ FORCE_INLINE void push_bank(const Src& src, const Dst& dst) {
     }
 }
 
+// Pages from `page` (before `end`) that sit back to back in the target, so one write covers them.
+// The accessor stops a run at a shard edge and at the tensor edge, so a ragged last shard never
+// writes into its padding slots; an interleaved target (page stride = bank count) gives runs of 1.
+template <typename Dst>
+FORCE_INLINE uint32_t target_run_pages(const Dst& dst, uint32_t page, uint32_t end) {
+    if constexpr (g6::bounce_write_run_pages == 1) {
+        return 1;
+    } else {
+        if (dst.contiguous_page_stride() != 1) {
+            return 1;
+        }
+        const uint32_t run = dst.num_contiguous_pages(page, end);
+        if constexpr (g6::bounce_write_run_pages == 0) {
+            return run;
+        } else {
+            return run < g6::bounce_write_run_pages ? run : g6::bounce_write_run_pages;
+        }
+    }
+}
+
 template <typename Dst>
 FORCE_INLINE void bounce_write(const Dst& dst, uint32_t start_page, uint32_t core_pages) {
     for (uint32_t done = 0; done < core_pages;) {
@@ -74,10 +94,14 @@ FORCE_INLINE void bounce_write(const Dst& dst, uint32_t start_page, uint32_t cor
         {
             DeviceZoneScopedN("G6_BOUNCE_WR_ISSUE");
             uint32_t slot = get_read_ptr(g6::cb_bounce_pages);
-            const uint32_t first = start_page + done;
-            for (uint32_t i = 0; i < block_pages; ++i) {
-                noc_async_write(slot, dst.get_noc_addr(first + i), g6::page_size);
-                slot += g6::page_size;
+            const uint32_t end = start_page + done + block_pages;
+            for (uint32_t page = start_page + done; page < end;) {
+                const uint32_t run = target_run_pages(dst, page, end);
+#ifndef G6_ABLATE_WRITE
+                noc_async_write(slot, dst.get_noc_addr(page), run * g6::page_size);
+#endif
+                slot += run * g6::page_size;
+                page += run;
             }
         }
         {

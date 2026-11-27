@@ -77,7 +77,9 @@ FORCE_INLINE void bounce_read(const Src& src, uint32_t start_page, uint32_t core
             uint32_t slot = get_write_ptr(g6::cb_bounce_pages);
             const uint32_t first = start_page + done;
             for (uint32_t i = 0; i < block_pages; ++i) {
+#ifndef G6_ABLATE_READ
                 noc_async_read(src.get_noc_addr(first + i), slot, g6::page_size);
+#endif
                 slot += g6::page_size;
             }
         }
