@@ -19,7 +19,8 @@ whose phase is left out of the report when there is nothing to run.
 Where the steps a tier can name are defined:
 
     resets, post_test_resets  tt-smi flags: "-r" or "-glx_reset"
-    tests                     TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py
+    tests                     TESTS (gtest), PYTESTS (pytest) and DIDT_RUNNERS (tests/didt/didt_runner.py)
+                              in diag/device_tests.py
     triage                    TRIAGE_TOOLS in diag/triage.py
 
 A name that isn't defined there fails at import, so a typo stops
@@ -36,7 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from diag.device_tests import PYTESTS, TESTS
+from diag.device_tests import DIDT_RUNNERS, PYTESTS, TESTS
 from diag.resets import RESET_FLAGS
 from diag.triage import TRIAGE_TOOLS
 
@@ -47,7 +48,7 @@ class Tier:
     # stick to -glx_reset. Each is followed by a fresh snapshot, revalidated.
     resets: tuple[str, ...] = ()
 
-    # Device tests, in order: names from TESTS / PYTESTS.
+    # Device tests, in order: names from TESTS / PYTESTS / DIDT_RUNNERS.
     tests: tuple[str, ...] = ()
 
     # Reset run between the tests and the triage phase. Two reasons it sits
@@ -86,7 +87,7 @@ class Tier:
 
 _WEEKLY = Tier(
     resets=("-r", "-glx_reset", "-glx_reset"),
-    tests=("gddr_full", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
+    tests=("gddr_full", "eth_link_up", "eth_bandwidth", "didt_runner_weekly"),
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
     qsfp_tests=True,
@@ -102,10 +103,11 @@ TIERS: dict[str, Tier] = {
         eth_status=True,
         eth_summary=True,
     ),
-    # The scheduled run.
+    # The scheduled run. The DIDT runner goes last: it resets the galaxy before each of its attempts, so the gtests
+    # still see the unit as the pre-test resets left it.
     "daily": Tier(
         resets=("-r", "-glx_reset"),
-        tests=("gddr_fast", "eth_link_up", "eth_bandwidth"),
+        tests=("gddr_fast", "eth_link_up", "eth_bandwidth", "didt_runner_daily"),
         post_test_resets=("-glx_reset",),
         triage=("host_side", "device_side"),
         qsfp_tests=True,
@@ -151,7 +153,11 @@ def _validate() -> None:
         problems += [
             f"{name}: unknown post-test reset flag {f!r}" for f in tier.post_test_resets if f not in RESET_FLAGS
         ]
-        problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
+        problems += [
+            f"{name}: unknown test {t!r}"
+            for t in tier.tests
+            if t not in TESTS and t not in PYTESTS and t not in DIDT_RUNNERS
+        ]
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
         if tier.eth_summary and not tier.eth_status:
             problems.append(f"{name}: eth_summary needs eth_status")

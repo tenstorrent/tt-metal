@@ -52,6 +52,9 @@ CHECK_CATEGORY = {
     "post_reset_state_stable": "reset",
     "eth_bandwidth": "eth",
     "eth_link_up": "eth",
+    # DIDT screens are stress tests; Category has no didt value, and adding one changes the dashboard schema.
+    "didt_runner_daily": "stress_test",
+    "didt_runner_weekly": "stress_test",
 }
 STRESS_PHASE = "tests"
 
