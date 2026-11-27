@@ -4,9 +4,6 @@ on:
   schedule:
     # Every four hours, offset from :00 which GitHub sheds first under load.
     - cron: "15 */4 * * *"
-  push:
-    branches:
-      - tcheda/runner-failure-scan-prototype
   workflow_dispatch:
     inputs:
       hours:
@@ -33,6 +30,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # Slack channel ID for #runner-failure-vibe-alerts. Not a secret.
+  RUNNER_FAILURE_SCAN_CHANNEL: C0BHAKAULEN
   RUNNER_FAILURE_SCAN_WORKFLOWS: |
     # Jobs are included unless include_exact or include_prefixes is set.
     # Exclusions are applied after inclusions.
@@ -105,6 +104,8 @@ env:
 
 jobs:
   scan:
+    # Runs only from main: Slack posting uses SLACK_BOT_TOKEN.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -126,7 +127,7 @@ jobs:
         run: python3 -m pip install -r .github/scripts/runner_failure_scan_requirements.txt
 
       - name: Restore previous checked-job state
-        if: github.event_name != 'push' && github.event.inputs.force-fresh != 'true'
+        if: github.event.inputs.force-fresh != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -150,7 +151,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
-          FORCE_FRESH: ${{ github.event_name == 'push' || github.event.inputs.force-fresh == 'true' }}
+          FORCE_FRESH: ${{ github.event.inputs.force-fresh == 'true' }}
           HOURS: ${{ github.event.inputs.hours || '24' }}
         run: |
           mkdir -p out
@@ -172,8 +173,8 @@ jobs:
         if: always() && hashFiles('out/runner_failure_report.json') != ''
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          DEFAULT_SLACK_CHANNEL: ${{ secrets.RUNNER_FAILURE_SCAN_CHANNEL }}
-          POST_TO_SLACK: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event.inputs.post-to-slack == 'true' }}
+          DEFAULT_SLACK_CHANNEL: ${{ env.RUNNER_FAILURE_SCAN_CHANNEL }}
+          POST_TO_SLACK: ${{ github.event_name == 'schedule' || github.event.inputs.post-to-slack == 'true' }}
         run: |
           if [[ "$POST_TO_SLACK" != "true" ]]; then
             echo "Slack posting was not requested."
@@ -259,5 +260,6 @@ jobs:
       enrichment_jobs_json: ${{ toJson(matrix.runner.enrichment_jobs) }}
       run_enrichment: false
       hours: ${{ github.event.inputs.hours || '24' }}
-      post_to_slack: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event.inputs.post-to-slack == 'true' }}
-    secrets: inherit
+      post_to_slack: ${{ github.event_name == 'schedule' || github.event.inputs.post-to-slack == 'true' }}
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
