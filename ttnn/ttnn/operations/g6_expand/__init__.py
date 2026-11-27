@@ -5,20 +5,9 @@ from .g6_expand import (
     EXCLUSIONS,
     INPUT_TAGGERS,
     SUPPORTED,
-    ExpandPlan,
     g6_expand,
-    g6_expand_with_plan,
-    select_plan,
+    g6_expand_plan,
     validate,
 )
 
-__all__ = [
-    "g6_expand",
-    "select_plan",
-    "g6_expand_with_plan",
-    "ExpandPlan",
-    "validate",
-    "INPUT_TAGGERS",
-    "SUPPORTED",
-    "EXCLUSIONS",
-]
+__all__ = ["g6_expand", "g6_expand_plan", "validate", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS"]

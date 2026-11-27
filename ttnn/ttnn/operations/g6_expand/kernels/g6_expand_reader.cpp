@@ -1,191 +1,202 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
-//
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_expand reader (NCRISC, NoC0).
+// g6_expand reader, CT-specialized per role (NCRISC, NoC0).
 //
-// Injector (top core of a strip): load_block -> replicate_rows_block -> publish_block.
-//   The group's x pages land in the CB slot, row 0 of every page is copied into all 32 rows in
-//   place, the block goes to the local writer and is multicast down the strip into the same slot.
-// Receiver (rest of the strip): receive_block -> hand the multicast slot to the local writer.
+// Sender (core (0, y) of each column group), per block:
+//   load_source_block  - read the block's x pages into consecutive cb_expanded_tiles slots
+//   expand_rows_block  - replicate row 0 of every page into all rows, in place (E tiles)
+//   publish_block      - push the block to this core's writer, then multicast it to the group
+// Receiver (cores (1.., y)), per block:
+//   receive_block      - reserve the same slot, ack the sender, wait for the flag, push to the writer
 //
-// Every core of a strip reserves and pushes the nominal block_pages on every block, including a
-// ragged last one, so all write pointers stay in lockstep: the multicast lands at the injector's
-// slot address, which must be the slot each receiver reserved.
-//
-// replicate_rows_block has no covering kernel_lib helper: tile_column_dataflow moves a column,
-// fill_l1_range replicates a <= 4 B scalar, and a compute Row-broadcast copy passes values through
-// the unpacker/FPU/packer (no bit identity for denormals / signalling NaNs). It is built here from
-// RISC-V word stores and the self-aimed copy helpers of local_copy_helpers_dataflow.hpp.
+// Raw Noc API for the x read and the expansion: no kernel_lib helper reads tile pages into a CB, and
+// generate_index_tile writes generated values instead of copying an existing row; its
+// seed -> fence -> fan-out -> lower-face construction is reused here.
 
-#include <stdint.h>
+#include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "api/debug/kernel_profiler.hpp"
-#include "api/tile_constants.h"
 #include "ckernel.h"
-#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 namespace {
 
-constexpr uint32_t cb_row_bcast_tiles = get_compile_time_arg_val(0);
+constexpr uint32_t cb_expanded_tiles = get_compile_time_arg_val(0);
 constexpr uint32_t page_bytes = get_compile_time_arg_val(1);
-constexpr uint32_t block_pages = get_compile_time_arg_val(2);
-constexpr bool is_injector = get_compile_time_arg_val(3) != 0;
+constexpr uint32_t block_src_col_tiles = get_compile_time_arg_val(2);
+constexpr bool is_sender = get_compile_time_arg_val(3) != 0;
 constexpr uint32_t seed_rows = get_compile_time_arg_val(4);
-constexpr auto x_args = TensorAccessorArgs<5>();
+constexpr uint32_t face_rows = get_compile_time_arg_val(5);
+constexpr uint32_t face_row_bytes = get_compile_time_arg_val(6);
+constexpr uint32_t face_bytes = get_compile_time_arg_val(7);
+constexpr uint32_t faces_per_tile_row = get_compile_time_arg_val(8);
+constexpr uint32_t face_rows_per_tile = get_compile_time_arg_val(9);
+constexpr auto x_args = TensorAccessorArgs<10>();
 
-// A 32x32 tile is four 16x16 faces stored face-major, rows row-major inside a face:
-// faces 0/1 hold tile rows 0-15 (left/right half), faces 2/3 hold rows 16-31.
-using tt::constants::FACE_HEIGHT;
-constexpr uint32_t tile_faces = tt::constants::TILE_HW / tt::constants::FACE_HW;
-constexpr uint32_t face_bytes = page_bytes / tile_faces;
-constexpr uint32_t row_bytes = face_bytes / FACE_HEIGHT;
-constexpr uint32_t row_words = row_bytes / sizeof(uint32_t);
-constexpr uint32_t seed_bytes = seed_rows * row_bytes;
-constexpr uint32_t upper_faces_bytes = 2 * face_bytes;
-static_assert(seed_rows >= 1 && FACE_HEIGHT % seed_rows == 0, "seed_rows must divide the face height");
+constexpr uint32_t face_row_words = face_row_bytes / sizeof(uint32_t);
+constexpr uint32_t seed_bytes = seed_rows * face_row_bytes;
+// The top face row of a tile (faces 0 .. faces_per_tile_row - 1); every lower face row is a copy of it.
+constexpr uint32_t face_band_bytes = faces_per_tile_row * face_bytes;
 
-// Row 0 of faces 0/1 is the only source: tile rows >= 1 of x are padding, and every one of them is
-// overwritten here, so no out element depends on x padding.
-//   1. RISC-V stores copy row 0 of faces 0/1 into rows [1, seed_rows) of the same face.
-//   2. Self-aimed NoC reads copy those seed rows down the rest of faces 0/1.
-//   3. One self-aimed NoC read per page copies faces 0/1 onto faces 2/3.
-// Every page of the block goes through each step together: one fence per step per block.
-FORCE_INLINE void replicate_rows_block(const Noc& noc, uint32_t slot_addr, uint32_t pages) {
+static_assert(face_rows % seed_rows == 0, "seed_rows must divide the face height");
+static_assert(face_row_bytes % 16 == 0, "NoC self-reads need 16 B aligned face rows");
+static_assert(face_band_bytes * face_rows_per_tile == page_bytes, "face geometry must cover the page");
+
+// Only row 0 of faces 0 .. faces_per_tile_row - 1 is read; every other byte of each page is overwritten,
+// so the x padding rows never reach out.
+FORCE_INLINE void expand_rows_block(const Noc& noc, uint32_t slot_base, uint32_t extent) {
+    const uint8_t noc_id = noc.get_noc_id();
+    const uint32_t self_x = my_x[noc_id];
+    const uint32_t self_y = my_y[noc_id];
+    UnicastEndpoint local_l1;
+
     if constexpr (seed_rows > 1) {
-        // Row 0 arrived over the NoC: drop any stale data-cache line before the RISC-V loads it.
+        // Row 0 landed through the NoC; drop any cached copy of these lines before the RISC-V reads it.
         invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* last_store = nullptr;
-        for (uint32_t k = 0; k < pages; ++k) {
-            for (uint32_t f = 0; f < 2; ++f) {
+        for (uint32_t i = 0; i < extent; ++i) {
+            const uint32_t tile_addr = slot_base + i * page_bytes;
+            for (uint32_t j = 0; j < faces_per_tile_row; ++j) {
                 volatile tt_l1_ptr uint32_t* face =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr + k * page_bytes + f * face_bytes);
-                uint32_t row0[row_words];
-                for (uint32_t w = 0; w < row_words; ++w) {
-                    row0[w] = face[w];
-                }
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr + j * face_bytes);
                 for (uint32_t r = 1; r < seed_rows; ++r) {
-                    for (uint32_t w = 0; w < row_words; ++w) {
-                        face[r * row_words + w] = row0[w];
+                    for (uint32_t w = 0; w < face_row_words; ++w) {
+                        face[r * face_row_words + w] = face[w];
                     }
                 }
-                last_store = face + seed_rows * row_words - 1;
+                last_store = face + seed_rows * face_row_words - 1;
             }
         }
-        // A baby-RISC-V store can retire before it lands in L1, and the NoC is a separate L1 client
-        // with no program-order guarantee: read the last store back so all seeds are in L1 before
-        // a NoC read (step 2/3, the multicast, or the writer) sees them.
+        // A store can retire before it lands in L1, and the NoC is a separate L1 client: read the last
+        // seed word back so every seed row is in L1 before the self-reads copy it.
         (void)ckernel::load_blocking(last_store);
     }
 
-    if constexpr (seed_rows < FACE_HEIGHT) {
-        for (uint32_t k = 0; k < pages; ++k) {
-            for (uint32_t f = 0; f < 2; ++f) {
-                const uint32_t face_addr = slot_addr + k * page_bytes + f * face_bytes;
-                set_read_state<seed_bytes>(noc, face_addr);
-                for (uint32_t dst = face_addr + seed_bytes; dst < face_addr + face_bytes; dst += seed_bytes) {
-                    read_with_state<seed_bytes>(noc, dst, face_addr);
-                }
+    for (uint32_t i = 0; i < extent; ++i) {
+        const uint32_t tile_addr = slot_base + i * page_bytes;
+        for (uint32_t j = 0; j < faces_per_tile_row; ++j) {
+            const uint32_t face_addr = tile_addr + j * face_bytes;
+            for (uint32_t k = seed_rows; k < face_rows; k += seed_rows) {
+                noc.async_read(
+                    local_l1,
+                    CoreLocalMem<uint32_t>(face_addr + k * face_row_bytes),
+                    seed_bytes,
+                    {.noc_x = self_x, .noc_y = self_y, .addr = face_addr},
+                    {});
             }
         }
-        noc.async_read_barrier();
     }
+    noc.async_read_barrier();
 
-    for (uint32_t k = 0; k < pages; ++k) {
-        const uint32_t page_addr = slot_addr + k * page_bytes;
-        set_read_state<upper_faces_bytes>(noc, page_addr);
-        read_with_state<upper_faces_bytes>(noc, page_addr + upper_faces_bytes, page_addr);
+    for (uint32_t i = 0; i < extent; ++i) {
+        const uint32_t tile_addr = slot_base + i * page_bytes;
+        for (uint32_t b = 1; b < face_rows_per_tile; ++b) {
+            noc.async_read(
+                local_l1,
+                CoreLocalMem<uint32_t>(tile_addr + b * face_band_bytes),
+                face_band_bytes,
+                {.noc_x = self_x, .noc_y = self_y, .addr = tile_addr},
+                {});
+        }
     }
     noc.async_read_barrier();
 }
 
-template <typename Publish>
-FORCE_INLINE void injector_blocks(
-    const Noc& noc, CircularBuffer& cb, uint32_t group_q_start, uint32_t group_pages, Publish&& publish) {
-    const auto x = TensorAccessor(x_args, get_common_arg_val<uint32_t>(0), page_bytes);
-    uint32_t q = group_q_start;
-    for (uint32_t remaining = group_pages; remaining > 0;) {
-        const uint32_t pages = remaining < block_pages ? remaining : block_pages;
-        uint32_t slot_addr;
+template <typename Broadcast>
+FORCE_INLINE void sender_blocks(
+    const Noc& noc, CircularBuffer& cb, uint32_t x_addr, uint32_t src_start, uint32_t src_count, Broadcast broadcast) {
+    const auto x = TensorAccessor(x_args, x_addr, page_bytes);
+    for (uint32_t first = 0; first < src_count; first += block_src_col_tiles) {
+        const uint32_t extent = src_count - first < block_src_col_tiles ? src_count - first : block_src_col_tiles;
+        uint32_t slot_base;
         {
-            DeviceZoneScopedN("G6E-load");
-            cb.reserve_back(block_pages);
-            slot_addr = cb.get_write_ptr();
-            for (uint32_t k = 0; k < pages; ++k) {
-                noc.async_read(x, cb, page_bytes, {.page_id = q + k}, {.offset_bytes = k * page_bytes});
+            DeviceZoneScopedN("load_source_block");
+            // Nominal quantum on a ragged block too: sender and receivers keep their write pointers in
+            // lockstep, so the sender's slot address is every receiver's landing address.
+            cb.reserve_back(block_src_col_tiles);
+            slot_base = cb.get_write_ptr();
+            for (uint32_t i = 0; i < extent; ++i) {
+                noc.async_read(x, cb, page_bytes, {.page_id = src_start + first + i}, {.offset_bytes = i * page_bytes});
             }
             noc.async_read_barrier();
         }
         {
-            DeviceZoneScopedN("G6E-replicate");
-            replicate_rows_block(noc, slot_addr, pages);
+            DeviceZoneScopedN("expand_rows_block");
+            expand_rows_block(noc, slot_base, extent);
         }
         {
-            DeviceZoneScopedN("G6E-publish");
-            cb.push_back(block_pages);
-            publish(slot_addr, pages * page_bytes);
+            DeviceZoneScopedN("publish_block");
+            // Push first: the local writer and the multicast only read E, so they overlap. The next
+            // reserve_back cannot reuse this slot before send() has read it out.
+            cb.push_back(block_src_col_tiles);
+            broadcast(slot_base, extent * page_bytes);
         }
-        q += pages;
-        remaining -= pages;
     }
 }
 
-template <typename Bcast>
-FORCE_INLINE void run_injector(const Bcast& bcast, const Noc& noc, CircularBuffer& cb, uint32_t q0, uint32_t pages) {
-    if constexpr (Bcast::active) {
-        // send() waits for every receiver's ready-ack, multicasts the slot to the same address on
-        // the strip, then the data-ready flag; with the default source guard it returns only once
-        // the NoC has read the slot, so the next reserve_back may reuse it.
-        auto sender = bcast.sender(noc);
-        injector_blocks(
-            noc, cb, q0, pages, [&](uint32_t slot_addr, uint32_t bytes) { sender.send(slot_addr, slot_addr, bytes); });
+template <typename Channel>
+FORCE_INLINE void run_sender(const Channel& group_mcast, const Noc& noc, CircularBuffer& cb) {
+    const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t src_start = get_arg_val<uint32_t>(0);
+    const uint32_t src_count = get_arg_val<uint32_t>(1);
+    if constexpr (Channel::active) {
+        auto pipe = group_mcast.sender(noc);
+        sender_blocks(noc, cb, x_addr, src_start, src_count, [&](uint32_t slot_base, uint32_t bytes) {
+            pipe.send(slot_base, slot_base, bytes);
+        });
     } else {
-        injector_blocks(noc, cb, q0, pages, [](uint32_t, uint32_t) {});
+        sender_blocks(noc, cb, x_addr, src_start, src_count, [](uint32_t, uint32_t) {});
     }
-    DeviceZoneScopedN("G6E-drain");
-    noc.async_write_barrier();
 }
 
-template <typename Bcast>
-FORCE_INLINE void run_receiver(const Bcast& bcast, const Noc& noc, CircularBuffer& cb, uint32_t group_pages) {
-    auto receiver = bcast.receiver(noc);
-    const uint32_t num_blocks = (group_pages + block_pages - 1) / block_pages;
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        DeviceZoneScopedN("G6E-receive-wait");
-        cb.reserve_back(block_pages);
-        receiver.receive(block);
-        cb.push_back(block_pages);
+template <typename Channel>
+FORCE_INLINE void run_receiver(const Channel& group_mcast, const Noc& noc, CircularBuffer& cb) {
+    static_assert(Channel::active, "a receiver core exists only when the group multicast is present");
+    const uint32_t src_count = get_arg_val<uint32_t>(1);
+    auto pipe = group_mcast.receiver(noc);
+    uint32_t round = 0;
+    for (uint32_t first = 0; first < src_count; first += block_src_col_tiles, ++round) {
+        DeviceZoneScopedN("receive_block");
+        // The ack inside receive() is sent only after the slot is reserved, so the payload never lands
+        // in a slot the writer is still reading.
+        cb.reserve_back(block_src_col_tiles);
+        pipe.receive(round);
+        cb.push_back(block_src_col_tiles);
     }
-    // The ready-acks are remote atomic increments that receive() does not drain.
-    DeviceZoneScopedN("G6E-drain");
-    noc.async_atomic_barrier();
 }
 
-template <bool INJECTOR, typename Bcast>
-FORCE_INLINE void run(const Bcast& bcast) {
-    const uint32_t group_q_start = get_arg_val<uint32_t>(0);
-    const uint32_t group_pages = get_arg_val<uint32_t>(1);
+template <bool IS_SENDER, typename Channel>
+FORCE_INLINE void run_reader(const Channel& group_mcast) {
     Noc noc;
-    CircularBuffer cb(cb_row_bcast_tiles);
-    if constexpr (INJECTOR) {
-        run_injector(bcast, noc, cb, group_q_start, group_pages);
+    CircularBuffer cb(cb_expanded_tiles);
+    if constexpr (IS_SENDER) {
+        run_sender(group_mcast, noc, cb);
     } else {
-        run_receiver(bcast, noc, cb, group_pages);
+        run_receiver(group_mcast, noc, cb);
+    }
+    {
+        DeviceZoneScopedN("reader_drain");
+        // Multicast payload/flag writes and the receivers' ready increments must complete before the
+        // next program starts (BB-03).
+        noc.async_write_barrier();
+        noc.async_atomic_barrier();
     }
 }
 
 }  // namespace
 
 void kernel_main() {
-    constexpr auto bcast = McastArgs<
-        get_named_compile_time_arg_val("bcast_ct_offset"),
-        get_named_compile_time_arg_val("bcast_rt_offset")>();
-    run<is_injector>(bcast);
+    constexpr auto group_mcast = McastArgs<
+        get_named_compile_time_arg_val("group_mcast_ct_offset"),
+        get_named_compile_time_arg_val("group_mcast_rt_offset")>();
+    run_reader<is_sender>(group_mcast);
 }
