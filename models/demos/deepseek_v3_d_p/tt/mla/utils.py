@@ -1,7 +1,50 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
+
+import ttnn
+
+
+def l1_if_fits(shape, bytes_per_element: float, limit_bytes: int) -> ttnn.MemoryConfig:
+    """L1 interleaved for a short-lived activation of `shape` up to `limit_bytes` per chip, else DRAM: the small
+    prefill chunks (GLM-5.3: 640 local rows) keep it in L1, larger sequences don't run L1 out."""
+    nbytes = math.prod(shape) * bytes_per_element
+    return ttnn.L1_MEMORY_CONFIG if nbytes <= limit_bytes else ttnn.DRAM_MEMORY_CONFIG
+
+
+# Largest per-core block (tiles) block_norm_program_config hands the sharded program; it holds several block-sized
+# buffers per core.
+_BLOCK_NORM_MAX_TILES = 32
+
+
+def block_norm_program_config(shape, grid: ttnn.CoreCoord) -> "ttnn.LayerNormShardedMultiCoreProgramConfig | None":
+    """Sharded-program layer/RMS norm config for an interleaved [.., rows, width] TILE tensor: its tile grid split into
+    blocks over up to grid.y rows x 8 columns of cores, read and written in place by tile id. The interleaved program
+    splits only rows, one core per row tile (5 cores for 160 rows); this spreads the width as well. None (the
+    interleaved program) for rows that are not whole tiles, or blocks too large for L1."""
+    shape = list(shape)
+    if len(shape) < 2:
+        return None
+    rows, width = math.prod(shape[:-1]), shape[-1]
+    # Whole tiles per [rows, width] slice: the op pads each dimension, not their product.
+    if shape[-2] % ttnn.TILE_SIZE or width % ttnn.TILE_SIZE:
+        return None
+    mt, wt = rows // ttnn.TILE_SIZE, width // ttnn.TILE_SIZE
+    gy = max(d for d in range(1, min(mt, grid.y) + 1) if mt % d == 0)
+    gx = max(d for d in range(1, min(wt, grid.x, 8) + 1) if wt % d == 0)
+    block_w = wt // gx
+    if (mt // gy) * block_w > _BLOCK_NORM_MAX_TILES:
+        return None
+    return ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        subblock_w=max(w for w in range(1, 5) if block_w % w == 0),
+        block_h=mt // gy,
+        block_w=block_w,
+        inplace=False,
+    )
 
 
 def create_balanced_chunk_order(sp_factor: int) -> list[int]:

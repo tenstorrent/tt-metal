@@ -18,11 +18,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.cache_layout import checkpoint_cache_key
 from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 
 HARNESS = Path(__file__).with_name("run_multirank_pcc.sh")
@@ -42,7 +44,9 @@ name = Path(sys.argv[0]).name
 root = Path(os.environ["TEST_ROOT"])
 
 def record(kind):
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=root / "records", delete=False) as f:
+    # Named by the host-wide monotonic clock, so the test reads the records back in the order they were written.
+    prefix = f"{time.monotonic_ns():020d}-"
+    with tempfile.NamedTemporaryFile(mode="w", prefix=prefix, suffix=".json", dir=root / "records", delete=False) as f:
         selected_env = {key: value for key, value in os.environ.items()
                         if key.startswith(("PREFILL_", "TEST_", "TT_MESH_", "TT_METAL_OPERATION_", "OMPI_COMM_WORLD_RANK"))}
         json.dump({"kind": kind, "args": args, "env": selected_env}, f)
@@ -126,6 +130,10 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
         log = Path(os.environ["TEST_RUNNER_LOGS"]) / "1" / "rank.1" / "stderr"
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text("Traceback (most recent call last):\nRuntimeError: retrying the D2D connect\n")
+    if os.environ.get("TEST_RUNNER_SLOW_BRINGUP"):
+        # Still in bringup, silently: no table, no traceback; only the harness's wait (or its kill) ends it.
+        while True:
+            time.sleep(0.05)
     if crash != "bringup":
         Path(os.environ["PREFILL_MIGRATION_TABLE_PATH"]).touch()
     if crash:
@@ -251,20 +259,35 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
             )
         # Kimi-K3's, Kimi-K3.1's and GLM-5.3's layouts are their manifests', so the harness reads the real ones.
-        for name in ("kimi_k3.json", "kimi_k3_1.json", "glm53.json", "glm53_4x4.json", "glm53_mtp_kv_share.json"):
+        for name in (
+            "kimi_k3.json",
+            "kimi_k3_1.json",
+            "kimi_k3_1_packed.json",
+            "glm53.json",
+            "glm53_4x4.json",
+            "glm53_4x4_packed.json",
+            "glm53_mtp_kv_share.json",
+        ):
             shutil.copyfile(REPO / MANIFESTS / name, manifest_dir / name)
         checkpoint = root / "checkpoint"
         checkpoint.mkdir()
         (checkpoint / "config.json").write_text("{}")
+        # The Kimi caches are keyed by this checkpoint's index.
+        (checkpoint / "model.safetensors.index.json").write_text("{}")
+        self.checkpoint = checkpoint
+        self.root = str(root)
         cache = root / "cache"
         if not missing_cache:
             (cache / "mistral_small_4_bh_8dev/8x1").mkdir(parents=True)
-            (cache / "kimi_k3_bh_16dev/4x4_sp1").mkdir(parents=True)
-            (cache / "kimi_k3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
-            (cache / "kimi_k3_1_bh_16dev/4x4_sp1").mkdir(parents=True)
-            (cache / "kimi_k3_1_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
-            (cache / "glm_5_3_bh_16dev/4x4_sp1").mkdir(parents=True)
-            (cache / "glm_5_3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
+            # Both SP axes of each 4x4 cache: the Kimi ones under the checkpoint, at the TP axis; GLM's by mesh key.
+            for tp_axis in (0, 1):
+                for kimi in ("kimi_k3", "kimi_k3_1"):
+                    kimi_cache = cache / f"{kimi}_bh_16dev" / checkpoint_cache_key(checkpoint, (4, 4), tp_axis)
+                    kimi_cache.mkdir(parents=True)
+                    (kimi_cache / "layer_0.tensorbin").touch()
+            for key in ("4x4_sp1", "4x4"):
+                (cache / "glm_5_3_bh_16dev" / key).mkdir(parents=True)
+                (cache / "glm_5_3_bh_16dev" / key / "layer_0.tensorbin").touch()
         golden = root / "golden"
         (golden / "kv_cache").mkdir(parents=True)
         for layer in range(36):
@@ -277,6 +300,10 @@ class MultirankPccHarnessTests(unittest.TestCase):
         ci_failure = metal / "models/common/ci_failure.py"
         ci_failure.parent.mkdir(parents=True)
         shutil.copyfile(HARNESS.parents[6] / "models/common/ci_failure.py", ci_failure)
+        # Each host's pre-launch probe keys the Kimi 4x4 cache with it, from TT_METAL_HOME.
+        cache_layout = metal / "models/demos/deepseek_v3_d_p/tt/kimi_k3/cache_layout.py"
+        cache_layout.parent.mkdir(parents=True)
+        shutil.copyfile(REPO / "models/demos/deepseek_v3_d_p/tt/kimi_k3/cache_layout.py", cache_layout)
         # The 4x4 legs hand tt-run these descriptors.
         for path in (
             "models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto",
@@ -302,9 +329,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "TEST_VERDICT": verdict,
             "TEST_RUNNER_RC": str(runner_rc),
         }
-        # K3.1 demands a throughput measurement (PREFILL_REQUIRE_TPS defaults to 1 for it), so its runs
-        # report one unless a test says otherwise.
-        if model == "kimi_k3_1":
+        # K3.1 and every packed run demand a throughput measurement (PREFILL_REQUIRE_TPS defaults to 1 for them), so
+        # their runs report one unless a test says otherwise.
+        if model == "kimi_k3_1" or "packed" in args:
             env["TEST_TPS"] = "1000"
         env.update(extra_env or {})
         command = ["bash", str(harness), model]
@@ -312,7 +339,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             command.append(config)
         command.extend(args)
         result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
-        records = [json.loads(path.read_text()) for path in (root / "records").glob("*.json")]
+        records = [json.loads(path.read_text()) for path in sorted((root / "records").glob("*.json"))]
         return result, records
 
     def one_record(self, records, kind):
@@ -497,13 +524,19 @@ class MultirankPccHarnessTests(unittest.TestCase):
     KIMI_REQUEST_LEN = {"kimi_k3": 1049600, "kimi_k3_1": 1049600}
     KIMI_4X4_USERS = {"kimi_k3": "127", "kimi_k3_1": "88"}
     KIMI_8X4_USERS = {"kimi_k3": "100", "kimi_k3_1": "76"}
+    KIMI_4X4_SP_AXIS = {"kimi_k3": 1, "kimi_k3_1": 0}
 
-    def assert_kimi_4x4_cache_check(self, records, model):
-        """The pre-launch probe checks the model's own [4,4] SP-axis-1 cache under PREFILL_TTNN_CACHE, and the
-        runner reads that same root."""
+    def kimi_4x4_cache(self, model, sp_axis=1):
+        """The [4,4] cache of the checkpoint, at the TP axis (KimiK3Adapter.weight_cache_key), below the cache root."""
+        return f"/cache/{model}_bh_16dev/{checkpoint_cache_key(self.checkpoint, (4, 4), 1 - sp_axis)}"
+
+    def assert_kimi_4x4_cache_check(self, result, records, model, sp_axis=1):
+        """The pre-launch probe checks the model's own [4,4] cache for the SP axis under PREFILL_TTNN_CACHE, and the
+        runner reads that same root. The host resolves the key itself: the launcher reads nothing on Weka."""
         checks = [r for r in records if r["kind"] == "mpi" and "no 4x4 weight cache" in r["args"][-1]]
         self.assertEqual(len(checks), 1, records)
-        self.assertIn(f"/cache/{model}_bh_16dev/4x4_sp1", checks[0]["args"][-1])
+        self.assertIn("python3 -m models.demos.deepseek_v3_d_p.tt.kimi_k3.cache_layout", checks[0]["args"][-1])
+        self.assertIn(f"4x4 weight cache {self.root}{self.kimi_4x4_cache(model, sp_axis)}", result.stdout)
         self.assertTrue(self.one_record(records, "runner")["env"]["PREFILL_TTNN_CACHE"].endswith("/cache"))
 
     def test_kimi_sc4_is_eight_4x4_stages_from_the_manifest(self):
@@ -525,7 +558,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertTrue(runner["PREFILL_MANIFEST"].endswith(f"manifests/{model}.json"))
         for key in ("PREFILL_SP", "PREFILL_TP", "PREFILL_SP_AXIS", "PREFILL_NUM_USERS"):
             self.assertNotIn(key, runner, key)
-        self.assert_kimi_4x4_cache_check(records, model)
+        self.assert_kimi_4x4_cache_check(result, records, model, self.KIMI_4X4_SP_AXIS[model])
         producer = self.one_record(records, "producer")["env"]
         self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith(f"manifests/{model}.json"))
         # The manifest's 2560-token chunk (640 tokens per chip), and the request in those chunks.
@@ -564,7 +597,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(runner["PREFILL_NUM_LAYERS"], "24")
         self.assertEqual(runner["PREFILL_NUM_USERS"], self.KIMI_4X4_USERS[model])
         self.assertNotIn("PREFILL_SP_AXIS", runner)
-        self.assert_kimi_4x4_cache_check(records, model)
+        self.assert_kimi_4x4_cache_check(result, records, model, self.KIMI_4X4_SP_AXIS[model])
         producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
         mpi_args = producer_mpi[0]["args"]
         self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "2")
@@ -576,6 +609,58 @@ class MultirankPccHarnessTests(unittest.TestCase):
             # K3's 1M request in 2560-token chunks: 1049600 tokens, 410 chunks; the 8192-token golden is its head.
             self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], "410")
         self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_kimi_k3_1_sc1_packed_runs_four_chunks_per_forward(self):
+        """--variant packed: kimi_k3_1_packed.json's 2560-token chunks, four per forward (budget 10240), at one slot
+        fewer than kimi_k3_1.json, on the same two 4x4 stages, golden and PCC gate."""
+        result, records = self.run_harness(
+            "kimi_k3_1", config="sc1", hosts=self.SC4_HOSTS[:1], args=["--variant", "packed"]
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runner = self.one_record(records, "runner")["env"]
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/kimi_k3_1_packed.json"))
+        manifest = json.loads(Path(runner["PREFILL_MANIFEST"]).read_text())["env"]
+        # What makes the run packed: the manifest's budget is four of its chunks, and the chunk the harness exports
+        # over the manifest is that chunk (an 8x4 layout's 5120 would pack two).
+        self.assertEqual(manifest["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertEqual(manifest["PREFILL_FORWARD_TOKENS_BUDGET"], "10240")
+        self.assertEqual(runner["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertNotIn("PREFILL_FORWARD_TOKENS_BUDGET", runner)
+        self.assertEqual(runner["PREFILL_NUM_LAYERS"], "24")
+        self.assertEqual(runner["PREFILL_NUM_USERS"], str(int(self.KIMI_4X4_USERS["kimi_k3_1"]) - 1))
+        self.assert_kimi_4x4_cache_check(result, records, "kimi_k3_1")
+        producer = self.one_record(records, "producer")["env"]
+        self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith("manifests/kimi_k3_1_packed.json"))
+        self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_packed_runs_are_perf_gated_and_must_measure(self):
+        """--variant packed keeps the perf gate, keyed <model>/<config>_packed in perf_baselines.json, and demands a
+        measurement before a baseline exists; the other variants stay ungated."""
+        packed = dict(config="sc1", hosts=self.SC4_HOSTS[:1], args=["--variant", "packed"])
+        result, _ = self.run_harness("kimi_k3_1", extra_env={"TEST_TPS": ""}, **packed)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+        result, _ = self.run_harness("kimi_k3_1", **packed)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PCC GATE PASS", result.stdout)
+        # The stub's verdicts carry no MTP caches, so the PCC gate fails there; only the perf gate is under test.
+        result, _ = self.run_harness(
+            "glm53", config="sc1", args=["--variant", "mtp_kv_share"], extra_env={"TEST_TPS": ""}
+        )
+        self.assertNotIn("TPS GATE", result.stdout + result.stderr)
+
+    def test_kimi_k3_1_packed_refuses_the_8x4_configs(self):
+        """On the 8x4 layout's 5120-token chunks kimi_k3_1_packed.json's budget (10240) packs two, not the four
+        production runs. Refused before anything launches."""
+        for config in ("sc1_8x4", "sc4_8x4"):
+            with self.subTest(config=config):
+                result, records = self.run_harness(
+                    "kimi_k3_1", config=config, hosts=self.SC4_HOSTS, args=["--variant", "packed"]
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("--variant packed runs the 4x4 configs", result.stderr)
+                self.assertFalse([r for r in records if r["kind"] in ("runner", "producer")])
 
     def test_a_capacity_probe_sends_its_own_request_at_its_own_slot_count(self):
         """PREFILL_REQUEST_LEN replaces the config's request (K3.1 sc1: 1049600) and PREFILL_NUM_USERS the slots."""
@@ -622,6 +707,14 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(self.KIMI_REQUEST_LEN[model] // 5120))
                 # The 8x4 cache, not the 4x4 one: no 4x4 cache check runs.
                 self.assertNotIn("no 4x4 weight cache", result.stdout + result.stderr)
+
+    def test_kimi_checkpoint_with_a_space_reaches_the_runner_whole(self):
+        checkpoint = "/weights/Kimi K3 ckpt"
+        for model in ("kimi_k3", "kimi_k3_1"):
+            with self.subTest(model=model):
+                result, records = self.run_harness(model, config="sc1_8x4", extra_env={"PREFILL_HF_MODEL": checkpoint})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.one_record(records, "runner")["env"]["PREFILL_HF_MODEL"], checkpoint)
 
     def test_kimi_k3_4x4_rejects_interleaved_discovery(self):
         result, records = self.run_harness("kimi_k3", hosts=self.SC4_HOSTS, extra_env={"TEST_TTRUN_INTERLEAVE": "1"})
@@ -697,7 +790,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 result, records = self.run_harness(model, hosts=self.SC4_HOSTS, missing_cache=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("no 4x4 weight cache at", result.stdout + result.stderr)
-                self.assertIn(f"{model}_bh_16dev/4x4_sp1", result.stdout + result.stderr)
+                self.assertIn(self.kimi_4x4_cache(model, self.KIMI_4X4_SP_AXIS[model]), result.stdout + result.stderr)
                 self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
 
     def test_glm53_sc4_and_sc1_are_8x4_stages_from_the_manifest(self):
@@ -757,6 +850,106 @@ class MultirankPccHarnessTests(unittest.TestCase):
         producer = self.one_record(records, "producer")["env"]
         self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
         self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_glm53_sc1_4x4_packed_runs_two_chunks_per_forward(self):
+        """--variant packed on the 4x4 sc1 leg: glm53_4x4_packed.json's 2560-token chunks, two per forward (budget
+        5120), on the same two tray halves, golden and PCC gate."""
+        result, records = self.run_harness(
+            "glm53", config="sc1_4x4", hosts=self.SC4_HOSTS[:1], args=["--variant", "packed"]
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runner = self.one_record(records, "runner")["env"]
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_4x4_packed.json"))
+        manifest = json.loads(Path(runner["PREFILL_MANIFEST"]).read_text())["env"]
+        self.assertEqual(manifest["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertEqual(manifest["PREFILL_FORWARD_TOKENS_BUDGET"], "5120")
+        self.assertNotIn("PREFILL_FORWARD_TOKENS_BUDGET", runner)
+        producer = self.one_record(records, "producer")["env"]
+        self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_a_job_deadline_caps_the_bringup_wait(self):
+        """PREFILL_JOB_DEADLINE (a CI job's end, set once for its launches): a launch still in bringup gives up with
+        its diagnostic before the job ends, not after the full TABLE_WAIT_SECS."""
+        start = time.monotonic()
+        result, _ = self.run_harness(
+            "glm53",
+            config="sc1_4x4",
+            hosts=self.SC4_HOSTS[:1],
+            extra_env={
+                "TEST_RUNNER_SLOW_BRINGUP": "1",
+                "TABLE_WAIT_SECS": "3600",
+                "PREFILL_JOB_DEADLINE": str(int(time.time()) + 120),
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("KV table not published within 5s", result.stdout)
+        self.assertLess(time.monotonic() - start, 120)
+
+    def test_kimi_sp_axis_knob_moves_sp_on_runner_and_cache(self):
+        """PREFILL_SP_AXIS=0 alone puts a 4x4 stage's SP on axis 0: exported to the runner over the manifest,
+        the pre-launch probe checks that axis's cache, and the fabric is left to the stage's descriptor."""
+        for model in ("kimi_k3", "kimi_k3_1"):
+            with self.subTest(model=model):
+                result, records = self.run_harness(
+                    model, config="sc1", hosts=self.SC4_HOSTS[:1], extra_env={"PREFILL_SP_AXIS": "0"}
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                launch = self.one_record(records, "runner_launch")["args"]
+                self.assertTrue(
+                    launch[launch.index("--mesh-graph-descriptor") + 1].endswith(
+                        "topology_configuration/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto"
+                    )
+                )
+                runner = self.one_record(records, "runner")["env"]
+                launch_line = launch[-1]
+                self.assertIn("export PREFILL_SP_AXIS=0;", launch_line)
+                self.assertNotIn("PREFILL_FABRIC_MODE", launch_line)
+                # The runner keys its cache by the checkpoint the pre-launch check keyed (tt-run forwards no
+                # PREFILL_* to remote ranks).
+                self.assertIn(f"export PREFILL_HF_MODEL={self.checkpoint};", launch_line)
+                self.assertTrue(runner["PREFILL_MANIFEST"].endswith(f"manifests/{model}.json"))
+                self.assert_kimi_4x4_cache_check(result, records, model, sp_axis=0)
+                self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_kimi_4x4_checkpoint_without_index_fails_on_the_host_before_launch(self):
+        # The cache key reads the checkpoint's index; the host probe, not the launcher, resolves it.
+        result, records = self.run_harness(
+            "kimi_k3_1", config="sc1", hosts=self.SC4_HOSTS[:1], extra_env={"PREFILL_HF_MODEL": "/nonexistent/ckpt"}
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no kimi_k3_1 checkpoint index at /nonexistent/ckpt", result.stdout + result.stderr)
+        self.assertEqual(len([r for r in records if r["kind"] == "mpi"]), 1, records)
+        self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
+
+    def test_sp_axis_knob_missing_flipped_cache_names_its_dir(self):
+        result, records = self.run_harness(
+            "kimi_k3_1", hosts=self.SC4_HOSTS, missing_cache=True, extra_env={"PREFILL_SP_AXIS": "0"}
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(self.kimi_4x4_cache("kimi_k3_1", sp_axis=0), result.stdout + result.stderr)
+        self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
+
+    def test_sp_axis_knob_on_glm53_4x4_checks_its_mesh_key(self):
+        result, records = self.run_harness(
+            "glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True, extra_env={"PREFILL_SP_AXIS": "0"}
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertRegex(result.stdout + result.stderr, r"glm_5_3_bh_16dev/4x4\b(?!_sp1)")
+
+    def test_sp_axis_knob_rejects_axis_1_off_a_4x4_stage_and_bad_values(self):
+        for model, config, value, message in (
+            ("kimi_k3_1", "sc1_8x4", "1", "runs SP on mesh axis 0 only"),
+            ("glm53", "sc1", "1", "runs SP on mesh axis 0 only"),
+            ("kimi_k3_1", "sc1", "2", "PREFILL_SP_AXIS must be 0 or 1"),
+        ):
+            with self.subTest(model=model, config=config, value=value):
+                result, records = self.run_harness(
+                    model, config=config, hosts=self.SC4_HOSTS[:1], extra_env={"PREFILL_SP_AXIS": value}
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertFalse([record for record in records if record["kind"] in ("mpi", "probe", "runner_launch")])
 
     def test_glm53_4x4_missing_cache_names_the_glm_dir(self):
         result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True)

@@ -3,18 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
-#include "device.hpp"
-#include "mesh_device.hpp"
+#include "tt-metalium/mesh/legacy/device.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "llrt/hal.hpp"
 #include <cstdint>
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"

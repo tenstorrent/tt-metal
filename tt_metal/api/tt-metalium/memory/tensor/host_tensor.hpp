@@ -10,18 +10,18 @@
 #include <memory>
 #include <optional>
 #include <span>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 
 // Tensor related constructs
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
-#include <tt-metalium/memory_pin.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
-#include <tt-metalium/shape.hpp>
-#include <tt-metalium/tensor/spec/layout/layout.hpp>
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/utils/memory_pin.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/layout.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>
 #include <vector>
 
 namespace tt::tt_metal {

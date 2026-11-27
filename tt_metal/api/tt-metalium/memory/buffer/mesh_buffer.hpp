@@ -12,14 +12,14 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 
 namespace tt::tt_metal {
 class TensorSpec;

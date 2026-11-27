@@ -37,7 +37,6 @@ from models.tt_dit.experimental.pipelines.pipeline_wan_distill import _patch_tor
 from models.tt_dit.experimental.utils.lightx2v_loader import load_lightx2v_state_dict
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
-from models.tt_dit.utils import cache
 
 if TYPE_CHECKING:
     from diffusers.schedulers import SchedulerMixin
@@ -85,34 +84,19 @@ class AniSoraPipeline(WanPipelineI2V):
                 device=device, config=config, scheduler=scheduler, run_warmup=run_warmup, lora_enabled=lora_enabled
             )
 
-    def _prepare_transformer(self, idx: int):
-        state = self.transformer_states[idx]
+    def _transformer_spec(self, idx: int) -> dict:
+        spec = super()._transformer_spec(idx)
         if self._random_weights:
-            cache.load_model(
-                state.model,
-                model_name=self.RANDOM_CACHE_NAMESPACE,
-                subfolder=state.checkpoint.subfolder,
-                parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                mesh_device=self.mesh_device,
-                is_fsdp=self.is_fsdp,
-                get_torch_state_dict=lambda s=state: s.checkpoint.state_dict(),
-            )
-            return
+            return {**spec, "model_name": self.RANDOM_CACHE_NAMESPACE}
 
         filename = self.HIGH_NOISE_FILE if idx == 0 else self.LOW_NOISE_FILE
-        cache.load_model(
-            state.model,
-            model_name=self.CACHE_NAMESPACE,
-            subfolder=state.checkpoint.subfolder,
-            parallel_config=self.parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            mesh_device=self.mesh_device,
-            is_fsdp=self.is_fsdp,
-            get_torch_state_dict=lambda f=filename: load_lightx2v_state_dict(
+        return {
+            **spec,
+            "model_name": self.CACHE_NAMESPACE,
+            "get_torch_state_dict": lambda: load_lightx2v_state_dict(
                 self.HF_REPO,
-                f,
+                filename,
                 allow_download=self._allow_download,
                 local_dir=self._anisora_local_dir,
             ),
-        )
+        }

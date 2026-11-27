@@ -7,9 +7,9 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
 #include <internal/mesh_device.hpp>
 
 namespace ttnn::experimental::prim {
@@ -156,8 +156,11 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
             (tilize_input && operation_attributes.in_dim == rank - 2 && operation_attributes.out_dim < rank - 2 &&
              input_shape[rank - 1] % tt::constants::TILE_WIDTH == 0 &&
              input_shape[rank - 2] % tt::constants::TILE_HEIGHT == 0 &&
-             input_tensor.memory_config().buffer_type() == BufferType::DRAM),
-        "Unsupported input layout {} (a row-major input must concatenate along dim {} with whole tiles, in DRAM).",
+             (input_tensor.memory_config().buffer_type() == BufferType::DRAM ||
+              (input_tensor.memory_config().buffer_type() == BufferType::L1 &&
+               input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED))),
+        "Unsupported input layout {} (a row-major input must concatenate along dim {} with whole tiles, in DRAM or "
+        "interleaved L1).",
         input_tensor.layout(),
         rank - 2);
 

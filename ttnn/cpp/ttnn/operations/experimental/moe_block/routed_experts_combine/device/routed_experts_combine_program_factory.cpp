@@ -15,9 +15,9 @@
 #include <tuple>
 #include <unordered_map>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {

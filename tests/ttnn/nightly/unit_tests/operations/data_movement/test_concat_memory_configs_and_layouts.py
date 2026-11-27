@@ -1296,6 +1296,192 @@ class TestEdgeCases:
         out = ttnn.to_torch(ttnn.concat([a, b], dim=-1, memory_config=out_mem))
         assert_equal(torch.cat([ta, tb], dim=-1), out)
 
+    def test_sub_core_grids_mixed_layout_aligned_matches_torch_cat(self, device):
+        """Mixed TILE+RM with tile-aligned shapes must still work under sub_core_grids (concat_impl normalizes)."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = torch.randn(1, 2, 32, 64).bfloat16()
+        b = torch.randn(1, 2, 32, 64).bfloat16()
+        ta_tile = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
+        tb_rm = ttnn.from_torch(b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        out = ttnn.to_torch(ttnn.concat([ta_tile, tb_rm], dim=-1, sub_core_grids=grid))
+        assert_equal(torch.cat([a, b], dim=-1), out)
+
+    def test_sub_core_grids_rm_unaligned_rejected(self, device, expect_error):
+        """RM width-concat with sub_core_grids and unaligned last dim must reject (device op already asserted)."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = torch.randn(1, 2, 32, 50).bfloat16()
+        ta = ttnn.from_torch(a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        tb = ttnn.from_torch(a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with expect_error(RuntimeError, "multiple of the max buffer alignment"):
+            ttnn.concat([ta, tb], dim=-1, sub_core_grids=grid)
+
+    def test_sub_core_grids_rm_mixed_l1_dram_rejected(self, device, expect_error):
+        """RM width-concat with sub_core_grids and mixed L1/DRAM inputs must reject on max-alignment mismatch."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        ta = ttnn.from_torch(
+            torch.randn(1, 2, 32, 8).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        tb = ttnn.from_torch(
+            torch.randn(1, 2, 32, 32).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        with expect_error(RuntimeError, "multiple of the max buffer alignment"):
+            ttnn.concat([ta, tb], dim=-1, sub_core_grids=grid)
+
+    def test_sub_core_grids_tile_plus_rm_unaligned_two_input_repro_rejected(self, device, expect_error):
+        """Two-input #61535 repro: TILE[1,2,32,50] + RM[1,2,32,50]; post-RM width 50 bytes is unaligned."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = ttnn.from_torch(torch.randn(1, 2, 32, 50).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+        b = ttnn.from_torch(torch.randn(1, 2, 32, 50).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with expect_error(RuntimeError, "multiple of the max buffer alignment"):
+            ttnn.concat([a, b], dim=-1, sub_core_grids=grid)
+
+    def test_sub_core_grids_l1_inputs_dram_output_alignment_rejected(self, device, expect_error):
+        """L1 inputs (16B-aligned widths) with DRAM output (64B BH / 32B WH): check must fold in output alignment."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        ta = ttnn.from_torch(
+            torch.randn(1, 2, 32, 8).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        tb = ttnn.from_torch(
+            torch.randn(1, 2, 32, 8).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        with expect_error(RuntimeError, "multiple of the max buffer alignment"):
+            ttnn.concat([ta, tb], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=grid)
+
+    def test_sub_core_grids_tile_middle_unaligned_after_conversion_rejected(self, device, expect_error):
+        """Pattern from #61535: [RM 64, TILE logical=50 padded=64, RM 64] — TILE's post-RM width (50) is unaligned."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = ttnn.from_torch(torch.randn(1, 2, 32, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        b = ttnn.from_torch(torch.randn(1, 2, 32, 50).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+        c = ttnn.from_torch(torch.randn(1, 2, 32, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with expect_error(RuntimeError, "multiple of the max buffer alignment"):
+            ttnn.concat([a, b, c], dim=-1, sub_core_grids=grid)
+
+    def test_sub_core_grids_uniform_layout_still_works(self, device):
+        """Uniform-layout, aligned inputs must still take the sub_core_grids fast path."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = torch.randn(1, 2, 32, 64).bfloat16()
+        b = torch.randn(1, 2, 32, 64).bfloat16()
+        ta = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
+        tb = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device)
+        out = ttnn.to_torch(ttnn.concat([ta, tb], dim=-1, sub_core_grids=grid))
+        assert_equal(torch.cat([a, b], dim=-1), out)
+
+    @pytest.mark.parametrize(
+        "entry",
+        [ttnn.concat, ttnn._ttnn.operations.data_movement.concat_force_native],
+        ids=["routed", "force_native"],
+    )
+    @pytest.mark.parametrize("position", ["first", "last", "middle"])
+    @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["RM", "TILE"])
+    @pytest.mark.parametrize("dim", [-1, -2, 1], ids=["dim=-1", "dim=-2", "dim=1"])
+    @pytest.mark.parametrize("mem", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG], ids=["L1", "DRAM"])
+    @pytest.mark.parametrize("width", [64, 50], ids=["w=64", "w=50"])
+    def test_empty_along_concat_dim(self, device, entry, position, layout, dim, mem, width):
+        """routed and concat_force_native must drop empty-along-dim inputs; width=50 covers the RM dim=-1 SIGFPE repro."""
+        full_shape = (1, 2, 32, width)
+        empty_shape = list(full_shape)
+        empty_shape[dim] = 0
+        a = torch.arange(1 * 2 * 32 * width).reshape(full_shape).to(torch.bfloat16)
+        ta = ttnn.from_torch(a, layout=layout, device=device, memory_config=mem)
+        e = ttnn.from_torch(
+            torch.zeros(empty_shape, dtype=torch.bfloat16), layout=layout, device=device, memory_config=mem
+        )
+        inputs = {"first": [e, ta], "last": [ta, e], "middle": [ta, e, ta]}[position]
+        expected = {"first": a, "last": a, "middle": torch.cat([a, a], dim=dim)}[position]
+        out = ttnn.to_torch(entry(inputs, dim=dim))
+        assert_equal(expected, out)
+
+    def test_force_codegen_filters_empty_then_concats(self, device):
+        """concat_force_codegen with [e, a, b] must filter e and codegen cat([a, b])."""
+        if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+            pytest.skip("concat_force_codegen is gated to WH/BH by codegen_supported_on_arch")
+        a = torch.randn(1, 2, 16, 32).bfloat16()
+        b = torch.randn(1, 2, 16, 32).bfloat16()
+        ta = ttnn.from_torch(a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        tb = ttnn.from_torch(b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        te = ttnn.from_torch(
+            torch.zeros(1, 2, 16, 0, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        out = ttnn.to_torch(ttnn._ttnn.operations.data_movement.concat_force_codegen([te, ta, tb], dim=-1))
+        assert_equal(torch.cat([a, b], dim=-1), out)
+
+    @pytest.mark.parametrize(
+        "entry",
+        [ttnn.concat, ttnn._ttnn.operations.data_movement.concat_force_native],
+        ids=["routed", "force_native"],
+    )
+    @pytest.mark.parametrize(
+        "shape, dim, layout",
+        [
+            ((1, 2, 32, 0), -1, ttnn.ROW_MAJOR_LAYOUT),
+            ((1, 0, 32, 32), 1, ttnn.ROW_MAJOR_LAYOUT),
+            ((1, 0, 32, 32), 1, ttnn.TILE_LAYOUT),
+            ((1, 0, 32, 48), 1, ttnn.TILE_LAYOUT),
+        ],
+        ids=["RM_dim=-1", "RM_dim=1", "TILE_dim=1", "TILE_dim=1_lastdim=48"],
+    )
+    def test_all_empty_along_concat_dim(self, device, entry, shape, dim, layout):
+        """All inputs empty along dim: shape, dtype, layout and interleaved memory config must be preserved."""
+        e1 = ttnn.from_torch(torch.zeros(shape, dtype=torch.bfloat16), layout=layout, device=device)
+        e2 = ttnn.from_torch(torch.zeros(shape, dtype=torch.bfloat16), layout=layout, device=device)
+        result = entry([e1, e2], dim=dim)
+        assert tuple(result.shape) == shape
+        assert result.dtype == e1.dtype
+        assert result.layout == e1.layout
+        assert result.memory_config().memory_layout == e1.memory_config().memory_layout
+
+    def test_force_codegen_refuses_all_empty(self, device, expect_error):
+        """concat_force_codegen must explicitly refuse an all-empty-along-dim list via the new passthrough gate."""
+        e1 = ttnn.from_torch(
+            torch.zeros(1, 2, 32, 0, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        e2 = ttnn.from_torch(
+            torch.zeros(1, 2, 32, 0, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        with expect_error(RuntimeError, "codegen path does not support a lone or all-empty-along-dim input list"):
+            ttnn._ttnn.operations.data_movement.concat_force_codegen([e1, e2], dim=-1)
+
+    def test_empty_input_with_rank_mismatch_still_raises(self, device, expect_error):
+        """Shape validator must run before the empty-drop so a rank-mismatched empty tensor still raises."""
+        ta = ttnn.from_torch(torch.randn(1, 2, 32, 32).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        e_wrong_rank = ttnn.from_torch(
+            torch.zeros(2, 32, 0, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        with expect_error(RuntimeError, "All dimensions must be the same size"):
+            ttnn.concat([ta, e_wrong_rank], dim=-1)
+
+    def test_empty_input_with_sharded_output_raises(self, device, expect_error):
+        """Guard: dropping empty-along-dim inputs is refused under sharded output memory_config."""
+        ta = ttnn.from_torch(torch.randn(1, 1, 32, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        e = ttnn.from_torch(torch.zeros(1, 1, 32, 0, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        sharded = ttnn.create_sharded_memory_config(
+            shape=(32, 64),
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        with expect_error(RuntimeError, "dropping empty-along-dim inputs is not supported with sharded output"):
+            ttnn.concat([e, ta], dim=-1, memory_config=sharded)
+
+    def test_empty_input_with_groups_raises(self, device, expect_error):
+        """Guard: dropping empty-along-dim inputs is refused under groups > 1."""
+        a = ttnn.from_torch(torch.randn(1, 1, 32, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        e = ttnn.from_torch(torch.zeros(1, 1, 32, 0, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with expect_error(RuntimeError, "dropping empty-along-dim inputs is not supported with groups > 1"):
+            ttnn.concat([e, a, a], dim=-1, groups=2)
+
 
 # ===========================================================================
 # 8. Groups parameter (height-sharded only)

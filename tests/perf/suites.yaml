@@ -1,0 +1,75 @@
+# Runtime performance suites run by tests/perf/test_suites.py. Entries are data only; see tests/perf/README.md.
+#
+#   <suite>:
+#     binary: path from the repo root
+#     golden: path from the repo root
+#     kind: google_benchmark (default) | contract (writes $TT_PERF_OUTPUT, one process per repetition)
+#     args: [extra binary arguments]
+#     repetitions: N, or {environment: N}        (google_benchmark only)
+#     process_repetitions: N                     (contract only)
+#     env: {NAME: value}  values may use {rep}, {rep_dir}, {scratch} (deleted after the process) and {env[NAME]};
+#                         applied to both kinds, with {rep} = 0 for google_benchmark
+#     env_unset: [NAME, ...]
+#     policy: {regression_pct: X, improvement_pct: Y, enforce: true, overrides: {case_regex: {regression_pct: Z}},
+#              environments: {environment: {regression_pct: X, improvement_pct: Y}}}
+#             Environment values replace the suite defaults there; a matching case override still wins.
+
+pgm_dispatch:
+  binary: build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch
+  golden: tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/goldens/pgm_dispatch.json
+  # Device-bound cases agree within a few percent across hosts; host-bound no_trace cases run separately.
+  args: ["--benchmark_filter=-no_trace"]
+  # Two repetitions with the min aggregate: a flake almost never makes dispatch faster.
+  repetitions: 2
+  policy: {regression_pct: 5, improvement_pct: 5}
+
+pgm_dispatch_no_trace:
+  binary: build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch
+  golden: tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/goldens/pgm_dispatch_no_trace.json
+  # Host-bound, so it runs on a pinned host whose CPU matches its golden.
+  args: ["--benchmark_filter=no_trace"]
+  repetitions: 2
+  policy:
+    regression_pct: 5
+    improvement_pct: 5
+    # On the same Wormhole host and commit, these cases move up to about 15% between runs.
+    environments: {wh_n300_perf: {regression_pct: 15, improvement_pct: 15}}
+
+rw_buffer:
+  binary: build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer
+  golden: tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/goldens/rw_buffer.json
+  repetitions: {wh_n300_civ2: 5, bh_p150_perf: 11}
+  # Bandwidth is not yet stable across runs, so only errors and changed case sets fail.
+  policy: {regression_pct: 5, improvement_pct: 5, enforce: false}
+
+jit_build:
+  binary: build/test/tt_metal/unit_tests_jit_build
+  golden: tests/tt_metal/tt_metal/jit_build/goldens/jit_build.json
+  kind: contract
+  args: [--gtest_also_run_disabled_tests, "--gtest_filter=*TensixCompileStress*", --gtest_color=no]
+  # A fresh process per repetition so the in-memory JIT cache starts cold every time.
+  process_repetitions: 3
+  env:
+    TT_METAL_COMPILE_STRESS_MOCK: "0"
+    TT_METAL_COMPILE_STRESS_NUM_KERNELS: "300"
+    TT_METAL_COMPILE_STRESS_ARCH: "{env[ARCH_NAME]}"
+    TT_METAL_COMPILE_STRESS_CLIENT_ID: "{rep}"
+    # A distinct seed per repetition gives unique kernels, so nothing is served from a cache.
+    TT_METAL_COMPILE_STRESS_SEED: "{rep}"
+    TT_METAL_COMPILE_STRESS_SHARED_FRACTION: "0"
+    TT_METAL_CACHE: "{scratch}/cache"
+    TT_METAL_JIT_SERVER_ENABLE: "0"
+    CCACHE_DISABLE: "1"
+  env_unset:
+    - TT_METAL_SIMULATOR
+    - TT_METAL_EMULE_MODE
+    - TT_METAL_MOCK_CLUSTER_DESC_PATH
+    - TT_METAL_JIT_SERVER_ENDPOINTS
+    - TT_METAL_CCACHE_KERNEL_SUPPORT
+  policy: {regression_pct: 15, improvement_pct: 15}
+
+pcie_mem_bench:
+  binary: build/tools/mem_bench
+  golden: tt_metal/tools/mem_bench/goldens/pcie_mem_bench.json
+  args: ["--benchmark_filter=Device (Reading|Writing) Host"]
+  policy: {regression_pct: 10, improvement_pct: 10, enforce: false}

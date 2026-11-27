@@ -10,7 +10,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 #include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 using namespace tt::tt_metal;
 

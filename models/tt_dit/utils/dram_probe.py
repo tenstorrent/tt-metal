@@ -29,8 +29,7 @@ ENABLED = os.environ.get("MINIMAX_H3_DRAM_PROBE", "0") == "1"
 # A weak reference: the probe must never keep a dropped pipeline's weights and buffers reachable.
 _pipeline: weakref.ReferenceType | None = None
 _SKIP_ATTRS = {
-    "coresident_exclusions",
-    "_coresident_peers",
+    "residency",
     "ccl_manager",
     "encoder_ccl_manager",
     "vae_ccl_manager",
@@ -38,7 +37,6 @@ _SKIP_ATTRS = {
     "mesh_device",
     "device",
     "weight_loader",
-    "_weight_loader",
 }
 
 

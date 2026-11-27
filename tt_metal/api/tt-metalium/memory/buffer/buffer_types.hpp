@@ -8,7 +8,7 @@
 // the two sides are compiled by different compilers and must not share this file. The device header mirrors
 // TensorMemoryLayout and BufferType; keep their enumerator values in sync with the ones below.
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#error "tt-metalium/buffer_types.hpp is host-only; include \"api/buffer_types.hpp\" in device code"
+#error "tt-metalium/memory/buffer/buffer_types.hpp is host-only; include \"api/buffer_types.hpp\" in device code"
 #endif
 
 namespace tt::tt_metal {

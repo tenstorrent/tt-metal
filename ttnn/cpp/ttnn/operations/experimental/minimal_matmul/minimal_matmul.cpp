@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "minimal_matmul.hpp"
 #include "device/minimal_matmul_device_operation.hpp"
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;

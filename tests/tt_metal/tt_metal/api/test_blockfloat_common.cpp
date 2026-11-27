@@ -19,7 +19,7 @@
 #include "impl/data_format/bfp_simd.hpp"
 #include <tt_stl/joined_tasks.hpp>
 
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include <tt-umd/types/arch.hpp>
 #include "jit_build/data_format.hpp"
 
@@ -119,6 +119,34 @@ TEST(DataFormatFp8ArchGuard, Fp8E4m3PackSrcFormatPerArch) {
     EXPECT_NO_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::BLACKHOLE));
 
     EXPECT_ANY_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::WORMHOLE_B0));
+}
+
+// pack_src is the format of the datum as it sits in Dest, not the L1 format of the output buffer.
+// On Quasar a 32-bit Dest widens every datum to a 32-bit word, so an 8-bit integer output has to
+// name Int32 and let the packer gasket narrow it on the way out to L1.
+TEST(DataFormatQuasarDestWidth, PackSrcMatchesDestWidth) {
+    constexpr auto unpack_dst = tt::DataFormat::Float16_b;
+    auto pack_src = [](tt::DataFormat output_format, bool fp32_dest_acc_en) {
+        const std::array<tt::DataFormat, 1> formats{output_format};
+        return tt::get_pack_src_formats(
+            formats,
+            unpack_dst,
+            fp32_dest_acc_en,
+            /*bfp8_pack_precise=*/false,
+            /*int_fpu_en=*/false,
+            tt::ARCH::QUASAR)[0];
+    };
+
+    // 32-bit Dest: every datum is a 32-bit word, whatever the output buffer holds.
+    EXPECT_EQ(pack_src(tt::DataFormat::Int8, /*fp32_dest_acc_en=*/true), tt::DataFormat::Int32);
+    EXPECT_EQ(pack_src(tt::DataFormat::UInt8, /*fp32_dest_acc_en=*/true), tt::DataFormat::Int32);
+    EXPECT_EQ(pack_src(tt::DataFormat::Int32, /*fp32_dest_acc_en=*/true), tt::DataFormat::Int32);
+    EXPECT_EQ(pack_src(tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true), tt::DataFormat::Float32);
+
+    // 16-bit Dest: the datum keeps its own width, so pack_src is the output format.
+    EXPECT_EQ(pack_src(tt::DataFormat::Int8, /*fp32_dest_acc_en=*/false), tt::DataFormat::Int8);
+    EXPECT_EQ(pack_src(tt::DataFormat::UInt8, /*fp32_dest_acc_en=*/false), tt::DataFormat::UInt8);
+    EXPECT_EQ(pack_src(tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false), tt::DataFormat::Float16_b);
 }
 
 namespace {

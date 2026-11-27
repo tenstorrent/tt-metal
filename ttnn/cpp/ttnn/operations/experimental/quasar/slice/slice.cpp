@@ -14,8 +14,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
 namespace ttnn::operations::experimental::quasar {
@@ -394,6 +394,15 @@ ttnn::Tensor slice(
     // (ends are padded downstream, so only begin alignment matters).
     rm_only = (input_tensor.layout() != Layout::TILE) || (!no_step || one_dimensional || !handled_tile_alignment);
 
+    // MX tiles (shared scale per 32-element block, face order) can only be copied whole: the RM staging
+    // path would untilize them (no MX row-major layout) and a strided / sub-tile-offset slice moves pieces
+    // of a tile. Only tile-aligned begins with unit steps (whole-tile copies) are MX-correct.
+    TT_FATAL(
+        !(rm_only && tt::tt_metal::is_mx(input_tensor.dtype())),
+        "Quasar slice on MX tensors ({}) supports only TILE layout with tile-aligned begins, unit steps and rank "
+        ">= 2: strided, 1D and sub-tile slices need a row-major staging that MX tiles do not have.",
+        input_tensor.dtype());
+
     // Implicit inheritance from a sharded input: rescale the shard spec to the sliced shape so the
     // output doesn't reuse the input's (oversized) spec. Covers HEIGHT/WIDTH/BLOCK. (Issue #38016)
     // Runs before the composite decision below so both that decision and the composite path's own
@@ -611,6 +620,11 @@ ttnn::Tensor slice(
     };
 
     if (pad_value.has_value() && (dim_needs_fill(-1) || dim_needs_fill(-2))) {
+        TT_FATAL(
+            !tt::tt_metal::is_mx(res.dtype()),
+            "Quasar slice cannot fill the implicit tile padding of an MX tensor ({}): the fill kernel knows no MX "
+            "tile layout. Use a tile-aligned slice end or omit pad_value.",
+            res.dtype());
         res = ttnn::fill_implicit_tile_padding(res, pad_value.value());
     }
 
