@@ -1533,6 +1533,9 @@
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    # Run the host-only anchor regression before staging assets or opening devices.
+    mpirun -np 1 --bind-to none --wdir "${TT_METAL_HOME}" \
+      python3 -B models/tt_dit/tests/unit/test_ltx_stage_statics.py -v || exit 1
     # The shared offline cache lacks this adapter. Fetch its pinned revision into
     # writable job storage before pytest opens any devices; keep the tests offline.
     LORA_PATH=$(mpirun -np 1 --bind-to none --wdir "${TT_METAL_HOME}" \
@@ -1551,6 +1554,7 @@
     rc=0
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1800 "$@" || rc=1; }
     # Cheap/CPU/block tests first so a slow later test can never starve them out of the leg timeout.
+    run models/tt_dit/tests/models/ltx/test_fps_conditioning_ltx.py
     run models/tt_dit/tests/models/ltx/test_ltx_adapter_loader.py
     run models/tt_dit/tests/models/ltx/test_embeddings_ltx.py
     run models/tt_dit/tests/models/ltx/test_rope_ltx.py
