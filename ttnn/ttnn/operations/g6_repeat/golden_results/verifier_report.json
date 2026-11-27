@@ -1,0 +1,96 @@
+{
+  "summary": {
+    "total": 9,
+    "supported_pass": 5,
+    "supported_fail": 1,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 0,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 3
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/g6_repeat/test_golden.py::test_op[1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[p1-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[poisoned_padding_1000-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[special_values-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[repeat_determinism-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      }
+    ],
+    "supported_fail": [
+      {
+        "nodeid": "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[poisoned_padding_nan-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "alignment": "h_non_aligned"
+        },
+        "status": "failed",
+        "failure_category": "other"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/g6_repeat/test_regression.py::test_small_magnitude_input[1x1x1x256-r1_1_16_1]",
+        "test_name": "test_small_magnitude_input[1x1x1x256-r1_1_16_1]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_repeat/test_regression.py::test_large_magnitude_input[1x1x1x256-r1_1_16_1]",
+        "test_name": "test_large_magnitude_input[1x1x1x256-r1_1_16_1]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_repeat/test_regression.py::test_uniform_input[1x1x1x256-r1_1_16_1]",
+        "test_name": "test_uniform_input[1x1x1x256-r1_1_16_1]",
+        "status": "passed"
+      }
+    ]
+  }
+}

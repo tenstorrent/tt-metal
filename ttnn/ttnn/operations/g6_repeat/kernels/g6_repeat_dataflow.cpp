@@ -9,6 +9,7 @@
 //   load_row0_faces_block  x upper faces (row 0 + padding rows) land in the out slots
 //   replicate_row0_block   row 0 -> rows 1..rows_to_fill-1 by self-aimed NoC reads
 //   store_block            each slot written once to its out page
+// then write_barrier: every write acked before the kernel returns.
 //
 // Raw-API entries (load, store, barriers) have no kernel_lib helper: kernel_lib has no
 // TensorAccessor tile-page streaming helper, and noc_async_read_page cannot read a
@@ -37,7 +38,6 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t slot_set_bytes = block_width_tiles * out_page_size;
-    constexpr uint32_t face_row_of_faces_bytes = face_cols * face_bytes;
 
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_common_arg_val<uint32_t>(1);
@@ -85,8 +85,8 @@ void kernel_main() {
                     const uint32_t src = slot + c * face_bytes;
                     dataflow_kernel_lib::set_read_state<face_row_bytes>(noc, src);
                     for (uint32_t r = 1; r < rows_to_fill; ++r) {
-                        const uint32_t dst =
-                            src + (r / face_h) * face_row_of_faces_bytes + (r % face_h) * face_row_bytes;
+                        // One row of faces spans row0_faces_bytes, so that is the stride to faces 2/3.
+                        const uint32_t dst = src + (r / face_h) * row0_faces_bytes + (r % face_h) * face_row_bytes;
                         dataflow_kernel_lib::read_with_state<face_row_bytes>(noc, dst, src);
                     }
                 }
@@ -108,6 +108,9 @@ void kernel_main() {
         }
     }
 
-    // The next program starts right after this one: no write may stay in flight.
-    noc_async_write_barrier();
+    {
+        // The next program starts right after this one: no write may stay in flight.
+        DeviceZoneScopedN("write_barrier");
+        noc_async_write_barrier();
+    }
 }

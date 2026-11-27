@@ -11,7 +11,6 @@ the production case does not (see op_design.md, "Acceptance test scope").
 """
 
 import importlib
-import math
 
 import pytest
 import torch
@@ -123,22 +122,36 @@ def test_g6_repeat_special_values(device):
     _assert_bit_exact(g6_repeat(ttnn_x, reps), pytorch_g6_repeat(torch_x, reps), ttnn_x)
 
 
-@pytest.mark.parametrize("poison", [1000.0, float("nan")], ids=["poison_1000", "poison_nan"])
-def test_g6_repeat_poisoned_input_padding(device, poison):
+def _poisoned_padding_row(device, w, poison_bits):
+    """x (1, 1, 1, W) whose tile padding (rows 1..31 of every tile) holds `poison_bits`.
+
+    A (1, 1, 32, W) tile tensor with the poison in rows 1..31 is viewed as (1, 1, 1, W) over
+    the same buffer. ttnn.fill_implicit_tile_padding cannot poison with NaN: it packs the fill
+    through DEST and lands +inf (0x7F80) instead of the payload.
+    """
+    full = _bits(torch.randn((1, 1, 32, w), dtype=torch.float32).to(torch.bfloat16)).clone()
+    signed = poison_bits - 0x10000 if poison_bits >= 0x8000 else poison_bits
+    full[..., 1:, :] = signed
+    full = full.view(torch.bfloat16)
+    t32 = _to_device(full, device)
+    x = ttnn.reshape(t32, ttnn.Shape([1, 1, 1, w]), ttnn.Shape([1, 1, 32, w]))
+    assert x.buffer_address() == t32.buffer_address(), "harness precondition: the view must share the buffer"
+    padding = _bits(x.cpu().to_torch_with_padded_shape()[..., 1:, :].contiguous())
+    assert bool((padding == signed).all()), "harness precondition: the tile padding of x does not hold the poison"
+    row = full[..., :1, :].contiguous()
+    _assert_uploaded_bits(x, row)
+    return row, x
+
+
+# 0x447A = 1000.0 (fails a form that combines the 32 rows of a tile); NaN payloads of both
+# signs (also fail a form that multiplies the padding rows by 0).
+@pytest.mark.parametrize("poison_bits", [0x447A, 0x7FC1, 0xFFC5], ids=["p1000", "qnan_payload", "neg_qnan_payload"])
+@pytest.mark.parametrize("w, r", [(256, 16), (64, 17), (96, 31)], ids=["p1_w256_r16", "w64_r17", "w96_r31"])
+def test_g6_repeat_poisoned_input_padding(device, w, r, poison_bits):
     torch.manual_seed(42)
-    torch_x = _randn_row(256)
-    reps = [1, 1, 16, 1]
-    ttnn_x = ttnn.fill_implicit_tile_padding(_to_device(torch_x, device), poison)
-
-    padded = ttnn_x.cpu().to_torch_with_padded_shape()
-    is_padding = torch.ones(padded.shape, dtype=torch.bool)
-    is_padding[..., :1, :256] = False
-    padding = padded[is_padding].float()
-    landed = bool(torch.isnan(padding).all()) if math.isnan(poison) else bool((padding == poison).all())
-    assert landed, f"harness precondition: the tile padding of x does not hold {poison}"
-    _assert_uploaded_bits(ttnn_x, torch_x)
-
-    _assert_bit_exact(g6_repeat(ttnn_x, reps), pytorch_g6_repeat(torch_x, reps), ttnn_x)
+    row, ttnn_x = _poisoned_padding_row(device, w, poison_bits)
+    reps = [1, 1, r, 1]
+    _assert_bit_exact(g6_repeat(ttnn_x, reps), pytorch_g6_repeat(row, reps), ttnn_x)
 
 
 def test_g6_repeat_determinism(device):

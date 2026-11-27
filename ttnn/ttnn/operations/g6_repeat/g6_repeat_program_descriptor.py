@@ -38,9 +38,6 @@ REGIME = "column_split_row_broadcast"
 
 CB_REPEAT_TILES = 0
 
-# NoC L1-to-L1 transfers need both ends 16 B aligned.
-L1_NOC_ALIGNMENT_BYTES = 16
-
 
 @dataclass(frozen=True)
 class RepeatPlan:
@@ -111,7 +108,10 @@ def _make_plan(input_tensor, reps) -> RepeatPlan:
     face_bytes = face_h * face_row_bytes
     face_cols = tile_w // face_w
     row0_faces_bytes = face_cols * face_bytes
-    assert face_row_bytes % L1_NOC_ALIGNMENT_BYTES == 0, f"face row of {face_row_bytes} B breaks L1 NoC alignment"
+    # The loopback copies move one face row between L1 addresses; the HAL's L1 alignment is
+    # the larger of the NoC L1 read and write alignments.
+    l1_noc_alignment = int(ttnn.get_l1_alignment())
+    assert face_row_bytes % l1_noc_alignment == 0, f"face row of {face_row_bytes} B breaks L1 NoC alignment"
 
     # x and out share dtype, layout and tile, so one page size describes both.
     page_size = int(input_tensor.buffer_aligned_page_size())

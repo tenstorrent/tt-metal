@@ -1,0 +1,32 @@
+{
+  "eval/golden_tests/g6_repeat/test_golden.py::test_op[1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[p1-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[poisoned_padding_1000-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[poisoned_padding_nan-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[special_values-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[repeat_determinism-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "alignment": "h_non_aligned"
+  }
+}

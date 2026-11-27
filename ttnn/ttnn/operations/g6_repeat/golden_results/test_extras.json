@@ -1,0 +1,23 @@
+{
+  "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[p1-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]": {
+    "case": "p1",
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[poisoned_padding_1000-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]": {
+    "case": "poisoned_padding_1000",
+    "poison_padding": 1000.0
+  },
+  "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[poisoned_padding_nan-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]": {
+    "case": "poisoned_padding_nan",
+    "poison_padding": NaN
+  },
+  "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[special_values-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]": {
+    "case": "special_values",
+    "input_gen": "special_values"
+  },
+  "eval/golden_tests/g6_repeat/test_golden.py::test_op_loose[repeat_determinism-1x1x1x256-r1_1_16_1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE]": {
+    "case": "repeat_determinism",
+    "repeat_determinism": true
+  }
+}

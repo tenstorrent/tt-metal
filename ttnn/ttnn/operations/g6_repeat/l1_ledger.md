@@ -10,7 +10,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes a
 
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
-| `out_page_size` | 2048 B | bfloat16 TILE 32x32 (`validate()`: dtype and layout in SUPPORTED); from `out.buffer_page_size()` |
+| `out_page_size` | 2048 B | bfloat16 TILE 32x32 (`validate()`: dtype and layout in SUPPORTED); from `x.buffer_aligned_page_size()`, which equals out's (same dtype, layout, tile and placement). Measured `device_l1_peak_bytes` at p1: 2048. |
 | `REPEAT_BUFFER_DEPTH` | 1 (Phase 0) | host constant |
 | `L1_BUDGET_BYTES` | 1347776 B | BB-05 (model-free L1 per core) |
 | `block_width_tiles` | `1 <= block_width_tiles <= max_block_width_tiles = floor(L1_BUDGET_BYTES / (REPEAT_BUFFER_DEPTH * out_page_size))` = 658; also `<= ceil(tensor_out_wt_tiles / num_cores)` and `<= MAX_BLOCK_WIDTH_TILES` when set | host clamp in `g6_repeat_program_descriptor.py`. A core with more columns loops over `num_blocks_this_core` blocks, so no W is refused. |
