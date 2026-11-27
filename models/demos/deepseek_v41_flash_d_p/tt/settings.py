@@ -790,7 +790,7 @@ TABLE = {
         "stays. False = the stock batched matmul (mm_configs WO_A)",
     ),
     "WOA_BANK": Setting(
-        "off",
+        "on",
         ("off", "on"),
         "WA.3 (OWNER 2026-11-27, wo_a bank-local reads; WOA_BANK_DESIGN.md, results/WA.2_probe.md, WA.3_offon.md), "
         "read per call (CALL-TIME, bringup/hooks.py batch_call_settings / batch_call_apply). on = the attention's grouped "

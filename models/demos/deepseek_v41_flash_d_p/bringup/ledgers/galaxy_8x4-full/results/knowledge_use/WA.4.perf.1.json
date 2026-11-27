@@ -1,0 +1,69 @@
+{
+ "used": [
+  {
+   "id": "DS41-391",
+   "how": "expected saving per chunk taken from the weight-read-bound wo_a (the bank layout removes read time, so a device win, not moved time)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-394",
+   "how": "expected host delta 0: one_group keeps the bank call's host time at today's; checked in the off/on host-us column",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-314",
+   "how": "test_woa_offon's timing switch: set the call-time DECODER_SKIP on the held model itself (use_decoder_skip + env), not only the env",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-385",
+   "how": "the proxy off side (another session) labelled indicative only; the device win judged from the same-load test_woa_offon",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a re-run of a chunk in place (a slot already past it) is refused under DECODER_SKIP=off with WINDOW_KV_KEEP=snapshot128; timing harnesses that re-run in place work only under decode (DS41-395)",
+  "orchestrator ab_test_names can produce an A/B item name longer than a file name (316 chars for two test_skip_positions units differing in BRINGUP_CHUNK plus 11 packed switches): measure/A/B crash with OSError Errno 36 (framework, F288 naming)",
+  "an edit of an untracked .py under the task's tests/ after the measure runs changes the code key and voids every measured part; keep report renderers outside keyed paths or finish them before measuring"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or weight padding in this step; measurement and a test fix only"
+  },
+  {
+   "id": "OV-77",
+   "answer": "done",
+   "evidence": "WA.3's WOA_BANK_COPIES (selected | both, tt/settings.py) kept: shipped load one copy, the A/B / test_woa_offon load both; the 40-layer run added the bank copy to the held load (load delta 2.64 s) and dropped it after; WA.4_ladder.md states weight DRAM a chip for both"
+  }
+ ],
+ "cited_only": [
+  "DS41-395"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "WA.4",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-27T19:23:13",
+  "head": "f39977aa64b",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/WA.4.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/wa4_notes.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/woa_ladder_report.py"
+  ]
+ }
+}

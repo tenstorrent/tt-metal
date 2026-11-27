@@ -1759,3 +1759,40 @@
 - Per-chunk values (rule 20): none touched. WOA_BANK is a per-call host branch; x / w / y addresses are prepared-program
   patches; layout, knobs, core set load- / compile-time.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate WA.3 --spec $BRINGUP_SPEC --check`.
+
+## WA.4 perf (attempt 1): wo_a bank-local reads, the accept measurement (DS41_WOA_BANK off | on)
+
+- Expected saving per chunk (perf_guide read: wo_a at 256 / 160 rows a chip is weight-read bound, DS41-191 / DS41-391;
+  the bank layout removes read time, it does not move it): device, from WA.3's in-model numbers, -0.33 to -0.41 ms a
+  8192 chunk (20 wo_a calls, layers 0-20; ~-0.8 ms for the 40-layer off == on run), -0.35 ms a 5120 chunk (160 rows,
+  OV-79 op probe 131.7 -> 114.2 us x 20); host 0 (WA.3 OV-78: one_group, host a call = today's within noise). The walls
+  are ~12-20 ms host-exposed (PB.LAD): a 0.4 ms device cut may sit inside the spread of a wall.
+- Code: none expected (WA.3's switch WOA_BANK, OV-77's WOA_BANK_COPIES already in tt/settings.py); fix only what the
+  gate shows broken.
+- Loads: test_woa_offon WOA_OFFON_LAYERS=all needs the full 40 layers (the owner's accept rule: off == on over all 40);
+  the ladders run on the perf load (layers 0-20, DECODER_SKIP=decode), the 5120 ladder on its own chunk-5120 load.
+- Fixed (gate-shown): test_woa_offon WOA_OFFON_LAYERS=all failed after its 40-layer comparison (off == on 0.0, repeats
+  0.0): the timing loop re-runs chunks in place, refused under DECODER_SKIP=off (DS41-395). Timing now switches the held
+  model to decode (use_decoder_skip + env, DS41-314) and back to the load's mode. Then a collection error after that
+  edit: the resident runner dropped test_mm256_offon from sys.modules, importlib.reload raised -> `_fresh` (reload if
+  present, else import_module).
+- Results (switch on): test_woa_offon all 40 layers: off == on 0.0 (single8192, 4x2k, single5120, real160 40 calls),
+  repeats 0.0; wo_a 3.06 -> 2.66 ms a chunk (-0.40/-0.41, all cases); device a chunk -0.52..-0.68 ms (timed on
+  layers 0-20); host a wo_a call 97.4/97.8, 109.0/116.2, 98.8/106.7 us (within WA.3's spread); load delta +1.97 s for
+  40 layers. packed_walls, 5120 skip_positions, cold strict no-rebuild (14 paths, 0 builds): rc 0. Single-8192 ladder
+  (gate unit WA.4#test_skip_positions): PASS, attention section 0.25-0.53 ms below PB.MM256's at every rung.
+  Expected vs measured: device -0.33..-0.41 expected -> wo_a -0.40, chunk -0.5..-0.7 (same load); host 0 -> 0 within
+  noise.
+- BLOCKER (framework, outside this step's paths): `orchestrator measure --task WA.4` (no --part) crashes in
+  ab_batches -> metrics.reset, OSError Errno 36: ab_test_names names the single-8192 test_skip_positions unit after the
+  12 variables it does not share with the 5120 unit (316 chars). The orchestrator's own A/B goes through the same code,
+  so the off side of the ladders could not be measured; WA.4_ladder.md shows a labelled proxy (PB.MM256's on side).
+- Report: rendered by generated/ds41_woa/woa_ladder_report_ext.py (proxy / gate-json / notes options; kept out of
+  tests/ because an edit of a .py there after the runs changes the code key and voids every measured part); the plain
+  tests/woa/woa_ladder_report.py renders off vs on from the A/B dirs once both sides exist. Verdict text:
+  tests/woa/wa4_notes.md.
+- Per-chunk values touched (rule 20): none (test-only change; WOA_BANK stays a per-call host branch, addresses are
+  prepared-program patches).
+- Re-run: `orchestrator measure --spec $BRINGUP_SPEC --task WA.4 --part test_woa_offon --part test_packed_walls
+  --part test_skip_positions__BRINGUP_CHUNK-5120 --part test_no_rebuild` (devjob) + `gate WA.4 --check --unit
+  WA.4#test_skip_positions`.

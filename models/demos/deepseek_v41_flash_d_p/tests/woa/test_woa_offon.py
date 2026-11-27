@@ -23,7 +23,9 @@ so a chunk is never re-run in place).
     woa_offon_max_abs_diff_real160: op level on REAL inputs (DS41-390): every wo_a call's input of the single8192 off
         chunk (chip 0, its first 160 rows, replicated) through today's call and the bank call at the 160-row knobs.
     woa_device_ms_<case>_<off|on> (the whole chunk) and woa_sec_ms_<case>_<off|on> (wo_a's own programs, signposted
-        around each call): the real-time profiler, slowest chip, the median of WOA_OFFON_PROF_RUNS runs a side.
+        around each call): the real-time profiler, slowest chip, the median of WOA_OFFON_PROF_RUNS runs a side. The
+        timing re-runs chunks in place, which DECODER_SKIP=off refuses (window rows not kept): with
+        WOA_OFFON_LAYERS=all it runs under DECODER_SKIP=decode (layers 0-20; WA.4), the comparison over all 40.
     woa_host_us_<off|on>_<case>: host us a wo_a call (perf_counter around ttnn.bringup.grouped_matmul, warm, no
         profiler; OV-78).
     woa_load_delta_s: load-time cost of the bank copy over the interleaved one for the executed layers (each copy built
@@ -49,8 +51,20 @@ from models.demos.common.bringup.testing.harness import mesh_parametrize, spec
 from models.demos.deepseek_v41_flash_d_p.tests import test_mm256_offon as _mm
 from models.demos.deepseek_v41_flash_d_p.tests.packed import packed_common as _pc
 
-_pc = importlib.reload(_pc)  # (the resident runner keeps helper modules of an earlier request: take this file's)
-_mm = importlib.reload(_mm)
+
+def _fresh(mod):
+    """The helper module as this file sees it now: the resident runner keeps helper modules of an earlier request
+    (reload them), or has dropped them from sys.modules after a tests/ edit while the package attribute stayed (then
+    reload() raises 'not in sys.modules': import it again; WA.4)."""
+    import sys
+
+    if sys.modules.get(mod.__name__) is mod:
+        return importlib.reload(mod)
+    return importlib.import_module(mod.__name__)
+
+
+_pc = _fresh(_pc)
+_mm = _fresh(_mm)
 CHUNK = _pc.CHUNK
 
 S = spec()
@@ -352,6 +366,15 @@ def test_woa_offon(mesh_device, monkeypatch):
                   flush=True)  # fmt: skip
         res["served_bad_offon"] = [list(map(str, b)) for b in bad_offon[:20]]
         res["served_bad_repeat"] = [list(map(str, b)) for b in bad_rep[:20]]
+        # WA.4: the timing below re-runs each chunk in place (a slot already past H). DECODER_SKIP=off refuses that
+        # (WINDOW_KV_KEEP=snapshot128: the window rows [H - 128, H) are no longer kept, tt/model.py window cut), so
+        # with WOA_OFFON_LAYERS=all the timing runs on the executed layers (DECODER_SKIP=decode, layers 0-20) as WA.3
+        # and the ladders time it; the off == on / repeat comparison above stays over all 40 layers.
+        timing_skip = "decode" if every else skip
+        res["timing_decoder_skip"] = timing_skip
+        if timing_skip != model.skip_mode:
+            monkeypatch.setenv(settings.env_name("DECODER_SKIP"), timing_skip)
+            model.use_decoder_skip(timing_skip)
         # host us a wo_a call (warm, no profiler), each case and side
         for case, fn in fns.items():
             for side, base in (("off", 0), ("on", 4)):
@@ -364,7 +387,9 @@ def test_woa_offon(mesh_device, monkeypatch):
                 us = round(min(got), 1)
                 res[case][f"host_us_{side}"] = us
                 res[case]["woa_calls"] = wc.calls
-                metrics.record(f"woa_host_us_{side}_{case}", us, calls=wc.calls, runs=[round(v, 1) for v in got])
+                metrics.record(
+                    f"woa_host_us_{side}_{case}", us, calls=wc.calls, runs=[round(v, 1) for v in got], skip=timing_skip
+                )
         # device ms (whole chunk; wo_a's own programs signposted), the median of runs a side, alternating
         runs = int(os.environ.get("WOA_OFFON_PROF_RUNS", "3"))  # diagnostic
         for case, fn in fns.items():
@@ -385,8 +410,8 @@ def test_woa_offon(mesh_device, monkeypatch):
                 res[case][f"woa_ms_{side}"] = round(woa_med, 3)
                 res[case][f"device_ms_runs_{side}"] = [round(t[0], 3) for t in got[side]]
                 res[case][f"woa_ms_runs_{side}"] = [round(t[1], 3) for t in got[side]]
-                metrics.record(f"woa_device_ms_{case}_{side}", round(dev, 3))
-                metrics.record(f"woa_sec_ms_{case}_{side}", round(woa_med, 3))
+                metrics.record(f"woa_device_ms_{case}_{side}", round(dev, 3), skip=timing_skip)
+                metrics.record(f"woa_sec_ms_{case}_{side}", round(woa_med, 3), skip=timing_skip)
             print(f"WOA {case}: device ms off {res[case]['device_ms_off']} on {res[case]['device_ms_on']}; wo_a ms "
                   f"off {res[case]['woa_ms_off']} on {res[case]['woa_ms_on']}; host us a call off "
                   f"{res[case]['host_us_off']} on {res[case]['host_us_on']}", flush=True)  # fmt: skip
@@ -407,7 +432,7 @@ def test_woa_offon(mesh_device, monkeypatch):
         for kind, atts in ld["added"].items():  # (the held model back to its load's copies)
             for att in atts:
                 att.woa_drop(kind)
-        if loaded != skip:
+        if model.skip_mode != loaded:
             model.use_decoder_skip(loaded)
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "offon.json").write_text(json.dumps(res, indent=1, default=str))

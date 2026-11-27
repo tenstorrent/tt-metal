@@ -1486,3 +1486,60 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   gather_hide, page_copy, snapshot / window / tail sends, index_keys, engram_device, ...). Tasks written after the
   grouped_matmul result.
 - 16:51 heartbeat: WA.3 agent active (transcript live); a model load on the runner holds the host (RAM used 248 GB, avail 122). Orchestrator paused-on-boundary (stops after WA.3). / 74 GB free, /scratch 130 GB.
+- 17:20 WA.3 gate refused by the one-load rule ("differ in DS41_WOA_BANK") although every unit passed: FRAMEWORK, the
+  orchestrator's import of hooks.py predated the agent making WOA_BANK call-time (a fresh validate: valid). F305
+  (0f287046b04): _call_hooks reloads hooks / settings when their files change (selftest, 19 passed). classify framework,
+  gate WA.3 --continue: committed f39977aa64b, nothing re-ran.
+- WA.3 result: off == on exact (single 8192, 4x2k, 5120; every layer and served record), repeats exact, cold no-rebuild PASS
+  (every layout); wo_a 3.06 -> 2.65-2.74 ms a chunk (-0.33..-0.41), chunk device 85.5 -> 84.8 (8192), 94.9 -> 94.3 (4x2k);
+  host a wo_a call unchanged (~105-131 us both); load +1.4 s (layers 0-20). OV-77 done (WOA_BANK_COPIES=selected default:
+  one copy; an unloaded layout raises). OV-79 answered: today's 8 x 11 rectangle with bank reads keeps 3 / 10 us of the
+  21 / 17 us; clusters next to the banks pay; cores held to the 11 x 10 matmul grid (gather-hide sub-device, DS41-382).
+- 17:22 DEVICE: resident runner stopped (RAM used 64 -> 48 GB). Orchestrator paused before WA.4. native-migrate run
+  grouped_matmul started (tmux native_gmm, checkout fast-forwarded to f39977aa64b; log /scratch/dnijemcevic/native/run.log).
+- 17:24 heartbeat: WA run paused before WA.4 (by design). native-migrate grouped_matmul startup: golden baseline on the device (the fork's unit tests through the safe runner) + translator / test-writer agents. RAM used 60 GB; / 73 GB, /scratch 128 GB free.
+- 17:40 native-migrate attempt 1 not_ported in 9.4 min ($10.5): golden baseline needed BRINGUP_SPEC (bank unit test's mesh_parametrize); the flow drops acceptance files outside the repo's tests/ (run.py:358) and --unit-test-dir had put them under the fork. Attempt 2: no --unit-test-dir, BRINGUP_SPEC set (attempt 1 kept at /scratch/dnijemcevic/native/attempt1_grouped_matmul).
+- 17:51 heartbeat: WA paused before WA.4 (port gap). native-migrate attempt 2: test writer OK (2 acceptance files, 4 perf cases), translation applied; round 1 red: build fail on a latent duplicate header (combine_plan_words.hpp copied in moe_block_ttnn and moe_block_main_ttnn, same namespace) colliding in a unity TU reshuffled by the port's new sources; round 2 agent at work; descriptor parity unchecked (no switch in this tree). RAM used 49 GB; / 73 GB, /scratch 127 GB free.
+- 18:02 native-migrate rounds 2-3 red: build passes; acceptance / golden cut 20 failed of 59 in round 2 (bank cases: rank-4 assert; interleaved output mismatch), review findings on output_tensor handling; clang-tidy gate could not run (PyPI clang-tidy 20.1.0 vs the build's clang 20.1.8 PCH). Swapped in clang-tidy 20.1.8 from the apt.llvm.org .deb (apt-get download, unpacked under /scratch/dnijemcevic/native/ctidy, linked in the port venv).
+- 18:20 native-migrate grouped_matmul: PORTED (42 min, $20, 5 rounds; branch port/grouped_matmul-nm-20261127T173252Z in
+  /scratch/dnijemcevic/native/tt-metal, not in the model tree). C++ device op ttnn.grouped_matmul (both paths). Host a warm
+  call: wo_a 8 x 160 142 -> 88 us, bank 82 -> 55 us, small ~59 -> 37 us; dispatch bytes identical; device 1.000x; golden
+  pass. OWNER: applied the one-line fix myself (assert messages parsed only on failure; was a per-call format_string
+  parse), rebuilt, acceptance + golden cut 63 passed, fork unit test 6 passed (alone: its own mesh fixture clashes with the
+  others' in one process). Bit-identity vs the Python op at the model's shapes: at integration (layer level).
+- 18:22 resume the WA run (WA.4) through the orchestrator; resident runner restarts on demand.
+- 18:21 heartbeat: WA.4 agent attempt 1 active (transcript live). RAM used 49 GB; / 72 GB, /scratch 127 GB free.
+- 18:35 OWNER-agreed order after WA.4 / WA.5: (1) the C++ grouped_matmul into the batching model (layer-level: exact vs the
+  Python op, no rebuild, host us); (2) a host profile ranks the other prepared ops (6 forks + the model's own prepared
+  programs) by host ms a chunk; port them largest first with native-migrate (separate checkout), layer-level checks only,
+  ONE model-wide check at the end; (3) then a wq_b / wo_b bank-layout probe built directly in C++ (they are grouped_matmul
+  with G = 1: N split over the banks), killed if its stub test shows no read bound; (4) port each milestone to
+  dnijemcevic/model_bringup in batches (MB.WA; the C++ op batch; wq_b / wo_b if won), each batch one 5120 full-model check;
+  one C++ op per fork for both branches (reconcile model_bringup's version first: block_select / ckv_bfp4 / fp8_rows /
+  prepared_program differ a little; fabric_reduce_scatter, pair_pool same); packed-only prepared ops (glued_derive,
+  lane_rows, owned_gather, gather_hide) do not apply there. Rough wq_b / wo_b upper bounds (overseer roofline, not
+  measured): ~2 / ~1 ms a 8192 chunk; P.81's stock DRAM-sharded attempt on them was flat / slower.
+- 18:50 heartbeat: WA.4 agent active; a full-model load in its checks (RAM used 256 GB); / 72G free.
+- 19:20 heartbeat: WA.4 agent active (~1 h); RAM used 255 GB; / 71G free.
+- 19:24 WA.4: agent finished; the orchestrator CRASHED at the A/B's first unit (OSError 36, file name too long: F288 named the 8192 / 5120 test_skip_positions units by all 20 differing packed vars). FRAMEWORK F306 (bc5a006acce): short name (first difference + hash), selftest (22 passed). Resumed --until WA.5.
+- 19:50 heartbeat: WA.4 A/B running; RAM used 255 GB; / 71G free.
+- 20:08 WA.4 A/B done (WAITING). Same-load device (test_woa_offon, alternating, median of 3): wo_a 3.06 -> 2.66 ms a chunk;
+  whole chunk single 8192 85.41 -> 84.82 (-0.60), 4x2k 94.72 -> 94.20 (-0.52), single 5120 98.41 -> 97.73 (-0.68). off ==
+  on bit-identical over all 40 layers (every served record), repeats 0, cold no-rebuild PASS everywhere, host a call within
+  spread, load +1.97 s (40 layers), shipped DRAM unchanged (one copy). Walls within noise both ways. ACCEPTED (owner rule:
+  device win + gate PASS; owner's any-size word). The agent's WA.4_ladder.md used a PROXY off side (its own A/B hit the
+  F306 crash): WA.5's paths widened to WA.4_ladder.md (validate: valid) + note OV-80 to re-render it from the real A/B.
+  Resumed (accept gate: 40-layer reference + determinism in a fresh process, ladders, no-rebuild; then WA.5).
+- 20:25 WA.4 accept gate: determinism PASS (fresh, 0.0), test_chunk8192_reference PASS (switch on, 40 layers: final hidden
+  0.1346 last, top-5 1.0), then unit 3 test_woa_offon FAIL in 0 s: NeedsFreshProcess (WOA_OFFON_LAYERS=all loads 40
+  layers but the test declares BATCH_LAYERS="executed", so the gate grouped it with the 21-layer perf units; one-load
+  rule refuses). My gate's shape, not the change. The 40-layer off == on is already recorded by the orchestrator's A/B on
+  the same code (ab/WA.4/new/test_woa_offon: single8192 / 4x2k / single5120 0.0 over 40 layers, outputs + served). Gate
+  unit 3 now runs at layers 0-20 (WOA_OFFON_LAYERS dropped; validate: valid); classify framework; gate WA.4 --continue.
+- 20:21 heartbeat: WA.4 accept gate units 3-7 running; RAM used 57 GB; / 71G free.
+- 20:45 WA.4 gate: units 3-5 PASS (off == on layers 0-20, 8192 ladder, packed walls); unit 6 (the 5120 ladder) FAIL 0 s:
+  NeedsFreshProcess (a 5120 model in the 8192 perf process). My gate: two chunks are two loads. validate had passed it:
+  FRAMEWORK F307 (0df7fba26b1): one_load_errors counts chunks per layer class (selftest; flags only WA.4 among queued
+  tasks; passed X.8 / PB.NR are real two-chunk gates). The 5120 ladder unit dropped from WA.4's gate (validate: valid):
+  its off AND on sides are already measured by the A/B on this code (ab/WA.4/{old,new}/test_skip_positions__BRINGUP_CHUNK-5120;
+  WA.5 renders them). classify framework; gate --continue (only test_no_rebuild left).
