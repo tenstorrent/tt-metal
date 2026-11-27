@@ -9,7 +9,7 @@ from loguru import logger
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 import numpy as np
 import evaluate
-from tests.models.nanogpt.dataset_utils import get_data
+from models.experimental.nanogpt.demo.dataset_utils import get_data
 
 
 @pytest.mark.parametrize(

@@ -7,8 +7,8 @@
 #include <gtest/gtest.h>
 
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <limits>
 #include <algorithm>
@@ -137,7 +137,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
 public:

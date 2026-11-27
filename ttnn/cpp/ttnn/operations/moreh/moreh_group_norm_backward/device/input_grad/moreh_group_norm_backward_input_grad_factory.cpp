@@ -4,7 +4,7 @@
 
 #include "moreh_group_norm_backward_input_grad_device_operation.hpp"
 #include <algorithm>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -18,7 +18,6 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     using namespace tt;
     using namespace tt::constants;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;

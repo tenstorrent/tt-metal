@@ -9,12 +9,12 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -22,17 +22,17 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/shared_with_host/activation_type.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/semaphore_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
@@ -2122,7 +2122,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     /* in2 */
     uint32_t in2_single_tile_size = in0_single_tile_size;
     uint32_t in2_CB_tiles = (ring_size - 1) * in0_CB_tiles;  // All shards except local
-    uint32_t in2_CB_size = in2_CB_tiles * in2_single_tile_size;
+    // A one-core ring has no remote shards, but a circular buffer cannot be zero-sized.
+    uint32_t in2_CB_size = std::max(in2_CB_tiles, 1u) * in2_single_tile_size;
 
     /* out */
     uint32_t out_block_tiles = per_core_M * per_core_N;
@@ -5188,7 +5189,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // under unity builds; the StrongType string *values* are the plain accessor names the kernels expect.
 // ===========================================================================================
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
@@ -5826,6 +5827,18 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
+    // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode, and cb_intermed0 holds 32-bit
+    // partials under fp32 accumulation. UnpackToSrc, unlike matmul_unified's UnpackToDest: the fused bias add
+    // here reads the partials as an FPU SrcA operand, and on Quasar UnpackToDest is kernel-wide (UnpackToDestEn
+    // sends every copy_tile through Dest, see #62102). The cost is that the reload between K blocks rounds
+    // through SrcA (TF32) and loses fp32 precision at every block boundary. The non-Quasar mcast factories
+    // avoid that loss by marking interm0 UnpackToDest (or, with a fused bias, an alias of it) (#50250).
+    const bool interm0_is_32bit = interm0_data_format == tt::DataFormat::Float32 ||
+                                  interm0_data_format == tt::DataFormat::Int32 ||
+                                  interm0_data_format == tt::DataFormat::UInt32;
+    if (fp32_dest_acc_en && interm0_is_32bit) {
+        compute_hw_config.unpack_modes.emplace(RO_INTERM0_DFB, m2::UnpackMode::UnpackToSrc);
+    }
 
     // ---- in0 sender kernel CTAs (named) ----
     auto make_in0_sender_cta = [&](uint32_t core_has_output_block_work,
@@ -6314,7 +6327,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         uint32_t output_idx_y = i / num_blocks_x;
 
         if (in0_is_sharded) {
-            m2::AdvancedKernelRunArgs::Varargs v;
+            m2::experimental::AdvancedKernelRunArgs::Varargs v;
             v.reserve(in0_sharded_num_varargs);
             for (auto x : in0_mcast_noc_x) {
                 v.push_back(x);
@@ -6859,6 +6872,18 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
+    // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode, and cb_intermed0 holds 32-bit
+    // partials under fp32 accumulation. UnpackToSrc, unlike matmul_unified's UnpackToDest: the fused bias add
+    // here reads the partials as an FPU SrcA operand, and on Quasar UnpackToDest is kernel-wide (UnpackToDestEn
+    // sends every copy_tile through Dest, see #62102). The cost is that the reload between K blocks rounds
+    // through SrcA (TF32) and loses fp32 precision at every block boundary. The non-Quasar mcast factories
+    // avoid that loss by marking interm0 UnpackToDest (or, with a fused bias, an alias of it) (#50250).
+    const bool interm0_is_32bit = interm0_data_format == tt::DataFormat::Float32 ||
+                                  interm0_data_format == tt::DataFormat::Int32 ||
+                                  interm0_data_format == tt::DataFormat::UInt32;
+    if (fp32_dest_acc_en && interm0_is_32bit) {
+        compute_hw_config.unpack_modes.emplace(RO_INTERM0_DFB, m2::UnpackMode::UnpackToSrc);
+    }
 
     // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based
     // on in1_noc (below). The in1 sender/receiver writer kernels MUST issue NoC ops on that same NOC,
@@ -7245,11 +7270,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
         });
+        // The noop compute does not bind the partials DFB, and unpack_modes may only name bound DFBs.
+        m2::ComputeHardwareConfig noop_compute_hw_config = compute_hw_config;
+        noop_compute_hw_config.unpack_modes.erase(RO_INTERM0_DFB);
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_COMPUTE_KERNEL,
             .source = std::filesystem::path(NOOP_COMPUTE_KERNEL_PATH),
             .dfb_bindings = std::move(noop_compute_dfb),
-            .hw_config = compute_hw_config,
+            .hw_config = std::move(noop_compute_hw_config),
         });
         work_units.push_back(m2::WorkUnitSpec{
             .name = "wu_noop",
@@ -7727,7 +7755,7 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
             }
             auto mesh_grid = pc.allowed_worker_cores.value().bounding_box().grid_size();
             DeviceComputeKernelConfig ckc = attributes.compute_kernel_config.value();
-            tt_metal::Program program{};
+            tt_metal::Program program = tt_metal::CreateProgram(*tensor_args.input_tensors.at(0).device());
             std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_signaler = std::nullopt;
             auto b_tensors =
                 std::vector<Tensor>{tensor_args.input_tensors.begin() + 1, tensor_args.input_tensors.end()};

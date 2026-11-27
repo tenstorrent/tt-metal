@@ -30,6 +30,7 @@ from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Att
 from ....models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
+from ....models.transformers.minimax_h3.vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.packing import (
@@ -41,12 +42,15 @@ from ....pipelines.minimax_h3.packing import (
     resolve_canvas_size,
     video_latent_num_frames,
 )
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import MINIMAX_H3_BUCKET_LADDER_4X8, select_bucket
 from ....pipelines.minimax_h3.policy import align_num_frames
+from ....pipelines.minimax_h3.vsa_geometry import build_vsa_geometry, vsa_min_padded_len
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local_device_to_torch
 from ....utils.test import skip_if_unsupported_num_links
 from .common import (
     GALAXY_RING,
+    GALAXY_RING_AND_LINE,
     REAL_BLOCK_CONFIG,
     ROPE_FREQ_DIM,
     ROPE_THETA,
@@ -54,6 +58,7 @@ from .common import (
     TAG_TEXT,
     TAG_VIDEO,
     TT_BLOCK_CONFIG,
+    format_host_times,
     packed_layout,
     randomize_norm_weights,
     upload_rope,
@@ -1055,6 +1060,63 @@ def test_minimax_h3_transformer_block(
 
 
 @GALAXY_RING
+def test_minimax_h3_transformer_block_prepared_modulation(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    reset_seeds,
+    expect_error,
+) -> None:
+    """The block reading its step's rows of `prepare_modulation`'s table (`modulation_row_indices`) matches the block
+    projecting that step's temb: for a step whose rows reach the table's second 32-row tile, and for the last step
+    of a different schedule prepared after a release. Without a prepared table, `modulation_row_indices` raises."""
+    MIN_PCC = 0.9995  # against the torch reference, as test_minimax_h3_transformer_block
+    MIN_PCC_PROJECTED = 0.99999  # against the same block projecting the step's temb itself
+    NUM_STEPS = 49  # the denoising forwards of a 50-step request
+    TABLE_ROWS = 256  # the pipeline's ADALN_PREPARED_ROWS
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
+    fixture = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 256, 1280)
+    slots = fixture.num_timesteps
+    assert NUM_STEPS * slots <= TABLE_ROWS
+
+    tt_model = MiniMaxH3TransformerBlock(**fixture.block_kwargs)
+    tt_model.load_torch_state_dict(fixture.torch_model.state_dict())
+    projected = fixture.run(tt_model)
+    assert_quality(fixture.torch_out, projected, pcc=MIN_PCC)
+
+    def rows_of(step: int) -> ttnn.Tensor:
+        """`modulation_row_indices` for `step`: its `slots` rows of the table, uint32 and replicated."""
+        rows = torch.arange(step * slots, (step + 1) * slots, dtype=torch.int32).reshape(1, slots)
+        return from_torch(rows, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR)
+
+    def prepare(step: int) -> None:
+        """Prepare a random schedule holding the fixture's temb at `step`, zero-padded like the pipeline's."""
+        rows = torch.zeros(TABLE_ROWS, TIME_EMBED_DIM)
+        rows[: NUM_STEPS * slots] = torch.randn(NUM_STEPS * slots, TIME_EMBED_DIM)
+        rows[step * slots : (step + 1) * slots] = fixture.temb_input
+        tt_rows = from_torch(rows.reshape(1, 1, TABLE_ROWS, TIME_EMBED_DIM), device=mesh_device, dtype=ttnn.float32)
+        tt_model.prepare_modulation(tt_rows)
+        ttnn.deallocate(tt_rows)
+
+    for step in (32 // slots, NUM_STEPS - 1):
+        tt_model.release_modulation()
+        prepare(step)
+        prepared = fixture.run(tt_model, temb=None, modulation_row_indices=rows_of(step))
+        logger.info(f"step {step} (rows {step * slots}..{(step + 1) * slots - 1}): prepared vs projected")
+        assert_quality(projected, prepared, pcc=MIN_PCC_PROJECTED)
+        assert_quality(fixture.torch_out, prepared, pcc=MIN_PCC)
+
+    tt_model.release_modulation()
+    with expect_error(RuntimeError, "modulation_row_indices needs prepare_modulation first"):
+        fixture.run(tt_model, temb=None, modulation_row_indices=rows_of(0))
+
+
+@GALAXY_RING_AND_LINE
 def test_minimax_h3_transformer_block_dynamic_length(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -1066,15 +1128,11 @@ def test_minimax_h3_transformer_block_dynamic_length(
 ) -> None:
     """One dynamic-length block serves two lengths from one program set: warm at the capacity length, then
     the shorter one must add no program; PCC against the reference at both."""
-    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+    from tt_py_test_utils_common.utils_for_testing import assert_program_cache_flat
 
     MIN_PCC = 0.9995
 
     skip_if_unsupported_num_links(mesh_device, num_links)
-    if not is_blackhole():
-        # The Wormhole grid has no pinned ff2 MM+RS program, so the block falls back to the row-parallel linear
-        # whose reduce-scatter keys its program on the row count: a second length always adds a program there.
-        pytest.skip("dynamic_length zero-miss gate is Blackhole-only: the Wormhole ff2 fallback keys on rows")
     big = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 512, 3072)
     small = _block_setup(
         mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 256, 1280, torch_model=big.torch_model
@@ -1092,6 +1150,56 @@ def test_minimax_h3_transformer_block_dynamic_length(
         assert_quality(fixture.torch_out, fixture.run(tt_model), pcc=MIN_PCC)
 
     assert_program_cache_flat(mesh_device, run, [big, small])
+
+
+@GALAXY_RING
+@pytest.mark.parametrize("dynamic_length", [False, True], ids=["static", "dynamic"])
+@pytest.mark.parametrize("use_persistent_ccl_buffers", [True, False], ids=["persistent", "op_allocated"])
+def test_minimax_h3_transformer_block_ff1_bf8(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    dynamic_length: bool,
+    use_persistent_ccl_buffers: bool,
+    reset_seeds,
+) -> None:
+    """A bfloat8_b ff1 -> ff2 intermediate (`ff1_output_dtype`) stays close to the reference and changes the output."""
+    MIN_PCC = 0.999
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    fixture = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 256, 1280)
+    extra = {"use_persistent_ccl_buffers": use_persistent_ccl_buffers}
+    if dynamic_length:
+        capacity = padded_sequence_length(fixture.seq_len, fixture.sp_factor)
+        extra |= dict(dynamic_length=True, kv_gather_capacity=capacity, norm_row_capacity=capacity // fixture.sp_factor)
+
+    def run(ff1_output_dtype) -> tuple[torch.Tensor, set]:
+        tt_model = MiniMaxH3TransformerBlock(**fixture.block_kwargs, **extra, ff1_output_dtype=ff1_output_dtype)
+        tt_model.load_torch_state_dict(fixture.torch_model.state_dict())
+        dtypes = set()
+
+        def record(forward):
+            def recording_forward(x, *args, **kwargs):
+                out = forward(x, *args, **kwargs)
+                dtypes.add((x.dtype, out.dtype))
+                return out
+
+            return recording_forward
+
+        ff2 = tt_model.ff.ff2
+        ff2.forward = record(ff2.forward)
+        ff2.forward_fused_addcmul = record(ff2.forward_fused_addcmul)
+        return fixture.run(tt_model), dtypes
+
+    bf16_out, bf16_dtypes = run(None)
+    bf8_out, bf8_dtypes = run(ttnn.bfloat8_b)
+    assert bf16_dtypes == {(ttnn.bfloat16, ttnn.bfloat16)}
+    assert bf8_dtypes == {(ttnn.bfloat8_b, ttnn.bfloat16)}
+    assert_quality(fixture.torch_out, bf8_out, pcc=MIN_PCC)
+    assert not torch.equal(bf16_out, bf8_out)
 
 
 # ---- production-geometry block device-perf (Tracy signposts) ----
@@ -1188,6 +1296,11 @@ def test_minimax_h3_transformer_block_perf(
     sizes = _packed_sizes(duration_s, num_text_tokens)
     seq_len = sizes["seq_len"]
     padded_len = padded_sequence_length(seq_len, sp_factor * SIM) // SIM
+    # H3_BLOCK_PADDED_LEN: the padded length a bucketed pipeline runs (its rung, e.g. 111616 at 15 s on the 4x8
+    # ladder), which the natural padding above does not reproduce; the dynamic-length path runs the natural one.
+    if os.environ.get("H3_BLOCK_PADDED_LEN"):
+        padded_len = int(os.environ["H3_BLOCK_PADDED_LEN"])
+        assert padded_len >= seq_len and padded_len % (sp_factor * ttnn.TILE_SIZE) == 0, padded_len
     logger.info(
         f"{duration_s:g}s @ {sizes['height']}x{sizes['width']}: {sizes['num_frames']} frames -> "
         f"{sizes['latent_frames']} latent frames x {sizes['grid_h']}x{sizes['grid_w']} patches = "
@@ -1230,6 +1343,8 @@ def test_minimax_h3_transformer_block_perf(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
         dynamic_length=dynamic_length,
+        # H3_BLOCK_PERSISTENT=0: transient CCL buffers, as the 4x8 pipeline preset runs the DiT.
+        use_persistent_ccl_buffers=os.environ.get("H3_BLOCK_PERSISTENT", "1") == "1",
     )
     tt_block.load_torch_state_dict(torch_block.state_dict())
     del torch_block
@@ -1252,6 +1367,7 @@ def test_minimax_h3_transformer_block_perf(
                         q_chunk_size=q_chunk,
                         k_chunk_size=k_chunk,
                         exp_approx_mode=False,
+                        min_blocked_pack_tiles=2,
                     )
                     for name in tt_block.attn._ring_sdpa_configs
                 }
@@ -1318,6 +1434,160 @@ def test_minimax_h3_transformer_block_perf(
     local = local_device_to_torch(tt_out).float()
     assert torch.isfinite(local).all(), "block output contains NaN or Inf"
     logger.info(f"output {tuple(tt_out.shape)}, local shard std={local.std().item():.4f}")
+    # H3_BLOCK_DUMP: save every device's output shard (bf16), to compare two code paths on the same seeded
+    # weights and inputs, e.g. a fused op against the unfused one it replaces.
+    if os.environ.get("H3_BLOCK_DUMP"):
+        torch.save(
+            [ttnn.to_torch(t).to(torch.bfloat16) for t in ttnn.get_device_tensors(tt_out)], os.environ["H3_BLOCK_DUMP"]
+        )
+
+
+VSA_SPARSITY = 0.9
+
+
+@GALAXY_RING
+@pytest.mark.parametrize(
+    "duration_s",
+    [
+        pytest.param(5.0, id="5s_768p"),
+        pytest.param(15.0, id="15s_768p"),
+    ],
+)
+@pytest.mark.parametrize("attention", ["dense", "vsa"])
+def test_minimax_h3_transformer_block_vsa_perf(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    duration_s: float,
+    attention: str,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    reset_seeds,
+) -> None:
+    """One block at the FastH3 VSA request's rung, dense or VSA, so the two profiles differ only in attention."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+    if sp_factor != 8:
+        pytest.skip("the rung comes from the 4x8 bucket ladder")
+
+    sizes = _packed_sizes(duration_s, CALIBRATED_FOX_PROMPT_NUM_TOKENS)
+    seq_len = sizes["seq_len"]
+    segments = (sizes["num_text"], 0, sizes["num_audio"])
+    frame = sizes["grid_h"] * sizes["grid_w"]
+    grid = (sizes["num_video"] // frame, sizes["grid_h"], sizes["grid_w"])
+    rung = select_bucket(vsa_min_padded_len(segments, grid, sp_factor), MINIMAX_H3_BUCKET_LADDER_4X8)
+    logger.info(f"{duration_s:g}s @ {sizes['height']}x{sizes['width']}: seq_len {seq_len}, rung {rung}, {attention}")
+
+    num_timesteps = 2
+    position_ids, tags, timestep_indices = packed_layout(
+        sizes["num_text"], sizes["num_audio"], sizes["num_video"], (sizes["grid_h"], sizes["grid_w"]), rung
+    )
+    adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + tags.clamp(min=0)
+
+    geometry = None
+    if attention == "vsa":
+        geometry = build_vsa_geometry(segments, grid, sp_factor=sp_factor, padded_len=rung)
+        position_ids = geometry.permute_metadata(position_ids[:seq_len])
+        adaln_indices = geometry.permute_metadata(adaln_indices[:seq_len])
+
+    rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
+    with torch.no_grad():
+        rope_cos, rope_sin = rope(position_ids)
+    rope_cos, rope_sin = prepare_rope_tables(rope_cos, rope_sin, ATTENTION_HEAD_DIM)
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    parallel_config = DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
+        cfg_parallel=None,
+    )
+    tt_block = MiniMaxH3TransformerBlock(
+        **TT_BLOCK_CONFIG,
+        rotary_dim=2 * 3 * ROPE_FREQ_DIM,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        vsa_config=MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY) if geometry is not None else None,
+    )
+    torch_block = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
+    tt_block.load_torch_state_dict(torch_block.state_dict())
+    del torch_block
+
+    host_ms = {}
+    logical_n = seq_len
+    if geometry is not None:
+        prepass = VSAPrepass(
+            rung=rung,
+            sp_factor=sp_factor,
+            sparsity=VSA_SPARSITY,
+            num_heads=REAL_BLOCK_CONFIG["num_attention_heads"] // tp_factor,
+            head_dim=ATTENTION_HEAD_DIM,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            sp_axis=sp_axis,
+        )
+        prepass.update(geometry, traced=False)
+        tt_block.attn.set_vsa_prepass(prepass)
+
+        # Timed again once warm.
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        geometry = build_vsa_geometry(segments, grid, sp_factor=sp_factor, padded_len=rung)
+        host_ms["build_vsa_geometry"] = (time.perf_counter() - t0) * 1e3
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        prepass.update(geometry, traced=False)
+        host_ms["prepass.update"] = (time.perf_counter() - t0) * 1e3
+        t0 = time.perf_counter()
+        tt_block.attn.set_vsa_prepass(prepass)
+        host_ms["set_vsa_prepass"] = (time.perf_counter() - t0) * 1e3
+        logical_n = geometry.logical_n
+
+    tt_spatial = bf16_tensor_2dshard(
+        torch.randn(1, 1, rung, HIDDEN_SIZE),
+        device=mesh_device,
+        shard_mapping={sp_axis: 2, tp_axis: 3},
+    )
+    tt_temb = from_torch(torch.randn(1, 1, num_timesteps, TIME_EMBED_DIM), device=mesh_device, dtype=ttnn.float32)
+    tt_adaln = from_torch(
+        adaln_indices.to(torch.int32).reshape(1, 1, 1, rung),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, sp_axis],
+    )
+    tt_rope_cos, tt_rope_sin = upload_rope(rope_cos, rope_sin, mesh_device=mesh_device, sp_axis=sp_axis)
+    tt_logical_n = logical_length_tensor(mesh_device, logical_n)
+
+    def run_block() -> ttnn.Tensor:
+        out = tt_block(
+            tt_spatial,
+            tt_logical_n,
+            temb=tt_temb,
+            adaln_indices=tt_adaln,
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+        )
+        ttnn.synchronize_device(mesh_device)
+        return out
+
+    logger.info("iteration 1: compiling kernels and populating the program cache")
+    ttnn.deallocate(run_block())
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info("iteration 2: warm run (the profiled region)")
+    signpost("start")
+    t0 = time.perf_counter()
+    tt_out = run_block()
+    host_ms["warm run"] = (time.perf_counter() - t0) * 1e3
+    signpost("stop")
+
+    local = local_device_to_torch(tt_out).float()
+    assert torch.isfinite(local).all(), "block output contains NaN or Inf"
+    logger.info(f"{attention} host times:\n" + format_host_times(host_ms))
 
 
 # ---- the token refiner ----

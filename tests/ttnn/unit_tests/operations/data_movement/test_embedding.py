@@ -692,6 +692,31 @@ def test_embedding_oom(
     assert_equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize(
+    "embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED, ttnn.EmbeddingsType.BINARY]
+)
+@pytest.mark.parametrize("index_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("hidden_embedding_dim", [8, 16, 24, 40, 48, 80])
+@pytest.mark.parametrize("sentence_size", [64, 4160])
+def test_embedding_rows_not_dram_aligned(device, embeddings_type, index_layout, hidden_embedding_dim, sentence_size):
+    torch.manual_seed(0)
+    indices, vocabulary_size, pad_token = _embedding_indices((1, sentence_size), 64, embeddings_type)
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+
+    input_tensor = _indices_to_device(indices, ttnn.uint32, index_layout, device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.embedding(
+        input_tensor,
+        weights,
+        padding_idx=pad_token,
+        embeddings_type=embeddings_type,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    expected = torch.nn.functional.embedding(indices, torch_weights)
+    assert_equal(expected, ttnn.to_torch(output_tensor).reshape(expected.shape))
+
+
 def test_embedding_chunked_two_blocks_partial_last_chunk(device):
     # 8224 columns leaves a 1-tile last chunk. 4096 tokens is two blocks on one core.
     torch.manual_seed(0)
@@ -1139,3 +1164,124 @@ def test_embedding_fused_rank2_preallocated_output_cache_hit(device):
         expected = torch.nn.functional.embedding(indices, torch_weights)
         assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
     assert device.num_program_cache_entries() == 1
+
+
+def _repeated_token_indices(pattern, batch_size, sentence_size, vocabulary_size):
+    positions = torch.arange(batch_size * sentence_size)
+    if pattern == "all_zeros":
+        indices = torch.zeros_like(positions)
+    elif pattern == "runs_across_blocks":
+        # Runs of 48 equal tokens cross the 32-index block boundaries of the reader.
+        indices = (positions // 48) % vocabulary_size
+    elif pattern == "alternating":
+        indices = (positions % 2) * 7
+    else:
+        raise AssertionError(pattern)
+    return indices.reshape(batch_size, sentence_size)
+
+
+def _run_repeated_token_embedding(
+    device, pattern, batch_size, sentence_size, hidden, vocabulary_size, layout, memory_config
+):
+    torch.manual_seed(0)
+    torch_indices = _repeated_token_indices(pattern, batch_size, sentence_size, vocabulary_size)
+    torch_weights = torch_random((vocabulary_size, hidden), -0.1, 0.1, dtype=torch.bfloat16)
+    expected = torch.nn.functional.embedding(torch_indices, torch_weights)
+
+    indices = ttnn.from_torch(torch_indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output = ttnn.embedding(
+        indices,
+        weights,
+        embeddings_type=ttnn.EmbeddingsType.GENERIC,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        memory_config=memory_config,
+    )
+    assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
+
+
+# Consecutive equal tokens reuse the row staged for the previous token instead of re-reading DRAM (row-major and
+# tilize readers). Random indices from a large vocabulary almost never repeat, so these patterns force that path.
+# With TILE output, hidden 17408 needs more than one chunk per row, which must keep reading from DRAM; the
+# row-major reader only chunks rows above 1 MiB, so for ROW_MAJOR both hidden sizes run as a single chunk.
+@pytest.mark.parametrize("pattern", ["all_zeros", "runs_across_blocks", "alternating"])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("hidden", [768, 17408])
+def test_embedding_repeated_tokens(device, pattern, layout, hidden):
+    _run_repeated_token_embedding(device, pattern, 2, 256, hidden, 1024, layout, ttnn.DRAM_MEMORY_CONFIG)
+
+
+# Width-sharded TILE output: each core reads only its column slice of a weight row (weight_offset != 0).
+@pytest.mark.requires_grid_size((8, 4))
+@pytest.mark.parametrize("pattern", ["all_zeros", "runs_across_blocks", "alternating"])
+def test_embedding_repeated_tokens_width_sharded_tile_output(device, pattern):
+    batch_size, sentence_size, hidden = 10, 96, 2048
+    num_cores_x, num_cores_y = 8, 4
+    shard_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))]
+    )
+    shard_spec = ttnn.ShardSpec(
+        shard_grid, (batch_size * sentence_size, hidden // (num_cores_x * num_cores_y)), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    _run_repeated_token_embedding(
+        device, pattern, batch_size, sentence_size, hidden, 1024, ttnn.TILE_LAYOUT, memory_config
+    )
+
+
+def _embedding_rm_case(device, sentence_size):
+    torch.manual_seed(0)
+    torch_indices = torch.randint(0, 64, (1, sentence_size))
+    torch_weights = torch.rand(64, 128)
+    indices = ttnn.from_torch(torch_indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weights = ttnn.from_torch(
+        torch_weights.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    expected = torch.nn.functional.embedding(torch_indices, torch_weights.to(torch.bfloat16))
+    return indices, weights, expected
+
+
+# A row-major output (explicit, or implied by the row-major weight) cannot be typecast.
+@pytest.mark.parametrize("sentence_size", [32, 10], ids=["aligned", "unaligned"])
+@pytest.mark.parametrize("requested_dtype", [ttnn.float32, ttnn.bfloat8_b])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, None], ids=["explicit_rm", "default_layout"])
+def test_embedding_row_major_output_rejects_dtype(device, sentence_size, requested_dtype, layout, expect_error):
+    indices, weights, _ = _embedding_rm_case(device, sentence_size)
+    with expect_error(RuntimeError, "Can only typecast output embeddings when producing TILE_LAYOUT output"):
+        ttnn.embedding(indices, weights, layout=layout, dtype=requested_dtype)
+
+
+# Requesting the dtype the row-major output already has must still succeed.
+@pytest.mark.parametrize("sentence_size", [32, 10], ids=["aligned", "unaligned"])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, None], ids=["explicit_rm", "default_layout"])
+def test_embedding_row_major_output_allows_same_dtype(device, sentence_size, layout):
+    indices, weights, expected = _embedding_rm_case(device, sentence_size)
+    output = ttnn.embedding(indices, weights, layout=layout, dtype=ttnn.bfloat16)
+    assert output.dtype == ttnn.bfloat16
+    assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
+
+
+# A BFLOAT8_B TILE weight is untilized to BFLOAT16 before the lookup, so a row-major output is BFLOAT16.
+@pytest.mark.parametrize("sentence_size", [32, 10], ids=["aligned", "unaligned"])
+def test_embedding_row_major_output_from_bf8_tile_weight(device, sentence_size):
+    torch.manual_seed(0)
+    torch_indices = torch.randint(0, 64, (1, sentence_size))
+    torch_weights = torch.rand(64, 128)
+    indices = ttnn.from_torch(torch_indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # The untilized (bf16 rounded) table is what the lookup reads, so it is the reference.
+    torch_untilized_weights = ttnn.to_torch(weights)
+    expected = torch.nn.functional.embedding(torch_indices, torch_untilized_weights)
+    output = ttnn.embedding(indices, weights, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    assert output.dtype == ttnn.bfloat16
+    assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
+
+
+def test_embedding_bf8_tile_weight_rejects_bf8_row_major_output(device, expect_error):
+    indices, _, _ = _embedding_rm_case(device, 32)
+    torch_weights = torch.rand(64, 128)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Can only typecast output embeddings when producing TILE_LAYOUT output"):
+        ttnn.embedding(indices, weights, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat8_b)

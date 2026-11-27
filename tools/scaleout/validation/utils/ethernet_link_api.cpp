@@ -4,7 +4,7 @@
 
 #include "tools/scaleout/validation/utils/ethernet_link_api.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <llrt/tt_cluster.hpp>
 
 #include <chrono>

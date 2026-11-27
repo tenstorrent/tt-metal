@@ -9,7 +9,7 @@
 #include <span>
 #include <utility>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include "impl/context/context_types.hpp"
 

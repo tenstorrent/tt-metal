@@ -6,8 +6,8 @@
 #include <vector>
 
 #include "moreh_sum_backward_device_operation.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -15,7 +15,6 @@
 namespace ttnn::operations::moreh::moreh_sum_backward {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_shape, uint32_t rank) {
     TT_FATAL(rank <= padded_shape.rank(), "rank {} must be <= padded rank {}", rank, padded_shape.rank());

@@ -5,10 +5,10 @@
 #include "embeddings_rm_program_factory.hpp"
 #include "embedding_program_factory_common.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -16,7 +16,6 @@ namespace ttnn::prim {
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_program_artifacts(
     const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
@@ -95,6 +94,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
 
     constexpr uint32_t max_l1_budget_bytes = 1024 * 1024;  // 1MB budget for embedding output staging
     // Count double buffering inside the budget. Applying it afterwards asks for twice the budget.
+    // The reader reuses the slot it pushed for the previous token when the next token is the same (see
+    // embeddings.cpp), so this buffer must stay single-producer and FIFO-ordered.
     uint32_t buffering_size = 1;
     if (!output_sharded && (num_blocks_per_core_group_1 > 1 || num_blocks_per_core_group_2 > 1)) {
         buffering_size = 2;
@@ -183,7 +184,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = block_height * index_page_size});
 
     if (use_local_cache) {
-        uint32_t cache_page_size = tt::round_up(weight_page_size, 32u);
+        uint32_t cache_page_size = weight_cache_row_bytes(device, weight_page_size);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
         const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
         scratchpads.push_back(

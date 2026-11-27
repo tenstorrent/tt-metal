@@ -9,8 +9,8 @@ import torch
 import ttnn
 from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
 from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
-from tests.ttnn.utils_for_testing import assert_with_pcc, maybe_trace
+from tt_py_test_utils_common.comparison_funcs import comp_equal
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc, maybe_trace
 
 DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG = [
     (

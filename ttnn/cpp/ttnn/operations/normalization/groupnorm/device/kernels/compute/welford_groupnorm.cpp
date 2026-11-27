@@ -612,6 +612,11 @@ void kernel_main() {
                         if (group_offset != 0) {
                             // Not the first group for this tile: add what is already in cb_x.
                             reconfig_data_format_srca(dfb_x_id);
+                            // DEST_TO_SRCB moves DEST into SrcB in SrcB's current format: the mask's, after the mask
+                            // multiply. Use cb_x's format so fp32 results are not truncated to the mask's format.
+                            if constexpr (enable_fp32_reconfig) {
+                                reconfig_data_format_srcb(dfb_input_mask_id, dfb_x_id);
+                            }
                             add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_x_id);
                             dfb_x.wait_front(1);
                             add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_x_id, 0, dst0);

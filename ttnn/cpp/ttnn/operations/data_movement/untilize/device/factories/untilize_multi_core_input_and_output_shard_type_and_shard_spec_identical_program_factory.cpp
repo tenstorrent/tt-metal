@@ -7,13 +7,12 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -41,9 +40,9 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     constexpr const char* COMPUTE_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp";
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_data_format = cb_dataformat_for(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_data_format);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_data_format = cb_dataformat_for(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");

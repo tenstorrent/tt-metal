@@ -29,15 +29,14 @@ ENABLED = os.environ.get("MINIMAX_H3_DRAM_PROBE", "0") == "1"
 # A weak reference: the probe must never keep a dropped pipeline's weights and buffers reachable.
 _pipeline: weakref.ReferenceType | None = None
 _SKIP_ATTRS = {
-    "coresident_exclusions",
-    "_coresident_peers",
+    "residency",
     "ccl_manager",
     "encoder_ccl_manager",
+    "vae_ccl_manager",
     "audio_ccl_manager",
     "mesh_device",
     "device",
     "weight_loader",
-    "_weight_loader",
 }
 
 
@@ -135,7 +134,7 @@ def _walk(
 
 def _ccl_entries(pipeline: Any) -> list[tuple[str, ttnn.Tensor]]:
     managers = {}
-    for name in ("encoder_ccl_manager", "ccl_manager", "audio_ccl_manager"):
+    for name in ("encoder_ccl_manager", "vae_ccl_manager", "ccl_manager", "audio_ccl_manager"):
         m = getattr(pipeline, name, None)
         if m is not None:
             managers.setdefault(id(m), (name, m))

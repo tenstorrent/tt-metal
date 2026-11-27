@@ -241,7 +241,7 @@ def _config(
     gate,
     tiles,
     src_b=None,
-    math_op=MathOperation.Elwadd,
+    mathop=MathOperation.Elwadd,
     fidelity=MathFidelity.HiFi4,
     approx=ApproximationMode.No,
     dest_sync=DestSync.Half,
@@ -253,7 +253,7 @@ def _config(
         FORMATS,
         templates=[
             gate,
-            MATH_OP(mathop=math_op),
+            MATH_OP(mathop=mathop),
             MATH_FIDELITY(fidelity),
             APPROX_MODE(approx),
             ACC_TO_DEST(acc_to_dest),
@@ -424,7 +424,7 @@ def _binary_tiles(scores, acc_base=None):
     ]
 
 
-def _assert_binary(faces, scores, bias, math_op, acc_base=None):
+def _assert_binary(faces, scores, bias, mathop, acc_base=None):
     """tile 0 holds SrcA verbatim, tile 2 holds srcA (op) srcB, over every face packed back.
 
     The MOP is a MOVA2D of SrcA into Dest tile 0 followed by the binary at dst_math_offset = 2 * 64
@@ -434,7 +434,7 @@ def _assert_binary(faces, scores, bias, math_op, acc_base=None):
     num_faces = faces.shape[1]
     scores, bias = scores[:num_faces], bias[:num_faces]
 
-    expected = _BINARY_GOLDEN[math_op](scores.to(torch.float32), bias.to(torch.float32))
+    expected = _BINARY_GOLDEN[mathop](scores.to(torch.float32), bias.to(torch.float32))
     if acc_base is not None:
         expected = expected + acc_base[:num_faces].to(torch.float32)
 
@@ -443,21 +443,21 @@ def _assert_binary(faces, scores, bias, math_op, acc_base=None):
     ), "Dest tile 0 is not SrcA verbatim"
     assert torch.equal(
         _from_dest(faces[KEYS]), expected
-    ), f"Dest tile 2 is not SrcA {math_op.name} srcB"
+    ), f"Dest tile 2 is not SrcA {mathop.name} srcB"
 
 
 # ELWADD is what the Compute API instantiates; ELWSUB and ELWMUL are reachable through the same
 # template and are here because the MOP selects a different instruction for each. ELWMUL takes LoFi
 # only.
 @parametrize(
-    math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
-    fidelity=lambda math_op: (
+    mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    fidelity=lambda mathop: (
         [MathFidelity.LoFi]
-        if math_op == MathOperation.Elwmul
+        if mathop == MathOperation.Elwmul
         else [MathFidelity.LoFi, MathFidelity.HiFi4]
     ),
 )
-def test_deepseek_moe_gate_binary(math_op, fidelity):
+def test_deepseek_moe_gate_binary(mathop, fidelity):
     scores, bias = _binary_stimuli(seed=11)
 
     faces = _run(
@@ -465,12 +465,12 @@ def test_deepseek_moe_gate_binary(math_op, fidelity):
             DEEPSEEK_MOE_GATE(dmg_mode=MODE_BINARY),
             _binary_tiles(scores),
             src_b=bias,
-            math_op=math_op,
+            mathop=mathop,
             fidelity=fidelity,
         )
     )
 
-    _assert_binary(faces, scores, bias, math_op)
+    _assert_binary(faces, scores, bias, mathop)
 
 
 # RELOAD swaps the MOP's MOVA2D for a replayed MOVD2A, so SrcA comes back out of Dest tile 0.

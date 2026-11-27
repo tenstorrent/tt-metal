@@ -10,14 +10,8 @@ carries' only store and a KDA forward has nowhere to run without them.
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
-    KDA_CONVOLUTION_DTYPE,
-    KDA_RECURRENT_DTYPE,
-    KdaStates,
-    deallocate_state,
-    device_scalar,
-)
+from models.demos.deepseek_v3_d_p.tests.kda.utils import upload_slab
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention, build_kda_scalars
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
 
@@ -53,36 +47,8 @@ def run_kda_chunk(
             ttnn.deallocate(scalar)
 
 
-def zero_state_like(state: KdaState) -> KdaState:
-    """A zero native carry shaped like ``state``: what a request head starts from. OWNED."""
-    return KdaState(recurrent=ttnn.zeros_like(state.recurrent), convolution=ttnn.zeros_like(state.convolution))
-
-
 def fill_slabs_with_noise(mesh_device, slabs: KdaStates, *, seed: int) -> None:
     """Store random carries into every slot and layer, so a stale slot holds neither zeros nor a real carry."""
     generator = torch.Generator().manual_seed(seed)
-    geometry = slabs.geometry
-    for slot in range(slabs.num_slots):
-        index = device_scalar(mesh_device, slot)
-        for layer_idx in slabs.layer_ids:
-            noise = KdaState(
-                recurrent=ttnn.from_torch(
-                    torch.randn(geometry.recurrent_shape, generator=generator),
-                    dtype=KDA_RECURRENT_DTYPE,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                ),
-                convolution=ttnn.from_torch(
-                    torch.randn(geometry.convolution_shape, generator=generator),
-                    dtype=KDA_CONVOLUTION_DTYPE,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=mesh_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                ),
-            )
-            slabs.export_layer(noise, index, layer_idx)
-            deallocate_state(noise)
-        ttnn.deallocate(index)
+    for slab in (slabs.recurrent, slabs.convolution):
+        upload_slab(slab, [torch.randn(tuple(slab.shape), generator=generator)] * mesh_device.get_num_devices())

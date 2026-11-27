@@ -374,15 +374,15 @@ Erfc:
 - {input: Float16, output: Float32, dest: 'No', near_zero_atol: 9.655952453613281e-05, domains: [{low: -.inf, high: .inf, ulp: 8192}]}
 - {input: Float16, output: Float32, dest: 'Yes', near_zero_atol: 9.703196701593697e-05, domains: [{low: -.inf, high: .inf, ulp: 1626}]}
 - {input: Float16_b, output: Float16, dest: 'Yes', near_zero_atol: 9.655952453613281e-05, domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', near_zero_atol: 9.72747802734375e-05, domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', near_zero_atol: 9.72747802734375e-05, domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float16_b, output: Float32, dest: 'No', near_zero_atol: 9.72747802734375e-05, domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float16_b, output: Float32, dest: 'Yes', near_zero_atol: 9.703196701593697e-05, domains: [{low: -.inf, high: .inf, ulp: 1626}]}
 - {input: Float32, output: Float16, dest: 'No', near_zero_atol: 7.086992263793945e-05, domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: -6.103515625e-05, ulp: 1}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
 - {input: Float32, output: Float16, dest: 'Yes', near_zero_atol: 5.328655242919922e-05, domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float32, output: Float16_b, dest: 'No', near_zero_atol: 9.72747802734375e-05, domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float32, output: Float16_b, dest: 'Yes', near_zero_atol: 5.435943603515625e-05, domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float32, output: Float32, dest: 'No', near_zero_atol: 9.72747802734375e-05, domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, dest: 'Yes', near_zero_atol: 5.331427382770926e-05, domains: [{low: -.inf, high: .inf, ulp: 1594}]}
 Erfinv:
 - {input: Float16, output: Float16, dest: 'No', near_zero_atol: 0.0004589557647705078, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 4}, {low: 1.0, high: .inf}]}
@@ -757,15 +757,15 @@ Hardmish:
 - {input: Float16, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 8192}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float32, output: Float16, dest: 'No', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: -6.103515625e-05, ulp: 1}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
 - {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
-- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 Hardshrink:
 - {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
@@ -859,23 +859,40 @@ I0:
 - {input: Float32, output: Float32, dest: 'No', metric: TOLERANCE, measured: 473432064, nonfinite: 678, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-552.06: inf -> 3.15027e+38; x=-549.588: inf -> 2.68504e+38)'}
 - {input: Float32, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 476812063, nonfinite: 678, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-552.06: inf -> 3.1658e+38; x=-549.588: inf -> 2.8682e+38)'}
 I1:
-- {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
-- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
-- {input: Float16, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 1}, {low: 16.0, high: .inf}]}
-- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 621, nonfinite: 19586, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.15477e+37; x=-65472: -inf -> -1.15477e+37)'}
-- {input: Float16, output: Float32, dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 57344}, {low: 16.0, high: .inf}]}
-- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 40708465, nonfinite: 19586, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.15477e+37; x=-65472: -inf -> -1.15477e+37)'}
-- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 544, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37)'}
-- {input: Float16_b, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 544, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37)'}
-- {input: Float16_b, output: Float32, dest: 'No', metric: TOLERANCE, measured: 35651584, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37)'}
-- {input: Float16_b, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 35645375, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37)'}
-- {input: Float32, output: Float16, dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: -6.103515625e-05, ulp: 6}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 16.0, ulp: 6}, {low: 16.0, high: .inf}]}
-- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
-- {input: Float32, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 544, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
-- {input: Float32, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 612, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
-- {input: Float32, output: Float32, dest: 'No', metric: TOLERANCE, measured: 35651584, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
-- {input: Float32, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 40083139, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
+- {input: Float16, output: Float16, approx: 'No', dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
+- {input: Float16, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
+- {input: Float16, output: Float16, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
+- {input: Float16, output: Float16, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
+- {input: Float16, output: Float16_b, approx: 'No', dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 1}, {low: 16.0, high: .inf}]}
+- {input: Float16, output: Float16_b, approx: 'No', dest: 'Yes', metric: TOLERANCE, measured: 621, nonfinite: 19586, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.15477e+37; x=-65472: -inf -> -1.15477e+37)'}
+- {input: Float16, output: Float16_b, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 1}, {low: 16.0, high: .inf}]}
+- {input: Float16, output: Float16_b, approx: 'Yes', dest: 'Yes', metric: TOLERANCE, measured: 621, nonfinite: 19586, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.15477e+37; x=-65472: -inf -> -1.15477e+37)'}
+- {input: Float16, output: Float32, approx: 'No', dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 57344}, {low: 16.0, high: .inf}]}
+- {input: Float16, output: Float32, approx: 'No', dest: 'Yes', metric: TOLERANCE, measured: 40708465, nonfinite: 19586, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.15477e+37; x=-65472: -inf -> -1.15477e+37)'}
+- {input: Float16, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 57344}, {low: 16.0, high: .inf}]}
+- {input: Float16, output: Float32, approx: 'Yes', dest: 'Yes', metric: TOLERANCE, measured: 40708465, nonfinite: 19586, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-65504: -inf -> -1.15477e+37; x=-65472: -inf -> -1.15477e+37)'}
+- {input: Float16_b, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
+- {input: Float16_b, output: Float16, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'Yes', metric: TOLERANCE, measured: 544, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37)'}
+- {input: Float16_b, output: Float16_b, approx: 'Yes', dest: 'No', metric: TOLERANCE, measured: 544, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37)'}
+- {input: Float16_b, output: Float16_b, approx: 'Yes', dest: 'Yes', metric: TOLERANCE, measured: 544, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37)'}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'Yes', metric: TOLERANCE, measured: 35645375, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37)'}
+- {input: Float16_b, output: Float32, approx: 'Yes', dest: 'No', metric: TOLERANCE, measured: 35651584, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37)'}
+- {input: Float16_b, output: Float32, approx: 'Yes', dest: 'Yes', metric: TOLERANCE, measured: 35645375, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: -inf -> -1.15477e+37; x=-3.37624e+38: -inf -> -1.15477e+37)'}
+- {input: Float32, output: Float16, approx: 'No', dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: -6.103515625e-05, ulp: 6}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 16.0, ulp: 6}, {low: 16.0, high: .inf}]}
+- {input: Float32, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
+- {input: Float32, output: Float16, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: -6.103515625e-05, ulp: 6}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 16.0, ulp: 6}, {low: 16.0, high: .inf}]}
+- {input: Float32, output: Float16, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', metric: TOLERANCE, measured: 612, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
+- {input: Float32, output: Float16_b, approx: 'Yes', dest: 'No', metric: TOLERANCE, measured: 544, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
+- {input: Float32, output: Float16_b, approx: 'Yes', dest: 'Yes', metric: TOLERANCE, measured: 612, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
+- {input: Float32, output: Float32, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, approx: 'No', dest: 'Yes', metric: TOLERANCE, measured: 40083139, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
+- {input: Float32, output: Float32, approx: 'Yes', dest: 'No', metric: TOLERANCE, measured: 35651584, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
+- {input: Float32, output: Float32, approx: 'Yes', dest: 'Yes', metric: TOLERANCE, measured: 40083139, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
 Identity:
 - {output: Float16_b, measured: 1, note: 'wh: max 1 ULP, 4 variants'}
 - {output: Float32, measured: 0, note: 'wh: max 0 ULP'}
@@ -1365,17 +1382,17 @@ Rpow:
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float32, dest: 'No', domains: [{low: -.inf, high: 16.0, ulp: 65536}, {low: 16.0, high: .inf}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 1, nonfinite: 1536, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: 0 -> nan; x=-3.37624e+38: 0 -> nan)'}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 16.0, ulp: 1}, {low: 16.0, high: .inf}]}
 - {input: Float16_b, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 1, nonfinite: 2816, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=8.11296e+31: inf -> 1; x=8.17635e+31: inf -> 1)'}
-- {input: Float16_b, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 0, nonfinite: 3072, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: 0 -> inf; x=-3.37624e+38: 0 -> inf)'}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16_b, output: Float32, dest: 'No', metric: TOLERANCE, measured: 65536, nonfinite: 2816, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=8.11296e+31: inf -> 1; x=8.17635e+31: inf -> 1)'}
-- {input: Float16_b, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 1, nonfinite: 3072, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.38953e+38: 0 -> inf; x=-3.37624e+38: 0 -> inf)'}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float32, output: Float16, dest: 'No', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: -6.103515625e-05, ulp: 8}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
-- {input: Float32, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 1, nonfinite: 1536, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: 0 -> nan; x=-3.38132e+38: 0 -> nan)'}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 16.0, ulp: 1}, {low: 16.0, high: .inf}]}
 - {input: Float32, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 1, nonfinite: 2816, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=8.1397e+31: inf -> 1; x=8.17888e+31: inf -> 1)'}
-- {input: Float32, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 0, nonfinite: 3072, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: 0 -> inf; x=-3.38132e+38: 0 -> inf)'}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'No', metric: TOLERANCE, measured: 65536, nonfinite: 2816, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=8.1397e+31: inf -> 1; x=8.17888e+31: inf -> 1)'}
-- {input: Float32, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 1, nonfinite: 3072, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: 0 -> inf; x=-3.38132e+38: 0 -> inf)'}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 Rsqrt:
 - {input: Float16, output: Float16, approx: 'No', dest: 'No', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 4}]}
 - {input: Float16, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 1}]}
@@ -2172,16 +2189,16 @@ Tanhshrink:
 - {input: Float16, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 98304}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 9}]}
 - {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 2}]}
-- {input: Float16_b, output: Float16_b, dest: 'Yes', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 2}]}
-- {input: Float16_b, output: Float32, dest: 'No', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 131072}]}
-- {input: Float16_b, output: Float32, dest: 'Yes', near_zero_atol: 2.3111579795509313e-23, domains: [{low: -.inf, high: .inf, ulp: 116273}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 7}]}
 - {input: Float32, output: Float16, dest: 'No', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: -6.103515625e-05, ulp: 11}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 65536.0, ulp: 11}, {low: 65536.0, high: .inf}]}
 - {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
-- {input: Float32, output: Float16_b, dest: 'No', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 2}]}
-- {input: Float32, output: Float16_b, dest: 'Yes', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 4}]}
-- {input: Float32, output: Float32, dest: 'No', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 131072}]}
-- {input: Float32, output: Float32, dest: 'Yes', near_zero_atol: 2.461821577206006e-23, domains: [{low: -.inf, high: .inf, ulp: 159138}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 7}]}
 Threshold:
 - {output: Float16, metric: TOLERANCE, note: '0 ULP, 116 variants / 2.10M lanes, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so that run measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on these keys)'}
 - {output: Float16_b, metric: TOLERANCE, note: '0 ULP, 116 variants / 2.10M lanes, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so that run measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on these keys)'}
@@ -2358,18 +2375,18 @@ UnaryPower:
 - {input: Float16, output: Float16_b, dest: 'No', near_zero_atol: 6.151199340820312e-05, domains: [{low: -.inf, high: -256.0}, {low: -256.0, high: 256.0, ulp: 1}, {low: 256.0, high: .inf}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float32, dest: 'No', near_zero_atol: 6.151199340820312e-05, domains: [{low: -.inf, high: -256.0}, {low: -256.0, high: 256.0, ulp: 81920}, {low: 256.0, high: .inf}]}
-- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -256.0}, {low: -256.0, high: 256.0, ulp: 1}, {low: 256.0, high: .inf}]}
 - {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
-- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float16, dest: 'No', domains: [{low: -.inf, high: -256.0}, {low: -256.0, high: -6.103515625e-05, ulp: 10}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 256.0, ulp: 10}, {low: 256.0, high: .inf}]}
 - {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -256.0}, {low: -256.0, high: 256.0, ulp: 1}, {low: 256.0, high: .inf}]}
 - {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
-- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 3}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 Xielu:
 - {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: 256.0, ulp: 4}, {low: 256.0, high: .inf}]}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 256.0, ulp: 1}, {low: 256.0, high: .inf}]}

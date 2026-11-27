@@ -16,6 +16,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_device_reshape.cpp
     test_mesh_device_view.cpp
     test_mesh_workload.cpp
+    test_mesh_per_device_runtime_args.cpp
     test_mesh_socket.cpp
     test_hd_sockets.cpp
     test_host_region.cpp
@@ -26,13 +27,12 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_trace.cpp
     test_thread_pool.cpp
     test_dispatch_context.cpp
+    test_single_host_context.cpp
     utils.cpp
 )
 # MPI sub-context tests require the MPI distributed build (matches tt_metal/distributed USE_MPI).
 if(ENABLE_DISTRIBUTED)
     list(APPEND DISTRIBUTED_UNIT_TEST_SOURCES test_mpi_subcontext.cpp)
-else()
-    list(APPEND DISTRIBUTED_UNIT_TEST_SOURCES test_single_host_context.cpp)
 endif()
 
 # Layer completion (host-only): ring, router, D2H ack decoder.

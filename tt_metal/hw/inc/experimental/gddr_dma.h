@@ -70,6 +70,12 @@ static inline __attribute__((always_inline)) void program_dma_read_addresses_(
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_READ_TRANSFER_DEST_REG_OFFSET, dst_l1);
 }
 
+// The stream status counts a transfer one cycle after its start pulse, and the core may send a load to a different
+// address ahead of a queued store. Reading back the start register first keeps a status read behind the last start.
+static inline __attribute__((always_inline)) void order_after_last_start_(uint8_t stream) {
+    (void)READ_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET);
+}
+
 //////////////////////////////////////////////////////////////////
 /////////////////// Local API (DRISC only) ///////////////////////
 //////////////////////////////////////////////////////////////////
@@ -174,6 +180,7 @@ inline __attribute__((always_inline)) void dma_async_write(
  */
 inline __attribute__((always_inline)) void dma_async_read_barrier(uint8_t stream) {
     check_stream_(stream);
+    order_after_last_start_(stream);
     volatile DmaTxqStatus_u status;
     do {
         status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
@@ -187,6 +194,7 @@ inline __attribute__((always_inline)) void dma_async_read_barrier(uint8_t stream
  */
 inline __attribute__((always_inline)) void dma_async_write_barrier(uint8_t stream) {
     check_stream_(stream);
+    order_after_last_start_(stream);
     volatile DmaTxqStatus_u status;
     do {
         status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
@@ -206,6 +214,7 @@ inline __attribute__((always_inline)) void dma_async_write_barrier(uint8_t strea
 inline __attribute__((always_inline)) void dma_async_read_wait_n(uint8_t stream, uint8_t n) {
     check_stream_(stream);
     check_outstanding_reads_(n);
+    order_after_last_start_(stream);
     volatile DmaTxqStatus_u status;
     do {
         status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
@@ -225,6 +234,7 @@ inline __attribute__((always_inline)) void dma_async_read_wait_n(uint8_t stream,
 inline __attribute__((always_inline)) void dma_async_write_wait_n(uint8_t stream, uint8_t n) {
     check_stream_(stream);
     check_outstanding_writes_(n);
+    order_after_last_start_(stream);
     volatile DmaTxqStatus_u status;
     do {
         status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
@@ -238,6 +248,7 @@ inline __attribute__((always_inline)) void dma_async_write_wait_n(uint8_t stream
  */
 inline __attribute__((always_inline)) uint8_t dma_get_reads_outstanding(uint8_t stream) {
     check_stream_(stream);
+    order_after_last_start_(stream);
     DmaTxqStatus_u status;
     status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
     return static_cast<uint8_t>(status.f.num_reads_outstanding);
@@ -250,6 +261,7 @@ inline __attribute__((always_inline)) uint8_t dma_get_reads_outstanding(uint8_t 
  */
 inline __attribute__((always_inline)) uint8_t dma_get_writes_outstanding(uint8_t stream) {
     check_stream_(stream);
+    order_after_last_start_(stream);
     DmaTxqStatus_u status;
     status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
     return static_cast<uint8_t>(status.f.num_writes_outstanding);

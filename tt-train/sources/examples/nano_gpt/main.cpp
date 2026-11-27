@@ -6,8 +6,9 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <tt-metalium/discovery/cluster.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/observability/memory_reporter.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -28,7 +29,6 @@
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
-#include "optimizers/remote_optimizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -176,6 +176,8 @@ struct TrainingConfig {
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
+    // A typo under precision stops the run here, before the model is built.
+    ttml::core::validate_precision_config(training_config);
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>(config.model_save_interval);
@@ -218,9 +220,16 @@ MultihostConfig parse_multihost_config(const YAML::Node &yaml_config) {
         throw std::runtime_error("Unknown socket type: " + socket_type_str);
     }
 
+    const auto pipeline_parallel_config = multihost_config["pipeline_parallel_config"];
+    if (config.enable_mpi && !pipeline_parallel_config) {
+        throw std::runtime_error(
+            "multihost_config.enabled requires pipeline_parallel_config: nano_gpt's multihost mode runs pipeline "
+            "parallel training only.");
+    }
+
     ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
 
-    if (auto pipeline_parallel_config = multihost_config["pipeline_parallel_config"]) {
+    if (pipeline_parallel_config) {
         config.pipeline_parallel_config =
             ttml::models::distributed::pipeline_parallel_llama::read_config(pipeline_parallel_config);
     }
@@ -237,6 +246,7 @@ struct DeviceConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
     bool enable_cp = false;
+    bool cp_reuse_forward_kv = false;
 };
 
 DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
@@ -249,6 +259,7 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
     config.enable_cp = device_node["enable_cp"].as<bool>(false);
+    config.cp_reuse_forward_kv = device_node["cp_reuse_forward_kv"].as<bool>(false);
 
     auto mesh_shape_node = device_node["mesh_shape"];
     bool multidevice = config.enable_ddp || config.enable_tp || config.enable_cp;
@@ -306,10 +317,6 @@ inline int get_mpi_rank_or_zero() {
     auto &ctx = ttml::autograd::ctx();
     auto distributed_ctx = ctx.get_distributed_context();
     return distributed_ctx ? *distributed_ctx->rank() : 0;
-}
-
-inline bool is_three_tier_training(const MultihostConfig &config) {
-    return config.enable_mpi && !is_pipeline_parallel_enabled(config);
 }
 
 inline bool is_last_pipeline_stage(const MultihostConfig &config) {
@@ -405,7 +412,7 @@ int main(int argc, char **argv) {
         num_devices *= device_config.mesh_shape[i];
     }
 
-    // enable fabric config for 3-tier architecture, tp, ddp, cp
+    // enable fabric config for fabric sockets between hosts, tp, ddp, cp
     if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp ||
         device_config.enable_cp) {
         fmt::print("Enabling fabric\n");
@@ -437,6 +444,7 @@ int main(int argc, char **argv) {
         fmt::println("Device config:");
         fmt::println("  Tensor parallel enabled: {}", device_config.enable_tp);
         fmt::println("  Context parallel enabled: {}", device_config.enable_cp);
+        fmt::println("  CP reuse forward K/V: {}", device_config.cp_reuse_forward_kv);
         fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_ddp);
         fmt::println("  Mesh shape: {}", device_config.mesh_shape);
         fmt::println("  Device IDs: {}", device_config.device_ids);
@@ -444,7 +452,9 @@ int main(int argc, char **argv) {
         ttml::autograd::ctx().initialize_parallelism_context(
             {.enable_ddp = device_config.enable_ddp,
              .enable_tp = device_config.enable_tp,
-             .enable_cp = device_config.enable_cp});
+             .cp = device_config.enable_cp ? std::make_optional(ttml::autograd::ContextParallelConfig{
+                                                 .reuse_forward_kv = device_config.cp_reuse_forward_kv})
+                                           : std::nullopt});
     }
 
     if (multihost_config.enable_mpi) {
@@ -539,16 +549,12 @@ int main(int argc, char **argv) {
     auto dataset = create_dataset(text_or_tokens, sequence_length, model_config);
 
     fmt::print("Dataset size: {}\n", dataset.get_size());
-    // In 3-tier training every worker iterates the full dataset with its own seed and the optimizer
-    // averages their gradients, so one optimizer step consumes num_mh_workers batches.
-    const uint32_t num_data_workers = is_three_tier_training(multihost_config) ? multihost_config.num_mh_workers : 1U;
     const auto [steps_per_epoch, effective_max_steps] = compute_training_steps(
         dataset,
         training_config.data_path,
         sequence_length,
         training_config.batch_size,
         training_config.gradient_accumulation_steps,
-        num_data_workers,
         training_config.max_steps,
         training_config.num_epochs);
     fmt::print("Steps per epoch {:.2f}\n", steps_per_epoch);
@@ -704,6 +710,18 @@ int main(int argc, char **argv) {
         ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
     }
 
+    // Before anything is loaded and the optimizer is created (see core::store_trainable_parameters_as for the load
+    // order). Save-and-exit exports the weights in the dtype the model builds, so it skips the conversion.
+    if (save_and_exit_path.empty()) {
+        if (auto master_dtype =
+                ttml::core::apply_precision_config(yaml_config["training_config"], get_model_parameters(model))) {
+            fmt::print("Master dtype: {}\n", *master_dtype);
+        }
+        if (auto reduce_dtype = ttml::autograd::ctx().get_gradient_reduce_dtype()) {
+            fmt::print("Reduce dtype: {}\n", *reduce_dtype);
+        }
+    }
+
     if (!safetensors_path.empty()) {
         fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
         model->load_from_safetensors(safetensors_path);
@@ -721,15 +739,6 @@ int main(int argc, char **argv) {
         std::exit(0);
     }
 
-    // Before the checkpoint is loaded and the optimizer is created, so both follow the stored dtype. 3-tier workers
-    // keep bf16 parameters for RemoteOptimizer; the optimizer worker holds the fp32 master weights.
-    if (!is_three_tier_training(multihost_config)) {
-        if (auto master_dtype =
-                ttml::core::apply_precision_config(yaml_config["training_config"], get_model_parameters(model))) {
-            fmt::print("Master dtype: {}\n", *master_dtype);
-        }
-    }
-
     // Load model parameters if in eval mode and model path exists
     if (!safetensors_path.empty() && !model_config.model_path.empty() &&
         std::filesystem::exists(model_config.model_path)) {
@@ -740,21 +749,10 @@ int main(int argc, char **argv) {
 
     fmt::print("Total parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
-    auto select_optimizer =
-        [&model, &optimizer_node, &multihost_config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
-        if (is_three_tier_training(multihost_config)) {
-            return std::make_unique<ttml::optimizers::RemoteOptimizer>(
-                get_model_parameters(model), multihost_config.num_mh_workers);
-        }
-        return ttml::optimizers::create_optimizer(optimizer_node, get_model_parameters(model));
-    };
-
-    auto optimizer = select_optimizer();
+    auto optimizer = ttml::optimizers::create_optimizer(optimizer_node, get_model_parameters(model));
 
     if (optimizer->get_name() == "NoOp") {
         fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
-    } else if (is_three_tier_training(multihost_config)) {
-        fmt::println("Remote optimizer configured!");
     } else {
         fmt::print("Optimizer: {}\n", optimizer->get_name());
         // TODO: Replace with print_stats() after #38756 is resolved
@@ -762,15 +760,7 @@ int main(int argc, char **argv) {
     }
     auto scheduler = schedule_func(optimizer.get(), effective_max_steps);
 
-    if (is_three_tier_training(multihost_config)) {
-        auto *optimizer_ptr = dynamic_cast<ttml::optimizers::RemoteOptimizer *>(optimizer.get());
-        if (!optimizer_ptr) {
-            throw std::runtime_error("Optimizer is not RemoteOptimizer");
-        }
-        fmt::println("[worker] Remote optimizer receiving weights from rank {}", multihost_config.num_mh_workers);
-        optimizer_ptr->receive_weights();
-        fmt::println("[worker] Remote optimizer received weights from rank {}", multihost_config.num_mh_workers);
-    } else if (optimizer->get_name() == "NoOp") {
+    if (optimizer->get_name() == "NoOp") {
         fmt::print("Skipping training state load (NoOp optimizer)\n");
     } else {
         // otherwise proceed with normal loading training state if necessary
@@ -788,7 +778,7 @@ int main(int argc, char **argv) {
     }
 
     if (multihost_config.enable_mpi && training_config.use_clip_grad_norm) {
-        throw std::logic_error("Clip grad norm is not supported with 3 tier training");
+        throw std::logic_error("Clip grad norm is not supported with multihost training");
     }
 
     if (device_config.enable_ddp) {
@@ -877,8 +867,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if ((device_config.enable_ddp || device_config.enable_cp) &&
-                    !is_three_tier_training(multihost_config)) {
+                if (device_config.enable_ddp || device_config.enable_cp) {
                     ttml::core::distributed::synchronize_gradients(parameters);
                 }
                 ttml::autograd::ctx().get_profiler().read_results(device, "gradient_sync_done");
@@ -919,7 +908,7 @@ int main(int argc, char **argv) {
                 }
 
                 if (!multihost_config.enable_mpi) {
-                    // save training state if it's not 3 tier training
+                    // multihost runs don't save the training state
                     if (!model_config.model_path.empty() && training_config.model_save_interval > 0 &&
                         global_step % training_config.model_save_interval == 0) {
                         save_training_state(
@@ -950,7 +939,7 @@ int main(int argc, char **argv) {
     }
 
     if (!multihost_config.enable_mpi) {
-        // save training state if it's not 3 tier training
+        // multihost runs don't save the training state
         if (!model_config.model_path.empty()) {
             save_training_state(
                 model_config.model_path, model, scheduler, model_config.model_type, optimizer->get_name());

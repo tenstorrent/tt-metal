@@ -38,27 +38,27 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/semaphore_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::is_1d_depthwise_conv;
@@ -219,7 +219,9 @@ const m2::DFBSpecName DFB_WEIGHTS{"weights"};                  // weights reader
 const m2::DFBSpecName DFB_BIAS{"bias"};                        // weights writer -> compute (optional)
 const m2::DFBSpecName DFB_MATMUL_PARTIALS{"matmul_partials"};  // compute self-loop (borrows OUTPUT when aliased)
 const m2::DFBSpecName DFB_OUT{"out"};                          // compute packer -> OUTPUT (degenerate DM consumer)
-const m2::DFBSpecName DFB_READER_INDICES{"reader_indices"};    // fresh L1 DMA landing (DRAM-config path only)
+// Fresh L1 landing for the reader-indices slice (DRAM-config path only). A scratchpad, not a DFB: only the
+// act reader fills and reads it, and a DM kernel cannot self-loop a DFB on Quasar.
+const m2::ScratchpadSpecName SCRATCH_READER_INDICES{"reader_indices"};
 const m2::DFBSpecName DFB_IN_SCALAR{"in_scalar"};              // reduce scalar srcB (unpack-tilize probe only)
 
 const m2::TensorParamName TP_INPUT{"input"};
@@ -245,7 +247,7 @@ const m2::KernelSpecName KERNEL_OUT_DRAIN{"out_drain"};  // Program A: credit-on
 // [#48552] Per-kernel runtime-arg population helpers, extracted from create_program_artifacts to keep its
 // clang-tidy cognitive complexity under threshold. Pure code motion: each fills the per-kernel run-args map
 // that the orchestration function then moves into ProgramRunArgs; no logic changes. Namespace scope here
-// (ttnn::prim::qsr, with `using namespace tt::tt_metal` and `namespace m2 = ...experimental` active) so all
+// (ttnn::prim::qsr, with `using namespace tt::tt_metal` and `namespace m2 = tt::tt_metal` active) so all
 // types resolve.
 // Multicast destination rectangle. Mirrors the fix already applied to the Quasar
 // matmul factories (matmul_multicore_reuse_mcast_2d_program_factory.cpp):
@@ -351,7 +353,8 @@ static void populate_reader_runtime_args(
                         {"is_sender_core", (uint32_t)is_sender_core},
                         {"dram_config_reader_index", transpose_mcast ? core.x : core.y},
                     });
-                m2::AdvancedKernelRunArgs::Varargs varargs(act_mcast_noc_y.begin(), act_mcast_noc_y.end());
+                m2::experimental::AdvancedKernelRunArgs::Varargs varargs(
+                    act_mcast_noc_y.begin(), act_mcast_noc_y.end());
                 reader_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
             }
         }
@@ -374,6 +377,12 @@ static void populate_reader_runtime_args(
             }
         }
     }
+}
+
+// Block-sharded: a core outside the output grid's last column (transposed: last row) skips the matmul.
+static bool is_skip_compute_core(const CoreCoord& core, bool transpose_mcast, const CoreRangeSet& output_cores) {
+    const CoreCoord out_end = output_cores.bounding_box().end_coord;
+    return transpose_mcast ? core.y > out_end.y : core.x > out_end.x;
 }
 
 static void populate_writer_sender_runtime_args(
@@ -572,12 +581,9 @@ static void populate_compute_runtime_args(
     const CoreRangeSet& all_cores,
     const CoreRangeSet& output_cores) {
     if (check_skip_compute && !is_conv_1d_depthwise_conv) {
-        CoreCoord bottom_right_core_out = output_cores.bounding_box().end_coord;
-        uint32_t end_coord_x = bottom_right_core_out.x;
-        uint32_t end_coord_y = bottom_right_core_out.y;
         for (const CoreRange& range : all_cores.ranges()) {
             for (const CoreCoord& core : range) {
-                bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
+                const bool skip_compute = is_skip_compute_core(core, transpose_mcast, output_cores);
                 compute_run_args.runtime_arg_values["skip_compute"][core] = (uint32_t)skip_compute;
             }
         }
@@ -1303,8 +1309,24 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
 
     const bool check_skip_compute = input_cores != output_cores;
-    // populate_skipped_work_cores is only reachable with split reader (deferred), so it is always false.
-    const bool populate_skipped_work_cores = false;
+    // Block-sharded with input-only cores (input grid wider than output, e.g. 320 -> 128 channels on 8x4): their
+    // compute still runs (it tilizes the act block the reader mcasts) with skip_compute, so it is bound to the
+    // local weights/bias DFBs, and a local DFB needs a producer on every node it lives on. Give those cores the
+    // sender writer with skip_work=1 (returns before touching any DFB) instead of no writer as on WH/BH.
+    const CoreRangeSet input_only_cores = input_cores.subtract(output_cores);
+    const bool populate_skipped_work_cores = block_sharded && input_only_cores.num_cores() > 0;
+    if (populate_skipped_work_cores) {
+        // A skip_work writer never pushes weights/bias, so compute on that core must skip the matmul, or it waits on
+        // them forever.
+        for (const CoreRange& range : input_only_cores.ranges()) {
+            for (const CoreCoord& core : range) {
+                TT_FATAL(
+                    !is_conv_1d_depthwise_conv && is_skip_compute_core(core, transpose_mcast, output_cores),
+                    "Conv2d: input-only core {} gets a skip_work weights writer but does not skip compute",
+                    core.str());
+            }
+        }
+    }
 
     // ============================================================================
     //  Mcast geometry (mirrors the legacy build_program_descriptor_sharded)
@@ -1605,11 +1627,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // TensorAccessor) in the reader — no borrowed self-loop DFB.
 
     // READER_INDICES: L1-resident indices are read by address via tensor::reader_indices. Only the
-    // DRAM-config path needs a fresh L1 landing DFB (the reader DMAs the slice into it, then reads it);
-    // that path is not exercised by resnet.
+    // DRAM-config path needs a fresh L1 landing scratchpad (the reader DMAs the slice into it, then reads it).
     if (!reader_indices_globally_allocated) {
-        auto dfb = make_dfb(DFB_READER_INDICES, Conv2dCb::READER_INDICES);
-        spec.dataflow_buffers.push_back(std::move(dfb));
+        const CBInfo& info = cb(Conv2dCb::READER_INDICES);
+        spec.scratchpads.push_back(m2::ScratchpadSpec{
+            .unique_id = SCRATCH_READER_INDICES,
+            .size_per_node = info.page_size * info.num_pages,
+        });
     }
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -1694,21 +1718,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         m2::TensorBinding{.tensor_parameter_name = TP_READER_INDICES, .accessor_name = "reader_indices"});
 
     // The depthwise reader has no CONFIG_TENSOR_IN_DRAM path (its indices are always L1-resident); only
-    // the height-/block-sharded readers DMA the config slice into the fresh READER_INDICES DFB.
+    // the height-/block-sharded readers DMA the config slice into the private reader_indices scratchpad.
     TT_FATAL(
         !(config_tensors_in_dram && is_conv_1d_depthwise_conv),
         "conv2d Metal 2.0 sharded factory: config_tensors_in_dram is not supported for the 1D depthwise path.");
+    std::vector<m2::ScratchpadBinding> reader_scratchpad_bindings;
     if (!reader_indices_globally_allocated) {
-        // DRAM-config: the reader DMAs the indices slice from tensor::reader_indices into this fresh L1
-        // DFB and then reads it (a self-loop on the reader; this path is not exercised by resnet).
-        reader_dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = DFB_READER_INDICES,
-            .accessor_name = "reader_indices",
-            .endpoint_type = m2::DFBEndpointType::PRODUCER});
-        reader_dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = DFB_READER_INDICES,
-            .accessor_name = "reader_indices",
-            .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        // DRAM-config: the reader DMAs the indices slice from tensor::reader_indices into this private L1
+        // scratchpad and then reads it.
+        reader_scratchpad_bindings.push_back(m2::ScratchpadBinding{
+            .scratchpad_spec_name = SCRATCH_READER_INDICES, .accessor_name = "reader_indices_scratch"});
     }
 
     m2::DataMovementHardwareConfig reader_hw;
@@ -1736,6 +1755,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .source = std::filesystem::path(reader_kernel),
         .dfb_bindings = std::move(reader_dfb_bindings),
         .semaphore_bindings = std::move(reader_sem_bindings),
+        .scratchpad_bindings = std::move(reader_scratchpad_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
         .hw_config = std::move(reader_hw),
     };

@@ -339,11 +339,10 @@ inline void invalidate_cache_all(uint32_t hartid) {
 
 #endif  // ARCH_QUASAR && COMPILE_FOR_DM
 
-// Fallback for Quasar non-DM cores (TRISC) - no cache management needed
+// A fence request invalidates a TRISC's read cache of L1. Call this before reading an L1 word that another core
+// writes.
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DM)
-inline __attribute__((always_inline)) void invalidate_l1_cache() {
-    // No-op for non-DM cores on Quasar
-}
+inline __attribute__((always_inline)) void invalidate_l1_cache() { asm volatile("fence" ::: "memory"); }
 #endif  // ARCH_QUASAR && !COMPILE_FOR_DM
 
 #include "api/debug/assert.h"
@@ -368,6 +367,23 @@ inline __attribute__((always_inline)) void set_l1_data_cache() {
             )ASM" ::
                 : "t1");
 #endif
+    } else {
+        asm(R"ASM(
+            fence
+            li t1, 0x8
+            csrrs zero, 0x7c0, t1
+             )ASM" ::
+                : "t1");
+    }
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
+    // Each Quasar TRISC has the same non-snooped L1 read cache as Blackhole, on at reset, controlled by CSR 0x7C0
+    // bit 3 (set = disabled). MEM_L1_UNCACHED_BASE does not bypass it for TRISCs.
+    if constexpr (enable) {
+        asm(R"ASM(
+            li t1, 0x8
+            csrrc zero, 0x7c0, t1
+             )ASM" ::
+                : "t1");
     } else {
         asm(R"ASM(
             fence
@@ -412,6 +428,7 @@ constexpr uint32_t INTERRUPT_TABLE_BASE = MEM_INTERRUPT_TABLE_BASE;
 constexpr uint32_t SYNC_INTERRUPT_INDEX = 0;                // synchronized interrupts index
 constexpr uint32_t MACHINE_EXTERNAL_INTERRUPT_OFFSET = 11;  // machine external interrupt offset
 constexpr uint32_t ROCC_INTERRUPT_INDEX = 13;               // rocc interrupt index
+constexpr uint32_t MSTATUS_MIE = 1u << 3;                   // mstatus.MIE bit mask
 
 // Encodes a 21-bit byte offset into a RISC-V J-type immediate field
 inline __attribute__((always_inline)) uint32_t encode_j_immediate(int32_t offset) {
@@ -457,19 +474,20 @@ inline __attribute__((always_inline)) void setup_isr_csrs() {
     }
 }
 
-inline __attribute__((always_inline)) void enable_dfb_tile_isr() {
-    // Enable ROCC interrupt in mie
-    asm volatile("csrrs zero, mie, %0" : : "r"(1 << 13));
-
-    // Enable MIE in mstatus
-    asm volatile("csrrs zero, mstatus, %0" : : "r"(1 << 3));
+// mie bit n gates the interrupt whose mcause code is n, which is also its vectored table slot.
+inline __attribute__((always_inline)) void enable_machine_interrupt(uint32_t interrupt_index) {
+    asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << interrupt_index));
+    asm volatile("csrrs zero, mstatus, %0" : : "r"(MSTATUS_MIE));
 }
 
-inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
-    // Disable ROCC interrupt in mie
-    asm volatile("csrrc zero, mie, %0" : : "r"(1 << 13));
-    // Keep machine interrupts enabled so an FDS machine-external go interrupt can reach DM0.
+// mstatus.MIE stays set: other interrupts may still be enabled in mie.
+inline __attribute__((always_inline)) void disable_machine_interrupt(uint32_t interrupt_index) {
+    asm volatile("csrrc zero, mie, %0" : : "r"(uint32_t{1} << interrupt_index));
 }
+
+inline __attribute__((always_inline)) void enable_dfb_tile_isr() { enable_machine_interrupt(ROCC_INTERRUPT_INDEX); }
+
+inline __attribute__((always_inline)) void disable_dfb_tile_isr() { disable_machine_interrupt(ROCC_INTERRUPT_INDEX); }
 #else
 // HW error interrupt entry, in trisc.cc.
 extern "C" void trisc_irq_entry();

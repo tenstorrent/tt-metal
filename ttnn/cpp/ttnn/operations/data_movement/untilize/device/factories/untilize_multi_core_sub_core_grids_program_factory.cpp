@@ -7,16 +7,15 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "untilize_multi_core_sub_core_grids_program_factory.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -45,9 +44,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
     constexpr const char* COMPUTE_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp";
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_data_format = cb_dataformat_for(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_data_format);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_data_format = cb_dataformat_for(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     uint32_t ntiles = a.physical_volume() / TILE_HW;
