@@ -77,10 +77,9 @@ def moe_routing(ffn, block, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
     bf16) in the chunk's token order.
 
     ``block.last_head.routing_rows`` holds, on each chip, its owner rows: per token 16 expert ids (block order) then
-    16 bf16 weights as uint16 words (``router_common.hpp routing_rows``). Mesh chip i = (mr, mc) is the block's chip
-    (SP row, TP column) = (mr, mc) with SP on axis 0, (mc, mr) with SP on axis 1; ``owner_positions`` places its owner
-    rows in the chunk. Block expert b is checkpoint expert ``block_order_perm[b]``."""
-    import ttnn
+    16 bf16 weights as uint16 words (``router_common.hpp routing_rows``). The chip at SP row r, TP column p
+    (``shard_grid``) is the block's chip (r, p); ``owner_positions`` places its owner rows in the chunk. Block expert b
+    is checkpoint expert ``block_order_perm[b]``."""
     from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import block_order_perm
 
     mesh = ffn.mesh
@@ -90,13 +89,12 @@ def moe_routing(ffn, block, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
     chunk = block.resources.config.chunk_tokens
     assert block.splits == 1, f"the routing rows hold the last of {block.splits} splits only"
     words = torch.full((chunk, 2 * MOE_TOP_K), -1, dtype=torch.int64)
-    for i, d in enumerate(ttnn.get_device_tensors(block.last_head.routing_rows)):
-        mr, mc = divmod(i, C)
-        r, p = (mr, mc) if sp_axis == 0 else (mc, mr)
-        owned, pos = owner_positions(
-            r, p, rows_per_sp_row=chunk // sp, pad_rows=block.pad_rows, row_blocks=block.row_blocks, tp=tp
-        )
-        words[pos] = (ttnn.to_torch(d).to(torch.int64).reshape(-1, 2 * MOE_TOP_K) & 0xFFFF)[owned]
+    for r, row in enumerate(shard_grid(mesh, block.last_head.routing_rows, sp_axis)):
+        for p, shard in enumerate(row):
+            owned, pos = owner_positions(
+                r, p, rows_per_sp_row=chunk // sp, pad_rows=block.pad_rows, row_blocks=block.row_blocks, tp=tp
+            )
+            words[pos] = (shard.to(torch.int64).reshape(-1, 2 * MOE_TOP_K) & 0xFFFF)[owned]
     assert (words[:rows] >= 0).all(), "a chunk row no chip's routing rows hold"
     perm = block_order_perm(mesh, MOE_NUM_EXPERTS // (R * C), sp_axis)
     return perm[words[:rows, :MOE_TOP_K]], words[:rows, MOE_TOP_K:].to(torch.int16).view(torch.bfloat16)
