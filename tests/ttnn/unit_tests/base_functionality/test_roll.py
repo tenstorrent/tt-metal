@@ -356,14 +356,14 @@ def test_roll_docstring_supported_inputs(dtype, layout, buffer_type, device):
         if dtype == ttnn.uint8 and dims is None:  # the docstring asks for `dim` with UINT8
             continue
         # With no dim, or with one of the last two dims rolled, a BFLOAT16 input leaves out NaN, as the docstring
-        # requires, and its zeros are compared by value. Block-float values can then move into other blocks, so they get
+        # requires, and -0.0 as well. Block-float values can then move into other blocks, so they get
         # one exponent.
         last_two = _rolls_last_two_dims(len(shape), dims)
         bfloat16_last_two = dtype == ttnn.bfloat16 and last_two
         if dtype in _BLOCK_FLOATS and last_two:
             x = _one_exponent_input(shape)
         else:
-            x = full_range_input(shape, dtype, nan=not bfloat16_last_two)
+            x = full_range_input(shape, dtype, nan=not bfloat16_last_two, negative_zero=not bfloat16_last_two)
         input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
         output = ttnn.roll(input_tensor, shifts) if dims is None else ttnn.roll(input_tensor, shifts, dims)
 
@@ -371,7 +371,7 @@ def test_roll_docstring_supported_inputs(dtype, layout, buffer_type, device):
         assert output.layout == layout
         assert output.memory_config() == input_tensor.memory_config()
         expected = _torch_roll(ttnn.to_torch(input_tensor), shifts, dims)
-        assert_exact(expected, ttnn.to_torch(output), signed_zeros=not bfloat16_last_two)
+        assert_exact(expected, ttnn.to_torch(output))
 
     # A given memory_config sets the output's memory configuration.
     other_config = interleaved_memory_config(
@@ -449,13 +449,13 @@ def test_roll_docstring_sharded_inputs(dtype, layout, memory_layout, buffer_type
         if dtype == ttnn.bfloat8_b and not _bfloat8_b_roll(_SHARDED_SHAPE, shifts, dims):
             continue
         # As in test_roll_docstring_supported_inputs: once one of the last two dims rolls, a BFLOAT16 input leaves out
-        # NaN and its zeros are compared by value, and block floats get values with one exponent.
+        # NaN and -0.0, and block floats get values with one exponent.
         last_two = _rolls_last_two_dims(len(_SHARDED_SHAPE), dims)
         bfloat16_last_two = dtype == ttnn.bfloat16 and last_two
         if dtype in _BLOCK_FLOATS and last_two:
             x = _one_exponent_input(_SHARDED_SHAPE)
         else:
-            x = full_range_input(_SHARDED_SHAPE, dtype, nan=not bfloat16_last_two)
+            x = full_range_input(_SHARDED_SHAPE, dtype, nan=not bfloat16_last_two, negative_zero=not bfloat16_last_two)
         input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=sharded)
         expected = _torch_roll(ttnn.to_torch(input_tensor), shifts, dims)
 
@@ -465,4 +465,4 @@ def test_roll_docstring_sharded_inputs(dtype, layout, memory_layout, buffer_type
         assert output.dtype == dtype, case
         assert output.layout == layout, case
         assert output.memory_config() == input_tensor.memory_config(), case
-        assert_exact(expected, ttnn.to_torch(output), signed_zeros=not bfloat16_last_two)
+        assert_exact(expected, ttnn.to_torch(output))
