@@ -61,8 +61,8 @@ inline void sum_int_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void add_int(const uint dst_offset) {
+template <bool APPROXIMATION_MODE, int ITERATIONS, uint32_t DST_OFFSET>
+inline void add_int() {
     // SFPI's dst_reg[] index steps the Dest address by SFP_DESTREG_STRIDE (2) rows, so a 64-row tile spans 32 indices.
     // Rows use immediate offsets and leave the Dest RWC alone: the face walk sets it from the
     // carriage-return counter, so no per-row INCRWC is needed.
@@ -70,7 +70,7 @@ inline void add_int(const uint dst_offset) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt a = dst_reg[d].mode<sfpi::DataLayout::I32>();
-        vInt b = dst_reg[dst_offset * dst_tile_size_sfpi + d].mode<sfpi::DataLayout::I32>();
+        vInt b = dst_reg[DST_OFFSET * dst_tile_size_sfpi + d].mode<sfpi::DataLayout::I32>();
 
         dst_reg[d].mode<sfpi::DataLayout::I32>() = a + b;
     }

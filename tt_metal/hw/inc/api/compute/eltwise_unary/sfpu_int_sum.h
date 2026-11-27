@@ -34,15 +34,19 @@ ALWI void sfpu_sum_int_row(uint32_t idst) {
  *
  * Return value: None
  *
+ * | Template Param | Description                                       | Type     | Valid Range                                                                | Required |
+ * |----------------|---------------------------------------------------|----------|----------------------------------------------------------------------------|----------|
+ * | dst_offset     | Distance in tiles from idst to the operand tile   | uint32_t | idst + dst_offset must be less than the size of the DST register buffer; 1 on Quasar | True     |
+ *
  * | Argument   | Description                                                        | Type     | Valid Range                                                                | Required |
  * |------------|--------------------------------------------------------------------|----------|----------------------------------------------------------------------------|----------|
  * | idst       | The index of the tile in DST register buffer that receives the sum | uint32_t | Must be less than the size of the DST register buffer                      | True     |
- * | dst_offset | Distance in tiles from idst to the operand tile                    | uint32_t | idst + dst_offset must be less than the size of the DST register buffer; 1 on Quasar | True     |
  */
 // clang-format on
-ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset) {
+template <uint32_t dst_offset>
+ALWI void sfpu_add_int(uint32_t idst) {
 #ifdef ARCH_QUASAR
-    LLK_ASSERT(dst_offset == 1, "sfpu_add_int on Quasar always adds tile idst + 1; dst_offset must be 1");
+    static_assert(dst_offset == 1, "sfpu_add_int on Quasar always adds tile idst + 1; dst_offset must be 1");
     MATH(LLK_ASSERT(
         (static_cast<std::uint64_t>(idst) + 1 <
          trisc::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, trisc::DstTileShape::Tile32x32>()),
@@ -55,7 +59,7 @@ ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset) {
         "sfpu_add_int operand tile idst + dst_offset exceeds max dest tiles"));
 #endif
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, add_int, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, dst_offset));
+        DST_SYNC_MODE, DST_ACCUM_MODE, add_int, (APPROX, 8 /*ITERATIONS*/, dst_offset), idst, VectorMode::RC));
 }
 
 }  // namespace ckernel

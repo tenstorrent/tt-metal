@@ -33,7 +33,7 @@ void kernel_main() {
             if (enable_reload) {
                 copy_tile_to_dst(dfb_intermed0_obj, idx0, dst1);
                 sfpu_sum_int_init();
-                sfpu_add_int(dst0, add_operand_dst_offset);
+                sfpu_add_int<add_operand_dst_offset>(dst0);
             }
             tile_regs_commit();
 

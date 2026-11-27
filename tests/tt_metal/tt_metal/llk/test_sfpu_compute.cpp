@@ -783,7 +783,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
     {"sfpu_add_int",
      {{"SFPU_OP_INT_SUM_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "sfpu_sum_int_init();"},
-      {"SFPU_OP_CHAIN_0", "sfpu_add_int(0, 1);"}}},
+      {"SFPU_OP_CHAIN_0", "sfpu_add_int<1>(0);"}}},
     {"int_mask",
      {{"SFPU_OP_MASK_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "mask_tile_init();"},

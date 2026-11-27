@@ -61,9 +61,10 @@ inline void sum_int_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
 }
 
-// Quasar builds with -Werror=unused-parameter; dst_offset is unused (the next tile is always read).
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void add_int([[maybe_unused]] const uint dst_offset) {
+template <bool APPROXIMATION_MODE, int ITERATIONS, uint32_t DST_OFFSET>
+inline void add_int() {
+    // The operand is always the tile right after the first (dst_reg[32]).
+    static_assert(DST_OFFSET == 1, "Quasar add_int always adds tile idst + 1; DST_OFFSET must be 1");
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt a = dst_reg[0];

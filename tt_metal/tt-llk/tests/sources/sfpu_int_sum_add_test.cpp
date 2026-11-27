@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Driver for `add_int<APPROX, ITERATIONS>(dst_offset)` of llk_sfpu/ckernel_sfpu_int_sum.h (the kernel
-// behind the compute API's sfpu_add_int(idst, dst_offset)): Dest tile idst += Dest tile idst + dst_offset,
+// Driver for `add_int<APPROX, ITERATIONS, DST_OFFSET>()` of llk_sfpu/ckernel_sfpu_int_sum.h (the kernel
+// behind the compute API's sfpu_add_int<dst_offset>(idst)): Dest tile idst += Dest tile idst + dst_offset,
 // in place. TILE_CNT Int32 tiles are copied into Dest tiles 0..TILE_CNT-1, the add runs once with the
 // compile-time INT_SUM_DST_INDEX and INT_SUM_DST_OFFSET, and every Dest tile is packed back so the test
 // can check both the sum and that the other tiles were left alone.
@@ -77,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             tile /*dst_index*/, formats.math, formats.math);
     }
 
-    // The compute API's sfpu_sum_int_init() followed by sfpu_add_int(dst_index, INT_SUM_DST_OFFSET), including
+    // The compute API's sfpu_sum_int_init() followed by sfpu_add_int<INT_SUM_DST_OFFSET>(dst_index), including
     // its bound on the operand tile (SFPU_UNARY_CALL only checks the destination index).
     constexpr std::uint32_t dst_index = INT_SUM_DST_INDEX;
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::sum_int_init<APPROX_MODE>);
@@ -87,7 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     LLK_ASSERT(
         (static_cast<std::uint64_t>(dst_index) + INT_SUM_DST_OFFSET < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "sfpu_add_int operand tile idst + dst_offset exceeds max dest tiles");
-    SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, add_int, (APPROX_MODE, ITERATIONS), dst_index, VECTOR_MODE, INT_SUM_DST_OFFSET);
+    SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, add_int, (APPROX_MODE, ITERATIONS, INT_SUM_DST_OFFSET), dst_index, VECTOR_MODE);
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

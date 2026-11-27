@@ -3,9 +3,9 @@
 """
 Operand placement of int_sum's add_int (hw/ckernels/<arch>/metal/llk_api/llk_sfpu/ckernel_sfpu_int_sum.h).
 
-    add_int<APPROX, ITERATIONS>(dst_offset):  Dest tile idst += Dest tile idst + dst_offset, in place
+    add_int<APPROX, ITERATIONS, DST_OFFSET>():  Dest tile idst += Dest tile idst + dst_offset, in place
 
-It is the kernel behind the compute API's sfpu_add_int(idst, dst_offset). Four Int32 tiles go
+It is the kernel behind the compute API's sfpu_add_int<dst_offset>(idst). Four Int32 tiles go
 into Dest tiles 0..3, each carrying a distinct per-tile value, so the sum identifies which tile
 was actually added and whether the operand was found relative to idst. Every other tile must
 come back untouched.
