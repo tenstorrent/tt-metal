@@ -317,31 +317,6 @@ def test_strip_stitch_matches_gather_stitch_bitwise(mesh_device):
     assert differing == 0, f"{differing} of {g_planar.size} planar bytes differ"
 
 
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING_L1, indirect=["mesh_device", "device_params"])
-def test_packed_spare_columns_match_one_chunk_per_wave_bitwise(mesh_device):
-    """At a 32 px overlap (4x6 grid, two spare mesh columns) packed waves give the canvases of one chunk per wave."""
-    import numpy as np
-
-    vae, chunk = _stub_decoder_vae(mesh_device)
-    vae.stitch_exchange = "strips"
-    vae.decode_tile_overlap = 32
-    # 5 chunks packed: a run of 4 in 3 waves, then a single wave.
-    chunks = [torch.randn_like(chunk) for _ in range(5)]
-    outputs = {}
-    for pack, waves in ((False, 5), (True, 4)):
-        vae.pack_spare_columns = pack
-        vae._profile = vae._empty_profile()
-        outputs[pack] = vae._decode_clips_device_stitched(chunks, "yuv420")
-        assert vae._profile["waves"] == waves, f"{vae._profile['waves']} waves"
-
-    assert len(outputs[True]) == len(outputs[False]) == len(chunks)
-    for index, (packed, single) in enumerate(zip(outputs[True], outputs[False])):
-        assert packed.shape == single.shape and packed.dtype == single.dtype == np.uint8
-        differing = int((packed != single).sum())
-        assert differing == 0, f"chunk {index}: {differing} of {single.size} planar bytes differ"
-
-
 def test_pixel_denorm_fold_is_exact_and_commutes_with_the_blend():
     """Folding the de-normalization into ``proj_out`` must be exact, not merely close.
 

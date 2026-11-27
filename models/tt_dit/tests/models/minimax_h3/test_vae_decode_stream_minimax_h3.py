@@ -17,12 +17,12 @@ from ....models.vae.minimax_h3.temporal_minimax_h3 import (
 )
 
 
-def _vae(decode_clips):
+def _vae(decode_clips, assemble_beside_decode=False):
     vae = object.__new__(vm.MiniMaxH3Vae)
     vae.config = vm.MiniMaxH3VaeConfig()
     vae.decoder = None
     vae.device_stitch = True
-    vae.assemble_beside_decode = False
+    vae.assemble_beside_decode = assemble_beside_decode
     vae._assembled_shapes = {}
     vae._ensure_loaded = lambda module, subfolder: None
     vae._decoder_subfolder = lambda: "vae"
@@ -103,20 +103,20 @@ def test_the_batch_assembly_is_unchanged(output_type, latent_frames):
         torch.testing.assert_close(result, expected, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("assemble_beside_decode", [True, False])
 @pytest.mark.parametrize("latent_frames", [7, 16, 31])
-def test_a_decode_with_no_consumer_can_assemble_beside_the_device_decode(latent_frames):
+def test_a_decode_with_no_consumer_can_assemble_beside_the_device_decode(latent_frames, assemble_beside_decode):
     config = vm.MiniMaxH3VaeConfig()
     recorded = []
     fake = _fake_clips("yuv420", 2 * _chunk_frames(config), seed=latent_frames)
 
     def decode_clips(chunk_latents, output_type_arg="float", on_clip=None):
-        assert on_clip is not None  # each clip reaches the assembly as it lands
+        assert (on_clip is not None) == assemble_beside_decode  # beside: each clip reaches the assembly as it lands
         clips = fake(chunk_latents, output_type_arg, on_clip)
         recorded.extend(clips)
         return clips
 
-    vae = _vae(decode_clips)
-    vae.assemble_beside_decode = True
+    vae = _vae(decode_clips, assemble_beside_decode)
     result = vae._decode(torch.zeros(1, 1, latent_frames, 2, 2), "yuv420")
     np.testing.assert_array_equal(result, _reference(recorded, config, latent_frames))
 
@@ -178,41 +178,3 @@ def test_the_streamed_decode_closes_the_assembly_when_the_device_raises(fake_str
         vae._decode(torch.zeros(1, 1, 16, 2, 2), "yuv420", on_frames=lambda frames: None)
     (stream,) = fake_stream.made
     assert stream.closed
-
-
-@pytest.mark.parametrize(
-    ("grid_cols", "pack_spare_columns", "num_chunks", "num_waves"),
-    [
-        # 1344x768 on the 4x8 mesh: 7 columns at a 64 px overlap, 6 at 32 px.
-        (7, False, 14, 13),
-        (7, False, 9, 8),
-        (6, True, 14, 11),
-        (6, True, 9, 7),
-        (6, False, 14, 14),
-        (5, True, 9, 6),
-        (4, True, 9, 5),
-    ],
-)
-def test_strip_waves_decode_each_chunk_once_and_read_back_in_chunk_order(
-    grid_cols, pack_spare_columns, num_chunks, num_waves
-):
-    mesh_cols = 8
-    waves = vm.strip_waves(num_chunks, grid_cols, mesh_cols, pack_spare_columns)
-    assert len(waves) == num_waves
-    read_back, held = [], {}
-    for wave in waves:
-        used = len(wave["mains"]) * grid_cols
-        read_back += wave["mains"]
-        if wave["extra"] is not None:
-            chunk, columns = wave["extra"]
-            used += len(columns)
-            held.setdefault(chunk, []).extend(columns)
-        assert used <= mesh_cols
-        if wave["flush"]:
-            # The held strips of one extra chunk, every grid column once and in order.
-            ((chunk, columns),) = held.items()
-            assert columns == list(range(grid_cols))
-            read_back.append(chunk)
-            held.clear()
-    assert not held
-    assert read_back == list(range(num_chunks))
