@@ -28,7 +28,7 @@
 #include "tt-metalium/experimental/sram_arena/sram_arena_properties.hpp"
 #include "tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp"
 #include "tt-metalium/workload/specification/tensor_parameter.hpp"
-#include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
+#include "tt-metalium/experimental/prefetcher_pipe.hpp"  // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
 
@@ -912,6 +912,10 @@ public:
     // (the program was moved out of it) does not apply to it, and the earlier entry is no longer the owner.
     void reset_per_device_run_arg_drops(uint64_t owner) { per_device_run_arg_drops_ = {.owner = owner}; }
 
+    // Set data format and tile metadata in `build_options` for every dataflow buffer intersecting `crs` (the
+    // compile's prep, and emulation's copy of a kernel's generated descriptors).
+    void set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -1078,9 +1082,6 @@ private:
     // Set data format and tile metadata in `build_options` for every circular buffer
     // intersecting `crs`.
     void set_cb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
-
-    // Same as `set_cb_data_fmt_and_tile`, but for dataflow buffers.
-    void set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 

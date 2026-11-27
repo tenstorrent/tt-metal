@@ -6,13 +6,16 @@
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
+#include <elf.h>
 #include <unistd.h>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -80,9 +83,21 @@ const CachedBinary& get_cached_binary(
     if (inserted) {
         // We're the first with PATH. Create and insert.
         lock.unlock();
+        ll_api::ElfFile elf;
+#ifdef TT_METAL_USE_EMULE
+        // An emulated kernel's binary is the host shared object the emulator runs: only its metadata is read. The
+        // binary says which it is, so a mock or silicon context next to an emulated one keeps its device images.
+        if (ll_api::ElfFile::IsHostSharedObject(path)) {
+            elf.ReadSections(path);
+            auto* mutable_ptr = new CachedBinary{.image = {}, .metadata = ll_api::parse_binary_metadata(elf)};
+            lock.lock();
+            slot->second = decltype(slot->second)(mutable_ptr);
+            cache.cvar.notify_all();
+            return *mutable_ptr;
+        }
+#endif
         // Single ELF open: harvest metadata from the pristine ELF first (from_elf may transform it in
         // place for XIP), then pack the device image.
-        ll_api::ElfFile elf;
         elf.ReadImage(path);
         ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
         // Every device-executed image, kernel or firmware, passes through here before it can run, so
@@ -110,7 +125,8 @@ const CachedBinary& get_cached_binary(
             cache.cvar.wait(lock, [=] { return bool(slot->second); });
         }
         ptr = slot->second.get();
-        TT_ASSERT(ptr->image.get_loading() == loading);
+        // A metadata-only entry (an emulated kernel's host binary) has no device image, so no loading mode.
+        TT_ASSERT(ptr->image.num_spans() == 0 || ptr->image.get_loading() == loading);
     }
 
     return *ptr;
@@ -405,8 +421,8 @@ std::string format_eth_fw_stage_slots(
     std::vector<std::string> entries;
     entries.reserve(slots.size());
     for (uint32_t slot = 0; slot < slots.size(); slot++) {
-        entries.push_back(fmt::format(
-            "erisc{}{}={}", slot, metal_slot[slot] ? "" : "(base)", eth_fw_stage_to_string(slots[slot])));
+        entries.push_back(
+            fmt::format("erisc{}{}={}", slot, metal_slot[slot] ? "" : "(base)", eth_fw_stage_to_string(slots[slot])));
     }
     return fmt::format("{}", fmt::join(entries, separator));
 }

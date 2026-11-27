@@ -408,6 +408,11 @@ class RunTimeOptions {
     // Mock cluster initialization using a provided cluster descriptor
     std::string mock_cluster_desc_path;
 
+    // SoC descriptor of the emulated chip; empty means the architecture's default descriptor
+    std::string emule_soc_desc_path;
+    // TT_METAL_EMULE_MODE is set; the target is Emule unless TT_METAL_SIMULATOR is set too
+    bool emule_mode_requested = false;
+
     // Cluster id handed to UMD topology discovery; unset means UMD uses the OS hostname
     std::optional<std::string> cluster_id;
 
@@ -439,7 +444,8 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
-    // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
+    // Serve simulation devices over sockets for a debug tool to attach; enable with
+    // TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
     bool simulator_serve_over_sockets = false;
 
     // Use the DRAM size the soc descriptor declares on the emulator models that back less
@@ -1018,8 +1024,12 @@ public:
     const std::optional<std::string>& get_cluster_id() const { return cluster_id; }
 
     // Mock cluster accessors
-    bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
+    // A mock cluster has no device behind it. An emulated device takes its cluster shape from the same
+    // descriptor but runs kernels, so it is not mock.
+    bool get_mock_enabled() const { return has_mock_cluster_desc() && runtime_target_device_ != TargetDevice::Emule; }
+    bool has_mock_cluster_desc() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
+    const std::string& get_emule_soc_desc_path() const { return emule_soc_desc_path; }
     // Set mock cluster descriptor from a filename.
     // Searches the tt-cluster-descriptors submodule first (these take precedence when
     // the same filename exists in both locations), then falls back to the UMD

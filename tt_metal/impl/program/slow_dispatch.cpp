@@ -150,11 +150,9 @@ void SetKernelTextOffsets(
 }
 
 void PrepareProgram(IDevice& device, Program& program) {
-#ifdef TT_METAL_USE_EMULE
-    if (MetalContext::instance(extract_context_id(&device)).get_cluster().get_target_device_type() !=
-        tt::TargetDevice::Emule)
-#endif
-    {
+    // An emulated chip without dispatch firmware compiles the program when it launches it.
+    const auto& cluster = MetalContext::instance(extract_context_id(&device)).get_cluster();
+    if (cluster.get_target_device_type() != tt::TargetDevice::Emule || cluster.runs_dispatch_firmware()) {
         program.impl().compile(&device);
     }
     program.impl().finalize_dataflow_buffer_configs();
@@ -238,7 +236,7 @@ void ConfigureDeviceWithProgram(
             CoreCoord physical_core = device.virtual_core_from_logical_core(logical_core, core_type);
             const uint64_t kernel_config_base =
                 hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
-            // Skip binary writing for emulated mode (JIT compilation happens in execute_program_emulated)
+            // Emulated kernels have no binaries; their text is written below.
             if (!is_emulated) {
                 ScopedHostTransfer binary_upload(
                     transfer_stats,
@@ -366,6 +364,11 @@ void ConfigureDeviceWithProgram(
             program.impl().init_semaphores(device, logical_core, index);
         }
     }
+#ifdef TT_METAL_USE_EMULE
+    if (is_emulated) {
+        emule::write_kernel_text(&device, program);
+    }
+#endif
 }
 
 void WriteRuntimeArgsToDevice(
@@ -491,9 +494,10 @@ void LaunchProgramAsync(
     WriteRuntimeArgsToDevice(device, program, force_slow_dispatch, kernel_config_buffer);
 
 #ifdef TT_METAL_USE_EMULE
-    if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
-        // Emulated mode always executes synchronously (slow dispatch only): all kernels complete before this
-        // function returns.
+    // An emulated chip without dispatch firmware launches the program itself; PrepareProgram left its compile to it.
+    if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule &&
+        !metal_ctx.get_cluster().runs_dispatch_firmware()) {
+        // Slow dispatch on an emulated chip executes synchronously: all kernels complete before this returns.
         emule::execute_program_emulated(&device, program);
         return;
     }

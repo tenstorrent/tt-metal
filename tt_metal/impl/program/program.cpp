@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "impl/emulation/emule_hooks.hpp"
 #include <tt-metalium/mesh/allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt-metalium/workload/legacy/circular_buffer.hpp>
@@ -245,6 +246,28 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
             kernel->name());
     }
 };
+
+// Blackhole and Quasar: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated
+// compute kernel. This is due to FP8/LF8 being considered "A" exp width formats, instead of "B" exp
+// width formats that are supported mostly in tt-metal. This conservative check fires whenever a
+// compute kernel shares a core with any FP8 CB — the old Program API has no way to know which CB
+// a given kernel actually reads, so we err on the side of catching the misconfiguration.
+void check_fp8_dest_acc(const Kernel& kernel, const JitBuildOptions& build_options) {
+    if ((build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE ||
+         build_options.build_env.get_arch() == tt::ARCH::QUASAR) &&
+        kernel.get_kernel_processor_class() == HalProcessorClassType::COMPUTE &&
+        std::any_of(
+            build_options.hlk_desc.buf_dataformat_arr.begin(),
+            build_options.hlk_desc.buf_dataformat_arr.end(),
+            tt::is_fp8_format)) {
+        TT_FATAL(
+            build_options.fp32_dest_acc_en,
+            "Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true in ComputeConfig. The DEST "
+            "register must be in 32-bit (family-agnostic) mode when any CB on the same core uses "
+            "an 8-bit float format. Kernel: {}",
+            kernel.name());
+    }
+}
 
 }  // namespace
 
@@ -3040,8 +3063,8 @@ void detail::ProgramImpl::set_cb_data_fmt_and_tile(
 }
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
-    // Mock/emulated devices don't dispatch to hardware, skip dispatch data population
-    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
+    // Devices without dispatch firmware take no dispatch commands
+    if (!tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().runs_dispatch_firmware()) {
         return;
     }
 
@@ -3434,10 +3457,29 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         return;
     }
 
-    // Emule never links a real RISC-V kernel binary -- DispatchCompiledProgramToDevice already skips
-    // this function for Emule, JIT-compiling to x86 in execute_program_emulated instead. Eager callers
-    // (the Metal 2.0 Program/MeshWorkload constructors) reach compile() directly, so skip here too.
+    auto validate_kernel_placements = [&]() {
+        for (const auto& kernels : kernels_) {
+            for (const auto& [id, kernel] : kernels) {
+                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
+            }
+        }
+    };
+
+    // An emulated device builds its kernels for the host (tt-emule's JIT), not as RISC-V binaries. It runs the
+    // placement and FP8 checks of the silicon path below, so a program silicon rejects is rejected here too.
     if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
+        validate_kernel_placements();
+        for (const auto& kernels : kernels_) {
+            for (const auto& [id, kernel] : kernels) {
+                JitBuildOptions build_options(build_env.build_env);
+                kernel->set_build_options(build_options);
+                this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
+                this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
+                check_fp8_dest_acc(*kernel, build_options);
+            }
+        }
+        Program program(shared_from_this());
+        emule::compile_program(device, program, build_env);
         compiled_.insert(build_env.build_key());
         Inspector::program_compile_finished(this, device, build_env.build_key());
         return;
@@ -3461,25 +3503,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
         this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
 
-        // Blackhole and Quasar: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated
-        // compute kernel. This is due to FP8/LF8 being considered "A" exp width formats, instead of "B" exp
-        // width formats that are supported mostly in tt-metal. This conservative check fires whenever a
-        // compute kernel shares a core with any FP8 CB — the old Program API has no way to know which CB
-        // a given kernel actually reads, so we err on the side of catching the misconfiguration.
-        if ((build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE ||
-             build_options.build_env.get_arch() == tt::ARCH::QUASAR) &&
-            kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE &&
-            std::any_of(
-                build_options.hlk_desc.buf_dataformat_arr.begin(),
-                build_options.hlk_desc.buf_dataformat_arr.end(),
-                is_fp8_format)) {
-            TT_FATAL(
-                build_options.fp32_dest_acc_en,
-                "Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true in ComputeConfig. The DEST "
-                "register must be in 32-bit (family-agnostic) mode when any CB on the same core uses "
-                "an 8-bit float format. Kernel: {}",
-                kernel->name());
-        }
+        check_fp8_dest_acc(*kernel, build_options);
 
         auto kernel_hash = detail::KernelCompileHash(kernel, build_options, build_env.build_key());
 
@@ -3500,11 +3524,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     // Validate every kernel before starting any build: a throw after a local task launches would unwind
     // locals it still references, and a throw after a remote submit would leave its dedup entry pending.
-    for (const auto& kernels : kernels_) {
-        for (const auto& [id, kernel] : kernels) {
-            validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
-        }
-    }
+    validate_kernel_placements();
 
     if (remote_enabled) {
         // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote

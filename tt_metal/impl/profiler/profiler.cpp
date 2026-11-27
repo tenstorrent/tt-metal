@@ -3046,7 +3046,7 @@ bool DeviceProfiler::pollDebugDumpResults(
 
 bool getDeviceProfilerState(MetalEnvImpl& env) {
     // Device profiler cannot be enabled on mock device.
-    if (env.get_cluster().is_mock_or_emulated()) {
+    if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return false;
     }
 

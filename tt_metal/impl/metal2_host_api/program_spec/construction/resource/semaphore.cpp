@@ -59,14 +59,9 @@ bool cached_geometry_ok(const SemaphoreSpec& sem, const SemaphoreBinderInfo& bin
            sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores() && all_binders_are_dm(binders);
 }
 
-// Check if the cached tier is available on this target device. Arch and the target device both
-// come from the program's own env (BuildProgramFromSpec builds against the mesh device's env),
+// Arch comes from the program's own env (BuildProgramFromSpec builds against the mesh device's env),
 // not the default context.
 bool is_gen2_target(const Hal& hal) { return hal.get_arch() == tt::ARCH::QUASAR; }
-
-bool cached_tier_available(MetalEnvImpl& env) {
-    return env.get_rtoptions().get_target_device() != tt::TargetDevice::Emule;
-}
 
 // Picks the fastest access path that keeps this semaphore's operations atomic. Every
 // binder is treated as a possible reader and writer.
@@ -96,7 +91,7 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const SemaphoreBinderIn
     }
 
     // Gen2, all binders are DMs on the same 1 node as the semaphore
-    if (cached_tier_available(env) && cached_geometry_ok(sem, binders)) {
+    if (cached_geometry_ok(sem, binders)) {
         return SemScope::DM_LOCAL_CACHED;
     }
 

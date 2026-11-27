@@ -61,6 +61,9 @@ inline std::string get_soc_description_file(
             return sim_soc_desc;
         }
     }
+    if (target_device == tt::TargetDevice::Emule && !rtoptions.get_emule_soc_desc_path().empty()) {
+        return rtoptions.get_emule_soc_desc_path();
+    }
     std::string path = rtoptions.get_root_dir();
     if (path.back() != '/') {
         path.push_back('/');
@@ -78,7 +81,7 @@ inline std::string get_soc_description_file(
 }
 
 std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunTimeOptions& rtoptions) {
-    TT_FATAL(rtoptions.get_mock_enabled(), "Mock cluster descriptor not enabled");
+    TT_FATAL(rtoptions.has_mock_cluster_desc(), "Mock cluster descriptor not enabled");
     std::unique_ptr<tt::umd::ClusterDescriptor> mock_cluster_desc =
         tt::umd::ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
     TT_FATAL(
@@ -137,7 +140,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             }
             return tt::tt_metal::ClusterType::INVALID;
         }
-        temp_cluster_desc = rtoptions.get_mock_enabled() ? get_mock_cluster_desc(rtoptions)
+        temp_cluster_desc = rtoptions.has_mock_cluster_desc() ? get_mock_cluster_desc(rtoptions)
                                                          : tt::umd::Cluster::create_cluster_descriptor();
         cluster_desc = temp_cluster_desc.get();
     }
@@ -258,6 +261,11 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     log_info(tt::LogDevice, "Opening user mode device driver");
 
     this->detect_arch_and_target();
+    // Fixed for the cluster's lifetime, as on silicon: an emulated chip runs metal's dispatch firmware when the
+    // cluster opens in fast dispatch. A later change of the dispatch mode does not move it while FD queues exist.
+    this->runs_dispatch_firmware_ =
+        this->target_type_ != tt::TargetDevice::Mock &&
+        (this->target_type_ != tt::TargetDevice::Emule || this->rtoptions_.get_fast_dispatch());
 
     this->initialize_device_drivers();
 
@@ -266,6 +274,18 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
     auto& cluster_desc = (*(this->driver_->get_cluster_description()));
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc);
+
+    // Emulated fast dispatch runs each chip's dispatch kernels on that chip, as on an MMIO chip: it has no ethernet
+    // tunnel or fabric to reach a remote chip's dispatch through, so a cluster with remote chips is not supported.
+    if (this->target_type_ == tt::TargetDevice::Emule && this->runs_dispatch_firmware_) {
+        for (ChipId chip_id : cluster_desc.get_all_chips()) {
+            TT_FATAL(
+                cluster_desc.is_chip_mmio_capable(chip_id),
+                "Emulated fast dispatch needs every chip to be MMIO-capable, but chip {} of the cluster descriptor is "
+                "remote. Use slow dispatch (TT_METAL_SLOW_DISPATCH_MODE=1) or a descriptor without remote chips.",
+                chip_id);
+        }
+    }
 
     if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule) {
         this->assert_risc_reset();
@@ -295,6 +315,8 @@ void Cluster::detect_arch_and_target() {
 bool Cluster::is_galaxy_cluster() const { return false; }
 
 bool Cluster::is_ubb_galaxy() const { return Cluster::is_ubb_galaxy(this->cluster_type_); }
+
+bool Cluster::runs_dispatch_firmware() const { return this->runs_dispatch_firmware_; }
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
@@ -523,7 +545,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     } else if (this->target_type_ == TargetDevice::Simulator) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
         std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc;
-        if (rtoptions_.get_mock_enabled()) {
+        if (rtoptions_.has_mock_cluster_desc()) {
             mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,

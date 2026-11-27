@@ -96,7 +96,7 @@ public:
     AuxRegionAllocator& aux_region_allocator() { return aux_region_allocator_; }
 
 private:
-    bool is_mock_device() const { return is_mock_device_; }
+    bool no_dispatch_firmware() const { return no_dispatch_firmware_; }
 
     void init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint16_t channel);
 
@@ -104,7 +104,7 @@ private:
 
     MetalEnvImpl& env_;
     MetalContext& ctx_;
-    const bool is_mock_device_;
+    const bool no_dispatch_firmware_;
     const bool is_dram_backed_;
     const uint32_t cq_alignment_;  // DRAM alignment if DRAM-backed, host alignment otherwise
     ChipId device_id = 0;
@@ -128,7 +128,7 @@ private:
 
     std::unique_ptr<char[]> dram_region_staging_buffer;
 
-    // Empty on mock devices.
+    // Empty on devices without dispatch firmware.
     AuxRegionAllocator aux_region_allocator_;
 };
 

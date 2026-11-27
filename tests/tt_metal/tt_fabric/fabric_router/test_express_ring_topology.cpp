@@ -72,7 +72,7 @@ int world_size() {
 
 // The ControlPlane-backed tests below need real channel binding, unlike everything above them.
 bool cluster_available() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled() ||
+    return tt::tt_metal::MetalContext::instance().rtoptions().has_mock_cluster_desc() ||
            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
                tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
 }
