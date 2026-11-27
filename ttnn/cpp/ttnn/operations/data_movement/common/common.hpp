@@ -324,20 +324,9 @@ uint32_t get_pending_l1_output_reservation(
 // BFLOAT16. The device operations' compute_output_specs and the composites' L1 accounting (output
 // tile size, pending L1 output reservation) must all agree on this, so they all go through here.
 // MX tiles (Quasar) are expanded to Float16_b by the unpacker and cannot exist in ROW_MAJOR either, so they
-// also come out as BFLOAT16. Listed explicitly because is_mx() is not constexpr.
+// also come out as BFLOAT16.
 constexpr DataType untilize_output_dtype(DataType input_dtype) {
-    switch (input_dtype) {
-        case DataType::BFLOAT8_B:
-        case DataType::MXFP8_E4M3:
-        case DataType::MXFP8_E5M2:
-        case DataType::MXFP6_E2M3:
-        case DataType::MXFP6_E3M2:
-        case DataType::MXFP4:
-        case DataType::MXINT8:
-        case DataType::MXINT4:
-        case DataType::MXINT2: return DataType::BFLOAT16;
-        default: return input_dtype;
-    }
+    return (input_dtype == DataType::BFLOAT8_B || tt::tt_metal::is_mx(input_dtype)) ? DataType::BFLOAT16 : input_dtype;
 }
 
 ttnn::Tensor pad_to_tile_vol(

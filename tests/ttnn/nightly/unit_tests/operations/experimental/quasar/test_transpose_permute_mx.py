@@ -31,9 +31,10 @@ def _quasar_only(device):
 
 def _sharded_mx(device, dtype, shape=(1, 1, 64, 32)):
     x = torch.randn(shape)
+    num_shards = x.numel() // (32 * 32)  # one 32x32 tile per shard, one shard per core
     cfg = ttnn.create_sharded_memory_config(
         shape=(32, 32),
-        core_grid=ttnn.CoreGrid(y=1, x=2),
+        core_grid=ttnn.CoreGrid(y=1, x=num_shards),
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -113,3 +114,14 @@ def test_permute_mx_sharded_rejected(device, dtype, expect_error):
     _, tt = _sharded_mx(device, dtype)
     with expect_error(RuntimeError, "interleaved input and output only"):
         ttnn.permute(tt, (0, 1, 3, 2))
+
+
+# N<->C permute / transpose keep the native whole-tile path, so they are accepted on sharded MX input.
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_permute_mx_sharded_nc(device, dtype):
+    torch.manual_seed(0)
+    x, tt = _sharded_mx(device, dtype, shape=(2, 1, 32, 32))
+    out = ttnn.permute(tt, (1, 0, 2, 3))
+    assert out.dtype == dtype
+    golden = mx_round_trip(x, dtype).permute(1, 0, 2, 3)
+    check(golden, ttnn.to_torch(out), pcc_floor(dtype))
