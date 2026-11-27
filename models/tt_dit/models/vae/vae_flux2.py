@@ -270,6 +270,11 @@ class Flux2VaeDecoder(Module):
 class Flux2VaeEncoder(Module):
     """The FLUX.2 VAE encoder, producing the mean of the latent distribution."""
 
+    # The output size per chip (height, width) of the fixed 2D slices of the convs at each resolution, from the
+    # image's to the latent's (1/8 of the image), or None for conv2d's own slicing; the decoder's, in the order of the
+    # resolutions. See Conv2d.fixed_slice_hw.
+    fixed_slice_hw_per_level: tuple[tuple[int, int], ...] | None = ((128, 128), (64, 64), (32, 64), (32, 32))
+
     def __init__(
         self,
         *,
@@ -291,6 +296,8 @@ class Flux2VaeEncoder(Module):
             h_factor=parallel_config.h_parallel.factor if parallel_config.h_parallel is not None else 1,
             w_mesh_axis=parallel_config.w_parallel.mesh_axis if parallel_config.w_parallel is not None else None,
             w_factor=parallel_config.w_parallel.factor if parallel_config.w_parallel is not None else 1,
+            # As in the decoder: the layout conversions and halo exchanges serve every image size after warming one.
+            runtime_shapes=True,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -330,9 +337,30 @@ class Flux2VaeEncoder(Module):
         # A fixed shard scheme, so each conv prepares its weights once instead of per image size. On a
         # T3K (2x4) for reference sizes from 256x256 to 1024x1024, square and not, these convs are
         # block-sharded by conv2d on its own. conv_in is left to conv2d: its 3 input channels are not
-        # a whole tile, so it prepares its weights per size anyway.
+        # a whole tile, so without fixed slices it prepares its weights per size anyway.
         for module in (self.down_blocks, self.mid_block, self.conv_out):
             configure_conv2d(module, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED)
+        # Fixed 2D slices for every conv, as in the decoder, so the convs add no program-cache entries at a new image
+        # size, and the warm-ups of what the warm size does not run: the slices' flatten, and the mid block's token
+        # gather where the token rows per chip are not whole tiles.
+        if self.fixed_slice_hw_per_level is not None:
+            for level, modules in enumerate(self._conv_levels()):
+                for module in modules:
+                    configure_conv2d(module, fixed_slice_hw=self.fixed_slice_hw_per_level[level])
+            warm_fixed_slice_flatten(ctx.device, [*channel_counts, z_channels])
+        warm_token_gather(ctx, channel_counts[-1])
+
+    def _conv_levels(self) -> list[list[Module]]:
+        """The modules holding the convs at each resolution, from the image's to the latent's: each down block's
+        resnets run at the resolution the previous block's downsampler leaves, and a downsampler's conv at the one it
+        makes."""
+        levels: list[list[Module]] = [[self.conv_in]]
+        for block in self.down_blocks:
+            levels[-1].append(block.resnets)
+            if block.downsampler is not None:
+                levels.append([block.downsampler])
+        levels[-1].extend([self.mid_block, self.conv_out])
+        return levels
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pop_substate(state, "decoder")
@@ -378,6 +406,12 @@ class Flux2VaeEncoder(Module):
         # The latents stay split over the H and W axes for the host to assemble (see output_concat_dims),
         # which on a single host saves gathering them on the device, at a program per image size.
         return self.conv_out.forward(x, hw)
+
+    @property
+    def runtime_shapes(self) -> bool:
+        """Whether the encoder's layout conversions and halo exchanges use one program for every image size; the
+        pipeline's flat_to_row_major of the latents follows it."""
+        return self._ctx.runtime_shapes
 
     def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
         """The local (H, W) of the latents of an image of local size `hw`."""

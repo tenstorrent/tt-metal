@@ -816,7 +816,11 @@ class Flux2Pipeline:
         # The encoder leaves its output split over the H and W axes; the host assembles it, as for the
         # decoded image, so on a single host no gather program is built per reference size.
         latents = fast_device_to_host(
-            flat_to_row_major(tt_latents, self._vae_encoder.output_hw((tt_pixels.shape[1], tt_pixels.shape[2]))),
+            flat_to_row_major(
+                tt_latents,
+                self._vae_encoder.output_hw((tt_pixels.shape[1], tt_pixels.shape[2])),
+                runtime_shapes=self._vae_encoder.runtime_shapes,
+            ),
             self._mesh_device,
             self._vae_encoder.output_concat_dims(),
             ccl_manager=self._vae_ccl_manager,

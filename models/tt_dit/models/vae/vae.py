@@ -447,11 +447,11 @@ class VaeConv2d(Module):
         return self.inner.forward(x, use_persistent_buffer=False, flat_output=hw is not None)
 
 
-def flat_to_row_major(x: ttnn.Tensor, hw: tuple[int, int]) -> ttnn.Tensor:
+def flat_to_row_major(x: ttnn.Tensor, hw: tuple[int, int], *, runtime_shapes: bool = False) -> ttnn.Tensor:
     """A flat tiled [N, 1, H * W, C] tensor as row major [N, H, W, C], where `hw` is (H, W). The
     untilize is of the flat tensor and the reshape a view, so neither depends on whether W is whole
-    tiles."""
-    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    tiles. With `runtime_shapes`, the untilize serves every size with one program."""
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=runtime_shapes)
     return ttnn.reshape(x, (x.shape[0], hw[0], hw[1], x.shape[-1]))
 
 

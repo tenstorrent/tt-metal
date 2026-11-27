@@ -584,6 +584,10 @@ class Conv2d(Module):
 
         fixed = self.fixed_slice_hw is not None
         if fixed:
+            # Fixed slices read a row-major input; the channel gather above leaves it tiled. Fixed slices are
+            # size-free, so the untilize is too.
+            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=True)
             num_slices, area_sliced = None, False
             slice_config = ttnn.Conv2dSliceConfig(
                 slice_height=self.fixed_slice_hw[0], slice_width=self.fixed_slice_hw[1]
@@ -617,9 +621,13 @@ class Conv2d(Module):
         # scheme makes the key size-free only for an interleaved input and without those two. The
         # input layout and dtype also reach prepare_conv_weights but are not in the key: this assumes
         # each Conv2d instance always gets inputs with the same memory config, layout and dtype.
+        # Fixed slices have the same shape at every size, so conv2d picks the same scheme and channel
+        # alignment for them at every size, a scheme of its own included.
         may_fold = self.stride == self.kernel_size and self.stride != (1, 1)
         size_free = (
-            self.shard_layout is not None and not x.is_sharded() and not may_fold and in_channels % ttnn.TILE_SIZE == 0
+            not x.is_sharded()
+            and not may_fold
+            and (fixed or (self.shard_layout is not None and in_channels % ttnn.TILE_SIZE == 0))
         )
         # The slice count dram_slice_area gives follows the size, so it stays out of the key, as the
         # count conv2d picks itself does. With a fixed scheme and an interleaved input the count only
@@ -738,11 +746,11 @@ def warm_fixed_slice_flatten(
     """Build, on small tensors, the program-cache entries of the flatten that ends conv2d's path with fixed 2D slices
     (Conv2d.fixed_slice_hw), for each output channel count in ``channels``.
 
-    With fixed slices the flatten is a tiled reshape that serves every shape with the same channel count and at least
-    one output tile per core, but it runs only where the width is not whole tiles, so a model warmed at a size whose
-    widths are whole tiles would build its entries at the first new size. This one covers bfloat16 in DRAM."""
+    With fixed slices the flatten is a tiled reshape that serves every shape with the same channel count, but it runs
+    only where the width is not whole tiles, so a model warmed at a size whose widths are whole tiles would build its
+    entries at the first new size. This one covers bfloat16 in DRAM."""
     for c in dict.fromkeys(channels):
-        # 128 rows of 40 pixels: not whole tiles, and 160 output tile rows, at least one per core on any chip.
+        # 128 rows of 40 pixels: not whole tiles.
         x = ttnn.from_torch(
             torch.zeros(1, 128, 40, c),
             dtype=dtype,
