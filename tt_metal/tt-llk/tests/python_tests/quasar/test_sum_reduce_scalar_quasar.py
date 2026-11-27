@@ -20,8 +20,10 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    SFPU_UNARY_SCALAR,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    fp32_bits,
 )
 from helpers.tile_constants import MAX_TILE_ELEMENTS
 from helpers.tile_shape import construct_tile_shape
@@ -43,6 +45,24 @@ FLOAT16_TILE_DIMENSIONS = [[32, 32], [8, 32]]
 # Poison tiles after the input catch a read past the last tile
 POISON_TILES = 2
 POISON_VALUE = 100.0
+
+# Two passes, so the second one uses the other half of DEST. Each pass packs its own result tile.
+NUM_PASSES = 2
+
+# A Float16 scaler with its 3 low mantissa bits set. LoFi and HiFi2 drop those bits from SrcB,
+# HiFi3 and HiFi4 keep them, so the result shows which phases ran.
+FLOAT16_SCALER = 1.0 + 7 * 2**-10
+
+
+# HiFi bounds. A dropped phase costs about 0.25% (SrcA low bits in one pool) to 1.4% (SrcB low bits).
+HIFI_RTOL_32BIT_DEST = 0.0015
+HIFI_RTOL_16BIT_DEST = 0.006
+
+
+def _without_low_mantissa_bits(value):
+    """The part of a Float16 value that the SrcB high bit phases see."""
+    bits = torch.tensor([value], dtype=torch.float16).view(torch.int16) & ~0x7
+    return float(bits.view(torch.float16).item())
 
 
 def _tile_dimensions_for_format(formats):
@@ -69,8 +89,6 @@ def _num_tiles_for_format(formats):
     num_tiles=_num_tiles_for_format,
     tile_dimensions=_tile_dimensions_for_format,
     run_types=[[PerfRunType.L1_TO_L1]],
-    # Two passes, so the second one uses the other half of DEST
-    loop_factor=[2],
 )
 def test_sum_reduce_scalar_quasar(
     formats,
@@ -78,7 +96,6 @@ def test_sum_reduce_scalar_quasar(
     num_tiles,
     tile_dimensions,
     run_types,
-    loop_factor,
     *,
     is_perf=False,
     perf_report=None,
@@ -97,7 +114,14 @@ def test_sum_reduce_scalar_quasar(
         spec_A=StimuliSpec.uniform(low=0.0, high=1.0),
     )
     src_B = torch.zeros_like(src_A)
-    golden_scalar = float(src_A.to(torch.float32).sum().item())
+    scaler = FLOAT16_SCALER if formats.input_format == DataFormat.Float16 else 1.0
+    # The scaler multiplies in both pools. LoFi and HiFi2 skip the SrcB low bit phases.
+    applied_scaler = (
+        scaler
+        if math_fidelity in (MathFidelity.HiFi3, MathFidelity.HiFi4)
+        else _without_low_mantissa_bits(scaler)
+    )
+    golden_scalar = float(src_A.to(torch.float64).sum().item()) * applied_scaler**2
 
     poison = torch.full(
         (POISON_TILES * MAX_TILE_ELEMENTS,), POISON_VALUE, dtype=src_A.dtype
@@ -109,13 +133,14 @@ def test_sum_reduce_scalar_quasar(
         "templates": [
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(DestSync.Half),
+            SFPU_UNARY_SCALAR(value_bits=fp32_bits(scaler)),
         ],
         "runtimes": [
             TILE_COUNT(num_tiles),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             TEST_FACE_DIMS(face_r_dim=tile_shape.face_r_dim),
-            LOOP_FACTOR(loop_factor),
+            LOOP_FACTOR(NUM_PASSES),
         ],
         "variant_stimuli": StimuliConfig(
             torch.cat([src_A, poison]),
@@ -125,7 +150,7 @@ def test_sum_reduce_scalar_quasar(
             formats.output_format,
             tile_count_A=tile_cnt_A + len(poison) // elements_per_tile,
             tile_count_B=tile_cnt_A,
-            tile_count_res=1,
+            tile_count_res=NUM_PASSES,
             num_faces=tile_shape.total_num_faces(),
             face_r_dim=tile_shape.face_r_dim,
             tile_dimensions=tile_dimensions,
@@ -145,16 +170,25 @@ def test_sum_reduce_scalar_quasar(
 
     res_from_L1 = configuration.run().result
     assert (
-        len(res_from_L1) == elements_per_tile
-    ), f"Expected one {elements_per_tile}-element output tile, got {len(res_from_L1)}"
+        len(res_from_L1) == NUM_PASSES * elements_per_tile
+    ), f"Expected {NUM_PASSES} {elements_per_tile}-element output tiles, got {len(res_from_L1)}"
 
-    device_scalar = float(res_from_L1[0])
     tol = tolerances[formats.output_format]
     rtol, atol = tol.rtol, tol.atol
     if math_fidelity != MathFidelity.LoFi:
-        # The bound the Metal test uses above LoFi
-        rtol, atol = 0.01, 0.01
-    assert abs(device_scalar - golden_scalar) <= max(rtol * abs(golden_scalar), atol), (
-        f"sum_reduce_scalar mismatch: device={device_scalar} golden={golden_scalar} "
-        f"(num_tiles={num_tiles}, tile={tile_dimensions}, fidelity={math_fidelity.name})"
-    )
+        # Tight enough that a missing fidelity phase fails. A 16-bit DEST accumulates in Float16, which
+        # costs up to about 0.4% at a full section, so there only the SrcB phases are told apart.
+        rtol = (
+            HIFI_RTOL_32BIT_DEST
+            if dest_acc == DestAccumulation.Yes
+            else HIFI_RTOL_16BIT_DEST
+        )
+        atol = 0.0
+    for loop in range(NUM_PASSES):
+        device_scalar = float(res_from_L1[loop * elements_per_tile])
+        assert abs(device_scalar - golden_scalar) <= max(
+            rtol * abs(golden_scalar), atol
+        ), (
+            f"sum_reduce_scalar mismatch in pass {loop}: device={device_scalar} golden={golden_scalar} "
+            f"(num_tiles={num_tiles}, tile={tile_dimensions}, fidelity={math_fidelity.name})"
+        )

@@ -95,7 +95,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const DataFormat math_format            = static_cast<DataFormat>(formats.math);
     // The copy leaves the input format in SrcA, and SrcB is configured to the same format.
     const DataFormat src_format             = static_cast<DataFormat>(formats.unpack_A_dst);
-    constexpr float scaler                  = 1.0f;
+    // The scaler arrives as fp32 bits. Low mantissa bits in it make the SrcB fidelity phases matter.
+    const float scaler = __builtin_bit_cast(float, SFPU_UNARY_SCALAR);
 
     {
         START_PERF_MEASURE("INIT")
@@ -109,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
             _llk_math_wait_for_dest_available_();
-            // The reduce tail reprograms the MOP, so the copy init runs every pass.
+            // The reduce tail rewrites ADDR_MOD_0 and ADDR_MOD_1, which the copy MOP uses, so the copy init runs every pass.
             _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 tensor_shape.face_r_dim * tensor_shape.total_num_faces() /*num_rows_per_matrix*/, 1 /*num_matrices*/);
@@ -123,7 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Load the scaler into SrcB through DEST tile 0, then zero that tile for the sums.
             _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<2 /*ITERATIONS*/>, 0 /*dst_index*/, VectorMode::RC_custom, scaler);
             _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0 /*tile_idx*/, tensor_shape);
-            _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<2 /*ITERATIONS*/>, 0 /*dst_index*/, VectorMode::RC_custom, 0.0f);
+            _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<2 /*ITERATIONS*/>, 0 /*dst_index*/, VectorMode::RC_custom, 0.0f /*value*/);
 
             _llk_math_mul_reduce_column_<MATH_FIDELITY>(0 /*dst_index*/, src_format, src_format, tensor_shape);
             for (std::uint32_t tile = 1; tile < TILE_CNT; tile++)
@@ -175,7 +176,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
             _llk_packer_wait_for_math_done_();
-            _llk_pack_(0 /*dest_tile_idx*/, 0 /*l1_tile_idx*/, tensor_shape);
+            // Each pass packs to its own tile, so a pass that reads the wrong half of DEST is caught.
+            _llk_pack_(0 /*dest_tile_idx*/, loop /*l1_tile_idx*/, tensor_shape);
             _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
         }
         _llk_pack_reduce_mask_clear_();
