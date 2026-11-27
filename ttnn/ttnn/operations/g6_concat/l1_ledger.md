@@ -48,7 +48,7 @@ L1_op = OUTPUT_PAGES_DEPTH · block_pages · page_bytes                       # 
 |------|---------------|-------|
 | bf16 `page_copy`, cap reached (p2–p4) | 64 | 2·64·2048 = 262,144 B |
 | fp32 `page_copy`, cap reached (p1) | 32 | 2·32·4096 = 262,144 B |
-| bf16 `row_gather`, Qwen 79 (`n1 = 15` on a ~130-core grid) | 15 | 2·15·2048 + 16·2048 = 94,208 B |
+| bf16 `row_gather`, Qwen 79 (`n1 = 18` on the 110-core 11×10 Blackhole grid, measured plan) | 18 | 2·18·2048 + 19·2048 = 112,640 B |
 | bf16 `row_gather`, worst case (cap) | 64 | 2·64·2048 + 65·2048 = 395,264 B |
 | bf8_b `page_copy` with L1 output (Panoptic 23, refinement) | ≤ 120 | ≤ 2·120·1088 + ceil(P_out/banks)·1088 ≈ 261,120 + ~25 KB |
 
