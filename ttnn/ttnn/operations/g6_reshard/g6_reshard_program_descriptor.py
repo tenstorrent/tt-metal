@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_reshard program descriptor: PULL reshard, block = out shard, on-device piece walk.
+"""Program descriptor for g6_reshard (PULL regime, op_design.md → Blocking Model).
 
-Every out-holding core runs ISSUERS_PER_CORE instances of one dataflow kernel. Issuer k reads
-its contiguous share of the block's tile rows from in0's shards straight into the out shard.
-There is no CB, no compute kernel and no semaphore.
+Every core holding an out block runs `issuers_per_core` instances of one
+dataflow source. Each instance pulls the pieces of in0 overlapping its row
+range of the out block straight into the out shard (no CB, no compute kernel),
+enumerating the pieces on device from the two placements' geometry.
 """
 
 from __future__ import annotations
@@ -17,276 +18,293 @@ from pathlib import Path
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
-ISSUER_KERNEL_SOURCE = KERNEL_DIR / "g6_reshard_reader.cpp"
+ISSUER_KERNEL = KERNEL_DIR / "g6_reshard_reader.cpp"
 
-REGIME = "PULL"
+TILE_HW = 32
 
-# Block knob: number of data-movement RISC-Vs that split each out block's tile rows.
+# L1 per core the model leaves to the op (BB-05).
+L1_FREE_BYTES = 1347776
+
+# Blocking-model knob: how many data-movement RISC-Vs split each out block's
+# tile rows. Each issuer slot names its processor and default NoC; the first
+# ISSUERS_PER_CORE slots are used.
 ISSUERS_PER_CORE = 2
-# (processor, NoC) of issuer k; one entry per data-movement RISC-V, so ISSUERS_PER_CORE <= len().
-ISSUER_CONFIGS = (
-    (ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
-    (ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1),
+ISSUER_SLOTS = (
+    (ttnn.DataMovementProcessor.RISCV_1, 0),
+    (ttnn.DataMovementProcessor.RISCV_0, 1),
 )
 
-# Per-core runtime-arg layout of the issuer kernel.
-_RT_BLOCK_ROW_BEGIN, _RT_BLOCK_COL_BEGIN, _RT_BLOCK_COL_END, _RT_ROW_BEGIN, _RT_ROW_END = range(5)
-# Common runtime-arg layout: the only per-call values.
-_CRT_IN_ADDR, _CRT_OUT_ADDR = range(2)
+# NoC-assignment knob.
+#   "fixed":     every issuer reads on its slot's default NoC (dedicated NoC mode).
+#   "wrap_free": when every piece of the placement pair reaches its target without
+#                a torus wrap on one NoC, every issuer reads on that NoC; otherwise
+#                each keeps its slot default. NoC0 carries data east/south, NoC1
+#                west/north. Moving only some issuers piles their bytes onto a NoC
+#                that already carries the other issuers' wrapped traffic, so the
+#                choice is all-or-nothing. Two issuers sharing a NoC needs dynamic
+#                NoC mode.
+NOC_POLICY = "wrap_free"
 
+# Common RT arg slots, rewritten on every call (both buffers are lockstep-allocated:
+# one address serves every core).
+COMMON_ARG_IN_ADDR = 0
+COMMON_ARG_OUT_ADDR = 1
 
-def _ceil_div(a: int, b: int) -> int:
-    return -(-a // b)
+PLAN_REGIME = "PULL"
 
 
 @dataclass(frozen=True)
-class BlockPlacement:
-    """A BLOCK_SHARDED placement of the padded 2-D tile view."""
+class Placement:
+    """Block grid of the padded 2-D view under one BLOCK_SHARDED shard spec."""
 
-    x0: int
-    y0: int
-    x1: int
-    y1: int
+    origin_x: int
+    origin_y: int
+    orientation: object
     block_height_tiles: int
     block_width_tiles: int
-    row_major: bool
-
-    @classmethod
-    def of(cls, memory_config: ttnn.MemoryConfig, tile_shape) -> "BlockPlacement":
-        spec = memory_config.shard_spec
-        box = spec.grid.bounding_box()
-        tile_h, tile_w = tile_shape
-        return cls(
-            x0=box.start.x,
-            y0=box.start.y,
-            x1=box.end.x,
-            y1=box.end.y,
-            block_height_tiles=int(spec.shape[0]) // tile_h,
-            block_width_tiles=int(spec.shape[1]) // tile_w,
-            row_major=spec.orientation == ttnn.ShardOrientation.ROW_MAJOR,
-        )
-
-    def core_of(self, block_row: int, block_col: int) -> tuple[int, int]:
-        if self.row_major:
-            return self.x0 + block_col, self.y0 + block_row
-        return self.x0 + block_row, self.y0 + block_col
-
-    def key(self) -> tuple:
-        return (
-            self.x0,
-            self.y0,
-            self.x1,
-            self.y1,
-            self.block_height_tiles,
-            self.block_width_tiles,
-            self.row_major,
-        )
-
-
-@dataclass(frozen=True)
-class OutBlock:
-    block_row: int
-    block_col: int
-    core: tuple[int, int]
-    row_begin: int
-    row_end: int
-    col_begin: int
-    col_end: int
-    issuer_rows: tuple[tuple[int, int], ...]
-
-
-@dataclass(frozen=True)
-class ReshardPlan:
     tensor_height_tiles: int
     tensor_width_tiles: int
-    src: BlockPlacement
-    dst: BlockPlacement
-    issuers_per_core: int
 
     @property
-    def num_block_rows(self) -> int:
-        return _ceil_div(self.tensor_height_tiles, self.dst.block_height_tiles)
+    def num_block_rows(self):
+        return -(-self.tensor_height_tiles // self.block_height_tiles)
 
     @property
-    def num_block_cols(self) -> int:
-        return _ceil_div(self.tensor_width_tiles, self.dst.block_width_tiles)
+    def num_block_cols(self):
+        return -(-self.tensor_width_tiles // self.block_width_tiles)
 
-    def kernel_rectangle(self) -> tuple[tuple[int, int], tuple[int, int]]:
-        """Out's block holders: the trimmed grid the allocator uses for BLOCK_SHARDED."""
-        last = self.dst.core_of(self.num_block_rows - 1, self.num_block_cols - 1)
-        return (self.dst.x0, self.dst.y0), last
+    def core_of(self, block_row, block_col):
+        if self.orientation == ttnn.ShardOrientation.ROW_MAJOR:
+            return self.origin_x + block_col, self.origin_y + block_row
+        return self.origin_x + block_row, self.origin_y + block_col
 
-    def split_rows(self, row_begin: int, row_end: int) -> tuple[tuple[int, int], ...]:
-        """Contiguous row ranges per issuer; the first (rows % n) issuers take one extra row."""
-        rows = row_end - row_begin
-        n = self.issuers_per_core
-        ranges = []
-        begin = row_begin
-        for k in range(n):
-            size = rows // n + (1 if k < rows % n else 0)
-            ranges.append((begin, begin + size))
-            begin += size
-        return tuple(ranges)
-
-    def blocks(self):
-        bh = self.dst.block_height_tiles
-        bw = self.dst.block_width_tiles
-        for r in range(self.num_block_rows):
-            row_begin = r * bh
-            row_end = min(row_begin + bh, self.tensor_height_tiles)
-            for c in range(self.num_block_cols):
-                col_begin = c * bw
-                col_end = min(col_begin + bw, self.tensor_width_tiles)
-                yield OutBlock(
-                    block_row=r,
-                    block_col=c,
-                    core=self.dst.core_of(r, c),
-                    row_begin=row_begin,
-                    row_end=row_end,
-                    col_begin=col_begin,
-                    col_end=col_end,
-                    issuer_rows=self.split_rows(row_begin, row_end),
-                )
-
-    def piece_count(self, row_begin: int, row_end: int, col_begin: int, col_end: int) -> int:
-        if row_begin >= row_end:
-            return 0
-        ih = self.src.block_height_tiles
-        iw = self.src.block_width_tiles
-        in_rows = (row_end - 1) // ih - row_begin // ih + 1
-        in_cols = (col_end - 1) // iw - col_begin // iw + 1
-        return in_rows * in_cols
-
-    def key(self) -> tuple:
-        return (
-            self.tensor_height_tiles,
-            self.tensor_width_tiles,
-            self.src.key(),
-            self.dst.key(),
-            self.issuers_per_core,
-        )
+    def kernel_range(self):
+        last_x, last_y = self.core_of(self.num_block_rows - 1, self.num_block_cols - 1)
+        return ttnn.CoreRange(ttnn.CoreCoord(self.origin_x, self.origin_y), ttnn.CoreCoord(last_x, last_y))
 
 
-def build_plan(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ReshardPlan:
-    tile_h, tile_w = input_tensor.tile.tile_shape
-    padded = list(input_tensor.padded_shape)
+def tensor_tiles(tensor):
+    padded = list(tensor.padded_shape)
     height = 1
     for d in padded[:-1]:
-        height *= int(d)
-    if not 1 <= ISSUERS_PER_CORE <= len(ISSUER_CONFIGS):
-        raise RuntimeError(f"g6_reshard: ISSUERS_PER_CORE={ISSUERS_PER_CORE} outside [1, {len(ISSUER_CONFIGS)}]")
-    return ReshardPlan(
-        tensor_height_tiles=height // tile_h,
-        tensor_width_tiles=int(padded[-1]) // tile_w,
-        src=BlockPlacement.of(input_tensor.memory_config(), (tile_h, tile_w)),
-        dst=BlockPlacement.of(memory_config, (tile_h, tile_w)),
-        issuers_per_core=ISSUERS_PER_CORE,
+        height *= d
+    return height // TILE_HW, padded[-1] // TILE_HW
+
+
+def placement_of(tensor, memory_config):
+    spec = memory_config.shard_spec
+    start = spec.grid.bounding_box().start
+    tensor_height_tiles, tensor_width_tiles = tensor_tiles(tensor)
+    return Placement(
+        origin_x=start.x,
+        origin_y=start.y,
+        orientation=spec.orientation,
+        block_height_tiles=int(spec.shape[0]) // TILE_HW,
+        block_width_tiles=int(spec.shape[1]) // TILE_HW,
+        tensor_height_tiles=tensor_height_tiles,
+        tensor_width_tiles=tensor_width_tiles,
     )
 
 
-def role_dump(plan: ReshardPlan) -> list[dict]:
-    """Per core of the kernel range: its out block, and each issuer's rows and piece count."""
+def issuer_row_ranges(row_begin, row_end, issuers):
+    """Contiguous split of [row_begin, row_end): the first issuers take the ceiling share."""
+    rows = row_end - row_begin
+    ranges = []
+    begin = row_begin
+    for k in range(issuers):
+        end = begin + rows // issuers + (1 if k < rows % issuers else 0)
+        ranges.append((begin, end))
+        begin = end
+    return ranges
+
+
+def iter_pieces(row_begin, row_end, col_begin, col_end, in_block_height_tiles, in_block_width_tiles):
+    """Host twin of the kernel's piece walk: (in block row, in block col, piece rows, piece width)."""
+    if row_begin >= row_end:
+        return
+    for ri in range(row_begin // in_block_height_tiles, (row_end - 1) // in_block_height_tiles + 1):
+        piece_rows = min(row_end, (ri + 1) * in_block_height_tiles) - max(row_begin, ri * in_block_height_tiles)
+        for ci in range(col_begin // in_block_width_tiles, (col_end - 1) // in_block_width_tiles + 1):
+            piece_width = min(col_end, (ci + 1) * in_block_width_tiles) - max(col_begin, ci * in_block_width_tiles)
+            yield ri, ci, piece_rows, piece_width
+
+
+def _wrap_free(noc, src, dst):
+    dx, dy = dst[0] - src[0], dst[1] - src[1]
+    if noc == 0:
+        return dx >= 0 and dy >= 0
+    return dx <= 0 and dy <= 0
+
+
+def choose_nocs(roles, in_p, policy):
+    """NoC of every issuer of every role, under `policy` (see NOC_POLICY)."""
+    defaults = [[ISSUER_SLOTS[k][1] for k in range(len(role["issuers"]))] for role in roles]
+    if policy == "fixed":
+        return defaults
+    if policy != "wrap_free":
+        raise ValueError(f"g6_reshard: unknown NoC policy {policy!r}")
+    all_free = [True, True]
+    for role in roles:
+        for issuer in role["issuers"]:
+            for ri, ci, _, _ in issuer["piece_list"]:
+                src_core = in_p.core_of(ri, ci)
+                for noc in (0, 1):
+                    all_free[noc] = all_free[noc] and _wrap_free(noc, src_core, role["core"])
+    if all_free[0] == all_free[1]:
+        return defaults
+    shared = 0 if all_free[0] else 1
+    return [[shared] * len(role["issuers"]) for role in roles]
+
+
+def describe_plan(input_tensor, memory_config):
+    """Per out block: holder core, clipped block rectangle, and each issuer's rows, pieces and NoC."""
+    issuers_per_core = ISSUERS_PER_CORE
+    in_p = placement_of(input_tensor, input_tensor.memory_config())
+    out_p = placement_of(input_tensor, memory_config)
     roles = []
-    for block in plan.blocks():
-        issuers = []
-        for k, (row_begin, row_end) in enumerate(block.issuer_rows):
-            processor, noc = ISSUER_CONFIGS[k]
-            issuers.append(
+    for r in range(out_p.num_block_rows):
+        row_begin = r * out_p.block_height_tiles
+        row_end = min(out_p.tensor_height_tiles, row_begin + out_p.block_height_tiles)
+        for c in range(out_p.num_block_cols):
+            col_begin = c * out_p.block_width_tiles
+            col_end = min(out_p.tensor_width_tiles, col_begin + out_p.block_width_tiles)
+            core = out_p.core_of(r, c)
+            issuers = []
+            for begin, end in issuer_row_ranges(row_begin, row_end, issuers_per_core):
+                pieces = list(
+                    iter_pieces(begin, end, col_begin, col_end, in_p.block_height_tiles, in_p.block_width_tiles)
+                )
+                runs = sum(
+                    1 if piece_width == in_p.block_width_tiles == out_p.block_width_tiles else piece_rows
+                    for _, _, piece_rows, piece_width in pieces
+                )
+                issuers.append({"rows": (begin, end), "pieces": len(pieces), "runs": runs, "piece_list": pieces})
+            roles.append(
                 {
-                    "issuer": k,
-                    "processor": str(processor),
-                    "noc": str(noc),
-                    "rows": (row_begin, row_end),
-                    "pieces": plan.piece_count(row_begin, row_end, block.col_begin, block.col_end),
+                    "core": core,
+                    "block": (r, c),
+                    "block_rows": (row_begin, row_end),
+                    "block_cols": (col_begin, col_end),
+                    "issuers": issuers,
                 }
             )
-        roles.append(
-            {
-                "core": block.core,
-                "out_block": (block.block_row, block.block_col),
-                "cols": (block.col_begin, block.col_end),
-                "issuers": issuers,
-            }
-        )
-    return roles
-
-
-def plan_report(plan: ReshardPlan) -> dict:
+    for role, nocs in zip(roles, choose_nocs(roles, in_p, NOC_POLICY)):
+        for issuer, noc in zip(role["issuers"], nocs):
+            issuer["noc"] = noc
+            del issuer["piece_list"]
     return {
-        "regime": REGIME,
-        "issuers_per_core": plan.issuers_per_core,
-        "kernel_rectangle": plan.kernel_rectangle(),
-        "num_out_blocks": (plan.num_block_rows, plan.num_block_cols),
-        "out_block_tiles": (plan.dst.block_height_tiles, plan.dst.block_width_tiles),
-        "in_block_tiles": (plan.src.block_height_tiles, plan.src.block_width_tiles),
+        "regime": PLAN_REGIME,
+        "issuers_per_core": issuers_per_core,
+        "noc_policy": NOC_POLICY,
+        "kernel_range": out_p.kernel_range(),
+        "roles": roles,
     }
 
 
-class CachedProgram:
-    """A built issuer program. Only the two buffer addresses change between calls."""
-
-    def __init__(self, kernels: list, program_hash: int, plan: ReshardPlan):
-        self.kernels = kernels
-        self.program_hash = program_hash
-        self.plan = plan
-
-    def bind(self, in_addr: int, out_addr: int) -> ttnn.ProgramDescriptor:
-        common_args = [0] * 2
-        common_args[_CRT_IN_ADDR] = in_addr
-        common_args[_CRT_OUT_ADDR] = out_addr
-        for kernel in self.kernels:
-            kernel.common_runtime_args = common_args
-        descriptor = ttnn.ProgramDescriptor(kernels=self.kernels, semaphores=[], cbs=[])
-        descriptor.custom_program_hash = self.program_hash
-        return descriptor
+def _placement_key(memory_config):
+    spec = memory_config.shard_spec
+    ranges = tuple(sorted((r.start.x, r.start.y, r.end.x, r.end.y) for r in spec.grid.ranges()))
+    return (ranges, tuple(int(d) for d in spec.shape), str(spec.orientation))
 
 
-def program_hash(cache_key: tuple) -> int:
-    digest = hashlib.blake2b(repr(("g6_reshard", str(ISSUER_KERNEL_SOURCE), cache_key)).encode(), digest_size=8)
-    return int.from_bytes(digest.digest(), "little")
+def _cache_key(input_tensor, memory_config):
+    return (
+        "g6_reshard",
+        tuple(input_tensor.padded_shape),
+        str(input_tensor.dtype),
+        str(input_tensor.layout),
+        _placement_key(input_tensor.memory_config()),
+        _placement_key(memory_config),
+        input_tensor.device().id(),
+        ISSUERS_PER_CORE,
+        NOC_POLICY,
+    )
 
 
-def create_program(
-    input_tensor: ttnn.Tensor, plan: ReshardPlan, aligned_page_bytes: int, cache_key: tuple
-) -> CachedProgram:
-    (kx0, ky0), (kx1, ky1) = plan.kernel_rectangle()
-    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(kx0, ky0), ttnn.CoreCoord(kx1, ky1))])
+def _program_hash(key):
+    return int.from_bytes(hashlib.blake2b(repr(key).encode(), digest_size=8).digest(), "little")
 
-    in_accessor_args = ttnn.TensorAccessorArgs(input_tensor)
-    if len(in_accessor_args.get_common_runtime_args()) != 0:
-        raise RuntimeError("g6_reshard: expected in0's TensorAccessorArgs to be fully compile-time")
+
+def _build(input_tensor, output_tensor, memory_config):
+    plan = describe_plan(input_tensor, memory_config)
+    in_p = placement_of(input_tensor, input_tensor.memory_config())
+    out_p = placement_of(input_tensor, memory_config)
+    aligned_page_bytes = input_tensor.buffer_aligned_page_size()
+
+    core_ranges = ttnn.CoreRangeSet([plan["kernel_range"]])
+
     compile_time_args = [
-        plan.src.block_height_tiles,
-        plan.src.block_width_tiles,
-        plan.dst.block_width_tiles,
-        plan.tensor_width_tiles,
+        in_p.block_height_tiles,
+        in_p.block_width_tiles,
+        out_p.block_width_tiles,
+        out_p.tensor_width_tiles,
         aligned_page_bytes,
     ]
-    compile_time_args.extend(in_accessor_args.get_compile_time_args())
+    compile_time_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
-    per_issuer_args = [ttnn.RuntimeArgs() for _ in range(plan.issuers_per_core)]
-    for block in plan.blocks():
-        x, y = block.core
-        for k, (row_begin, row_end) in enumerate(block.issuer_rows):
-            args = [0] * 5
-            args[_RT_BLOCK_ROW_BEGIN] = block.row_begin
-            args[_RT_BLOCK_COL_BEGIN] = block.col_begin
-            args[_RT_BLOCK_COL_END] = block.col_end
-            args[_RT_ROW_BEGIN] = row_begin
-            args[_RT_ROW_END] = row_end
-            per_issuer_args[k][x][y] = args
+    common_runtime_args = [0, 0]
+    common_runtime_args[COMMON_ARG_IN_ADDR] = input_tensor.buffer_address()
+    common_runtime_args[COMMON_ARG_OUT_ADDR] = output_tensor.buffer_address()
+
+    # A RISC may read on a NoC other than its configured one only in dynamic NoC mode.
+    off_default = any(
+        issuer["noc"] != ISSUER_SLOTS[k][1] for role in plan["roles"] for k, issuer in enumerate(role["issuers"])
+    )
+    noc_mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC if off_default else ttnn.NOC_MODE.DM_DEDICATED_NOC
 
     kernels = []
-    for k in range(plan.issuers_per_core):
-        processor, noc = ISSUER_CONFIGS[k]
+    for issuer in range(ISSUERS_PER_CORE):
+        processor, default_noc = ISSUER_SLOTS[issuer]
+        runtime_args = ttnn.RuntimeArgs()
+        for role in plan["roles"]:
+            x, y = role["core"]
+            row_begin, row_end = role["issuers"][issuer]["rows"]
+            col_begin, col_end = role["block_cols"]
+            runtime_args[x][y] = [
+                row_begin,
+                row_end,
+                role["block_rows"][0],
+                col_begin,
+                col_end,
+                role["issuers"][issuer]["noc"],
+            ]
         kernels.append(
             ttnn.KernelDescriptor(
-                kernel_source=str(ISSUER_KERNEL_SOURCE),
+                kernel_source=str(ISSUER_KERNEL),
                 core_ranges=core_ranges,
                 compile_time_args=compile_time_args,
-                runtime_args=per_issuer_args[k],
-                common_runtime_args=[0, 0],
-                config=ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc),
+                runtime_args=runtime_args,
+                common_runtime_args=common_runtime_args,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=processor, noc=ttnn.NOC.NOC_0 if default_noc == 0 else ttnn.NOC.NOC_1, noc_mode=noc_mode
+                ),
             )
         )
-    return CachedProgram(kernels, program_hash(cache_key), plan)
+
+    program_descriptor = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[])
+    return program_descriptor, plan
+
+
+_plan_cache = {}
+
+
+def get_program_descriptor(input_tensor, output_tensor, memory_config):
+    """Cached descriptor for this placement pair; a hit only rewrites the two buffer addresses (BB-07)."""
+    key = _cache_key(input_tensor, memory_config)
+    entry = _plan_cache.get(key)
+    if entry is None:
+        program_descriptor, plan = _build(input_tensor, output_tensor, memory_config)
+        program_descriptor.custom_program_hash = _program_hash(key)
+        _plan_cache[key] = (program_descriptor, plan)
+        return program_descriptor, plan
+
+    program_descriptor, plan = entry
+    # The kernels list comes back as a copy: patch it and assign it back.
+    kernels = program_descriptor.kernels
+    for kernel in kernels:
+        args = list(kernel.common_runtime_args)
+        args[COMMON_ARG_IN_ADDR] = input_tensor.buffer_address()
+        args[COMMON_ARG_OUT_ADDR] = output_tensor.buffer_address()
+        kernel.common_runtime_args = args
+    program_descriptor.kernels = kernels
+    return program_descriptor, plan

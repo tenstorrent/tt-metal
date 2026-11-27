@@ -4,21 +4,19 @@
 from .g6_reshard import (
     EXCLUSIONS,
     INPUT_TAGGERS,
-    PROPERTIES,
     SUPPORTED,
+    dump_roles,
     g6_reshard,
-    g6_reshard_last_plan,
-    g6_reshard_role_dump,
+    last_plan,
     validate,
 )
 
 __all__ = [
     "EXCLUSIONS",
     "INPUT_TAGGERS",
-    "PROPERTIES",
     "SUPPORTED",
+    "dump_roles",
     "g6_reshard",
-    "g6_reshard_last_plan",
-    "g6_reshard_role_dump",
+    "last_plan",
     "validate",
 ]

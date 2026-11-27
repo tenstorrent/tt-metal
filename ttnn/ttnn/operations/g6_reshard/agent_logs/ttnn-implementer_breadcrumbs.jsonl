@@ -12,3 +12,6 @@
 {"event":"test_run","result":"pass","detail":"acceptance 7/7 (dev + prod), golden 12/12; PULL, 2 issuers per out core, on-device piece walk, no CB/compute","ts":"2026-11-27T06:49:59-05:00"}
 {"event":"test_run","what":"acceptance test_g6_reshard.py --dev and plain","result":"7 passed both modes","ts":"2026-11-27T07:43:30-05:00"}
 {"event":"test_run","what":"eval/golden_tests/g6_reshard","result":"12 passed","ts":"2026-11-27T07:43:30-05:00"}
+{"event":"test_run","what":"acceptance+golden","result":"pass","detail":"7/7 dev, 7/7 plain, golden 12/12; PULL, 2 issuers, fixed NoC0/NoC1","ts":"2026-11-27T08:49:57-05:00"}
+{"event":"perf_measure","shape":"P","fixed_ns":2407,"floor_stub_reads_ns":599,"finding":"NCRISC on NoC0 2.4us vs BRISC NoC1 1.3us: P sources lie east/south, NoC0 responses wrap the torus","ts":"2026-11-27T08:49:57-05:00"}
+{"event":"fix_applied","what":"NOC_POLICY knob wrap_free (placement-level): all issuers on the one NoC that is wrap-free for every piece, else slot defaults; dynamic NoC mode when off default","result_ns":{"P":1661,"I0":921,"I3":2275,"I5":1670,"O1":2948},"fixed_ns":{"P":2407,"I0":919,"I3":2238,"I5":6907,"O1":2834},"rejected":"per-issuer wrap_free (O1 3.5-3.7us), issuers_per_core=1 (P same, others worse)","ts":"2026-11-27T08:49:57-05:00"}
