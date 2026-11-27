@@ -128,10 +128,12 @@ pytest models/experimental/kimi_k3_moonvit_v2/tests -m simulator
 ```
 
 Ring tests (`ring1x4`) run on row 0 of any system mesh 4 chips wide (LoudBox 2x4, Galaxy 8x4) and skip
-elsewhere. CI (Blaze models prefill, `kimi_k3_moonvit`) runs `-m synthetic -k "real_rows_from_each_chip or
-model_trace_perf or small_image"` on a Galaxy; `test_vision_model_small_image` runs the full model on a 48x48-patch
-image against an fp32 CPU reference computed in the test; `test_full_size_model_trace_perf` (random weights) asserts the traced model's
+elsewhere. CI (Blaze models prefill, `kimi_k3_moonvit`) runs `-m real -k "real_rows_from_each_chip or
+model_trace_perf or small_image"` on a Galaxy, with the MXFP4 checkpoint on Weka (`KIMI_K3_HF_MODEL`, set in the job);
+`test_vision_model_small_image` runs the full model on a 48x48-patch
+image against an fp32 CPU reference computed in the test; `test_full_size_model_trace_perf` (random or real weights) asserts the traced model's
 time on the largest processor grid is within the system mesh's `MODEL_TRACE_LIMIT_MS` (lower and upper) and checks no output.
+CI runs it on `bh_sc1`, the 8 kW (power-capped) Galaxy pool.
 Row-wise tests run on one P150 (`p150`) standing in for one ring chip: it runs that chip's 16,896-row
 quarter of the padded sequence (`MeshRows`).
 

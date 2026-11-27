@@ -80,7 +80,9 @@ MODEL_RELATIVE_RMSE = 0.17
 # `test_full_size_model_trace_perf`: the largest grid the processor makes, and the (lower, upper) limits on
 # one traced replay of the model there per system mesh, with headroom around the current time so run-to-run
 # noise does not fail it. Falling below the lower limit means the model got faster (or skipped work): check
-# it and tighten both limits. The Galaxy is slower: fewer cores per chip and slower links.
+# it and tighten both limits.
+# CI runs this test on `bh_sc1`, the 8 kW (power-capped) Galaxy pool; the ring joint SDPA perf job runs on the
+# 14 kW pool, `bh_sc1_high_power`.
 PERF_SIZE = SIZES["510x132"]
 GALAXY_SHAPE = (8, RING_SIZE)
 MODEL_TRACE_LIMIT_MS = {LOUDBOX_SHAPE: (2800, 3100), GALAXY_SHAPE: (3750, 4150)}
