@@ -31,9 +31,9 @@ pack relies on, so its C++ driver runs the header's MATH core verbatim (the two 
 then does a standard full-tile _llk_pack_ (see sources/sdpa_weighted_reduce_test.cpp). Under that
 path only ONE lane group is provably defined:
 
-  - MVMUL #1 (ADDR_MOD_6) writes the reduced row into DEST row 0, cols 0..15 == logical row 0,
+  - MVMUL #1 (ADDR_MOD_5) writes the reduced row into DEST row 0, cols 0..15 == logical row 0,
     cols 0..15 (Dest face0 row 0).
-  - ADDR_MOD_6 then advances DEST by 8 rows, so MVMUL #2 (qk face1) writes DEST row 8 -- still
+  - ADDR_MOD_5 then advances DEST by 8 rows, so MVMUL #2 (qk face1) writes DEST row 8 -- still
     inside face0, NOT the physical face1 (DEST rows 16..31) that carries logical row 0 cols
     16..31. The header's real pack reaches that data with a custom face-stepping addrmod; a plain
     full-tile pack does not, and that Dest<->face mapping is Blackhole hardware detail we cannot
