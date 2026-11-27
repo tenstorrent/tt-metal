@@ -339,7 +339,7 @@ ALWI void topk_xl_add_lsb_indices(std::uint32_t idst) {
 /**
  * Initialize supplied-index packing after copying the score and index operands.
  * Call topk_xl_pack_supplied_indices before restoring TopK state as described there.
- * This programs ADDR_MOD_0 for advancing stores; reinitialize datacopy before copying again.
+ * The store advances through the ADDR_MOD_6 dest += 2 invariant that hw_configure establishes.
  *
  * Return value: None
  */
