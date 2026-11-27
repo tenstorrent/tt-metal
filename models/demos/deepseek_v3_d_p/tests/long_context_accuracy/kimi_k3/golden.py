@@ -41,7 +41,9 @@ def _rows(run_dir: Path, segment: int, start: int, end: int) -> torch.Tensor:
 
 
 def _state(run_dir: Path, index: int) -> dict[str, torch.Tensor]:
-    return torch.load(segment_path(run_dir, index), weights_only=True)["state"]
+    """The state after segment ``index``, copied out of the mapped file (the segment's output rows are not read)."""
+    state = torch.load(segment_path(run_dir, index), weights_only=True, mmap=True)["state"]
+    return {name: t.clone() for name, t in state.items()}
 
 
 class KimiK3KdaGolden(Fp64Golden):

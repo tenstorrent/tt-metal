@@ -10,8 +10,10 @@ checked (``BlockScorer.check_chunk``); the first chunk with a violation stops th
 carried state is read, the run is scored into metric tiers and checked against the context length's run bars.
 
 Progress (a 1M run takes minutes; a stage silent beyond its expected time is stuck): a timestamped ``LC_STAGE`` line
-when each setup stage starts and ends (golden open, weight load, identity, device build), and one ``LC_CHUNK`` line
-per chunk with the case, chunk i/N, rows [lo, hi), elapsed time, ETA and the chunk's time split: ``golden`` (read
+when each stage outside the chunk loop starts and ends (golden open, weight load, identity, device build, then
+carried state and score run), and one ``LC_CHUNK`` line per chunk with the case, chunk i/N, rows [lo, hi), elapsed
+time, ETA (from the chunks after the first, whose one-time cost it leaves out; ``?`` after the first) and the chunk's
+time split: ``golden`` (read
 and input build on the prefetch thread, overlapped), ``wait`` (the part the loop waited for it), ``device``
 (forward including readback) and ``score`` (``score_chunk`` + ``check_chunk``). Then one ``LONG_CONTEXT_RESULT=``
 JSON line.
@@ -70,13 +72,16 @@ _SPAN_KEYS = {"start", "end", "rows"}
 
 
 def _check_tiers(tiers: MetricTiers) -> None:
-    """Raise unless ``tiers`` is keyed by ``METRIC_TIERS`` and no metric name is in two tiers (a bar names one
-    quantity)."""
+    """Raise unless ``tiers`` is keyed by ``METRIC_TIERS``, every measurement has its span (``start``, ``end``,
+    ``rows``: a bar failure names it) and no metric name is in two tiers (a bar names one quantity)."""
     unknown = sorted(set(tiers) - set(METRIC_TIERS))
     if unknown:
         raise ValueError(f"metric tiers {unknown} are not among {METRIC_TIERS}")
     owner: dict[str, int] = {}
     for tier, measurements in sorted(tiers.items()):
+        unspanned = [m for m in measurements if not _SPAN_KEYS <= set(m)]
+        if unspanned:
+            raise ValueError(f"metric tier {tier} has measurements without {sorted(_SPAN_KEYS)}: {unspanned[:1]}")
         for name in {k for m in measurements for k in m} - _SPAN_KEYS:
             if owner.setdefault(name, tier) != tier:
                 raise ValueError(f"metric {name!r} is in metric tiers {owner[name]} and {tier}")
@@ -86,12 +91,10 @@ def _format_seconds(seconds: float) -> str:
     return f"{seconds:.1f}s" if math.isfinite(seconds) else "?"
 
 
-def run_case(
-    case: LongContextCase, context_len: int, mesh: Any, checkpoint: Path, golden_root: Path | None = None
-) -> Result:
+def run_case(case: LongContextCase, context_len: int, mesh: Any, checkpoint: Path) -> Result:
     """Run ``case`` over rows ``[0, context_len)`` on ``mesh`` and return its ``Result``; the caller asserts
-    ``result.passed``. ``golden_root`` overrides the registry root (tests). Raises the registry's ``GoldenError`` on
-    a missing or mismatched golden, before any device work."""
+    ``result.passed``. Raises the registry's ``GoldenError`` on a missing or mismatched golden, before any device
+    work."""
     if context_len not in case.bars:
         raise ValueError(f"case {case.id} has no bars for context length {context_len} (has {case.context_lengths})")
     mesh_shape = tuple(mesh.shape)
@@ -111,7 +114,7 @@ def run_case(
         logger.info(f"LC_STAGE {tag}: {name} done in {_format_seconds(seconds[name])}")
 
     with stage("golden open"):
-        golden = open_golden(case.golden_id, golden_root, reader=case.golden_reader)
+        golden = open_golden(case.golden_id, reader=case.golden_reader)
         if context_len > golden.rows:
             raise ValueError(f"golden {golden.golden_id} has {golden.rows} rows, fewer than {context_len}")
     with stage("weight load"):
@@ -141,7 +144,7 @@ def run_case(
     try:
         with stage("device build"):
             block.build(mesh, context_len, case.chunk)
-        loop_began = time.perf_counter()
+        first_chunk_end = None  # (the ETA's rate leaves out the first chunk's one-time cost: weight load, compile)
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="lc-golden") as prefetch:
             pending = prefetch.submit(fetch, 0)
             try:
@@ -161,11 +164,14 @@ def run_case(
                     score_s = time.perf_counter() - t
                     for key, value in zip(totals, (golden_s, wait_s, device_s, score_s)):
                         totals[key] += value
-                    done = time.perf_counter() - loop_began
-                    eta = done / (c + 1) * (num_chunks - c - 1)
+                    now = time.perf_counter()
+                    if first_chunk_end is None:
+                        first_chunk_end, eta = now, math.nan
+                    else:
+                        eta = (now - first_chunk_end) / c * (num_chunks - c - 1)
                     logger.info(
                         f"LC_CHUNK {case.id} chunk {c + 1}/{num_chunks} rows [{lo}, {hi}) "
-                        f"elapsed {_format_seconds(time.perf_counter() - began)} eta {_format_seconds(eta)} | "
+                        f"elapsed {_format_seconds(now - began)} eta {_format_seconds(eta)} | "
                         f"golden {golden_s:.3f}s wait {wait_s:.3f}s device {device_s:.3f}s score {score_s:.3f}s"
                     )
                     if violations:
@@ -175,18 +181,20 @@ def run_case(
                         break
             finally:
                 pending.cancel()
-        carried = block.carried_state() if result.stopped_at is None else {}
+        carried = {}
+        if result.stopped_at is None:
+            with stage("carried state"):
+                carried = block.carried_state()
     finally:
         block.release()
     seconds.update({f"chunk_{key}": value for key, value in totals.items()})
 
     if result.stopped_at is None:
-        t = time.perf_counter()
-        tiers = scorer.score_run(carried, golden)
-        _check_tiers(tiers)
-        result.metric_tiers = tiers
-        result.violations = check([m for tier in METRIC_TIERS for m in tiers.get(tier, [])], bars.run)
-        seconds["score_run"] = time.perf_counter() - t
+        with stage("score run"):
+            tiers = scorer.score_run(carried, golden)
+            _check_tiers(tiers)
+            result.metric_tiers = tiers
+            result.violations = check([m for tier in METRIC_TIERS for m in tiers.get(tier, [])], bars.run)
     seconds["total"] = time.perf_counter() - began
     result.seconds = {key: round(value, 3) for key, value in seconds.items()}
     logger.info("LONG_CONTEXT_RESULT=" + result.to_json())

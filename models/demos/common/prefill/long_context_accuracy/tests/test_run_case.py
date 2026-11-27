@@ -6,6 +6,7 @@ metric tiers, release on every path, and the progress lines. CPU only, no device
 
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,7 @@ from models.demos.common.prefill.long_context_accuracy.block import (
     PreparedCase,
 )
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
+    ROOT_ENV,
     Fp64Golden,
     GoldenMismatch,
     GoldenNotFound,
@@ -180,8 +182,10 @@ def make_case(block: FakeBlock, bars: ContextBars = ContextBars(), weights: str 
 
 
 @pytest.fixture
-def golden_root(tmp_path):
+def golden_root(tmp_path, monkeypatch):
+    """The tiny golden in a registry root of its own (``ROOT_ENV``)."""
     write_golden(tmp_path)
+    monkeypatch.setenv(ROOT_ENV, str(tmp_path))
     TinyGolden.reads = []
     return tmp_path
 
@@ -197,7 +201,7 @@ def log_lines():
 def test_run_scores_every_chunk_in_order_and_logs_progress(golden_root, log_lines) -> None:
     block = FakeBlock(error={4: 0.01})
     case = make_case(block, ContextBars(run=[AcceptanceBar("output_nrmse", "max", 0.01)]))
-    result = run_case(case, ROWS, Mesh(), Path("/ckpt"), golden_root=golden_root)
+    result = run_case(case, ROWS, Mesh(), Path("/ckpt"))
     assert result.passed and result.stopped_at is None, result.violations
     assert block.calls == [
         ("prepare", ROWS),
@@ -214,20 +218,25 @@ def test_run_scores_every_chunk_in_order_and_logs_progress(golden_root, log_line
     assert tiers[0][0]["output_nrmse"] == pytest.approx(0.01 * (174 / 385) ** 0.5)
     assert [w["window_nrmse"] for w in tiers[1]] == [0.0, pytest.approx(0.01), 0.0]
     assert tiers[2][0]["state_error"] == 0.0
-    assert set(result.seconds) >= {"golden open", "weight load", "identity", "device build", "chunk_device", "total"}
+    stage_names = ["golden open", "weight load", "identity", "device build", "carried state", "score run"]
+    assert set(result.seconds) == {*stage_names, "chunk_golden", "chunk_wait", "chunk_device", "chunk_score", "total"}
     stages = [line for line in log_lines if line.startswith("LC_STAGE")]
-    assert [line.split(": ", 1)[1].split(" ")[0:2] for line in stages[::2]] == [
-        ["golden", "open"],
-        ["weight", "load"],
-        ["identity", "..."],
-        ["device", "build"],
+    assert [line.removeprefix("LC_STAGE tiny-block 10: ").split(" done in ")[0] for line in stages] == [
+        text for name in stage_names for text in (f"{name} ...", name)
     ]
+    assert all(re.fullmatch(r".* done in \d+\.\ds", line) for line in stages[1::2]), stages
+    # the tail stages (carried state, score run) come after the last chunk and before the result line
+    order = [line.split(" ")[0] for line in log_lines if line.startswith(("LC_", "LONG_CONTEXT_RESULT="))]
+    assert order[-6:-1] == ["LC_CHUNK"] + ["LC_STAGE"] * 4 and order[-1].startswith("LONG_CONTEXT_RESULT="), order
     chunks = [line for line in log_lines if line.startswith("LC_CHUNK")]
     assert len(chunks) == 3
     for i, (lo, hi) in enumerate([(0, 4), (4, 8), (8, 10)]):
         assert chunks[i].startswith(f"LC_CHUNK tiny-block chunk {i + 1}/3 rows [{lo}, {hi}) elapsed ")
         for part in (" eta ", " golden ", " wait ", " device ", " score "):
             assert part in chunks[i], chunks[i]
+    # no ETA from the first chunk alone (its one-time cost would dominate); later chunks give one in seconds
+    assert " eta ? |" in chunks[0]
+    assert all(re.search(r" eta \d+\.\ds \|", line) for line in chunks[1:]), chunks
     assert sum(line.startswith("LONG_CONTEXT_RESULT={") for line in log_lines) == 1
 
 
@@ -235,7 +244,7 @@ def test_a_chunk_violation_stops_the_run(golden_root, log_lines) -> None:
     block = FakeBlock(error={4: 0.5})
     scorer = FakeScorer()
     case = make_case(block, ContextBars(chunk=[AcceptanceBar("chunk_nrmse", "max", 0.1)]), scorer=scorer)
-    result = run_case(case, ROWS, Mesh(), Path("/ckpt"), golden_root=golden_root)
+    result = run_case(case, ROWS, Mesh(), Path("/ckpt"))
     assert not result.passed and result.stopped_at == 4
     assert result.violations == ["rows [4, 8): chunk_nrmse 0.5 > 0.1 in [4, 8)"]
     assert [c for c in block.calls if c[0] in ("forward", "carried_state", "release")] == [
@@ -250,7 +259,7 @@ def test_a_chunk_violation_stops_the_run(golden_root, log_lines) -> None:
 def test_run_bars_report_every_violation(golden_root) -> None:
     block = FakeBlock(error={0: 0.02, 8: 0.03})
     bars = ContextBars(run=[AcceptanceBar("window_nrmse", "max", 0.01), AcceptanceBar("missing_metric", "max", 1)])
-    result = run_case(make_case(block, bars), ROWS, Mesh(), Path("/ckpt"), golden_root=golden_root)
+    result = run_case(make_case(block, bars), ROWS, Mesh(), Path("/ckpt"))
     assert result.stopped_at is None and len([c for c in block.calls if c[0] == "forward"]) == 3
     assert result.violations == [
         "window_nrmse 0.02 > 0.01 in [0, 4)",
@@ -259,17 +268,19 @@ def test_run_bars_report_every_violation(golden_root) -> None:
     ]
 
 
-def test_golden_identity_is_checked_before_device_work(golden_root, expect_error) -> None:
+def test_golden_identity_is_checked_before_device_work(golden_root, monkeypatch, expect_error) -> None:
     block = FakeBlock()
     with expect_error(GoldenMismatch, "weights layers.0"):
-        run_case(make_case(block, weights="other"), ROWS, Mesh(), Path("/ckpt"), golden_root=golden_root)
+        run_case(make_case(block, weights="other"), ROWS, Mesh(), Path("/ckpt"))
     assert block.calls == [("prepare", ROWS)] and TinyGolden.reads == []
     with expect_error(GoldenNotFound, "no golden"):
-        run_case(make_case(block), ROWS, Mesh(), Path("/ckpt"), golden_root=golden_root / "elsewhere")
+        monkeypatch.setenv(ROOT_ENV, str(golden_root / "elsewhere"))
+        run_case(make_case(block), ROWS, Mesh(), Path("/ckpt"))
+    monkeypatch.setenv(ROOT_ENV, str(golden_root))
     with expect_error(ValueError, "no bars for context length 6"):
-        run_case(make_case(block), 6, Mesh(), Path("/ckpt"), golden_root=golden_root)
+        run_case(make_case(block), 6, Mesh(), Path("/ckpt"))
     with expect_error(ValueError, "mesh"):
-        run_case(make_case(block), ROWS, Mesh((2, 4)), Path("/ckpt"), golden_root=golden_root)
+        run_case(make_case(block), ROWS, Mesh((2, 4)), Path("/ckpt"))
     assert block.calls == [("prepare", ROWS)]
 
 
@@ -278,7 +289,7 @@ def test_next_chunk_golden_is_read_while_the_device_runs(golden_root) -> None:
     would never get there and the wait would time out."""
     prefetched = threading.Event()
     block = FakeBlock(wait_for_prefetch=prefetched)
-    result = run_case(make_case(block, prefetched=prefetched), ROWS, Mesh(), Path("/ckpt"), golden_root=golden_root)
+    result = run_case(make_case(block, prefetched=prefetched), ROWS, Mesh(), Path("/ckpt"))
     assert result.passed
     assert [c for c in block.calls if c[0] == "prefetched"] == [("prefetched", True), ("prefetched", True)]
 
@@ -286,14 +297,32 @@ def test_next_chunk_golden_is_read_while_the_device_runs(golden_root) -> None:
 def test_the_block_is_released_when_the_device_fails(golden_root, expect_error) -> None:
     block = FakeBlock(fail_at=4)
     with expect_error(RuntimeError, "device fault at row 4"):
-        run_case(make_case(block), ROWS, Mesh(), Path("/ckpt"), golden_root=golden_root)
+        run_case(make_case(block), ROWS, Mesh(), Path("/ckpt"))
     assert block.calls[-1] == ("release",) and ("carried_state",) not in block.calls
 
 
-def test_a_metric_in_two_tiers_is_refused(golden_root, expect_error) -> None:
-    class TwoTiers(FakeScorer):
+def test_metric_tiers_need_spans_and_one_tier_per_metric(golden_root, expect_error) -> None:
+    span = {"start": 0, "end": 8, "rows": 8}
+
+    class Tiers(FakeScorer):
+        def __init__(self, tiers):
+            super().__init__()
+            self.tiers = tiers
+
         def score_run(self, carried_state, golden):
-            return {0: [{"start": 0, "end": ROWS, "rows": ROWS, "nrmse": 0.0}], 1: [{"nrmse": 0.0}]}
+            return self.tiers
 
     with expect_error(ValueError, "metric 'nrmse' is in metric tiers 0 and 1"):
-        run_case(make_case(FakeBlock(), scorer=TwoTiers()), 8, Mesh(), Path("/ckpt"), golden_root=golden_root)
+        run_case(
+            make_case(FakeBlock(), scorer=Tiers({0: [{**span, "nrmse": 0.0}], 1: [{**span, "nrmse": 0.0}]})),
+            8,
+            Mesh(),
+            Path("/ckpt"),
+        )
+    with expect_error(ValueError, "metric tier 1 has measurements without"):
+        run_case(
+            make_case(FakeBlock(), scorer=Tiers({0: [{**span, "a": 0.0}], 1: [{"start": 0, "b": 0.0}]})),
+            8,
+            Mesh(),
+            Path("/ckpt"),
+        )
