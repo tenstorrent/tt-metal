@@ -231,3 +231,166 @@ def test_summarize_mixed_labels_reports_top_lane():
     assert s["top_col_lane"] == (7, 2)
     assert line.startswith("face column lane 7 in 1/2 checks (also ")
     assert nd_core_map.summarize_structures([]) is None and nd_core_map.describe_summary(None) == "no structure"
+
+
+# --- per-tile owner tables (expected values: worked examples from the op program factories, and the shard specs
+# recorded by graph capture on a p100, worker grid 11x10) ---------------------------------------------------------
+
+
+def core_of(owner, cores, row, col):
+    i = int(owner[row // 32, col // 32])
+    return cores[i] if i >= 0 else None
+
+
+def test_contiguous_owner_index_uneven():
+    # 10 units over 4 cores: 3, 3, 2, 2 (the first 10 % 4 cores take one more)
+    idx = nd_core_map.contiguous_owner_index(torch.arange(10), 10, 4)
+    assert idx.tolist() == [0, 0, 0, 1, 1, 1, 2, 2, 3, 3]
+
+
+def test_contiguous_owner_index_fewer_units_than_cores():
+    idx = nd_core_map.contiguous_owner_index(torch.arange(3), 3, 8)
+    assert idx.tolist() == [0, 1, 2]
+
+
+def test_owner_sdpa_13x10():
+    # (1, 10, 9472, 128), q_chunk 256: 370 chunks over 130 cores; element (b=0, h=3, s=5000) -> g=130 -> core 43
+    owner, cores = nd_core_map.owner_sdpa((1, 10, 9472, 128), 256, 13, 10)
+    assert core_of(owner, cores, 3 * 9472 + 5000, 77) == (4, 3)
+
+
+def test_owner_sdpa_11x10_extra_boundary():
+    # 370 chunks over 110 cores: cores 0..39 take 4, the rest 3; g=159 is core 39's last, g=160 core 40's first
+    owner, cores = nd_core_map.owner_sdpa((1, 10, 9472, 128), 256, 11, 10)
+    g159, g160 = (4 * 37 + 11, 4 * 37 + 12)  # head 4, chunks 11 and 12
+    assert core_of(owner, cores, 4 * 9472 + 11 * 256, 0) == (39 % 11, 39 // 11)
+    assert core_of(owner, cores, 4 * 9472 + 12 * 256, 0) == (40 % 11, 40 // 11)
+    assert (g159, g160) == (159, 160)
+
+
+def test_owner_mla_sdpa_13x10():
+    # (1, 32, 4096, 128), q_chunk 128: element (0, h=5, s=1000) -> g = 5*32 + 7 = 167 -> core 20 = (7, 1)
+    owner, cores = nd_core_map.owner_sdpa((1, 32, 4096, 128), 128, 13, 10)
+    assert core_of(owner, cores, 5 * 4096 + 1000, 64) == (7, 1)
+
+
+def test_owner_mla_sdpa_galaxy_12x10():
+    # test_mla_sdpa on a Blackhole Galaxy (12x10): 1024 chunks over 120 cores, cores 0..63 take 9, the rest 8.
+    # Core (11, 0) = index 11 owns chunks 99..107: head 3 (chunks 96..127), q-chunks 3..11
+    owner, cores = nd_core_map.owner_sdpa((1, 32, 4096, 128), 128, 12, 10)
+    assert core_of(owner, cores, 3 * 4096 + 3 * 128, 0) == (11, 0)
+    assert core_of(owner, cores, 3 * 4096 + 11 * 128 + 127, 127) == (11, 0)
+    assert core_of(owner, cores, 3 * 4096 + 12 * 128, 0) == (0, 1)
+
+
+def test_owner_contiguous_tiles_binary_mul_13x10():
+    # [1, 1, 640*10, 576*13]: 234 tile columns, 360 tiles per core; tile 359 -> core 0, tile 360 -> core 1
+    owner, cores = nd_core_map.owner_contiguous_tiles((1, 1, 6400, 7488), 13, 10)
+    assert core_of(owner, cores, 1 * 32, 125 * 32) == (0, 0)  # tile 234 + 125 = 359
+    assert core_of(owner, cores, 1 * 32, 126 * 32) == (1, 0)  # tile 360
+    assert core_of(owner, cores, 6399, 7487) == (12, 9)  # last tile, last core
+
+
+def test_owner_sharded_height_resnet_conv():
+    # resnet conv on 11x10: one image (2560 rows) per core, row-major
+    owner, cores = nd_core_map.owner_sharded((1, 1, 2560 * 110, 64), "HEIGHT", (2560, 64), [((0, 0), (10, 9))], True)
+    assert core_of(owner, cores, 2560 * 13 + 5, 63) == (2, 1)
+
+
+def test_owner_sharded_block_row_major():
+    # recorded on bh-43: [1, 1, 1024, 1280] BLOCK [128, 128] on (0,0)-(9,7) ROW_MAJOR
+    owner, cores = nd_core_map.owner_sharded((1, 1, 1024, 1280), "BLOCK", (128, 128), [((0, 0), (9, 7))], True)
+    assert core_of(owner, cores, 300, 700) == (5, 2)
+
+
+def test_owner_sharded_block_col_major():
+    owner, cores = nd_core_map.owner_sharded((1, 1, 1024, 1280), "BLOCK", (128, 128), [((0, 0), (7, 9))], False)
+    assert core_of(owner, cores, 300, 700) == (2, 5)
+
+
+def test_owner_conv_slices_vae_upsample_256():
+    # recorded on bh-43: 256x256 output, 2 width slices of 128, each BLOCK [3296, 64] on (0,0)-(7,9) ROW_MAJOR
+    spec = ("BLOCK", (3296, 64), [((0, 0), (7, 9))], True)
+    slices = [(0, 1, 0, 256, 0, 128) + spec, (0, 1, 0, 256, 128, 256) + spec]
+    owner, cores = nd_core_map.owner_conv_slices((1, 1, 256 * 256, 512), 256, 256, slices)
+    # h=10, w=130 (slice 2, local row 10*128 + 2 = 1282 -> shard row 0), c=100 -> core (1, 0)
+    assert core_of(owner, cores, 10 * 256 + 128, 100) == (1, 0)
+    # h=200, w=5 (slice 1, local row 200*128 + 5 = 25605 -> shard row 7), c=500 -> core (7, 7)
+    assert core_of(owner, cores, 200 * 256 + 0, 500) == (7, 7)
+
+
+@pytest.mark.parametrize("shape", [(64, 96), (2, 3, 70, 33), (1, 1, 32 * 300, 64), (5000, 1000)])
+def test_tile_mismatches_matches_brute_force(shape):
+    # Partial edge tiles, leading dims, and outputs large enough to split into several chunks
+    torch.manual_seed(0)
+    ref = torch.zeros(shape)
+    out = ref.clone()
+    flat = out.view(-1)
+    flat[torch.randint(0, flat.numel(), (500,))] = 1.0
+    counts = nd_core_map.tile_mismatches(ref, out)
+    h, w = shape[-2], shape[-1]
+    d = (ref != out).reshape(-1, h, w)
+    rows_t, cols_t, lead, hp, wp = nd_core_map.physical_tile_grid(shape)
+    expected = torch.zeros(rows_t, cols_t, dtype=torch.int64)
+    for l in range(lead):
+        for r, c in d[l].nonzero().tolist():
+            expected[l * (hp // 32) + r // 32, c // 32] += 1
+    assert torch.equal(counts, expected)
+
+
+def test_owner_core_mismatches_counts_and_unowned():
+    owner = torch.tensor([[0, 1], [1, -1]])
+    ref = torch.zeros(64, 64)
+    out = ref.clone()
+    out[0, 0] = 1  # tile (0, 0) -> core 0
+    out[40, 3] = 1  # tile (1, 0) -> core 1
+    out[40, 40] = 1  # tile (1, 1) -> nobody
+    cores, unowned = nd_core_map.owner_core_mismatches(ref, out, owner, [(3, 4), (5, 6)])
+    assert cores == {(3, 4): 1, (5, 6): 1} and unowned == 1
+
+
+def test_conv_slices_from_graph_parses_capture():
+    # argument text exactly as graph capture recorded it on bh-43 (trimmed); note the range list is not valid JSON
+    mc = (
+        "MemoryConfig(memory_layout=TensorMemoryLayout::BLOCK_SHARDED,buffer_type=BufferType::L1,"
+        'shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":9}], shape=[3296, 64], '
+        "orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt)"
+    )
+    graph = [
+        {"node_type": "function_start", "counter": 1, "params": {"name": "Conv2dDeviceOperation"}, "arguments": []},
+        {
+            "node_type": "function_start",
+            "counter": 2,
+            "params": {"name": "SliceWriteDeviceOperation"},
+            "arguments": [
+                "SliceWriteParams(Shape([0, 0, 128, 0]), Shape([1, 256, 256, 512]), Shape([1, 1, 1, 1]))",
+                "{Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 32768, 512]),"
+                f"tensor_layout=TensorLayout(memory_config={mc})))}}",
+            ],
+        },
+    ]
+    assert nd_core_map.conv_slices_from_graph(graph) == [
+        (0, 1, 0, 256, 128, 256, "BLOCK", (3296, 64), [((0, 0), (7, 9))], True)
+    ]
+
+
+def test_owner_conv_slices_batch_two():
+    # two 32x32 images in one piece, HEIGHT sharded 1024 rows per core: image 1 lands on the second core
+    spec = ("HEIGHT", (1024, 64), [((0, 0), (1, 0))], True)
+    owner, cores = nd_core_map.owner_conv_slices((1, 1, 2 * 32 * 32, 64), 32, 32, [(0, 2, 0, 32, 0, 32) + spec])
+    assert core_of(owner, cores, 1024 + 5 * 32, 0) == (1, 0)
+
+
+def test_owner_conv_slices_refuses_unaligned_slice(expect_error):
+    spec = ("BLOCK", (960, 64), [((0, 0), (7, 9))], True)
+    with expect_error(ValueError, "not tile aligned"):
+        nd_core_map.owner_conv_slices((1, 1, 480 * 480, 512), 480, 480, [(0, 1, 0, 480, 0, 120) + spec])
+
+
+def test_matmul_fuse_batch_folds_rows():
+    # [1, 2, 64, 32] folded to [128, 32] with 64-row blocks: batch 1 belongs to block row 1, not row 0
+    ref = torch.zeros(1, 2, 64, 32)
+    out = ref.clone()
+    out[0, 1, 3, 0] = 1
+    folded = nd_core_map.core_mismatches(ref.reshape(-1, 32), out.reshape(-1, 32), (64, 32))
+    assert folded == {(0, 1): 1}

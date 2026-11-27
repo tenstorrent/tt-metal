@@ -4,9 +4,9 @@
 
 """Pick the 1x1 submesh a per-chip DIDT test runs on.
 
-The submesh index (galaxy_chip_N) follows the mesh layout, not the device id a full-mesh run logs (galaxy_chip_20
-can be device 26). DIDT_DEVICE_ID=<device id> picks by device id instead, so a rerun lands on exactly the chip a
-failed run named.
+galaxy_chip_N / logical_chip_N select device id N, the id a full-mesh run logs, so a rerun lands on exactly the chip a
+failed run named. The 1x1 submesh order follows the mesh layout, not the device id (the 21st submesh can be device
+26), so the submesh is found by its device id, never by position. DIDT_DEVICE_ID=<device id> overrides the test's id.
 """
 
 import os
@@ -17,11 +17,12 @@ DEVICE_ID_ENV = "DIDT_DEVICE_ID"
 
 
 def pick_submesh(submeshes, logical_chip_id):
-    wanted = os.environ.get(DEVICE_ID_ENV)
-    if not wanted:
-        return submeshes[logical_chip_id]
     by_dev = {s.get_device_ids()[0]: s for s in submeshes}
-    if int(wanted) not in by_dev:
-        raise ValueError(f"{DEVICE_ID_ENV}={wanted} is not in this mesh, device ids {sorted(by_dev)}")
-    logger.info(f"{DEVICE_ID_ENV}={wanted} selects device {wanted}; logical_chip_id {logical_chip_id} ignored")
-    return by_dev[int(wanted)]
+    wanted = os.environ.get(DEVICE_ID_ENV)
+    dev = int(wanted) if wanted else logical_chip_id
+    if dev not in by_dev:
+        source = f"{DEVICE_ID_ENV}={wanted}" if wanted else f"device {dev}"
+        raise ValueError(f"{source} is not in this mesh, device ids {sorted(by_dev)}")
+    if wanted:
+        logger.info(f"{DEVICE_ID_ENV}={wanted} selects device {wanted}; logical_chip_id {logical_chip_id} ignored")
+    return by_dev[dev]

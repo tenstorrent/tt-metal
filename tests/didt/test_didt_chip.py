@@ -17,9 +17,20 @@ class Submesh:
 SUBMESHES = [Submesh(d) for d in (3, 26, 16, 0)]
 
 
-def test_logical_index_without_env(monkeypatch):
+def test_chip_id_is_device_id_without_env(monkeypatch):
     monkeypatch.delenv(DEVICE_ID_ENV, raising=False)
-    assert pick_submesh(SUBMESHES, 1).dev == 26
+    assert pick_submesh(SUBMESHES, 26).dev == 26  # the 2nd submesh, found by its id
+    assert pick_submesh(SUBMESHES, 0).dev == 0  # the last submesh, not the first
+
+
+def test_chip_id_not_in_mesh_fails_loudly(monkeypatch):
+    monkeypatch.delenv(DEVICE_ID_ENV, raising=False)
+    try:
+        pick_submesh(SUBMESHES, 1)
+    except ValueError as e:
+        assert "device 1" in str(e) and "[0, 3, 16, 26]" in str(e)
+    else:
+        raise AssertionError("no error for a device the mesh does not have")
 
 
 def test_device_id_env_selects_by_device(monkeypatch):

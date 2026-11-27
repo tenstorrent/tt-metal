@@ -8,6 +8,7 @@ import pytest
 import torch
 import random
 
+from tests.didt.didt_chip import pick_submesh
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
@@ -201,6 +202,9 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
         weights_df_on_device=weights_dtype,
     )
 
+    # ND core attribution: the output is height sharded and each shard is written by the core holding it
+    resnetConvTest.nd_core_from_shard_spec = True
+
     resnetConvTest.run_op_test()
 
 
@@ -219,7 +223,8 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
 def test_specific_chip_resnet_conv(mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
-    test_resnet_conv(mesh_device.get_device(logical_chip_id), didt_workload_iterations, determinism_check_interval)
+    chip = pick_submesh(mesh_device.create_submeshes(ttnn.MeshShape((1, 1))), logical_chip_id)
+    test_resnet_conv(chip, didt_workload_iterations, determinism_check_interval)
 
 
 @skip_for_blackhole("Multi-board Blackhole has not been tested")

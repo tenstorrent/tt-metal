@@ -6,6 +6,7 @@ from loguru import logger
 import pytest
 import torch
 
+from tests.didt.didt_chip import pick_submesh
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
@@ -202,6 +203,10 @@ def test_sdxl_matmul(
     )
 
     # Run test
+    # ND core attribution (matmul 2D factory): core (x, y) computes and writes output block (by = y, bx = x)
+    sdxl_matmul_test.nd_core_block = (32 * per_core_M, 32 * per_core_N)
+    sdxl_matmul_test.nd_core_grid_size = (compute_grid.x, compute_grid.y)
+
     sdxl_matmul_test.run_op_test()
 
 
@@ -226,8 +231,9 @@ def test_specific_chip_sdxl_matmul(
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
+    chip = pick_submesh(mesh_device.create_submeshes(ttnn.MeshShape((1, 1))), logical_chip_id)
     test_sdxl_matmul(
-        mesh_device.get_device(logical_chip_id),
+        chip,
         didt_workload_iterations,
         determinism_check_interval,
         test_config,

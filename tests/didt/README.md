@@ -117,7 +117,7 @@ every step that reads it. A step that needs a mesh graph descriptor sets it in i
 
 | variable | read by | effect |
 |---|---|---|
-| `DIDT_DEVICE_ID=<dev>` | `didt_chip.py` (per-chip tests) | pick the chip by device id, not by submesh index; `pin_core` sets it |
+| `DIDT_DEVICE_ID=<dev>` | `didt_chip.py` (per-chip tests) | run on device `<dev>` instead of the test's own chip id (also a device id); `pin_core` sets it |
 | `DIDT_MIN_LOOP_SECONDS=<s>` | `OpTestBase.run_op_test` | keep iterating until the loop has run `<s>` seconds; `pin_core` sets it |
 | `DIDT_MINIMAL_M=<M>` | `test_minimal_matmul.py` | override M (default 16384); M > N transposes the core grid |
 | `DIDT_GRID_X=<x>`, `DIDT_GRID_Y=<y>` | `test_ff1_matmul.py` | shrink the compute grid, anchored at core (0,0) |
@@ -222,6 +222,73 @@ Some tests require a full 11×10 grid (Deepseek V3, MLA SDPA).
 # Reduced grid size testing (maintains compute per core)
 pytest tests/didt/test_ff1_matmul.py::test_grid_size_ff1_matmul -k "2chips and 6x8"
 ```
+
+## ND core attribution
+
+When a determinism check fails, these tests name the Tensix core that computed and wrote the mismatching output:
+the matmul tests (`minimal_matmul`, `mm_mcast_write_ack_failure`, `ff1`, `lm_head`, `sdxl_matmul`, `mm_after_non_mm`,
+`duty_cycle`, `deepseek_v3_128k_matmul`), `binary_mul`, `sdpa_op`, `mla_sdpa` and the conv tests (`resnet_conv`,
+`sdxl_conv`, `sdxl_conv_1280x1280_upsample`). `didt_runner` reads the end-of-run summary lines.
+Each failing check logs the cores and how many elements differ on each, in device logical and translated coordinates,
+and the run ends with a per-device summary that includes the chip's tray, ASIC, PCI device and board id:
+
+```
+ND device 22 logical core (11,0) translated=(14,2): 3 elements differ
+ND summary device 22 [UBB4 ASIC7 /dev/tenstorrent/30 0000:87:00.0 board=0x...]: 81/200 checks; pattern single core (11,0); ...
+```
+
+The map from output to core comes from the op's own work split (`tt_py_test_utils_common/nd_core_map.py`):
+
+| Op | Map |
+|---|---|
+| matmul 2D / 1D with a program config | one output block per core, from the config (1D: blocks row-major over the grid) |
+| matmul whose config the op selects | the config observed on each checked call (`ttnn.graph.begin/end_program_config_capture`) |
+| binary_ng (interleaved) | contiguous tile ranges per core |
+| SDPA, flash MLA prefill (non-causal) | (batch, head, q-chunk) ranges per core |
+| conv2d, sharded output | the output's shard spec |
+| conv2d, DRAM-sliced (`sdxl_conv`) | each checked call's slices, from a graph capture (`RunMode.NORMAL`) |
+
+Observing a call does not change what runs. A layout that cannot be mapped is reported with the reason, never guessed.
+For a 2D matmul block the summary also describes where the wrong elements sit inside it (row or column strips, whole
+tiles, one face lane, scattered) and which bits flipped. A test opts in by declaring its layout (`nd_core_block`,
+`nd_core_owner`, `nd_core_capture` or `nd_core_from_shard_spec`, see `OpTestBase`); a test that declares nothing runs
+exactly as before. Host-only tests for the maps: `pytest tests/didt/test_nd_core_map.py tests/didt/test_matmul_window.py`.
+
+### Core-exclusion windows (DeepSeek matmuls)
+
+`test_deepseek_v3_128k_matmul` can run each matmul on a window of its grid, with every core in the window computing
+exactly the block it computes on the full grid (`tt_py_test_utils_common/matmul_window.py`): `--grid-size XxY` with
+`--grid-origin XxY`. Excluding a suspect column or row and checking whether the ND goes away separates a bad core from
+a bad forwarding path. Narrow down by core, not by chip: run the window on the full mesh, good chips included. A
+single-chip rerun iterates faster and loads the chip differently from the multichip screen, and often does not
+reproduce the ND. Configs the op selects itself are read with the program-config listener inside a
+`NO_DISPATCH` capture, so the full grid never runs before the window. Other didt tests refuse `--grid-origin`.
+
+```bash
+pytest "tests/didt/test_deepseek_v3_128k_matmul.py::test_deepseek_v3_mla_matmul[blackhole-1chips-x_wq_a]" \
+  --grid-size 4x10 --grid-origin 6x0 --didt-workload-iterations 200 --determinism-check-interval 10
+```
+
+## VF sweep
+
+Any didt test can run as a voltage/frequency sweep, to tell a marginal core (fixed by more voltage or less clock)
+from a defective one (fails at every point). AICLK and VDD are forced through ARC messages on every MMIO chip, the
+reference outputs are taken at the lowest clock, and each point runs `--sweep-iterations` iterations:
+
+```bash
+pytest "tests/didt/test_mla_sdpa.py::test_mla_sdpa[blackhole-galaxy]" --didt-vf-sweep 800,900,1000,1100,1200,1350 \
+  --enable-vdd-offsets --sweep-iterations 1000 --determinism-check-interval 50
+```
+
+Sweep the full mesh, as the screen ran it (see "Core-exclusion windows"). `DIDT_MIN_LOOP_SECONDS` does not apply: a sweep has
+fixed steps, so scale `--sweep-iterations` instead. `--didt-vf-sweep` with no value runs 800,1000,1200,1350 MHz. `--enable-vdd-offsets` runs each clock at the firmware's
+VCORE and at +25 and +50 mV. The run ends with a pass/fail grid per point (failed checks with a 95 % interval) and,
+for tests with core attribution, the failing cores per clock, plus per-step telemetry: VCORE, temperature, TDC, TDP,
+whether the clock held, and whether the firmware would have throttled.
+
+FORCE_AICLK bypasses the firmware's power, current and thermal throttling. The sweep releases both forces and checks
+THERM_TRIP_COUNT on every exit path; still, watch temperature and current on the first run on a new system. Faster
+telemetry readback needs firmware 19.17+ and `pip install pyluwen` (optional).
 
 ## Analysis Tools
 
