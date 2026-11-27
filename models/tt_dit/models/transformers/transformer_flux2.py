@@ -155,7 +155,8 @@ class Flux2SingleTransformerBlock(Module):
         self,
         *,
         spatial_prompt_concat: ttnn.Tensor,
-        spatial_size: int,
+        prompt_size: int,
+        prompt_first: bool,
         time_embed: ttnn.Tensor,
         combined_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None,
         temb_mod_params: tuple[ttnn.Tensor, ...],
@@ -188,9 +189,10 @@ class Flux2SingleTransformerBlock(Module):
 
         # slice out spatial only. Prompt not needed. The variable names are left to prevent code bloat. But this is just spatial after the slice.
         if not compute_prompt_output:
-            x_c = x_c[:, :spatial_size, :]
-            x_c_attn = x_c_attn[:, :spatial_size, :]
-            spatial_prompt_concat = spatial_prompt_concat[:, :spatial_size, :]
+            rows = slice(prompt_size, None) if prompt_first else slice(None, x_c.shape[1] - prompt_size)
+            x_c = x_c[:, rows, :]
+            x_c_attn = x_c_attn[:, rows, :]
+            spatial_prompt_concat = spatial_prompt_concat[:, rows, :]
 
         x_c_mlp = self.proj_mlp(
             x_c,
@@ -237,6 +239,10 @@ class Flux2Transformer(Module):
         inner_dim = num_attention_heads * attention_head_dim
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         self._row_capacity = row_capacity
+        # With the prompt split over SP, the single blocks put it in front of the spatial tokens, so
+        # that padding at the end of the last device's spatial shard ends the whole sequence, where
+        # the attention masks it. A replicated prompt stays behind them.
+        self.prompt_first = shard_prompt and parallel_config.sequence_parallel.factor > 1
         self._mesh_device = device
 
         self.time_guidance_embed = CombinedTimestepGuidanceTextProjEmbeddings(
@@ -396,7 +402,8 @@ class Flux2Transformer(Module):
             guidance: Optional tensor with shape [batch_size, 1].
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
-            combined_rope: spatial_rope and prompt_rope concatenated on the sequence dim, for the
+            combined_rope: prompt_rope and spatial_rope concatenated on the sequence dim in the order
+                of `prompt_first`, for the
                 single blocks. Supplied by the caller rather than built here because it is constant
                 across denoising steps.
             spatial_sequence_length: int.
@@ -448,14 +455,14 @@ class Flux2Transformer(Module):
 
         num_single_blocks = len(self.single_transformer_blocks)
 
-        # prep pre concatenated data
-        spatial_prompt_concat = ttnn.concat([spatial, prompt], dim=1)
-        spatial_size = spatial.shape[1]
+        spatial_prompt_concat = ttnn.concat([prompt, spatial] if self.prompt_first else [spatial, prompt], dim=1)
+        prompt_size = prompt.shape[1]
         spatial_prompt_sequence_length = spatial_sequence_length + prompt_sequence_length
         for i, block in enumerate(self.single_transformer_blocks, start=1):
             spatial_prompt_concat = block.forward(
                 spatial_prompt_concat=spatial_prompt_concat,
-                spatial_size=spatial_size,
+                prompt_size=prompt_size,
+                prompt_first=self.prompt_first,
                 time_embed=time_embed,
                 combined_rope=combined_rope,
                 temb_mod_params=single_stream_mod,
@@ -469,7 +476,7 @@ class Flux2Transformer(Module):
             # if i % 6 == 0:
             #     ttnn.ReadDeviceProfiler(spatial.device())
 
-        spatial = spatial_prompt_concat if compute_prompt_output else spatial_prompt_concat  # [:, :spatial_size, :]
+        spatial = spatial_prompt_concat if compute_prompt_output else spatial_prompt_concat  # spatial rows only
 
         spatial = ttnn.squeeze(
             self.norm_out(ttnn.unsqueeze(spatial, 0), dynamic_weight=norm_out_scale, dynamic_bias=norm_out_shift), 0

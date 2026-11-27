@@ -122,13 +122,14 @@ class Flux2TransformerState:
 
 
 class _DenoiseState:
-    """The denoising state of one image size, with or without a reference image: the latents, the
-    reference tokens, their RoPE and the trace."""
+    """The denoising state of one image size, with or without a reference image: the token sequence
+    (latents, reference tokens and padding, see `_token_rows`), the mask of its latent rows, their
+    RoPE and the trace."""
 
     def __init__(self, *, step_tracer: Tracer) -> None:
         self.step_tracer = step_tracer
         self.latents = StateTensor()
-        self.reference = StateTensor()
+        self.latent_mask = StateTensor()
         self.rope_cos = StateTensor()
         self.rope_sin = StateTensor()
         self.combined_rope_cos = StateTensor()
@@ -615,27 +616,40 @@ class Flux2Pipeline:
         image_ids = _prepare_ids(height=latents_height // self._patch_size, width=latents_width // self._patch_size)
         rope_cos, rope_sin = self._pos_embed.forward(image_ids)
 
-        state.latents.update(self._to_device(latents, mesh_axes=[None, sp_axis, None]), traced)
-
-        # Each device runs the transformer on its shard of the latents followed by its shard of the
-        # reference tokens, so the RoPE is arranged the same way. The attention does not depend on
-        # the order of the tokens, only on their positions.
+        # The transformer runs on one sequence of the latents, the reference tokens and padding, split
+        # evenly over the SP devices (see `_token_rows`); the RoPE is arranged the same way. The
+        # step only updates the latent rows, so the reference and padding rows stay as they are.
+        rows = self._token_rows(spatial_sequence_length + reference_sequence_length)
+        padding = rows - spatial_sequence_length - reference_sequence_length
+        sequence = [latents] if reference is None else [latents, reference.expand(latents.shape[0], -1, -1)]
+        sequence = torch.cat([*sequence, latents.new_zeros(latents.shape[0], padding, latents.shape[2])], dim=1)
+        latent_mask = torch.zeros_like(sequence)
+        latent_mask[:, :spatial_sequence_length] = 1
         if reference is not None:
-            sp_factor = self._parallel_config.sequence_parallel.factor
             reference_rope_cos, reference_rope_sin = self._pos_embed.forward(reference_ids)
-            rope_cos = _interleave_shards(rope_cos, reference_rope_cos, sp_factor)
-            rope_sin = _interleave_shards(rope_sin, reference_rope_sin, sp_factor)
-            state.reference.update(self._to_device(reference, mesh_axes=[None, sp_axis, None]), traced)
+            rope_cos = torch.cat([rope_cos, reference_rope_cos])
+            rope_sin = torch.cat([rope_sin, reference_rope_sin])
+        rope_cos = torch.cat([rope_cos, rope_cos.new_zeros(padding, rope_cos.shape[1])])
+        rope_sin = torch.cat([rope_sin, rope_sin.new_zeros(padding, rope_sin.shape[1])])
+
+        state.latents.update(self._to_device(sequence, mesh_axes=[None, sp_axis, None]), traced)
+        state.latent_mask.update(self._to_device(latent_mask, mesh_axes=[None, sp_axis, None]), traced)
 
         # Store rope tensors pre-shaped as (1, 1, seq, head_dim) so attention blocks never
         # need to reshape per-call. SP sharding is on dim 2 (seq).
         rope_mesh_axes = [None, None, sp_axis, None]
         state.rope_cos.update(self._to_device(rope_cos[None, None], mesh_axes=rope_mesh_axes), traced)
         state.rope_sin.update(self._to_device(rope_sin[None, None], mesh_axes=rope_mesh_axes), traced)
-        # The single blocks run on the concatenated [spatial | prompt] sequence and need the matching
-        # rope. It is constant across the denoising steps, so concat once here.
-        state.combined_rope_cos.update(ttnn.concat([state.rope_cos.data, self.ts.tt_prompt_rope_cos], dim=2), traced)
-        state.combined_rope_sin.update(ttnn.concat([state.rope_sin.data, self.ts.tt_prompt_rope_sin], dim=2), traced)
+
+        # The single blocks run on the concatenated prompt and spatial sequence, in the order of the
+        # transformer's `prompt_first`, and need the matching rope. It is constant across the
+        # denoising steps, so concat once here.
+        def combined(spatial_rope: ttnn.Tensor, prompt_rope: ttnn.Tensor) -> ttnn.Tensor:
+            parts = [prompt_rope, spatial_rope] if self.transformer.prompt_first else [spatial_rope, prompt_rope]
+            return ttnn.concat(parts, dim=2)
+
+        state.combined_rope_cos.update(combined(state.rope_cos.data, self.ts.tt_prompt_rope_cos), traced)
+        state.combined_rope_sin.update(combined(state.rope_sin.data, self.ts.tt_prompt_rope_sin), traced)
 
         if self._guidance_embeds:
             self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
@@ -679,7 +693,7 @@ class Flux2Pipeline:
 
                     step_inputs = {
                         "spatial": state.latents.data,
-                        "reference": state.reference.data if reference is not None else None,
+                        "latent_mask": state.latent_mask.data,
                         "embedded_prompt": self.ts.tt_embedded_prompt,
                         "timestep": self.ts.tt_timestep,
                         "guidance": self.ts.tt_guidance,
@@ -699,7 +713,7 @@ class Flux2Pipeline:
 
             # Latents arrive SP-sharded on dim=1 (patchified token dim). The decoder undoes the patchify on the host
             # and uploads the result split over its H and W axes.
-            latents = tensor.to_torch(state.latents.data, mesh_axes=(None, sp_axis, None))
+            latents = tensor.to_torch(state.latents.data, mesh_axes=(None, sp_axis, None))[:, :spatial_sequence_length]
             tt_latents = self._vae_decoder.preprocess_and_unpatchify(
                 latents, height=latents_height, width=latents_width
             )
@@ -723,7 +737,8 @@ class Flux2Pipeline:
                 self._vae_decoder.output_concat_dims(),
                 ccl_manager=self._vae_ccl_manager,
             )
-            output = [Image.fromarray(image.numpy()) for image in decoded_output]
+            # The decoder extends latents that do not split over its devices; crop that back.
+            output = [Image.fromarray(image[:height, :width].contiguous().numpy()) for image in decoded_output]
 
         on_event(SectionEnd("total"))
         return output
@@ -753,10 +768,18 @@ class Flux2Pipeline:
 
     def _reference_size(self, *, width: int, height: int) -> tuple[int, int]:
         """The size (width, height) a reference image is encoded at for an output of the given size:
-        the output size scaled down to at most one megapixel, rounded down to whole tokens."""
+        the output size scaled down to at most one megapixel, rounded down to whole tokens and, along
+        each axis the VAE encoder splits, to whole latent rows per device."""
         scale = min(1.0, math.sqrt(1024 * 1024 / (width * height)))
-        multiple = self._vae_scale_factor * self._patch_size
-        return int(width * scale) // multiple * multiple, int(height * scale) // multiple * multiple
+        token = self._vae_scale_factor * self._patch_size
+
+        def multiple(split: ParallelFactor | None) -> int:
+            factor = split.factor if split is not None else 1
+            return math.lcm(token, self._vae_scale_factor * factor)
+
+        w_multiple = multiple(self._vae_parallel.w_parallel)
+        h_multiple = multiple(self._vae_parallel.h_parallel)
+        return int(width * scale) // w_multiple * w_multiple, int(height * scale) // h_multiple * h_multiple
 
     def _transformer_row_capacity(self) -> int:
         """The most tokens per device the transformer sees over all resolutions, rounded up to whole
@@ -772,8 +795,32 @@ class Flux2Pipeline:
             reference_tokens = (
                 0 if self.dynamic_load else (reference_height // token_size) * (reference_width // token_size)
             )
-            rows = max(rows, -(-spatial_tokens // sp_factor) + -(-reference_tokens // sp_factor) + prompt_rows)
+            tokens = spatial_tokens + reference_tokens
+            token_rows = self._token_rows(tokens) if self._prompt_first() else -(-tokens // sp_factor) * sp_factor
+            rows = max(rows, token_rows // sp_factor + prompt_rows)
         return -(-rows // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+    def _prompt_first(self) -> bool:
+        """The transformer's `prompt_first`, known before the transformer is built."""
+        return self._shard_prompt and self._parallel_config.sequence_parallel.factor > 1
+
+    def _token_rows(self, tokens: int) -> int:
+        """The rows of the transformer's token sequence for ``tokens`` latent and reference tokens:
+        whole tiles per SP device, the padding all at the end of the last one. The attention masks
+        only the end of the whole sequence, so padding anywhere else would take part in it. Without
+        the prompt in front in the single blocks (`prompt_first`), the padding would sit before the
+        last device's prompt, so the sequence is not padded and must split evenly."""
+        sp_factor = self._parallel_config.sequence_parallel.factor
+        if not self._prompt_first():
+            if tokens % sp_factor:
+                msg = f"{tokens} tokens do not split over {sp_factor} devices without a sequence-parallel prompt"
+                raise ValueError(msg)
+            return tokens
+        per_device = -(-tokens // (ttnn.TILE_SIZE * sp_factor)) * ttnn.TILE_SIZE
+        if tokens <= (sp_factor - 1) * per_device:
+            msg = f"{tokens} tokens leave a device without any over {sp_factor} devices"
+            raise ValueError(msg)
+        return per_device * sp_factor
 
     def _encode_reference(
         self, image: Image.Image, *, width: int, height: int, traced: bool
@@ -844,7 +891,7 @@ class Flux2Pipeline:
         self,
         *,
         spatial: ttnn.Tensor,
-        reference: ttnn.Tensor | None,
+        latent_mask: ttnn.Tensor,
         embedded_prompt: ttnn.Tensor,
         timestep: ttnn.Tensor,
         guidance: ttnn.Tensor | None,
@@ -857,7 +904,7 @@ class Flux2Pipeline:
         total_sequence_length: ttnn.Tensor,
     ) -> None:
         noise_pred = self.transformer.forward(
-            spatial=ttnn.concat([spatial, reference], dim=1) if reference is not None else spatial,
+            spatial=spatial,
             embedded_prompt=embedded_prompt,
             timestep=timestep,
             guidance=guidance,
@@ -868,11 +915,10 @@ class Flux2Pipeline:
             prompt_sequence_length=prompt_sequence_length,
             total_sequence_length=total_sequence_length,
         )
-        if reference is not None:
-            noise_pred = noise_pred[:, : spatial.shape[1], :]
-
+        # Only the latent rows change: the reference and padding rows keep their values, also where the
+        # transformer's output there is not finite.
         ttnn.multiply_(noise_pred, sigma_difference)
-        ttnn.add_(spatial, noise_pred)
+        ttnn.add_(spatial, ttnn.where(latent_mask, noise_pred, 0.0))
 
     def _patchify(self, latents: torch.Tensor) -> torch.Tensor:
         # N, H, W, C -> N, (H / P) * (W / P), C * P * P
@@ -924,13 +970,6 @@ def compute_empirical_mu(image_seq_len: int, num_steps: int) -> float:
     mu = a * num_steps + b
 
     return float(mu)
-
-
-def _interleave_shards(a: torch.Tensor, b: torch.Tensor, num_shards: int) -> torch.Tensor:
-    """Concatenate ``a`` and ``b`` on the first dim so that each of ``num_shards`` equal shards of the
-    result is the matching shard of ``a`` followed by that of ``b``."""
-    shards = zip(a.chunk(num_shards), b.chunk(num_shards), strict=True)
-    return torch.cat([t for pair in shards for t in pair])
 
 
 def _prepare_ids(*, height: int = 1, width: int = 1, text_sequence_length: int = 1, time: int = 0) -> torch.Tensor:

@@ -202,11 +202,12 @@ class Flux2VaeDecoder(Module):
         """Undoes the latent normalization and the patchify of all tokens, [N, (H / P) * (W / P), C * P * P], on
         the host, and uploads the result split over the H and W mesh axes, [N, H / h_factor, W / w_factor, C] per
         device, row major. On the device this was a layout conversion, a permute and a mesh partition per axis, a
-        program per image size each, for about 1 MB at 1024x1024; the transfers cost a few ms instead."""
+        program per image size each, for about 1 MB at 1024x1024; the transfers cost a few ms instead.
+
+        Where H or W does not split over its devices, the latents are extended to the next multiple by repeating
+        their last row or column; the caller crops the decoded image back (see `output_hw`)."""
         p = self._PATCH_SIZE
         assert height % p == 0 and width % p == 0, f"{height}x{width} is not whole patches"
-        assert height % self._ctx.h_factor == 0, f"height {height} does not split over {self._ctx.h_factor} devices"
-        assert width % self._ctx.w_factor == 0, f"width {width} does not split over {self._ctx.w_factor} devices"
         if self._bn_host is None:
             replicated = (None,)
             mean = tensor.to_torch(self.bn_running_mean.data, mesh_axes=replicated).float()
@@ -217,6 +218,11 @@ class Flux2VaeDecoder(Module):
         z = z.reshape(z.shape[0], height // p, width // p, -1, p, p).permute(0, 1, 4, 2, 5, 3)
         # In bfloat16 already, since from_torch converts other dtypes on the device, at a program per shape.
         z = z.reshape(z.shape[0], height, width, -1).to(torch.bfloat16)
+        pad_h, pad_w = -height % self._ctx.h_factor, -width % self._ctx.w_factor
+        if pad_h:
+            z = torch.cat([z, z[:, -1:].expand(-1, pad_h, -1, -1)], dim=1)
+        if pad_w:
+            z = torch.cat([z, z[:, :, -1:].expand(-1, -1, pad_w, -1)], dim=2)
         # Row major: the decoder flattens it before tilizing (see forward).
         return tensor.from_torch(
             z,
