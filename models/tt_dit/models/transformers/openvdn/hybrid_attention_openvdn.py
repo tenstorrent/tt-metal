@@ -23,7 +23,8 @@ Tensor parallel by head, as H3: each device projects, normalises and attends wit
 the linear branch and its gates are sharded the same way), then the outputs are gathered on TP for the column-parallel
 `to_out` and `to_out_linear`. Sequence parallel by gathering: the SP-fractured rows are all-gathered so every device
 holds the whole (logical, unpadded) sequence for its TP heads, and `mesh_partition` hands each device its rows back.
-The heavy work is then split over the SP devices (stage 4): each window group's queries by row (`WindowSoftmax`), and
+The heavy work is then split over the SP devices (stage 4): the window's video rows as one block-sparse ring attention
+(`SparseWindowSoftmax`, HiFi2) and its global rows by row (dense, HiFi4), and
 the linear branch by head, from its raw projections to the readout (`OpenVDNLinearBranch`, `_head_split`), each
 reassembled with one all-gather; the per-row tail (softmax gate, `to_out`, `to_out_linear`) runs on each device's own
 rows. Still repeated on every SP device: the gathers of the projections and the small beta/alpha/gate projections.
@@ -40,11 +41,11 @@ import ttnn
 
 from ....layers.linear import ColParallelLinear
 from ....utils import tensor
-from ..minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, rope_channel_permutation
+from ..minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, rope_channel_permutation, vsa_k_chunk_size
 from . import linear_ops_openvdn as ops
 from .linear_branch_openvdn import OpenVDNLinearBranch, RowInputs, rows_slice
 from .reference_openvdn import window_bounds
-from .window_softmax_openvdn import WindowLayout, WindowSoftmax
+from .window_softmax_openvdn import SparseWindowSoftmax, WindowLayout, WindowSoftmax
 
 
 @dataclasses.dataclass(frozen=True)
@@ -127,6 +128,14 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         expand = torch.repeat_interleave(torch.eye(self.n_local_heads), self.head_dim, dim=1)
         self.gate_expand = tensor.from_torch(expand.reshape(1, 1, *expand.shape), device=mesh_device)
         self.gate_config = config
+        # The sparse window's HiFi4 setting; `sparse_ring_sdpa` refuses fp32 accumulation.
+        self.window_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False
+        )
+        # The dense window's own (`WindowSoftmax`), for the global rows next to the sparse window.
+        self.dense_window_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+        )
         self._windows: dict[HybridLayout, WindowSoftmax] = {}
         self._cache: dict[tuple, ttnn.Tensor] = {}
 
@@ -161,6 +170,27 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             # layout (stage 4). Env switches, for A/B runs: OPENVDN_WINDOW_SP=0, OPENVDN_WINDOW_ALIGNED=0 turn them
             # off; OPENVDN_WINDOW_CHUNKS="q,k" sets the SDPA chunk sizes (32,32 measured best).
             split = os.environ.get("OPENVDN_WINDOW_SP", "1") == "1" and self.sp_factor > 1
+            gather = lambda t: self._gather(t, dim=2, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor)  # noqa: E731
+            # The window's video rows as one block-sparse ring attention at H3's HiFi2 (`SparseWindowSoftmax`; stage 4,
+            # LOSSY, accepted under the launch note's HiFi2 sign-off), global rows dense at HiFi4 / fp32.
+            # OPENVDN_WINDOW_SPARSE=0 takes the exact per-group dense window.
+            if split and os.environ.get("OPENVDN_WINDOW_SPARSE", "1") == "1":
+                self._windows[layout] = SparseWindowSoftmax(
+                    self.mesh_device,
+                    WindowLayout(layout.seq_len, layout.video_start, layout.num_frames, layout.tokens_per_frame),
+                    self.bounds(layout),
+                    anchor_frames=self.anchor_frames,
+                    sp_axis=self.sp_mesh_axis,
+                    sp_factor=self.sp_factor,
+                    gather=gather,
+                    ring_sdpa=self._ring_sdpa,
+                    num_heads=self.n_local_heads,
+                    scale=self.head_dim**-0.5,
+                    # The global rows stay dense at HiFi4 / fp32 accumulation (OPENVDN_SPARSE_DENSE_GLOBALS=0: sparse).
+                    dense_globals=os.environ.get("OPENVDN_SPARSE_DENSE_GLOBALS", "1") == "1",
+                    compute_config=self.dense_window_compute_config,
+                )
+                return self._windows[layout]
             q_chunk, k_chunk = (int(c) for c in os.environ.get("OPENVDN_WINDOW_CHUNKS", "32,32").split(","))
             self._windows[layout] = WindowSoftmax(
                 self.mesh_device,
@@ -170,14 +200,30 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
                 anchor_frames=self.anchor_frames,
                 sp_axis=self.sp_mesh_axis if split else None,
                 sp_factor=self.sp_factor if split else 1,
-                gather=(lambda t: self._gather(t, dim=2, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor))
-                if split
-                else None,
+                gather=gather if split else None,
                 q_chunk=q_chunk,
                 k_chunk=k_chunk,
                 aligned=os.environ.get("OPENVDN_WINDOW_ALIGNED", "1") == "1",
             )
+            lowered = self._window_lowered_config("hifi4")
+            if lowered is not None:
+                self._windows[layout].compute_config = lowered
         return self._windows[layout]
+
+    def _window_lowered_config(self, default: str) -> ttnn.DeviceComputeKernelConfig | None:
+        """OPENVDN_WINDOW_FIDELITY (else `default`) = hifi2 (H3's own SDPA setting) or lofi: the window SDPA at that
+        fidelity with no fp32 accumulation; None for hifi4."""
+        fidelity = os.environ.get("OPENVDN_WINDOW_FIDELITY", default)
+        if fidelity == "hifi2":
+            return self.sdpa_compute_kernel_config
+        if fidelity == "lofi":
+            return ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+            )
+        return None
 
     def forward(
         self,
@@ -342,6 +388,51 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
         self._mark("attention end")
         return out
+
+    def _ring_sdpa(
+        self,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        v: ttnn.Tensor,
+        block_mask: ttnn.Tensor,
+        block_counts: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """`sparse_ring_sdpa` (kept blocks only) on SP-split `[1, H, N / SP, d]` q, k, v, with H3's ring setup. The op
+        needs fp32 accumulation off (streaming compute), so this path is lossy against the HiFi4 / fp32 dense
+        window: H3's HiFi2 by default, OPENVDN_WINDOW_FIDELITY=hifi4 (still no fp32 accumulation) or lofi."""
+        rows = q.shape[2]
+        compute = self._window_lowered_config("hifi2") or self.window_compute_config
+        return ttnn.transformer.sparse_ring_sdpa(
+            q,
+            k,
+            v,
+            block_mask,
+            persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                k.shape, 2, self.sp_mesh_axis, dtype=k.dtype, capacity=self.kv_gather_capacity
+            ),
+            persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                v.shape, 2, self.sp_mesh_axis, dtype=v.dtype, capacity=self.kv_gather_capacity
+            ),
+            logical_n=rows * self.sp_factor,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
+                q_chunk_size=SparseWindowSoftmax.BLOCK,
+                k_chunk_size=vsa_k_chunk_size(rows),
+                exp_approx_mode=False,
+            ),
+            scale=self.head_dim**-0.5,
+            compute_kernel_config=compute,
+            dim=2,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
+            num_links=self.ccl_manager.num_links,
+            cluster_axis=self.sp_mesh_axis,
+            mesh_device=self.mesh_device,
+            topology=self.ccl_manager.topology,
+            subdevice_id=self.ccl_manager.ccl_sub_device_id,
+            ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
+            use_column_major_ccl=True,
+            block_counts=block_counts,
+        )
 
     def _mark(self, name: str) -> None:
         ops.mark(self.mesh_device, name)

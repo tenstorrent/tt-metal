@@ -317,7 +317,11 @@ class SparseWindowSoftmax:
     output `[1, H, N, d]` replicated over SP, as `WindowSoftmax`; inside, q, k, v are split over SP and the op
     gathers K/V around the ring itself.
 
-    `ring_sdpa(q, k, v, block_mask, block_counts)` runs the op with the caller's CCL setup."""
+    `ring_sdpa(q, k, v, block_mask, block_counts)` runs the op with the caller's CCL setup.
+
+    The op cannot accumulate in fp32, which a global row's softmax over the whole sequence needs (the mesh test's
+    global rows: RMSE 2.7% without it). So with `dense_globals` (the default) the global query rows are left out of
+    the mask and run as two dense SDPAs (head and tail globals, all keys) at `compute_config`, as `WindowSoftmax`."""
 
     BLOCK = 64
 
@@ -333,10 +337,14 @@ class SparseWindowSoftmax:
         gather: Callable[[ttnn.Tensor], ttnn.Tensor],
         ring_sdpa: Callable[..., ttnn.Tensor],
         num_heads: int,
+        scale: float,
+        dense_globals: bool = True,
+        compute_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
         block = self.BLOCK
         self.device = device
-        self.sp_axis, self.gather, self.ring_sdpa = sp_axis, gather, ring_sdpa
+        self.sp_axis, self.sp_factor, self.gather, self.ring_sdpa = sp_axis, sp_factor, gather, ring_sdpa
+        self.scale = scale
         self.geo = geo = _AlignedLayout(layout, multiple=block, total_multiple=block * sp_factor)
         num_blocks = geo.total // block
         per_shard = num_blocks // sp_factor
@@ -351,10 +359,35 @@ class SparseWindowSoftmax:
             a0, a1 = geo.map(r0, r1)
             return slice(a0 // block, -(-a1 // block))
 
+        vs, ve = layout.video_start, layout.video_end
         keep = torch.zeros(num_blocks, num_blocks, dtype=torch.int32)
         for (q0, q1), key_ranges in window_groups(layout, bounds, anchor_frames):
+            if dense_globals and (q1 <= vs or q0 >= ve):
+                continue  # a global group: dense, below
             for r0, r1 in key_ranges:
                 keep[blocks(q0, q1), blocks(r0, r1)] = 1
+
+        # Dense global groups on the aligned rows: (aligned query range) each, all real keys, pad keys masked.
+        self.dense_groups: list[Range] = []
+        if dense_globals:
+            if vs:
+                self.dense_groups.append((0, geo.head))
+            if geo.tail_len:
+                self.dense_groups.append((geo.tail_start, geo.total))
+        self.dense_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=_PAD,
+            k_chunk_size=_PAD,
+            exp_approx_mode=False,
+        )
+        self.dense_compute = compute_config
+        self.dense_masks: dict[int, ttnn.Tensor] = {}
+        for a0, a1 in self.dense_groups:
+            q_rows = _ceil(a1 - a0, _PAD * sp_factor) // sp_factor
+            if q_rows not in self.dense_masks:
+                mask = torch.zeros(1, 1, q_rows, geo.total)
+                mask[..., ~geo.valid] = float("-inf")
+                self.dense_masks[q_rows] = tensor.from_torch(mask, device=device, dtype=ttnn.bfloat16)
 
         def shard_cols(t: torch.Tensor) -> torch.Tensor:  # [..., num_blocks] -> [..., sp * pad], each shard padded
             t = t.reshape(*t.shape[:-1], sp_factor, per_shard)
@@ -378,6 +411,40 @@ class SparseWindowSoftmax:
         )
 
     def __call__(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
-        q, k, v = (ttnn.mesh_partition(self.geo.to_aligned(t), dim=2, cluster_axis=self.sp_axis) for t in (q, k, v))
-        out = self.ring_sdpa(q, k, v, self.block_mask, self.block_counts)
-        return self.geo.from_aligned(self.gather(out))
+        q, k, v = (self.geo.to_aligned(t) for t in (q, k, v))
+        out = self.ring_sdpa(
+            *(ttnn.mesh_partition(t, dim=2, cluster_axis=self.sp_axis) for t in (q, k, v)),
+            self.block_mask,
+            self.block_counts,
+        )
+        out = self.gather(out)  # [1, H, total, d] aligned; the dense groups' rows are zero
+        if self.dense_groups:
+            _, heads, total, dim = out.shape
+            pieces, at = [], 0
+            for a0, a1 in self.dense_groups:
+                if a0 > at:
+                    pieces.append(ttnn.slice(out, [0, 0, at, 0], [1, heads, a0, dim]))
+                pieces.append(self._dense(q, k, v, a0, a1))
+                at = a1
+            if at < total:
+                pieces.append(ttnn.slice(out, [0, 0, at, 0], [1, heads, total, dim]))
+            out = ttnn.concat(pieces, dim=2)
+        return self.geo.from_aligned(out)
+
+    def _dense(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, a0: int, a1: int) -> ttnn.Tensor:
+        """Aligned rows `[a0, a1)` against every key (pad keys masked), queries split over SP, at `dense_compute`."""
+        _, heads, total, dim = q.shape
+        qg = _pad_rows(ttnn.slice(q, [0, 0, a0, 0], [1, heads, a1, dim]), _PAD * self.sp_factor)
+        qg = ttnn.mesh_partition(qg, dim=2, cluster_axis=self.sp_axis)
+        out = ttnn.transformer.scaled_dot_product_attention(
+            qg,
+            k,
+            v,
+            attn_mask=self.dense_masks[qg.shape[2]],
+            is_causal=False,
+            scale=self.scale,
+            program_config=self.dense_config,
+            compute_kernel_config=self.dense_compute,
+        )
+        out = self.gather(out)
+        return out if out.shape[2] == a1 - a0 else ttnn.slice(out, [0, 0, 0, 0], [1, heads, a1 - a0, dim])
