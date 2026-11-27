@@ -4,10 +4,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mesh_trace.hpp"
 
-#include <mesh_command_queue.hpp>
-#include <mesh_coord.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <cstdint>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
@@ -18,14 +18,14 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
-#include "buffer.hpp"
-#include "buffer_types.hpp"
-#include "device.hpp"
-#include "hal_types.hpp"
-#include "math.hpp"
-#include "mesh_buffer.hpp"
-#include "mesh_device.hpp"
-#include "mesh_trace_id.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include "tt-metalium/mesh/legacy/device.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "tt-metalium/utils/math.hpp"
+#include "tt-metalium/memory/buffer/mesh_buffer.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
+#include "tt-metalium/vocabulary/mesh_trace_id.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "impl/allocator/allocator.hpp"
 #include <distributed/mesh_device_impl.hpp>

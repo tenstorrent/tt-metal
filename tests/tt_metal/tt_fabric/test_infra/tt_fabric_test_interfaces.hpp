@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <optional>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"

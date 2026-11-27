@@ -245,6 +245,11 @@ inline void calculate_sfpu_binary(
             v_if(in0 > in1 && in0 <= 0.0f) { step = kUlpStep; }
             v_endif;
             result = sfpi::as<sfpi::vFloat>(bits + step);
+            // Equal operands return the target. The direction tests above compare through a
+            // subtraction, which is NaN for two equal infinities, so +inf against +inf would
+            // step down to the largest finite value. Identical bit patterns settle it exactly.
+            v_if(bits == sfpi::as<sfpi::vInt>(in1)) { result = in1; }
+            v_endif;
             // Zeros need their own path: neither zero reaches its neighbour by stepping its own
             // pattern, and the sign of the answer comes from the target rather than from in0.
             // The guards test the magnitudes, not in0 and in1 directly, because SFPSETCC is

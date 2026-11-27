@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // JIT-compile smoke test for GlobalSemaphore bindings (mock Wormhole): a data-movement kernel constructs
-// GlobalSemaphore(global_sem::<accessor>) and calls every on-chip method. The fabric methods are compiled
+// GlobalSemaphore(global_sem::<accessor>) and calls every on-chip method and address(). The fabric methods are compiled
 // in tests/tt_metal/tt_fabric/fabric_data_movement/test_global_semaphore_fabric.cpp.
 
 #include <gtest/gtest.h>
@@ -11,8 +11,8 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -43,6 +43,8 @@ void kernel_main() {
     second.inc_multicast(noc, 1, 1, 2, 2, 1, 4);
     volatile uint32_t value = first.value() + second.value();
     (void)value;
+    volatile uint32_t address = first.address();
+    (void)address;
 }
 )";
 

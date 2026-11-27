@@ -117,13 +117,19 @@ moreh_group_norm_backward_input_grad(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType =
         ttnn::operations::moreh::moreh_group_norm_backward::MorehGroupNormBackwardInputGradOperation;
+    const auto arch = input.device()->arch();
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto math_fidelity =
+        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     OperationType::operation_attributes_t operation_attributes{
         num_groups,
         input_grad_memory_config.value_or(output_grad.memory_config()),
         init_device_compute_kernel_config(
-            input.device()->arch(),
+            arch,
             compute_kernel_config,
-            tt::tt_metal::MathFidelity::HiFi4,
+            math_fidelity,
             /*default_approx_mode=*/true,
             /*default_fp32_acc=*/true)};
     OperationType::tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma, input_grad};
