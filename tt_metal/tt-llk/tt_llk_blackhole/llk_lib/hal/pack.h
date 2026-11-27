@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::pack
@@ -89,7 +90,7 @@ struct DataTransfer
     TileBoundary boundary              = TileBoundary::NotLast;
 
     /** @brief Encode the transfer. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /**
@@ -107,7 +108,7 @@ struct RegisterWrite
     std::uint8_t stream_id    = 0; // 6-bit stream id / register address bits [17:12]
 
     /** @brief Encode the write. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /** @brief Stage one 16-bit half of the value a @ref RegisterWrite writes (PACR_SETREG, load flavor). */
@@ -117,7 +118,7 @@ struct RegisterWriteValue
     std::uint16_t value = 0;
 
     /** @brief Encode the staging operation. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /**
@@ -135,31 +136,31 @@ struct EdgeWindow
     std::uint8_t y_end   = 0;
 
     /** @brief Encode the operation. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr hal::Operation get_operation() const;
 };
 
 /** @brief Encode a flush of the packer's non-empty write-aligners with no new data (PACR Flush). */
-constexpr std::uint32_t flush_write_aligners_operation()
+constexpr hal::Operation flush_write_aligners_operation()
 {
-    return TT_OP_PACR(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 /* Flush */, 0);
+    return hal::detail::make_operation(TT_OP_PACR(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 /* Flush */, 0));
 }
 
 /** @brief Flush the packer's non-empty write-aligners with no new data (PACR Flush). */
 inline __attribute__((always_inline)) void flush_write_aligners()
 {
-    TTI_INSN(flush_write_aligners_operation());
+    hal::detail::run_immediate<flush_write_aligners_operation()>();
 }
 
 /** @brief Encode a clear of the packer exponent histogram (CLREXPHIST). */
-constexpr std::uint32_t clear_exponent_histogram_operation()
+constexpr hal::Operation clear_exponent_histogram_operation()
 {
-    return TT_OP_CLREXPHIST;
+    return hal::detail::make_operation(TT_OP_CLREXPHIST);
 }
 
 /** @brief Clear the packer exponent histogram (CLREXPHIST). */
 inline __attribute__((always_inline)) void clear_exponent_histogram()
 {
-    TTI_INSN(clear_exponent_histogram_operation());
+    hal::detail::run_immediate<clear_exponent_histogram_operation()>();
 }
 
 namespace detail
@@ -263,43 +264,42 @@ constexpr bool is_valid(const EdgeWindow window)
     return detail::is_valid(window);
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t DataTransfer::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation DataTransfer::get_operation() const
 {
     detail::validate(*this);
-    return detail::encode(*this);
+    return hal::detail::make_operation(detail::encode(*this));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t RegisterWrite::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation RegisterWrite::get_operation() const
 {
     detail::validate(*this);
-    return detail::encode(*this);
+    return hal::detail::make_operation(detail::encode(*this));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t RegisterWriteValue::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation RegisterWriteValue::get_operation() const
 {
-    return detail::encode(*this);
+    return hal::detail::make_operation(detail::encode(*this));
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t EdgeWindow::get_operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation EdgeWindow::get_operation() const
 {
     detail::validate(*this);
-    return detail::encode(*this);
+    return hal::detail::make_operation(detail::encode(*this));
 }
 
 /** @brief Issue a compile-time packer descriptor as one immediate instruction. */
-template <auto Operation>
+template <auto Descriptor>
 inline __attribute__((always_inline)) void run()
 {
-    static_assert(detail::is_valid(Operation), "invalid packer descriptor");
-    constexpr std::uint32_t operation = Operation.get_operation();
-    TTI_INSN(operation);
+    static_assert(detail::is_valid(Descriptor), "invalid packer descriptor");
+    hal::detail::run_immediate<Descriptor.get_operation()>();
 }
 
 /** @brief Issue a runtime-selected packer descriptor. */
-template <typename Operation>
-inline __attribute__((always_inline)) void run(const Operation operation)
+template <typename Descriptor>
+inline __attribute__((always_inline)) void run(const Descriptor descriptor)
 {
-    TT_INSN(operation.get_operation());
+    hal::run(descriptor.get_operation());
 }
 
 } // namespace hal::pack
