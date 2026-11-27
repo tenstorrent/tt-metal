@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_pad program descriptors for regimes E (extension, in place) and N (new storage).
+"""g6_pad program descriptors: regime E (in-place extension) and regime N (new storage).
 
-Every per-call value (buffer addresses, fill bits) lives only in common runtime args, so a cached
-descriptor is reused on every call of the same geometry; everything that changes the program
-(geometry, segments, block size, core split) is a compile-time or per-core arg built once.
+Both regimes fold the output tile index space (slice, tile row, tile column) into one work axis
+`w`, tile column fastest, and split it over the grid in contiguous runs. A descriptor depends only
+on the call's geometry; the per-call values (buffer addresses, fill bits) are common runtime args
+written by the entry point on every call, so a cached descriptor is reused as is.
 """
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import ttnn
@@ -21,136 +21,185 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE = 32
 FACE = 16
 
-REGIME_EXTENSION = "E"
-REGIME_NEW_STORAGE = "N"
-
-# Model L1 budget per core for the op (BB-05).
+# L1 the model leaves to the op on every core (BB-05).
 L1_OP_BUDGET = 1347776
-# Fewest work tiles a core is given before the grid stops growing (grid-synchronization knob).
-MIN_CORE_WORK_TILES = 1
-# Optional cap on N's block below the L1 clamp (overlap knob); None keeps the whole run per block.
-N_BLOCK_TILES_TARGET = None
-# NoC write alignment to DRAM and L1 on WH and BH.
+
+# NoC write alignment to DRAM and L1 on both Wormhole and Blackhole.
 NOC_WRITE_ALIGNMENT = 16
+
+# ---- Blocking knobs (single source each; every derived quantity is computed from them) ----
+# Fewest work tiles a core is given before another core is added (grid-synchronization lamp).
+MIN_CORE_WORK_TILES = 1
+# Extra clamp on the N block (overlap lamp); None = only the L1 clamp applies.
+N_BLOCK_TILES_LIMIT = None
+# N CB depth once a core streams more than one block.
+N_MULTI_BLOCK_BUFFER_DEPTH = 2
+# Most E write segments per touched tile (rows [a, b) of a tile split by faces, merged).
 MAX_EXTENSION_SEGMENTS = 3
 
 CB_WORK_TILES = 0
 CB_FILL_TILE = 1
 
 
-@dataclass
-class CachedProgram:
-    regime: str
-    program: ttnn.ProgramDescriptor
-    kernels: list
-    # kernel index -> True if its common args start with the output address instead of x's.
-    writes_output: list
-    plan: dict = field(default_factory=dict)
+def knobs_key():
+    return (MIN_CORE_WORK_TILES, N_BLOCK_TILES_LIMIT, N_MULTI_BLOCK_BUFFER_DEPTH)
 
 
-def set_call_args(cached, x_addr, out_addr, fill_bits):
-    """Write the per-call common runtime args and return the descriptor to dispatch."""
-    for kernel, writes_output in zip(cached.kernels, cached.writes_output):
-        kernel.common_runtime_args = [out_addr if writes_output else x_addr, fill_bits]
-    # ProgramDescriptor.kernels is converted by value: reassign so the edits reach the descriptor.
-    cached.program.kernels = cached.kernels
-    return cached.program
+def _ceil_div(a, b):
+    return -(-a // b)
 
 
-def _prod(values):
-    return math.prod(values) if values else 1
+@dataclass(frozen=True)
+class Geometry:
+    """Per-image tile geometry of one call (ceil per dim, never a flattened floor)."""
+
+    in_shape: tuple
+    out_shape: tuple
+    elem_bytes: int
+    tile_bytes: int
+    in_lead: tuple  # (d_0, d_1) of the leading dims, padded on the left with 1 to two entries
+    out_lead: tuple
+    in_row_tiles: int
+    out_row_tiles: int
+    in_col_tiles: int
+    out_col_tiles: int
+    in_row_rem: int
+    in_col_rem: int
+    out_row_end: int
+
+    @property
+    def in_tensor_slices(self):
+        return self.in_lead[0] * self.in_lead[1]
+
+    @property
+    def out_tensor_slices(self):
+        return self.out_lead[0] * self.out_lead[1]
+
+    @property
+    def row_mask_rem(self):
+        """Rows of the input's last tile row that hold data; 0 when no row mask is needed (the
+        input's padding rows are output padding too when dim -2 does not grow)."""
+        return self.in_row_rem if self.out_shape[-2] > self.in_shape[-2] else 0
+
+    @property
+    def col_mask_rem(self):
+        return self.in_col_rem if self.out_shape[-1] > self.in_shape[-1] else 0
+
+
+def make_geometry(in_shape, out_shape, elem_bytes, tile_bytes):
+    in_shape, out_shape = tuple(in_shape), tuple(out_shape)
+    rank = len(in_shape)
+    if not 2 <= rank <= 4:
+        raise ValueError(f"g6_pad: rank {rank} outside 2..4")
+
+    def lead(shape):
+        dims = list(shape[:-2])
+        return tuple([1] * (2 - len(dims)) + dims)
+
+    out_row_end = out_shape[-2] % TILE or TILE
+    return Geometry(
+        in_shape=in_shape,
+        out_shape=out_shape,
+        elem_bytes=elem_bytes,
+        tile_bytes=tile_bytes,
+        in_lead=lead(in_shape),
+        out_lead=lead(out_shape),
+        in_row_tiles=_ceil_div(in_shape[-2], TILE),
+        out_row_tiles=_ceil_div(out_shape[-2], TILE),
+        in_col_tiles=_ceil_div(in_shape[-1], TILE),
+        out_col_tiles=_ceil_div(out_shape[-1], TILE),
+        in_row_rem=in_shape[-2] % TILE,
+        in_col_rem=in_shape[-1] % TILE,
+        out_row_end=out_row_end,
+    )
+
+
+def row_band_segments(first_row, end_row, elem_bytes):
+    """Byte ranges (offset, length) inside one tile covering tile rows [first_row, end_row) across
+    all 32 columns. Faces are 16x16 in order face0 (rows 0-15, cols 0-15), face1 (rows 0-15,
+    cols 16-31), face2, face3; adjacent ranges are merged."""
+    face_row_bytes = FACE * elem_bytes
+    face_bytes = FACE * face_row_bytes
+    ranges = []
+    for face in range(4):
+        face_first_row = 0 if face < 2 else FACE
+        lo = max(first_row, face_first_row)
+        hi = min(end_row, face_first_row + FACE)
+        if lo >= hi:
+            continue
+        start = face * face_bytes + (lo - face_first_row) * face_row_bytes
+        end = face * face_bytes + (hi - face_first_row) * face_row_bytes
+        if ranges and ranges[-1][1] == start:
+            ranges[-1][1] = end
+        else:
+            ranges.append([start, end])
+    return [(start, end - start) for start, end in ranges]
 
 
 def _split_work(grid, num_work_tiles):
-    """Contiguous runs of the folded work axis over a row-major prefix of the grid."""
-    num_cores = min(grid.x * grid.y, -(-num_work_tiles // MIN_CORE_WORK_TILES))
-    core_set = ttnn.num_cores_to_corerangeset(num_cores, grid, True)
-    _, all_cores, group_1, group_2, per_core_1, per_core_2 = ttnn.split_work_to_cores(
-        core_set, num_work_tiles, row_wise=True
+    """Contiguous runs of `w` over a row-major prefix of the grid.
+
+    Returns (all_cores, [(core, core_work_begin, core_work_tiles)], max_core_work_tiles)."""
+    num_cores_cap = min(grid.x * grid.y, _ceil_div(num_work_tiles, MIN_CORE_WORK_TILES))
+    candidate_cores = ttnn.num_cores_to_corerangeset(num_cores_cap, grid, True)
+    _, all_cores, core_group_1, core_group_2, group_1_tiles, group_2_tiles = ttnn.split_work_to_cores(
+        candidate_cores, num_work_tiles, True
     )
-    runs = []
-    begin = 0
-    for group, per_core in ((group_1, per_core_1), (group_2, per_core_2)):
-        if per_core == 0:
+    assignment = []
+    core_work_begin = 0
+    for group, core_work_tiles in ((core_group_1, group_1_tiles), (core_group_2, group_2_tiles)):
+        if core_work_tiles == 0:
             continue
         for core in ttnn.corerange_to_cores(group, None, True):
-            runs.append((core, begin, per_core))
-            begin += per_core
-    assert begin == num_work_tiles, f"g6_pad: work split covers {begin} of {num_work_tiles} tiles"
-    return all_cores, runs, per_core_1
+            assignment.append((core, core_work_begin, core_work_tiles))
+            core_work_begin += core_work_tiles
+    assert core_work_begin == num_work_tiles, (core_work_begin, num_work_tiles)
+    return all_cores, assignment, group_1_tiles
 
 
-def _row_band_segments(row_begin, row_end, elem_bytes):
-    """Byte ranges inside a tile covering rows [row_begin, row_end) x all 32 columns, adjacent
-    face runs merged."""
-    face_row_bytes = FACE * elem_bytes
-    face_bytes = FACE * face_row_bytes
-    segments = []
-    for face in range(4):
-        face_row_base = (face // 2) * FACE
-        lo = max(row_begin, face_row_base)
-        hi = min(row_end, face_row_base + FACE)
-        if lo >= hi:
-            continue
-        start = face * face_bytes + (lo - face_row_base) * face_row_bytes
-        end = face * face_bytes + (hi - face_row_base) * face_row_bytes
-        if segments and segments[-1][1] == start:
-            segments[-1][1] = end
-        else:
-            segments.append([start, end])
-    return [(start, end - start) for start, end in segments]
+def _cb(index, num_pages, geom, dtype, core_ranges):
+    return ttnn.CBDescriptor(
+        total_size=num_pages * geom.tile_bytes,
+        core_ranges=core_ranges,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=geom.tile_bytes)],
+    )
 
 
-def _plan(regime, num_work_tiles, all_cores, runs, block_tiles, buffer_depth, roles):
-    return {
-        "regime": regime,
-        "num_work_tiles": num_work_tiles,
-        "num_cores": len(runs),
-        "block_tiles": block_tiles,
-        "buffer_depth": buffer_depth,
-        "roles": {role: str(all_cores) for role in roles},
-    }
+# ------------------------------------------------------------------------------------------------
+# Regime E: write-only new rows of the last tile row of each slice, in place
+# ------------------------------------------------------------------------------------------------
 
 
-def _extension_program(input_tensor, highs, grid):
-    shape = list(input_tensor.shape)
-    elem_bytes = input_tensor.element_size()
-    tile_bytes = ttnn.tile_size(input_tensor.dtype)
+def build_extension_descriptor(geom, input_tensor, grid):
+    """Returns (descriptor, plan, {role: kernel index}). Common RT args of the writer:
+    [x_addr, fill_bits]."""
+    num_work_tiles = geom.out_tensor_slices * geom.out_col_tiles
+    all_cores, assignment, max_core_work_tiles = _split_work(grid, num_work_tiles)
+    block_tiles = max_core_work_tiles
 
-    out_tensor_slices = _prod(shape[:-2])
-    out_tensor_row_tiles = -(-shape[-2] // TILE)
-    out_tensor_col_tiles = -(-shape[-1] // TILE)
-    in_row_rem = shape[-2] % TILE
-    out_row_end = (shape[-2] + highs[-2]) % TILE or TILE
-    assert in_row_rem != 0 and in_row_rem < out_row_end
-
-    segments = _row_band_segments(in_row_rem, out_row_end, elem_bytes)
+    segments = row_band_segments(geom.in_row_rem, geom.out_row_end, geom.elem_bytes)
     assert 1 <= len(segments) <= MAX_EXTENSION_SEGMENTS, segments
     for offset, length in segments:
         assert offset % NOC_WRITE_ALIGNMENT == 0 and length % NOC_WRITE_ALIGNMENT == 0, segments
-    segment_args = []
-    for k in range(MAX_EXTENSION_SEGMENTS):
-        segment_args += list(segments[k]) if k < len(segments) else [0, 0]
-
-    num_work_tiles = out_tensor_slices * out_tensor_col_tiles
-    all_cores, runs, max_core_work_tiles = _split_work(grid, num_work_tiles)
-    block_tiles = max_core_work_tiles
+    padded_segments = list(segments) + [(0, 0)] * (MAX_EXTENSION_SEGMENTS - len(segments))
 
     ct_args = [
         CB_FILL_TILE,
-        elem_bytes,
-        tile_bytes,
-        len(segments),
-        *segment_args,
-        out_tensor_row_tiles,
-        out_tensor_col_tiles,
+        geom.tile_bytes,
+        geom.elem_bytes,
+        geom.in_row_tiles,
+        geom.in_col_tiles,
         block_tiles,
+        len(segments),
     ]
-    ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    for offset, length in padded_segments:
+        ct_args += [offset, length]
+    ct_args += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
 
     rt_args = ttnn.RuntimeArgs()
-    for core, begin, tiles in runs:
-        rt_args[core.x][core.y] = [begin, tiles, -(-tiles // block_tiles)]
+    for core, core_work_begin, core_work_tiles in assignment:
+        num_blocks_this_core = _ceil_div(core_work_tiles, block_tiles)
+        rt_args[core.x][core.y] = [core_work_begin, core_work_tiles, num_blocks_this_core]
 
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_pad_extension_writer.cpp"),
@@ -160,148 +209,149 @@ def _extension_program(input_tensor, highs, grid):
         common_runtime_args=[0, 0],
         config=ttnn.WriterConfigDescriptor(),
     )
-    cb_fill_tile = ttnn.CBDescriptor(
-        total_size=tile_bytes,
-        core_ranges=all_cores,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(buffer_index=CB_FILL_TILE, data_format=input_tensor.dtype, page_size=tile_bytes)
-        ],
+    descriptor = ttnn.ProgramDescriptor(
+        kernels=[writer],
+        semaphores=[],
+        cbs=[_cb(CB_FILL_TILE, 1, geom, input_tensor.dtype, all_cores)],
     )
-    kernels = [writer]
-    program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[cb_fill_tile])
-    plan = _plan(REGIME_EXTENSION, num_work_tiles, all_cores, runs, block_tiles, 1, ["extension_writer"])
-    plan["segments"] = segments
-    return CachedProgram(REGIME_EXTENSION, program, kernels, [False], plan)
+    plan = {
+        "regime": "E",
+        "num_work_tiles": num_work_tiles,
+        "num_cores": len(assignment),
+        "block_tiles": block_tiles,
+        "buffer_depth": None,
+        "segments": segments,
+        "roles": {str(all_cores): "extension_writer"},
+    }
+    return descriptor, plan, {"extension_writer": 0}
 
 
-def _leading2(dims):
-    """Leading dims padded on the left to exactly two (rank 2..4)."""
-    lead = list(dims)
-    assert len(lead) <= 2
-    return [1] * (2 - len(lead)) + lead
+# ------------------------------------------------------------------------------------------------
+# Regime N: new storage, one pass, boundary tiles assembled in L1
+# ------------------------------------------------------------------------------------------------
 
 
-def _new_storage_program(input_tensor, output_tensor, highs, grid):
-    in_shape = list(input_tensor.shape)
-    out_shape = [d + h for d, h in zip(in_shape, highs)]
-    elem_bytes = input_tensor.element_size()
-    tile_bytes = ttnn.tile_size(input_tensor.dtype)
+def _slice_exists(geom, out_slice):
+    lead_0, lead_1 = divmod(out_slice, geom.out_lead[1])
+    return lead_0 < geom.in_lead[0] and lead_1 < geom.in_lead[1]
 
-    out_lead = _leading2(out_shape[:-2])
-    in_lead = _leading2(in_shape[:-2])
-    out_tensor_slices = _prod(out_lead)
-    out_tensor_row_tiles = -(-out_shape[-2] // TILE)
-    out_tensor_col_tiles = -(-out_shape[-1] // TILE)
-    in_tensor_row_tiles = -(-in_shape[-2] // TILE)
-    in_tensor_col_tiles = -(-in_shape[-1] // TILE)
-    in_row_rem = in_shape[-2] % TILE
-    in_col_rem = in_shape[-1] % TILE
-    row_mask_on = int(in_row_rem != 0 and out_shape[-2] > in_shape[-2])
-    col_mask_on = int(in_col_rem != 0 and out_shape[-1] > in_shape[-1])
 
-    num_work_tiles = out_tensor_slices * out_tensor_row_tiles * out_tensor_col_tiles
-    all_cores, runs, max_core_work_tiles = _split_work(grid, num_work_tiles)
+def count_input_backed(geom, w_end):
+    """Number of input-backed output tiles among w in [0, w_end)."""
+    slice_tiles = geom.out_row_tiles * geom.out_col_tiles
+    full_slices, rem = divmod(w_end, slice_tiles)
+    lead_0_full, lead_1_rem = divmod(full_slices, geom.out_lead[1])
+    existing_slices = min(lead_0_full, geom.in_lead[0]) * geom.in_lead[1]
+    if lead_0_full < geom.in_lead[0]:
+        existing_slices += min(lead_1_rem, geom.in_lead[1])
+    count = existing_slices * geom.in_row_tiles * geom.in_col_tiles
+    if rem and _slice_exists(geom, full_slices):
+        tile_row, tile_col = divmod(rem, geom.out_col_tiles)
+        count += min(tile_row, geom.in_row_tiles) * geom.in_col_tiles
+        if tile_row < geom.in_row_tiles:
+            count += min(tile_col, geom.in_col_tiles)
+    return count
 
-    block_tiles_cap = (L1_OP_BUDGET - tile_bytes) // (2 * tile_bytes)
-    block_tiles = min(max_core_work_tiles, block_tiles_cap)
-    if N_BLOCK_TILES_TARGET is not None:
-        block_tiles = min(block_tiles, N_BLOCK_TILES_TARGET)
-    buffer_depth = 2 if -(-max_core_work_tiles // block_tiles) > 1 else 1
 
-    def has_input(w):
-        tc = w % out_tensor_col_tiles
-        tr = (w // out_tensor_col_tiles) % out_tensor_row_tiles
-        s = w // (out_tensor_row_tiles * out_tensor_col_tiles)
-        l0, l1 = divmod(s, out_lead[1])
-        return l0 < in_lead[0] and l1 < in_lead[1] and tr < in_tensor_row_tiles and tc < in_tensor_col_tiles
-
-    geometry = [
-        out_lead[1],
-        in_lead[0],
-        in_lead[1],
-        out_tensor_row_tiles,
-        out_tensor_col_tiles,
-        in_tensor_row_tiles,
-        in_tensor_col_tiles,
+def geometry_ct_args(geom):
+    """The geometry block shared by the N reader and writer (g6_pad_new_storage_walk.hpp)."""
+    return [
+        geom.out_lead[0],
+        geom.out_lead[1],
+        geom.in_lead[0],
+        geom.in_lead[1],
+        geom.out_row_tiles,
+        geom.out_col_tiles,
+        geom.in_row_tiles,
+        geom.in_col_tiles,
+        geom.row_mask_rem,
+        geom.col_mask_rem,
     ]
 
-    reader_ct = [CB_WORK_TILES, elem_bytes, tile_bytes, block_tiles, *geometry, in_row_rem, in_col_rem]
-    reader_ct += [row_mask_on, col_mask_on]
-    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
-    writer_ct = [CB_WORK_TILES, CB_FILL_TILE, elem_bytes, tile_bytes, block_tiles, *geometry]
-    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+def new_storage_block(geom, max_core_work_tiles):
+    block_tiles_cap = (L1_OP_BUDGET - geom.tile_bytes) // (2 * geom.tile_bytes)
+    block_tiles = min(max_core_work_tiles, block_tiles_cap)
+    if N_BLOCK_TILES_LIMIT is not None:
+        block_tiles = min(block_tiles, N_BLOCK_TILES_LIMIT)
+    buffer_depth = N_MULTI_BLOCK_BUFFER_DEPTH if _ceil_div(max_core_work_tiles, block_tiles) > 1 else 1
+    return block_tiles, buffer_depth
 
-    reader_rt = ttnn.RuntimeArgs()
-    writer_rt = ttnn.RuntimeArgs()
-    has_fill_only_tiles = False
-    fill_only_per_core = []
-    for core, begin, tiles in runs:
-        fill_only = sum(1 for w in range(begin, begin + tiles) if not has_input(w))
-        fill_only_per_core.append(fill_only)
-        has_fill_only_tiles |= fill_only > 0
-        num_blocks = -(-tiles // block_tiles)
-        reader_rt[core.x][core.y] = [begin, tiles, num_blocks]
-        writer_rt[core.x][core.y] = [begin, tiles, num_blocks, int(fill_only > 0)]
+
+def build_new_storage_descriptor(geom, input_tensor, output_tensor, grid):
+    """Returns (descriptor, plan, {role: kernel index}). Common RT args: reader [x_addr, fill_bits],
+    writer [out_addr, fill_bits]."""
+    num_work_tiles = geom.out_tensor_slices * geom.out_row_tiles * geom.out_col_tiles
+    all_cores, assignment, max_core_work_tiles = _split_work(grid, num_work_tiles)
+    block_tiles, buffer_depth = new_storage_block(geom, max_core_work_tiles)
+    has_fill_only_tiles = count_input_backed(geom, num_work_tiles) < num_work_tiles
+
+    geometry_args = geometry_ct_args(geom)
+    reader_ct_args = [CB_WORK_TILES, geom.tile_bytes, geom.elem_bytes, block_tiles] + geometry_args
+    reader_ct_args += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    writer_ct_args = [
+        CB_WORK_TILES,
+        CB_FILL_TILE,
+        geom.tile_bytes,
+        geom.elem_bytes,
+        block_tiles,
+        int(has_fill_only_tiles),
+    ] + geometry_args
+    writer_ct_args += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+
+    reader_rt_args = ttnn.RuntimeArgs()
+    writer_rt_args = ttnn.RuntimeArgs()
+    for core, core_work_begin, core_work_tiles in assignment:
+        num_blocks_this_core = _ceil_div(core_work_tiles, block_tiles)
+        core_input_tiles = count_input_backed(geom, core_work_begin + core_work_tiles) - count_input_backed(
+            geom, core_work_begin
+        )
+        core_has_fill_only = int(core_input_tiles < core_work_tiles)
+        reader_rt_args[core.x][core.y] = [core_work_begin, core_work_tiles, num_blocks_this_core]
+        writer_rt_args[core.x][core.y] = [core_work_begin, core_work_tiles, num_blocks_this_core, core_has_fill_only]
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_pad_reader.cpp"),
         core_ranges=all_cores,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
+        compile_time_args=reader_ct_args,
+        runtime_args=reader_rt_args,
         common_runtime_args=[0, 0],
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_pad_writer.cpp"),
         core_ranges=all_cores,
-        compile_time_args=writer_ct,
-        runtime_args=writer_rt,
+        compile_time_args=writer_ct_args,
+        runtime_args=writer_rt_args,
         common_runtime_args=[0, 0],
         config=ttnn.WriterConfigDescriptor(),
     )
-
-    cbs = [
-        ttnn.CBDescriptor(
-            total_size=block_tiles * buffer_depth * tile_bytes,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=CB_WORK_TILES, data_format=input_tensor.dtype, page_size=tile_bytes
-                )
-            ],
-        )
-    ]
+    cbs = [_cb(CB_WORK_TILES, block_tiles * buffer_depth, geom, input_tensor.dtype, all_cores)]
     if has_fill_only_tiles:
-        cbs.append(
-            ttnn.CBDescriptor(
-                total_size=tile_bytes,
-                core_ranges=all_cores,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=CB_FILL_TILE, data_format=input_tensor.dtype, page_size=tile_bytes
-                    )
-                ],
-            )
-        )
-    assert sum(cb.total_size for cb in cbs) <= L1_OP_BUDGET
+        cbs.append(_cb(CB_FILL_TILE, 1, geom, input_tensor.dtype, all_cores))
+    footprint = geom.tile_bytes * (block_tiles * buffer_depth + int(has_fill_only_tiles))
+    assert footprint <= L1_OP_BUDGET, footprint
 
-    kernels = [reader, writer]
-    program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-    plan = _plan(
-        REGIME_NEW_STORAGE,
-        num_work_tiles,
-        all_cores,
-        runs,
-        block_tiles,
-        buffer_depth,
-        ["new_storage_reader", "new_storage_writer"],
-    )
-    plan["fill_only_tiles"] = sum(fill_only_per_core)
-    return CachedProgram(REGIME_NEW_STORAGE, program, kernels, [False, True], plan)
+    descriptor = ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=cbs)
+    plan = {
+        "regime": "N",
+        "num_work_tiles": num_work_tiles,
+        "num_cores": len(assignment),
+        "block_tiles": block_tiles,
+        "buffer_depth": buffer_depth,
+        "has_fill_only_tiles": has_fill_only_tiles,
+        "l1_bytes_per_core": footprint,
+        "roles": {str(all_cores): "new_storage_reader+new_storage_writer"},
+    }
+    return descriptor, plan, {"new_storage_reader": 0, "new_storage_writer": 1}
 
 
-def create_program_descriptor(regime, input_tensor, output_tensor, highs, grid):
-    if regime == REGIME_EXTENSION:
-        return _extension_program(input_tensor, highs, grid)
-    return _new_storage_program(input_tensor, output_tensor, highs, grid)
+__all__ = [
+    "Geometry",
+    "make_geometry",
+    "row_band_segments",
+    "count_input_backed",
+    "build_extension_descriptor",
+    "build_new_storage_descriptor",
+    "knobs_key",
+]
