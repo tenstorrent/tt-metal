@@ -233,6 +233,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
     ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    // tilizeA_B_reduce_init has no pack part, so no reduce mask.
     _llk_pack_init_(bfd_pack, tensor_shape, TILE_CNT);
     {
         START_PERF_MEASURE("INIT")
@@ -243,7 +244,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
 
-        _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape);
         PROFILER_SYNC();
     }
     {
@@ -270,7 +270,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
             }
         }
-        _llk_pack_reduce_mask_clear_();
         PROFILER_SYNC();
     }
     uninit_zone();
@@ -279,7 +278,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 void uninit_zone()
 {
     ZONE_SCOPED("UNINIT")
-    // The pack reduce mask clear stays at the end of TILE_LOOP above.
+    // No uninit: the production op has none on Quasar.
 }
 
 #endif
