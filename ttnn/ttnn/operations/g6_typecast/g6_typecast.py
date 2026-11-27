@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_typecast — convert every value of one interleaved tensor to `dtype` in one device program.
-
-Registry model (eval/op_template.py): INPUT_TAGGERS, SUPPORTED, EXCLUSIONS, validate().
-INVALID lives in eval/golden_tests/g6_typecast/feature_spec.py, not here.
-"""
+"""g6_typecast: convert every value of one interleaved tensor to `dtype` in one device program,
+keeping shape, layout and memory placement (registry model, see eval/op_template.py)."""
 
 from __future__ import annotations
 
@@ -13,16 +10,11 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_typecast_program_descriptor import (
-    create_program_descriptor,
-    patch_addresses,
-    plan_work,
-    select_regime,
-)
+from .g6_typecast_program_descriptor import CORE_ROLES, build_program, make_plan
 
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_TAGGERS — `inputs` is (scenario,), the dict validate() builds.
+# 1. INPUT_TAGGERS — every axis is projected from the scenario dict (inputs = (scenario,))
 # ---------------------------------------------------------------------------
 
 
@@ -44,11 +36,11 @@ def tag_buffer(inputs, axes):
 
 def tag_alignment(inputs, axes):
     shape = inputs[0]["input_shape"]
-    w = shape[-1]
-    h = shape[-2] if len(shape) >= 2 else 1
-    if w % 32 != 0:
+    W = shape[-1]
+    H = shape[-2] if len(shape) >= 2 else 1
+    if W % 32 != 0:
         return "w_non_aligned"
-    if h % 32 != 0:
+    if H % 32 != 0:
         return "h_non_aligned"
     return "tile_aligned"
 
@@ -68,7 +60,7 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED — Phase 0: bfloat16 TILE -> float32 / bfloat8_b / int32.
+# 2. SUPPORTED — Phase 0: bfloat16 TILE -> float32 / bfloat8_b / int32, DRAM or L1, ranks 3-4
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -82,10 +74,15 @@ SUPPORTED = {
 
 
 # ---------------------------------------------------------------------------
-# 3. EXCLUSIONS — every TARGET cell is a production case; stays empty.
+# 3. EXCLUSIONS — stays empty: every TARGET cell is a production case
 # ---------------------------------------------------------------------------
 
 EXCLUSIONS = []
+
+
+PROPERTIES = {
+    "multi_core": {"value": True, "source": "declared"},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -93,34 +90,33 @@ EXCLUSIONS = []
 # ---------------------------------------------------------------------------
 
 
-def _buffer_name(tensor):
-    return "l1" if tensor.memory_config().buffer_type == ttnn.BufferType.L1 else "dram"
-
-
 def _scenario(input_tensor, dtype):
+    buffer_type = input_tensor.memory_config().buffer_type
     return {
         "input_shape": tuple(input_tensor.shape),
         "dtype": input_tensor.dtype,
         "output_dtype": dtype,
         "layout": input_tensor.layout,
-        "buffer": _buffer_name(input_tensor),
+        "buffer": "l1" if buffer_type == ttnn.BufferType.L1 else "dram",
     }
 
 
 def validate(input_tensor, dtype, *, sub_core_grids=None):
-    # Contract errors first; each message names the offending argument.
+    # Contract errors first; they are not support refusals.
     if not isinstance(dtype, ttnn.DataType):
-        raise ValueError(f"g6_typecast: dtype must be a ttnn.DataType, got {type(dtype).__name__} {dtype!r}")
+        raise ValueError(f"g6_typecast: dtype must be a ttnn.DataType, got {type(dtype).__name__}")
     if sub_core_grids is not None:
         raise ValueError("g6_typecast: sub_core_grids must be None")
     rank = len(input_tensor.shape)
     if not 1 <= rank <= 4:
-        raise ValueError(f"g6_typecast: input rank must be 1 to 4, got rank {rank}")
+        raise ValueError(f"g6_typecast: rank must be 1 to 4, got rank {rank}")
+    if input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        raise ValueError("g6_typecast: input_tensor must be interleaved (DRAM or L1)")
 
     scenario = _scenario(input_tensor, dtype)
     axes = {}
-    for axis, tagger in INPUT_TAGGERS.items():
-        axes[axis] = tagger((scenario,), axes)
+    for axis_name, tagger in INPUT_TAGGERS.items():
+        axes[axis_name] = tagger((scenario,), axes)
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
@@ -135,36 +131,37 @@ def validate(input_tensor, dtype, *, sub_core_grids=None):
 # Plan reporting and program cache
 # ---------------------------------------------------------------------------
 
-_CORE_ROLE = {"tile_convert": "reader+compute+writer"}
-
 
 def describe_plan(input_tensor, dtype):
-    """The plan a call selects, without dispatching."""
-    regime = select_regime(input_tensor.layout, input_tensor.dtype, dtype)
-    plan = plan_work(input_tensor.device(), input_tensor.buffer_num_pages())
+    """The plan a call selects, without dispatching (BB-08, BB-21)."""
+    plan = make_plan(input_tensor, dtype)
+    role = CORE_ROLES[plan.regime]
     return {
-        "regime": regime,
-        "num_cores": plan["num_cores"],
-        "block_tiles": plan["block_tiles"],
-        "core_roles": {(core.x, core.y): _CORE_ROLE[regime] for core, _, _ in plan["assignment"]},
+        "regime": plan.regime,
+        "num_cores": plan.num_cores,
+        "block_tiles": plan.block_tiles,
+        "core_roles": {(core.x, core.y): role for core, _, _ in plan.assignment},
     }
 
 
-# Built descriptors keyed by everything that changes the program; a hit patches only the two
-# buffer addresses (common RT args), which the device-side program hash excludes.
-_DESCRIPTOR_CACHE = {}
+# Everything that changes the program is in the key; buffer addresses are patched per call (BB-07).
+_PROGRAM_CACHE = {}
 
 
-def _cache_key(input_tensor, dtype, device):
+def _cache_key(input_tensor, dtype):
+    device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
+    memory_config = input_tensor.memory_config()
     return (
         device.id(),
         tuple(input_tensor.shape),
         tuple(input_tensor.padded_shape),
+        tuple(input_tensor.tile.tile_shape),
         input_tensor.dtype,
         dtype,
         input_tensor.layout,
-        input_tensor.memory_config(),
+        memory_config.memory_layout,
+        memory_config.buffer_type,
         (grid.x, grid.y),
     )
 
@@ -174,22 +171,21 @@ def _cache_key(input_tensor, dtype, device):
 # ---------------------------------------------------------------------------
 
 
-def g6_typecast(input_tensor, dtype, *, sub_core_grids=None):
+def g6_typecast(input_tensor: ttnn.Tensor, dtype: ttnn.DataType, *, sub_core_grids=None) -> ttnn.Tensor:
     validate(input_tensor, dtype, sub_core_grids=sub_core_grids)
 
-    device = input_tensor.device()
     output_tensor = ttnn.allocate_tensor_on_device(
-        input_tensor.shape, dtype, input_tensor.layout, device, input_tensor.memory_config()
+        input_tensor.shape,
+        dtype,
+        input_tensor.layout,
+        input_tensor.device(),
+        input_tensor.memory_config(),
     )
 
-    key = _cache_key(input_tensor, dtype, device)
-    descriptor = _DESCRIPTOR_CACHE.get(key)
-    if descriptor is None:
-        select_regime(input_tensor.layout, input_tensor.dtype, dtype)
-        plan = plan_work(device, input_tensor.buffer_num_pages())
-        descriptor = create_program_descriptor(input_tensor, output_tensor, plan)
-        _DESCRIPTOR_CACHE[key] = descriptor
-    else:
-        patch_addresses(descriptor, input_tensor, output_tensor)
+    key = _cache_key(input_tensor, dtype)
+    program = _PROGRAM_CACHE.get(key)
+    if program is None:
+        program = build_program(make_plan(input_tensor, dtype), input_tensor, output_tensor)
+        _PROGRAM_CACHE[key] = program
 
-    return ttnn.generic_op([input_tensor, output_tensor], descriptor)
+    return ttnn.generic_op([input_tensor, output_tensor], program.descriptor(input_tensor, output_tensor))
