@@ -15,51 +15,59 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "g6_pad_fill.hpp"
 #include "g6_pad_new_storage_walk.hpp"
 
 namespace {
 
 constexpr uint32_t FACE_DIM = 16;
+constexpr uint32_t TILE_DIM = 32;
 
-// Rows [row_mask_rem, 32) of one tile, all columns: faces of 16 rows, face order 0,1 (rows 0-15),
-// 2,3 (rows 16-31).
-template <uint32_t row_mask_rem, uint32_t elem_bytes>
-FORCE_INLINE void mask_rows(uint32_t slot, uint32_t fill_bits) {
+// Tile rows [row_mask_rem, 32), all columns, of the slot at slot_offset past the CB write pointer.
+// Faces of 16 rows: 0,1 hold tile rows 0-15, 2,3 rows 16-31.
+template <uint32_t elem_bytes, uint32_t row_mask_rem>
+FORCE_INLINE void mask_rows(uint32_t cb_id, uint32_t slot_offset, uint32_t fill_bits) {
     constexpr uint32_t face_row_bytes = FACE_DIM * elem_bytes;
     constexpr uint32_t face_bytes = FACE_DIM * face_row_bytes;
     if constexpr (row_mask_rem < FACE_DIM) {
         constexpr uint32_t skip = row_mask_rem * face_row_bytes;
-        dataflow_kernel_lib::fill_l1_range<elem_bytes>(slot + skip, face_bytes - skip, fill_bits);
-        dataflow_kernel_lib::fill_l1_range<elem_bytes>(slot + face_bytes + skip, 3 * face_bytes - skip, fill_bits);
+        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + skip, face_bytes - skip, fill_bits);
+        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + face_bytes + skip, 3 * face_bytes - skip, fill_bits);
     } else {
         constexpr uint32_t skip = (row_mask_rem - FACE_DIM) * face_row_bytes;
-        dataflow_kernel_lib::fill_l1_range<elem_bytes>(slot + 2 * face_bytes + skip, face_bytes - skip, fill_bits);
-        dataflow_kernel_lib::fill_l1_range<elem_bytes>(slot + 3 * face_bytes + skip, face_bytes - skip, fill_bits);
+        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + 2 * face_bytes + skip, face_bytes - skip, fill_bits);
+        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + 3 * face_bytes + skip, face_bytes - skip, fill_bits);
     }
 }
 
-// Columns [col_mask_rem, 32) of one tile, all rows. Faces 0,2 hold columns 0-15, faces 1,3
-// columns 16-31.
-template <uint32_t col_mask_rem, uint32_t elem_bytes>
-FORCE_INLINE void mask_cols(uint32_t slot, uint32_t fill_bits) {
+// Columns [col_mask_rem, 32) of tile rows [0, row_end). Faces 0,2 hold columns 0-15, faces 1,3
+// columns 16-31. row_end < 32 on a corner tile, whose rows from row_end on the row mask covers.
+template <uint32_t elem_bytes, uint32_t col_mask_rem>
+FORCE_INLINE void mask_cols(uint32_t cb_id, uint32_t slot_offset, uint32_t row_end, uint32_t fill_bits) {
     constexpr uint32_t face_row_bytes = FACE_DIM * elem_bytes;
     constexpr uint32_t face_bytes = FACE_DIM * face_row_bytes;
     constexpr bool right_faces_whole = col_mask_rem < FACE_DIM;
-    constexpr uint32_t first_col = right_faces_whole ? col_mask_rem : col_mask_rem - FACE_DIM;
-    constexpr uint32_t skip = first_col * elem_bytes;
-    constexpr uint32_t part_face_a = right_faces_whole ? 0 : face_bytes;
-    constexpr uint32_t part_face_b = right_faces_whole ? 2 * face_bytes : 3 * face_bytes;
+    constexpr uint32_t skip = (right_faces_whole ? col_mask_rem : col_mask_rem - FACE_DIM) * elem_bytes;
+    constexpr uint32_t part_bytes = face_row_bytes - skip;
+    constexpr uint32_t part_face_top = right_faces_whole ? 0 : face_bytes;
+    constexpr uint32_t part_face_bottom = right_faces_whole ? 2 * face_bytes : 3 * face_bytes;
+    const uint32_t top_rows = row_end < FACE_DIM ? row_end : FACE_DIM;
+    const uint32_t bottom_rows = row_end - top_rows;
     if constexpr (right_faces_whole) {
-        dataflow_kernel_lib::fill_l1_range<elem_bytes>(slot + face_bytes, face_bytes, fill_bits);
-        dataflow_kernel_lib::fill_l1_range<elem_bytes>(slot + 3 * face_bytes, face_bytes, fill_bits);
+        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + face_bytes, top_rows * face_row_bytes, fill_bits);
+        g6_pad::fill_constant<elem_bytes>(cb_id, slot_offset + 3 * face_bytes, bottom_rows * face_row_bytes, fill_bits);
     }
-    for (uint32_t row = 0; row < FACE_DIM; ++row) {
-        const uint32_t row_offset = row * face_row_bytes + skip;
-        dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-            slot + part_face_a + row_offset, face_row_bytes - skip, fill_bits);
-        dataflow_kernel_lib::fill_l1_range<elem_bytes>(
-            slot + part_face_b + row_offset, face_row_bytes - skip, fill_bits);
+    // Slots and face rows are 32-B aligned, so a partial row's alignment is that of `skip`.
+    const uint32_t word = g6_pad::pattern_word<elem_bytes>(fill_bits);
+    const uint32_t top_first = get_write_ptr(cb_id) + slot_offset + part_face_top + skip;
+#pragma GCC unroll 16
+    for (uint32_t row = 0; row < top_rows; ++row) {
+        g6_pad::store_constant_fixed<elem_bytes, part_bytes, skip % 4>(top_first + row * face_row_bytes, word);
+    }
+    const uint32_t bottom_first = get_write_ptr(cb_id) + slot_offset + part_face_bottom + skip;
+#pragma GCC unroll 16
+    for (uint32_t row = 0; row < bottom_rows; ++row) {
+        g6_pad::store_constant_fixed<elem_bytes, part_bytes, skip % 4>(bottom_first + row * face_row_bytes, word);
     }
 }
 
@@ -116,15 +124,19 @@ void kernel_main() {
                 Walk mask_walk = block_first;
                 for (uint32_t i = 0; i < block_extent; ++i) {
                     if (mask_walk.has_input()) {
-                        const uint32_t slot = block_base + i * tile_bytes;
+                        const uint32_t slot_offset = i * tile_bytes;
+                        bool row_masked = false;
                         if constexpr (Walk::row_mask_rem != 0) {
-                            if (mask_walk.row_mask()) {
-                                mask_rows<Walk::row_mask_rem, elem_bytes>(slot, fill_bits);
+                            row_masked = mask_walk.row_mask();
+                            if (row_masked) {
+                                mask_rows<elem_bytes, Walk::row_mask_rem>(cb_work_tiles, slot_offset, fill_bits);
                             }
                         }
                         if constexpr (Walk::col_mask_rem != 0) {
                             if (mask_walk.col_mask()) {
-                                mask_cols<Walk::col_mask_rem, elem_bytes>(slot, fill_bits);
+                                const uint32_t row_end = row_masked ? Walk::row_mask_rem : TILE_DIM;
+                                mask_cols<elem_bytes, Walk::col_mask_rem>(
+                                    cb_work_tiles, slot_offset, row_end, fill_bits);
                             }
                         }
                     }
