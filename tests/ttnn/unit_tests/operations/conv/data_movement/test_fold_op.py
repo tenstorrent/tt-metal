@@ -464,7 +464,7 @@ def test_fold_docstring_supported_inputs(dtype, layout, buffer_type, device):
     each padding form. The output takes the input's memory configuration by default, and the other interleaved buffer
     type through override_memory_config together with collapse_output.
 
-    A BFLOAT16 TILE input leaves out NaN, as the docstring requires, and compares zeros by value. A BFLOAT8_B input is
+    A BFLOAT16 TILE input leaves out NaN, as the docstring requires, and -0.0 as well. A BFLOAT8_B input is
     compared with its own block-float values, which its BFLOAT16 output holds exactly.
     """
     check_readable(dtype, layout, buffer_type)
@@ -474,7 +474,7 @@ def test_fold_docstring_supported_inputs(dtype, layout, buffer_type, device):
     cases = _DOCSTRING_CASES + (_DOCSTRING_PADDED_CASES if layout == ttnn.ROW_MAJOR_LAYOUT else [])
     for shape, stride_h, stride_w, padding in cases:
         input_tensor = ttnn.from_torch(
-            full_range_input(shape, dtype, nan=not bfloat16_tile),
+            full_range_input(shape, dtype, nan=not bfloat16_tile, negative_zero=not bfloat16_tile),
             dtype=dtype,
             layout=layout,
             device=device,
@@ -494,7 +494,7 @@ def test_fold_docstring_supported_inputs(dtype, layout, buffer_type, device):
             assert output.dtype == _fold_output_dtype(dtype)
             assert output.memory_config() == (memory_config if override is None else override)
             expected = _fold_reference(ttnn.to_torch(input_tensor), stride_h, stride_w, padding, collapse_output)
-            assert_exact(expected, ttnn.to_torch(output), signed_zeros=not bfloat16_tile)
+            assert_exact(expected, ttnn.to_torch(output))
 
 
 def _height_sharded_l1(rows, width, num_cores, device):
@@ -517,7 +517,7 @@ def test_fold_docstring_sharded_inputs(dtype, layout, device):
     else:
         (n, h, w, c), num_cores, paddings = (2, 8, 8, 8), 4, [[0, 0], [1, 1], [0, 0, 0, 0, 2, 6]]
     input_tensor = ttnn.from_torch(
-        full_range_input((n, h, w, c), dtype, nan=not bfloat16_tile),
+        full_range_input((n, h, w, c), dtype, nan=not bfloat16_tile, negative_zero=not bfloat16_tile),
         dtype=dtype,
         layout=layout,
         device=device,
@@ -531,7 +531,7 @@ def test_fold_docstring_sharded_inputs(dtype, layout, device):
         assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         assert output.memory_config().buffer_type == ttnn.BufferType.L1
         expected = _fold_reference(ttnn.to_torch(input_tensor), 2, 2, padding)
-        assert_exact(expected, ttnn.to_torch(output), signed_zeros=not bfloat16_tile)
+        assert_exact(expected, ttnn.to_torch(output))
 
 
 def _docstring_override_shard_layouts():
