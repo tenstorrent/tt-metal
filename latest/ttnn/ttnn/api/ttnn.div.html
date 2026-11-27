@@ -456,7 +456,7 @@ L1 sharded layout is preferred, with no broadcast and matching tensor specs for 
 </dd>
 </dl>
 <p>With INT32 tensor operands or an INT32 tensor and an integer scalar, rounding_mode <cite>None</cite> produces a FLOAT32 output and output datatype conversion is not supported, while <cite>floor</cite> and <cite>trunc</cite> produce an INT32 output.
-For these INT32 operands with rounding_mode <cite>floor</cite> or <cite>trunc</cite>, division by zero and INT32_MIN / -1 are undefined, regardless of <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code>.
+For these INT32 operands with rounding_mode <cite>floor</cite> or <cite>trunc</cite>, division by zero is undefined and INT32_MIN / -1 wraps to INT32_MIN, regardless of <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code>.
 For floating-point division (including promoted INT32 inputs), when <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code> is <cite>True</cite>, operation assumes that <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> is not zero for fast approximation.
 When <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code> is <cite>False</cite> (default), floating-point division properly handles division by zero (accurate mode).</p>
 </div>

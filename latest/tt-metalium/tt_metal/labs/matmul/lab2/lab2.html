@@ -486,7 +486,7 @@ of tiles in the output matrix as units of work to be assigned to cores.</p></li>
 </ul>
 <p>If we assume that work units are the output tiles, the function may be called as follows:</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/work_split.hpp&gt;</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/utils/work_split.hpp&gt;</span>
 
 <span class="n">CoreCoord</span><span class="w"> </span><span class="n">core_grid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">compute_with_storage_grid_size</span><span class="p">();</span>
 <span class="kt">uint32_t</span><span class="w"> </span><span class="n">work_units</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">M</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">N</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">(</span><span class="n">TILE_HEIGHT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">TILE_WIDTH</span><span class="p">);</span>

@@ -515,7 +515,7 @@ references without parsing the kernel source.</p>
 <span class="linenos"> 11</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn/core.hpp"</span>
 <span class="linenos"> 12</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn/device_operation.hpp"</span>
 <span class="linenos"> 13</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn/types.hpp"</span>
-<span class="linenos"> 14</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/program_descriptors.hpp&gt;</span>
+<span class="linenos"> 14</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/workload/legacy/program_descriptors.hpp&gt;</span>
 <span class="linenos"> 15</span>
 <span class="linenos"> 16</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos"> 17</span>
@@ -676,8 +676,8 @@ references without parsing the kernel source.</p>
 <span class="linenos">  3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
 <span class="linenos">  4</span>
 <span class="linenos">  5</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"example_device_operation.hpp"</span>
-<span class="linenos">  6</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/work_split.hpp&gt;</span>
-<span class="linenos">  7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/tensor_accessor_args.hpp&gt;</span>
+<span class="linenos">  6</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/utils/work_split.hpp&gt;</span>
+<span class="linenos">  7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/workload/legacy/tensor_accessor_args.hpp&gt;</span>
 <span class="linenos">  8</span>
 <span class="linenos">  9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos"> 10</span>
@@ -811,8 +811,8 @@ references without parsing the kernel source.</p>
 <span class="linenos">  3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
 <span class="linenos">  4</span>
 <span class="linenos">  5</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"example_device_operation.hpp"</span>
-<span class="linenos">  6</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/work_split.hpp&gt;</span>
-<span class="linenos">  7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/tensor_accessor_args.hpp&gt;</span>
+<span class="linenos">  6</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/utils/work_split.hpp&gt;</span>
+<span class="linenos">  7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/workload/legacy/tensor_accessor_args.hpp&gt;</span>
 <span class="linenos">  8</span>
 <span class="linenos">  9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos"> 10</span>

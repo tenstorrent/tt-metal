@@ -369,6 +369,9 @@ generated on device.</p></li>
 <li><p>Kept blocks only (e.g. the VSA fine branch): omit pooled_k and pooled_v. The softmax normalizes over the
 kept blocks.</p></li>
 </ul>
+<p>The op balances each mask’s work over cores and devices on device, every call (traces included). Balancing
+across devices keeps three DRAM buffers the size of input_tensor_q, block_mask and the output for each
+cached program.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>

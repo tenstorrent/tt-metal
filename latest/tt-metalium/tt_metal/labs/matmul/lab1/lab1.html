@@ -970,7 +970,7 @@ However, some host-side objects contain information about data and code on the d
 <li><p><code class="docutils literal notranslate"><span class="pre">Tensor</span></code> objects are created on the host and contain information about the tensor shape and layout,
 but actual tensor data is stored in device DRAM.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">TensorAccessorArgs</span></code> objects exist on both host and device, but they are different underlying types,
-defined in different headers (<code class="docutils literal notranslate"><span class="pre">tt_metal/api/tt-metalium/tensor_accessor_args.hpp</span></code> for host-side
+defined in different headers (<code class="docutils literal notranslate"><span class="pre">tt_metal/api/tt-metalium/workload/legacy/tensor_accessor_args.hpp</span></code> for host-side
 and <code class="docutils literal notranslate"><span class="pre">tt_metal/hw/inc/api/tensor/tensor_accessor_args.h</span></code> for device-side).</p></li>
 <li><p>Integers <code class="docutils literal notranslate"><span class="pre">src0_addr</span></code>, <code class="docutils literal notranslate"><span class="pre">src1_addr</span></code>, and <code class="docutils literal notranslate"><span class="pre">dst_addr</span></code> in the <code class="docutils literal notranslate"><span class="pre">eltwise_add_tensix()</span></code> function
 are host-side integers, but they contain addresses of the input and output tensor data in device DRAM.</p></li>
@@ -1066,7 +1066,7 @@ DPRINT can be combined with the <code class="docutils literal notranslate"><span
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/dataflow_api.h"</span>
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"tt-metalium/constants.hpp"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"tt-metalium/data_formats/tile_constants.hpp"</span>
 
 <span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// Assume this circular buffer holds output tiles from a compute kernel.</span>
@@ -1485,7 +1485,7 @@ You should write your code to make the following assumptions about the matrix an
 <ul class="simple">
 <li><p>Tiles will be square with dimensions <code class="docutils literal notranslate"><span class="pre">TILE_HEIGHTxTILE_WIDTH</span></code> (i.e. <code class="docutils literal notranslate"><span class="pre">TILE_HEIGHT</span> <span class="pre">==</span> <span class="pre">TILE_WIDTH</span></code>).</p></li>
 <li><p>All matrices will have dimensions that are divisible by the tile size.
-Note that constants <code class="docutils literal notranslate"><span class="pre">TILE_HEIGHT</span></code> and <code class="docutils literal notranslate"><span class="pre">TILE_WIDTH</span></code> are defined in the <code class="docutils literal notranslate"><span class="pre">tt_metal/api/tt-metalium/constants.hpp</span></code> header in the <code class="docutils literal notranslate"><span class="pre">tt::constants</span></code> namespace,
+Note that constants <code class="docutils literal notranslate"><span class="pre">TILE_HEIGHT</span></code> and <code class="docutils literal notranslate"><span class="pre">TILE_WIDTH</span></code> are defined in the <code class="docutils literal notranslate"><span class="pre">tt_metal/api/tt-metalium/data_formats/tile_constants.hpp</span></code> header in the <code class="docutils literal notranslate"><span class="pre">tt::constants</span></code> namespace,
 and height is equal to width for all existing Tenstorrent devices.
 You should add assertions (using <code class="docutils literal notranslate"><span class="pre">TT_FATAL</span></code>) that check these assumptions.</p></li>
 </ul>

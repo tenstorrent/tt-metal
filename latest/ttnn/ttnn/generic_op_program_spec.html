@@ -314,10 +314,10 @@ by name.</p>
 (<code class="docutils literal notranslate"><span class="pre">tt_metal/api/tt-metalium/workload/</span></code>), apart from the advanced options, which stay experimental in
 <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp">advanced_options.hpp</a>. Of the advanced options, Python
 binds only <code class="docutils literal notranslate"><span class="pre">DFBAdvancedOptions.alias_with</span></code>, which lets buffers of the same total size share memory; the others are
-C++ only. So far the GlobalSemaphore fields are C++ only too: <code class="docutils literal notranslate"><span class="pre">ProgramSpec.global_semaphore_parameters</span></code>,
-<code class="docutils literal notranslate"><span class="pre">KernelSpec.global_semaphore_bindings</span></code> and <code class="docutils literal notranslate"><span class="pre">ProgramRunArgs.global_semaphore_args</span></code>. Two fields differ in type:
-<code class="docutils literal notranslate"><span class="pre">ProgramRunArgs.tensor_args</span></code> takes a <code class="docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> for each name and keeps it alive, where C++ holds the tensor’s
-<code class="docutils literal notranslate"><span class="pre">MeshTensor</span></code>; and the <code class="docutils literal notranslate"><span class="pre">data_format_metadata</span></code> of a <code class="docutils literal notranslate"><span class="pre">DataflowBufferSpec</span></code> or <code class="docutils literal notranslate"><span class="pre">ScratchpadSpec</span></code> takes a ttnn data
+C++ only. Three fields differ in type: <code class="docutils literal notranslate"><span class="pre">ProgramRunArgs.tensor_args</span></code> takes a <code class="docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> for each name and keeps
+it alive, where C++ holds the tensor’s <code class="docutils literal notranslate"><span class="pre">MeshTensor</span></code>; <code class="docutils literal notranslate"><span class="pre">ProgramRunArgs.global_semaphore_args</span></code> takes a global
+semaphore for each name, such as <code class="docutils literal notranslate"><span class="pre">ttnn.create_global_semaphore</span></code> returns, and keeps it alive too, where C++ holds a
+reference to it; and the <code class="docutils literal notranslate"><span class="pre">data_format_metadata</span></code> of a <code class="docutils literal notranslate"><span class="pre">DataflowBufferSpec</span></code> or <code class="docutils literal notranslate"><span class="pre">ScratchpadSpec</span></code> takes a ttnn data
 type, such as <code class="docutils literal notranslate"><span class="pre">ttnn.bfloat16</span></code>, so a format without one, such as Float16, cannot be set, and <code class="docutils literal notranslate"><span class="pre">ttnn.int8</span></code> reads back
 as <code class="docutils literal notranslate"><span class="pre">ttnn.uint8</span></code>. In Python, argument values are integers from 0 to 2**32 - 1.</p>
 <section id="an-example">
@@ -422,9 +422,9 @@ example’s TT-NN kernels. To give the code itself instead, pass <code class="do
 <section id="how-a-kernel-finds-its-inputs">
 <h2>How a kernel finds its inputs<a class="headerlink" href="#how-a-kernel-finds-its-inputs" title="Permalink to this heading"></a>
 </h2>
-<p>Everything a kernel uses has a name, which the kernel code reaches through a generated namespace. For a buffer,
-tensor, semaphore or scratchpad, that name is the <code class="docutils literal notranslate"><span class="pre">accessor_name</span></code> of the kernel’s binding; the <code class="docutils literal notranslate"><span class="pre">unique_id</span></code> of the
-spec only ties the binding to it. In the example, the reader reads tensor parameter <code class="docutils literal notranslate"><span class="pre">input</span></code> as <code class="docutils literal notranslate"><span class="pre">tensor::src</span></code>.
+<p>Everything a kernel uses has a name, which the kernel code reaches through a generated namespace. For a buffer, tensor,
+semaphore, global semaphore or scratchpad, that name is the <code class="docutils literal notranslate"><span class="pre">accessor_name</span></code> of the kernel’s binding; the <code class="docutils literal notranslate"><span class="pre">unique_id</span></code>
+of the spec only ties the binding to it. In the example, the reader reads tensor parameter <code class="docutils literal notranslate"><span class="pre">input</span></code> as <code class="docutils literal notranslate"><span class="pre">tensor::src</span></code>.
 <code class="docutils literal notranslate"><span class="pre">E.producer_of</span></code> and <code class="docutils literal notranslate"><span class="pre">E.consumer_of</span></code> make a buffer binding from the buffer’s <code class="docutils literal notranslate"><span class="pre">unique_id</span></code> and the accessor name; the
 example’s buffers and their accessors share the names <code class="docutils literal notranslate"><span class="pre">in</span></code> and <code class="docutils literal notranslate"><span class="pre">out</span></code>.</p>
 <p>What a kernel needs, where you set it, and how the kernel reaches it:</p>
@@ -448,6 +448,10 @@ node’s own shard in L1.</p></li>
 <li><p><strong>A buffer on a sharded tensor’s memory</strong>: a <code class="docutils literal notranslate"><span class="pre">DataflowBufferSpec</span></code> whose <code class="docutils literal notranslate"><span class="pre">borrowed_from</span></code> names the
 <code class="docutils literal notranslate"><span class="pre">TensorParameter</span></code>. In the kernel: <code class="docutils literal notranslate"><span class="pre">DataflowBuffer(dfb::&lt;accessor_name&gt;)</span></code>.</p></li>
 <li><p><strong>A semaphore</strong>: a <code class="docutils literal notranslate"><span class="pre">SemaphoreSpec</span></code> and a <code class="docutils literal notranslate"><span class="pre">SemaphoreBinding</span></code>. In the kernel: <code class="docutils literal notranslate"><span class="pre">Semaphore(sem::&lt;accessor_name&gt;)</span></code>.</p></li>
+<li><p><strong>A global semaphore</strong>, whose value carries over from one call to the next: a <code class="docutils literal notranslate"><span class="pre">GlobalSemaphoreParameter</span></code> and a
+<code class="docutils literal notranslate"><span class="pre">GlobalSemaphoreBinding</span></code> (data-movement kernels only), and the semaphore, such as one from
+<code class="docutils literal notranslate"><span class="pre">ttnn.create_global_semaphore</span></code>, in <code class="docutils literal notranslate"><span class="pre">ProgramRunArgs.global_semaphore_args</span></code>. In the kernel:
+<code class="docutils literal notranslate"><span class="pre">GlobalSemaphore(global_sem::&lt;accessor_name&gt;)</span></code>.</p></li>
 <li><p><strong>Private scratch memory</strong>: a <code class="docutils literal notranslate"><span class="pre">ScratchpadSpec</span></code> and a <code class="docutils literal notranslate"><span class="pre">ScratchpadBinding</span></code>. In the kernel:
 <code class="docutils literal notranslate"><span class="pre">Scratchpad&lt;T&gt;(scratch::&lt;accessor_name&gt;)</span></code>.</p></li>
 </ul>
@@ -483,9 +487,9 @@ of the tensor, whichever view is bound.</p>
 <h2>Calls and the program cache<a class="headerlink" href="#calls-and-the-program-cache" title="Permalink to this heading"></a>
 </h2>
 <p>The first call with a given program compiles its kernels and sets it up on the device. A later call with the same
-program only writes the new values: argument values and tensors can change from call to call without a recompile.
-<code class="docutils literal notranslate"><span class="pre">ttnn.experimental.prepare_generic_op</span></code> takes the same arguments, compiles the program and puts it in the cache without
-running it.</p>
+program only writes the new values: argument values, tensors and global semaphores can change from call to call without
+a recompile. <code class="docutils literal notranslate"><span class="pre">ttnn.experimental.prepare_generic_op</span></code> takes the same arguments, compiles the program and puts it in the
+cache without running it.</p>
 <p>The cache key is a hash of the whole <code class="docutils literal notranslate"><span class="pre">ProgramSpec</span></code>, combined with the devices it runs on, apart from
 <code class="docutils literal notranslate"><span class="pre">ProgramSpec.name</span></code>, <code class="docutils literal notranslate"><span class="pre">WorkUnitSpec.name</span></code> and the tensor fields that a parameter’s <code class="docutils literal notranslate"><span class="pre">TensorSpecRelaxations</span></code> allow
 to differ. So renaming or reordering kernels or buffers gives a new cache entry. <code class="docutils literal notranslate"><span class="pre">generic_op</span></code> computes that hash on
@@ -496,12 +500,13 @@ process. A kernel given as <code class="docutils literal notranslate"><span clas
 could give two different programs the same cache entry.</p>
 <p>Every call checks its run args against the spec before Metal sees them: each kernel gets exactly the runtime arguments
 and arrays it declares, each array with its declared length, each tensor parameter gets a tensor from <code class="docutils literal notranslate"><span class="pre">io_tensors</span></code>
-that matches it, and each dataflow buffer (DFB) size override names a buffer of the spec, at most once and with no size
-of 0. Whether every node got its values is checked on later calls only when <code class="docutils literal notranslate"><span class="pre">ttnn.CONFIG.validate_program_args</span></code> is on,
-which it is not by default; with it off, a node that a later call leaves out keeps its previous values. A DFB size
-override in <code class="docutils literal notranslate"><span class="pre">ProgramRunArgs.dfb_run_overrides</span></code> stays in effect for later calls that reuse the cached program,
-including calls with an equal spec from other code, until a call changes it. <code class="docutils literal notranslate"><span class="pre">prepare_generic_op</span></code> with a program that
-is already cached applies its run args to it the same way, even if the preparation then fails.</p>
+that matches it, each GlobalSemaphore parameter gets a global semaphore on the MeshDevice the program runs on, and each
+dataflow buffer (DFB) size override names a buffer of the spec, at most once and with no size of 0. Whether every node
+got its values is checked on later calls only when <code class="docutils literal notranslate"><span class="pre">ttnn.CONFIG.validate_program_args</span></code> is on, which it is not by
+default; with it off, a node that a later call leaves out keeps its previous values. A DFB size override in
+<code class="docutils literal notranslate"><span class="pre">ProgramRunArgs.dfb_run_overrides</span></code> stays in effect for later calls that reuse the cached program, including calls with
+an equal spec from other code, until a call changes it. <code class="docutils literal notranslate"><span class="pre">prepare_generic_op</span></code> with a program that is already cached
+applies its run args to it the same way, even if the preparation then fails.</p>
 </section>
 <section id="running-on-a-mesh">
 <h2>Running on a mesh<a class="headerlink" href="#running-on-a-mesh" title="Permalink to this heading"></a>
@@ -559,15 +564,15 @@ leaves the counting to the kernel’s own calls. TT-NN’s factories pass it in 
 kernels, where the implicit counting would acknowledge one entry more than the kernel’s own pops; when you port a TT-NN
 kernel, keep the flag if its factory sets it.</p>
 <p>Some features of the <code class="docutils literal notranslate"><span class="pre">ProgramDescriptor</span></code> form are not available in the <code class="docutils literal notranslate"><span class="pre">ProgramSpec</span></code> form yet, such as global
-circular buffers, fabric connections and per-core allocated tensors. From Python, global semaphores are not available
-yet either, and a semaphore always starts at 0. Programs that need any of these stay on <code class="docutils literal notranslate"><span class="pre">ttnn.generic_op</span></code>.</p>
+circular buffers, fabric connections and per-core allocated tensors. From Python, a <code class="docutils literal notranslate"><span class="pre">SemaphoreSpec</span></code>’s semaphore always
+starts at 0. Programs that need any of these stay on <code class="docutils literal notranslate"><span class="pre">ttnn.generic_op</span></code>.</p>
 </section>
 <section id="more-examples">
 <h2>More examples<a class="headerlink" href="#more-examples" title="Permalink to this heading"></a>
 </h2>
 <p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py">test_generic_op_program_spec.py</a> builds programs with two inputs, array arguments, aliased buffers, buffers on a sharded
-tensor’s memory, semaphores, the mesh form and, on Quasar, a compute kernel with two threads. The API reference lists
-the arguments of <a class="reference internal" href="api/ttnn.experimental.generic_op.html#ttnn.experimental.generic_op" title="ttnn.experimental.generic_op"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.experimental.generic_op()</span></code></a>.</p>
+tensor’s memory, semaphores, global semaphores, the mesh form and, on Quasar, a compute kernel with two threads. The API
+reference lists the arguments of <a class="reference internal" href="api/ttnn.experimental.generic_op.html#ttnn.experimental.generic_op" title="ttnn.experimental.generic_op"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.experimental.generic_op()</span></code></a>.</p>
 </section>
 </section>
 

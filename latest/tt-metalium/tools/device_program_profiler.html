@@ -359,6 +359,15 @@
 <p class="admonition-title">Note</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN</span></code> annotation introduces some overhead. Use it selectively in performance-critical sections, and be cautious when interpreting timings for code with many <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN</span></code> annotations.</p>
 </div>
+<p>To keep a zone in the source but profile it only on some builds or cores, use <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedNIf(zone_name,</span> <span class="pre">active)</span></code>, where <code class="docutils literal notranslate"><span class="pre">active</span></code> is a constant expression (for example a compile-time argument of the kernel). When it is false the zone is compiled out of the kernel: no code, no markers, no room taken in the profiler buffer. A condition that is only known at run time does not compile; the streaming profiler’s <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedNIf</span></code> is the one that decides at run time.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">profile_loop</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_compile_time_arg_val</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="n">DeviceZoneScopedNIf</span><span class="p">(</span><span class="s">"MyLoop"</span><span class="p">,</span><span class="w"> </span><span class="n">profile_loop</span><span class="p">);</span>
+<span class="w">    </span><span class="c1">// Kernel code, profiled only on the cores built with the argument set</span>
+<span class="p">}</span>
+</pre></div>
+</div>
 </section>
 <section id="controlling-profiling-from-host-code">
 <h2>Controlling Profiling from Host Code<a class="headerlink" href="#controlling-profiling-from-host-code" title="Permalink to this heading"></a>
