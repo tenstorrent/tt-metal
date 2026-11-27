@@ -20,3 +20,7 @@
 {"event":"test_run","result":"pass","detail":"acceptance 17/17 dev+prod, golden 42 pass / 27 xfail. Kernel ns: Q2227 803, Q2191 1599, Q2229 1577, Q2203 1628, Q2185 35800, Q2187 8087, P22 2792, P39 17738","ts":"2026-11-26T19:19:20-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T05:21:53-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T05:59:25-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"debug-ttnn-op","args":"numerical mismatch: bf8b output beyond one quantization step of host rendering on 0.05% of values","ts":"2026-11-27T06:06:35-05:00"}
+{"event":"hypothesis","detail":"bf8b default packer rounds/truncates differently from host from_torch; when a group max rounds up past a power of two on the host, the host exponent shifts and values differ by up to 2 steps. Mitigation per design: bfp8_pack_precise=True","ts":"2026-11-27T06:06:35-05:00"}
+{"event":"device_print_observation","detail":"host-side probe Q2197: 3 bad groups, all with gmax=1.9921875 (0x3FFF bf16). Device rounds max to 2.0 (shared exponent +1, step doubles); host clamps to 1.984375 keeping exponent. Original hypothesis direction wrong: device rounds, host does not overflow exponent.","ts":"2026-11-27T06:07:34-05:00"}
+{"event":"fix_applied","detail":"bfp8_pack_precise=True for bfloat8_b outputs (Plan field, in cache key via output dtype); Q2197/Q2187/P39 pass","ts":"2026-11-27T06:08:06-05:00"}

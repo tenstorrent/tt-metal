@@ -68,6 +68,7 @@ class Plan:
     cb_input_bytes: int
     cb_output_bytes: int
     fp32_dest_acc_en: bool
+    bfp8_pack_precise: bool
     cores: tuple[CoreWork, ...]
 
 
@@ -183,6 +184,7 @@ def _plan(input_tensor, output_dtype, knobs: Knobs = Knobs()) -> Plan:
         cb_input_bytes=pipeline_depth * block_tiles * in_page_bytes,
         cb_output_bytes=pipeline_depth * block_tiles * out_page_bytes,
         fp32_dest_acc_en=fp32_dest_acc_en,
+        bfp8_pack_precise=output_dtype == ttnn.bfloat8_b,
         cores=tuple(cores),
     )
 
@@ -270,7 +272,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan: Plan) -> ttnn.P
         compile_time_args=[CB_INPUT_TILES, CB_OUTPUT_TILES],
         runtime_args=compute_rt,
         common_runtime_args=[plan.block_tiles],
-        config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=plan.fp32_dest_acc_en),
+        config=ttnn.ComputeConfigDescriptor(
+            fp32_dest_acc_en=plan.fp32_dest_acc_en, bfp8_pack_precise=plan.bfp8_pack_precise
+        ),
     )
 
     kernels = [None, None, None]
