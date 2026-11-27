@@ -52,6 +52,17 @@ RingSDPAFwDeviceOperation::tensor_return_value_t RingSDPAFwDeviceOperation::crea
     return outputs;
 }
 
+std::vector<tt::tt_metal::TensorTopology> RingSDPAFwDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*attrs*/, const tensor_args_t& tensor_args) {
+    std::vector<tt::tt_metal::TensorTopology> topologies;
+    topologies.reserve(2U * tensor_args.chunks.size());
+    for (const auto& chunk : tensor_args.chunks) {
+        topologies.push_back(chunk.output.tensor_topology());
+        topologies.push_back(chunk.intermediates.tensor_topology());
+    }
+    return topologies;
+}
+
 }  // namespace ttml::metal::ops::ring_sdpa_fw
 
 namespace ttnn::prim {

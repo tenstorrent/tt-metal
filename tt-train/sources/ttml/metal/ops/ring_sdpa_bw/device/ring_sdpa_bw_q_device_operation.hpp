@@ -29,6 +29,10 @@ struct RingSDPABwQDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    // The outputs are the caller's buffers: each keeps its own label instead of the one TTNN merges from the inputs.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttml::metal::ops::ring_sdpa_bw::q

@@ -613,3 +613,118 @@ TEST_F(RingSDPAChunkTest, ValidationRejectsChunksWhoseSpecsDifferFromChunkZero) 
             RingLoadBalancing::ZigZag),
         ThrowsMessage<std::runtime_error>(HasSubstr("Chunk 1 'grad_key'")));
 }
+
+namespace {
+
+tt::tt_metal::TensorTopology seq_sharded_label(const ttnn::Tensor& like, const RingSetup& ring) {
+    using tt::tt_metal::distributed::MeshMapperConfig;
+    ttsl::SmallVector<MeshMapperConfig::Placement> placements(ring.mesh_shape.dims(), MeshMapperConfig::Replicate{});
+    placements[ring.ring_axis] = MeshMapperConfig::Shard{2};
+    return tt::tt_metal::TensorTopology(ring.mesh_shape, placements, like.tensor_topology().mesh_coords());
+}
+
+void relabel(const tt::tt_metal::TensorTopology& label, std::vector<ttnn::Tensor> tensors) {
+    for (auto& tensor : tensors) {
+        tensor.update_tensor_topology(label);
+    }
+}
+
+void expect_fw_keeps_caller_labels(
+    const RingSetup& ring, const std::array<Chunk, 2>& data, std::vector<ttnn::Tensor>& keep_alive) {
+    const std::vector<ttml::metal::RingSDPAFwChunk> chunks{upload_fw_chunk(data[0]), upload_fw_chunk(data[1])};
+    const auto label = seq_sharded_label(chunks[0].query, ring);
+    std::vector<tt::tt_metal::TensorTopology> before;
+    for (const auto& chunk : chunks) {
+        keep(keep_alive, chunk);
+        relabel(label, {chunk.query, chunk.key, chunk.value});
+        before.insert(before.end(), {chunk.output.tensor_topology(), chunk.intermediates.tensor_topology()});
+        ASSERT_NE(before.back(), label);
+    }
+    ttnn::prim::ttml_ring_sdpa_fw(
+        chunks,
+        ring.ring_size,
+        ring.ring_axis,
+        /*step=*/1U,
+        AttentionMaskType::Causal,
+        RingShiftDirection::Backward,
+        RingLoadBalancing::ZigZag);
+    for (uint32_t i = 0; i < 2; ++i) {
+        EXPECT_EQ(chunks[i].output.tensor_topology(), before[2 * i]) << "chunk " << i << " output";
+        EXPECT_EQ(chunks[i].intermediates.tensor_topology(), before[2 * i + 1]) << "chunk " << i << " intermediates";
+    }
+}
+
+std::vector<ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQChunk> to_q_chunks(
+    const std::vector<ttml::metal::RingSDPABwChunk>& chunks) {
+    std::vector<ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQChunk> q_chunks;
+    for (const auto& chunk : chunks) {
+        q_chunks.push_back(
+            {.grad_output = chunk.grad_output,
+             .attn_output = chunk.attn_output,
+             .query = chunk.query,
+             .key = chunk.key,
+             .value = chunk.value,
+             .intermediates = chunk.intermediates,
+             .grad_query = chunk.grad_query});
+    }
+    return q_chunks;
+}
+
+void expect_bw_keeps_caller_labels(
+    const RingSetup& ring, const std::array<Chunk, 2>& data, std::vector<ttnn::Tensor>& keep_alive) {
+    const std::vector<ttml::metal::RingSDPABwChunk> chunks{upload_bw_chunk(data[0]), upload_bw_chunk(data[1])};
+    const auto label = seq_sharded_label(chunks[0].query, ring);
+    std::vector<tt::tt_metal::TensorTopology> before;
+    for (const auto& chunk : chunks) {
+        keep(keep_alive, chunk);
+        relabel(
+            label, {chunk.grad_output, chunk.attn_output, chunk.query, chunk.key, chunk.value, chunk.intermediates});
+        before.insert(
+            before.end(),
+            {chunk.grad_query.tensor_topology(), chunk.grad_key.tensor_topology(), chunk.grad_value.tensor_topology()});
+        ASSERT_NE(before.back(), label);
+    }
+    constexpr auto kMask = AttentionMaskType::Causal;
+    constexpr auto kDirection = RingShiftDirection::Backward;
+    constexpr auto kBalancing = RingLoadBalancing::ZigZag;
+    const auto q_outputs = ttnn::prim::ttml_ring_sdpa_bw_q(
+        to_q_chunks(chunks), ring.ring_size, ring.ring_axis, /*step=*/1U, kMask, kDirection, kBalancing);
+    EXPECT_EQ(q_outputs.u_scaler.tensor_topology(), label) << "u_scaler follows the query";
+    ttnn::prim::ttml_ring_sdpa_bw_kv(
+        {to_kv_chunk(chunks[0]), to_kv_chunk(chunks[1])},
+        q_outputs.u_scaler,
+        ring.ring_size,
+        ring.ring_axis,
+        /*step=*/1U,
+        kMask,
+        kDirection,
+        kBalancing);
+    for (uint32_t i = 0; i < 2; ++i) {
+        EXPECT_EQ(chunks[i].grad_query.tensor_topology(), before[3 * i]) << "chunk " << i << " grad_query";
+        EXPECT_EQ(chunks[i].grad_key.tensor_topology(), before[3 * i + 1]) << "chunk " << i << " grad_key";
+        EXPECT_EQ(chunks[i].grad_value.tensor_topology(), before[3 * i + 2]) << "chunk " << i << " grad_value";
+    }
+}
+
+}  // namespace
+
+// The ops return the caller's buffers: TTNN must not relabel them with the label it merges from the inputs.
+TEST_F(RingSDPAChunkTest, CallerBuffersKeepTheirTopologyOnCacheMissAndHit) {
+    const auto ring = ring_setup();
+    auto& device = ttml::autograd::ctx().get_device();
+    device.clear_program_cache();
+    std::vector<ttnn::Tensor> keep_alive;
+    for (uint32_t pass = 0; pass < 2; ++pass) {
+        SCOPED_TRACE(fmt::format("pass {}", pass));
+        const auto entries_before = device.num_program_cache_entries();
+        const auto data = make_chunk_inputs(500U + pass);
+        expect_fw_keeps_caller_labels(ring, data, keep_alive);
+        expect_bw_keeps_caller_labels(ring, data, keep_alive);
+        if (pass == 0) {
+            EXPECT_GT(device.num_program_cache_entries(), entries_before) << "first launch must build programs";
+        } else {
+            EXPECT_EQ(device.num_program_cache_entries(), entries_before)
+                << "second launch must hit the program cache";
+        }
+    }
+}
