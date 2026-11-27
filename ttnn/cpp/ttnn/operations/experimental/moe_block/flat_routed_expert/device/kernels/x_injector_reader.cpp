@@ -19,7 +19,7 @@
 // are not read (their tiles are padding: their outputs are never written back). Named CT args: x_row_major_cb (RM_CB),
 // x_page_bytes (the token row's bytes / PPR), row_chunks_per_read_barrier (BATCH), token_index_arg (the runtime-arg
 // index of the token index address, x_indexed), x_pages_per_row (PPR); flat_options: NUM_EXPERTS = local_experts, MT =
-// row_tiles_per_sub_block, NSB = super_blocks_per_sub_block (super-blocks per row)
+// x_row_tiles (an x block's row tiles), NSB = super_blocks_per_sub_block (super-blocks per row)
 // x_indexed: flat row r (region space) reads x row token_index[r] (x = the all-gathered tokens rather than a dispatch
 // buffer). Each sub-block's MT x 32 indices are read once (one small read + barrier) into this RISC's schedule scratch
 // (free after load_schedule).
@@ -38,7 +38,7 @@ void kernel_main() {
     constexpr uint32_t rm_cb = get_named_compile_time_arg_val("x_row_major_cb");
     constexpr uint32_t row_bytes = get_named_compile_time_arg_val("x_page_bytes");
     constexpr uint32_t num_e = flat_options::local_experts;
-    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t mt = flat_options::x_row_tiles;  // (the x path's sub-blocks: to_x_schedule)
     constexpr uint32_t nsb = flat_options::super_blocks_per_sub_block;
     constexpr uint32_t batch = get_named_compile_time_arg_val("row_chunks_per_read_barrier");
     constexpr uint32_t sbt = flat_options::super_block_tiles;
@@ -74,6 +74,7 @@ void kernel_main() {
     // the tilizer gets this relay's super-block count in CB 6.
     ExpertSchedule schedule;
     load_schedule<num_e>(schedule, 3, schedule_scratch(ScratchOwner::Brisc));
+    to_x_schedule(schedule);
     {
         const uint32_t tot = schedule.total_sub_blocks * nsb;
         cb_reserve_back(tt::CBIndex::c_6, 1);

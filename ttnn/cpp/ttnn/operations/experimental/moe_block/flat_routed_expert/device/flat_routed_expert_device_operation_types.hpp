@@ -20,8 +20,9 @@ constexpr uint32_t kRelayWordsBytes = 16;
 
 // The layout / program choices a caller makes for the flat routed expert: part of the plan cache key and of every
 // program hash. -1: unset (the plan's own choice). The plan itself is fixed: every gate/up core reads its own weight
-// blocks on NOC0 (two reads in flight, pieces of at least 6 KB), even gate/up and down splits, x read once by one
-// helper relay a rectangle and fed along unicast snakes; an expert is pinned only at 8 x the next one's rows.
+// blocks on NOC0 (one read in flight at 16+ local experts with whole-tile gate / up, else two; pieces of at least 6
+// KB), even gate/up and down splits, x read once by one helper relay a rectangle and fed along unicast snakes; an
+// expert is pinned only at 8 x the next one's rows.
 struct FlatLayoutOptions {
     // the arena's L1 budget, bytes a core (-1: the L1 bank). The plan fits it: 128-row sub-blocks with 3 down-core h
     // buffers, then 2 h buffers, then fewer sub-block rows (the MoE block: the combine's arena)
@@ -32,6 +33,10 @@ struct FlatLayoutOptions {
     // h's data format after gate/up (h_local on the gate/up cores, the down cores' h CB, the h chain between them):
     // bf16 (else bfp8, the default). Doubles h's L1 a buffer.
     bool h_bf16 = false;
+    // Let the planner grow the gate/up cores' x ring into the arena's spare L1 (plans with row passes and whole-tile
+    // gate/up only): more x can then arrive ahead of the compute. Off keeps the ring the planner first picked, leaving
+    // that L1 free - the combine turns it off for its landing pool.
+    bool x_ring_fill = true;
 
     // the tile bytes of x / h in these formats
     uint32_t x_tile() const { return x_bf16 ? 2048u : 1088u; }

@@ -60,6 +60,8 @@ constexpr uint32_t super_blocks_per_sub_block = get_named_compile_time_arg_val("
 constexpr uint32_t x_block_k_tiles = get_named_compile_time_arg_val("x_block_k_tiles");
 // x pieces a gate/up core's x block arrives in (the x arrival semaphore counts pieces)
 constexpr uint32_t x_chain_pieces = get_named_compile_time_arg_val("x_chain_pieces");
+// unicast VC of the x writes (the primaries' into the snake heads, the snake's forwarding): their own
+constexpr uint32_t x_vc = get_named_compile_time_arg_val("x_vc");
 // semaphore: the pieces of x that arrived in a gate/up core's x ring (on the head from the primary relay, else from the
 // predecessor); and the count of x blocks the core's successor freed (the forwarder's, on the predecessor)
 constexpr uint32_t x_arrived_sem = get_named_compile_time_arg_val("x_arrived_sem");
@@ -103,9 +105,13 @@ constexpr bool half_width_gate_up = get_named_compile_time_arg_val("half_width_g
 constexpr uint32_t gate_up_units = get_named_compile_time_arg_val("gate_up_units");
 // h tiles a gate/up core produces per row with 16-column units
 constexpr uint32_t gate_up_units_h_tiles = get_named_compile_time_arg_val("gate_up_units_h_tiles");
-// row passes: row tiles per pass when DEST holds fewer than a whole sub-block's gate/up tiles (0: one pass)
-constexpr uint32_t row_pass_rows = get_named_compile_time_arg_val("row_pass_rows");
-// x blocks the gate/up core's x ring holds (row passes re-read x from it)
+// row passes: row tiles a pass when DEST holds fewer than a whole sub-block's gate/up tiles (0: one pass)
+constexpr uint32_t row_tiles_per_pass = get_named_compile_time_arg_val("row_tiles_per_pass");
+// row tiles of an x block (the x path's unit): a row pass's with row passes (each pass waits for, and frees, its own
+// x blocks), else a sub-block's
+constexpr uint32_t x_row_tiles = get_named_compile_time_arg_val("x_row_tiles");
+constexpr uint32_t x_rows_per_sub_block = x_row_tiles * 32;
+// x blocks (of x_row_tiles row tiles) the gate/up core's x ring holds
 constexpr uint32_t x_ring_blocks = get_named_compile_time_arg_val("x_ring_blocks");
 
 // ---- down and y ----

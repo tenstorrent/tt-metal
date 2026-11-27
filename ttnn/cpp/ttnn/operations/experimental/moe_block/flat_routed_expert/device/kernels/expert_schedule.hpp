@@ -117,12 +117,28 @@ struct ExpertSchedule {
     uint8_t load_expert[flat_options::max_experts];  // its local expert
     uint8_t load_region[flat_options::max_experts];  // its ring region
     uint32_t max_tokens = 0;                         // the most tokens of an entry
+    // rows a sub-block in this schedule's unit: the compute's (flat_options::rows_per_sub_block), or the x path's
+    // (x_rows_per_sub_block) once to_x_schedule has converted it. The row-tile helpers below use it, so they always
+    // count in the schedule's own unit.
+    uint32_t rows_per_sub_block = flat_options::rows_per_sub_block;
 };
 
-// Row tiles holding tokens in entry `entry`'s last sub-block.
+// Row tiles holding tokens in entry `entry`'s last sub-block (of the schedule's rows_per_sub_block).
 inline uint32_t last_sub_block_row_tiles(const ExpertSchedule& schedule, uint32_t entry) {
-    const uint32_t rows = schedule.tokens[entry] - (schedule.sub_blocks[entry] - 1u) * flat_options::rows_per_sub_block;
+    const uint32_t rows = schedule.tokens[entry] - (schedule.sub_blocks[entry] - 1u) * schedule.rows_per_sub_block;
     return (rows + kTileRows - 1) / kTileRows;
+}
+
+// The x path's view of a schedule: every entry's sub-blocks counted at flat_options::x_rows_per_sub_block rows (with
+// row passes, a compute sub-block's x arrives as one x sub-block a pass, in pass order).
+inline void to_x_schedule(ExpertSchedule& schedule) {
+    schedule.rows_per_sub_block = flat_options::x_rows_per_sub_block;
+    schedule.total_sub_blocks = 0;
+    for (uint32_t entry = 0; entry < schedule.entries; ++entry) {
+        schedule.sub_blocks[entry] =
+            (schedule.tokens[entry] + flat_options::x_rows_per_sub_block - 1) / flat_options::x_rows_per_sub_block;
+        schedule.total_sub_blocks += schedule.sub_blocks[entry];
+    }
 }
 
 // Row tiles holding tokens in the schedule's sub-block `sub_block` (counted over all entries, in schedule order): a
@@ -131,11 +147,11 @@ inline uint32_t sub_block_row_tiles(const ExpertSchedule& schedule, uint32_t sub
     for (uint32_t entry = 0; entry < schedule.entries; ++entry) {
         if (sub_block < schedule.sub_blocks[entry]) {
             return sub_block + 1u == schedule.sub_blocks[entry] ? last_sub_block_row_tiles(schedule, entry)
-                                                                : kSubBlockRowTiles;
+                                                                : schedule.rows_per_sub_block / kTileRows;
         }
         sub_block -= schedule.sub_blocks[entry];
     }
-    return kSubBlockRowTiles;
+    return schedule.rows_per_sub_block / kTileRows;
 }
 
 // The loads' ring regions from the order the loads retire in (see Ring regions); false if some load would wait on a

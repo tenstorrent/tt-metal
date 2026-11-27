@@ -9,12 +9,16 @@
 namespace ttnn::operations::experimental::moe_block::flat_routed_expert {
 
 std::vector<uint32_t> FlatLayoutOptions::key() const {
-    return {static_cast<uint32_t>(arena_bytes), x_bf16 ? 1u : 0u, h_bf16 ? 1u : 0u};
+    return {static_cast<uint32_t>(arena_bytes), x_bf16 ? 1u : 0u, h_bf16 ? 1u : 0u, x_ring_fill ? 1u : 0u};
 }
 
 std::string FlatLayoutOptions::str() const {
     return fmt::format(
-        "arena_bytes {}, x {}, h {}", arena_bytes, x_bf16 ? "bf16" : "bfp8", h_bf16 ? "bf16" : "bfp8");
+        "arena_bytes {}, x {}, h {}, x ring {}",
+        arena_bytes,
+        x_bf16 ? "bf16" : "bfp8",
+        h_bf16 ? "bf16" : "bfp8",
+        x_ring_fill ? "growth on" : "growth off");
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::flat_routed_expert

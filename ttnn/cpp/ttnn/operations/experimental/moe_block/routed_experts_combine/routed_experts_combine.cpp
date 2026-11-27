@@ -61,6 +61,8 @@ fre::FlatRoutedExpertConfig base_flat_config(MoEBlockResources& res, uint32_t m,
         layout);
     cfg.activation = routed_activation_code(dims.routed_expert_activation);  // (the model's, from the resources)
     cfg.down_fp32 = true;
+    // (no x ring growth: the combine's landing pool takes the flat expert cores' spare L1)
+    cfg.layout.x_ring_fill = false;
     return cfg;
 }
 

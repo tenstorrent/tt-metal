@@ -17,8 +17,8 @@
 // tiles, row tile major in the gate/up cores' x ring) goes out as MT unicast pieces into the rectangle's snake head,
 // once the whole super-block's ring slots are free there (the head's freed word); the gate/up cores forward it along
 // the snake (gate_up_core_reader.cpp / gate_up_x_forwarder.cpp). The head's XARR moves by a batch's pieces once its
-// writes are acknowledged. Named CT args (flat_options): MT = row_tiles_per_sub_block, TILE_BYTES = x_tile_bytes,
-// X_SLOTS = x_ring_blocks, XARR_SEM = x_arrived_sem, KBLK = x_block_k_tiles, NUM_E = local_experts, NSB =
+// writes are acknowledged. Named CT args (flat_options): MT = x_row_tiles (an x block's row tiles), TILE_BYTES =
+// x_tile_bytes, X_SLOTS = x_ring_blocks, XARR_SEM = x_arrived_sem, KBLK = x_block_k_tiles, NUM_E = local_experts, NSB =
 // super_blocks_per_sub_block
 // RT: 0 x ring address, 1 snake head xy, 2 the head's freed word address (here), 3 helper 0 xy, 4 landing rings
 //     address, 5 landing slots, 6 helper 1 xy, 7.. the expert_schedule.hpp args
@@ -26,12 +26,13 @@
 #include <stdint.h>
 constexpr uint32_t kXnh = 2;  // the helper relays feeding a primary
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "flat_options.hpp"
 #include "expert_schedule.hpp"
 
 void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
-    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t mt = flat_options::x_row_tiles;
     constexpr uint32_t tb = flat_options::x_tile_bytes;
     constexpr uint32_t x_slots = flat_options::x_ring_blocks;
     constexpr uint32_t xarr_sem = flat_options::x_arrived_sem;
@@ -56,6 +57,7 @@ void kernel_main() {
     constexpr uint32_t schedule_args = 7;
     ExpertSchedule schedule;
     load_schedule<num_e>(schedule, schedule_args, schedule_scratch(ScratchOwner::Ncrisc));
+    to_x_schedule(schedule);
     const uint32_t num_sb = schedule.total_sub_blocks * nsb;
     uint32_t sent = 0;
     constexpr uint32_t kChainDepth = 4;  // batches of head writes in flight (transaction ids 1..kChainDepth)
@@ -88,9 +90,9 @@ void kernel_main() {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])), hb + 1);
         const uint32_t src = land + (hh * land_slots + hb % land_slots) * sb_tiles * tb;
         // The whole super-block goes out as one batch once its last block's ring slot is free. Batches in flight are
-        // only counted into the head's XARR on retirement: every wait retires the acknowledged ones, else a compute
-        // that needs the whole ring (row passes: all Ht / KBLK blocks of a sub-block resident, GLM-5.3 24 of 24)
-        // never sees the last batch and never frees one (deadlock).
+        // counted into the head's XARR only when retired, so every wait retires the acknowledged ones: otherwise the
+        // compute could be waiting on blocks that have landed but are not yet counted, never free a ring slot, and
+        // this wait for a free slot would never end (deadlock).
         invalidate_l1_cache();
         while (sent + per_sb > *freed + x_slots) {
             chain_retire(kChainDepth);
@@ -101,6 +103,7 @@ void kernel_main() {
         chain_retire(kChainDepth - 1);  // (room for this batch's id)
         // (a short last sub-block: only its row tiles holding tokens go; the head's XARR still counts every piece)
         const uint32_t lr = sub_block_row_tiles(schedule, b / nsb);
+        ASSERT(lr >= 1 && lr <= mt);  // (the pieces stay within the block's ring slot)
         for (uint32_t k = 0; k < per_sb; ++k) {
             const uint32_t dst = ring + ((sent + k) % x_slots) * blk_bytes;
             for (uint32_t m = 0; m < lr; ++m) {
@@ -108,7 +111,10 @@ void kernel_main() {
                     src + (m * sbt + k * kblk) * tb,
                     get_noc_addr(hxy >> 16, hxy & 0xFFFF, dst + m * piece),
                     piece,
-                    1 + cb_iss % kChainDepth);
+                    1 + cb_iss % kChainDepth,
+                    write_cmd_buf,
+                    noc_index,
+                    flat_options::x_vc);
             }
         }
         ++cb_iss;

@@ -24,12 +24,13 @@
 //     chain head with a GATH increment there, once go >= v (counted by the down
 //     cores' coordinator).
 //
-// Named CT args: x_cb (X_CB), weight_cb (IN1_CB), h_local_cb (H_LOCAL_CB); flat_options: X_BLK_TILES = MT x
-//     x_block_k_tiles, SLOT_TILES = gate_up_block_tiles, NK_GU = gate_up_blocks_per_expert (weight blocks of a load,
-//     x blocks of a virtual expert), W_SLOTS = gate_up_weight_ring_blocks, MT = row_tiles_per_sub_block, H_TILE_BYTES
-//     = h_tile_bytes, NCC = gate_up_core_count, DATA_SEM = gate_up_data_sem, GO_SEM = go_sem, HBUF = h_buffers,
-//     XARR_SEM = x_arrived_sem, X_SLOTS = x_ring_blocks, NP = gate_up_tile_pairs, h_gather_sem_1 / _2 (the GATH ids
-//     of h buffers 1, 2), X_PIECES = x_chain_pieces (the x arrival semaphore counts pieces), NUM_E = local_experts
+// Named CT args: x_cb (X_CB), weight_cb (IN1_CB), h_local_cb (H_LOCAL_CB); flat_options: X_BLK_TILES = x_row_tiles x
+//     x_block_k_tiles (an x block), SLOT_TILES = gate_up_block_tiles, NK_GU = gate_up_blocks_per_expert (weight blocks
+//     of a load; x blocks of an x row group), W_SLOTS = gate_up_weight_ring_blocks, MT = row_tiles_per_sub_block,
+//     H_TILE_BYTES = h_tile_bytes, NCC = gate_up_core_count, DATA_SEM = gate_up_data_sem, GO_SEM = go_sem, HBUF =
+//     h_buffers, XARR_SEM = x_arrived_sem, X_SLOTS = x_ring_blocks, NP = gate_up_tile_pairs, h_gather_sem_1 / _2 (the
+//     GATH ids of h buffers 1, 2), X_PIECES = x_chain_pieces (the x arrival semaphore counts pieces), NUM_E =
+//     local_experts
 // RT: 0 the grant counter's sem id here, 1 column group CG, 2 NH (chain heads of the group), 3 the GATH sem id, 4
 //     h_all address, 5.. the expert_schedule.hpp args. Common args: the NH head xy
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
@@ -45,7 +46,9 @@ void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
     constexpr uint32_t x_cb = get_named_compile_time_arg_val("x_cb");
     constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
-    constexpr uint32_t x_blk = mt * flat_options::x_block_k_tiles;
+    // (x blocks: flat_options::x_row_tiles row tiles - a row pass's with row passes, to_x_schedule)
+    constexpr uint32_t xmt = flat_options::x_row_tiles;
+    constexpr uint32_t x_blk = xmt * flat_options::x_block_k_tiles;
     constexpr uint32_t in1_cb = get_named_compile_time_arg_val("weight_cb");
     constexpr uint32_t slot = flat_options::gate_up_block_tiles;
     constexpr uint32_t nk_gu = flat_options::gate_up_blocks_per_expert;
@@ -93,6 +96,7 @@ void kernel_main() {
     publish_schedule(schedule, tt::CBIndex::c_6);
     const uint32_t total_w = schedule.loads * nk_gu;  // gate/up loads
     const uint32_t num_v = schedule.total_sub_blocks;
+    uint32_t x_num_v = 0;  // (the x path's sub-blocks, below)
     volatile tt_l1_ptr uint32_t* data_sem = sem(data_sem_id);
     volatile tt_l1_ptr uint32_t* go_sem = sem(go_sem_id);
     volatile tt_l1_ptr uint32_t* xarr_sem = sem(xarr_sem_id);
@@ -106,22 +110,36 @@ void kernel_main() {
         for (uint32_t l = 0; l < schedule.loads; ++l) {
             mb[1 + l] = schedule.load_expert[l] | (uint32_t(schedule.load_region[l]) << 8);
         }
-        // then the x forwarder's: the entries' sub-blocks and their last one's row tiles holding tokens
+        // then the x forwarder's: the entries' x sub-blocks (to_x_schedule) and their last one's row tiles holding
+        // tokens
         volatile tt_l1_ptr uint32_t* xe = mb + 1 + schedule.loads;
         xe[0] = schedule.entries;
         for (uint32_t a = 0; a < schedule.entries; ++a) {
-            xe[1 + a] = schedule.sub_blocks[a] | (last_sub_block_row_tiles(schedule, a) << 16);
+            constexpr uint32_t xr = flat_options::x_rows_per_sub_block;
+            const uint32_t xs = (schedule.tokens[a] + xr - 1) / xr;
+            x_num_v += xs;
+            xe[1 + a] = xs | (((schedule.tokens[a] - (xs - 1) * xr + kTileRows - 1) / kTileRows) << 16);
         }
         *sem(flat_options::gate_up_mailbox_sem) = 1;
     }
-    grant(w_slots);  // every landing slot starts free
-    uint32_t granted = w_slots, pushed = 0;
+    // Start-up cap: grant at most gate_up_w_start landing slots (0: the whole ring), keeping the weight reads off the
+    // NoC while x ramps up, until the first x row group is in - its nk_gu x blocks (one a K block), or as many as the
+    // x ring holds if fewer: the compute may keep its first weight blocks until it has the rest of them, so the cap
+    // must lift once no more x can arrive without it (else neither side moves).
+    constexpr uint32_t w_start = get_named_compile_time_arg_val("gate_up_w_start");
+    constexpr uint32_t w_first = w_start && w_start < w_slots ? w_start : w_slots;
     uint32_t x_pub = 0, x_cons = 0;
+    constexpr uint32_t w_lift = nk_gu < x_slots ? nk_gu : x_slots;  // (x blocks published that lift the cap)
+    auto w_cap = [&]() { return w_start == 0 || x_pub >= w_lift ? w_slots : w_first; };
+    grant(w_first);  // every landing slot starts free
+    uint32_t granted = w_first, pushed = 0;
     uint32_t h_sent = 0, h_pending = 0;
 
     while (h_sent < num_v || pushed < total_w) {
         invalidate_l1_cache();
-        while (granted < total_w && cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1) * slot)) {
+        // (granted and not yet freed <= the cap: the ring's free space from the write pointer leaves w_slots - cap)
+        while (granted < total_w &&
+               cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1 + w_slots - w_cap()) * slot)) {
             grant(1);
             ++granted;
         }
@@ -203,7 +221,7 @@ void kernel_main() {
     // x_cons follows compute at most a block a loop pass, so the loop can end (all h sent) with it short of the call's
     // blocks; the end count must be the total (the forwarder ends at fwd == (end - 1) x pieces: a short count left it
     // spinning past it - a 1-in-13k whole-model hang - or would end it before the successor has every block)
-    for (const uint32_t x_total = num_v * nk_gu; x_cons < x_total;) {
+    for (const uint32_t x_total = x_num_v * nk_gu; x_cons < x_total;) {
         invalidate_l1_cache();
         if (cb_pages_reservable_at_back(x_cb, (x_slots - (x_pub - x_cons) + 1) * x_blk)) {
             ++x_cons;

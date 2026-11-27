@@ -216,7 +216,8 @@ FlatRoutedExpertPlan make_plan(
     const FlatRoutedExpertConfig& cfg,
     uint32_t budget,
     uint32_t mt_max,
-    uint32_t hbuf_max) {
+    uint32_t hbuf_max,
+    uint32_t x_ring = 0) {
     auto* device = &mesh_device;
     FlatRoutedExpertPlan p;
     p.hidden = cfg.hidden;
@@ -285,7 +286,12 @@ FlatRoutedExpertPlan make_plan(
         }
         const uint32_t np = per / 2;
         const bool pairs = per % 2 == 0 && p.intermediate_tiles % np == 0 && (p.intermediate_tiles / np) % slots == 0;
-        for (uint32_t xs : {24u, 16u, 12u}) {
+        // (x_ring != 0: plan with exactly that ring size - the plan search's ring growth, below)
+        std::vector<uint32_t> ring_sizes = {24u, 16u, 12u};
+        if (x_ring != 0) {
+            ring_sizes = {x_ring};
+        }
+        for (uint32_t xs : ring_sizes) {
             const uint32_t dst =
                 pairs ? gu_dst(np, p.hidden_tiles, xs).first : gu_dst((per + 1) / 2, p.hidden_tiles, xs, true).first;
             const uint32_t mt_ = std::min(dst / per, mt_max);
@@ -672,6 +678,10 @@ FlatRoutedExpertPlan make_plan(
         p.dynamic_counts_bytes = 4 * dyn_half;
         p.static_l1_bytes = 0;  // (every CB is in the arena)
     }
+    if (x_ring != 0 && gu_bytes > budget) {  // (too large: an over-budget plan, which stops the search's ring growth)
+        p.arena_tiles = budget / 2048 + 1;
+        return p;
+    }
     TT_FATAL(gu_bytes <= budget, "flat_routed_expert: gate/up core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {
         if (p.hidden_tiles % t == 0 && t % kKBlk == 0) {
@@ -844,6 +854,24 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
             try {
                 auto p = make_plan(mesh_device, cfg, budget, mt, hbuf);
                 if (p.arena_tiles * 2048 <= budget) {
+                    // Grow the x ring into the spare L1, one block at a time, as long as the plan keeps its sub-block
+                    // rows and h buffers: more x can then arrive ahead of the compute. Only with row passes and whole
+                    // tile pairs - the 16-column-unit splits get slower with it.
+                    if (cfg.layout.x_ring_fill && p.gate_up_row_passes && p.units_per_core == 0) {
+                        for (uint32_t xs = p.x_ring_blocks + 1; xs <= 2 * p.gate_up_k_blocks; ++xs) {
+                            try {
+                                auto q = make_plan(mesh_device, cfg, budget, mt, hbuf, xs);
+                                if (q.arena_tiles * 2048 > budget || !q.gate_up_row_passes ||
+                                    q.row_tiles_per_sub_block != p.row_tiles_per_sub_block ||
+                                    q.down_h_buffers != p.down_h_buffers) {
+                                    break;
+                                }
+                                p = std::move(q);
+                            } catch (const std::exception&) {
+                                break;
+                            }
+                        }
+                    }
                     return p;
                 }
                 tried += fmt::format(
