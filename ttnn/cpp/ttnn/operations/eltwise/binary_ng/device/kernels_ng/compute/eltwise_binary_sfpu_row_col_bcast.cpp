@@ -46,33 +46,32 @@ ALWI void process_tile(
     using namespace ckernel;
     CircularBuffer exp_cb_out(cb_out);
 
-    // The row-broadcast operand is expanded by unary_bcast straight into its DEST slot: packing the
-    // expanded tile to L1 and copying it back would round NaN to inf and -0.0 to +0.0 in a 16-bit DEST.
-    // The host routes a row-broadcast operand that carries a pre-activation to the reader-broadcast kernels.
+    // The row-broadcast operand reaches DEST without a pack: see the invariant in eltwise_binary_sfpu_row_bcast.cpp.
 #if BCAST_INPUT  // ROW_A_COL_B
 #if HAS_ACTIVATIONS(LHS)
 #error "LLK row broadcast of LHS does not support LHS activations"
 #endif
-#define CB_PRE_BCAST cb_pre_rhs
-#define CB_POST_BCAST cb_post_rhs
+#define CB_PRE_COL cb_pre_rhs
+#define CB_POST_COL cb_post_rhs
     constexpr auto cb_row = tt::CBIndex::c_0;
     constexpr uint32_t row_dst_offset = 0;
 #else  // ROW_B_COL_A
 #if HAS_ACTIVATIONS(RHS)
 #error "LLK row broadcast of RHS does not support RHS activations"
 #endif
-#define CB_PRE_BCAST cb_pre_lhs
-#define CB_POST_BCAST cb_post_lhs
+#define CB_PRE_COL cb_pre_lhs
+#define CB_POST_COL cb_post_lhs
     constexpr auto cb_row = tt::CBIndex::c_1;
     constexpr uint32_t row_dst_offset = 1;
 #endif
     constexpr uint32_t col_dst_offset = 1 - row_dst_offset;
 
     CircularBuffer exp_cb_row(cb_row);
-    CircularBuffer exp_cb_post_bcast(CB_POST_BCAST);
+    CircularBuffer exp_cb_post_col(CB_POST_COL);
 
-    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
-    exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
+    // BCAST_OP is the reader's broadcast input, which is the column-held operand here, not the row broadcast.
+    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_COL), exp_cb_post_col, exp_cb_out, num_tiles_per_cycle);
+    exp_cb_post_col.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_cb_row.wait_front(num_tiles_per_cycle);
@@ -86,10 +85,10 @@ ALWI void process_tile(
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             unary_bcast<BroadcastType::ROW>(cb_row, i, i * 2 + row_dst_offset);
         }
-        reconfig_data_format_srca(cb_row, CB_POST_BCAST);
-        copy_init(CB_POST_BCAST);
+        reconfig_data_format_srca(cb_row, CB_POST_COL);
+        copy_init(CB_POST_COL);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(CB_POST_BCAST, i, i * 2 + col_dst_offset);
+            copy_tile(CB_POST_COL, i, i * 2 + col_dst_offset);
 
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
@@ -111,7 +110,7 @@ ALWI void process_tile(
         exp_cb_out.push_back(num_tiles_per_cycle);
         exp_cb_row.pop_front(num_tiles_per_cycle);
     }
-    exp_cb_post_bcast.pop_front(num_tiles_per_cycle);
+    exp_cb_post_col.pop_front(num_tiles_per_cycle);
 }
 
 void kernel_main() {

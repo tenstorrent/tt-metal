@@ -120,9 +120,7 @@ void kernel_main() {
 
     constexpr auto cb_out = tt::CBIndex::c_2;
 
-    // The broadcast operand is expanded by unary_bcast straight into its DEST slot: packing the expanded
-    // tile to L1 and copying it back would round NaN to inf and -0.0 to +0.0 in a 16-bit DEST. The host
-    // routes broadcast operands that carry a pre-activation to the reader-broadcast kernels instead.
+    // The broadcast operand reaches DEST without a pack: see the invariant in eltwise_binary_sfpu_row_bcast.cpp.
 #if SRC_BCAST
 #if HAS_ACTIVATIONS(LHS)
 #error "LLK column broadcast of LHS does not support LHS activations"

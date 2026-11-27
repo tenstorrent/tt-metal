@@ -24,8 +24,9 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_2;
     DataflowBuffer exp_dfb_out(cb_out);
 
-    // The broadcast operand is expanded by unary_bcast straight into its DEST slot: packing the expanded
-    // tile to L1 and copying it back would round NaN to inf and -0.0 to +0.0 in a 16-bit DEST.
+    // The broadcast operand reaches DEST without a pack: see the invariant in eltwise_binary_sfpu_row_bcast.cpp.
+    // DEST slots per tile: [0] = condition, [1] = true value, [2] = false value, stride 3. The second tensor
+    // goes to slot 1 (TTS) or 2 (TST); the scalar fills the remaining slot.
 #if WHERE_TTS
     constexpr uint32_t tensor_dst_offset = 1;
 #else

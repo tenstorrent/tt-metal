@@ -25,34 +25,34 @@ ALWI void process_tile(
     using namespace ckernel;
     DataflowBuffer exp_dfb_out(cb_out);
 
+    // DEST slots per tile: [0] = condition, [1] = true value, [2] = false value, stride 3.
 #if WHERE_TTS
     constexpr uint32_t tensor_dst_offset = 1;
 #else
     constexpr uint32_t tensor_dst_offset = 2;
 #endif
-    // The row-broadcast input is expanded by unary_bcast straight into its DEST slot: packing the expanded
-    // tile to L1 and copying it back would round NaN to inf and -0.0 to +0.0 in a 16-bit DEST.
+    // The row-broadcast input reaches DEST without a pack: see the invariant in eltwise_binary_sfpu_row_bcast.cpp.
 #if BCAST_INPUT  // ROW_A_COL_B: condition (A) is row-broadcast, B is held across the column
-#define CB_BCAST cb_in1
+#define CB_COL cb_in1
 #define CB_ROW cb_in0
     constexpr uint32_t row_dst_offset = 0;
-    constexpr uint32_t bcast_dst_offset = tensor_dst_offset;
+    constexpr uint32_t col_dst_offset = tensor_dst_offset;
 #else  // ROW_B_COL_A: B is row-broadcast, condition (A) is held across the column
-#define CB_BCAST cb_in0
+#define CB_COL cb_in0
 #define CB_ROW cb_in1
     constexpr uint32_t row_dst_offset = tensor_dst_offset;
-    constexpr uint32_t bcast_dst_offset = 0;
+    constexpr uint32_t col_dst_offset = 0;
 #endif
 
-    DataflowBuffer exp_dfb_bcast(CB_BCAST);
+    DataflowBuffer exp_dfb_col(CB_COL);
     DataflowBuffer exp_dfb_row(CB_ROW);
 
     // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
     // exactly once); process_tile is called per iteration, so it only re-inits the op here.
-    copy_init(CB_BCAST);
+    copy_init(CB_COL);
     BINARY_SFPU_INIT
 
-    exp_dfb_bcast.wait_front(num_tiles_per_cycle);
+    exp_dfb_col.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_dfb_row.wait_front(num_tiles_per_cycle);
@@ -64,10 +64,10 @@ ALWI void process_tile(
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             unary_bcast<BroadcastType::ROW>(CB_ROW, i, i * 3 + row_dst_offset);
         }
-        reconfig_data_format_srca(CB_ROW, CB_BCAST);
-        copy_init(CB_BCAST);
+        reconfig_data_format_srca(CB_ROW, CB_COL);
+        copy_init(CB_COL);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(CB_BCAST, i, i * 3 + bcast_dst_offset);
+            copy_tile(CB_COL, i, i * 3 + col_dst_offset);
             fill_tile_init();
 // TTS: scalar is false value, goes to dst_reg 2
 #if WHERE_TTS
@@ -103,7 +103,7 @@ ALWI void process_tile(
         exp_dfb_out.push_back(num_tiles_per_cycle);
         exp_dfb_row.pop_front(num_tiles_per_cycle);
     }
-    exp_dfb_bcast.pop_front(num_tiles_per_cycle);
+    exp_dfb_col.pop_front(num_tiles_per_cycle);
 }
 
 void kernel_main() {

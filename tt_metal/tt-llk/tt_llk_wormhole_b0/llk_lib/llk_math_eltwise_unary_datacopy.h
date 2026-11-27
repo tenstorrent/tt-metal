@@ -22,11 +22,21 @@ using namespace ckernel;
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 
 /**
- * @brief Whether a B2D broadcast moves SrcB with MOVB2D rather than ELWADD against a zeroed SrcA.
+ * @brief Whether a COL or SCALAR B2D broadcast moves SrcB with MOVB2D rather than ELWADD against a zeroed SrcA.
  *
- * MOVB2D writes SrcB datums to a 16-bit Dst unchanged, so NaN and -0.0 survive; ELWADD computes 0 + x in the FPU,
- * which turns -0.0 into +0.0 and does not keep NaN. ELWADD stays where MOVB2D cannot do the job: accumulating
- * (acc_to_dest) and widening into an FP32 Dst. UInt16 always takes MOVB2D, since ELWADD would treat it as a float.
+ * MOVB2D copies SrcB datums into a 16-bit Dst without arithmetic, so NaN survives. -0.0 survives only while
+ * ALU_ACC_CTRL_Zero_Flag_disabled_src is set; otherwise MOVB2D flushes every datum with a zero exponent to +0.0, so
+ * the caller owns the zero-flag state (unary_bcast_init sets it). ELWADD computes 0 + x in the FPU, which turns -0.0
+ * into +0.0 and does not follow IEEE754 for NaN (ISA doc ELWADD.md, functional-model note).
+ *
+ * ELWADD stays where MOVB2D cannot do the job: acc_to_dest needs the add, and MOVB2D writes a 16-bit Dst unless
+ * SrcAFmt is TF32, so it cannot widen into an FP32 Dst. UInt16 always takes MOVB2D, since ELWADD would treat it as a
+ * float.
+ *
+ * @note On Wormhole MOVB2D takes its exponent width and Dst16b/Dst32b choice from the SrcA format
+ * (ALU_FORMAT_SPEC_REG0_SrcA, or the override), not from SrcB's. Neither llk_unpack_A_init nor the datacopy init programs
+ * it, so the caller must leave SrcA configured with the broadcast operand's exponent width and not TF32, for example
+ * through reconfig_data_format(icb, icb) or hw_startup with icb as the SrcA operand.
  *
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam acc_to_dest: B2D broadcast accumulates into dest.
@@ -393,7 +403,8 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
  * @param rows_per_inst: Rows moved per instruction (selects single-row vs. multi-row addr mode and loop count).
  * @param total_rows: Total rows to move across the inner loop.
  * @param tensor_shape: Tile geometry; only the total face count is used today.
- * @param dst_format: Destination data format (DataFormat enum underlying value); selects UInt16 special-casing.
+ * @param dst_format: Destination data format (DataFormat enum underlying value); selects the UInt16/UInt8 A2D paths and,
+ *                    for COL/SCALAR B2D, MOVB2D vs ELWADD (see @ref eltwise_unary_b2d_uses_movb2d).
  */
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool is_int_fpu_en = false, bool acc_to_dest = false>
 inline void eltwise_unary_configure_mop(

@@ -25,8 +25,8 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-// A row-broadcast operand is expanded by unary_bcast straight into its DEST slot: packing the expanded tile to
-// L1 and copying it back would round NaN to inf and -0.0 to +0.0 in a 16-bit DEST.
+// A row-broadcast operand reaches DEST without a pack: see the invariant in
+// binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_row_bcast.cpp.
 template <bool is_bcast>
 ALWI void load_operand(const uint32_t dfb_id, const uint32_t dst_index) {
     if constexpr (is_bcast) {

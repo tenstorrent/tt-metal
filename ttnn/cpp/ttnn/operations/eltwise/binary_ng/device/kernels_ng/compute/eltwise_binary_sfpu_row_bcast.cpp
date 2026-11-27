@@ -46,9 +46,10 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_2;
     CircularBuffer exp_cb_out(cb_out);
 
-    // The broadcast operand is expanded by unary_bcast straight into its DEST slot: packing the expanded
-    // tile to L1 and copying it back would round NaN to inf and -0.0 to +0.0 in a 16-bit DEST. The host
-    // routes broadcast operands that carry a pre-activation to the reader-broadcast kernels instead.
+    // Invariant of every SFPU LLK-broadcast kernel (binary, where, ternary TTT): the broadcast operand goes from
+    // L1 through unary_bcast into its DEST slot with no pack in between, so NaN and -0.0 reach the SFPU op as
+    // they are; a bf16 pack from a 16-bit DEST would turn them into inf and +0.0. A pre-activation on that
+    // operand would need such a pack, so the host sends those cases to the reader-broadcast kernels.
 #if SRC_BCAST
 #if HAS_ACTIVATIONS(LHS)
 #error "LLK row broadcast of LHS does not support LHS activations"
