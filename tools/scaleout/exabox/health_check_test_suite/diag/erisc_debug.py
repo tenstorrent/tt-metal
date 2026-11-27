@@ -38,7 +38,7 @@ from .eth_status import pcie_gate_check, read_pcie_functions, resolve_triage_pyt
 from .model import PASS, SKIP, WARN, Check, Phase
 
 # Where the ETH FW release ELFs (eth_init-vX.Y.Z.elf) are provisioned on the host.
-DEFAULT_ERISC_ELF_DIR = Path("/opt/tenstorrent/eth-fw-elf")
+DEFAULT_ERISC_ELF_DIR = Path("/usr/local/share/exabox/eth-fw-elf")
 
 # A backstop, not the expected duration: four section compares, a PC read and a
 # boot_results read per ETH core.

@@ -69,7 +69,7 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 - `--bmc-api-url` / `--bmc-api-token` (default `$TT_BMC_API_URL` /
   `$TT_BMC_API_TOKEN`) feed the QSFP collector on every tier; without them it
   reads the FRU with ipmitool and collects no QSFP cages.
-- `--erisc-elf-dir` (default `/opt/tenstorrent/eth-fw-elf`) is the host
+- `--erisc-elf-dir` (default `/usr/local/share/exabox/eth-fw-elf`) is the host
   directory of ETH FW release ELFs the [ERISC debug phase](#erisc-debug-phase)
   decodes through, mounted read-only at the same path. Without it the phase
   names the ELF each chip needs and reads nothing.
@@ -647,14 +647,14 @@ report.
 
 The dump decodes through the ELF that the bh-erisc release of the chip's ETH FW
 publishes, `eth_init-vX.Y.Z.elf`. Nothing downloads it: the ELFs are provisioned
-on the host, in `--erisc-elf-dir` (default `/opt/tenstorrent/eth-fw-elf`). The
+on the host, in `--erisc-elf-dir` (default `/usr/local/share/exabox/eth-fw-elf`). The
 dump reads each chip's ETH FW version, looks for `eth_init-vX.Y.Z.elf` (or
 `eth_init_vX.Y.Z.elf`) there, and uses it only if the ELF's own `.fw_version`
 section says the same version. A chip whose ELF is not there is not inspected,
 and the dump and the report say which file it needs:
 
 ```
-ETH FW v1.14.0 on 32 device(s): needs eth_init-v1.14.0.elf, not found in /opt/tenstorrent/eth-fw-elf; not inspected
+ETH FW v1.14.0 on 32 device(s): needs eth_init-v1.14.0.elf, not found in /usr/local/share/exabox/eth-fw-elf; not inspected
 ```
 
 To provision a host, copy the release's `eth_init-vX.Y.Z.elf` into that
@@ -699,7 +699,7 @@ per core) and `erisc_debug.log` (command, exit code and stderr), so
 | `--bmc-user USER` | `$BMC_USER` | BMC user for sys-triage |
 | `--bmc-password PASS` | `$BMC_PASSWORD` | BMC password for sys-triage. Prefer the variable: a flag value is visible in the process list. |
 | `--skip-erisc-debug` | off | Skip the ERISC debug dump entirely |
-| `--erisc-elf-dir PATH` | `/opt/tenstorrent/eth-fw-elf` | ETH FW release ELFs (`eth_init-vX.Y.Z.elf`) for the ERISC debug dump. A chip whose ELF is not there is not inspected, and the phase names the ELF it needs. |
+| `--erisc-elf-dir PATH` | `/usr/local/share/exabox/eth-fw-elf` | ETH FW release ELFs (`eth_init-vX.Y.Z.elf`) for the ERISC debug dump. A chip whose ELF is not there is not inspected, and the phase names the ELF it needs. |
 | `--input-snapshot PATH` | — | Use a stored snapshot instead of calling tt-smi |
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
 | `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root. The deployment-test binary is looked up under `build_Release/`, `build/`, `build_Debug/` and `build_RelWithDebInfo/`, in that order (`DEPLOYMENT_BIN_CANDIDATES`). |

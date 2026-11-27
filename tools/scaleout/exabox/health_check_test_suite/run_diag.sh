@@ -111,7 +111,7 @@ Forwarded options (see diag_runner.py --help for details):
                          a flag value is visible in the process list)
   --skip-erisc-debug     Skip the ERISC debug dump
   --erisc-elf-dir PATH   ETH FW release ELFs for the ERISC debug dump
-                         (default: /opt/tenstorrent/eth-fw-elf)
+                         (default: /usr/local/share/exabox/eth-fw-elf)
 EOF
 }
 

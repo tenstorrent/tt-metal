@@ -26,7 +26,7 @@ IN_DIR="/tmp/hc-inputs"
 
 # The ETH FW release ELFs for the ERISC debug dump. Same default as
 # diag/erisc_debug.py, so the directory is mounted at the path the suite reads.
-DEFAULT_ERISC_ELF_DIR="/opt/tenstorrent/eth-fw-elf"
+DEFAULT_ERISC_ELF_DIR="/usr/local/share/exabox/eth-fw-elf"
 
 IMAGE="${DEFAULT_IMAGE}"
 TIER="daily"
