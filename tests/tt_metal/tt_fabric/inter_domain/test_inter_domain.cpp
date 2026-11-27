@@ -163,10 +163,11 @@ std::map<std::pair<FabricNodeId, chan_id_t>, uint64_t> packets_sent(
 
 // Each domain is one process per mesh, or per host of a mesh, of the MGD; processes meet through files in
 // TT_INTER_DOMAIN_DIR.
-//   - Sanity, AllPairs: every chip of each domain sends to every chip of the other, over a cable by the pair (so every
-//     cable carries some): from the exit chip straight onto it, from its mesh VC0 to the exit chip, from another mesh
-//     VC0 then VC1 across the meshes; landing on the peer's chip, then VC2 across its domain. A sending chip and cable
-//     at a time (Sanity), or all together (AllPairs).
+//   - Sanity, AllPairs: every chip of each domain sends to every chip of the other, over a cable by the pair among
+//   those
+//     its mesh reaches (its own mesh's and its neighbours'): from the exit chip straight onto it, from its mesh VC0 to
+//     the exit chip, from a neighbour VC0 then VC1 across the boundary; landing on the peer's chip, then VC2 across its
+//     domain. A sending chip and cable at a time (Sanity), or all together (AllPairs).
 //   - Routes: from each exit chip to every chip of the other domain, all together, then the packets each router sent
 //     checked against VC2's routes over the domain's mesh (TT_METAL_FABRIC_TELEMETRY=1).
 enum class Mode { Sanity, AllPairs, Routes };
@@ -368,10 +369,21 @@ void run(Mode mode) {
             std::vector<uint64_t> to;
         };
         std::vector<Send> sends;
+        // the cables this mesh reaches: its own and its neighbours' (VC1 crosses one mesh boundary, as intermesh
+        // traffic does)
+        std::set<uint32_t> reach{my_mesh};
+        for (const auto& chip : mesh_graph.get_inter_mesh_connectivity()[my_mesh]) {
+            for (const auto& [neighbour, _] : chip) {
+                reach.insert(*neighbour);
+            }
+        }
         std::vector<const Cable*> by_index;
         for (const auto& [_, cable] : cables) {
-            by_index.push_back(&cable);
+            if (reach.contains(cable.exit.mesh)) {
+                by_index.push_back(&cable);
+            }
         }
+        ASSERT_FALSE(by_index.empty()) << "mesh " << my_mesh << " reaches no cable";
         if (mode == Mode::Routes) {
             for (const auto& [_, cable] : cables) {
                 if (cable.port) {
