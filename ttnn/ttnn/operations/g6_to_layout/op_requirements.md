@@ -62,7 +62,7 @@ Cells moved from `xfail_expected` to passing (8):
 
 **Done when**: the 8 cells above pass (loose c29 specials bit-exact), the golden suite shows no Phase-0 regression, and `l1_ledger.md` / `op_design.md` carry the new regime rows and CBs.
 
-### [ ] Refinement 2 — ROW_MAJOR input → TILE output (bfloat16 and bfloat8_b)
+### [x] Refinement 2 — ROW_MAJOR input → TILE output (bfloat16 and bfloat8_b)
 
 **Goal**: add `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]` and `ttnn.bfloat8_b` to `SUPPORTED["output_dtype"]` via the design's `row_major_to_tile` regime, natively in-kernel, on the full grid:
 
