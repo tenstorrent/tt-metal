@@ -8,7 +8,7 @@
 #include <fstream>
 #include <string>
 
-#include <tt-metalium/observability/memory_reporter.hpp>
+#include <tt-metalium/memory_reporter.hpp>
 
 namespace tt::tt_metal {
 class IDevice;

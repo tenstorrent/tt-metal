@@ -9,8 +9,8 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt_stl/span.hpp>
 
 namespace {

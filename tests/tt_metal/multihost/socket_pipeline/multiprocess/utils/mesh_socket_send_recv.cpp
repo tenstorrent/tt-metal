@@ -10,18 +10,18 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
-#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/cluster.hpp>
 #include <internal/mesh_device.hpp>
 
 using namespace tt::constants;

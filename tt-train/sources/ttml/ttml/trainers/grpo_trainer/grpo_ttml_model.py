@@ -35,10 +35,8 @@ transport accepts it without changes.
 
 from __future__ import annotations
 
-import gc
 import logging
 import os
-import time
 from typing import Any, Optional, Tuple
 
 import torch
@@ -47,7 +45,7 @@ import ttnn
 import ttml
 from ttml.checkpointing import load_checkpoint
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import apply_precision, build_mesh
+from ttml.common.utils import build_mesh
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, compute_swiglu_intermediate_size, load_from_safetensors
 from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
@@ -109,12 +107,7 @@ def load_hf_state_dict(model_source: str) -> dict:
 
 
 def setup_ttml_model(
-    transformer_config: TransformerConfig,
-    device_config: DeviceConfig,
-    model_source: str,
-    num_command_queues: int = 1,
-    *,
-    precision: Optional[dict] = None,
+    transformer_config: TransformerConfig, device_config: DeviceConfig, model_source: str
 ) -> Tuple[Any, Any]:
     """Open the device and build the ttml model and tokenizer.
 
@@ -122,11 +115,6 @@ def setup_ttml_model(
     ``"qwen3"``). Both take the architecture from the HF config of ``model_source``;
     ``transformer_config`` sets ``max_sequence_length``, ``runner_type`` and, for
     Llama, ``dropout_prob``.
-
-    ``precision``, the YAML's ``training_config.precision`` block as a dict, is
-    applied with ``apply_precision`` once the parameters exist and before the
-    weights or a trainer checkpoint load, so fp32 master weights get the loaded
-    values unrounded; ``None`` means no block.
 
     Returns:
         ``(model, tokenizer)``.
@@ -136,13 +124,13 @@ def setup_ttml_model(
         raise ValueError(f"setup_ttml_model: model_type must be one of {_SUPPORTED_KINDS}, got {model_kind!r}")
 
     _reject_old_checkpoint_format(model_source)
-    open_device(model_kind, device_config, num_command_queues)
+    open_device(model_kind, device_config)
     if model_kind == "llama":
-        return _build_llama(transformer_config, device_config, model_source, precision)
-    return _build_qwen3(transformer_config, device_config, model_source, precision)
+        return _build_llama(transformer_config, device_config, model_source)
+    return _build_qwen3(transformer_config, device_config, model_source)
 
 
-def open_device(model_kind: str, device_config: DeviceConfig, num_command_queues: int = 1) -> Any:
+def open_device(model_kind: str, device_config: DeviceConfig) -> Any:
     """Open the device and return the ``ttnn.MeshDevice``.
 
     Llama opens the ``AutoContext`` device directly; Qwen3 opens a named mesh
@@ -156,18 +144,16 @@ def open_device(model_kind: str, device_config: DeviceConfig, num_command_queues
         if device_config.total_devices() > 1 and ttnn.get_fabric_config() == ttnn.FabricConfig.DISABLED:
             ttml.core.distributed.enable_fabric(device_config.total_devices())
         autograd_ctx = ttml.autograd.AutoContext.get_instance()
-        autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids, num_command_queues)
+        autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
         return autograd_ctx.get_device()
 
     mesh = build_mesh(device_config)
     device_ids = tuple(device_config.device_ids) if device_config.device_ids else None
-    ttml.open_device_mesh(mesh, device_ids, num_command_queues)
+    ttml.open_device_mesh(mesh, device_ids)
     return ttml.autograd.AutoContext.get_instance().get_device()
 
 
-def _build_llama(
-    tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str, precision: Optional[dict]
-) -> Tuple[Any, Any]:
+def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str) -> Tuple[Any, Any]:
     from transformers import AutoTokenizer
 
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -185,7 +171,6 @@ def _build_llama(
         raise ValueError(f"the tokenizer has {len(tokenizer)} tokens but the checkpoint embeds {llama_cfg.vocab_size}")
 
     tt_model = Llama(llama_cfg)
-    apply_precision(tt_model, precision)  # before the weights or a trainer checkpoint load
 
     if device_config.enable_ddp:
         # NOTE: TP is intentionally disabled here. cross_entropy_loss assumes full-vocab logits.
@@ -202,9 +187,7 @@ def _build_llama(
     return tt_model, tokenizer
 
 
-def _build_qwen3(
-    tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str, precision: Optional[dict]
-) -> Tuple[Any, Any]:
+def _build_qwen3(tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str) -> Tuple[Any, Any]:
     from transformers import AutoConfig, AutoTokenizer
 
     fsdp_enabled = resolve_batch_layout().fsdp_enabled
@@ -221,19 +204,18 @@ def _build_qwen3(
         "Building ttml Qwen3 model (hidden=%d, layers=%d)", qwen_config.hidden_size, qwen_config.num_hidden_layers
     )
 
-    # One order for every build: shard, apply the precision block, load. Under FSDP the block then converts the shards,
-    # so no device holds the whole model in fp32, and the weights or a trainer checkpoint load into the stored dtype.
     if fsdp_enabled and bool(device_config.lazy_parameter_init):
         with ttml.lazy_init():
             tt_model = Qwen3(qwen_config)
         _fully_shard(tt_model, device_config.fsdp_replicate_params)
         ttml.materialize_module(tt_model)
+        _load_qwen3_weights(tt_model, model_source, qwen_config, tie, sharded=True)
     else:
         tt_model = Qwen3(qwen_config)
+        _load_qwen3_weights(tt_model, model_source, qwen_config, tie, sharded=False)
+
         if fsdp_enabled:
             _fully_shard(tt_model, device_config.fsdp_replicate_params)
-    apply_precision(tt_model, precision)
-    _load_qwen3_weights(tt_model, model_source, qwen_config, tie, sharded=fsdp_enabled)
 
     return tt_model, tokenizer
 
@@ -273,18 +255,6 @@ def weights_ref_hf_dict(model) -> dict[str, ttnn.Tensor]:
     if isinstance(model, Llama):
         return _llama_weights_ref_hf_dict(model)
     raise TypeError(f"weights_ref_hf_dict supports ttml Llama and Qwen3 models, got {type(model).__name__}")
-
-
-def push_weights(client: Any, model: Any, version: int) -> float:
-    """Sends the policy weights through ``client`` as ``version``; returns the push time in seconds."""
-    start = time.perf_counter()
-    hf_dict = weights_ref_hf_dict(model)
-    try:
-        client.send_weights(hf_dict, version=version)
-    finally:
-        del hf_dict
-        gc.collect()
-    return time.perf_counter() - start
 
 
 def _llama_weights_ref_hf_dict(model) -> dict[str, ttnn.Tensor]:

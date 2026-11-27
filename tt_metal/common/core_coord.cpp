@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <core_coord.hpp>
 #include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
@@ -15,7 +15,6 @@
 #include <ostream>
 #include <set>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -154,8 +153,7 @@ bool CoreRange::CoreIterator::operator==(const CoreIterator& other) const { retu
 
 bool CoreRange::CoreIterator::operator!=(const CoreIterator& other) const { return !(current_ == other.current_); }
 
-CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreRange> core_ranges) :
-    ranges_(core_ranges.begin(), core_ranges.end()) {
+CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreRange> core_ranges) : ranges_(core_ranges.begin(), core_ranges.end()) {
     this->validate_no_overlap();
 }
 
@@ -166,33 +164,43 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
 CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreCoord> core_coords) {
-    // Gives the same ranges, in the same order, as merge_ranges() over single-core ranges, without its std::set churn
-    // or the O(n^2) validate_no_overlap(). Row-major order puts duplicates side by side and each row's x runs together.
-    const auto row_major = [](const CoreCoord& a, const CoreCoord& b) {
-        return std::tie(a.y, a.x) < std::tie(b.y, b.x);
-    };
-    std::vector<CoreCoord> cores(core_coords.begin(), core_coords.end());
-    if (!std::is_sorted(cores.begin(), cores.end(), row_major)) {
-        std::sort(cores.begin(), cores.end(), row_major);
-    }
-    if (const auto dup = std::adjacent_find(cores.begin(), cores.end()); dup != cores.end()) {
-        TT_THROW("Cannot create CoreRangeSet because core {} is listed more than once", dup->str());
-    }
-    const auto run_breaks = [](const CoreCoord& a, const CoreCoord& b) { return b.y != a.y || b.x != a.x + 1; };
-    for (auto first = cores.begin(); first != cores.end();) {
-        const auto last = std::min(std::adjacent_find(first, cores.end(), run_breaks), std::prev(cores.end()));
-        // A run extends the rectangle ending on the row above with the same x span (CoreRange::merge's vertical rule).
-        const auto above = std::find_if(ranges_.begin(), ranges_.end(), [&](const CoreRange& r) {
-            return r.end_coord.y + 1 == first->y && r.start_coord.x == first->x && r.end_coord.x == last->x;
-        });
-        if (above != ranges_.end()) {
-            above->end_coord.y = first->y;
-        } else {
-            ranges_.emplace_back(*first, *last);
+    // Cores that fill their bounding box exactly once merge to that one range. Checking this is linear, while the
+    // general path checks every pair for overlap and merges through sets, which sharded allocations pay for every
+    // tensor.
+    if (core_coords.size() > 1) {
+        size_t min_x = std::numeric_limits<size_t>::max(), max_x = 0;
+        size_t min_y = std::numeric_limits<size_t>::max(), max_y = 0;
+        for (const auto& c : core_coords) {
+            min_x = std::min(min_x, c.x);
+            max_x = std::max(max_x, c.x);
+            min_y = std::min(min_y, c.y);
+            max_y = std::max(max_y, c.y);
         }
-        first = std::next(last);
+        const size_t width = max_x - min_x + 1;
+        if (width * (max_y - min_y + 1) == core_coords.size()) {
+            std::vector<bool> seen(core_coords.size(), false);
+            bool unique = true;
+            for (const auto& c : core_coords) {
+                const size_t i = ((c.y - min_y) * width) + (c.x - min_x);
+                if (seen[i]) {
+                    unique = false;
+                    break;
+                }
+                seen[i] = true;
+            }
+            if (unique) {
+                ranges_ = {CoreRange({min_x, min_y}, {max_x, max_y})};
+                return;
+            }
+        }
     }
-    std::sort(ranges_.begin(), ranges_.end());
+    std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(core_coords.size());
+    for (const auto& core_coord : core_coords) {
+        core_ranges.push_back(CoreRange(core_coord));
+    }
+    CoreRangeSet unmerged_set(std::move(core_ranges));
+    *this = unmerged_set.merge_ranges();
 }
 
 void swap(CoreRangeSet& first, CoreRangeSet& second) noexcept { std::swap(first.ranges_, second.ranges_); }
@@ -673,8 +681,8 @@ bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b)
 
 }  // namespace tt::tt_metal
 
-auto fmt::formatter<tt::tt_metal::CoreCoord>::format(const tt::tt_metal::CoreCoord& core_coord, format_context& ctx) const
-    -> format_context::iterator {
+auto fmt::formatter<tt::tt_metal::CoreCoord>::format(
+    const tt::tt_metal::CoreCoord& core_coord, format_context& ctx) const -> format_context::iterator {
     std::stringstream ss;
     ss << core_coord.str();
     return fmt::format_to(ctx.out(), "{}", ss.str());

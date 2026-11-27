@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Quasar only: with device prints enabled on a Tensix tile, firmware init must complete and DM0
-// plus all 16 TRISCs must print their boot banners, tagged as firmware lines. Guards the TRISC
-// start-up order in dm.cc.
+// plus all 16 TRISCs must print their boot banners. Guards the TRISC start-up order in dm.cc.
 
 #include <gtest/gtest.h>
 #include <fmt/format.h>
@@ -22,11 +21,11 @@
 #include <unistd.h>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 
@@ -63,19 +62,6 @@ std::vector<std::string> MissingBanners(
         }
     }
     return missing;
-}
-
-// Whether text holds the lines in this order.
-bool ContainsInOrder(const std::string& text, const std::vector<std::string>& lines) {
-    std::string::size_type pos = 0;
-    for (const auto& line : lines) {
-        pos = text.find(line, pos);
-        if (pos == std::string::npos) {
-            return false;
-        }
-        pos += line.size();
-    }
-    return true;
 }
 
 // Opens the devices itself, with device prints enabled on kBootCore only, so the banner printed by
@@ -115,7 +101,6 @@ protected:
         rtoptions.set_feature_mesh_coords(kFeature, {});
         rtoptions.set_feature_chip_ids(kFeature, {});
         rtoptions.set_feature_prepend_device_core_risc(kFeature, true);
-        rtoptions.set_feature_tag_firmware(kFeature, true);
         rtoptions.set_feature_file_name(kFeature, dprint_file_name);
         rtoptions.set_test_mode_enabled(true);
         rtoptions.set_watcher_enabled(false);
@@ -157,8 +142,7 @@ TEST_F(QuasarFwBootPrintFixture, TensixFirmwareBootBannerWithPrintsEnabled) {
 
     for (auto& mesh_device : this->devices_) {
         const auto device_id = mesh_device->get_device_ids()[0];
-        // Each firmware line starts with the tag as the manual gives it, and then the prefix.
-        const std::string core_prefix = fmt::format("[FW] {}:{}-{}:", device_id, kBootCore.x, kBootCore.y);
+        const std::string core_prefix = fmt::format("{}:{}-{}:", device_id, kBootCore.x, kBootCore.y);
         const std::string dm0 = hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, 0, true);
         const std::string dm0_initialized = fmt::format("{}{}: DM0-FW: initialized", core_prefix, dm0);
         const std::string dm0_deasserted = fmt::format("{}{}: DM0-FW: deasserted TRISC", core_prefix, dm0);
@@ -183,12 +167,7 @@ TEST_F(QuasarFwBootPrintFixture, TensixFirmwareBootBannerWithPrintsEnabled) {
 
         EXPECT_TRUE(missing.empty()) << "Device " << device_id << ": boot banner lines missing from the print output:\n"
                                      << fmt::format("{}", fmt::join(missing, "\n"));
-        // The file helpers skip tagged lines, so check the order in the whole text.
-        const bool in_order = ContainsInOrder(ReadWholeFile(dprint_file_name), required);
-        if (!in_order) {
-            DumpFile(dprint_file_name);
-        }
-        EXPECT_TRUE(in_order) << "Device " << device_id << ": the DM0 boot lines are missing or out of order";
+        EXPECT_TRUE(FileContainsAllStringsInOrder(dprint_file_name, required));
     }
 }
 

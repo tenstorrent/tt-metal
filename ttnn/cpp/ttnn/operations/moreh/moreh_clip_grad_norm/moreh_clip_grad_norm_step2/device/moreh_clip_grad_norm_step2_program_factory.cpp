@@ -6,10 +6,10 @@
 #include <vector>
 
 #include "moreh_clip_grad_norm_step2_device_operation.hpp"
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2 {
 

@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device_fixture.hpp"
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <chrono>

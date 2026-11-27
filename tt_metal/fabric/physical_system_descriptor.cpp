@@ -13,7 +13,6 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <tt_stl/assert.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include "llrt/tt_target_device.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 
@@ -423,41 +422,6 @@ std::vector<ExitNodeConnection> PhysicalSystemDescriptor::get_connecting_exit_no
         }
     }
     return connections;
-}
-
-std::vector<std::pair<AsicID, EthConnection>> PhysicalSystemDescriptor::get_eth_links(
-    AsicID asic_id, bool outside_job) const {
-    std::vector<std::pair<AsicID, EthConnection>> links;
-    for (const auto& peer : get_asic_neighbors(asic_id)) {
-        const auto back = get_eth_connections(peer, asic_id);
-        for (const auto& c : get_eth_connections(asic_id, peer)) {
-            const bool agree =
-                !asic_descriptors_.contains(peer) || std::any_of(back.begin(), back.end(), [&](const auto& b) {
-                    return b.src_chan == c.dst_chan && b.dst_chan == c.src_chan;
-                });
-            if (agree) {
-                links.emplace_back(peer, c);
-            } else {
-                log_warning(
-                    tt::LogDistributed,
-                    "asic {} chan {} -> asic {} chan {}: the far end doesn't list it back",
-                    *asic_id,
-                    c.src_chan,
-                    *peer,
-                    c.dst_chan);
-            }
-        }
-    }
-    if (outside_job) {
-        for (const auto& e : local_exit_nodes_) {
-            const bool listed = std::any_of(
-                links.begin(), links.end(), [&](const auto& l) { return l.second.src_chan == e.eth_conn.src_chan; });
-            if (e.src_exit_node == asic_id && !listed) {
-                links.emplace_back(e.dst_exit_node, e.eth_conn);
-            }
-        }
-    }
-    return links;
 }
 
 std::pair<AsicID, uint8_t> PhysicalSystemDescriptor::get_connected_asic_and_channel(

@@ -12,9 +12,9 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt::tt_metal::distributed {

@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::experimental::prim {
 

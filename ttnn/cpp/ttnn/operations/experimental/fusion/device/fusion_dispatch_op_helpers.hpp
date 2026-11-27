@@ -9,9 +9,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::fusion {

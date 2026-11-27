@@ -11,7 +11,7 @@
 #include <string_view>
 #include <utility>
 
-#include <tt-metalium/observability/capture_hooks.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace ttnn::graph {
 

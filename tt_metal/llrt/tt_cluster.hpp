@@ -5,9 +5,9 @@
 #pragma once
 
 #include "hostdevcommon/fabric_common.h"
-#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/cluster.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_target_device.hpp"
@@ -359,9 +359,6 @@ public:
 
     // Returns whether IOMMU is enabled on the system (cached at init time)
     bool is_iommu_enabled() const;
-    // Returns whether D2H sockets must use the hugepage fallback: the host can't pin device-visible memory (no 64-bit
-    // PCIe addressing and no IOMMU).
-    bool needs_d2h_hugepage_fallback() const;
     // Returns whether device-read-only page pinning is available.
     bool is_read_only_page_pinning_supported() const;
 

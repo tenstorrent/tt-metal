@@ -8,8 +8,8 @@
 #include <array>
 #include <cmath>
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::normalization {
 

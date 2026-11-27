@@ -23,11 +23,11 @@
 #include "tools/scaleout/validation/utils/ethernet_link_api.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <enchantum/enchantum.hpp>
 #include <cabling_generator/cabling_generator.hpp>
 #include <google/protobuf/text_format.h>

@@ -23,8 +23,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <system_mesh.hpp>
 
 // NOLINTBEGIN(bugprone-branch-clone)
 
@@ -109,10 +109,7 @@ enum class EnvVarID {
     TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
     TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
-    TT_METAL_ENABLE_FABRIC_HOST_RDMA,                   // Enable the host_rdma sender channel (host-injected traffic)
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
-    TT_METAL_FABRIC_GRAPH_BUILDER,                      // Build fabric routers from the fabric graph
-    TT_METAL_FABRIC_INTER_DOMAIN,                       // Inter-domain routers on unused links leaving the domain
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
@@ -228,7 +225,6 @@ enum class EnvVarID {
     TT_METAL_DPRINT_FILE,                           // Debug print output file
     TT_METAL_DPRINT_ONE_FILE_PER_RISC,              // Separate file per RISC-V processor
     TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,       // Prepend device/core/RISC info
-    TT_METAL_DPRINT_TAG_FIRMWARE,                   // Tag the lines that firmware printed
     TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US,        // dispatch_s DevicePrintDispatch stall-detection period (us)
     TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US,         // dispatch_s DevicePrintDispatch full-dispatch period (us)
     TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES,  // dispatch_s DevicePrintDispatch L1 cache size override (bytes)
@@ -499,7 +495,7 @@ const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->
 // Uses switch statement for efficient dispatch
 //
 // IMPORTANT: Most cases assume 'value' is non-null (enforced by InitializeFromEnvVars loop guard).
-// Only TT_METAL_JIT_ANALYTICS explicitly handles nullptr
+// Only TT_METAL_RISCV_DEBUG_INFO explicitly handle nullptr
 // for default value initialization.
 
 void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
@@ -850,12 +846,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ENABLE_FABRIC_VC2=1
         case EnvVarID::TT_METAL_ENABLE_FABRIC_VC2: this->enable_fabric_vc2 = true; break;
 
-        // TT_METAL_ENABLE_FABRIC_HOST_RDMA
-        // Enables host-initiated RDMA over the fabric.
-        // Default: false
-        // Usage: export TT_METAL_ENABLE_FABRIC_HOST_RDMA=1
-        case EnvVarID::TT_METAL_ENABLE_FABRIC_HOST_RDMA: this->enable_fabric_host_rdma = is_env_enabled(value); break;
-
         // TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH
         // EXPERIMENTAL: Enables VC1 inter-mesh pass-through routing (e.g. A->B->C), where inter-mesh
         // (VC1) traffic is forwarded across intermediate meshes instead of sinking at the first mesh
@@ -865,20 +855,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1
         case EnvVarID::TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH: this->enable_fabric_mesh_pass_through = true; break;
-
-        // TT_METAL_FABRIC_GRAPH_BUILDER
-        // EXPERIMENTAL: Builds fabric routers from the fabric graph (tt_metal/fabric/graph) instead of the
-        // stock builder. Tensix mux/UDM fabrics still use the stock builder.
-        // Default: false
-        // Usage: export TT_METAL_FABRIC_GRAPH_BUILDER=1
-        case EnvVarID::TT_METAL_FABRIC_GRAPH_BUILDER: this->fabric_graph_builder = true; break;
-
-        // TT_METAL_FABRIC_INTER_DOMAIN
-        // EXPERIMENTAL: Inter-domain routers on unused eth links that leave the domain.
-        // Needs TT_METAL_FABRIC_GRAPH_BUILDER=1.
-        // Default: false
-        // Usage: export TT_METAL_FABRIC_INTER_DOMAIN=1
-        case EnvVarID::TT_METAL_FABRIC_INTER_DOMAIN: this->fabric_inter_domain = is_env_enabled(value); break;
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
@@ -1669,11 +1645,20 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_RISCV_DEBUG_INFO
-        // Enable RISC-V debug info (-g). Any value but 0 enables it.
-        // Default: the Inspector setting; on a simulator, off unless DPRINT is on or
-        // TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1 (get_riscv_debug_info_enabled())
+        // Enable RISC-V debug info. Defaults to inspector setting, override with 0/1.
+        // Default: Inherits from inspector setting
         // Usage: export TT_METAL_RISCV_DEBUG_INFO=1  # or =0 to disable
-        case EnvVarID::TT_METAL_RISCV_DEBUG_INFO: this->set_riscv_debug_info_enabled(strcmp(value, "0") != 0); break;
+        case EnvVarID::TT_METAL_RISCV_DEBUG_INFO: {
+            bool enable_riscv_debug_info = this->get_inspector_enabled();  // Default from inspector
+            if (value) {
+                enable_riscv_debug_info = true;  // Default to true if set
+                if (strcmp(value, "0") == 0) {
+                    enable_riscv_debug_info = false;  // Only "0" = false
+                }
+            }
+            this->set_riscv_debug_info_enabled(enable_riscv_debug_info);
+            break;
+        }
 
         // TT_METAL_JIT_ANALYTICS_
         // Enable JIT compiler state information. Disable state by default; override with 1.
@@ -1877,14 +1862,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: true (prepend enabled)
         // Usage: export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0
         case EnvVarID::TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC:
-            // Handled by ParseFeatureEnv() - this is for documentation
-            break;
-
-        // TT_METAL_DPRINT_TAG_FIRMWARE
-        // Starts each line that firmware printed, rather than a kernel, with "[FW] ". Set to '1' to enable.
-        // Default: false (no tag)
-        // Usage: export TT_METAL_DPRINT_TAG_FIRMWARE=1
-        case EnvVarID::TT_METAL_DPRINT_TAG_FIRMWARE:
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
 
@@ -2143,6 +2120,11 @@ void RunTimeOptions::InitializeFromEnvVars() {
     // Set inspector log path
     this->inspector_settings.log_path = std::filesystem::path(this->get_logs_dir()) / "generated/inspector";
 
+    // TT_METAL_RISCV_DEBUG_INFO: Inherit from inspector if not explicitly set
+    if (std::getenv("TT_METAL_RISCV_DEBUG_INFO") == nullptr) {
+        HandleEnvVar(EnvVarID::TT_METAL_RISCV_DEBUG_INFO, nullptr);
+    }
+
     // TT_METAL_JIT_ANALYTICS: Inherit from inspector if not explicitly set
     if (std::getenv("TT_METAL_JIT_ANALYTICS") == nullptr) {
         HandleEnvVar(EnvVarID::TT_METAL_JIT_ANALYTICS, nullptr);
@@ -2341,7 +2323,6 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
     ParseFeatureOneFilePerRisc(feature, feature_env_prefix + "_ONE_FILE_PER_RISC");
     ParseFeaturePrependDeviceCoreRisc(feature, feature_env_prefix + "_PREPEND_DEVICE_CORE_RISC");
-    ParseFeatureTagFirmware(feature, feature_env_prefix + "_TAG_FIRMWARE");
 
     // Set feature enabled if the user asked for any feature cores, chips, or nodes
     feature_targets[feature].enabled = false;
@@ -2583,11 +2564,6 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
     char* env_var_str = std::getenv(env_var.c_str());
     feature_targets[feature].prepend_device_core_risc =
         (env_var_str != nullptr) ? (strcmp(env_var_str, "1") == 0) : true;
-}
-
-void RunTimeOptions::ParseFeatureTagFirmware(RunTimeDebugFeatures feature, const std::string& env_var) {
-    char* env_var_str = std::getenv(env_var.c_str());
-    feature_targets[feature].tag_firmware = (env_var_str != nullptr) && (strcmp(env_var_str, "1") == 0);
 }
 
 std::string RunTimeOptions::get_watcher_hash() const {

@@ -6,8 +6,8 @@
 
 #include <algorithm>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/experimental/sparse_kv_push/common/sparse_kv_push_common.hpp"
 #include "ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
 

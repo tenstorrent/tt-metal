@@ -10,7 +10,7 @@
 #include <unordered_map>
 
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal {
 

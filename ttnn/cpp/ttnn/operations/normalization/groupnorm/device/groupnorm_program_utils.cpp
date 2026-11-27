@@ -9,7 +9,7 @@
 #include <limits>
 #include <algorithm>
 
-#include <tt-metalium/data_formats/data_format.hpp>  // tt::DataFormat, tt::tile_size
+#include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat, tt::tile_size
 #include <ttnn/tensor/types.hpp>                 // tt::tt_metal::datatype_to_dataformat_converter
 
 namespace ttnn::prim {

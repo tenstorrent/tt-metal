@@ -9,9 +9,9 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"

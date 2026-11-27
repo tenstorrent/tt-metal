@@ -8,7 +8,7 @@
 #include <ostream>
 #include <variant>
 #include <tt_stl/small_vector.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal::distributed {
 

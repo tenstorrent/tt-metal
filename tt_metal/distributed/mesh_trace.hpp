@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
-#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 #include "trace/trace_buffer.hpp"
 
 namespace tt::tt_metal::distributed {

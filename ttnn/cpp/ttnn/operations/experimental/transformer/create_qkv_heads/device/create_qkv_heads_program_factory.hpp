@@ -7,7 +7,7 @@
 #include "create_qkv_heads_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 

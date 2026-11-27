@@ -6,10 +6,10 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <functional>
@@ -22,25 +22,24 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
 // Do we really want to expose Hal like this?
 // This looks like an API level test
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-umd/types/xy_pair.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -324,8 +323,7 @@ void RunTestOnCore(
                       "use_inline_dw_write_from_state",
                       "use_inline_dw_write_with_state",
                       "invalid_txn_id",
-                      "use_dram_bank_dst",
-                      "raw_local_noc_read"}},
+                      "use_dram_bank_dst"}},
             .hw_config = dm_cfg,
         };
         WorkUnitSpec wu{
@@ -338,7 +336,7 @@ void RunTestOnCore(
             .kernels = {dm_spec},
             .work_units = {wu},
         };
-        program = tt_metal::Program(*mesh_device, spec);
+        program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
         if (is_quasar) {
             // Quasar SD does not yet expose a NOC index in the same way as legacy DMs; the watcher
             // log emits "noc0" for Metal 2.0 DM kernels. Match that so expected strings line up.
@@ -371,7 +369,6 @@ void RunTestOnCore(
     const uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
     uint32_t invalid_txn_id = 0;
     bool use_dram_bank_dst = false;
-    bool raw_local_noc_read = false;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -391,14 +388,14 @@ void RunTestOnCore(
             // This is illegal because we'd be writing to the mailbox memory
             buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX);
             break;
-        case SanitizeNOCMailboxWriteUncachedAlias: {
-            // The legacy read passes the local address to the NoC unchanged; Noc::async_read would map the
-            // uncached alias (MEM_L1_UNCACHED_BASE) back to the cached view.
-            constexpr uint32_t l1_uncached_base = 0x400000;
-            buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX) + l1_uncached_base;
-            raw_local_noc_read = true;
+        case SanitizeNOCMailboxWriteUncachedAlias:
+            // Quasar-only (skipped at the top otherwise): the mailbox is aliased into the uncached L1
+            // window (upper 4 MB, same physical memory as the cached view). Target the alias so a NoC
+            // access landing in the mailbox through it is still flagged. Complements
+            // SanitizeNOCMailboxWrite, which covers the cached view.
+            buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX) +
+                          hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
             break;
-        }
         case SanitizeNOCInlineWriteDram:
             use_inline_dw_write = true;
             // Under ATT the destination is addressed as DRAM bank 0.
@@ -539,8 +536,7 @@ void RunTestOnCore(
         use_inline_dw_write_from_state,
         use_inline_dw_write_with_state,
         invalid_txn_id,
-        use_dram_bank_dst,
-        raw_local_noc_read};
+        use_dram_bank_dst};
 
     if (is_eth_core) {
         // ETH cores still go through the legacy API.
@@ -572,10 +568,9 @@ void RunTestOnCore(
                  {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
                  {"use_inline_dw_write_with_state", use_inline_dw_write_with_state},
                  {"invalid_txn_id", invalid_txn_id},
-                 {"use_dram_bank_dst", use_dram_bank_dst},
-                 {"raw_local_noc_read", raw_local_noc_read}}),
+                 {"use_dram_bank_dst", use_dram_bank_dst}}),
         }};
-        program.set_program_run_args(params);
+        tt_metal::experimental::SetProgramRunArgs(program, params);
     }
     workload.add_program(device_range, std::move(program));
 

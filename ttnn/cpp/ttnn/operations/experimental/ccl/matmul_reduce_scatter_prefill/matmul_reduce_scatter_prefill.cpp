@@ -11,9 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt_stl/indestructible.hpp>
 
@@ -106,7 +106,7 @@ size_t usable_links(tt::tt_metal::distributed::MeshDevice* mesh, int32_t cluster
     using Key = std::tuple<int, int32_t, bool, tt::tt_fabric::FabricConfig>;
     static ttsl::Indestructible<std::map<Key, size_t>> counts;
     static std::mutex counts_mutex;
-    const Key key{mesh->id(), cluster_axis, ring, tt::tt_fabric::GetFabricConfig(*mesh)};
+    const Key key{mesh->id(), cluster_axis, ring, tt::tt_fabric::GetFabricConfig()};
     const std::lock_guard<std::mutex> lock(counts_mutex);
     auto it = counts.get().find(key);
     if (it == counts.get().end()) {
@@ -182,10 +182,10 @@ MatmulReduceScatterPrefillParams resolve_params(
         !ring ? detail::ScheduleKind::Line
               : (G % 2 == 0 ? detail::ScheduleKind::RingBalanced : detail::ScheduleKind::RingUnbalanced);
     TT_FATAL(
-        !ring || config_wraps(tt::tt_fabric::GetFabricConfig(*mesh), cluster_axis),
+        !ring || config_wraps(tt::tt_fabric::GetFabricConfig(), cluster_axis),
         "matmul_reduce_scatter_prefill: Ring along axis {} needs a fabric config that wraps it (active: {})",
         cluster_axis,
-        static_cast<uint32_t>(tt::tt_fabric::GetFabricConfig(*mesh)));
+        static_cast<uint32_t>(tt::tt_fabric::GetFabricConfig()));
     const size_t avail = usable_links(mesh, cluster_axis, ring);
     TT_FATAL(avail > 0, "matmul_reduce_scatter_prefill: a hop of the group has no usable fabric link (no wrap link?)");
     uint32_t L = static_cast<uint32_t>(std::min<size_t>(avail, kMaxLinks));  // the default: every link the op supports

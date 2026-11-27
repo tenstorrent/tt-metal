@@ -8,9 +8,9 @@
 #include <cmath>
 #include <limits>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
@@ -22,21 +22,6 @@ namespace ttnn::experimental::prim {
 PrepareChunkRecurrenceOperation::program_factory_t PrepareChunkRecurrenceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return PrepareChunkRecurrenceProgramFactory{};
-}
-
-// A cache hit matches every attribute and tensor spec the miss validated: only the buffers can differ.
-void PrepareChunkRecurrenceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t&, const tensor_args_t& in) {
-    kda_factory_detail::check_allocated_on_device(
-        in.q,
-        {{&in.q, "q"},
-         {&in.k, "k"},
-         {&in.v, "v"},
-         {&in.g, "g"},
-         {&in.beta, "beta"},
-         {in.actual_start ? &*in.actual_start : nullptr, "actual_start"},
-         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}},
-        "prepare_chunk_recurrence");
 }
 
 void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"

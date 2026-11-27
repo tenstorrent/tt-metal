@@ -4,7 +4,7 @@
 
 #include "topk_route_prep_device_operation.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::reduction::topk_route_prep {
 

@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device_fixture.hpp"
-#include "tt-metalium/execution/slow_dispatch.hpp"
+#include "tt_metal.hpp"
 #include "dm_common.hpp"
 
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace tt::tt_metal {
 

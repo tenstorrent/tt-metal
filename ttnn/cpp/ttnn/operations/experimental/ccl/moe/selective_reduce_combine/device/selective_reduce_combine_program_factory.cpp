@@ -8,23 +8,23 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::experimental::prim {

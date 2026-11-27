@@ -17,7 +17,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "ckernel_buf_desc.h"
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_reduce_col_tilizeA_strided.h"
 #include "params.h"
@@ -43,13 +43,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         // SrcA is tilized out of a row-major tensor, so its descriptor must address L1 in units of a single
         // 16-datum row (y_dim = z_dim = 1) for every tile shape.
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0, ckernel::trisc::L1AccessMode::Strided>(
+        const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(
             tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
 
         // SrcB holds the reduce scalar and is unpacked face by face, so it uses the tile-shaped descriptor.
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
-        constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
+        const auto bfd_b =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
 
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
@@ -177,7 +176,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "ckernel_buf_desc.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -207,8 +206,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+        const auto bfd_pack =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
 
         _llk_pack_init_(bfd_pack, tensor_shape, TILE_CNT);

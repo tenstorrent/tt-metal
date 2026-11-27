@@ -4,10 +4,10 @@
 
 #pragma once
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include <vector>
 #include <optional>

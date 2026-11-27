@@ -7,9 +7,9 @@
 #include <memory>
 #include <utility>
 
-#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/assert.hpp>
 
 /**

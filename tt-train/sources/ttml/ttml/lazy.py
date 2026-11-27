@@ -133,7 +133,7 @@ def materialize_module(
         # via ``parameter.add_post_materialize_callback(...)`` to attach
         # metadata onto the now-materialized autograd tensor (e.g. mirror
         # ``_fsdp_managed`` markers from the wrapper to ``inner`` so
-        # ``ttml.fsdp.is_fsdp_managed`` can find them).
+        # ``sync_gradients`` / ``ttml.fsdp.is_fsdp_managed`` can find them).
         # ``materialize_module`` itself stays feature-agnostic.
         param._run_post_materialize_callbacks()
 

@@ -20,8 +20,8 @@
 #include "command_queue_common.hpp"
 #include "device/device_manager.hpp"
 #include "dispatch_settings.hpp"
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include "tt-metalium/workload/legacy/host_api.hpp"
+#include "hal_types.hpp"
+#include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "system_memory_cq_interface.hpp"
 #include "system_memory_manager.hpp"

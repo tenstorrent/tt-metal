@@ -71,8 +71,8 @@ inline void generalized_moe_gate_transpose_dest_single_face_step0_configure_mop(
             TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
         });
 
-    std::uint32_t d2b_instr = TT_OP_REPLAY(math::replay_buf_offset, 8, 0, 0);
-    std::uint32_t b2d_instr = TT_OP_REPLAY(math::replay_buf_offset + 8, 8, 0, 0);
+    std::uint32_t d2b_instr = lltt::replay_insn(math::replay_buf_offset, 8);
+    std::uint32_t b2d_instr = lltt::replay_insn(math::replay_buf_offset + 8, 8);
 
     ckernel_template tmp(num_tiles, 1, d2b_instr, TT_OP_TRNSPSRCB);
     tmp.set_end_op(b2d_instr);
@@ -107,7 +107,7 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_configure_mop(
             TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
             TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
         });
-    std::uint32_t replay_instr = TT_OP_REPLAY(math::replay_buf_offset, 11, 0, 0);
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 11);
 
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();
@@ -141,7 +141,7 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_hi_configure_m
             TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 6);
             TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, b2d_base + 7);
         });
-    std::uint32_t replay_instr = TT_OP_REPLAY(math::replay_buf_offset, 11, 0, 0);
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 11);
 
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();
@@ -168,7 +168,7 @@ inline void generalized_moe_gate_copy4rows_configure_mop()
             TTI_MOVB2D(0, srcb + 2, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 2);
             TTI_MOVB2D(0, srcb + 3, ADDR_MOD_2, p_movb2d::MOV_1_ROW, dst + 3); // ADDR_MOD_2 advances base by 64
         });
-    std::uint32_t replay_instr = TT_OP_REPLAY(math::replay_buf_offset, 5, 0, 0);
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 5);
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();
 }
@@ -191,7 +191,7 @@ inline void generalized_moe_gate_transpose_dest_single_face_step2_configure_mop(
             // Move 1 row from SrcB back to DEST
             TTI_MOVB2D(0, 16, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 0);
         });
-    std::uint32_t replay_instr = TT_OP_REPLAY(math::replay_buf_offset, 4, 0, 0);
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 4);
 
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();

@@ -150,9 +150,9 @@ class TestUngatedMode:
         [
             ((2, 1, 96, 80), "bf16"),
             ((2, 1, 96, 80), "fp32"),
-            # One tile-row as 16 slices of 16 tiles, which stay in L1 in both passes.
+            # The forward keeps everything but gamma in L1 and the backward streams.
             ((1, 1, 32, 8192), "fp32"),
-            # As 16 slices of 32 tiles. ttml_tests' _WholeRows cases cover the whole-row paths of both widths.
+            # Both stream.
             ((1, 1, 32, 16384), "fp32"),
         ],
     )

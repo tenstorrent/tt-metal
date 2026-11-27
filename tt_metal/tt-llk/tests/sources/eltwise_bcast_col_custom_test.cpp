@@ -35,18 +35,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t loop_factor = params.LOOP_FACTOR;
-    const std::uint32_t num_blocks         = params.NUM_BLOCKS;
-    const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
-    const std::uint32_t test_num_faces     = params.num_faces;
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #else
     constexpr std::uint32_t loop_factor = LOOP_FACTOR;
+#endif
+#if defined(SPEED_OF_LIGHT) || defined(LLK_PROFILER)
+    // Perf builds get the geometry as template parameters (create_eltwise_bcast_col_custom_config).
     constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
     constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
     constexpr std::uint32_t test_face_r_dim    = TEST_FACE_R_DIM;
     constexpr std::uint32_t test_num_faces     = num_faces;
+#else
+    const std::uint32_t num_blocks         = params.NUM_BLOCKS;
+    const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
+    const std::uint32_t test_num_faces     = params.num_faces;
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(test_face_r_dim, test_num_faces);
 
@@ -114,16 +118,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t loop_factor = params.LOOP_FACTOR;
-    const std::uint32_t num_blocks         = params.NUM_BLOCKS;
-    const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
-    const std::uint32_t test_num_faces     = params.num_faces;
 #else
     constexpr std::uint32_t loop_factor = LOOP_FACTOR;
+#endif
+#if defined(SPEED_OF_LIGHT) || defined(LLK_PROFILER)
+    // Perf builds get the geometry as template parameters (create_eltwise_bcast_col_custom_config).
     constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
     constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
     constexpr std::uint32_t test_face_r_dim    = TEST_FACE_R_DIM;
     constexpr std::uint32_t test_num_faces     = num_faces;
+#else
+    const std::uint32_t num_blocks         = params.NUM_BLOCKS;
+    const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
+    const std::uint32_t test_num_faces     = params.num_faces;
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(test_face_r_dim, test_num_faces);
 
@@ -200,17 +208,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t loop_factor = params.LOOP_FACTOR;
-    const std::uint32_t num_blocks         = params.NUM_BLOCKS;
-    const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
-    const std::uint32_t test_num_faces     = params.num_faces;
     const Operand& buffer_Res       = params.buffer_Res;
 #else
     constexpr std::uint32_t loop_factor = LOOP_FACTOR;
+#endif
+#if defined(SPEED_OF_LIGHT) || defined(LLK_PROFILER)
+    // Perf builds get the geometry as template parameters (create_eltwise_bcast_col_custom_config).
     constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
     constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
     constexpr std::uint32_t test_face_r_dim    = TEST_FACE_R_DIM;
     constexpr std::uint32_t test_num_faces     = num_faces;
+#else
+    const std::uint32_t num_blocks         = params.NUM_BLOCKS;
+    const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
+    const std::uint32_t test_num_faces     = params.num_faces;
 #endif
 
     {

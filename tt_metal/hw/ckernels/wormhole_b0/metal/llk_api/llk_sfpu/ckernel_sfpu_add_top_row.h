@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
+#include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 
@@ -67,7 +68,7 @@ inline void calculate_add_top_row(const uint tile_idx_0 = 0, const uint tile_idx
     TT_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_1 + 16 + 2);  // face 3, rows 0-3, odd columns
 
     // Call replay buffer (integer: index 0, 4 instructions; float: index 4, 8 instructions)
-    TTI_REPLAY(REPLAY_BUFFER_INDEX, REPLAY_BUFFER_COUNT, 0, 0);
+    lltt::replay(REPLAY_BUFFER_INDEX, REPLAY_BUFFER_COUNT);
 
     TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_dst);
     TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_dst + 2);
@@ -86,7 +87,7 @@ inline void init_add_top_row() {
 
     // Set up integer replay buffer (index 0, 4 instructions)
     // Contains: 4 TTI_SFPIADD operations for adding top rows
-    TTI_REPLAY(0, 4, 0, 1);
+    lltt::record(0, 4);
     TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, 4);
     TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG1, 4);
     TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG2, 4);
@@ -94,7 +95,7 @@ inline void init_add_top_row() {
 
     // Set up floating-point replay buffer (index 4, 8 instructions)
     // Contains: 4 TT_SFPADD + 4 TTI_SFPNOP operations for adding top rows
-    TTI_REPLAY(4, 4, 0, 1);
+    lltt::record(4, 4);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0);
     TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG1, 0);
     TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG2, 0);

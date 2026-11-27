@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -15,13 +15,9 @@ struct FastReduceNCParams {
     const tt::tt_metal::MemoryConfig output_mem_config;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     const std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
-    // When set, packer writes this dtype instead of input.dtype() (used by the Sum/Mean precision chain).
+    // When set, packer writes this dtype instead of input.dtype() (used by the Sum precision chain).
     const std::optional<tt::tt_metal::DataType> output_dtype;
     const std::optional<uint32_t> split_output_width = std::nullopt;
-    // Sum Float32 input on the SFPU at full precision instead of the FPU (tf32). Int32 always uses the SFPU.
-    const bool use_sfpu_reduce = false;
-    // Multiplies each reduced tile before packing: mean's 1/N or the caller's scalar.
-    const float post_mul_scaler = 1.0f;
 };
 
 struct FastReduceNCInputs {

@@ -11,9 +11,9 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -169,8 +169,7 @@ std::vector<uint32_t> writer_compile_args(
     return ct;
 }
 
-std::vector<uint32_t> reader_runtime_args(
-    const CoreLayout& layout, uint32_t sender, uint32_t my_rank, uint32_t my_owner) {
+std::vector<uint32_t> reader_runtime_args(const CoreLayout& layout, uint32_t sender, uint32_t my_rank) {
     const uint32_t channel = sender / kSendersPerChannel;
     return {
         channel / kDirections,  // link
@@ -178,8 +177,7 @@ std::vector<uint32_t> reader_runtime_args(
         my_rank,
         sender % kSendersPerChannel,
         kSendersPerChannel,
-        layout.links,
-        my_owner};
+        layout.links};
 }
 
 std::vector<uint32_t> writer_runtime_args(
@@ -251,8 +249,6 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t num_devices = mesh_view.shape().mesh_size();
     const uint32_t my_rank = ttnn::operations::ccl::common::get_linearized_index(coord, mesh_view);
-    // The plan owns block b on owner b % num_devices; the cache stripes blocks along sp_axis first.
-    const uint32_t my_owner = params.sp_axis == 0 ? my_rank : coord[1] * mesh_view.shape()[0] + coord[0];
     const auto neighbors = torus_neighbors(mesh_view, coord);
     const auto layout = core_layout(params.core_grid, params.num_links);
     const auto mux = mux_config(mesh_device, desc, layout);
@@ -338,7 +334,7 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     }
     for (uint32_t w = 0; w < layout.num_senders(); ++w) {
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt;
-        reader_rt.append(reader_runtime_args(layout, w, my_rank, my_owner));
+        reader_rt.append(reader_runtime_args(layout, w, my_rank));
         reader.emplace_runtime_args(layout.senders[w], reader_rt);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt;
         writer_rt.append(writer_runtime_args(mesh_device, layout, w, my_rank, mux, desc));

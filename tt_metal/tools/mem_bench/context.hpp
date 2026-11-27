@@ -7,10 +7,10 @@
 #include <string>
 #include <map>
 #include <memory>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace tt::tt_metal::tools::mem_bench {
 

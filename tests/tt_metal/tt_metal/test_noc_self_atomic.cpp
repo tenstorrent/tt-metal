@@ -9,21 +9,20 @@
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
 
-#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/workload/specification/compute_modes.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "common/mesh_dispatch_fixture.hpp"
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -125,8 +124,8 @@ protected:
             .kernels = kernel_specs,
             .work_units = {main_wu},
         };
-        program = Program(*mesh_device_, spec);
-        program.set_program_run_args(params);
+        program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        experimental::SetProgramRunArgs(program, params);
 
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
@@ -166,7 +165,7 @@ protected:
             .kernels = {kernel_spec},
             .work_units = {main_wu},
         };
-        program = Program(*mesh_device_, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
         ProgramRunArgs params;
         params.kernel_run_args = {
             ProgramRunArgs::KernelRunArgs{
@@ -175,7 +174,7 @@ protected:
                     core, {{"base_addr", base_addr}, {"report_addr", report_addr}, {"residency_addr", residency_addr}}),
             },
         };
-        program.set_program_run_args(params);
+        experimental::SetProgramRunArgs(program, params);
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
     }
@@ -210,7 +209,7 @@ protected:
             .kernels = {kernel_spec},
             .work_units = {main_wu},
         };
-        program = Program(*mesh_device_, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
         ProgramRunArgs params;
         params.kernel_run_args = {
             ProgramRunArgs::KernelRunArgs{
@@ -225,7 +224,7 @@ protected:
                      {"pairs", pairs}}),
             },
         };
-        program.set_program_run_args(params);
+        experimental::SetProgramRunArgs(program, params);
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
@@ -321,7 +320,7 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
         .kernels = {self_spec, remote_spec},
         .work_units = {wu_0, wu_1},
     };
-    program = Program(*mesh_device_, spec);
+    program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -340,7 +339,7 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
                  {"remote_noc_y", static_cast<uint32_t>(node_0_virtual.y)}}),
         },
     };
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     RunProgram(mesh_device_, workload);

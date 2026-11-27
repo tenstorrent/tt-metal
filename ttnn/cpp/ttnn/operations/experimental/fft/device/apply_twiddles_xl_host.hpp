@@ -24,9 +24,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "tt-metalium/execution/distributed.hpp"
-#include "tt-metalium/memory/buffer/mesh_buffer.hpp"
-#include "tt-metalium/execution/mesh_command_queue.hpp"
+#include "tt-metalium/distributed.hpp"
+#include "tt-metalium/mesh_buffer.hpp"
+#include "tt-metalium/mesh_command_queue.hpp"
 
 #include "ttnn/operations/experimental/fft/device/leak_static_cache.hpp"
 #include "ttnn/tensor/tensor.hpp"

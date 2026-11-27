@@ -5,7 +5,7 @@
 
 #include <vector>
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "fused_recurrent_gated_delta_rule_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"

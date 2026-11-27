@@ -12,7 +12,7 @@
 #include "ttnn/types.hpp"  // exposes ttnn::MemoryConfig alias used in member/signature declarations
 #include "ttnn/distributed/types.hpp"  // exposes ttnn::MeshCoordinate used in override_runtime_arguments()
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 

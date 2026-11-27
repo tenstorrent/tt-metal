@@ -12,7 +12,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 
 #include "impl/allocator/algorithms/free_list_opt.hpp"

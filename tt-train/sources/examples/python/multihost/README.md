@@ -17,13 +17,12 @@ multihost/
 │   ├── trainer.py
 │   ├── training.py
 │   └── runner.sh
-├── pipeline_parallel_training/
-│   ├── configurations/
-│   │   └── 5loudboxes/
-│   ├── trainer.py
-│   ├── training.py
-│   └── runner.sh
-└── all_machines_copy.sh        # copies the build to every host (the fabric_minimal_example and hierarchical_parallel runners call it)
+└── pipeline_parallel_training/
+    ├── configurations/
+    │   └── 5loudboxes/
+    ├── trainer.py
+    ├── training.py
+    └── runner.sh
 ```
 
 ## Configurations Folder Structure

@@ -10,8 +10,8 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"

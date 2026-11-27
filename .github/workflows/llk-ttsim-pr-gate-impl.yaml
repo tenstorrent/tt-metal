@@ -108,12 +108,13 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
     container:
       image: ${{ inputs.docker-image }}
       options: "--label runner-mode=sim"
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
@@ -138,7 +139,6 @@ jobs:
           root: ${{ steps.workspace.outputs.path }}
 
       - name: Run tests
-        timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:

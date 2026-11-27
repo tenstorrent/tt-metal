@@ -4,13 +4,14 @@
 
 from __future__ import annotations
 
+import gc
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from ttml.common.utils import repeat_interleave
 
 from ..grpo_trainer import RolloutBatch
-from ..grpo_ttml_model import push_weights
+from ..grpo_ttml_model import weights_ref_hf_dict
 from ..rollout_batch_source import (
     RolloutBatchSource,
     ScoredRolloutBatch,
@@ -87,9 +88,15 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
     def update_weights(self, model: Any, step: int) -> float:
         if self._pushed_version is not None and step - self._pushed_version < self._weight_sync_every:
             return 0.0
-        duration = push_weights(self._client, model, step)
+        start = time.perf_counter()
+        hf_dict = weights_ref_hf_dict(model)
+        try:
+            self._client.send_weights(hf_dict, version=step)
+        finally:
+            del hf_dict
+            gc.collect()
         self._pushed_version = step
-        return duration
+        return time.perf_counter() - start
 
     def close(self) -> None:
         self._client.shutdown()

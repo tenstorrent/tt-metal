@@ -1,15 +1,13 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-// DEPRECATED-FORWARDING-HEADER: <tt-metalium/device_types.hpp> moved to <tt-metalium/vocabulary/device_types.hpp>.
-// This forwarding header will be removed after 2027-03-05.
-#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
-// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
-#warning \
-    "<tt-metalium/device_types.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/vocabulary/device_types.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
-#endif
+namespace tt {
 
-#include <tt-metalium/vocabulary/device_types.hpp>  // IWYU pragma: export
+// ChipId identifies a physical Tenstorrent device in a cluster (e.g., chip 0, chip 1).
+// Defined locally to avoid leaking UMD headers into the tt-metalium public API.
+using ChipId = int;
+
+}  // namespace tt

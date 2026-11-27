@@ -10,8 +10,8 @@
 #include <unordered_map>
 
 #include <yaml-cpp/yaml.h>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>

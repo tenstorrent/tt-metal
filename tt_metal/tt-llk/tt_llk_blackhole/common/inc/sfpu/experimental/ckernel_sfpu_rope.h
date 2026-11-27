@@ -24,6 +24,7 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel
@@ -41,6 +42,16 @@ constexpr std::uint32_t NEGATE_VA = 1;
 
 constexpr std::uint8_t ZERO_ADDR_MOD = ADDR_MOD_7;
 } // namespace rope
+
+inline void sfpu_rope_configure_addrmod()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(rope::ZERO_ADDR_MOD);
+}
 
 inline void sfpu_rope_dest_setup()
 {

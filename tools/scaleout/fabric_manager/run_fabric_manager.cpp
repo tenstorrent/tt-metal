@@ -10,11 +10,11 @@
 
 #include <factory_system_descriptor/utils.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <cabling_generator/cabling_generator.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/hal.hpp>
 #include "tools/scaleout/fabric_manager/utils/fabric_manager_utils.hpp"
 #include <enchantum/enchantum.hpp>
 

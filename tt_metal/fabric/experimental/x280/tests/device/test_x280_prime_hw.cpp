@@ -21,7 +21,7 @@
 #include "x280/device/x280_runtime.hpp"
 
 #include <gtest/gtest.h>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <mesh_device.hpp>
 
 #include <cstdlib>
 #include <string>

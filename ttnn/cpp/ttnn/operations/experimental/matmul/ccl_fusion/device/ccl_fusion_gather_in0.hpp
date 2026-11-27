@@ -19,8 +19,8 @@
 
 #pragma once
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"

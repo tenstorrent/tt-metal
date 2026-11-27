@@ -1,15 +1,19 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-// DEPRECATED-FORWARDING-HEADER: <tt-metalium/hal_types.hpp> moved to <tt-metalium/vocabulary/hal_types.hpp>.
-// This forwarding header will be removed after 2027-03-05.
-#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
-// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
-#warning \
-    "<tt-metalium/hal_types.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/vocabulary/hal_types.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
-#endif
+#include <cstdint>
 
-#include <tt-metalium/vocabulary/hal_types.hpp>  // IWYU pragma: export
+namespace tt::tt_metal {
+
+using DeviceAddr = std::uint64_t;
+
+enum class HalProcessorClassType : uint8_t { DM = 0, COMPUTE = 1 };
+
+enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, DRAM = 3, DISPATCH = 4, COUNT = 5 };
+
+enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };
+
+}  // namespace tt::tt_metal

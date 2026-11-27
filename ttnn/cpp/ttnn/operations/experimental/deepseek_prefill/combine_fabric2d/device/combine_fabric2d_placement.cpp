@@ -10,10 +10,10 @@
 #include <numeric>
 #include <set>
 
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 

@@ -12,8 +12,8 @@
 #include <limits>
 #include <variant>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
@@ -399,17 +399,16 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
     }
 }
 
-// The feature set dynamic_local_n serves: non-chunked MHA or grouped GQA with a separate V, causal only when
-// unbalanced, and nothing that bakes the length into host-built structure. Scalar and presence checks only, so it
-// runs on every cache hit too.
+// The feature set dynamic_local_n serves: non-causal, non-chunked MHA with a separate V and nothing that bakes
+// the length into host-built structure. Scalar and presence checks only, so it runs on every cache hit too.
 void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const bool has_joint_tensors =
         tensor_args.joint_q.has_value() || tensor_args.joint_k.has_value() || tensor_args.joint_v.has_value();
     TT_FATAL(
         tensor_args.has_logical_n_tensor(),
         "dynamic_local_n requires logical_n as a device tensor (the kernels derive the masks from it)");
-    // Balanced causal compiles the zigzag parity and the straddle chunk per length.
-    TT_FATAL(!args.is_balanced && !args.is_cross, "dynamic_local_n does not support balanced or cross attention");
+    TT_FATAL(
+        !args.is_causal && !args.is_balanced && !args.is_cross, "dynamic_local_n supports non-causal attention only");
     TT_FATAL(!has_joint_tensors, "dynamic_local_n does not support joint tensors");
     TT_FATAL(
         tensor_args.input_v.has_value() && !tensor_args.has_latent_v() && !tensor_args.attention_sink.has_value(),
@@ -428,9 +427,8 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
     const auto& k_shape = tensor_args.input_k.logical_shape();
     const auto& v_shape = tensor_args.input_v->logical_shape();
     TT_FATAL(
-        (q_shape[1] == k_shape[1] && k_shape[1] == v_shape[1]) ||
-            ring_joint::is_gqa_grouped_kv_head_mode(/*v_shares_k_buffer=*/false, q_shape[1], k_shape[1], v_shape[1]),
-        "dynamic_local_n requires MHA or grouped GQA head counts. Got Q: {}, K: {}, V: {}",
+        q_shape[1] == k_shape[1] && k_shape[1] == v_shape[1],
+        "dynamic_local_n requires MHA (equal Q/K/V head counts). Got Q: {}, K: {}, V: {}",
         q_shape[1],
         k_shape[1],
         v_shape[1]);
@@ -447,11 +445,11 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
         tensor_args.input_k.padded_shape()[2],
         v_shape[2],
         tensor_args.input_v->padded_shape()[2]);
-    // One K head per chip: MHA selects the shared-K batch chain, host-built per length and not rebuilt on a hit.
-    // One-head GQA builds no chain under dynamic_local_n but is untested, so it is refused too.
+    // The one-K-head shared-K batch chain is host-built per length; the hit path cannot rebuild it.
     TT_FATAL(
         tensor_args.gathered_k.logical_shape()[1] > 1,
-        "dynamic_local_n requires more than one K head per chip. Got {}",
+        "dynamic_local_n requires more than one K head per chip (the shared-K batch chain is built per length). "
+        "Got {}",
         tensor_args.gathered_k.logical_shape()[1]);
     TT_FATAL(
         tensor_args.input_q.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
@@ -1512,7 +1510,6 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const bool dynamic_local_n) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
-    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -1603,7 +1600,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             "ring_mla cluster_axis=None requires the persistent gathered-KV buffer to be replicated across the "
             "complete mesh");
 
-        const auto fabric_config = tt::tt_fabric::GetFabricConfig(mesh_device);
+        const auto fabric_config = tt::tt_fabric::GetFabricConfig();
         // A full mesh is gathered as one snake across both axes, which only a 2D fabric can route.
         TT_FATAL(
             tt::tt_fabric::is_2d_fabric_config(fabric_config),

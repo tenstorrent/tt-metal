@@ -8,8 +8,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "tt-metalium/data_formats/bfloat16.hpp"
-#include "tt-metalium/memory/buffer/host_buffer.hpp"
+#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/host_buffer.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <cmath>
 #include <algorithm>

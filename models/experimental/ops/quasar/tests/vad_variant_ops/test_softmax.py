@@ -19,6 +19,7 @@ Default softmax compute config (HiFi4, approx on, fp32 acc off) [H].
 import pytest
 import torch
 
+import ttnn
 from models.experimental.ops.quasar.tests.vad_variant_ops import op_utils as U
 
 Q, H = U.NUM_QUERY, U.NUM_HEADS
@@ -40,10 +41,5 @@ def test_softmax(ttnn_mesh_device, reset_seeds, shape, dim, in_mem, out_mem):
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(shape)
     x = U.to_tt_mem(x_torch, mesh, in_mem)
-    if dim not in (-1, len(shape) - 1) or shape[-1] % 32 != 0:
-        U.xfail_on_quasar(
-            "Quasar softmax requires a tile-aligned last dimension; "
-            "https://github.com/tenstorrent/tt-metal/issues/66459"
-        )
-    out = U.op("softmax")(x, dim=dim, memory_config=U.resolve_memcfg(out_mem, mesh), numeric_stable=True)
+    out = ttnn.softmax(x, dim=dim, memory_config=U.resolve_memcfg(out_mem, mesh), numeric_stable=True)
     U.assert_pcc(torch.softmax(x_torch.float(), dim=dim), out, pcc=0.999, mesh_device=mesh)

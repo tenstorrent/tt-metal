@@ -5,9 +5,9 @@
 #include <tt-metalium/experimental/udm/mesh_semaphore.hpp>
 #include <tt-metalium/experimental/udm/mesh_builder.hpp>
 #include <tt-metalium/experimental/udm/mesh_program.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::experimental::udm {

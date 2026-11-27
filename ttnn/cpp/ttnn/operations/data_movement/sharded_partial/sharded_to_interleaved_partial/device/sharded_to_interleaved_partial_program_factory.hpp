@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"

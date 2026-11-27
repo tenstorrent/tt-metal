@@ -8,6 +8,7 @@ import json
 import math
 import os
 import random
+import struct
 import sys
 import threading
 import time
@@ -22,10 +23,8 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotate_chunk_tokens
-from models.demos.common.prefill.media_stub import stub_media_key
 from models.demos.common.prefill.prefill_chunk import (
     SHUTDOWN_WORD,
-    MediaRef,
     PrefillChunk,
     check_packed_forward_support,
     metadata_size_bytes,
@@ -33,7 +32,6 @@ from models.demos.common.prefill.prefill_chunk import (
     packed_forward_capabilities,
     pad_chunks,
     sentinel_metadata,
-    validate_media_refs,
 )
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (
     chunk_key,
@@ -112,27 +110,9 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     return manifest
 
 
-def _parse_media(spec: str) -> list:
-    """PREFILL_PRODUCER_MEDIA "start:num_tokens,...": images sorted by position, not overlapping, within
-    PREFILL_MAX_SEQ_LEN."""
-    media = []
-    for item in filter(None, spec.split(",")):
-        start, sep, n = item.partition(":")
-        assert (
-            sep and start.isdigit() and n.isdigit() and int(n) > 0
-        ), f"PREFILL_PRODUCER_MEDIA item {item!r}: want start:num_tokens with num_tokens > 0"
-        media.append((int(start), int(n)))
-    for (s0, n0), (s1, _) in zip(media, media[1:]):
-        assert s1 >= s0 + n0, f"PREFILL_PRODUCER_MEDIA={spec!r}: images must be sorted and not overlap"
-    assert (
-        not media or sum(media[-1]) <= MAX_SEQ_LEN
-    ), f"PREFILL_PRODUCER_MEDIA={spec!r}: the last image ends past PREFILL_MAX_SEQ_LEN={MAX_SEQ_LEN}"
-    return media
-
-
 def _load_env_config(check_budget: bool = True) -> None:
     global SP_FACTOR, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
-    global MTP_DECODE_LEVELS, FORWARD_CHUNKS, H2D_METADATA_SIZE_BYTES, MEDIA_MAX_REFS, MEDIA
+    global MTP_DECODE_LEVELS, FORWARD_CHUNKS, CHUNK_METADATA_SIZE_BYTES
     # The host payload is one row per SP chip, in SP order, whichever mesh axis SP runs on; the
     # runner's H2D mapper (PREFILL_SP_AXIS) places the rows, so the producer needs only the factor.
     SP_FACTOR = int(os.environ.get("PREFILL_SP", 8))
@@ -143,25 +123,11 @@ def _load_env_config(check_budget: bool = True) -> None:
         forward_tokens_budget >= CHUNK_SIZE and forward_tokens_budget % CHUNK_SIZE == 0
     ), f"PREFILL_FORWARD_TOKENS_BUDGET={forward_tokens_budget} must be a multiple of PREFILL_CHUNK_SIZE={CHUNK_SIZE}"
     FORWARD_CHUNKS = max(forward_tokens_budget // CHUNK_SIZE, 1)
-    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 16))
-    # Must match the runner's. PREFILL_PRODUCER_MEDIA="start:num_tokens,..." places synthetic images at those prompt
-    # positions of every request; the runner reads them from the metadata as the engine would send them.
-    MEDIA_MAX_REFS = int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0))
-    assert MEDIA_MAX_REFS >= 0, f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS} must be >= 0"
-    H2D_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS, MEDIA_MAX_REFS)
-    MEDIA = _parse_media(os.environ.get("PREFILL_PRODUCER_MEDIA", ""))
-    assert not MEDIA or MEDIA_MAX_REFS, "PREFILL_PRODUCER_MEDIA needs PREFILL_MEDIA_MAX_REFS > 0"
-    # Every chunk of a forward may sit at the same positions (one per slot), so size K for the busiest window.
-    most = max(
-        (sum(s < e - 1 + CHUNK_SIZE and s + n > e - 1 for s, n in MEDIA) for e in (s + n for s, n in MEDIA)), default=0
-    )
-    assert FORWARD_CHUNKS * most <= MEDIA_MAX_REFS, (
-        f"PREFILL_PRODUCER_MEDIA: a chunk can overlap {most} images, so a forward of {FORWARD_CHUNKS} chunks needs "
-        f"PREFILL_MEDIA_MAX_REFS >= {FORWARD_CHUNKS * most}, not {MEDIA_MAX_REFS}"
-    )
+    CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     # Decode's level count: the levels past MTP_LEVELS are table aliases of level 0's rows, acked with it.
     MTP_DECODE_LEVELS = int(os.environ.get("PREFILL_MTP_DECODE_LEVELS", MTP_LEVELS))
+    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 16))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
     # Default from the adapter's own depth (see prefill_runner.py's MODEL_CFG.NUM_LAYERS
     # pattern) rather than a literal -- a hardcoded default silently under-covers any model
@@ -174,20 +140,8 @@ def _load_env_config(check_budget: bool = True) -> None:
 _load_env_config(check_budget=False)
 
 
-def _media_refs(chunks, prompt_lens) -> list:
-    """A ref for each image (MEDIA) a chunk overlaps, if its request holds the image: like the engine's admit, an
-    image must end before the prompt's last position. ``prompt_lens`` lists the non-empty chunks' prompt lengths."""
-    return [
-        MediaRef(k, start, start + n, stub_media_key(n, i))
-        for k, (c, prompt_len) in enumerate(zip(chunks, prompt_lens))
-        for i, (start, n) in enumerate(MEDIA)
-        if start + n < prompt_len and start < c.actual_end and start + n > c.actual_start
-    ]
-
-
-def _pack_metadata(chunks, refs=()) -> bytes:
-    validate_media_refs(refs, chunks)
-    return pack_forward_metadata(chunks, FORWARD_CHUNKS, refs, MEDIA_MAX_REFS)
+def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
+    return struct.pack("<3I", slot_id, actual_start, actual_end)
 
 
 def _push(service, expect_bytes: int, tokens, mtp_tokens, metadata: bytes) -> None:
@@ -246,55 +200,22 @@ def _forward_payload(pushes: list, pool_of) -> tuple:
     if FORWARD_CHUNKS == 1:
         (p,) = pushes
         pool = pool_of(p.slot_id)
-        chunks = [PrefillChunk(p.slot_id, p.actual_start, p.actual_end)]
         return (
             _h2d_rows(_chunk_slice(pool, p.actual_start, p.actual_isl), p.actual_start),
             _mtp_rows(pool, p.actual_start, p.actual_isl, actual_end=p.actual_end),
-            _pack_metadata(chunks, _media_refs(chunks, [p.actual_isl])),
+            _pack_metadata(p.slot_id, p.actual_start, p.actual_end),
         )
-    pushes = _partial_runs_last(pushes)
     chunks = pad_chunks([PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes], FORWARD_CHUNKS)
     tokens = [_chunk_slice(pool_of(p.slot_id), p.actual_start, p.actual_isl) for p in pushes]
     tokens += [[1] * CHUNK_SIZE] * (FORWARD_CHUNKS - len(pushes))
     rows = _h2d_forward_rows(tokens, [c.actual_start for c in chunks])
-    refs = _media_refs(chunks, [p.actual_isl for p in pushes])
-    return rows, _forward_mtp_rows(pushes, pool_of), _pack_metadata(chunks, refs)
-
-
-def _partial_runs_last(pushes: list) -> list:
-    """``pushes`` with the slot runs that end in a partial chunk after the others. The MoE masks every pad row wherever
-    it sits (PackedPadding), but its dispatch loop stops at each chip's last real row, so trailing pad rows cost
-    nothing and pad rows ahead of a non-empty chunk still cost a loop pass (packed_routed_pad_rows). Whole runs
-    move, so each slot's chunks stay one run in order (validate_chunks); only a run's last chunk can be partial."""
-    runs = []
-    for p in pushes:
-        if runs and runs[-1][-1].slot_id == p.slot_id:
-            runs[-1].append(p)
-        else:
-            runs.append([p])
-    runs.sort(key=lambda run: run[-1].actual_end - run[-1].actual_start < CHUNK_SIZE)
-    return [p for run in runs for p in run]
-
-
-def _forward_mtp_rows(pushes: list, pool_of):
-    """``[sp, 1, FORWARD_CHUNKS * num_mtp_tokens]`` lookahead ids of a packed forward, sent after every chunk's ids:
-    chunk k's block (_mtp_rows) at ``k * num_mtp_tokens``, an empty chunk's all MTP_PAD_TOKEN_ID. None without MTP."""
-    n_mtp = num_mtp_tokens(MTP_LEVELS)
-    if not n_mtp:
-        return None
-    sp = SP_FACTOR
-    blocks = [_mtp_rows(pool_of(p.slot_id), p.actual_start, p.actual_isl, actual_end=p.actual_end) for p in pushes]
-    blocks += [np.full((sp, 1, n_mtp), MTP_PAD_TOKEN_ID, dtype=np.uint32)] * (FORWARD_CHUNKS - len(pushes))
-    return np.concatenate(blocks, axis=-1)
+    return rows, None, pack_forward_metadata(chunks, FORWARD_CHUNKS)
 
 
 def _shutdown_payload() -> tuple:
     """(token rows, MTP rows, metadata) of the SHUTDOWN sentinel: every metadata word is SHUTDOWN_WORD."""
     rows = _h2d_forward_rows([[1] * CHUNK_SIZE] * FORWARD_CHUNKS, [0] * FORWARD_CHUNKS)
-    mtp = _mtp_rows([], 0)
-    if mtp is not None:
-        mtp = np.concatenate([mtp] * FORWARD_CHUNKS, axis=-1)  # one block per chunk position
-    return rows, mtp, sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS, MEDIA_MAX_REFS)
+    return rows, _mtp_rows([], 0), sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS)
 
 
 def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
@@ -1364,7 +1285,7 @@ def _resolve_pcc_window(trace_dir, real_len: int, tokens_per_block: int) -> tupl
 
 
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
-    from models.demos.deepseek_v3_d_p.tt.mla.indexer import rotate_index_keys
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
         _load_golden_index_k,
         _load_golden_kv_post,
@@ -1491,18 +1412,17 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         mins["mtp"] = mtp_min
     if _has_index_config(table):
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
-        hf_config = ADAPTER.load_hf_config()
+        index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
         n_index_layers = table.config(1).num_layers
         full_layers = _full_indexer_layer_indices(NUM_LAYERS)
         index_rows = []
         if index_golden_present(trace_dir):
-            # Without an `indexer_types` map every layer that owns a KV slab runs its own indexer: all of a
-            # dense DSA stack, only the DSA layers of a hybrid one (Kimi-K3.1's other rows hold KDA state).
-            index_layers = sorted(expected_slabs) if full_layers is None else full_layers
-            index_rows = [(layer, trace_dir) for layer in index_layers]
-            assert max(index_layers) < n_index_layers, (
+            index_rows = [
+                (layer, trace_dir) for layer in (range(n_index_layers) if full_layers is None else full_layers)
+            ]
+            assert full_layers is None or max(full_layers) < n_index_layers, (
                 f"config 1 has {n_index_layers} rows but layers [0,{NUM_LAYERS}) put a full indexer at layer "
-                f"{max(index_layers)}. On the layer axis the extent must cover the deepest full-indexer "
+                f"{max(full_layers)}. On the layer axis the extent must cover the deepest full-indexer "
                 f"layer; a compacted (rank-axis) table reaching here would read another layer's keys."
             )
         else:
@@ -1556,7 +1476,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 rope_layout=mtp_index_layout if is_mtp_row else "interleaved",
                 position0=first_pos + skip_rows,
             )
-            dev_ik = rotate_index_keys(hf_config, dev_ik.float()).to(torch.bfloat16)  # the golden's natural basis
+            dev_ik = (dev_ik.float() @ index_hadamard).to(torch.bfloat16)
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             if is_mtp_row:
                 mtp_index_pcc = pcc_index
@@ -2034,7 +1954,7 @@ def main() -> None:
 
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
         rows, mtp_rows, sentinel = _shutdown_payload()
-        assert len(sentinel) == H2D_METADATA_SIZE_BYTES
+        assert len(sentinel) == CHUNK_METADATA_SIZE_BYTES
         logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
         _push(service, payload_bytes, rows, mtp_rows, sentinel)
         service.barrier()

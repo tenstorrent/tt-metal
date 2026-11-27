@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_placement.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_types.hpp"

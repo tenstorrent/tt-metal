@@ -4,7 +4,7 @@
 
 #include "ttnn-nanobind/device.hpp"
 
-#include <tt-metalium/vocabulary/device_types.hpp>
+#include <tt-metalium/device_types.hpp>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -37,24 +37,21 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 // #include "ttnn/operations/experimental/auto_format/auto_format.hpp" // TODO_NANOBIND
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/discovery/cluster.hpp>
-#include <tt-metalium/utils/runtime_config.hpp>
-#include <tt-metalium/observability/profiler/device_profiler.hpp>
-#include <tt-metalium/observability/memory_reporter.hpp>
-#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/operation_timeout.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_state.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
 namespace nb = nanobind;

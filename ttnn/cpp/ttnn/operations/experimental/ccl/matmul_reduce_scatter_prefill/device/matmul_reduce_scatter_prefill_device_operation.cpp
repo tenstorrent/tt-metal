@@ -7,8 +7,8 @@
 #include <initializer_list>
 #include <string_view>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"

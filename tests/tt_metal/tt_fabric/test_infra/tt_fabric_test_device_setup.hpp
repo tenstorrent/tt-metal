@@ -10,8 +10,8 @@
 #include <string>
 #include <string_view>
 #include <memory>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>

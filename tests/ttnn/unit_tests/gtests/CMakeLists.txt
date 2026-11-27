@@ -25,8 +25,8 @@ target_precompile_headers(
         <vector>
         <gtest/gtest.h>
         <gmock/gmock.h>
-        <tt-metalium/workload/legacy/host_api.hpp>
-        <tt-metalium/execution/distributed.hpp>
+        <tt-metalium/host_api.hpp>
+        <tt-metalium/distributed.hpp>
         <ttnn/device_operation.hpp>
         <ttnn/operation.hpp>
         <ttnn/tensor/tensor.hpp>

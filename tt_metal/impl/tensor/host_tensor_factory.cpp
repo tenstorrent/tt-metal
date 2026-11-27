@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/data_formats/bfloat4.hpp>
-#include <tt-metalium/data_formats/bfloat8.hpp>
-#include <tt-metalium/memory/tensor/host_tensor.hpp>
-#include <tt-metalium/memory/tensor/tensor_apis.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
 #include <tt-metalium/experimental/host_bfp_conversion.hpp>
-#include <tt-metalium/memory/buffer/host_buffer.hpp>
-#include <tt-metalium/memory/utils/memory_pin.hpp>
-#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include "mx_host_packing.hpp"
 #include "tensor_impl.hpp"
 #include "impl/data_format/bfp_tile_encode.hpp"

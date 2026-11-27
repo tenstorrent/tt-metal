@@ -6,8 +6,8 @@
 
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>

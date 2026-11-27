@@ -14,7 +14,6 @@
 #if COL_GROUP_B
 #include <algorithm>
 
-#include "ckernel.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/col_group_walk.hpp"
 #endif
 
@@ -156,11 +155,6 @@ void kernel_main() {
                 noc.async_read(src_b, cb_src_b, src_tile_bytes_b, {.page_id = b_page}, {.offset_bytes = 0});
             } else {
                 copy_row0(b_tile, kFaceBytes, slot, kRowBytes);
-                // Those were RISC-V stores, and row 0 is next read by another L1 client: the NoC in the fill below,
-                // or the compute after the push. A store can retire before it lands in L1
-                // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md), so read the last stored word back first.
-                (void)ckernel::load_blocking(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(b_tile + kFaceBytes) + (B_ROW_WORDS - 1));
             }
             noc.async_read_barrier();
             if (fetch) {

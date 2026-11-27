@@ -35,38 +35,6 @@ void require_bf16_parameters(const serialization::NamedParameters& parameters, s
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }
 
-void OptimizerBase::drop_gradients(bool remember) {
-    for (auto& [name, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-            tensor_ptr->set_grad(ttnn::Tensor());
-            if (remember) {
-                m_cleared_gradients.insert(name);
-            }
-        }
-    }
-}
-
-void OptimizerBase::clear_gradients() {
-    drop_gradients(/* remember */ false);
-}
-
-void OptimizerBase::clear_gradients_to_restore() {
-    drop_gradients(/* remember */ true);
-}
-
-void OptimizerBase::restore_cleared_gradients_as_zeros() {
-    for (const auto& name : m_cleared_gradients) {
-        const auto& tensor_ptr = m_parameters.at(name);
-        // The zero gradient is for a parameter that got none in this step, an expert no token was routed to for
-        // example: the optimizer still updates it (momentum, weight decay). A parameter that backward reached keeps
-        // its gradient, and one frozen since zero_grad() gets none, because it is not trained any more.
-        if (tensor_ptr->get_requires_grad() && !tensor_ptr->is_grad_initialized()) {
-            tensor_ptr->set_grad(core::zeros_like(tensor_ptr->get_value()));
-        }
-    }
-    m_cleared_gradients.clear();
-}
-
 namespace {
 // A group's param names as one string: sorted (so the order the group was built in does not matter).
 std::string joined_param_names(std::vector<std::string> names) {

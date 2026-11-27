@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <map>
 #include <string>
 #include <string_view>
 #include <variant>
 
 #include "context.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include "core_coord.hpp"
 #include "device_utils.hpp"
-#include "tt-metalium/workload/legacy/kernel_types.hpp"
+#include "kernel_types.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {

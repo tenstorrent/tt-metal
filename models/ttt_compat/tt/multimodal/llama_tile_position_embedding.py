@@ -116,7 +116,13 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
             out_pos_embed = out_pos_embed * self.gate
 
         # Broadcast along ntok dimension
-        out_pos_embed = ttnn.repeat(out_pos_embed, (1, 1, nearest_32(x.shape[2]) // 32, 1))
+        out_pos_embed = ttnn.concat(
+            [
+                out_pos_embed,
+            ]
+            * (nearest_32(x.shape[2]) // 32),
+            dim=2,
+        )
 
         # Concatenate with input tensor
         x = x + out_pos_embed[:, : x.shape[1], : x.shape[2], :]

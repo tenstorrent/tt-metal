@@ -55,6 +55,8 @@ void bind_slice_write(nb::module_& mod) {
         nb::arg("output_tensor"),
         nb::arg("start"),
         nb::arg("end"),
-        nb::arg("step"));
+        nb::arg("step"),
+        nb::kw_only(),
+        nb::arg("runtime_shapes") = false);
 }
 }  // namespace ttnn::operations::experimental::slice_write

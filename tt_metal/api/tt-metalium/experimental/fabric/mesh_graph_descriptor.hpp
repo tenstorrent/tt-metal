@@ -20,7 +20,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-umd/types/arch.hpp>
 
 // Forward declaration

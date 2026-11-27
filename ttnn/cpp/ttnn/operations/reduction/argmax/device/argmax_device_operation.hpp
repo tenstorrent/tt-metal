@@ -9,7 +9,6 @@
 #include <optional>
 #include <variant>
 #include "ttnn/metal_v2_artifacts.hpp"
-#include "ttnn/command_list_params.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::prim {
@@ -17,21 +16,11 @@ namespace ttnn::prim {
 struct ArgMaxSingleCoreProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
-    static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
-        const ArgmaxParams&,
-        const ArgmaxInputs&,
-        const tt::tt_metal::ProgramSpec&,
-        const tt::tt_metal::ProgramRunArgs&);
 };
 
 struct ArgMaxMultiCoreProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
-    static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
-        const ArgmaxParams&,
-        const ArgmaxInputs&,
-        const tt::tt_metal::ProgramSpec&,
-        const tt::tt_metal::ProgramRunArgs&);
 };
 
 struct ArgMaxDeviceOperation {

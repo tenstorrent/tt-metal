@@ -39,9 +39,9 @@
 #include <fstream>
 #include <string>
 
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
 #include "jit_build/build.hpp"

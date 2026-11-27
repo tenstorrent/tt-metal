@@ -4,9 +4,9 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <buffer_types.hpp>
+#include <core_coord.hpp>
+#include <device.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe_dram_sender_internal.hpp"
@@ -15,8 +15,8 @@
 #include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
-#include "tt_metal/api/tt-metalium/vocabulary/hal_types.hpp"
-#include <tt-metalium/utils/math.hpp>
+#include "tt_metal/api/tt-metalium/hal_types.hpp"
+#include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -36,16 +36,16 @@
 
 #include "hostdev/remote_dfb_config_layout.h"
 #include "llrt/tt_cluster.hpp"
-#include "tt-metalium/mesh/mesh_device.hpp"
+#include "mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "tt_metal/api/tt-metalium/execution/slow_dispatch.hpp"
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
+#include "tt_metal/api/tt-metalium/tt_metal.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
-#include <tt-metalium/memory/buffer/host_buffer.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -102,8 +102,6 @@ uint32_t checked_l1_address(DeviceAddr address, std::string_view what) {
 struct PrefetcherPipePageCommon {
     const PrefetcherPipeConfigPageLayout& layout;
     uint32_t l1_alignment;
-    // Credit-lane slots each receiver has in either credit block (the space's lane capacity).
-    uint32_t credit_lane_capacity;
     uint32_t num_receivers;
     uint32_t data_base_addr;
     uint32_t ring_size;
@@ -146,8 +144,7 @@ std::vector<uint32_t> build_receiver_config_page(
     CoreCoord sender_noc_xy) {
     std::vector<uint32_t> page(common.layout.page_size / sizeof(uint32_t), 0);
     uint32_t i = write_shared_config_words(page, common, false);
-    // This receiver's lane-0 slot in each credit block, at the allocated lane stride.
-    const uint32_t slot = receiver_index * common.credit_lane_capacity * common.l1_alignment;
+    const uint32_t slot = receiver_index * common.l1_alignment;
     page[i++] = common.layout.sent_offset + slot;
     page[i++] = common.layout.acked_offset + slot;
     page[i++] = peer_counter_offset;
@@ -248,12 +245,12 @@ PrefetcherPipeSpaceImpl::~PrefetcherPipeSpaceImpl() {
 // ---------------------------------------------------------------------------------------------
 
 PrefetcherPipeSpaceL1::PrefetcherPipeSpaceL1(
-    distributed::MeshCommandQueue& mesh_cq,
+    distributed::MeshDevice& device,
     PrefetcherPipeL1Source source,
     const CoreRangeSet& cores,
     uint32_t ring_size,
     uint32_t config_page_size) :
-    device_(mesh_cq.device()), cq_id_(static_cast<uint8_t>(mesh_cq.id())) {
+    device_(&device) {
     TT_FATAL(
         source != PrefetcherPipeL1Source::Default,
         "PrefetcherPipeSpaceL1 requires a resolved L1 source (internal error)");
@@ -270,10 +267,6 @@ PrefetcherPipeSpaceL1::PrefetcherPipeSpaceL1(
 }
 
 PrefetcherPipeSpaceL1::~PrefetcherPipeSpaceL1() { release(); }
-
-distributed::MeshCommandQueue& PrefetcherPipeSpaceL1::command_queue() const {
-    return device_->mesh_command_queue(cq_id_);
-}
 
 void PrefetcherPipeSpaceL1::allocate_from_arena(
     const CoreRangeSet& cores, uint32_t ring_size, uint32_t config_page_size) {
@@ -338,7 +331,7 @@ void PrefetcherPipeSpaceL1::allocate_from_allocator(
     // Zero every core's page, which is the template a core no pipe has claimed holds. Through the
     // command queue, like the pages carved later, because earlier work may still be using this L1.
     const std::vector<uint32_t> zeros(config_buffer_->size() / sizeof(uint32_t), 0);
-    distributed::EnqueueWriteMeshBuffer(command_queue(), config_buffer_, zeros, /*blocking=*/false);
+    distributed::EnqueueWriteMeshBuffer(device_->mesh_command_queue(), config_buffer_, zeros, /*blocking=*/false);
 }
 
 void PrefetcherPipeSpaceL1::enqueue_config_pages(
@@ -377,7 +370,7 @@ void PrefetcherPipeSpaceL1::enqueue_config_pages(
             return image;
         });
     }
-    core_subset_write::enqueue_write(command_queue(), *config_buffer_, images, /*blocking=*/false, cores);
+    core_subset_write::enqueue_write(device_->mesh_command_queue(), *config_buffer_, images, /*blocking=*/false, cores);
 }
 
 void PrefetcherPipeSpaceL1::release() noexcept {
@@ -539,7 +532,7 @@ void PrefetcherPipeSpaceImpl::order_dram_sender_pages() const {
     // holds every later request until the queue gets here. One started later, even on another thread
     // while this runs, is launched straight from the host, so the queue has to have drained before
     // the caller gets a pipe to name in a request.
-    auto& cq = command_queue();
+    auto& cq = device_->mesh_command_queue();
     if (!device_->impl().wait_for_cq_on_tensor_prefetcher_if_active(cq)) {
         distributed::Finish(cq);
     }
@@ -607,9 +600,10 @@ void PrefetcherPipeSpaceImpl::set_dram_sender_cores(std::span<const CoreCoord> d
     }
     validate_dram_senders_across_mesh(device_, sender_mapping);
 
+    const auto& hal = device_->impl().metal_env().get_hal();
     TT_FATAL(
-        device_->impl().dram_sender_placement().has_value(),
-        "set_dram_sender_cores: this device runs no DRAM-sender endpoints");
+        hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
+        "set_dram_sender_cores requires programmable DRAM cores");
     const uint32_t alignment = config_page_alignment_for(device_);
 
     // Reserve each sender's state before a pipe on it is carved. A later carve on that sender only
@@ -860,18 +854,14 @@ std::vector<CoreCoord> PrefetcherPipeImpl::dram_sender_receiver_table() const {
 }
 
 void PrefetcherPipeImpl::build_dram_sender_config_pages() {
-    // A DRAM sender credits one lane per receiver, but its pages keep the space's lane stride, which is
-    // what the device addresses credit slots by.
-    TT_FATAL(num_credit_lanes_ == 1, "DRAM-sender PrefetcherPipes credit one lane per receiver");
+    TT_FATAL(space_->credit_lane_capacity() == 1, "DRAM-sender PrefetcherPipes support one credit lane per receiver");
     const uint32_t l1_alignment = l1_alignment_for(space_->get_device());
-    const uint32_t credit_lane_capacity = space_->credit_lane_capacity();
     const auto& layout = space_->layout();
     const auto receivers = dram_sender_receiver_table();
     const uint32_t num_receivers = static_cast<uint32_t>(receivers.size());
     const PrefetcherPipePageCommon common{
         .layout = layout,
         .l1_alignment = l1_alignment,
-        .credit_lane_capacity = credit_lane_capacity,
         .num_receivers = num_receivers,
         .data_base_addr = space_->buffer_address(),
         .ring_size = space_->ring_size(),
@@ -900,11 +890,10 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
         write_dram_sender_l1(
             *mesh_device, target_device, sender_core_, sender_page_addr, std::as_bytes(std::span(sender_page)));
 
-        const CoreCoord sender_virtual = dram_sender_virtual_core(*mesh_device, target_device, sender_core_);
+        const CoreCoord sender_virtual = target_device->virtual_core_from_logical_core(sender_core_, CoreType::DRAM);
         PrefetcherPipeConfigPages& pages = device_pages[mesh_device->get_view().find_device(target_device->id())];
         for (uint32_t r = 0; r < num_receivers; ++r) {
-            const uint32_t sender_acked_slot =
-                sender_page_addr + layout.acked_offset + r * credit_lane_capacity * l1_alignment;
+            const uint32_t sender_acked_slot = sender_page_addr + layout.acked_offset + r * l1_alignment;
             auto receiver_page =
                 build_receiver_config_page(common, r, sender_acked_slot - space_->config_address(), sender_virtual);
             if (!config_pages_.contains(receivers[r])) {
@@ -1050,15 +1039,14 @@ std::vector<PrefetcherPipe> PrefetcherPipeSpace::create_pipes(
 PrefetcherPipeL1Source PrefetcherPipeSpace::l1_source() const { return pimpl_->l1_source(); }
 
 PrefetcherPipeSpace CreatePrefetcherPipeSpace(
-    distributed::MeshCommandQueue& mesh_cq, const PrefetcherPipeSpaceConfig& config) {
-    std::vector<PrefetcherPipeSpace> spaces = CreatePrefetcherPipeSpaces(mesh_cq, std::span(&config, 1));
+    distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config) {
+    std::vector<PrefetcherPipeSpace> spaces = CreatePrefetcherPipeSpaces(device, std::span(&config, 1));
     return std::move(spaces.front());
 }
 
 std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
-    distributed::MeshCommandQueue& mesh_cq, std::span<const PrefetcherPipeSpaceConfig> configs) {
+    distributed::MeshDevice& device, std::span<const PrefetcherPipeSpaceConfig> configs) {
     TT_FATAL(!configs.empty(), "CreatePrefetcherPipeSpaces requires at least one config");
-    distributed::MeshDevice& device = *mesh_cq.device();
     std::vector<std::unique_ptr<PrefetcherPipeSpaceImpl>> impls;
     impls.reserve(configs.size());
     for (const PrefetcherPipeSpaceConfig& config : configs) {
@@ -1088,7 +1076,7 @@ std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
         config_page_size = std::max(config_page_size, impl.config_page_size());
     }
 
-    auto l1 = std::make_shared<PrefetcherPipeSpaceL1>(mesh_cq, source, cores, ring_size, config_page_size);
+    auto l1 = std::make_shared<PrefetcherPipeSpaceL1>(device, source, cores, ring_size, config_page_size);
     std::vector<PrefetcherPipeSpace> spaces;
     spaces.reserve(impls.size());
     for (auto& impl : impls) {

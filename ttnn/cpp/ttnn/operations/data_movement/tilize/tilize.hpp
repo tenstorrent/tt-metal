@@ -4,7 +4,7 @@
 
 #pragma once
 #include "ttnn/types.hpp"
-#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/tile.hpp>
 
 namespace ttnn {
 

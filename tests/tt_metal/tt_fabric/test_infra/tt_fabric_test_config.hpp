@@ -23,13 +23,13 @@
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/hal.hpp>
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric::fabric_tests {

@@ -17,23 +17,23 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
-#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/mesh/sub_device.hpp>
-#include <tt-metalium/mesh/sub_device_types.hpp>
-#include <tt-metalium/discovery/system_mesh.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/allocator/allocator.hpp"
@@ -369,54 +369,6 @@ TEST_F(DispatchContextFixture, RefusesPerCoreResidentL1OnDispatchCores) {
     ASSERT_FALSE(error.empty()) << "Expected per-core resident L1 to block Fast Dispatch setup.";
     EXPECT_NE(error.find("chip ledger"), std::string::npos);
     EXPECT_NE(error.find("core (12,1)"), std::string::npos);
-}
-
-// WHAT: the mesh opened with a 16 KB KERNEL_CONFIG window, smaller than the dispatch kernels' blocks (cq_prefetch's
-//       is about 31 KB), then two manual fast-dispatch sessions, each moving a DRAM page.
-// WHY:  the dispatch kernels' L1 starts at DEFAULT_UNRESERVED whatever worker_l1_size is, so their blocks are checked
-//       against the default KERNEL_CONFIG window, not the one worker_l1_size leaves.
-// EXPECT: both sessions start and round-trip the page through fast dispatch; slow dispatch works afterwards.
-TEST_F(DispatchContextFixture, DispatchKernelsRunWhenWindowIsSmall) {
-    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
-        GTEST_SKIP() << *reason;
-    }
-
-    const auto& hal = MetalContext::instance().hal();
-    // The largest worker_l1_size leaves the window empty; keep 16 KB of it.
-    constexpr size_t window_size = 16 * 1024;
-    const size_t worker_l1_size = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
-                                  hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) -
-                                  hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG) -
-                                  window_size;
-    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
-    auto mesh = MeshDevice::create(
-        MeshDeviceConfig(system_shape),
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        /*num_command_queues=*/1,
-        DispatchCoreConfig{},
-        /*l1_bank_remap=*/{},
-        worker_l1_size);
-
-    constexpr uint32_t page_size = 4096;
-    DeviceLocalBufferConfig dram{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
-    ReplicatedBufferConfig dram_global{.size = page_size};
-    for (uint32_t session = 0; session < 2; session++) {
-        ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get()))
-            << "fast-dispatch session " << session;
-        auto probe = MeshBuffer::create(dram_global, dram, mesh.get());
-        std::vector<uint32_t> src(page_size / sizeof(uint32_t));
-        std::iota(src.begin(), src.end(), 100 * (session + 1));
-        EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), probe, src);
-        Finish(mesh->mesh_command_queue());
-        std::vector<uint32_t> dst;
-        ReadShard(mesh->mesh_command_queue(), dst, probe, MeshCoordinate(0, 0));
-        EXPECT_EQ(dst, src) << "fast-dispatch DRAM round trip failed in session " << session;
-        probe.reset();
-        ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()))
-            << "fast-dispatch session " << session;
-    }
-    expect_slow_dispatch_dram_round_trip(mesh.get(), 300);
 }
 
 // WHAT: a persistent-arena region on (12,1), booked in the MESH allocator's arena.
@@ -1317,38 +1269,6 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
             EXPECT_EQ(dst_vec, src_vec);
         }
     }
-}
-
-// A submesh created during the session gets its own FD queues. Ending the session from the root while that submesh
-// is capturing a trace must refuse, and must succeed once the capture ends.
-TEST_F(DispatchContextFixture, TerminateRefusedWhileSubmeshCaptures) {
-    const auto& rt_options = MetalContext::instance().rtoptions();
-    if (rt_options.get_fast_dispatch()) {
-        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
-    }
-    const auto& cluster = MetalContext::instance().get_cluster();
-    if (cluster.is_mock_or_emulated()) {
-        GTEST_SKIP() << "This test requires real hardware.";
-    }
-    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP()
-            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
-    }
-    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
-    auto mesh =
-        MeshDevice::create(MeshDeviceConfig(system_shape), DEFAULT_L1_SMALL_SIZE, /*trace_region_size=*/1 << 20);
-    auto& dispatch_context = experimental::DispatchContext::get();
-    dispatch_context.initialize_fast_dispatch(mesh.get());
-
-    auto submesh = mesh->create_submesh(MeshShape(1, 1));
-    auto& cq = submesh->mesh_command_queue();
-    const MeshTraceId trace_id = submesh->begin_mesh_trace(cq);
-    EXPECT_THROW(dispatch_context.terminate_fast_dispatch(mesh.get()), std::runtime_error);
-
-    submesh->end_mesh_trace(cq, trace_id);
-    submesh->release_mesh_trace(trace_id);
-    submesh.reset();  // its FD queues drain on destruction, which needs dispatch running
-    EXPECT_NO_THROW(dispatch_context.terminate_fast_dispatch(mesh.get()));
 }
 
 // Regression test for https://github.com/tenstorrent/tt-metal/issues/50634:

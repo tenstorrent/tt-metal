@@ -6,7 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/device/common.hpp"
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim::qsr {
 

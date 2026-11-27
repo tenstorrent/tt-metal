@@ -4,16 +4,9 @@
 
 #include "ternary.hpp"
 
-#include <algorithm>
-#include <array>
-#include <initializer_list>
-#include <span>
 #include <utility>
 #include <variant>
 #include <cstdint>
-
-#include <enchantum/enchantum.hpp>
-#include <fmt/ranges.h>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
@@ -103,62 +96,6 @@ inline bool is_integer_dtype(DataType dtype) {
            dtype == DataType::UINT8;
 }
 
-// Dtypes each op computes correctly on, through either its LLK kernel or its composite fallback.
-// Kernels without an integer path read integer data as float bit patterns instead of failing,
-// so anything not listed here must be rejected before dispatch.
-std::span<const DataType> supported_dtypes(TernaryOpType op_type) {
-    using enum DataType;
-    static constexpr std::array where_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, INT32, UINT32, UINT16, UINT8};
-    // The LERP kernel has no UINT32 path: a UINT32 dispatch compiles but returns zeros.
-    static constexpr std::array lerp_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, INT32, UINT16, UINT8};
-    static constexpr std::array addcmul_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32};
-    static constexpr std::array addcdiv_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B};
-    static constexpr std::array snake_beta_dtypes{BFLOAT16, FLOAT32};
-    static constexpr std::array mac_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, INT32, UINT32, UINT16, UINT8};
-    switch (op_type) {
-        case TernaryOpType::WHERE: return where_dtypes;
-        case TernaryOpType::LERP: return lerp_dtypes;
-        case TernaryOpType::ADDCMUL: return addcmul_dtypes;
-        case TernaryOpType::ADDCDIV: return addcdiv_dtypes;
-        case TernaryOpType::SNAKE_BETA: return snake_beta_dtypes;
-        case TernaryOpType::MAC: return mac_dtypes;
-    }
-    TT_THROW("Unknown TernaryOpType {}", static_cast<int>(op_type));
-}
-
-// Block-float conversion happens when packing the result, so a float op can write BFLOAT8_B and
-// BFLOAT4_B into a preallocated output even when it does not accept them as inputs.
-std::span<const DataType> supported_output_dtypes(TernaryOpType op_type) {
-    using enum DataType;
-    static constexpr std::array addcmul_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, INT32, UINT32};
-    static constexpr std::array snake_beta_dtypes{BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B};
-    switch (op_type) {
-        case TernaryOpType::ADDCMUL: return addcmul_dtypes;
-        case TernaryOpType::SNAKE_BETA: return snake_beta_dtypes;
-        default: return supported_dtypes(op_type);
-    }
-}
-
-void validate_dtypes(
-    TernaryOpType op_type, std::initializer_list<DataType> input_dtypes, const std::optional<Tensor>& output) {
-    auto check = [&](DataType dtype, std::span<const DataType> supported, const char* role) {
-        TT_FATAL(
-            std::ranges::find(supported, dtype) != supported.end(),
-            "{} does not support {} {}. Supported {} dtypes: {}",
-            enchantum::to_string(op_type),
-            dtype,
-            role,
-            role,
-            fmt::format("{}", fmt::join(supported, ", ")));
-    };
-    for (DataType dtype : input_dtypes) {
-        check(dtype, supported_dtypes(op_type), "input");
-    }
-    if (output.has_value()) {
-        check(output->dtype(), supported_output_dtypes(op_type), "output");
-    }
-}
-
 void validate_where_scalar_for_integer_tensor(float scalar, DataType tensor_dtype) {
     if (tensor_dtype != DataType::INT32 && tensor_dtype != DataType::UINT32) {
         return;
@@ -181,7 +118,6 @@ Tensor invoke_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    validate_dtypes(TernaryOpType::WHERE, {predicate.dtype(), t_true.dtype(), t_false.dtype()}, output);
     Tensor condition = predicate;
     auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
         condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
@@ -202,14 +138,6 @@ Tensor invoke_impl(
         t_false.logical_shape());
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-    if (output.has_value() && is_floating_point(t_true.dtype()) && is_floating_point(t_false.dtype()) &&
-        !is_floating_point(output->dtype())) {
-        // where selects the floating-point value bits; packing them into an integer
-        // buffer does not convert them. Convert after selection into the caller's buffer.
-        auto selected = ternary_utils::invoke_ternary_llk<TernaryOpType::WHERE>(
-            condition, t_true, t_false, DataType::FLOAT32, output->memory_config(), std::nullopt, sub_core_grids);
-        return ttnn::typecast(selected, output->dtype(), output->memory_config(), output, sub_core_grids);
-    }
     log_debug(tt::LogOp, "Where LLK - TTT");
     return ternary_utils::invoke_ternary_llk<TernaryOpType::WHERE>(
         condition, t_true, t_false, output_dtype, memory_config, output, sub_core_grids);
@@ -223,7 +151,6 @@ Tensor invoke_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    validate_dtypes(TernaryOpType::WHERE, {predicate.dtype(), t_true.dtype()}, output);
     validate_where_scalar_for_integer_tensor(scalar_false, t_true.dtype());
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
@@ -248,7 +175,6 @@ Tensor invoke_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    validate_dtypes(TernaryOpType::WHERE, {predicate.dtype(), t_false.dtype()}, output);
     validate_where_scalar_for_integer_tensor(scalar_true, t_false.dtype());
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
@@ -308,14 +234,6 @@ Tensor mac_impl(
     constexpr bool b_is_tensor = std::same_as<ValueB, Tensor>;
     constexpr bool c_is_tensor = std::same_as<ValueC, Tensor>;
     constexpr auto variant = b_is_tensor && c_is_tensor ? "TTT" : (b_is_tensor ? "TTS" : "TST");
-
-    if constexpr (b_is_tensor && c_is_tensor) {
-        validate_dtypes(TernaryOpType::MAC, {input_tensor_a.dtype(), value_b.dtype(), value_c.dtype()}, output);
-    } else if constexpr (b_is_tensor) {
-        validate_dtypes(TernaryOpType::MAC, {input_tensor_a.dtype(), value_b.dtype()}, output);
-    } else {
-        validate_dtypes(TernaryOpType::MAC, {input_tensor_a.dtype(), value_c.dtype()}, output);
-    }
 
     const auto broadcast_type = [&] {
         if constexpr (b_is_tensor && c_is_tensor) {
@@ -419,7 +337,14 @@ Tensor addcmul(
     const std::optional<Tensor>& output) {
     log_debug(tt::LogOp, "Addcmul LLK - TTT");
 
-    validate_dtypes(TernaryOpType::ADDCMUL, {input_a.dtype(), input_b.dtype(), input_c.dtype()}, output);
+    bool is_supported_dtype =
+        (input_a.dtype() == DataType::BFLOAT16 || input_a.dtype() == DataType::FLOAT32 ||
+         input_a.dtype() == DataType::INT32 || input_a.dtype() == DataType::BFLOAT8_B ||
+         input_a.dtype() == DataType::UINT32);
+    TT_FATAL(
+        is_supported_dtype,
+        "Addcmul supports only BFLOAT16, BFLOAT8_B, FLOAT32, INT32, and UINT32 dtypes. Got {}",
+        input_a.dtype());
     TT_FATAL(
         input_b.dtype() == input_a.dtype() && input_c.dtype() == input_a.dtype(),
         "Addcmul TTT requires all input tensors to have the same dtype. Got input_a={}, input_b={}, input_c={}",
@@ -466,13 +391,15 @@ Tensor addcdiv(
     const std::optional<Tensor>& output) {
     log_debug(tt::LogOp, "Addcdiv LLK - TTT");
 
-    validate_dtypes(TernaryOpType::ADDCDIV, {input_a.dtype(), input_b.dtype(), input_c.dtype()}, output);
-
     // Only TTT variant is supported for addcdiv
     auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
 
     bool is_any_input_block_format =
         is_block_float(input_a.dtype()) || is_block_float(input_b.dtype()) || is_block_float(input_c.dtype());
+    bool is_input_int32 = (input_a.dtype() == DataType::INT32) && (input_b.dtype() == DataType::INT32) &&
+                          (input_c.dtype() == DataType::INT32);
+
+    TT_FATAL(!is_input_int32, "Addcdiv TTT does not support INT32 inputs.");
 
     if (is_invalid_bcast(broadcast_type) || is_any_input_block_format) {
         log_debug(tt::LogOp, "Addcdiv Fallback - TTT");
@@ -500,7 +427,12 @@ Tensor lerp(
     float weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    validate_dtypes(TernaryOpType::LERP, {input.dtype(), end.dtype()}, output);
+    // The LERP kernel has no unsigned path: a UINT32 dispatch compiles but returns zeros.
+    TT_FATAL(
+        input.dtype() != DataType::UINT32 && end.dtype() != DataType::UINT32,
+        "lerp does not support UINT32 inputs. Got input={}, end={}",
+        input.dtype(),
+        end.dtype());
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
 
     bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
@@ -532,7 +464,13 @@ Tensor lerp(
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    validate_dtypes(TernaryOpType::LERP, {input.dtype(), end.dtype(), weight.dtype()}, output);
+    // The LERP kernel has no unsigned path: a UINT32 dispatch compiles but returns zeros.
+    TT_FATAL(
+        input.dtype() != DataType::UINT32 && end.dtype() != DataType::UINT32 && weight.dtype() != DataType::UINT32,
+        "lerp does not support UINT32 inputs. Got input={}, end={}, weight={}",
+        input.dtype(),
+        end.dtype(),
+        weight.dtype());
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
 
     bool is_any_input_block_format =
@@ -566,8 +504,6 @@ Tensor snake_beta(
     const Tensor& beta,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    validate_dtypes(
-        TernaryOpType::SNAKE_BETA, {input_tensor.dtype(), alpha.dtype(), beta.dtype()}, optional_output_tensor);
     auto lift_to_rank2 = [](const Tensor& t) { return t.logical_shape().rank() < 2 ? ttnn::unsqueeze(t, 0) : t; };
     return ttnn::prim::ternary(
         TernaryOpType::SNAKE_BETA,
@@ -610,7 +546,6 @@ Tensor mac(
 
 // TSS: a * scalar1 + scalar2 — native unary SFPU kernel (single pass, no intermediate tensor)
 Tensor mac(const Tensor& input_tensor_a, float value1, float value2, const std::optional<MemoryConfig>& memory_config) {
-    validate_dtypes(TernaryOpType::MAC, {input_tensor_a.dtype()}, std::nullopt);
     // The unary mac_tss kernel packs both scalars as floats and computes in the FP32 SFPU
     // registers, so integer inputs stay on the composite path (which preserves the integer
     // output dtype the pre-LLK implementation produced).

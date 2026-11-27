@@ -1,0 +1,111 @@
+{
+ "arch": "blackhole",
+ "grid": [
+  11,
+  10
+ ],
+ "variables": {
+  "M": {
+   "start": 8192,
+   "stop": 18912,
+   "step": 32
+  }
+ },
+ "matmuls": [
+  {
+   "name": "blocks.*.attn1.to_out",
+   "K": 5120,
+   "N": 2560,
+   "op": "addcmul",
+   "bias": true,
+   "math_approx_mode": true,
+   "calls": [
+    [
+     "M",
+     80
+    ]
+   ]
+  },
+  {
+   "name": "patch_embedding.proj_weight",
+   "K": 144,
+   "N": 2560,
+   "bias": true,
+   "math_fidelity": "HiFi4",
+   "calls": [
+    [
+     "M",
+     2
+    ]
+   ]
+  },
+  {
+   "name": "blocks.*.attn2.to_out + blocks.*.attn2.to_q",
+   "K": 5120,
+   "N": 2560,
+   "bias": true,
+   "math_approx_mode": true,
+   "calls": [
+    [
+     "M",
+     160
+    ]
+   ]
+  },
+  {
+   "name": "proj_out",
+   "K": 5120,
+   "N": 64,
+   "bias": true,
+   "math_fidelity": "HiFi4",
+   "input_dtype": "float32",
+   "output_dtype": "float32",
+   "calls": [
+    [
+     "M",
+     2
+    ]
+   ]
+  },
+  {
+   "name": "blocks.*.ffn.ff1",
+   "K": 5120,
+   "N": 6912,
+   "bias": true,
+   "activation": "gelu_tanh",
+   "calls": [
+    [
+     "M",
+     80
+    ]
+   ]
+  },
+  {
+   "name": "blocks.*.ffn.ff2",
+   "K": 6912,
+   "N": 5120,
+   "bias": true,
+   "calls": [
+    [
+     "M",
+     80
+    ]
+   ]
+  },
+  {
+   "name": "blocks.*.attn1.to_qkv",
+   "K": 5120,
+   "N": 7680,
+   "op": "split",
+   "bias": true,
+   "math_approx_mode": true,
+   "calls": [
+    [
+     "M",
+     80
+    ]
+   ]
+  }
+ ],
+ "l1_limit": 1565696
+}

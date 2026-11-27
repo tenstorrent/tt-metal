@@ -7,10 +7,10 @@
 
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include <algorithm>
 #include <cstdint>

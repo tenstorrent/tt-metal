@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -111,9 +111,7 @@ void ConfigureProgramWithoutLaunch(IDevice* device, Program& program);
 
 // A relocatable capture of the kernel config a core currently runs. The detailed launch-message
 // layout remains private to Metal; consumers get only the source block's L1 range and an opaque
-// copy of the launch kernel config needed to restore it at another base. For a program whose
-// kernel binaries run from a kernel config buffer, the range is the KERNEL_CONFIG window without
-// them: they stay in the buffer, where the launch kernel config points.
+// copy of the launch kernel config needed to restore it at another base.
 class CapturedKernelConfig {
 public:
     uint32_t kernel_config_base() const;

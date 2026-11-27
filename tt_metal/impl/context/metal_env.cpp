@@ -19,8 +19,7 @@
 #include "device/device_manager.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
-#include "impl/drisc_service/seat_lock.hpp"
-#include "impl/profiler/profiler_state_manager.hpp"
+#include "profiler_state_manager.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
@@ -30,8 +29,8 @@
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/mesh_graph.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
-#include <tt-metalium/discovery/system_mesh.hpp>
+#include <distributed_context.hpp>
+#include <system_mesh.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_context.hpp"
@@ -147,25 +146,6 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
     return res.dram_programmable_cores;
 }
 
-// Takes the seat lock of every DRAM core metal programs and resets, so no DRISC service can start on one while this
-// env exists. Returns the first seat another process holds, holding none; otherwise holds them all in `held`.
-std::optional<std::string> hold_dram_core_seats(
-    const Cluster& cluster, std::vector<internal::drisc_service::SeatLock>& held) {
-    for (const ChipId chip : cluster.all_chip_ids()) {
-        const uint64_t asic_id = cluster.get_unique_chip_ids().at(chip);
-        for (const CoreCoord& core : cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::NOC0)) {
-            auto lock = internal::drisc_service::SeatLock::try_acquire_exclusive(
-                {.asic_id = asic_id, .noc0_x = static_cast<uint32_t>(core.x), .noc0_y = static_cast<uint32_t>(core.y)});
-            if (!lock.has_value()) {
-                held.clear();
-                return fmt::format("chip {} DRAM core {} (ASIC {})", chip, core.str(), asic_id);
-            }
-            held.push_back(std::move(*lock));
-        }
-    }
-    return std::nullopt;
-}
-
 // The qsr.s1 emulator model only routes device NoC traffic through the boot-programmed
 // address-translation tables, so tt-metal defaults it to the grendel_qsr1 ATT map.
 // Set the qsr.s1 ATT default from the simulator path alone. Only called when the user did not set
@@ -220,24 +200,6 @@ void MetalEnvImpl::initialize_base_objects() {
     // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
     // a throwaway TopologyDiscovery via get_cluster_type_from_cluster_desc().
     const bool is_base_routing_fw_enabled = cluster_->is_base_routing_fw_enabled();
-    bool enable_dram_cores = should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_);
-    if (enable_dram_cores && platform_arch == tt::ARCH::BLACKHOLE &&
-        cluster_->get_target_device_type() == tt::TargetDevice::Silicon) {
-        if (const auto busy = hold_dram_core_seats(*this->cluster_, this->dram_core_seat_locks_)) {
-            TT_FATAL(
-                !this->rtoptions_->get_blackhole_dram_programmable_cores_override().has_value(),
-                "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1, but another process (a DRISC service client or "
-                "metal) holds the seat of {}, which metal would reset. Unset the variable to run with the DRAM "
-                "programmable cores off.",
-                *busy);
-            log_warning(
-                tt::LogMetal,
-                "Another process (a DRISC service client or metal) holds the seat of {}; disabling Blackhole DRAM "
-                "programmable cores for this process",
-                *busy);
-            enable_dram_cores = false;
-        }
-    }
     this->hal_ = std::make_unique<Hal>(
         platform_arch,
         is_base_routing_fw_enabled,
@@ -245,7 +207,7 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        enable_dram_cores,
+        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
         this->rtoptions_->get_eth_ptp_trace(),
         // just take the descriptor of the first device
         this->cluster_->get_quasar_ip_variant());
@@ -286,7 +248,7 @@ tt_fabric::FabricManagerMode MetalEnvImpl::get_fabric_manager() const { return f
 
 uint8_t MetalEnvImpl::get_num_fabric_active_routing_planes() const { return num_fabric_active_routing_planes_; }
 
-void MetalEnvImpl::configure_fabric(const FabricSettings& fabric) {
+void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
     // The control plane is the first object built from the fabric configuration, so its existence marks the
     // configuration as committed.
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
@@ -540,17 +502,10 @@ void MetalEnvImpl::initialize_fabric_config() {
         return;
     }
 
+    this->get_cluster().configure_ethernet_cores_for_fabric_routers(
+        this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& cp = this->get_control_plane();
-    if (cp.fabric_uses_flat_addressing()) {
-        // Horizon (QUASAR arch + HORIZON variant): no Ethernet fabric routers.
-        // Routing tables are built from crossbar flat addresses via get_flat_address().
-        cp.configure_routing_tables_for_fabric_flat_address();
-    } else {
-        // WH/BH/Quasar: Ethernet-based routing.
-        this->get_cluster().configure_ethernet_cores_for_fabric_routers(
-            this->fabric_config_, this->num_fabric_active_routing_planes_);
-        cp.configure_routing_tables_for_fabric_ethernet_channels();
-    }
+    cp.configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 void MetalEnvImpl::initialize_fabric_tensix_datamover_config(const tt_fabric::FabricTensixSessionInputs& inputs) {
@@ -672,8 +627,8 @@ void MetalEnvImpl::construct_control_plane() {
     fabric_config_ = control_plane_->get_fabric_config();
 }
 
-FabricSettings MetalEnvImpl::control_plane_config() const {
-    return FabricSettings{
+FabricConfigDescriptor MetalEnvImpl::control_plane_config() const {
+    return FabricConfigDescriptor{
         .fabric_config = fabric_config_,
         .reliability_mode = fabric_reliability_mode_,
         .num_routing_planes = num_fabric_active_routing_planes_,
@@ -808,9 +763,11 @@ MetalEnv::~MetalEnv() {
 
 const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_descriptor(); }
 
-void MetalEnv::configure_fabric(const FabricSettings& fabric) { impl_->configure_fabric(fabric); }
+void MetalEnv::configure_fabric(const FabricConfigDescriptor& fabric) { impl_->configure_fabric(fabric); }
 
-const FabricSettings& MetalEnv::get_fabric_settings() const { return impl_->get_fabric_settings(); }
+const FabricConfigDescriptor& MetalEnv::get_fabric_config_descriptor() const {
+    return impl_->get_fabric_config_descriptor();
+}
 
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
 uint32_t MetalEnv::get_num_available_devices() const { return impl_->get_cluster().number_of_user_devices(); }

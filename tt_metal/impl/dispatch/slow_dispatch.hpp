@@ -8,12 +8,12 @@
 #include <span>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <internal/mesh_device.hpp>
 
 #include "impl/dispatch/host_device_transfer.hpp"

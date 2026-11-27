@@ -20,13 +20,13 @@
 // CODE REVIEWERS: if anyone builds on top of this, reject immediately — unless it's Diego.
 
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include "program_impl.hpp"
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
-#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <algorithm>
@@ -45,13 +45,6 @@ ResolvedBindings resolve_bindings(
     size_t num_input_buffers,
     bool allow_inplace_output_tensor_alias) {
     ResolvedBindings result;
-
-    // A CB bound later has no buffer to bind to a tensor; bail to the slow path, which binds it from the descriptor.
-    if (std::any_of(desc.cbs.begin(), desc.cbs.end(), [](const CBDescriptor& cb) {
-            return cb.experimental_options.globally_allocated_bound_later && !cb.buffer && !cb.tensor;
-        })) {
-        return ResolvedBindings{};
-    }
 
     // If the same Buffer* appears more than once, every binding for that buffer maps to the
     // first occurrence via std::find below; at cache hit all of those bindings get patched with
@@ -194,7 +187,9 @@ ResolvedBindings resolve_bindings(
         auto program_cbs = program.circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
             const auto& cb_desc = desc.cbs[ci];
-            validate_cb_descriptor_backing(cb_desc);
+            TT_FATAL(
+                !(cb_desc.buffer && cb_desc.tensor),
+                "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
 
             Buffer* cb_buffer = cb_desc.buffer;
             if (!cb_buffer && cb_desc.tensor) {

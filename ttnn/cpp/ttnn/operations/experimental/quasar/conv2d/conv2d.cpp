@@ -10,13 +10,13 @@
 #include <string>
 #include <utility>
 
-#include <tt-metalium/mesh/allocator.hpp>  // Allocator::get_bank_size (real L1 bank, not nominal l1_size_per_core)
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>  // tt::tile_size (DFB ring-extent cap for no-spill conv)
+#include <tt-metalium/allocator.hpp>  // Allocator::get_bank_size (real L1 bank, not nominal l1_size_per_core)
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>  // tt::tile_size (DFB ring-extent cap for no-spill conv)
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "tt-metalium/utils/math.hpp"
+#include "tt-metalium/math.hpp"
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -277,7 +277,8 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
 // QUASAR matmul program config (ttnn::operations::experimental::quasar::matmul) so the 1x1-conv
 // GEMM runs on the quasar matmul/linear instead of the original. Mirrors the shared helper
 // field-for-field; the config structs are identical copies.
-ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config_qsr(
+static ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig
+determine_matmul_op_config_from_conv_op_config_qsr(
     Conv2dParallelizationConfig conv_parallelization_config,
     Conv2dBlockConfig conv_blocking_config,
     bool height_sharded,

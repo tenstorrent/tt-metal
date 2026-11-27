@@ -7,8 +7,6 @@
 #include <numeric>
 #include <vector>
 
-#include "core/parameter_dtype.hpp"
-
 namespace ttml::optimizers {
 
 namespace {
@@ -32,7 +30,12 @@ RemoteOptimizer::RemoteOptimizer(serialization::NamedParameters parameters, int 
 }
 
 void RemoteOptimizer::zero_grad() {
-    clear_gradients();
+    for (auto& [name, tensor_ptr] : m_parameters) {
+        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
+            // Set gradient to empty tensor
+            tensor_ptr->set_grad(ttnn::Tensor());
+        }
+    }
 }
 
 void RemoteOptimizer::step() {
@@ -66,8 +69,6 @@ SortedParameters RemoteOptimizer::get_sorted_parameters() const {
 }
 
 void RemoteOptimizer::send_gradients() {
-    // The aggregator receives bf16 gradients.
-    core::cast_fp32_gradients_to_bf16(m_parameters);
     auto& socket_manager = autograd::ctx().get_socket_manager();
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
         if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {

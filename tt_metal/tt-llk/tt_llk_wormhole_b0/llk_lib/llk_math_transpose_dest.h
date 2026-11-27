@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
+#include "lltt.h"
 
 using namespace ckernel;
 
@@ -56,19 +57,19 @@ inline void transpose_dest_32b()
     {
         // Transpose Face 0 hi bits and put back in Dest register.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
-        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
+        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12); // Dest=16, SrcA=0
 
         // Transpose Face 1 hi bits and put back in Dest register.
-        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
+        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12); // Dest=32, SrcA=0
 
         // Transpose Face 2 hi bits and put back in Dest register.
-        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
+        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12); // Dest=48, SrcA=0
 
         // Transpose Face 3 hi bits and put back in Dest register.
-        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
+        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 12); // Dest=0, SrcA=0
 
         // Since all high bits have been written. We can set the appropriate formats and
@@ -88,7 +89,7 @@ inline void transpose_dest_32b()
     {
         // Transpose Face 0 hi bits and put back in Dest register.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
-        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
+        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 12); // Dest=0, SrcA=0
 
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Float32));
@@ -99,12 +100,12 @@ inline void transpose_dest_32b()
 
         // Transpose Face 1 hi bits and move to SrcA
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
-        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 5, 0, 0);
-        TTI_REPLAY(ckernel::math::replay_buf_offset + 5, 3, 0, 0);
+        lltt::replay(ckernel::math::replay_buf_offset + 8, 5);
+        lltt::replay(ckernel::math::replay_buf_offset + 5, 3);
         TTI_MOVB2A(12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, 28); // Dest=32, SrcA=0
 
         // Transpose Face 2 hi bits and move to Face 1's area in Dest
-        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 5, 0, 0);
+        lltt::replay(ckernel::math::replay_buf_offset + 8, 5);
         TTI_MOVB2D(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, (0x3ff & (-16 + 0)));
         TTI_MOVB2D(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, (0x3ff & (-16 + 4)));
         TTI_MOVB2D(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, (0x3ff & (-16 + 8)));
@@ -115,7 +116,7 @@ inline void transpose_dest_32b()
         TTI_MOVA2D(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8); // Dest=48, SrcA=0
 
         // Transpose Face 3 hi bits and put back in Dest register
-        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
+        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 12);
 
         // Since all high bits have been written. We can set the appropriate formats and
@@ -278,7 +279,7 @@ inline void transpose_dest_configure_mop()
 {
     if constexpr (is_32bit)
     {
-        TTI_REPLAY(ckernel::math::replay_buf_offset, 16, 0, 1);
+        lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 16);
 
         TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
         TTI_MOVD2B(p_mov::DEST_32B_LOW, 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
@@ -302,7 +303,7 @@ inline void transpose_dest_configure_mop()
         TTI_MOVB2D(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 8);
 
-        std::uint32_t loop_op_0          = TT_OP_REPLAY(ckernel::math::replay_buf_offset, 8, 0, 0);
+        std::uint32_t loop_op_0          = lltt::replay_insn(ckernel::math::replay_buf_offset, 8);
         std::uint32_t loop_op_1          = TT_OP_MOVB2A(12, ADDR_MOD_2, p_movb2a::MOV_4_ROWS, 28);
         std::uint32_t loop_op_last_outer = TT_OP_MOVB2A(12, ADDR_MOD_3, p_movb2a::MOV_4_ROWS, 28);
 
@@ -312,7 +313,7 @@ inline void transpose_dest_configure_mop()
     }
     else
     {
-        TTI_REPLAY(16, 15, 0, 1);
+        lltt::record(16, 15);
 
         // ABCD
         TTI_MOVB2A(0, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 16);
@@ -343,13 +344,13 @@ inline void transpose_dest_configure_mop()
         // Face 3: 4x MOVD2B, TRNSPSRCB, 4x MOVB2D, dst += 16 (EFGHIJKLM..)
         // Face 1: 2x MOVA2D (2x dst -= 16) (..NO)
 
-        std::uint32_t EFGHIJKLM   = TT_OP_REPLAY(20, 9, 0, 0);
-        std::uint32_t EFGHI       = TT_OP_REPLAY(20, 5, 0, 0);
-        std::uint32_t ABCDEFG     = TT_OP_REPLAY(16, 7, 0, 0);
+        std::uint32_t EFGHIJKLM   = lltt::replay_insn(20, 9);
+        std::uint32_t EFGHI       = lltt::replay_insn(20, 5);
+        std::uint32_t ABCDEFG     = lltt::replay_insn(16, 7);
         std::uint32_t P           = TT_OP_MOVD2B(p_mov::DEST_NORM, 28, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 12); // dst -= 16
-        std::uint32_t IJKL        = TT_OP_REPLAY(24, 4, 0, 0);
+        std::uint32_t IJKL        = lltt::replay_insn(24, 4);
         std::uint32_t Q           = TT_OP_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 12); // dst += 32
-        std::uint32_t EFGHIJKLMNO = TT_OP_REPLAY(20, 11, 0, 0);
+        std::uint32_t EFGHIJKLMNO = lltt::replay_insn(20, 11);
 
         // The following MOP config simply runs the above 7 instructions in order (when executed with zmask 0b10):
         ckernel_unpack_template tmp(true, true, EFGHIJKLM, EFGHI, ABCDEFG, P, /* skip A */ Q, /* B */ IJKL, /* skip B */ EFGHIJKLMNO);

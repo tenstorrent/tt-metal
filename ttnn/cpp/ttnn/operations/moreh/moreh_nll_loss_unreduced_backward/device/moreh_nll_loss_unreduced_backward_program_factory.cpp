@@ -6,10 +6,10 @@
 #include <string>
 #include <string_view>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_unreduced_backward_device_operation.hpp"
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include <tt-metalium/workload/specification/program_spec.hpp>

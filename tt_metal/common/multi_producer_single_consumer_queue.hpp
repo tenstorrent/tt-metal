@@ -6,15 +6,14 @@
 
 #include <atomic>
 #include <memory>
-#include <utility>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/tt_pause.hpp>
 
 template <typename T>
 class MultiProducerSingleConsumerQueue {
 private:
-    struct alignas(64) Node {  // One cache line per slot.
-        T data{};
+    struct Node {
+        std::shared_ptr<T> data = nullptr;
         Node* next = nullptr;
     };
 
@@ -32,7 +31,7 @@ private:
         return oldHead;
     }
     // Statically allocated ring buffer containing
-    // node objects, which contain the data
+    // node objects, which contain handles to data
     // and another node object to traverse ring buffer.
     const static uint32_t ring_buffer_size = 8192;
     Node ring_buffer[ring_buffer_size];
@@ -59,7 +58,24 @@ public:
     MultiProducerSingleConsumerQueue(const MultiProducerSingleConsumerQueue& other) = delete;
     MultiProducerSingleConsumerQueue& operator=(const MultiProducerSingleConsumerQueue& other) = delete;
 
-    void push(T value) {
+    void push(T&& value) {
+        // Legacy Push API allowing copy by value
+        // for object T.
+
+        // Stall condition: this push will update the tail (wptr)
+        // to match the location of head (rptr). The current push can
+        // thus overwrite data that's being read. Stall until head
+        // has progressed (data has been read).
+        std::unique_lock<std::mutex> lock(this->queue_mutex);
+        ttsl::nice_spin_until([this] { return tail.load()->next != head.load(); });
+        tail.load()->data = std::make_shared<T>(std::move(value));
+        tail.store(tail.load()->next);
+    }
+
+    void push(std::shared_ptr<T> value) {
+        // Latest Push API, passing ptrs around.
+        // Usually faster, since no data-copies.
+
         // Stall condition: this push will update the tail (wptr)
         // to match the location of head (rptr). The current push can
         // thus overwrite data that's being read. Stall until head
@@ -70,12 +86,16 @@ public:
         tail.store(tail.load()->next);
     }
 
-    T pop() {
+    std::shared_ptr<T> pop() {
         // Precondition: this non-blocking pop must only be called when the
         // single consumer knows an entry is available.
         Node* oldHead = pop_head();
         TT_FATAL(oldHead != nullptr, "Cannot pop from an empty MultiProducerSingleConsumerQueue.");
-        return std::exchange(oldHead->data, T{});
+        std::shared_ptr<T> result(oldHead->data);
+        // Does not actually delete oldHead->data.
+        // Just mark is to null to mark prev node as empty.
+        (oldHead->data).reset();
+        return result;
     }
 
     void clear() {
@@ -113,7 +133,7 @@ public:
         bool operator!=(const Iterator& other) const { return current != other.current; }
 
         // Dereference operator overloading
-        const T& operator*() const { return current->data; }
+        const T& operator*() const { return *(current->data); }
     };
 
     Iterator begin() { return Iterator(head.load()); }

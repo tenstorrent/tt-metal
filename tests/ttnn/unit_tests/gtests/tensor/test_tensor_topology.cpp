@@ -6,7 +6,7 @@
 #include <gmock/gmock.h>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn_test_fixtures.hpp"

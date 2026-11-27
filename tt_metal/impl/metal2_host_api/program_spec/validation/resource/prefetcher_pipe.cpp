@@ -187,8 +187,7 @@ PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx) {
 // Rules per relay DFB:
 //  5. Not also borrowed_from (checked in ValidateDFBSpec). Every relayed pipe shares
 //     ring_size / entry_size; the DFB's entry_size divides that entry_size (the relay may page one pipe entry as
-//     several pages, e.g. a K-block as tiles, or one entry per consumer; with a single-threaded producer, or with a
-//     BLOCKED producer whose block_size is that page count so one pipe entry is one block) and
+//     several pages, e.g. a K-block as tiles, or one entry per consumer; only with a single-threaded producer) and
 //     entry_size * num_entries is the pipe's
 //     whole entries: ring_size rounded down to a multiple of the pipe's entry_size (the DFB is
 //     exactly the ring the pipe uses; the pipe skips any trailing gap at the wrap).
@@ -308,27 +307,12 @@ void ValidatePrefetcherPipeLanesAndRelays(
             dfb.entry_size,
             first->unique_id,
             first->entry_size);
-        // Credit lanes stripe whole pipe entries over the relay's producer threads. A BLOCKED relay
-        // producer therefore owns one pipe entry per block, its block_size is the relay entries per
-        // pipe entry. Any other pattern paged finer than the pipe is only implemented for one producer thread.
-        const uint32_t relay_entries_per_pipe_entry = first->entry_size / dfb.entry_size;
-        for (const auto& rec : collected.dfb_endpoints.at(dfb.unique_id).producers) {
-            if (rec.binding->access_pattern == DFBAccessPattern::BLOCKED) {
+        if (dfb.entry_size != first->entry_size) {
+            // Credit lanes stripe whole pipe entries over the relay's producer threads; a relay paged
+            // finer than the pipe is only implemented for one producer thread.
+            for (const auto& rec : collected.dfb_endpoints.at(dfb.unique_id).producers) {
                 TT_FATAL(
-                    rec.binding->block_size == relay_entries_per_pipe_entry,
-                    "DFB '{}': a BLOCKED relay producer's block_size ({}) must equal the relay entries per pipe entry "
-                    "({}: PrefetcherPipeParameter '{}' entry_size {} over relay entry_size {}), so that one pipe entry "
-                    "is one block (kernel '{}')",
-                    dfb.unique_id,
-                    rec.binding->block_size,
-                    relay_entries_per_pipe_entry,
-                    first->unique_id,
-                    first->entry_size,
-                    dfb.entry_size,
-                    rec.kernel->unique_id);
-            } else {
-                TT_FATAL(
-                    relay_entries_per_pipe_entry == 1 || rec.kernel->num_threads == 1,
+                    rec.kernel->num_threads == 1,
                     "DFB '{}' pages relayed PrefetcherPipeParameter '{}' entry_size {} as entries of {} bytes, which "
                     "needs a single-threaded relay producer, but kernel '{}' has {} threads",
                     dfb.unique_id,
@@ -353,7 +337,7 @@ void ValidatePrefetcherPipeLanesAndRelays(
             first->ring_size,
             first->entry_size);
 
-        const NodeRangeSet& dfb_nodes = collected.dfb_placements.at(dfb.unique_id).allocation;
+        const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
         TT_FATAL(
             dfb_nodes.contains(relayed_receivers),
             "DFB '{}' relays PrefetcherPipe(s) whose receiver nodes are not all in the DFB's node set (union of its "

@@ -29,8 +29,8 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {

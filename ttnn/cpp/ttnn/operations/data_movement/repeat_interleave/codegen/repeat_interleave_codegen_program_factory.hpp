@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"

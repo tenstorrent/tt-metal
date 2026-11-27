@@ -11,23 +11,18 @@
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_PAUSE) && !defined(FORCE_WATCHER_OFF)
 
 void watcher_pause() {
-    // Tell the host we're paused and which value of our unpause bit we're waiting to see change (debug_pause_msg_t).
+    // Write the pause flag for this core into the memory mailbox for host to read.
     debug_pause_msg_t tt_l1_ptr* pause_msg = GET_MAILBOX_ADDRESS_DEV(watcher.pause_status);
-    const uint32_t idx = internal_::get_hw_thread_idx();
-    const uint32_t bit = 1u << idx;
-    invalidate_l1_cache();
-    const uint32_t unpause = pause_msg->unpause & bit;
-    pause_msg->flags[idx] = unpause ? 2 : 1;
+    pause_msg->flags[internal_::get_hw_thread_idx()] = 1;
 
-    // Wait for the host to flip our bit.
+    // Wait for the pause flag to be cleared.
     WAYPOINT("PASW");
     do {
         invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
         internal_::risc_context_switch();
 #endif
-    } while ((pause_msg->unpause & bit) == unpause);
-    pause_msg->flags[idx] = 0;
+    } while (pause_msg->flags[internal_::get_hw_thread_idx()]);
     WAYPOINT("PASD");
 }
 

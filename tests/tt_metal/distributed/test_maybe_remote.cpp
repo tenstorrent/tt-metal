@@ -9,8 +9,8 @@
 #include <vector>
 #include <sstream>
 
-#include <tt-metalium/vocabulary/maybe_remote.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/maybe_remote.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {

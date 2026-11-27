@@ -14,8 +14,8 @@
 #include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "host_api/helpers.hpp"

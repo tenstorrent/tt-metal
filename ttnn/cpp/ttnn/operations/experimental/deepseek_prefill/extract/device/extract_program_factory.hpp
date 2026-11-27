@@ -6,7 +6,7 @@
 
 #include "extract_types.hpp"
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::extract {
 

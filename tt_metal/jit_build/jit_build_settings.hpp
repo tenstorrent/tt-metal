@@ -130,27 +130,22 @@ struct KernelCrtaLayout {
     uint32_t binding_section_words = 0;
     // Section 3 size, in words. Equals the number of scratchpad bindings (one address word each).
     uint32_t scratchpad_section_words = 0;
-    // Section 4 size, in words. Equals the number of GlobalSemaphore bindings (one address word each).
-    uint32_t global_semaphore_section_words = 0;
-    // Start offset of section 5 (varargs), in words.
+    // Start offset of section 4 (varargs), in words.
     // Stored (not computed on demand) so it can be set from a known value at spec resolution
     // and asserted against the derived sum if a consumer wants belt-and-suspenders verification.
     uint32_t vararg_section_offset = 0;
 };
 
 // Metal 2.0: layout of each node's runtime-args (RTA) buffer, the per-node counterpart of KernelCrtaLayout:
-//   [ user-named RTAs | per-node TensorBinding section | fabric connection section | vararg RTAs ]
+//   [ user-named RTAs | per-node TensorBinding section | vararg RTAs ]
 // Section 2 holds one base-address word per per-node tensor binding.
-// Section 3 holds the words of each fabric connection binding (see FabricConnectionBindingHandle).
 struct KernelRtaLayout {
     // Section 1 size, in words. The user-named RTAs: one word per scalar, then the RTA arrays
     // (see KernelArrayArgs), in declaration order.
     uint32_t num_named_words = 0;
     // Section 2 size, in words. Equals the number of per-node tensor bindings.
     uint32_t binding_section_words = 0;
-    // Section 3 size, in words. Equals the sum over fabric connection bindings of their words.
-    uint32_t fabric_connection_section_words = 0;
-    // Start offset of section 4 (varargs), in words.
+    // Start offset of section 3 (varargs), in words.
     uint32_t vararg_section_offset = 0;
 };
 
@@ -293,22 +288,6 @@ public:
                                                         uint32_t addr_crta_word,
                                                         const std::optional<LLKMetadata>&)>&) const {}
 
-    // GlobalSemaphore binding callback (Metal 2.0):
-    //  - accessor_name: kernel-side identifier, used as the symbol name in the `global_sem::` namespace
-    //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
-    //    bound GlobalSemaphore's address
-    virtual void process_global_semaphore_binding_handles(
-        // NOLINTNEXTLINE(performance-unnecessary-value-param)
-        std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)>) const {}
-
-    // Fabric connection binding callback (Metal 2.0):
-    //  - accessor_name: kernel-side identifier, used as the symbol name in the `fabric::` namespace
-    //  - rta_word: word index, within each node's RTA buffer, of the binding's first word
-    //  - num_targets: the number of targets (connection slots) of the bound FabricConnectionsSpec
-    virtual void process_fabric_connection_binding_handles(
-        // NOLINTNEXTLINE(performance-unnecessary-value-param)
-        std::function<void(const std::string& accessor_name, uint32_t rta_word, uint32_t num_targets)>) const {}
-
     // PrefetcherPipe binding callback (Metal 2.0):
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
     //  - prefetcher_pipe_id: the program PrefetcherPipe slot the accessor constructs its PrefetcherPipe with
@@ -371,7 +350,7 @@ public:
     // Fence for Metal 2.0 kernel machinery. When false, the JIT build path must not emit or
     // reference any Metal 2.0 generated headers (kernel_bindings_generated.h, kernel_args_generated.h).
     // Legacy kernels created via the old host API default to false; kernels created via
-    // the Program constructor set this to true. This flag exists to prevent cross-contamination
+    // MakeProgramFromSpec set this to true. This flag exists to prevent cross-contamination
     // between the two API paths during the deprecation window of the legacy API.
     virtual bool is_metal2_kernel() const { return false; }
 

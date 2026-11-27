@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #pragma once
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/core.hpp"
 #include "ttnn/global_semaphore.hpp"

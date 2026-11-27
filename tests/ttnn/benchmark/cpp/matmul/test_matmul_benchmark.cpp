@@ -8,15 +8,15 @@
 
 #include <benchmark/benchmark.h>
 
-#include <tt-metalium/workload/specification/compute_modes.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
-#include <tt-metalium/vocabulary/shape2d.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape2d.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/mesh/sub_device_types.hpp>
-#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tile.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/functions.hpp"

@@ -145,9 +145,7 @@ def _validate_mgd(mesh: Mesh) -> None:
 _mesh: Mesh | None = None
 
 
-def open_device_mesh(
-    mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] | None = None, num_command_queues: int = 1
-):
+def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] | None = None):
     """Initialize the global device mesh and open the underlying TT devices.
 
     When more than one device is requested the MGD file is validated and the
@@ -174,7 +172,7 @@ def open_device_mesh(
         fabric_enabled = True
 
     try:
-        ttml.autograd.AutoContext.get_instance().open_device(list(mesh.shape), list(device_ids), num_command_queues)
+        ttml.autograd.AutoContext.get_instance().open_device(list(mesh.shape), list(device_ids))
     except BaseException:
         if fabric_enabled:
             try:
@@ -233,9 +231,7 @@ def mesh() -> Mesh:
     return _mesh
 
 
-def sync_gradients(
-    parameters, axis_names: tuple[str, ...] = ("dp",), *, reduce_dtype: ttnn.DataType | None = None
-) -> None:
+def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
     """Average parameter gradients across one or more mesh axes.
 
     For each parameter with an initialized gradient, the grad is all-reduced
@@ -251,28 +247,45 @@ def sync_gradients(
     (e.g. ``lora_A`` in ``LoraColumnParallelLinear``). Nothing enforces this;
     see #63970 for a known violation.
 
-    The sum is ``ttml.core.distributed.synchronize_gradients`` along the listed
-    axes, which skips, for each parameter, any axis its value is sharded on.
-    That covers ``ttml.fsdp.fully_shard``: its backward hook reduce-scatters the
-    grad into shard shape and reinstalls the Shard-labelled shard as the value.
+    FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
+    mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
+    backward hook already reduce-scattered the grad into shard shape.
 
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
         axis_names: Tuple of mesh axis names to reduce over.
-        reduce_dtype: The dtype the gradients are summed in, as ``ttml.core.distributed.synchronize_tensor`` takes
-            it: ``ttnn.DataType.FLOAT32`` sums in fp32 and casts the mean back to the gradient's dtype. ``None`` takes
-            the training config's ``precision.reduce_dtype``, which ``create_optimizer`` stores
-            (``AutoContext.get_gradient_reduce_dtype``); with no default set either, it sums in each gradient's own
-            dtype.
     """
-    ttml.core.distributed.check_reduce_dtype(reduce_dtype)
     m = maybe_mesh()
     if m is None or not axis_names:
         return
 
-    # An axis of one device has nothing to average over.
-    axes = [m.axis_index(name) for name in axis_names if m.has_axis(name)]
-    axes = [a for a in axes if m.shape[a] > 1]
+    axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name))
     if not axes:
         return
-    ttml.core.distributed.synchronize_gradients(parameters, axes, reduce_dtype=reduce_dtype)
+
+    for _, param in parameters.items():
+        if not param.is_grad_initialized():
+            continue
+
+        # Drop axes on which this particular parameter is FSDP-sharded
+        axes_for_param = tuple(a for a in axes if not _param_is_fsdp_sharded(param, a))
+        if not axes_for_param:
+            continue
+
+        scaler = prod(m.shape[axis] for axis in axes_for_param)
+        if scaler == 1:
+            continue
+        inv_scaler = 1.0 / float(scaler)
+
+        grad = param.get_grad()
+        for axis in axes_for_param:
+            grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)
+        grad = ttnn.multiply(grad, inv_scaler)
+        param.set_grad(grad)
+
+
+def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
+    """True if ``param`` is FSDP-sharded on the given mesh axis."""
+    if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
+        return True
+    return False

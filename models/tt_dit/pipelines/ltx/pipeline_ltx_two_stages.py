@@ -224,7 +224,7 @@ class LTXTwoStagesPipeline(LTXPipeline):
         t0 = time.time()
         cached = os.path.exists(self._device_embed_cache_path([prompt, neg]))
         if not cached:
-            self._prepare_gemma()
+            self.gemma_encoder_pair.ensure_loaded()
         enc = self.encode_prompts([prompt, neg])
         t_encode = time.time() - t0
         timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))

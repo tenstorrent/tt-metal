@@ -8,6 +8,7 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -16,6 +17,22 @@ namespace sfpu {
 //**************************************************************
 // SFPU REDUCE MAX COL IMPLEMENTATION
 //**************************************************************
+inline void sfpu_reduce_max_col_subblock_4x2_configure_addrmod() {
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
+
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 64},
+    }
+        .set(ADDR_MOD_6);
+}
+
 inline void sfpu_reduce_max_col_subblock_4x2_load_initial_values() {
     constexpr std::uint16_t neg_inf_fp16b = 0xFF80;  // bf16 -inf; SFPLOADI FLOATB widens it to fp32 0xFF800000
 
@@ -33,10 +50,11 @@ inline void _init_reduce_max_col_subblock_4x2_() {
     static_assert(format == DataFormat::Float16_b, "Unsupported data format. Supported formats: Float16_b");
 
     _init_sfpu_config_reg();
+    sfpu_reduce_max_col_subblock_4x2_configure_addrmod();
 
     // ***********************************************************
     // Record replay buffer
-    TTI_REPLAY(0, 8, 0, 1);
+    lltt::record<lltt::NoExec>(0, 8);
 
     TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);
     TTI_SFPSWAP(0 /*unused*/, p_sfpu::LREG4 /*lreg_src_c*/, p_sfpu::LREG2 /*lreg_dest*/, 1 /*instr_mod1*/);
@@ -71,9 +89,6 @@ inline void _move_to_next_subblock_4x2_() {
 
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
 inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_height /*, const uint32_t block_width*/) {
-    // The dummy loads step dest to the next tile through ADDR_MOD_6 (dest += 64).
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 64}}.set(ADDR_MOD_6);
-
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
     static_assert(pool_type == PoolType::MAX, "Only MAX pool type is currently supported");
     static_assert(format == DataFormat::Float16_b, "SFPU reduce max col only supports Float16_b format");
@@ -86,7 +101,7 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_he
     for (std::uint32_t i = 0; i < block_height; i++) {
 #pragma GCC unroll 8
         for (int j = 0; j < 8; j++) {
-            TTI_REPLAY(0, 8, 0, 0);
+            lltt::replay(0, 8);
 
             if (j % 4 == 3) {
                 TTI_INCRWC(0, 10, 0, 0);
@@ -112,7 +127,7 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_he
     for (std::uint32_t i = 0; i < block_height; i++) {
 #pragma GCC unroll 8
         for (int j = 0; j < 8; j++) {
-            TTI_REPLAY(0, 8, 0, 0);
+            lltt::replay(0, 8);
 
             if (j % 4 == 3) {
                 TTI_INCRWC(0, 10, 0, 0);
@@ -128,9 +143,6 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_he
     _move_to_next_subblock_4x2_();
 
     TTI_SFPSWAP(0 /*unused*/, p_sfpu::LREG1 /*lreg_src_c*/, p_sfpu::LREG4 /*lreg_dest*/, 1 /*instr_mod1*/);
-
-    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 inline void _reduce_max_col_subblock_4x2_prologue_() {

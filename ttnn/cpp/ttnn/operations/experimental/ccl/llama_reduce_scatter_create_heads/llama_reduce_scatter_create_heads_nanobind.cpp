@@ -13,7 +13,7 @@
 
 #include "llama_reduce_scatter_create_heads.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
-#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 

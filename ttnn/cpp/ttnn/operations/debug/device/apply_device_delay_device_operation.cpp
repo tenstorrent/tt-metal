@@ -7,12 +7,12 @@
 #include <cstddef>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::debug {

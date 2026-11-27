@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include <atomic>
 #include <vector>
 #include <optional>
-#include <api/tt-metalium/mesh/sub_device_types.hpp>
+#include <api/tt-metalium/sub_device_types.hpp>
 
 #include "launch_message_ring_buffer_state.hpp"
 #include "dispatch_settings.hpp"
@@ -35,9 +34,6 @@ struct CQSharedState {
 
     // One entry per sub-device.
     std::vector<CQOwnerState> sub_device_cq_owner;
-
-    // Number of this mesh's CQs recording a trace.
-    std::atomic<uint32_t> num_cqs_capturing_trace{0};
 };
 
 }  // namespace tt::tt_metal

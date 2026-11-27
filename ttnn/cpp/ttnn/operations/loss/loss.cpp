@@ -10,7 +10,6 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/data_movement/copy/copy.hpp"
 
 namespace ttnn::operations::loss::loss_utils {
 
@@ -28,47 +27,26 @@ Tensor loss_function(
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<EltwiseUnaryWithParam> fused_ops;
     switch (loss_kind) {
-        case LossFunction::MAE:
-            // INT32 needs the integer ABS; the float ABS clears the sign bit of the two's-complement difference.
-            fused_ops.push_back(
-                EltwiseUnaryWithParam{ref.dtype() == DataType::INT32 ? UnaryOpType::ABS_INT32 : UnaryOpType::ABS});
-            break;
+        case LossFunction::MAE: fused_ops.push_back(EltwiseUnaryWithParam{UnaryOpType::ABS}); break;
         case LossFunction::MSE: fused_ops.push_back(EltwiseUnaryWithParam{UnaryOpType::SQUARE}); break;
         default: TT_THROW("unsupported loss function {}. Please change.", loss_kind);
     }
-
-    if (reduce_mode == LossReductionMode::NONE) {
-        return ttnn::subtract(ref, prediction, std::nullopt, memory_config, optional_output_tensor, fused_ops);
-    }
-
-    Tensor diff = ttnn::subtract(ref, prediction, std::nullopt, memory_config, std::nullopt, fused_ops);
-    Tensor reduced;
+    Tensor result = ttnn::subtract(ref, prediction, std::nullopt, memory_config, optional_output_tensor, fused_ops);
 
     switch (reduce_mode) {
         case LossReductionMode::SUM:
-            reduced = ttnn::sum(
-                diff, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
-            break;
+            return ttnn::sum(
+                result, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
         case LossReductionMode::MEAN:
-            reduced = ttnn::mean(
-                diff, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
+            return ttnn::mean(
+                result, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
+        case LossReductionMode::NONE:
+        default:
+            // TODO: old code indicated this path is unsupported, but the all post commit test pipeline uses this path.
+            // Need to update test or replace this comment with a throw.
             break;
-        default: TT_THROW("unsupported loss reduction mode {}.", reduce_mode);
     }
-
-    if (optional_output_tensor.has_value()) {
-        TT_FATAL(
-            optional_output_tensor.value().logical_shape() == reduced.logical_shape(),
-            "Loss reduction mode {} produces a tensor with logical shape {}, but optional_output_tensor has logical "
-            "shape {}",
-            reduce_mode,
-            reduced.logical_shape(),
-            optional_output_tensor.value().logical_shape());
-
-        ttnn::copy(reduced, optional_output_tensor.value());
-        return optional_output_tensor.value();
-    }
-    return reduced;
+    return result;
 }
 
 }  // namespace ttnn::operations::loss::loss_utils
@@ -81,8 +59,7 @@ Tensor mse_loss(
     operations::loss::LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::loss::loss_utils::loss_function(
-        ref, prediction, operations::loss::LossFunction::MSE, mode, memory_config, optional_output_tensor);
+    return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MSE, mode, memory_config, optional_output_tensor);
 }
 
 Tensor l1_loss(
@@ -91,8 +68,7 @@ Tensor l1_loss(
     operations::loss::LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::loss::loss_utils::loss_function(
-        ref, prediction, operations::loss::LossFunction::MAE, mode, memory_config, optional_output_tensor);
+    return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MAE, mode, memory_config, optional_output_tensor);
 }
 
 }  // namespace ttnn

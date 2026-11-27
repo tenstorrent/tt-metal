@@ -10,9 +10,9 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
@@ -91,10 +91,7 @@ void test_dram_prefetcher_validator(
 // they do above and must match what was queued; the consumer Attaches the pipes and reads them
 // through the device-side experimental::PrefetcherPipe. `bank_to_receivers` is the plan the pipes
 // were created from (create_prefetcher_pipes_for_tensor_prefetcher); it fixes which slab each
-// receiver expects, so `prefetcher_pipes` may be in any order. For a grouped weight (its dim -3 counts the
-// groups, at most 32), `groups` lists the groups the prefetcher delivers, ascending, as a group selector picks
-// them; empty means every group. `compare_word_stride` above 1 compares only every compare_word_stride'th word of
-// each block, from its first; 1 compares them all.
+// receiver expects, so `prefetcher_pipes` may be in any order.
 //
 // Unlike the GlobalCircularBuffer path this is not a ttnn device operation: it builds and enqueues
 // its program directly. Every run wants a fresh program anyway -- the validator is checked once per
@@ -108,9 +105,7 @@ void test_tensor_prefetcher_pipe_validator(
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
     const std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>>& bank_to_receivers,
     bool streaming = false,
-    const std::vector<uint32_t>& rotation = {},
-    const std::vector<uint32_t>& groups = {},
-    uint32_t compare_word_stride = 1);
+    const std::vector<uint32_t>& rotation = {});
 
 // The workload test_tensor_prefetcher_pipe_validator enqueues, for a caller that enqueues it some other way,
 // such as recording it into a CommandList.
@@ -122,8 +117,6 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
     const std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>>& bank_to_receivers,
     bool streaming = false,
-    const std::vector<uint32_t>& rotation = {},
-    const std::vector<uint32_t>& groups = {},
-    uint32_t compare_word_stride = 1);
+    const std::vector<uint32_t>& rotation = {});
 
 }  // namespace ttnn::operations::experimental::test

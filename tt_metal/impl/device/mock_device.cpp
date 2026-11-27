@@ -8,7 +8,7 @@
 #include <tt_stl/assert.hpp>
 #include "llrt/get_platform_architecture.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal::experimental {
 

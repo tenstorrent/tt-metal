@@ -7,12 +7,12 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/data_formats/mxfp4.hpp>
-#include <tt-metalium/data_formats/mxfp6.hpp>
-#include <tt-metalium/data_formats/mxfp8.hpp>
-#include <tt-metalium/data_formats/mxint.hpp>
-#include <tt-metalium/memory/tensor/tensor_types.hpp>
-#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/mxfp4.hpp>
+#include <tt-metalium/mxfp6.hpp>
+#include <tt-metalium/mxfp8.hpp>
+#include <tt-metalium/mxint.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 

@@ -13,11 +13,11 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/workload/specification/compute_modes.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "moe_compute_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"

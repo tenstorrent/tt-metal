@@ -118,13 +118,9 @@ class SparsePerfCase:
     input_shard_dims: tuple
     # A GLM-5.3 shared layer runs no indexer: it takes a full layer's top-k indices.
     indexer_indices: ttnn.Tensor | None = None
-    # The previous layer's record of the prefix it pushed for this layer (timed in the full-layer case).
-    prefix_entry: tuple | None = None
 
     def forward(self, start: int) -> ttnn.Tensor:
         """One chunk forward at `start`; the caller owns (and deallocates) the output."""
-        if self.prefix_entry is not None:  # restored each forward, so this layer pushes only the rest
-            self.mla.tt_ccl.sparse_kv_push_planner.prefetched[self.mla.layer_idx] = self.prefix_entry
         return self.mla.forward(
             self.x,
             self.rope,
@@ -154,10 +150,8 @@ def build_sparse_perf_case(
 
     sparse: DSA indexer + sparse SDPA over `kv_cache_format`, caches SPxTP-sharded when `tp_shard_kv`.
     dense: the v3.1 baseline, no indexer, full-prefix ring MLA over the tiled BFP8 cache.
-    GLM-5.3 sparse layers run inside a stage, as in the model: the full layer builds the push plan and pushes the next
-    layer's prefix beside its sparse SDPA.
-    shared_layer (GLM-5.3, sparse): the shared layer after it; it reuses the full layer's top-k, pushes only the rest of
-    its KV and pushes the next layer's prefix beside its sparse SDPA.
+    shared_layer (GLM-5.3, sparse): the last shared layer, which runs no indexer and reuses the top-k indices of a
+    full layer's forward at `cache`.
     """
     has_indexer = attn_mode == "sparse"
     tp_axis = 1 - sp_axis
@@ -179,18 +173,17 @@ def build_sparse_perf_case(
 
     config = copy.deepcopy(config_only)
     config.max_seq_len = total
+    # GLM-5.3 packs its index-K cache by full indexer layers (21 slots): build the last full layer (74 -> slot
+    # 20) so the ring score selects a real slot, not slot 0 of a one-slot proxy.
     full_indexer_layers = num_full_indexer_layers(config) if has_indexer else None
-    index_cache_layers = 1
-    mla_layer_idx, mla_layer_num, cache_layer_idx, first_layer_idx = 0, 1, 0, None
+    index_cache_layers = full_indexer_layers or 1
+    mla_layer_idx = 0
     if full_indexer_layers:
         full_layer_indices = [i for i, mode in enumerate(config.indexer_types) if mode == "full"]
         assert len(full_layer_indices) == full_indexer_layers
-        # GLM-5.3: the last full layer in a stage from the previous full layer to its successor, so the ring score reads
-        # a real index-K slot (1 of 2) and the layer pushes its successor's prefix.
-        first_layer_idx, mla_layer_idx = full_layer_indices[-2:]
-        cache_layer_idx = mla_layer_idx - first_layer_idx
-        mla_layer_num, index_cache_layers = cache_layer_idx + 2, 2
+        mla_layer_idx = full_layer_indices[-1]
     # Kimi-K3.1: the last DSA layer's slot of a 24-slot cache.
+    mla_layer_num, cache_layer_idx = 1, 0
     if variant.name == "kimi_k3_1" and has_indexer:
         mla_layer_ids = variant.model_config.mla_layer_ids()
         mla_layer_num, mla_layer_idx = len(mla_layer_ids), mla_layer_ids[-1]
@@ -209,7 +202,6 @@ def build_sparse_perf_case(
         is_chunked=True,
         active_seq_len=chunk,
         layer_num=mla_layer_num,
-        first_layer_idx=first_layer_idx,
         has_indexer=has_indexer,
         sparse_kv_cache_format=kv_cache_format if has_indexer else MlaKvCacheFormat.BF16_RM,
     )
@@ -264,29 +256,28 @@ def build_sparse_perf_case(
         return_indexer_indices=True,
     )
     ttnn.deallocate(out)
-    planner = mla.tt_ccl.sparse_kv_push_planner  # None where the push is off: the shared layer gathers
-    prefix_entry = planner.prefetched.get(mla_layer_idx + 1) if planner is not None else None
     # Free the full layer before building the shared one: ttMLA holds reference cycles, so without a collection its
     # buffers would linger and could be freed mid-measurement.
     ttnn.deallocate(index_kv_cache)
     ttnn.deallocate(kvpe_cache.storage)
     del case, mla, kvpe_cache, index_kv_cache
     gc.collect()
-    # The shared layer after the full layer, in the same stage extended by one layer, so it has a shared successor.
-    assert config.indexer_types[mla_layer_idx + 1 : mla_layer_idx + 3] == ["shared"] * 2
+    # Inside a stage a shared layer reuses the sparse KV push plan its full layer built; only a stage's first layer
+    # rebuilds it. This standalone layer is not marked first, so it builds the plan in warm-up and then reuses it: the
+    # in-stage case. Plan construction is outside its timing and determinism checks.
+    shared_layer_idx = [i for i, mode in enumerate(config.indexer_types) if mode == "shared"][-1]
     shared = ttMLA(
         config,
         dict(random_mla_weights(config)),
         mesh_device,
         topology=topology,
-        layer_idx=mla_layer_idx + 1,
+        layer_idx=shared_layer_idx,
         seq_len=total,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_chunked=True,
         active_seq_len=chunk,
-        layer_num=mla_layer_num + 1,
-        first_layer_idx=first_layer_idx,
+        layer_num=1,
         has_indexer=True,
         sparse_kv_cache_format=kv_cache_format,
     )
@@ -297,20 +288,10 @@ def build_sparse_perf_case(
         seq_len=total,
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
-        num_kvpe_cache_layers=mla_layer_num + 1,
+        num_kvpe_cache_layers=1,
         tp_axis=kv_tp_axis,
     )
-    return SparsePerfCase(
-        shared,
-        x,
-        rope,
-        shared_kvpe_cache,
-        None,
-        cache_layer_idx + 1,
-        tuple(shard_dims),
-        indexer_indices=indices,
-        prefix_entry=prefix_entry,
-    )
+    return SparsePerfCase(shared, x, rope, shared_kvpe_cache, None, 0, tuple(shard_dims), indexer_indices=indices)
 
 
 BOX = detect_box(detect_num_devices())

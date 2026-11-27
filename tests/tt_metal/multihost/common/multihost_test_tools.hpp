@@ -9,7 +9,7 @@
 #include <memory>
 #include <type_traits>
 
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <fmt/format.h>
 namespace multihost::common {
 

@@ -23,7 +23,7 @@ enum class p_dim_stride_target
  * @brief Programs the unpacker source register format.
  *
  * L1 buffer info is not programmed here: it lives in buffer descriptors, which op inits
- * program via the engine's fixed id (see ckernel_buf_desc.h).
+ * program via the per-TRISC allocator (see llk_bfd_alloc.h).
  *
  * @tparam UNP_SEL: Selects which unpacker to configure, values = <p_unpacr::UNP_A/UNP_B/UNP_S/UNP_DEST>
  * @param reg_data_format: Source register (out) data format.
@@ -135,7 +135,8 @@ inline void _llk_unpack_dest_section_advance_()
  *
  * dest_register_offset is kept in DEST rows (0, 256 or 512); a 32x32 tile spans 1 << get_dest_tile_size_log2 rows, the
  * same stride @ref _set_dst_write_addr_ uses on the math thread, so the two sides agree on where bank 1 starts. The
- * shift covers 4-face tiles only: tiny tiles place their bank base in rows (@ref _llk_unpack_to_dest_dst_tile_counter_).
+ * shift assumes full 32x32 tiles: the UNP_DEST tile counter steps in buffer-descriptor tiles, and a tiny-tile operand
+ * is described in one-face tiles, which would put bank 1 at the wrong rows. The API init asserts the shape.
  */
 inline std::uint32_t _llk_unpack_dest_bank_tile_offset_()
 {
@@ -202,5 +203,5 @@ constexpr std::uint32_t nop_insn_for_unused_unpacker_engine()
 {
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL must be UNP_A or UNP_B");
     constexpr auto unpacr_engine = UNP_SEL == p_unpacr::UNP_A ? p_unpacr::UNP_B : p_unpacr::UNP_A;
-    return TT_OP_UNPACR_NOP(unpacr_engine, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+    return TT_OP_UNPACR_NOP(unpacr_engine, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/);
 }

@@ -4,13 +4,13 @@
 
 #include <cstddef>
 #include <random>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include "tt-metalium/vocabulary/core_coord.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include "tt-metalium/core_coord.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -113,7 +113,7 @@ ProgramState init_program() {
     tt::tt_metal::CoreCoord core({0, 0});
     // Create a program object. A program is a collection of kernels that are executed on the device.
     // Kernels will be specified later.
-    Program program = CreateProgram(*mesh_device);
+    Program program = CreateProgram();
 
     return ProgramState(
         std::move(mesh_device), std::move(program), core, std::move(workload), std::move(device_range), cq);

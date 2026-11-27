@@ -14,8 +14,8 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>           // TT_FATAL
-#include <tt-metalium/data_formats/tile_constants.hpp>  // tt::constants::TILE_WIDTH
-#include <tt-metalium/vocabulary/core_coord.hpp>        // CoreCoord
+#include <tt-metalium/constants.hpp>   // tt::constants::TILE_WIDTH
+#include <tt-metalium/core_coord.hpp>  // CoreCoord
 
 #include "ttnn/distributed/types.hpp"                 // ttnn::MeshCoordinate
 #include "ttnn/operations/ccl/ccl_common.hpp"         // get_linearized_index_from_physical_coord

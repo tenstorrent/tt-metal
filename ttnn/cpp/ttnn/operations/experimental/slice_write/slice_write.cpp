@@ -5,9 +5,9 @@
 #include "slice_write.hpp"
 #include "device/slice_write_device_operation.hpp"
 #include <tt_stl/assert.hpp>
-#include "tt-metalium/data_formats/tile_constants.hpp"
+#include "tt-metalium/constants.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/utils/math.hpp"
+#include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
@@ -21,7 +21,8 @@ ttnn::Tensor slice_write(
     ttnn::Tensor& output_tensor,
     const ttsl::SmallVector<uint32_t>& begins,
     const ttsl::SmallVector<uint32_t>& ends,
-    const ttsl::SmallVector<uint32_t>& step) {
+    const ttsl::SmallVector<uint32_t>& step,
+    bool runtime_shapes) {
     const auto& logical_input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     const auto& padded_output_shape = output_tensor.padded_shape();
@@ -120,7 +121,7 @@ ttnn::Tensor slice_write(
             output_tensor = ttnn::to_layout(output_tensor, Layout::ROW_MAJOR);
         }
         (void)ttnn::prim::slice_write(
-            input, output_tensor, ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step));
+            input, output_tensor, ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step), runtime_shapes);
         if (rm_only_not_sharded) {
             output_tensor = ttnn::to_layout(output_tensor, original_output_layout);
         }

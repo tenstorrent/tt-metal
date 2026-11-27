@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/hal_types.hpp>
 
 namespace tt::tt_metal {
 

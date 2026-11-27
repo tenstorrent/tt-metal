@@ -13,7 +13,7 @@
 #include <array>
 #include <optional>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"

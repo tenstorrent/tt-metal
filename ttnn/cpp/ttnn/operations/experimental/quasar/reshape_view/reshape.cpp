@@ -9,7 +9,7 @@
 #include <variant>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
 

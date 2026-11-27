@@ -19,7 +19,6 @@ from helpers.ulp_budget_diff import (
     compare,
     judge,
     main,
-    only_acknowledgements_differ,
     read_cells,
     render_budget_diff,
 )
@@ -200,39 +199,6 @@ def test_a_declared_tolerance_that_may_loosen_is_a_regression(base_row, head_row
     assert kinds == {Kind.TOLERANCE_WIDENED}
 
 
-_PAST_LIST = Row(input=F16, output=F16B, domains=TANH_DOMAINS)
-_DECLARED = Row(input=F16, metric=TOL, atol=0.2)
-ADDED, GATED, WIDENED = Kind.ADDED, Kind.GATED, Kind.TOLERANCE_WIDENED
-
-
-@pytest.mark.parametrize(
-    "rows, kinds",
-    [
-        ((Row(input=F16, output=F16, metric=TOL, measured=393, nonfinite=3),), {ADDED}),
-        ((Row(input=F16, output=F32, metric=TOL, atol=0.2, rtol=0.05),), {WIDENED}),
-        ((Row(input=F16, output=F32, measured=7),), {GATED}),
-        ((Row(input=F16, output=F32, domains=TANH_DOMAINS),), {GATED}),
-        ((_PAST_LIST, _DECLARED), {ADDED, GATED, WIDENED}),
-    ],
-    ids=[
-        "tolerance-with-nonfinite",
-        "declared-bounds",
-        "gated",
-        "list",
-        "past-list-beside-bounds",
-    ],
-)
-def test_a_cell_no_row_held_before_starts_from_its_row(rows, kinds):
-    """A recorded figure or non-finite count is what a variant no row held starts from.
-    Its functional driver held it to the per-format default, though, which a declared
-    bound replaces: that may loosen, under an op the table already has and under a new
-    one alike."""
-    enrolled = Row(input=F16B, output=F16B, measured=1)
-    under_an_enrolled_op = compare(_table(enrolled), _table(enrolled, *rows))
-    assert {c.kind for c in under_an_enrolled_op} == kinds
-    assert {c.kind for c in compare({}, _table(*rows))} == kinds
-
-
 # ── Where a budget binds ──────────────────────────────────────────────────────
 
 
@@ -345,18 +311,7 @@ def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text, capsy
     argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
     assert main([*argv, "--arch", MEASURED_ARCH.value, "--allow-raises"]) == 2
     # Refused by the loader, not by the architecture check that runs first.
-    out = capsys.readouterr().out
-    assert "cannot tell which architecture" not in out
-    assert f"the head table {head_path}" in out
-
-
-def test_a_base_the_head_cannot_read_is_named_as_the_base(tmp_path, capsys):
-    base_path, head_path = tmp_path / "base.yaml", tmp_path / "head.yaml"
-    base_path.write_text("Abs: [\n")
-    write_table_file(_BASE, head_path)
-    argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
-    assert main([*argv, "--arch", MEASURED_ARCH.value]) == 2
-    assert f"the base table {base_path}" in capsys.readouterr().out
+    assert "cannot tell which architecture" not in capsys.readouterr().out
 
 
 def test_the_guard_imports_no_module_that_loads_the_checked_out_table():
@@ -721,38 +676,6 @@ def test_headroom_judges_a_table_by_the_architecture_its_file_names(tmp_path, ar
     assert main([*argv, "--arch", other.value]) == 1  # --arch overrides the name
 
 
-@pytest.mark.parametrize("arch", list(TABLE_PATHS), ids=lambda a: a.value)
-def test_headroom_without_table_judges_the_sessions_table(tmp_path, monkeypatch, arch):
-    """The CI commands omit `--table`: the session's architecture picks the file. The
-    other architecture's table would let the reading through."""
-    paths = {a: tmp_path / path.name for a, path in TABLE_PATHS.items()}
-    for a, path in paths.items():
-        write_table_file(
-            _table(Row(output=F16B, measured=1 if a is arch else 20)), path
-        )
-    monkeypatch.setattr(ulp_budget_diff, "TABLE_PATHS", paths)
-    monkeypatch.setattr(ulp_budget_diff, "measured_arch", lambda: arch)
-    measured = tmp_path / "measured.jsonl"
-    cell = replace(_CELL, arch=arch)
-    measured.write_text(Measurement(op=ABS, key=cell, worst=9, lanes=1).to_json())
-    assert main(["headroom", "--measured", str(measured)]) == 1
-    other = next(a for a in TABLE_PATHS if a is not arch)
-    assert (
-        main(
-            [
-                "headroom",
-                "--measured",
-                str(measured),
-                "--table",
-                str(paths[other]),
-                "--arch",
-                arch.value,
-            ]
-        )
-        == 0
-    )
-
-
 def test_headroom_takes_records_from_a_chip_that_reads_the_table(tmp_path):
     """Quasar has no table of its own and reads Wormhole's, so its records are not
     another chip's; no step budget binds them there."""
@@ -772,51 +695,3 @@ def test_a_table_whose_name_names_no_architecture_needs_arch(tmp_path):
     argv = ["diff", "--base", str(base), "--head", str(head)]
     assert main(argv) == 2
     assert main([*argv, "--arch", MEASURED_ARCH.value]) == 0
-
-
-# ── What a budget raise may edit beside the tables ────────────────────────────
-
-_ACKNOWLEDGING = """
-import pytest
-
-# why
-ONLY_EVER_TOLERANCE = frozenset({1})
-_UNMEASURABLE_CELLS_ACKNOWLEDGED_ON = {}
-
-
-def test_it():
-    assert ONLY_EVER_TOLERANCE
-"""
-
-
-@pytest.mark.parametrize(
-    "old, new, only",
-    [
-        ("frozenset({1})", "frozenset({1, 2})", True),
-        ("_ON = {}", "_ON = {'wormhole': {}}", True),
-        ("# why", "# another reason", True),
-        ("    assert ONLY_EVER_TOLERANCE", "    pass", False),
-        ("import pytest", "import os", False),
-        ("def test_it", "def helper", False),
-        ("\n\ndef test_it", "\nOTHER = 1\n\n\ndef test_it", False),
-    ],
-    ids=["list", "per-arch-list", "comment", "test-body", "import", "rename", "new"],
-)
-def test_a_raise_may_edit_only_the_acknowledgements(tmp_path, old, new, only):
-    """`acknowledgements` exits 1 for a change to anything else in the file."""
-    assert old in _ACKNOWLEDGING
-    assert only_acknowledgements_differ(_ACKNOWLEDGING, _ACKNOWLEDGING)
-    base, head = tmp_path / "base.py", tmp_path / "head.py"
-    base.write_text(_ACKNOWLEDGING)
-    head.write_text(_ACKNOWLEDGING.replace(old, new))
-    argv = ["acknowledgements", "--base", str(base), "--head", str(head)]
-    assert main(argv) == (0 if only else 1)
-
-
-def test_acknowledgements_that_do_not_parse_cannot_load(tmp_path):
-    base, head = tmp_path / "base.py", tmp_path / "head.py"
-    base.write_text(_ACKNOWLEDGING)
-    head.write_text("def (")
-    argv = ["acknowledgements", "--base", str(base), "--head", str(head)]
-    assert main(argv) == 2
-    assert main([*argv[:-1], str(tmp_path / "absent.py")]) == 2

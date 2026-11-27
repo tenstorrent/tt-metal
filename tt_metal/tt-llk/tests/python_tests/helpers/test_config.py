@@ -132,8 +132,6 @@ CODE_SHIFT_FLAG = "-Wl,--defsym=__llk_code_shift="
 
 class TestConfig:
 
-    CODE_SHIFT: ClassVar[int] = LLK_CODE_SHIFT
-
     # === STATIC VARIABLES ===
 
     # Architecture Selection
@@ -142,7 +140,9 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
-    QUASAR_VECTOR_MCPU: ClassVar[str] = "-mcpu=tt-qsr32-vector-tensix"
+    QUASAR_VECTOR_MARCH: ClassVar[str] = (
+        "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb"
+    )
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
@@ -613,11 +613,11 @@ class TestConfig:
                 "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
             # The variant's register headers, as the JIT build picks them (qa_hal.cpp).
+            # Saturn has none yet.
             register_header_version = {
                 "": "2.0.0",
                 "horizon": "2.0.1",
                 "trinity": "2.0.2",
-                "saturn": "2.0.3",
             }.get(quasar_variant())
             if register_header_version:
                 hw_specific_includes.append(
@@ -1356,9 +1356,7 @@ class TestConfig:
         NON_COMPILATION_ARGUMENTS = [
             "run_configs",
             "variant_id",
-            "unshifted_variant_id",
-            # runtime_arguments_struct stays in: build.h compiles the RuntimeParams layout in, so two
-            # variants that order their runtimes differently need different ELFs.
+            "runtime_arguments_struct",
             "runtime_format",
             "passed_templates",
             "passed_runtimes",
@@ -1452,17 +1450,11 @@ class TestConfig:
             if TestConfig.ENABLE_PERF_COUNTERS
             else []
         )
-        parts = temp_str + ["<<search-dirs>>"] + search_dirs + build_modes
-        self.unshifted_variant_id = sha256(str(" | ".join(parts)).encode()).hexdigest()
-        self.variant_id = (
-            sha256(
-                str(
-                    " | ".join(parts + [f"<<code-shift>>{TestConfig.CODE_SHIFT}"])
-                ).encode()
-            ).hexdigest()
-            if TestConfig.CODE_SHIFT
-            else self.unshifted_variant_id
-        )
+        self.variant_id = sha256(
+            str(
+                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + build_modes)
+            ).encode()
+        ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
         """Flags for brisc/coverage. Process-wide ``INCLUDES`` only.
@@ -1585,17 +1577,9 @@ class TestConfig:
             )
 
             if TestConfig.WITH_COVERAGE:
-                compile_command = TestConfig._argv(  # coverage.o : coverage.cpp
-                    [TestConfig.GXX],
-                    TestConfig.ARCH_NON_COMPUTE,
-                    TestConfig.OPTIONS_ALL,
-                    local_non_coverage,
-                    "-fno-strict-aliasing -c",
-                    [
-                        "-o",
-                        shared_obj_dir / "coverage.o",
-                        TestConfig.RISCV_SOURCES / "coverage.cpp",
-                    ],
+                compile_command = (  # coverage.o : coverage.cpp
+                    f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {local_non_coverage} "
+                    f'-fno-strict-aliasing -c -o {shared_obj_dir / "coverage.o"} {TestConfig.RISCV_SOURCES / "coverage.cpp"}'
                 )
                 logger.trace(compile_command)
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
@@ -1605,22 +1589,12 @@ class TestConfig:
                 perf_cnt_flag = ""
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     perf_cnt_flag = f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
-                compile_command = TestConfig._argv(  # brisc.elf : brisc.cpp
-                    [TestConfig.GXX],
-                    TestConfig.ARCH_NON_COMPUTE,
-                    TestConfig.OPTIONS_ALL,
-                    TestConfig.OPTIONS_LINK,
-                    local_non_coverage,
-                    "-DCOVERAGE" if TestConfig.WITH_COVERAGE else "",
-                    perf_cnt_flag,
-                    [
-                        f"-T{local_memory_layout_ld}",
-                        f'-T{TestConfig.LINKER_SCRIPTS / "brisc.ld"}',
-                        f'-T{TestConfig.LINKER_SCRIPTS / "sections.ld"}',
-                        "-o",
-                        shared_elf_dir / "brisc.elf",
-                        TestConfig.RISCV_SOURCES / "brisc.cpp",
-                    ],
+                compile_command = (  # brisc.elf : brisc.cpp
+                    f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
+                    f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
+                    f"{perf_cnt_flag}"
+                    f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
+                    f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
                 )
                 logger.trace(compile_command)
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
@@ -1860,9 +1834,7 @@ class TestConfig:
         head = compile_command[: compile_command.index("-x")]
         root = str(TestConfig.ARTEFACTS_DIR)
         key = [
-            token.replace(root, "<artefacts>").replace(
-                self.variant_id, self.unshifted_variant_id
-            )
+            token.replace(root, "<artefacts>")
             for token in head
             if not token.startswith(CODE_SHIFT_FLAG)
         ]
@@ -1946,7 +1918,7 @@ class TestConfig:
                 # Only TRISC0 has the vector unit on Quasar. The flag is after
                 # ARCH_COMPUTE so it overrides the march implied by -mcpu.
                 if self.requires_vector_ext and name == "unpack":
-                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MCPU}"
+                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
 
                 # Only counters on compiles counter code, with its L1 selection (mux group on tt-1xx, l1_client
                 # event on Quasar); counters off keeps each zone's rendezvous alone (counters.h).
@@ -2008,11 +1980,7 @@ class TestConfig:
                         f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
                         f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
                     ],
-                    (
-                        [f"{CODE_SHIFT_FLAG}{TestConfig.CODE_SHIFT}"]
-                        if TestConfig.CODE_SHIFT
-                        else []
-                    ),
+                    ([f"{CODE_SHIFT_FLAG}{LLK_CODE_SHIFT}"] if LLK_CODE_SHIFT else []),
                     # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
                     # that -nostdlib drops; only referenced helpers are linked.
                     ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
@@ -2247,7 +2215,7 @@ class TestConfig:
 
     def _recover_hung_core(self):
         # SimpleNamespace variants in the hw-free tests call this on self and don't model the device.
-        if TestConfig.runs_on_ttsim() or not hasattr(
+        if TestConfig.TEST_TARGET.run_simulator or not hasattr(
             device_module, "recover_tensix_core"
         ):
             return
@@ -2379,11 +2347,10 @@ class TestConfig:
             TestConfig.TENSIX_LOCATION,
         )
 
-        elf_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
-        logger.debug("ELF directory: {}", elf_dir)
-
-        if TestConfig.BUILD_MODE == BuildMode.CONSUME and not elf_dir.is_dir():
-            pytest.skip("no ELFs: the compile session did not reach this test")
+        logger.debug(
+            "ELF directory: {}",
+            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf",
+        )
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
@@ -2680,7 +2647,7 @@ def process_coverage_run_artefacts() -> bool:
 
             if merged_stream:
                 run_shell_command(
-                    [TestConfig.GCOV_TOOL, "merge-stream"],
+                    f"{TestConfig.GCOV_TOOL} merge-stream",
                     TestConfig.TESTS_WORKING_DIR,
                     merged_stream,
                     text=False,
@@ -2688,18 +2655,12 @@ def process_coverage_run_artefacts() -> bool:
 
                 # Generate single .info file per variant
                 info_hash = sha256(str(variant).encode()).hexdigest()
-                command = [
-                    "lcov",
-                    "--gcov-tool",
-                    TestConfig.GCOV,
-                    "--capture",
-                    "--directory",
-                    f"{variant}/elf/",
-                    "--output-file",
-                    f"{TestConfig.COVERAGE_INFO_DIR}/{info_hash}.info",
-                    "--rc",
-                    "lcov_branch_coverage=1",
-                ]
+                command = (
+                    f"lcov --gcov-tool {TestConfig.GCOV} --capture "
+                    f"--directory {variant}/elf/ "
+                    f"--output-file {TestConfig.COVERAGE_INFO_DIR}/{info_hash}.info "
+                    "--rc lcov_branch_coverage=1"
+                )
                 run_shell_command(command, TestConfig.TESTS_WORKING_DIR)
 
     worker_num = 20
@@ -2744,15 +2705,7 @@ def process_coverage_run_artefacts() -> bool:
     def combine_files(index, info_files):
         merged_path = TestConfig.ARTEFACTS_DIR / f"merged_coverage_{index}.info"
         for info_file in info_files:
-            cmd = [
-                "lcov",
-                "-a",
-                str(merged_path),
-                "-a",
-                str(info_file),
-                "-o",
-                str(merged_path),
-            ]
+            cmd = f"lcov -a {merged_path} -a {info_file} -o {merged_path}"
             result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
             if result.returncode:
@@ -2773,15 +2726,7 @@ def process_coverage_run_artefacts() -> bool:
 
     for i in range(1, worker_num):
         info_file = TestConfig.ARTEFACTS_DIR / f"merged_coverage_{i}.info"
-        cmd = [
-            "lcov",
-            "-a",
-            str(merged_path),
-            "-a",
-            str(info_file),
-            "-o",
-            str(merged_path),
-        ]
+        cmd = f"lcov -a {merged_path} -a {info_file} -o {merged_path}"
         result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
         if result.returncode:

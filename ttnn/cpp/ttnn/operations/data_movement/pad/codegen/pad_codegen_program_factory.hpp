@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"

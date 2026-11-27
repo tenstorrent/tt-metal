@@ -12,10 +12,10 @@
 #include <thread>
 #include <vector>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "jit_build/build.hpp"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"

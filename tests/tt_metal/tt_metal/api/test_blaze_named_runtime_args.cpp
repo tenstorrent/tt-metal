@@ -17,16 +17,13 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/experimental/context/metal_env.hpp>
-#include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
@@ -66,7 +63,7 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     };
 
     distributed::MeshWorkload workload;
-    Program program(*get_mesh_device(), ProgramDescriptor{.kernels = {kernel}});
+    Program program(ProgramDescriptor{.kernels = {kernel}});
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
@@ -120,7 +117,7 @@ TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
     };
 
     distributed::MeshWorkload workload;
-    Program program(*get_mesh_device(), ProgramDescriptor{.kernels = {kernel}});
+    Program program(ProgramDescriptor{.kernels = {kernel}});
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
@@ -161,7 +158,7 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     };
 
     distributed::MeshWorkload workload;
-    Program program(*get_mesh_device(), ProgramDescriptor{.kernels = {kernel}});
+    Program program(ProgramDescriptor{.kernels = {kernel}});
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
@@ -214,7 +211,7 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
     };
 
     distributed::MeshWorkload workload;
-    Program program(*get_mesh_device(), ProgramDescriptor{.kernels = {kernel}});
+    Program program(ProgramDescriptor{.kernels = {kernel}});
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
@@ -257,7 +254,7 @@ TEST_F(NamedArgsTest, TensixTestMixedNamedCompileTimeArgsComputeKernel) {
     };
 
     distributed::MeshWorkload workload;
-    Program program(*get_mesh_device(), ProgramDescriptor{.kernels = {kernel}});
+    Program program(ProgramDescriptor{.kernels = {kernel}});
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
@@ -308,7 +305,7 @@ TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
     };
 
     distributed::MeshWorkload workload;
-    Program program(*get_mesh_device(), ProgramDescriptor{.kernels = {kernel}});
+    Program program(ProgramDescriptor{.kernels = {kernel}});
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
@@ -351,7 +348,7 @@ TEST_F(NamedArgsTest, TensixTestLegacyCTArgDedupSameValue) {
     };
 
     distributed::MeshWorkload workload;
-    Program program(*get_mesh_device(), ProgramDescriptor{.kernels = {kernel}});
+    Program program(ProgramDescriptor{.kernels = {kernel}});
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
@@ -387,7 +384,7 @@ TEST_F(NamedArgsTest, TensixTestCTArgConflictFails) {
         .config = DataMovementConfigDescriptor{},
     };
 
-    EXPECT_THROW(Program program(*get_mesh_device(), ProgramDescriptor{.kernels = {kernel}}), std::exception);
+    EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::exception);
 }
 
 // Test 3: Invalid named arg identifiers fail during Program construction.
@@ -415,7 +412,7 @@ TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
         .config = DataMovementConfigDescriptor{},
     };
 
-    EXPECT_THROW(Program program(*get_mesh_device(), ProgramDescriptor{.kernels = {kernel_bad_ns}}), std::exception);
+    EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel_bad_ns}}), std::exception);
 
     // Invalid field: contains a hyphen
     KernelDescriptor kernel_bad_field = {
@@ -431,7 +428,7 @@ TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
         .config = DataMovementConfigDescriptor{},
     };
 
-    EXPECT_THROW(Program program(*get_mesh_device(), ProgramDescriptor{.kernels = {kernel_bad_field}}), std::exception);
+    EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel_bad_field}}), std::exception);
 }
 
 // ============================================================================
@@ -504,18 +501,6 @@ void blaze_expect_cache_hit_values(
 
 }  // namespace
 
-namespace {
-
-// Programs are bound to a MetalEnv. The CPU tests below build Programs but never run them, so they
-// get a mock MetalEnv's mesh device and stay hardware-free.
-struct MockMesh {
-    MetalEnv env{{.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)}};
-    std::shared_ptr<distributed::MeshDevice> device =
-        distributed::MeshDevice::open_mesh_device(env, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
-};
-
-}  // namespace
-
 TEST(NamedArgsDescriptorCacheHit, CPU_SameSchemaDifferentValuesShareProgramHash) {
     // Premise of the staleness bug (and of the regression test below): the two
     // invocations must land on the SAME cache entry.  Values are deliberately
@@ -539,8 +524,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_NamedValuesReappliedOnCacheHit) {
 
     // "Cache miss": first invocation constructs the program; process_named_args
     // merges the named values after the positional slots.
-    MockMesh mock;
-    Program program{*mock.device, desc_v1};
+    Program program{desc_v1};
     blaze_expect_cache_hit_values(program, core0, core1, 0);
 
     // "Cache hit": second invocation, same schema, new values — exactly the
@@ -575,8 +559,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_NamedOnlyValuesReappliedOnCacheHit) {
     ASSERT_EQ(std::hash<ProgramDescriptor>{}(desc_v1), std::hash<ProgramDescriptor>{}(desc_v2))
         << "Test premise: both invocations target the same cache entry";
 
-    MockMesh mock;
-    Program program{*mock.device, desc_v1};
+    Program program{desc_v1};
     apply_descriptor_runtime_args(program, desc_v2);
 
     const auto& per_core_args = GetRuntimeArgs(program, 0, core);
@@ -604,8 +587,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_RepeatedCacheHitsKeepReapplyingValues) {
     ASSERT_EQ(std::hash<ProgramDescriptor>{}(desc_v1), std::hash<ProgramDescriptor>{}(desc_v3))
         << "Test premise: all invocations target the same cache entry";
 
-    MockMesh mock;
-    Program program{*mock.device, desc_v1};
+    Program program{desc_v1};
     apply_descriptor_runtime_args(program, desc_v2);
     blaze_expect_cache_hit_values(program, core0, core1, 1000);
 
@@ -657,8 +639,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_MultipleNamedArgsPerVariantReappliedOnCach
         }
     };
 
-    MockMesh mock;
-    Program program{*mock.device, desc_v1};
+    Program program{desc_v1};
     expect_values(program, 0);
 
     apply_descriptor_runtime_args(program, desc_v2);
@@ -674,8 +655,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_PositionalRuntimeArgCountChangeIsRejected)
     EXPECT_EQ(std::hash<ProgramDescriptor>{}(desc), std::hash<ProgramDescriptor>{}(changed))
         << "Per-core length is not part of the cache key";
 
-    MockMesh mock;
-    Program program{*mock.device, desc};
+    Program program{desc};
     const uint32_t core0_positional = GetRuntimeArgs(program, 0, core0)[0];
     const uint32_t core0_named = GetRuntimeArgs(program, 0, core0)[1];
     EXPECT_THROW(apply_descriptor_runtime_args(program, changed), std::runtime_error);
@@ -703,8 +683,7 @@ TEST(NamedArgsDescriptorCacheHit, CPU_DroppedNamedOnlyCoreIsRejected) {
     EXPECT_EQ(std::hash<ProgramDescriptor>{}(desc), std::hash<ProgramDescriptor>{}(dropped))
         << "Named-arg schema hash does not include which cores carry values";
 
-    MockMesh mock;
-    Program program{*mock.device, desc};
+    Program program{desc};
     const uint32_t core1_before = GetRuntimeArgs(program, 0, core1)[0];
     EXPECT_THROW(apply_descriptor_runtime_args(program, dropped), std::runtime_error);
     EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[0], core1_before);
@@ -720,8 +699,7 @@ TEST(RuntimeArgCountCacheHit, CPU_PaddedDispatchCapacityIsNotTheLogicalCount) {
             .runtime_args = {{core0, {1u, 2u}}, {core1, {5u, 6u, 7u, 8u}}},
             .config = DataMovementConfigDescriptor{},
         }}};
-    MockMesh mock;
-    Program program{*mock.device, desc};
+    Program program{desc};
     auto kernel = program.impl().get_kernel(0);
     uint32_t max_stored = 0;
     for (const CoreCoord& core : {core0, core1}) {
@@ -761,8 +739,7 @@ TEST(RuntimeArgCountCacheHit, CPU_DuplicateCoreEntryCannotExceedCachedCount) {
             .runtime_args = {{core0, core0_args}, {core0, core0_args}, {core1, core1_args}},
             .config = DataMovementConfigDescriptor{},
         }}};
-    MockMesh mock;
-    Program program{*mock.device, desc};
+    Program program{desc};
     ASSERT_EQ(GetRuntimeArgs(program, 0, core0).size(), 4u);
     ASSERT_EQ(GetRuntimeArgs(program, 0, core1).size(), 4u);
 
@@ -800,8 +777,7 @@ TEST(RuntimeArgCountCacheHit, CPU_TrailingEmptyDuplicateReusesCachedCount) {
             .runtime_args = {{core0, core0_args}, {core0, {}}, {core1, core1_args}},
             .config = DataMovementConfigDescriptor{},
         }}};
-    MockMesh mock;
-    Program program{*mock.device, desc};
+    Program program{desc};
     ASSERT_EQ(GetRuntimeArgs(program, 0, core0).size(), core0_args.size());
     ASSERT_EQ(GetRuntimeArgs(program, 0, core1).size(), core1_args.size());
 
@@ -838,8 +814,7 @@ TEST(RuntimeArgCountCacheHit, CPU_OmittedCoreIsRejected) {
             .runtime_args = {{core0, {1u, 2u, 3u, 4u}}, {core1, {5u, 6u, 7u, 8u}}},
             .config = DataMovementConfigDescriptor{},
         }}};
-    MockMesh mock;
-    Program program{*mock.device, desc};
+    Program program{desc};
     const uint32_t core1_before = GetRuntimeArgs(program, 0, core1)[0];
 
     ProgramDescriptor missing = desc;
@@ -857,8 +832,7 @@ TEST(RuntimeArgCountCacheHit, CPU_EmptyCommonArgsSurviveCountFinalization) {
             .runtime_args = {{core, {1u, 2u, 3u, 4u}}},
             .config = DataMovementConfigDescriptor{},
         }}};
-    MockMesh mock;
-    Program program{*mock.device, desc};
+    Program program{desc};
     auto kernel = program.impl().get_kernel(0);
     kernel->set_common_runtime_args_count(static_cast<uint32_t>(kernel->common_runtime_args().size()));
     apply_descriptor_runtime_args(program, desc);
@@ -869,7 +843,7 @@ TEST(RuntimeArgCountCacheHit, CPU_EmptyCommonArgsSurviveCountFinalization) {
 
     ProgramDescriptor with_common = desc;
     with_common.kernels[0].common_runtime_args = {10u, 11u};
-    Program populated{*mock.device, with_common};
+    Program populated{with_common};
     ProgramDescriptor cleared = with_common;
     cleared.kernels[0].common_runtime_args.clear();
     const uint32_t common_before = GetCommonRuntimeArgs(populated, 0)[0];

@@ -4,22 +4,22 @@
 
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <unistd.h>
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cstdlib>
@@ -117,9 +117,10 @@ bool find_device_with_neighbor_in_direction(
     return false;
 }
 
-tt_metal::FabricSettings make_control_plane_config(FabricConfig fabric_config, FabricReliabilityMode reliability_mode) {
-    const auto& env_config = tt::tt_metal::MetalContext::instance().get_env().get_fabric_settings();
-    return tt_metal::FabricSettings{
+tt_metal::FabricConfigDescriptor make_control_plane_config(
+    FabricConfig fabric_config, FabricReliabilityMode reliability_mode) {
+    const auto& env_config = tt::tt_metal::MetalContext::instance().get_env().get_fabric_config_descriptor();
+    return tt_metal::FabricConfigDescriptor{
         .fabric_config = fabric_config,
         .reliability_mode = reliability_mode,
         .mesh_id = env_config.mesh_id,

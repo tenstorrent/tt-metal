@@ -8,7 +8,7 @@
 
 // Dimensions of the default 32x32 tile and its 16x16 faces, for device (kernel) code.
 //
-// This is the device-side counterpart of the host header tt-metalium/data_formats/tile_constants.hpp. The two files are
+// This is the device-side counterpart of the host header tt-metalium/constants.hpp. The two files are
 // deliberately separate: one is compiled by the host compiler, the other by the RISC-V kernel compiler,
 // and neither may include the other. Kernels that must work with other tile shapes should take the tile
 // dimensions as compile-time or runtime arguments instead of using these values.

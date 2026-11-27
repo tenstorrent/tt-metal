@@ -4,7 +4,7 @@
 
 #include <tt-metalium/experimental/operation_timeout.hpp>
 
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"

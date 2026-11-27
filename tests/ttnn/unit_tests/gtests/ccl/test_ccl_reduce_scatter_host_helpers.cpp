@@ -10,7 +10,7 @@
 
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"

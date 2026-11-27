@@ -380,10 +380,6 @@ jobs:
       (github.event_name == 'schedule' || inputs.run_tt_train_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: unit
@@ -392,7 +388,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      hf-oidc: true
       summary-scope: unit
   tt-train-perf-pretraining-tests:
     needs: [build-artifact, generate-arch-matrix]
@@ -400,10 +395,6 @@ jobs:
       (github.event_name == 'schedule' || inputs.run_tt_train_perf_pretraining_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: perf
@@ -412,7 +403,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      hf-oidc: true
       subcategories: pretraining
       summary-scope: pretraining
   tt-train-perf-finetuning-tests:
@@ -421,10 +411,6 @@ jobs:
       (github.event_name == 'schedule' || inputs.run_tt_train_perf_finetuning_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: perf
@@ -433,7 +419,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      hf-oidc: true
       subcategories: finetuning
       summary-scope: finetuning
 

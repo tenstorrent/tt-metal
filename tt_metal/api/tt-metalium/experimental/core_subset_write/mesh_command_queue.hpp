@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 
 namespace tt::tt_metal::distributed {
 class MeshBuffer;

@@ -8,10 +8,10 @@
 #include "ttnn/operations/core/core.hpp"
 #include "embedding_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::prim {
 struct CoreSplitResult {
@@ -24,6 +24,4 @@ struct CoreSplitResult {
 };
 
 CoreSplitResult split_work_to_cores_aligned(CoreCoord grid_size, uint32_t units_to_divide, uint32_t alignment);
-
-uint32_t weight_cache_row_bytes(tt::tt_metal::distributed::MeshDevice* device, uint32_t weight_page_size);
 }  // namespace ttnn::prim

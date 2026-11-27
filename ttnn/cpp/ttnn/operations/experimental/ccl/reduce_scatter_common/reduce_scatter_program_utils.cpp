@@ -9,9 +9,9 @@
 #include <numeric>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <enchantum/enchantum.hpp>
 

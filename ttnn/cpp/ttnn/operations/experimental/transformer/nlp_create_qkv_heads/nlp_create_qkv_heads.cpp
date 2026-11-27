@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operation.hpp"  // tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"

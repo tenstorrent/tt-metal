@@ -29,10 +29,9 @@ import runner  # noqa: E402
 
 import perf  # noqa: E402
 
-#: Report-only thresholds: the LLK PR perf gate's, from its policy file.
-_POLICY = json.loads((Path(__file__).resolve().parents[2] / "tt_metal/tt-llk/perf/gate_policy.json").read_text())["pr"]
-THRESHOLDS = {arch: float(p["threshold"]) for arch, p in _POLICY.items()}
-THRESHOLDS["min_cycles"] = float(_POLICY["blackhole"]["min_cycles"])
+#: Report-only thresholds, the LLK perf gate's (#53752): BH 2%, WH 8%, and 30
+#: cycles per loop on top.
+THRESHOLDS = {"blackhole": 0.02, "wormhole": 0.08, "min_cycles": 30.0}
 
 #: Detected ops beyond this are listed, not measured (the /test cap is 8 too).
 MAX_OPS = 8

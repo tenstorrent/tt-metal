@@ -9,7 +9,7 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"

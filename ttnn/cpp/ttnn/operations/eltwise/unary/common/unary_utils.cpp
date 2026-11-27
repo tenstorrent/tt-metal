@@ -7,11 +7,11 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include <algorithm>
 #include <bit>

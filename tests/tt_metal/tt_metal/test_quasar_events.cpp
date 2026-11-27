@@ -5,13 +5,12 @@
 #include "common/device_fixture.hpp"
 #include "context/metal_context.hpp"
 
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/mesh_event.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -47,14 +46,14 @@ distributed::MeshWorkload make_l1_write_workload(
     WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
     ProgramSpec spec{
         .name = std::string("l1_write_") + kernel_id, .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
-    Program program(mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
-    program.set_program_run_args(params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
     wl.add_program(device_range, std::move(program));
     return wl;
 }

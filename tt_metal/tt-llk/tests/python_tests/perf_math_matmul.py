@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from itertools import chain
+from itertools import chain, product
 
 import pytest
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
@@ -16,22 +16,14 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import (
     DEST_RT_CT_BLOCKS,
-    MATMUL_CONFIG_AXES,
     MatmulConfig,
     generate_face_layout_config_sweep,
     generate_tile_dims,
-    matmul_config_columns,
-    matmul_config_from_axes,
     mid_fill_rt_ct_pairs,
     skip_matmul_combination,
     sweep_tiny_tiles_matmul,
 )
-from helpers.param_config import (
-    flat_axes,
-    input_output_formats,
-    max_dest_tiles,
-    parametrize,
-)
+from helpers.param_config import input_output_formats, max_dest_tiles
 from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -168,55 +160,41 @@ TINY_TILES_MATMUL_COMBINATIONS = [
     if _fits_tiny_perf_tile_shape(cfg)
 ]
 
-
-def _rows(fidelities, configs, throttle, num_blocks, row_mop):
-    """(math_fidelity, *MATMUL_CONFIG_AXES, throttle, num_blocks, row_mop) rows."""
-    return (
-        (fidelity, *matmul_config_columns(config), throttle, num_blocks, row_mop)
-        for config in configs
-        for fidelity in fidelities
-    )
-
-
 ALL_TEST_PARAMS = list(
     chain(
-        chain.from_iterable(
-            _rows(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, throttle, 1, False)
-            for throttle in THROTTLE_LEVELS
+        (
+            (fidelity, cfg, throttle, 1, False)
+            for fidelity, cfg, throttle in product(
+                ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
+            )
         ),
-        _rows(ALL_MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS, 0, 1, False),
-        _rows(
-            ALL_MATH_FIDELITIES,
-            [c for c in MATMUL_COMBINATIONS if c.tile_dimensions.kt_dim == 1],
-            0,
-            DEST_HANDOFF_NUM_BLOCKS,
-            False,
+        (
+            (fidelity, cfg, 0, 1, False)
+            for fidelity, cfg in product(
+                ALL_MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
+            )
+        ),
+        (
+            (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS, False)
+            for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)
+            if cfg.tile_dimensions.kt_dim == 1
         ),
         # Blackhole row MOP at throttle 0: A/B against the first slice's throttle-0 per-tile rows.
-        _rows(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, 0, 1, True),
+        (
+            pytest.param(fidelity, cfg, 0, 1, True, marks=skip_for_wormhole)
+            for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)
+        ),
     )
 )
 
 
 @pytest.mark.perf
-@parametrize(
-    **flat_axes(
-        ("math_fidelity", *MATMUL_CONFIG_AXES, "throttle", "num_blocks", "row_mop"),
-        ALL_TEST_PARAMS,
-    )
+@pytest.mark.parametrize(
+    "math_fidelity,matmul_config,throttle,num_blocks,row_mop", ALL_TEST_PARAMS
 )
 def test_perf_math_matmul(
     math_fidelity,
-    formats,
-    dest_acc,
-    dest_sync,
-    stochastic_rnd,
-    dst_index,
-    input_tile_dimensions,
-    ct_dim,
-    rt_dim,
-    kt_dim,
-    unpack_transpose_faces,
+    matmul_config,
     throttle,
     num_blocks,
     row_mop,
@@ -232,20 +210,7 @@ def test_perf_math_matmul(
     dest-handoff slice repeats dest_index=0 grids (NUM_BLOCKS=4, KT=1,
     throttle=0).
     """
-    if row_mop and get_chip_architecture() == ChipArchitecture.WORMHOLE:
-        pytest.skip("The row MOP is Blackhole only")
-    matmul_config = matmul_config_from_axes(
-        formats,
-        dest_acc,
-        dest_sync,
-        stochastic_rnd,
-        dst_index,
-        input_tile_dimensions,
-        ct_dim,
-        rt_dim,
-        kt_dim,
-        unpack_transpose_faces,
-    )
+    formats = matmul_config.formats
     in0_dimensions = matmul_config.tile_dimensions.in0_dimensions
     in1_dimensions = matmul_config.tile_dimensions.in1_dimensions
     transpose = matmul_config.face_layout_config.unpack_transpose_faces

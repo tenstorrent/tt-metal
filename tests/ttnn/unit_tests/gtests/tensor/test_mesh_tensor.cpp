@@ -31,12 +31,12 @@
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/core_subset_write/tensor.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/memory/tensor/tensor_apis.hpp>
-#include <tt-metalium/memory/buffer/host_buffer.hpp>
-#include <tt-metalium/memory/utils/memory_pin.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory_pin.hpp>
 #include <tt_stl/aligned_allocator.hpp>
 
 #include "tt_metal/distributed/pinned_memory_cache.hpp"

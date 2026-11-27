@@ -21,10 +21,9 @@
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-single-galaxy
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-dual-galaxy
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-misc
-    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group fabric-builder
   skus:
     cpu_medium:
-      timeout: 7
+      timeout: 6
   team: scaleout
   budget_type: unit
   arch: wormhole_b0

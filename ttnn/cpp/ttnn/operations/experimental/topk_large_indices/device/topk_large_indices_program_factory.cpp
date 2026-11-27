@@ -5,12 +5,12 @@
 #include "topk_large_indices_program_factory.hpp"
 #include "kernels/topk_large_indices_runtime_args.hpp"
 
-#include <tt-metalium/workload/specification/compute_modes.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <optional>
 #include <tuple>
@@ -87,11 +87,8 @@ void set_runtime_args(
     reader_args[topk_common_args::input_row_bytes] = runtime_args.input_row_bytes;
     tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel_id)[topk_common_args::compute_search_length] =
         runtime_args.search_len;
-    // The row assignment depends on the row count and, through the column split, on the chunk count. It uses the
-    // physical width, as in metadata mode: the kernels bound each row (or half row) by search_len on the device, so
-    // a new valid_length changes only the common args above, not every core's.
-    const uint32_t input_width = input.logical_shape()[-1];
-    const uint32_t num_chunks = tt::div_up(input_width, shared.llk_k);
+    // The row assignment depends on the row count and, through the column split, on the searched chunk count.
+    const uint32_t num_chunks = tt::div_up(runtime_args.search_len, shared.llk_k);
     if (shared.num_rows == runtime_args.num_rows && shared.num_chunks == num_chunks) {
         return;
     }
@@ -268,7 +265,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto program = tt::tt_metal::CreateProgram(*tensor_args.input_tensor.device());
+    auto program = tt::tt_metal::CreateProgram();
 
     const auto& input = tensor_args.input_tensor;
     auto& indices = tensor_return_value;

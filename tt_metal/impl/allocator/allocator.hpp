@@ -11,9 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 
 #include "impl/allocator/allocator_types.hpp"
 #include "impl/allocator/bank_manager.hpp"

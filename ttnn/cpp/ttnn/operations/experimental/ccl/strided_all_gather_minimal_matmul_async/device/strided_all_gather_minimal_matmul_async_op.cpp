@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
 
 /* All Gather Matmul fusion includes */
@@ -27,6 +27,12 @@ void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.fused_ternary_input_a.has_value() == tensor_args.fused_ternary_input_b.has_value(),
         "StridedAllGatherMinimalMatmulAsync fused addcmul requires both ternary inputs (a and b) or neither.");
+    // MinimalMatmulConfig::transpose_core_grid pins minimal_matmul's grid orientation; this op does not
+    // read it, so refuse it rather than silently run the other orientation.
+    TT_FATAL(
+        !(attributes.matmul_struct.config.has_value() &&
+          attributes.matmul_struct.config->transpose_core_grid.has_value()),
+        "StridedAllGatherMinimalMatmulAsync ignores MinimalMatmulConfig::transpose_core_grid; it chooses its own");
 
     // SwiGLU packs gate/up tile-pairs along the weight's N, so the weight width must be an even
     // number of tiles; each pair collapses to one output tile. Restated here because this op does

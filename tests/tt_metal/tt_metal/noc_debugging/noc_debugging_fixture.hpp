@@ -7,20 +7,12 @@
 #include <cstdlib>
 #include <string>
 #include <gtest/gtest.h>
-#include "impl/profiler/profiler_state_manager.hpp"
+#include "profiler_state_manager.hpp"
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <impl/context/metal_context.hpp>
 #include <impl/debug/noc_debugging.hpp>
-#include "llrt/get_platform_architecture.hpp"
-#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
 namespace tt::tt_metal {
-
-inline DataMovementHardwareConfig make_data_movement_config(DataMovementProcessor processor, NOC noc) {
-    return DataMovementHardwareConfig{
-        .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc},
-    };
-}
 
 class NOCDebuggingFixture : public MeshDispatchFixture {
 public:
@@ -29,11 +21,6 @@ public:
         return;
 #endif
         if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-            return;
-        }
-        // Not get_umd_arch_name(): it builds MetalContext, which reads TT_METAL_NOC_DEBUG_DUMP before it is set below.
-        is_quasar_ = tt::tt_metal::get_platform_architecture(tt::llrt::RunTimeOptions{}) == tt::ARCH::QUASAR;
-        if (is_quasar_) {
             return;
         }
 
@@ -55,9 +42,6 @@ public:
 #if !defined(TRACY_ENABLE)
         return;
 #endif
-        if (is_quasar_) {
-            return;
-        }
         MeshDispatchFixture::destroy_shared_devices();
         if (had_prev_env_) {
             setenv("TT_METAL_NOC_DEBUG_DUMP", prev_env_value_.c_str(), 1);
@@ -141,6 +125,11 @@ public:
                issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_LOCKED_DFB);
     }
 
+    // #45918: noc event logging on quasar is not supported yet
+    bool dfb_scoped_lock_tracker_supported(const std::shared_ptr<distributed::MeshDevice>& mesh_device) const {
+        return mesh_device->arch() != tt::ARCH::QUASAR;
+    }
+
     bool has_write_to_unlocked_dfb_issue(ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
         auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
         if (!noc_debug_state) {
@@ -197,7 +186,6 @@ public:
 protected:
     static inline bool had_prev_env_{false};
     static inline std::string prev_env_value_{};
-    static inline bool is_quasar_{false};
 
     void SetUp() override {
 #if !defined(TRACY_ENABLE)
@@ -205,9 +193,6 @@ protected:
 #endif
         if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
             GTEST_SKIP() << "NOC debugging tests require fast dispatch mode";
-        }
-        if (is_quasar_) {
-            GTEST_SKIP() << "NOC debugging is currently not supported on Quasar";
         }
 
         MeshDispatchFixture::SetUp();
@@ -217,8 +202,6 @@ protected:
                 tt::llrt::RunTimeDebugFeatureDprint)) {
             GTEST_SKIP() << "NOC debugging tests require Watcher and DPRINT to be disabled";
         }
-        ASSERT_TRUE(tt::tt_metal::MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled())
-            << "TT_METAL_NOC_DEBUG_DUMP must be set before MetalContext initializes";
 
         if (auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state()) {
             noc_debug_state->reset_state();

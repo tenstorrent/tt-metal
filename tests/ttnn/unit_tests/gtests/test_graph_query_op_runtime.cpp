@@ -9,11 +9,10 @@
 #include <tuple>
 
 #include "gtest/gtest.h"
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/vocabulary/shape.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/graph/graph_query_op_runtime.hpp"

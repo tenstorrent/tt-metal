@@ -22,7 +22,6 @@ from ....utils.tracing import StateTensor, traced_function
 from .agmm_config import AgmmMode
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock, onehot_identity
-from .vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass
 
 # shift, scale -- the order `norm_out.linear` emits them in.
 NUM_OUT_MODULATION_PARAMS = 2
@@ -144,7 +143,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
         activated = ttnn.silu(temb)
         if activated.dtype != ttnn.bfloat16:
             activated = ttnn.typecast(activated, ttnn.bfloat16)
-        projected = self.linear(activated)  # [1, 1, num_slots, 2 * hidden_local]
+        projected = self.linear(activated)  # [1, 1, num_timesteps, 2 * hidden_local]
 
         rows = projected.shape[2]
         tables = []
@@ -229,14 +228,10 @@ class MiniMaxH3Transformer3DModel(Module):
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
         agmm_mode: AgmmMode | str | None = None,
-        ff1_output_dtype: ttnn.DataType | None = None,
-        # VSA: when set, bind a geometry's pre-pass with `set_vsa_prepass` and feed the sequence in its tile order.
-        vsa_config: MiniMaxH3VSAConfig | None = None,
     ) -> None:
         """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
         are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour.
-        `agmm_mode` picks that path's all-gather matmul pins (`resolve_agmm_mode`). `ff1_output_dtype` is the
-        blocks' feed-forward intermediate dtype (None: bfloat16)."""
+        `agmm_mode` picks that path's all-gather matmul pins (`resolve_agmm_mode`)."""
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -344,8 +339,6 @@ class MiniMaxH3Transformer3DModel(Module):
                     dynamic_length=dynamic_length,
                     norm_row_capacity=norm_row_capacity,
                     agmm_mode=agmm_mode,
-                    ff1_output_dtype=ff1_output_dtype,
-                    vsa_config=vsa_config,
                 )
                 for _ in range(num_layers)
             ]
@@ -373,15 +366,6 @@ class MiniMaxH3Transformer3DModel(Module):
             grid = get_matmul_core_grid(mesh_device)
             for name, width in (("video", video_patch_dim), ("audio", audio_in_channels)):
                 self._head_configs[name] = get_matmul_config(_HEAD_CONFIG_ROWS, hidden_size, width, grid)
-        # A plain tuple, not child modules, so the per-step heads stay out of the weight cache.
-        self._output_projections: tuple[Linear, Linear] | None = None
-
-    def set_output_projections(self, projections: tuple[Linear, Linear] | None) -> None:
-        """Run the next forwards with these `(proj_out, audio_proj_out)`; None restores the loaded ones.
-
-        Outside the traced `run_blocks`, so a swap between steps needs no recapture.
-        """
-        self._output_projections = projections
 
     def prepare_static_sources(
         self,
@@ -476,7 +460,6 @@ class MiniMaxH3Transformer3DModel(Module):
         traced: bool = False,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
-        modulation_row_indices: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -497,8 +480,6 @@ class MiniMaxH3Transformer3DModel(Module):
             capture per `(pad_to, map present)`).
         adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
             their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
-        modulation_row_indices: [1, 1, 1, num_slots] uint32, this step's rows of `prepare_modulation`'s projection, one
-            per slot: the blocks take their adaLN tables from there instead of projecting `temb`.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -558,7 +539,12 @@ class MiniMaxH3Transformer3DModel(Module):
         if not indices_already_sharded:
             hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        temb = self._temb(timestep, endpoint_timestep)
+        temb = self.time_embedder(self.time_proj(timestep))
+        if self.two_time is not None:
+            if endpoint_timestep is None:
+                raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
+            endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
+            temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
         self._temb_state.update(temb, traced=traced)
         temb = self._temb_state.value
 
@@ -596,9 +582,6 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
             traced=traced,
             tracer_trace_key=(pad_to, adaln_tile_map is not None),
-            **(
-                {} if modulation_row_indices is None else {"modulation_row_indices": as_indices(modulation_row_indices)}
-            ),
         )
 
         hidden = self.norm_out(
@@ -612,9 +595,8 @@ class MiniMaxH3Transformer3DModel(Module):
                 hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False, **ag_kwargs
             )
 
-        proj_out, audio_proj_out = self._output_projections or (self.proj_out, self.audio_proj_out)
-        video_all = proj_out(hidden, matmul_config=self._head_configs.get("video"))
-        audio_all = audio_proj_out(hidden, matmul_config=self._head_configs.get("audio"))
+        video_all = self.proj_out(hidden, matmul_config=self._head_configs.get("video"))
+        audio_all = self.audio_proj_out(hidden, matmul_config=self._head_configs.get("audio"))
         if self.sp_factor > 1:
             video_all = self.ccl_manager.all_gather(
                 video_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False, **ag_kwargs
@@ -633,45 +615,6 @@ class MiniMaxH3Transformer3DModel(Module):
 
         return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
 
-    def _temb(self, timestep: ttnn.Tensor, endpoint_timestep: ttnn.Tensor | None) -> ttnn.Tensor:
-        temb = self.time_embedder(self.time_proj(timestep))
-        if self.two_time is not None:
-            if endpoint_timestep is None:
-                raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
-            endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
-            temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
-        return temb
-
-    def prepare_modulation(self, timesteps: ttnn.Tensor, endpoint_timesteps: ttnn.Tensor | None = None) -> None:
-        """Project every block's adaLN tables for a whole denoise at once (see the block's `prepare_modulation`).
-
-        timesteps / endpoint_timesteps: [1, 1, rows, 1] float32, replicated: the `timestep` (and
-        `endpoint_timestep`) forward inputs of every step stacked, plus any padding rows. A forward then passes
-        the row numbers of its step as `modulation_row_indices`. Release with `release_modulation`.
-        """
-        # temb a tile row at a time: the fp32 time-embedder linears are configured for a step's few rows (at 256 rows
-        # their buffers overflow L1), and a step's own shape keeps each row's temb that of the step's forward.
-        tile = ttnn.TILE_SIZE
-        chunks = []
-        for r in range(0, timesteps.shape[2], tile):
-            end = min(r + tile, timesteps.shape[2])
-            ts = ttnn.slice(timesteps, [0, 0, r, 0], [1, 1, end, 1])
-            ep = None if endpoint_timesteps is None else ttnn.slice(endpoint_timesteps, [0, 0, r, 0], [1, 1, end, 1])
-            chunks.append(self._temb(ts, ep))
-        temb = ttnn.concat(chunks, dim=2) if len(chunks) > 1 else chunks[0]
-        try:
-            for block in self.transformer_blocks:
-                block.prepare_modulation(temb)
-        except BaseException:
-            self.release_modulation()
-            raise
-        finally:
-            ttnn.deallocate(temb)
-
-    def release_modulation(self) -> None:
-        for block in self.transformer_blocks:
-            block.release_modulation()
-
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def run_blocks(
         self,
@@ -684,7 +627,6 @@ class MiniMaxH3Transformer3DModel(Module):
         eye: ttnn.Tensor | None = None,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
-        modulation_row_indices: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
@@ -692,20 +634,22 @@ class MiniMaxH3Transformer3DModel(Module):
             hidden = block(
                 hidden,
                 logical_n,
-                temb=temb if modulation_row_indices is None else None,
+                temb=temb,
                 adaln_indices=adaln_indices,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
                 onehot=onehot,
                 tilerow=tilerow,
-                modulation_row_indices=modulation_row_indices,
             )
         ttnn.deallocate(onehot)
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])
         return hidden
 
-    def set_vsa_prepass(self, prepass: VSAPrepass | None) -> None:
-        """Bind one geometry's VSA pre-pass to every block (its constants are shared across layers); None is dense."""
-        for block in self.transformer_blocks:
-            block.attn.set_vsa_prepass(prepass)
+    def release_traces(self) -> None:
+        """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""
+        run_blocks = type(self).run_blocks
+        tracers = [run_blocks._tracers.get(self), *run_blocks._tracers_keyed.get(self, {}).values()]
+        for tracer in tracers:
+            if tracer is not None:
+                tracer.release_trace()

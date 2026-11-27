@@ -6,8 +6,8 @@
 
 #include <tuple>
 
-#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 
 namespace tt::tt_metal {
 

@@ -6,8 +6,8 @@
 #include "x280/device/x280_runtime.hpp"
 
 #include <gtest/gtest.h>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include <array>
 #include <memory>

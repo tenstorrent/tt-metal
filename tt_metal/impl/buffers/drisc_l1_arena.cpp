@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -30,24 +30,13 @@ DriscL1Arena::DriscL1Arena(ContextId context_id) {
         drisc_unreserved_size_);
 }
 
-DriscL1Arena::DriscL1Arena(DeviceAddr zone_base, uint32_t zone_size) :
-    unreserved_base_(zone_base),
-    drisc_unreserved_size_(zone_size),
-    zone_size_(zone_size),
-    endpoint_l1_(EndpointL1::Shared) {}
-
-std::shared_ptr<DriscL1Arena> DriscL1Arena::for_dispatch_engine(DeviceAddr zone_base, uint32_t zone_size) {
-    TT_FATAL(zone_size > 0, "Dispatch-engine sender-state zone is empty");
-    return std::shared_ptr<DriscL1Arena>(new DriscL1Arena(zone_base, zone_size));
-}
-
 std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate_on(const CoreCoord& core, uint32_t size, uint32_t alignment) {
     TT_FATAL(size > 0, "DriscL1Arena allocation requires size > 0");
     TT_FATAL(alignment > 0 && (alignment & (alignment - 1)) == 0, "alignment must be a power of two");
 
     const uint32_t aligned_size = tt::align(size, alignment);
     const DeviceAddr zone_begin = unreserved_base_;
-    const DeviceAddr zone_end = unreserved_base_ + zone_size_;
+    const DeviceAddr zone_end = unreserved_base_ + kSenderStateZoneSize;
 
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -56,7 +45,7 @@ std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate_on(const CoreCoord& co
     // lowest free candidate.
     DeviceAddr candidate = tt::align(zone_begin, alignment);
     for (const LiveRange& range : live_) {
-        if (!same_l1(range.core, core)) {
+        if (range.core != core) {
             continue;
         }
         if (range.base >= candidate + aligned_size) {
@@ -83,7 +72,7 @@ std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate_on(const CoreCoord& co
         aligned_size,
         core.x,
         core.y,
-        zone_size_,
+        kSenderStateZoneSize,
         zone_begin);
 }
 

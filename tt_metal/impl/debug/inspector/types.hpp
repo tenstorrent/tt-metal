@@ -14,8 +14,8 @@
 
 #include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 
 namespace tt::tt_metal {
     class Inspector;
@@ -81,7 +81,6 @@ struct MeshSocketLocalCoreData {
 
 struct MeshSocketData {
     bool is_sender{};
-    bool peer_is_host{};
     uint64_t config_buffer_address{};
     uint64_t data_buffer_address{};
     uint64_t fifo_size{};

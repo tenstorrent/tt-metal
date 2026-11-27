@@ -5,8 +5,8 @@
 #pragma once
 
 #include <vector>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::prim {
 struct shared_variables_interleaved {

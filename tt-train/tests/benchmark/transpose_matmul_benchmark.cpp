@@ -8,7 +8,7 @@
 #include <benchmark/benchmark.h>
 
 #include <chrono>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/device.hpp>
 #include <vector>
 
 #include "core/compute_kernel_config.hpp"

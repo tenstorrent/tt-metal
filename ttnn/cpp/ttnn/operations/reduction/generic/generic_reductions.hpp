@@ -10,7 +10,7 @@
 
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/types.hpp"
 
 namespace ttnn {
@@ -41,8 +41,7 @@ Tensor sum(
     bool fast_and_approximate_mode = false,
     // Layout of the result. std::nullopt (default) is TILE, except a ROW_MAJOR input reduced over
     // -1/-2 on the dense RM path, which stays ROW_MAJOR. An explicit layout is always honored.
-    const std::optional<Layout>& output_layout = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt);
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 Tensor mean(
     const Tensor& input_tensor_arg,
@@ -55,8 +54,7 @@ Tensor mean(
     // When false (default), fp32 mean runs on the accurate SFPU path; true selects the faster tf32 FPU path.
     bool fast_and_approximate_mode = false,
     // See ttnn::sum above.
-    const std::optional<Layout>& output_layout = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt);
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 Tensor max(
     const Tensor& input_tensor_arg,

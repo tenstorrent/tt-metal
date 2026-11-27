@@ -3,7 +3,7 @@
 
 #include "chunk_gdn_phased.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

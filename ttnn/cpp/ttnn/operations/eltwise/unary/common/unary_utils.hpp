@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include <optional>
 #include <vector>

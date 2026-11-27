@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <limits>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_formats/tilize_utils.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 using std::uint16_t;
 using std::uint32_t;

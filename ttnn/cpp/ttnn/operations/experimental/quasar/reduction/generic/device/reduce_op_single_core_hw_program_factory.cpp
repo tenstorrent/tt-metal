@@ -4,8 +4,8 @@
 
 #include "reduce_op_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op.hpp"
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <bit>
 #include <cmath>
 #include <filesystem>

@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 #include <cstdint>
 
 #include <cerrno>

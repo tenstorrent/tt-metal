@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <device.hpp>
 #include <cstdint>
 #include <cstddef>
 #include <unordered_map>
@@ -13,7 +13,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "impl/context/context_types.hpp"
-#include "tt-metalium/mesh/sub_device_types.hpp"
+#include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
 
 namespace tt::tt_metal {
@@ -49,6 +49,24 @@ struct TraceDispatchMetadata {
         trace_buffer_num_pages(buf_num_pages),
         trace_buffer_address(buf_address) {}
 };
+
+void reset_host_dispatch_state_for_trace(
+    uint32_t num_sub_devices,
+    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
+    DispatchArray<uint32_t>& expected_num_workers_completed,
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
+    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
+    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset);
+
+void load_host_dispatch_state(
+    uint32_t num_sub_devices,
+    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
+    DispatchArray<uint32_t>& expected_num_workers_completed,
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
+    DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
+    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset);
 
 void issue_trace_commands(
     distributed::MeshDevice* mesh_device,

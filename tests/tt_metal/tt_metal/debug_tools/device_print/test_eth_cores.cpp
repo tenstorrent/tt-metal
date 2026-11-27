@@ -3,22 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <functional>
 #include <string>
 #include <unordered_set>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include "tests/tt_metal/tt_metal/eth/eth_test_common.hpp"
@@ -80,7 +80,6 @@ TEST_F(DevicePrintFixture, ActiveEthTestPrint) {
     if (!this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
-    bool ran = false;
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->impl().get_devices()[0];
         // Skip if no ethernet cores on this device
@@ -88,7 +87,6 @@ TEST_F(DevicePrintFixture, ActiveEthTestPrint) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
-        ran = true;
 
         const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
@@ -102,9 +100,6 @@ TEST_F(DevicePrintFixture, ActiveEthTestPrint) {
                 mesh_device);
         }
     }
-    if (!ran) {
-        GTEST_SKIP() << "No device has an active ethernet core";
-    }
 }
 TEST_F(DevicePrintFixture, IdleEthTestPrint) {
     if (!this->IsSlowDispatch()) {
@@ -112,7 +107,6 @@ TEST_F(DevicePrintFixture, IdleEthTestPrint) {
         GTEST_SKIP();
     }
     this->RequestFreshDevicesAfterThisTest();
-    bool ran = false;
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->impl().get_devices()[0];
         // Skip if no ethernet cores on this device
@@ -120,7 +114,6 @@ TEST_F(DevicePrintFixture, IdleEthTestPrint) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
-        ran = true;
         const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
@@ -133,8 +126,5 @@ TEST_F(DevicePrintFixture, IdleEthTestPrint) {
                 },
                 mesh_device);
         }
-    }
-    if (!ran) {
-        GTEST_SKIP() << "No device has an idle ethernet core";
     }
 }

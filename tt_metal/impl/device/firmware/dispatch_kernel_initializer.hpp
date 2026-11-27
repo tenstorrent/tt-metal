@@ -42,8 +42,7 @@ private:
 
     void wait_for_dispatch_cores() const;
 
-    // Writes the termination signals of the kernels of `kernel_type`.
-    void process_termination_signals(FDKernelType kernel_type) const;
+    void process_termination_signals() const;
 
     bool using_fast_dispatch() const;
 

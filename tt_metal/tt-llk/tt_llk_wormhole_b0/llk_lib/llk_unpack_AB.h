@@ -15,6 +15,7 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_unpack_common.h"
+#include "lltt.h"
 #include "tensor_shape.h"
 #include "tensor_shape_coverage_unpack.h"
 
@@ -382,7 +383,7 @@ inline void _llk_unpack_bcastA_B_init_()
 
     */
 
-    TTI_REPLAY(0, 16, 0, 1);
+    lltt::record<lltt::NoExec>(0, 16);
     // ************************************
     // F0
     TTI_UNPACR(SrcA, ADDRMOD_CH1Y_1_CH1Z_0_CH0Y_0_CH0Z_0, 0, 0, 0, 1, 0 /* dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);

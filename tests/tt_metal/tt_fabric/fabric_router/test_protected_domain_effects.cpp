@@ -12,7 +12,7 @@
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
-#include "tt-metalium/discovery/cluster.hpp"
+#include "cluster.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/injection_policy.hpp"

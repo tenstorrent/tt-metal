@@ -13,14 +13,12 @@
 #include <vector>
 
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/dispatch_core_config.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
-#include "distributed/mesh_device_impl.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include "impl/context/metal_env_impl.hpp"
 #include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
@@ -40,36 +38,22 @@ namespace {
 // TT_METAL_SLOW_DISPATCH_MODE).
 class OptimalDramWorkers : public ::testing::TestWithParam<DispatchCoreAxis> {};
 
-// Supported axes follow the per-arch core descriptor YAMLs (tt_metal/core_descriptors/):
-// Blackhole defines only a col axis and Quasar only a row axis. This assumes fabric tensix
-// is disabled; Blackhole's fabric-mux descriptor also defines a row axis.
-bool is_axis_supported(tt::ARCH arch, DispatchCoreAxis axis) {
-    switch (arch) {
-        case tt::ARCH::BLACKHOLE: return axis == DispatchCoreAxis::COL;
-        case tt::ARCH::QUASAR: return axis == DispatchCoreAxis::ROW;
-        default: return true;
-    }
-}
-
 // Resolved at static-init from the ARCH_NAME env var (set by build/test scripts), so
 // gtest enumeration only lists axes that the platform actually supports — no runtime
-// skips appear in the test output. When ARCH_NAME is unset or wrong, the test body
-// skips unsupported axes at run time instead.
+// skips appear in the test output.
+//
+// Blackhole rejects ROW dispatch (the Device guard emits
+// "ROW dispatch core axis is not supported for blackhole arch"), so we omit ROW on BH.
+// Quasar core descriptors only define a row axis.
 std::vector<DispatchCoreAxis> supported_dispatch_axes() {
     const char* arch_env = std::getenv("ARCH_NAME");
-    const std::string arch_name = arch_env == nullptr ? "" : arch_env;
-    // Not tt::get_arch_from_string: it throws on an unset or unknown name.
-    tt::ARCH arch = tt::ARCH::Invalid;
-    if (arch_name == "blackhole") {
-        arch = tt::ARCH::BLACKHOLE;
-    } else if (arch_name == "quasar") {
-        arch = tt::ARCH::QUASAR;
+    const std::string arch = arch_env == nullptr ? "" : arch_env;
+    if (arch == "quasar") {
+        return {DispatchCoreAxis::ROW};
     }
-    std::vector<DispatchCoreAxis> axes;
-    for (DispatchCoreAxis axis : {DispatchCoreAxis::COL, DispatchCoreAxis::ROW}) {
-        if (is_axis_supported(arch, axis)) {
-            axes.push_back(axis);
-        }
+    std::vector<DispatchCoreAxis> axes = {DispatchCoreAxis::COL};
+    if (arch != "blackhole") {
+        axes.push_back(DispatchCoreAxis::ROW);
     }
     return axes;
 }
@@ -82,25 +66,17 @@ TEST_P(OptimalDramWorkers, ReturnsOneValidWorkerPerDramBank) {
     if (ids_set.empty()) {
         GTEST_SKIP() << "No user-exposed chips available";
     }
-
-    const tt::ARCH arch = MetalContext::instance().get_cluster().arch();
-    if (!is_axis_supported(arch, axis)) {
-        GTEST_SKIP() << (axis == DispatchCoreAxis::ROW ? "ROW" : "COL") << " dispatch core axis is not supported on "
-                     << arch;
-    }
     std::vector<int> ids(ids_set.begin(), ids_set.end());
 
     auto devs = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, /*num_command_queues=*/1, cfg);
 
     for (auto& [chip_id, dev] : devs) {
-        const uint32_t num_nocs = dev->impl().metal_env().get_hal().get_num_nocs();
         const CoreCoord grid = dev->compute_with_storage_grid_size();
         const CoreCoord dram_grid = dev->dram_grid_size();
         const size_t expected_banks = static_cast<size_t>(dram_grid.x) * dram_grid.y;
 
-        for (uint32_t noc_idx = 0; noc_idx < num_nocs; ++noc_idx) {
-            const NOC noc = static_cast<NOC>(noc_idx);
+        for (NOC noc : {NOC::NOC_0, NOC::NOC_1}) {
             const auto bank_to_core = dev->get_optimal_dram_bank_to_logical_worker_assignment(
                 noc, distributed::MeshCoordinate::zero_coordinate(dev->shape().dims()));
             std::vector<CoreCoord> cores(bank_to_core.size());

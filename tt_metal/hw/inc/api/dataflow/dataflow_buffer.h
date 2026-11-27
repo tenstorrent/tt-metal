@@ -86,9 +86,10 @@ template <bool IsWrite, typename ReleaseFunc>
     return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
 }
 
-// UNPACK, PACK and, on Quasar, the isolate-SFPU thread have a DFB interface. On MATH a
-// DataflowBuffer is just an id and the sync calls do nothing.
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
+// Only UNPACK and PACK have a DFB interface. On MATH and on the SFPU thread a DataflowBuffer
+// is just an id and the sync calls do nothing. Drop ISOLATE_SFPU from this list when the SFPU
+// thread gets its own interface and unpacks from DFBs.
+#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU))
 #define DFB_IS_COMPUTE_MATH 1
 #else
 #define DFB_IS_COMPUTE_MATH 0
@@ -151,32 +152,13 @@ public:
     // the token type is how the host marks the binding as a relay at compile time.
     // For PrefetcherPipe relays on TRISC, construction snaps the borrowed local iface to the
     // durable checkpoint via a launch-msg slot lookup keyed by token.prefetcher_pipe_id()
-#ifdef ARCH_QUASAR
-    DataflowBuffer(RelayDFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
-        align_relay_to_prefetcher_pipe(token);
-    }
-    // DataflowBuffer<> (UNKNOWN) accepts any relay token.
-    template <
-        dfb::AccessPattern TokPap,
-        dfb::AccessPattern TokCap,
-        bool Agnostic = !pattern_known,
-        std::enable_if_t<Agnostic, int> = 0>
-    DataflowBuffer(RelayDFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
-        align_relay_to_prefetcher_pipe(token);
-    }
-    // A known pair rejects any other pair's relay token.
-    template <
-        dfb::AccessPattern TokPap,
-        dfb::AccessPattern TokCap,
-        bool Known = pattern_known,
-        std::enable_if_t<Known && !(TokPap == Pap && TokCap == Cap), int> = 0>
-    DataflowBuffer(RelayDFBBindingToken<TokPap, TokCap>) = delete;
-#else
-    template <dfb::AccessPattern TokPap, dfb::AccessPattern TokCap>
-    DataflowBuffer(RelayDFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
-        align_relay_to_prefetcher_pipe(token);
-    }
+    DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
+        if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {
+            experimental::align_local_dfb_to_prefetcher_pipe_slot(logical_dfb_id_, token.prefetcher_pipe_id());
+        }
 #endif
+    }
 
     // Low-level constructor: prefer DFBBindingToken / RelayDFBBindingToken for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
@@ -433,7 +415,7 @@ public:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
     [[nodiscard]] Operand front() const {
-#if DFB_IS_COMPUTE_MATH
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
         return Operand{0};
 #else
         return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
@@ -447,7 +429,7 @@ public:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
     [[nodiscard]] Operand back() const {
-#if DFB_IS_COMPUTE_MATH
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
         return Operand{0};
 #else
         return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};
@@ -490,17 +472,6 @@ private:
     void pop_front_impl(uint16_t num_entries);
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
-
-    // On a TRISC, set this thread's counters to the PrefetcherPipe's saved position.
-    template <dfb::AccessPattern TokPap, dfb::AccessPattern TokCap>
-    void align_relay_to_prefetcher_pipe([[maybe_unused]] RelayDFBBindingToken<TokPap, TokCap> token) {
-#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
-        if (token.prefetcher_pipe_id() != RelayDFBBindingToken<TokPap, TokCap>::NO_PREFETCHER_PIPE) {
-            experimental::align_local_dfb_to_prefetcher_pipe_slot(
-                logical_dfb_id_, token.prefetcher_pipe_id(), get_consumer_share());
-        }
-#endif
-    }
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     static constexpr uint32_t L1_UNCACHED_OFFSET = MEM_L1_UNCACHED_BASE;

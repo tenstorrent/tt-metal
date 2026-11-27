@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/distributed/types.hpp"

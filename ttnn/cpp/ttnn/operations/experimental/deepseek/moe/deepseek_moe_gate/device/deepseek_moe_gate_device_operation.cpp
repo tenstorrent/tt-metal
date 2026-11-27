@@ -6,7 +6,7 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/buffer.hpp>
 
 namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate {
 

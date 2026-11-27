@@ -25,7 +25,7 @@ DEFAULT_DIAG_PKG_VERSION="0.0.4"
 IN_DIR="/tmp/hc-inputs"
 
 IMAGE="${DEFAULT_IMAGE}"
-TIER="daily"
+TIER="medium"
 OUTPUT_DIR=""
 DIAG_PKG_REPO="${DEFAULT_DIAG_PKG_REPO}"
 DIAG_PKG_VERSION="${DEFAULT_DIAG_PKG_VERSION}"
@@ -53,15 +53,13 @@ Usage: $(basename "$0") [options] [-- <extra run_diag.sh args>]
 Runs health_check_test_suite/run_diag.sh inside the tt-metal upstream image and
 keeps the JSON report, the per-step logs and the console transcript on the host.
 
-Every option has a default, so a bare \`$(basename "$0")\` runs the daily tier
+Every option has a default, so a bare \`$(basename "$0")\` runs the medium tier
 into ./test_output_<date>-<time>/.
 
 Wrapper options:
-  -t, --tier {flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot}
+  -t, --tier {light|medium|deploy|pre_reboot}
                          Tier to run (default: ${TIER}). Also accepted
-                         positionally, like run_diag.sh itself. The old
-                         names light, medium, deploy and pre_reboot are
-                         still accepted and passed on as given.
+                         positionally, like run_diag.sh itself.
   -o, --output-dir PATH  Host directory for the report, the per-step logs and
                          the console transcript. Created if absent and chmod
                          0777 so the image user can write to it.
@@ -89,10 +87,10 @@ sys-triage phases):
                          Release tag (default: ${DEFAULT_DIAG_PKG_VERSION});
                          empty string skips the install
 
-BMC credentials (needed by the sys-triage phase, which runs on flash, full,
-pre_bmc_reboot and post_bmc_reboot only and reports SKIP without all three).
-Forwarded to the container as BMC_IP / BMC_USER / BMC_PASSWORD via the same
-0600 --env-file as the token, never on a command line:
+BMC credentials (needed by the sys-triage phase, which runs on pre_reboot only
+and reports SKIP without all three). Forwarded to the container as BMC_IP /
+BMC_USER / BMC_PASSWORD via the same 0600 --env-file as the token, never on a
+command line:
       --bmc-ip IP        BMC address (default: \$BMC_IP)
       --bmc-user USER    BMC user (default: \$BMC_USER)
       --bmc-password PASS
@@ -116,7 +114,6 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
       --skip-triage          Skip the post-test reset and the triage phase
       --triage-gating        Let triage FAILs gate the run (default: held at WARN)
       --triage-dir PATH      Host triage scripts dir; mounted read-only
-      --skip-eth-status      Skip the ETH status read (flash)
       --skip-qsfp-tests      Skip the QSFP tests
       --qsfp-gating          Report QSFP findings at their real severity and let
                              them gate the run
@@ -139,23 +136,19 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
 
 Host requirements checked before starting:
   /dev/tenstorrent (required), /dev/ipmi0, /dev/hugepages, /dev/hugepages-1G,
-  /etc/udev/rules.d, /lib/modules, /sys/kernel/debug, and on full, pre_bmc_reboot
-  and post_bmc_reboot /var/log/journal, /run/log/journal, /etc/machine-id. A
-  missing optional path is reported with what it costs rather than failing the
-  container outright.
+  /etc/udev/rules.d, /lib/modules, /sys/kernel/debug, and on pre_reboot
+  /var/log/journal, /run/log/journal, /etc/machine-id. A missing optional path
+  is reported with what it costs rather than failing the container outright.
 
 Examples:
-  # Daily tier into a timestamped directory
+  # Medium tier into a timestamped directory
   $(basename "$0")
 
-  # Quick ETH link health: two triage reads 30 s apart, no resets, no tests
-  $(basename "$0") flash
+  # Deploy tier with the QSFP phase, results in a named directory
+  $(basename "$0") deploy --output-dir /data/hc-run-1 --gh-token "\$GH_TOKEN"
 
-  # Weekly tier with the QSFP phase, results in a named directory
-  $(basename "$0") weekly --output-dir /data/hc-run-1 --gh-token "\$GH_TOKEN"
-
-  # Snapshot-only smoke: no resets, tests, triage or QSFP
-  $(basename "$0") daily --skip-reset --skip-tests --skip-triage --skip-qsfp-tests
+  # Snapshot-only smoke, no resets and no gtests
+  $(basename "$0") light --skip-reset --skip-tests
 EOF
 }
 
@@ -178,14 +171,12 @@ while (( $# )); do
     case "$1" in
         -h|--help) show_help; exit 0 ;;
 
-        # Old names are passed on as given, not translated: this script is
-        # fetched on its own and may drive an image that predates the rename.
-        flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
+        light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
         -t|--tier)
             require_value "$1" "${2:-}"
             case "$2" in
-                flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
-                *) die "unknown tier '$2'. Expected: flash, daily, weekly, full, pre_bmc_reboot, post_bmc_reboot" ;;
+                light|medium|deploy|pre_reboot) ;;
+                *) die "unknown tier '$2'. Expected: light, medium, deploy, pre_reboot" ;;
             esac
             TIER="$2"; shift 2 ;;
 
@@ -214,7 +205,7 @@ while (( $# )); do
             SKIP_QSFP=true; FORWARD+=("$1"); shift ;;
         --skip-sys-triage)
             SKIP_SYS_TRIAGE=true; FORWARD+=("$1"); shift ;;
-        --skip-tests|--skip-triage|--triage-gating|--skip-eth-status|--qsfp-gating)
+        --skip-tests|--skip-triage|--triage-gating|--qsfp-gating)
             FORWARD+=("$1"); shift ;;
 
         # Forwarded, in-container value.
@@ -237,19 +228,10 @@ while (( $# )); do
     esac
 done
 
-# The sys-triage phase runs on flash, full, pre_bmc_reboot (old name
-# pre_reboot) and post_bmc_reboot only. Every other tier gets exactly the
-# container it got before the phase existed: no extra mounts or packages.
+# The sys-triage phase runs on pre_reboot only. Every other tier gets exactly
+# the container it got before the phase existed: no extra mounts or packages.
 WANT_SYS_TRIAGE=false
-case "${TIER}" in
-    flash|full|pre_bmc_reboot|pre_reboot|post_bmc_reboot) ${SKIP_SYS_TRIAGE} || WANT_SYS_TRIAGE=true ;;
-esac
-
-# flash runs no QSFP tests, so it needs neither the stub nor the BMC API
-# credentials the QSFP collector reads, and the syseng package only for
-# sys-triage.
-WANT_QSFP=false
-[[ ${TIER} != flash ]] && ! ${SKIP_QSFP} && WANT_QSFP=true
+[[ ${TIER} == pre_reboot ]] && ! ${SKIP_SYS_TRIAGE} && WANT_SYS_TRIAGE=true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Output directory. Bind-mounted at the same path inside the container so the
@@ -363,7 +345,7 @@ trap cleanup EXIT
 # systemd-detect-virt stub. Best-effort, like the rest of the optional setup: a
 # host that cannot stage it still runs every check that needs no ASIC location.
 # Both lookup paths are covered — PATH and absolute.
-if ${WANT_QSFP}; then
+if ! ${SKIP_QSFP}; then
     if VIRT_STUB="$(mktemp 2>/dev/null)" \
        && printf '#!/bin/sh\nexit 1\n' > "${VIRT_STUB}" \
        && chmod 0755 "${VIRT_STUB}"; then
@@ -448,7 +430,7 @@ DOCKER_ARGS+=(
     -e "HC_DIAG_PKG_REPO=${DIAG_PKG_REPO}"
     -e "HC_DIAG_PKG_VERSION=${DIAG_PKG_VERSION}"
     -e "HC_NEED_LSPCI=${NEED_LSPCI}"
-    -e "HC_SKIP_QSFP=$(${WANT_QSFP} && echo false || echo true)"
+    -e "HC_SKIP_QSFP=${SKIP_QSFP}"
     -e "HC_WANT_SYS_TRIAGE=${WANT_SYS_TRIAGE}"
     -e "HC_VIRT_STUB=$([[ -n ${VIRT_STUB} ]] && echo true || echo false)"
     -e "HC_HOST_UID=$(id -u)"
@@ -476,9 +458,9 @@ if [ -n "${_need}" ]; then
     fi
 fi
 
-# What sys-triage shells out to beyond the above, on the tiers that run it
-# only. Each is installed after the packages above and on its own, so that a
-# failure here costs one section of the bundle and nothing else:
+# What sys-triage shells out to beyond the above, on pre_reboot only. Each is
+# installed after the packages above and on its own, so that a failure here
+# costs one section of the bundle and nothing else:
 #   kmod (modinfo, lsmod)  the driver row of its FW table, where a missing
 #                          binary costs the whole table rather than the row
 #   curl                   its Redfish version reads
@@ -638,7 +620,7 @@ if ${WANT_SYS_TRIAGE}; then
 fi
 if [[ -n ${BMC_API_URL_VALUE} && -n ${BMC_API_TOKEN_VALUE} ]]; then
     say "bmc api:    ${BMC_API_URL_VALUE} (token set)"
-elif ${WANT_QSFP}; then
+elif ! ${SKIP_QSFP} && [[ ${TIER} != light ]]; then
     say "bmc api:    (incomplete — the QSFP collector will not read the cages; see --bmc-api-*)"
 fi
 say "forwarded:  ${FORWARD[*]:-(none)}"

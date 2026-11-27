@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "deepseek_moe_fast_reduce_nc_device_operation_types.hpp"
 

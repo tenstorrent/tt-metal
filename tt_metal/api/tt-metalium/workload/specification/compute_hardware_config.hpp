@@ -7,9 +7,8 @@
 #include <optional>
 
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
-#include <tt-metalium/workload/utils/group.hpp>
 #include <tt-metalium/workload/utils/table.hpp>
-#include <tt-metalium/workload/specification/compute_modes.hpp>  // For MathFidelity, UnpackToDestMode
+#include <tt-metalium/base_types.hpp>  // For MathFidelity, UnpackToDestMode
 
 namespace tt::tt_metal {
 
@@ -111,8 +110,6 @@ struct ComputeHardwareConfig {
     // EXPLICITLY specify an UnpackMode for that DFB. (Enforced by validation checks.)
     // On Quasar, a consumed Int16 DFB with enable_32_bit_dest set also requires UnpackToDest.
     // The FPU cannot datacopy Int16 into a 32-bit Dest. UnpackToDest is the SFPU typecast path.
-    // On Quasar, a DFB in config_2xx->sfpu_pipeline_consumed_dfbs needs no unpack_modes entry and must not be
-    // given UnpackToDest. (Enforced by validation checks.)
     //
     using ComputeUnpackModes = Table<DFBSpecName, tt::tt_metal::UnpackMode>;
     ComputeUnpackModes unpack_modes;
@@ -121,7 +118,7 @@ struct ComputeHardwareConfig {
     // Optional and unset by default. Each config applies only to the architecture named in
     // its header, and is ignored on any other.
     // NOTE: The target architecture is selected at program construction time.
-    //       See Program(MeshDevice&, const ProgramSpec&) for more details.
+    //       See MakeProgramFromSpec for more details.
 
     // ---- TT-1.x.x specific (Wormhole, Blackhole) ----
     struct Compute1XXConfig {
@@ -146,12 +143,6 @@ struct ComputeHardwareConfig {
         // Enable the RISC-V vector extension when compiling the compute kernel's Unpack binary.
         // Use this only if you need vector intrinsics in kernel code.
         bool enable_unpack_rvv = false;
-
-        // On Quasar, the SFPU can also run as its own pipeline next to Unpack -> Math -> Pack.
-        // DFBs this pipeline reads instead of the Unpack stage. Unpack ops (e.g. copy_tile) must not read them.
-        Group<DFBSpecName> sfpu_pipeline_consumed_dfbs;
-        // DFBs this pipeline writes instead of the Pack stage. Pack ops (e.g. pack_tile) must not write them.
-        Group<DFBSpecName> sfpu_pipeline_produced_dfbs;
     };
     std::optional<Compute2XXConfig> config_2xx = std::nullopt;
 };

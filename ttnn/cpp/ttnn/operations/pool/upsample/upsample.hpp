@@ -17,7 +17,8 @@ ttnn::Tensor upsample(
     std::variant<int, std::array<int, 2>, float, std::array<float, 2>> scale_factor,
     const std::string& mode = std::string("nearest"),
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool runtime_shapes = false);
 
 }  // namespace operations::upsample
 

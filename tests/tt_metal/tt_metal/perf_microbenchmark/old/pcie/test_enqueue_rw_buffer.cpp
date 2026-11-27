@@ -6,8 +6,8 @@
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdint>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/device.hpp>
 #include <algorithm>
 #include <cstring>
 #include <exception>
@@ -20,8 +20,8 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
 

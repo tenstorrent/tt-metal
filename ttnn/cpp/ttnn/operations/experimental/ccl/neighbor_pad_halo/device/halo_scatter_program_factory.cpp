@@ -3,12 +3,12 @@
 
 #include "halo_scatter_program_factory.hpp"
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
 #include <algorithm>
 
 using namespace tt::tt_metal;
@@ -47,7 +47,7 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     const ttnn::MeshCoordinate& /*mesh_coordinate*/,
     const NpHaloScatterInputs& tensor_args,
     Tensor& tensor_return_value) {
-    Program program = CreateProgram(*tensor_return_value.device());
+    Program program{};
 
     const auto* compact = &tensor_args.compact_buffer.mesh_buffer();  // [total_sticks, C] (border source)
     Buffer* dst = tensor_return_value.buffer();          // padded output (allocated) or in-place (border_only)

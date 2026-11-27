@@ -17,7 +17,6 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
-    NUM_GUARD_TILES,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -82,7 +81,6 @@ def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim, loop_factor):
             TILE_COUNT(tile_count),
             LOOP_FACTOR(loop_factor),
             NUM_FACES(4),
-            NUM_GUARD_TILES(0),
         ],
         variant_stimuli=StimuliConfig(
             None,

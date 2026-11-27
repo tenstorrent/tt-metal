@@ -11,18 +11,18 @@
 #include <numeric>
 #include <vector>
 
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 #include "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/test_common.hpp"
 #include "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/kernel_common.hpp"
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/mesh/mesh_device_view.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
 
 namespace tt::tt_fabric::test {

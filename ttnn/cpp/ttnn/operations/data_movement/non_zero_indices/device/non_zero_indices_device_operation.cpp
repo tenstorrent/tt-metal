@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <limits>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
 

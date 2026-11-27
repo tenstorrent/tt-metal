@@ -4,16 +4,16 @@
 
 #pragma once
 
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <device.hpp>
 #include <memory>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include "core_coord.hpp"
 #include "device/device_impl.hpp"
-#include "tt-metalium/workload/program.hpp"
+#include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
 #include "tt_metal/impl/context/context_descriptor.hpp"
@@ -76,9 +76,7 @@ public:
 
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
-    // Termination signals of the device's kernels of `kernel_type` (DISPATCH or ROUTING).
-    const std::unordered_set<TerminationInfo>& get_registered_termination_cores(
-        ChipId dev_id, FDKernelType kernel_type) const;
+    const std::unordered_set<TerminationInfo>& get_registered_termination_cores(ChipId dev_id) const;
 
     void reset();
 
@@ -95,8 +93,7 @@ private:
     std::unique_ptr<detail::ProgramCompileGroup> command_queue_compile_group_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> routing_cores_;
-    std::unordered_map<ChipId, std::unordered_set<TerminationInfo>> dispatch_termination_info_;
-    std::unordered_map<ChipId, std::unordered_set<TerminationInfo>> routing_termination_info_;
+    std::unordered_map<ChipId, std::unordered_set<TerminationInfo>> termination_info_;
     const std::unordered_set<CoreCoord> empty_container_;
     const std::unordered_set<TerminationInfo> empty_termination_info_container_;
 };

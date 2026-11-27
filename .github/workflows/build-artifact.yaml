@@ -48,13 +48,6 @@ on:
         type: boolean
         default: true
         description: "Make resulting debian packages available in the workflow"
-      skip-package:
-        required: false
-        type: boolean
-        default: false
-        description: >-
-          Skip the CPack package step and run `cmake --install` into a temporary
-          prefix. Ignored when publish-package is true.
       use-system-sfpi:
         required: false
         type: boolean
@@ -584,7 +577,7 @@ jobs:
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
 
       - name: ⬇️ Checkout
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -613,19 +606,10 @@ jobs:
       - name: 📦 Compute CPM cache key
         id: cpm-key
         run: |
-          variant="tracy-${{ inputs.tracy && 'on' || 'off' }}-tttrain-${{ inputs.skip-tt-train && 'off' || 'on' }}"
-          echo "key=cpm-z9l-${variant}-${{ hashFiles(
-            'cmake/CPM.cmake',
+          echo "key=cpm-z9l-${{ hashFiles(
             'third_party/CMakeLists.txt',
-            'third_party/*.patch',
-            'tt_metal/third_party/CMakeLists.txt',
-            'tt_metal/third_party/tracy/cmake/CPM.cmake',
-            'tt_metal/third_party/tracy/cmake/vendor.cmake',
-            'tt_metal/third_party/umd/cmake/CPM.cmake',
             'tt_metal/third_party/umd/third_party/CMakeLists.txt',
-            'tt-train/cmake/CPM.cmake',
-            'tt-train/cmake/dependencies.cmake',
-            'tt-train/sources/examples/mnist_mlp/CMakeLists.txt') }}" >> "$GITHUB_OUTPUT"
+            'tt-train/cmake/dependencies.cmake') }}" >> "$GITHUB_OUTPUT"
 
       - name: 📦 Restore CPM source cache (Garage S3)
         id: cpm-cache
@@ -640,23 +624,16 @@ jobs:
           CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
           URL="${AWS_ENDPOINT_URL_S3}/${CPM_S3_BUCKET}/${CPM_S3_PREFIX}/${CACHE_KEY}.tar.zst"
           echo "Restoring CPM cache from: ${URL}"
-          rc=0
-          http_code=$(curl -sS --retry 5 --retry-delay 2 --retry-connrefused --max-time 120 \
+          # -f => non-2xx (incl. 404 miss) exits non-zero; --retry rides out transient blips.
+          if curl -fsS --retry 3 --retry-delay 2 --max-time 120 \
                --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
-               -w '%{http_code}' -o .cpmcache.tar.zst "${URL}") || rc=$?
-          if [ "${rc}" -eq 0 ] && [ "${http_code}" = "200" ]; then
+               "${URL}" -o .cpmcache.tar.zst; then
             echo "CPM cache HIT (key=${CACHE_KEY})"
             echo "hit=true" >> "$GITHUB_OUTPUT"
-          elif [ "${rc}" -eq 0 ] && [ "${http_code}" = "404" ]; then
-            echo "CPM cache MISS (key=${CACHE_KEY}, HTTP 404); configure fetches sources, and this job saves the cache"
-            rm -f .cpmcache.tar.zst
-            echo "hit=false" >> "$GITHUB_OUTPUT"
-            echo "save=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::CPM cache restore failed (curl exit=${rc}, HTTP ${http_code:-none}, key=${CACHE_KEY}); configure fetches sources, and this job does not save the cache"
+            echo "CPM cache MISS or restore error (key=${CACHE_KEY}); continuing without cache"
             rm -f .cpmcache.tar.zst   # remove any partial/empty download
             echo "hit=false" >> "$GITHUB_OUTPUT"
-            echo "save=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: 📦 Unpack CPM cache
@@ -710,12 +687,20 @@ jobs:
           "${build_args[@]}"
 
       - name: 📦 Pack CPM cache
-        if: steps.cpm-cache.outputs.save == 'true'
+        # Only pack when we can actually save. For fork PRs the restore step is
+        # skipped (no secrets), so 'hit' is unset and would otherwise trigger a
+        # pointless zstd compression that never gets uploaded.
+        if: >-
+          steps.cpm-cache.outputs.hit != 'true' &&
+          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
         run: |
           [ -d .cpmcache ] && tar -I 'zstd -T0 --long -9 -v' -cf .cpmcache.tar.zst .cpmcache || true
 
       - name: 📦 Save CPM source cache (Garage S3)
-        if: steps.cpm-cache.outputs.save == 'true'
+        # Only upload on a miss, and only where we have S3 creds (same fork guard).
+        if: >-
+          steps.cpm-cache.outputs.hit != 'true' &&
+          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
         env:
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
         run: |
@@ -730,7 +715,7 @@ jobs:
           echo "Saving CPM cache to: ${URL} ($(du -h .cpmcache.tar.zst | cut -f1))"
           # Use --upload-file instead of --data-binary so curl streams the tarball
           # from disk. A 1.2 GB CPM archive caused OOM with --data-binary @file.
-          if curl -fsS --retry 3 --retry-delay 2 --retry-connrefused --max-time 300 \
+          if curl -fsS --retry 3 --retry-delay 2 --max-time 300 \
                --upload-file .cpmcache.tar.zst \
                --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
                "${URL}" -o /dev/null; then
@@ -757,7 +742,6 @@ jobs:
           ClangBuildAnalyzer --analyze capture.bin
 
       - name: 📦 Package
-        if: ${{ !inputs.skip-package || inputs.publish-package }}
         timeout-minutes: 10
         run: |
           cmake --build build --target package
@@ -767,16 +751,6 @@ jobs:
           else
             ls -1sh build/*.deb build/*.ddeb || true
           fi
-
-      - name: 📦 Install (package skipped)
-        if: ${{ inputs.skip-package && !inputs.publish-package }}
-        timeout-minutes: 10
-        run: |
-          # Run the install rules into a separate prefix.
-          install_dir="$(mktemp -d)"
-          cmake --install build --prefix "${install_dir}"
-          echo "Installed $(find "${install_dir}" -type f | wc -l) files into ${install_dir}"
-          rm -rf "${install_dir}"
 
       - name: Publish ccache summary
         run: |

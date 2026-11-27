@@ -9,7 +9,7 @@
 #include <cstdlib>
 #include <vector>
 
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <algorithm>
@@ -17,7 +17,7 @@
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 

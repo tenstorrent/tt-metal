@@ -5,7 +5,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/allocator/allocator_state.hpp"

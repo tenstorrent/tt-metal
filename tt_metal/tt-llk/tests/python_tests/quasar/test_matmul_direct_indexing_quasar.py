@@ -9,61 +9,60 @@ from quasar.test_matmul_quasar import (
     FULL_MATMUL_SHAPES,
     NON_MX_MATMUL_FORMATS,
     matmul_dest_acc_modes,
-    matmul_exact_fill_ct_dims,
-    matmul_exact_fill_rt_dims,
+    matmul_tile_dimensions,
     matmul_transpose_modes,
 )
 from quasar.test_matmul_quasar import test_matmul as run_matmul
 
-DIRECT_INDEXING_KT_DIMS = [1, 2]
+DIRECT_INDEXING_KT_DIMS = (1, 2)
 
 
-def matmul_direct_indexing_ct_dims(dest_acc, dest_sync, rt_dim):
-    """The exact Dest fill, plus a single tile when rt is 1."""
-    ct_dims = {matmul_exact_fill_ct_dims(dest_acc, dest_sync, rt_dim)[0]}
-    if rt_dim == 1:
-        ct_dims.add(1)
-    return sorted(ct_dims)
+def matmul_direct_indexing_tile_dimensions(dest_acc, dest_sync_mode):
+    shapes = {(1, 1)} | {
+        (ct_dim, rt_dim)
+        for ct_dim, rt_dim, _ in matmul_tile_dimensions(
+            dest_acc, dest_sync_mode, exact_dest_fill=True
+        )
+    }
+    return [
+        (ct_dim, rt_dim, kt_dim)
+        for ct_dim, rt_dim in sorted(shapes)
+        for kt_dim in DIRECT_INDEXING_KT_DIMS
+    ]
 
 
 @pytest.mark.nightly
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    formats=NON_MX_MATMUL_FORMATS,
-    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
-    dest_sync=lambda: quasar_dest_sync_modes(),
+    format=NON_MX_MATMUL_FORMATS,
+    math_fidelity=lambda format: get_valid_math_fidelities(format),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
-    rt_dim=runtime(matmul_exact_fill_rt_dims),
-    ct_dim=runtime(matmul_direct_indexing_ct_dims),
-    kt_dim=runtime(DIRECT_INDEXING_KT_DIMS),
+    matmul_tile_dims=runtime(matmul_direct_indexing_tile_dimensions),
     register_format_hint=[None],
-    unpack_transpose_faces=matmul_transpose_modes,
+    transpose=matmul_transpose_modes,
 )
 def test_matmul_direct_indexing(
     input_tile_dimensions,
-    ct_dim,
-    rt_dim,
-    kt_dim,
+    matmul_tile_dims,
     math_fidelity,
-    dest_sync,
+    dest_sync_mode,
     dest_acc,
-    formats,
+    format,
     register_format_hint,
-    unpack_transpose_faces,
+    transpose,
 ):
     run_matmul(
         input_tile_dimensions,
-        ct_dim,
-        rt_dim,
-        kt_dim,
+        matmul_tile_dims,
         math_fidelity,
-        dest_sync,
+        dest_sync_mode,
         dest_acc,
-        formats,
+        format,
         register_format_hint,
         enable_direct_indexing=True,
-        unpack_transpose_faces=unpack_transpose_faces,
+        transpose=transpose,
         run_types=[PerfRunType.L1_TO_L1],
-        loop_factor=2 if dest_sync == DestSync.Half else 1,
+        loop_factor=2 if dest_sync_mode == DestSync.Half else 1,
     )

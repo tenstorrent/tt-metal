@@ -30,7 +30,26 @@ struct DitFusedDistributedGroupnormSharedVariables {
     // parallel to sender_cores. The index varies per core because the preceding mcast sub-group
     // blocks are optional. Empty on the is_local (ring_size==1) path.
     std::vector<size_t> stats_dram_addr_reader_arg_idx;
+    // Virtual (group column, tile-row slot) coordinates, parallel to cores, sender_cores and
+    // receiver_cores. The size-dependent runtime args are rewritten from them on every call.
+    std::vector<tt::tt_metal::CoreCoord> virtual_cores;
+    std::vector<tt::tt_metal::CoreCoord> sender_virtual_cores;
+    std::vector<tt::tt_metal::CoreCoord> receiver_virtual_cores;
+    uint32_t num_virtual_rows = 1;
+    uint32_t per_core_Nt = 1;
 };
+
+// The reduction grid: num_virtual_cols group columns of num_virtual_rows cores each, laid out as
+// (num_virtual_cols * col_replication) x num_actual_rows cores. It depends on the input only through
+// the channel count and, for inputs with fewer tile rows than the grid has rows, the tile row count.
+struct DitFusedDistributedGroupnormGrid {
+    uint32_t num_virtual_cols = 1;
+    uint32_t num_virtual_rows = 1;
+    uint32_t num_actual_rows = 1;
+    uint32_t col_replication = 1;
+};
+
+DitFusedDistributedGroupnormGrid gn_choose_grid(const DitFusedDistributedGroupnormParams& args, const Tensor& input);
 
 struct DitFusedDistributedGroupnormMeshWorkloadFactory {
     using shared_variables_t = DitFusedDistributedGroupnormSharedVariables;

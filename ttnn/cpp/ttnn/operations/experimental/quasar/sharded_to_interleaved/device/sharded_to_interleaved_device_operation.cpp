@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>

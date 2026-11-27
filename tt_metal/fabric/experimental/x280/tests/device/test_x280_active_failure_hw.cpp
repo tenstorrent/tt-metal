@@ -13,7 +13,7 @@
 #include "x280_test_images.hpp"
 
 #include <gtest/gtest.h>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <mesh_device.hpp>
 
 #include <chrono>
 #include <cstdlib>

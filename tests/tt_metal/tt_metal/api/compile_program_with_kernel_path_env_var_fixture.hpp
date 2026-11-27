@@ -10,7 +10,7 @@
 
 #include <gtest/gtest.h>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include "device_fixture.hpp"

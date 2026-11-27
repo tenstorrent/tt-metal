@@ -11,7 +11,7 @@
 #include <numeric>
 #include <string>
 #include <string_view>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <vector>
 
 #include "utils/memory_utils.hpp"

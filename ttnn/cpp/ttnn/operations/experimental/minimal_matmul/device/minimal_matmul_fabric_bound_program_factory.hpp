@@ -8,7 +8,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "minimal_matmul_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"

@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The device header api/buffer_types.hpp mirrors a subset of tt-metalium/memory/buffer/buffer_types.hpp. Enumerator
-// values travel from host to device as compile-time args, so the two must agree. Compile-time check only.
+// The device header api/buffer_types.hpp mirrors a subset of tt-metalium/buffer_types.hpp. Enumerator values
+// travel from host to device as compile-time args, so the two must agree. Compile-time check only.
 
 #include <cstdint>
 
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
 
 // Wrapped so the device enums do not collide with the host ones. <cstdint> is already included above.
 // NOLINTNEXTLINE(modernize-concat-nested-namespaces): the included header opens its own namespace.

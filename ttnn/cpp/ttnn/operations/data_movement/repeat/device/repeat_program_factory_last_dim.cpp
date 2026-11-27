@@ -7,10 +7,10 @@
 #include <cstdint>
 #include <filesystem>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_common.hpp"

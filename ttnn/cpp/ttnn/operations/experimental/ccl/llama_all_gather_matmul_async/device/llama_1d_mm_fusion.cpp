@@ -8,11 +8,11 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"

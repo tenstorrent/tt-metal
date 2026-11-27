@@ -40,8 +40,8 @@
 #include <random>
 #include <vector>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/shape.hpp>
 #include "common_test_utils.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

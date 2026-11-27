@@ -45,6 +45,7 @@ from regression_compare import (  # noqa: E402
 )
 
 POSITIONS = ("p0", "p4", "p20", "p36", "p52")
+DEFAULT_CAP = 1000
 _STATS = ("current", "baseline", "delta_pct", "delta_cycles", "marker", "run_type")
 
 
@@ -331,15 +332,13 @@ def render(results, arch, limit_note=""):
         verdict = "ℹ️ no confirmed regression, code-placement effects only"
     else:
         verdict = "✅ no confirmed regression"
-    at = " / ".join(f"+{p[1:]}" for p in POSITIONS)
-    head = f"| test | configuration | run type | change at positions {at} B | loop code changed in |"
+    head = "| test | configuration | run type | change at positions +0 / +4 / +20 / +36 / +52 B | loop code changed in |"
     rule = "|---|---|---|---|---|"
     lines = [
         f"## {name}: {verdict}",
         "",
         "Stage 2 measured every stage-1 regression again with the TRISC code at 5 positions, on the base "
-        "and on the head. All of the code moves together, so the positions of functions relative to each other "
-        "do not change.",
+        "and on the head.",
         "",
         f"- {len(results)} stage-1 regression(s)",
     ]
@@ -422,38 +421,13 @@ def gate(results_by_leg, legs, stage1, gate_base, leg_bases):
     return results, notes
 
 
-def write_blocking(stage1, results, notes, out):
-    """The stage-1 rows the gate blocks on, as a stage-1 CSV, for the Slack post. With a note, stage 2 cleared
-    nothing reliably, so every row stays."""
-    # Confirmed regressions first, so the Slack post lists them and reproduces one of them.
-    rank = {
-        _row_key(r): BLOCKING.index(r["outcome"])
-        for r in results
-        if r["outcome"] in BLOCKING
-    }
-    with open(stage1, newline="") as fh:
-        reader = csv.DictReader(fh)
-        rows = list(reader)
-    kept = [
-        (rank.get(_row_key(c), len(BLOCKING)), i, row)
-        for i, (row, c) in enumerate(zip(rows, read_candidates(stage1)))
-        if notes or _row_key(c) in rank
-    ]
-    with open(out, "w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=reader.fieldnames)
-        writer.writeheader()
-        writer.writerows(row for _, _, row in sorted(kept, key=lambda k: k[:2]))
-
-
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     n = sub.add_parser("nodes")
     n.add_argument("--candidates", required=True)
     n.add_argument("--map", required=True)
-    n.add_argument(
-        "--cap", type=int, required=True, help="PLACEMENT_CAP in llk-perf-gate.yaml"
-    )
+    n.add_argument("--cap", type=int, default=DEFAULT_CAP)
     n.add_argument("--out", required=True)
     d = sub.add_parser("decide")
     d.add_argument("--candidates", required=True)
@@ -463,11 +437,6 @@ def main(argv=None):
     d.add_argument("--min-cycles", type=float, default=DEFAULT_MIN_CYCLES)
     d.add_argument("--module-threshold", default="")
     d.add_argument("--arch", default="")
-    d.add_argument(
-        "--positions",
-        default="",
-        help="the code shifts both sides measured at, e.g. '0 4 20 36 52'",
-    )
     d.add_argument(
         "--over-cap", default="", help="file of candidate indices left out by the cap"
     )
@@ -493,15 +462,7 @@ def main(argv=None):
     g.add_argument("--bases", required=True, help="glob of the legs' stage2.base files")
     g.add_argument("--arch", default="")
     g.add_argument("--report", required=True)
-    g.add_argument(
-        "--blocking-csv",
-        default="",
-        help="write the stage-1 rows the gate blocks on here",
-    )
     a = ap.parse_args(argv)
-    if getattr(a, "positions", ""):
-        global POSITIONS
-        POSITIONS = tuple(f"p{shift}" for shift in a.positions.split())
     if a.cmd == "gate":
         paths = sorted(glob.glob(a.results, recursive=True))
         results, notes = gate(
@@ -514,8 +475,6 @@ def main(argv=None):
                 for b in sorted(glob.glob(a.bases, recursive=True))
             ],
         )
-        if a.blocking_csv and Path(a.stage1).exists():
-            write_blocking(a.stage1, results, notes, a.blocking_csv)
         report = render(results, a.arch)
         if notes:
             report += "\n\n" + "\n".join(f"> ⚠️ {n}" for n in notes)

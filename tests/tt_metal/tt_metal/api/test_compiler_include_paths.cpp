@@ -11,13 +11,13 @@
 #include <type_traits>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"

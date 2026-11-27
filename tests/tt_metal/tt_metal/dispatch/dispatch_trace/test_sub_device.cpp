@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <array>
 #include <cstdint>
 #include <exception>
@@ -14,27 +14,18 @@
 #include "command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt_stl/span.hpp>
 #include "sub_device_test_utils.hpp"
-#include <tt-metalium/mesh/sub_device_types.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include "unit_tests_dispatch_utils.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal {
 
 TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) {
     auto mesh_device = devices_[0];
-    if (!has_at_least_worker_cores(*mesh_device, 2)) {
-        GTEST_SKIP();
-    }
-    const auto [sub_device_1_cores, sub_device_2_cores] = two_disjoint_core_sets(
-        *mesh_device,
-        CoreRange({0, 0}, {2, 2}),
-        CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}));
-    SubDevice sub_device_1(std::array{sub_device_1_cores});
-    SubDevice sub_device_2(std::array{sub_device_2_cores});
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
     uint32_t num_iters = 5;
     auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
     mesh_device->load_sub_device_manager(sub_device_manager);
@@ -105,15 +96,8 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) 
 
 TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations) {
     auto mesh_device = devices_[0];
-    if (!has_at_least_worker_cores(*mesh_device, 2)) {
-        GTEST_SKIP();
-    }
-    const auto [sub_device_1_cores, sub_device_2_cores] = two_disjoint_core_sets(
-        *mesh_device,
-        CoreRange({0, 0}, {2, 2}),
-        CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}));
-    SubDevice sub_device_1(std::array{sub_device_1_cores});
-    SubDevice sub_device_2(std::array{sub_device_2_cores});
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
 
     // Assert no idle eth cores specified
     EXPECT_THROW(

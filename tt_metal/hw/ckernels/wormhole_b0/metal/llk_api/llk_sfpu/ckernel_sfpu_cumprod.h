@@ -23,7 +23,7 @@ inline void calculate_cumprod(const bool first) {
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void cumprod_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    TTI_REPLAY(0, 2 * cumprod_step, 0, 1);
+    lltt::record(0, 2 * cumprod_step);
     TTI_SFPMUL(0, 7, p_sfpu::LCONST_0, 0, 0);
     TTI_SFPNOP;
     TTI_SFPMUL(1, 0, p_sfpu::LCONST_0, 1, 0);

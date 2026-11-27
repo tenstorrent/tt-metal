@@ -90,7 +90,6 @@ uint32_t _start() {
     // Wait until first thread in the group has set its slot to GO.
     while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
            SHARED_GLOBALS_READY_GO) {
-        invalidate_l1_cache();
     }
 
     // DM use indices 0-7; compute engines 0-3 use indices 8-11 (one slot per engine, 4 TRISCs share).
@@ -126,9 +125,9 @@ uint32_t _start() {
     WAYPOINT("K");
     run_kernel();
     WAYPOINT("KD");
-#if DFB_TRISC_HAS_INTERFACE
-    // Drain every DFB this TRISC produces or consumes (dataflow_buffer_finish.h). It runs here, linked
-    // into the kernel, rather than in trisc.cc: TRISC firmware has no room for it.
+#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+    // Drain every DFB this Neo is bound to (dataflow_buffer_finish.h). It runs here, linked into the
+    // kernel, rather than in trisc.cc: TRISC firmware has no room for it.
     dfb_trisc_kernel_exit();
 #endif
     EARLY_RETURN_FOR_DEBUG_EXIT;

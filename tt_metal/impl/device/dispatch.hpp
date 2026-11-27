@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "tt-metalium/mesh/legacy/device.hpp"
+#include "device.hpp"
 #include "dispatch/topology.hpp"
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "hal_types.hpp"
 
 namespace tt::tt_metal {
 

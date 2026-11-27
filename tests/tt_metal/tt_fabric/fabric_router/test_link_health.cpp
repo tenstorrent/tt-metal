@@ -21,7 +21,7 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/link_health.hpp>

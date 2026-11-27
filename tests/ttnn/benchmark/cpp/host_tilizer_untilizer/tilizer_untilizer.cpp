@@ -7,7 +7,7 @@
 #include <vector>
 
 #include <tt_stl/span.hpp>
-#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt_stl/indestructible.hpp>
 
 // static std::vector<float> input_data;

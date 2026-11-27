@@ -5,15 +5,15 @@
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <memory>
 #include <unordered_set>
 #include <vector>
 #include <string>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program.hpp>
 
 namespace tt::tt_metal::distributed {
 class MeshBuffer;

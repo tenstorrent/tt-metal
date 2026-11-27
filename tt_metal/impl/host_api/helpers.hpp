@@ -9,7 +9,7 @@
 #include <tt_stl/overloaded.hpp>
 #include "tracy/Tracy.hpp"
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal::detail {
 

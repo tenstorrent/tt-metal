@@ -257,6 +257,7 @@ def run_neighbor_pad_2d_impl(
     input_dtype,
     topology,
     use_persistent_output_buffer=False,
+    runtime_shapes=False,
 ):
     """Run fused 2D neighbor pad and compare per-device against golden."""
     mesh_shape = tuple(mesh_device.shape)
@@ -331,6 +332,7 @@ def run_neighbor_pad_2d_impl(
         memory_config=mem_config,
         topology=topology,
         persistent_output_buffer=persistent_output_buffer,
+        runtime_shapes=runtime_shapes,
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
@@ -518,3 +520,130 @@ def test_neighbor_pad_async_2d(
         topology=ttnn.Topology.Linear,
         use_persistent_output_buffer=use_persistent_output_buffer,
     )
+
+
+# Shapes of the FLUX.2 klein VAE's halo exchange: [1, N, H, W, C], H across mesh axis 0, W across axis 1.
+NEIGHBOR_PAD_2D_SIZES = [[1, 1, 16, 32, 64], [1, 1, 24, 48, 64], [1, 1, 10, 40, 64], [1, 1, 16, 32, 64]]
+
+
+def run_neighbor_pad_2d_sizes(mesh_device, sizes, pad, runtime_shapes, persistent):
+    entries = []
+    for input_shape in sizes:
+        run_neighbor_pad_2d_impl(
+            mesh_device,
+            input_shape=list(input_shape),
+            h_dim=2,
+            w_dim=3,
+            h_axis=0,
+            w_axis=1,
+            pH=pad,
+            pW=pad,
+            padding_mode="zeros",
+            num_links=1,
+            input_dtype=ttnn.bfloat16,
+            topology=ttnn.Topology.Linear,
+            use_persistent_output_buffer=persistent,
+            runtime_shapes=runtime_shapes,
+        )
+        entries.append(mesh_device.num_program_cache_entries())
+    return entries
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("pad", [1, 2], ids=["pad1", "pad2"])
+@pytest.mark.parametrize("persistent", [False, True], ids=["new_output", "persistent"])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_neighbor_pad_async_2d_runtime_shapes_one_program(mesh_device, pad, persistent, device_params):
+    # One program serves every H and W; each call's outputs match the golden. The input is written by from_torch on
+    # the host, so the counted entries are the op's own.
+    entries = run_neighbor_pad_2d_sizes(mesh_device, NEIGHBOR_PAD_2D_SIZES, pad, True, persistent)
+    assert entries == [entries[0]] * len(entries), entries
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_neighbor_pad_async_2d_without_runtime_shapes_keeps_one_program_per_shape(mesh_device, device_params):
+    entries = run_neighbor_pad_2d_sizes(mesh_device, NEIGHBOR_PAD_2D_SIZES, 1, False, False)
+    assert entries[1] > entries[0] and entries[2] > entries[1] and entries[3] == entries[2], entries
+
+
+def run_neighbor_pad_flag_matches_per_shape(mesh_device, sizes, dims, pads, axes, num_links, logical_h, t_front_pad):
+    # Each size runs with runtime_shapes, a cache hit after the first, and without it, a program of its own; the
+    # outputs must be equal and the flag's calls must add no cache entry after the first size.
+    mesh_shape = tuple(mesh_device.shape)
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    sub_device_manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    stall_group = [ttnn.SubDeviceId(0)]
+    mesh_device.set_sub_device_stall_group(stall_group)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    def run(x, runtime_shapes):
+        x_mesh = ttnn.from_torch(
+            x,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=mem_config,
+            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, 3)),
+        )
+        sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3)]
+        out = ttnn.experimental.neighbor_pad_async(
+            x_mesh,
+            dims,
+            pads,
+            pads,
+            "zeros",
+            axes,
+            sems[: len(dims)],
+            [sems[2]],
+            num_links=num_links,
+            memory_config=mem_config,
+            topology=ttnn.Topology.Linear,
+            logical_h=logical_h,
+            t_front_pad=t_front_pad,
+            runtime_shapes=runtime_shapes,
+        )
+        ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
+        return [ttnn.to_torch(t) for t in ttnn.get_device_tensors(ttnn.from_device(out))]
+
+    torch.manual_seed(0)
+    new_entries = []
+    try:
+        for shape in sizes:
+            x = torch.rand(shape).bfloat16()
+            before = mesh_device.num_program_cache_entries()
+            with_flag = run(x, True)
+            new_entries.append(mesh_device.num_program_cache_entries() - before)
+            without_flag = run(x, False)
+            for device, (a, b) in enumerate(zip(with_flag, without_flag)):
+                assert torch.equal(a, b), f"{shape}, device {device}"
+    finally:
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
+    assert new_entries[0] > 0 and all(n == 0 for n in new_entries[1:]), new_entries
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "dims, pads, axes, num_links, logical_h, t_front_pad",
+    [
+        ([2], [1], [0], [1], 0, 0),
+        ([2], [2], [0], [2], 0, 0),
+        ([2, 3], [1, 1], [0, 1], [2, 1], 0, 0),
+        ([2, 3], [1, 1], [0, 1], [1, 1], 0, 2),
+        ([2, 3], [1, 1], [0, 1], [1, 1], 9, 0),
+    ],
+    ids=["1d", "1d_2links_pad2", "2d_2links", "2d_t_front_pad", "2d_logical_h"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_neighbor_pad_async_runtime_shapes_matches_per_shape_program(
+    mesh_device, dims, pads, axes, num_links, logical_h, t_front_pad, device_params
+):
+    # [1, T, H, W, C] with two T batches, so two H links each take one outer dim.
+    sizes = [[1, 2, 16, 32, 64], [1, 2, 24, 48, 64], [1, 2, 10, 40, 64]]
+    run_neighbor_pad_flag_matches_per_shape(mesh_device, sizes, dims, pads, axes, num_links, logical_h, t_front_pad)

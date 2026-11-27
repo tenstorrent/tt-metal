@@ -14,9 +14,9 @@
 #include "impl/context/metal_context.hpp"
 
 #include <llrt/tt_cluster.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <mesh_device.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 #include <algorithm>
 #include <array>

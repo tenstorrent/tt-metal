@@ -7,9 +7,9 @@
 #include <vector>
 
 #include "moreh_sgd_device_operation.hpp"
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 

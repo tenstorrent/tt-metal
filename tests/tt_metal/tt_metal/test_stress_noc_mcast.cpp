@@ -12,9 +12,9 @@
 
 #include <fmt/base.h>
 #include <cstdlib>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <map>
@@ -24,13 +24,13 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"

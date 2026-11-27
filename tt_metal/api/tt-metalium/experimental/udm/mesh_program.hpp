@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <memory>
 #include <tt-metalium/experimental/udm/types.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 

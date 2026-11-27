@@ -9,10 +9,7 @@ Return a fresh dictionary for every ``pytest.param`` so cases cannot share mutab
 import re
 from pathlib import Path
 
-import pytest
-
 import ttnn
-from models.demos.common.prefill.runners.runner_utils import stage_sp_axis
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -164,16 +161,8 @@ def assert_torus_xy_descriptor(path: str) -> None:
     ), f"{descriptor_path}: TorusXY requires every device topology to be 8x4 Ring/Ring; found {topologies}"
 
 
-# The 8x4 stage runs SP on axis 0 only: SP on its axis 1 (SP=4, TP=8) has no chunk, slot count or weight cache yet,
-# so an 8x4 row carries this mark and skips when the SP-axis knob ($PREFILL_SP_AXIS) asks for axis 1.
-SKIP_8X4_SP_AXIS_1 = pytest.mark.skipif(
-    stage_sp_axis((8, 4)) != 0, reason="SP on axis 1 of the 8x4 stage is not supported yet"
-)
-
 # One tray half as a 4x4 prefill stage: SP on the axis-1 ring, TP on the axis-0 line.
 STAGE_4X4_TOPOLOGY = ("4", "4", "LINE", "RING")
-# The single-Galaxy [RING, RING] carve (ASICs 3, 4, 7, 8 of trays 1-4): rings on both axes.
-STAGE_4X4_RING_RING_TOPOLOGY = ("4", "4", "RING", "RING")
 
 
 def certified_torus_fabric(path: str) -> ttnn.FabricConfig:
@@ -181,48 +170,44 @@ def certified_torus_fabric(path: str) -> ttnn.FabricConfig:
 
     8x4 Ring/Ring is the production TorusXY. A 4x4 Line/Ring descriptor is one tray half (the
     4x4 stage), whose axis-1 rings are the certified torus's own X wraps, so it certifies TorusX.
-    A 4x4 Ring/Ring descriptor is the single-Galaxy carve with a wrap on both axes (TorusXY).
     Anything else fails before device open.
     """
     _, topologies = _device_topologies(path)
     if all(topology == STAGE_4X4_TOPOLOGY for topology in topologies):
         return ttnn.FabricConfig.FABRIC_2D_TORUS_X
-    if all(topology == STAGE_4X4_RING_RING_TOPOLOGY for topology in topologies):
-        return ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     assert_torus_xy_descriptor(path)
     return ttnn.FabricConfig.FABRIC_2D_TORUS_XY
 
 
-def tp_axis_is_wrapped(mesh_device, axis: int = 1) -> bool:
-    """Whether the fabric that came up rings mesh axis `axis`, read from the routes it resolved.
+_REQUESTS_TP_WRAP = frozenset(
+    {
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    }
+)
+
+
+def tp_axis_is_wrapped(mesh_device) -> bool:
+    """Whether the fabric that came up rings the TP axis, read from the routes it resolved.
 
     The mesh graph descriptor cannot answer this: it is absent whenever the graph came from
     auto-discovery, which is the one path that substitutes a fabric for the requested one.
     Routing tables are always populated, and they are what the collective actually consumes,
     so a wrap is detected by where a route goes rather than by what the topology claims. The
-    far peer sits one hop behind on a ring and `n - 1` hops ahead on a line.
+    far peer sits one hop behind on a ring and `cols - 1` hops ahead on a line.
     """
-    assert axis in (0, 1), f"axis must be 0 or 1, got {axis}"
-    n = tuple(mesh_device.shape)[axis]
+    _, cols = tuple(mesh_device.shape)
+    mesh_shapes = ttnn.get_physical_mesh_shapes()
+    assert len(mesh_shapes) == 1, f"expected a single local mesh, got {mesh_shapes}"
+    mesh_id = ttnn.MeshId(next(iter(mesh_shapes)))
 
     def direction(src, dst):
-        # The line along `axis` through the mesh's first coordinate, resolved to fabric nodes through the mesh itself so
-        # a mesh that is not laid out like the physical one still probes its own chips.
-        node = lambda i: mesh_device.get_fabric_node_id(  # noqa: E731
-            ttnn.MeshCoordinate(i, 0) if axis == 0 else ttnn.MeshCoordinate(0, i)
-        )
+        node = lambda col: ttnn.FabricNodeId(mesh_id, col)  # noqa: E731 -- row 0, so chip id is the column
         value = ttnn.get_eth_forwarding_direction(mesh_device, node(src), node(dst))
-        assert value is not None, f"no route along axis {axis} from index {src} to {dst}"
+        assert value is not None, f"no TP route from column {src} to {dst}"
         return value
 
-    return direction(0, n - 1) == direction(1, 0)
-
-
-_WRAPPED_AXES = {
-    ttnn.FabricConfig.FABRIC_2D_TORUS_X: (1,),
-    ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (0,),
-    ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (0, 1),
-}
+    return direction(0, cols - 1) == direction(1, 0)
 
 
 def assert_requested_tp_wrap_was_realized(mesh_device) -> None:
@@ -233,14 +218,16 @@ def assert_requested_tp_wrap_was_realized(mesh_device) -> None:
     short one wrap link therefore answers a torus request with an unwrapped fabric and runs
     the arm to green on the single topology that arm exists to exercise.
     """
-    wrapped_axes = _WRAPPED_AXES.get(ttnn.get_fabric_config(mesh_device), ())
-    shape = tuple(mesh_device.shape)
-    for axis in wrapped_axes:
-        if shape[axis] <= 2:
-            # `is_genuine_torus_dim`: a dimension this narrow keeps ordinary mesh links, so the
-            # fabric is right to leave it unwrapped and there is nothing here to hold it to.
-            continue
-        assert tp_axis_is_wrapped(mesh_device, axis), (
-            f"{ttnn.get_fabric_config(mesh_device)} was requested but mesh axis {axis} came up unwrapped; "
-            f"this box cannot gate a wrap-direction bug -- check the wrap cabling"
-        )
+    if ttnn.get_fabric_config() not in _REQUESTS_TP_WRAP:
+        return
+
+    _, cols = tuple(mesh_device.shape)
+    if cols <= 2:
+        # `is_genuine_torus_dim`: a dimension this narrow keeps ordinary mesh links, so the
+        # fabric is right to leave it unwrapped and there is nothing here to hold it to.
+        return
+
+    assert tp_axis_is_wrapped(mesh_device), (
+        f"{ttnn.get_fabric_config()} was requested but the TP axis came up unwrapped; "
+        f"this box cannot gate a wrap-direction bug -- check the wrap cabling"
+    )

@@ -5,10 +5,10 @@
 #pragma once
 
 #include "fabric_fixture.hpp"
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <filesystem>
@@ -39,7 +39,7 @@ bool find_device_with_neighbor_in_direction(
 
 // Config for a directly constructed ControlPlane. Carries this process's TT_MESH_ID / TT_MESH_HOST_RANK binding
 // (parsed by MetalEnv), since ControlPlane does not read those env vars itself.
-tt_metal::FabricSettings make_control_plane_config(
+tt_metal::FabricConfigDescriptor make_control_plane_config(
     FabricConfig fabric_config = FabricConfig::DISABLED,
     FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 

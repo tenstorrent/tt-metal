@@ -33,7 +33,6 @@ from .utils import (
     format_elem_max,
     generate_face_matmul_data,
     resolve_intervals,
-    signed_cancelling_operands,
 )
 
 __all__ = [
@@ -54,5 +53,4 @@ __all__ = [
     "format_elem_max",
     "generate_face_matmul_data",
     "resolve_intervals",
-    "signed_cancelling_operands",
 ]

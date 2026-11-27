@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <mesh_device.hpp>
 #include <cstddef>
 #include <memory>
 
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::distributed::test {

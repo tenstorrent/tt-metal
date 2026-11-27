@@ -10,11 +10,11 @@
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
 
-#include <tt-metalium/data_formats/bfloat2.hpp>
-#include <tt-metalium/data_formats/bfloat4.hpp>
-#include <tt-metalium/data_formats/bfloat8.hpp>
-#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/bfloat2.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt_stl/span.hpp>
 
 namespace ttnn::bfp_utils {

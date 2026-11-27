@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
 

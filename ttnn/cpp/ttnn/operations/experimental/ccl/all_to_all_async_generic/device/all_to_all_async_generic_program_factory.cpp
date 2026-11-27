@@ -2,21 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include "all_to_all_async_generic_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/common/types/fabric_directions.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <internal/mesh_device.hpp>
 #include <algorithm>
@@ -343,7 +343,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const uint32_t cluster_axis = operation_attributes.cluster_axis.value_or(0);
     const auto sender_device_fabric_node_id = tensor_args.input_tensor.device()->get_fabric_node_id(mesh_coordinate);
 
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*tensor_args.input_tensor.device());
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     const bool is_fabric_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
     // FABRIC_2D_TORUS_X/Y wraps only one mesh axis even though get_fabric_topology() reports Torus for both.
     // Resolve wrapping for the collective's axis so a Ring on the other axis cannot open a nonexistent hop.
@@ -1299,7 +1299,7 @@ tt::tt_metal::WorkloadDescriptor AllToAllAsyncGenericProgram::create_workload_de
     const uint32_t num_links = args.num_links.has_value()
                                    ? *args.num_links
                                    : ttnn::operations::ccl::common::get_num_links(*mesh_device, args.cluster_axis);
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     const uint32_t axis = args.cluster_axis.value_or(0);
     const ResolvedRouting routing{
         .num_links = num_links,

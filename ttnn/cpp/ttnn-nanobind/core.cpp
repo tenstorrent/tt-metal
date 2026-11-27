@@ -20,13 +20,13 @@
 #include <reflect>
 
 #include "ttnn/core.hpp"
-#include <tt-metalium/data_formats/bfloat4.hpp>
-#include <tt-metalium/data_formats/bfloat8.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tile.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_stl/caseless_comparison.hpp"
 #include "ttnn-nanobind/nanobind_helpers.hpp"

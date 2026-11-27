@@ -11,14 +11,14 @@
 #include <optional>
 #include <vector>
 #include <gtest/gtest.h>
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>
-#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal {
 

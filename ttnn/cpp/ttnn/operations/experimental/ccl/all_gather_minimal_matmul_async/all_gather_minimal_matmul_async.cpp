@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "all_gather_minimal_matmul_async.hpp"
 #include "device/all_gather_minimal_matmul_async_device_operation.hpp"
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -41,8 +41,7 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     std::optional<ttnn::ccl::Topology> fsdp_topology,
     bool fuse_swiglu,
     const std::vector<uint32_t>& chunk_sizes,
-    std::optional<bool> transpose_core_grid,
-    bool use_mcast) {
+    std::optional<bool> transpose_core_grid) {
     return ttnn::prim::all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -72,8 +71,7 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fsdp_topology,
         fuse_swiglu,
         chunk_sizes,
-        transpose_core_grid,
-        use_mcast);
+        transpose_core_grid);
 }
 
 }  // namespace ttnn

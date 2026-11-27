@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

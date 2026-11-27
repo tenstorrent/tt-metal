@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fill_pad_program_factory.hpp"
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"

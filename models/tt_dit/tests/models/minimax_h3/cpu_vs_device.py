@@ -145,7 +145,6 @@ def main():
 
     from models.tt_dit.models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
     from models.tt_dit.models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
-    from models.tt_dit.utils.tracing import Tracer
 
     audio_dir = os.path.join(WEIGHTS, "audio_vae")
     with open(os.path.join(audio_dir, "config.json")) as fh:
@@ -232,7 +231,7 @@ def main():
     finally:
         if TRACED:
             try:
-                Tracer.release_all()
+                decoder.release_trace()
             except Exception:  # nothing to release if the run died before capture
                 pass
         ttnn.close_mesh_device(device)

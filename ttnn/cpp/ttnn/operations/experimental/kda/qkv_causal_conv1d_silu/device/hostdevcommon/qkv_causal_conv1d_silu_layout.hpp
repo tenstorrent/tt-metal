@@ -68,50 +68,33 @@ struct ReaderScratch {
     constexpr uint32_t bytes() const { return rows() + history_rows * block_ct * tile_row_bytes + read_alignment; }
 };
 
-// Work item `work` is tile row work % tile_rows of channel block work / tile_rows. Rows that may wait for the
-// predecessor's rows, tile row 0 with defer_first_rows and a nonzero split_row (the split rank's tail start), run after
-// the block's other rows, so no block is visited twice. The reader and writer must walk the same order; compute only
-// follows blocks and may leave split_row out.
+// Work item `work` is tile row work % tile_rows of channel block work / tile_rows. With defer_first_rows each core
+// handles a block's tile row 0, which may wait for the predecessor's rows, after the block's other rows, so no block
+// is visited twice; the reader, compute and writer must all walk this order.
 template <typename Process>
 inline void for_each_work_item(
-    uint32_t first,
-    uint32_t count,
-    uint32_t tile_rows,
-    bool defer_first_rows,
-    const Process& process,
-    uint32_t split_row = 0) {
+    uint32_t first, uint32_t count, uint32_t tile_rows, bool defer_first_rows, const Process& process) {
     const uint32_t end = first + count;
-    for (uint32_t segment_start = first; segment_start < end;) {
-        const uint32_t block = segment_start - segment_start % tile_rows;
-        const uint32_t segment_end = block + tile_rows < end ? block + tile_rows : end;
-        const bool defer_first = defer_first_rows && segment_start == block;
-        const uint32_t split = block + split_row;
-        const bool defer_split = split_row != 0 && segment_start <= split && split < segment_end;
-        const uint32_t deferred = defer_first + defer_split;
-        // One process() call site, so the kernels inline it; with more, the reader calls it out of line.
-        for (uint32_t index = segment_start; index < segment_end; ++index) {
-            uint32_t work = index + defer_first;
-            if (index + deferred >= segment_end) {
-                work = defer_first && index + deferred == segment_end ? block : split;
-            } else if (defer_split && work >= split) {
-                ++work;
-            }
-            process(work);
+    uint32_t segment_start = first;
+    for (uint32_t index = first; index < end; ++index) {
+        const uint32_t block_end = (segment_start / tile_rows + 1) * tile_rows;
+        const uint32_t segment_end = block_end < end ? block_end : end;
+        const bool defer = defer_first_rows && segment_start % tile_rows == 0;
+        // A deferred segment runs rows [1, n) first, then its row 0.
+        process(defer ? (index + 1 == segment_end ? segment_start : index + 1) : index);
+        if (index + 1 == segment_end) {
+            segment_start = segment_end;
         }
-        segment_start = segment_end;
     }
 }
 
 // Fabric exchange buffer pages. The predecessor writes rows [predecessor_page, +3) and the final segment's owner
 // writes rows [carry_page, +3); the convolution cores stage this rank's outgoing and end rows for the exchange core.
-// With an SP-sharded history slab, every rank writes its channels of the slot's old tail into the chronologically
-// first rank's rows [history_page, +3), the only rank that reads it.
 constexpr uint32_t predecessor_page = 0;
 constexpr uint32_t carry_page = predecessor_page + history_rows;
 constexpr uint32_t outgoing_page = carry_page + history_rows;
 constexpr uint32_t end_page = outgoing_page + history_rows;
-constexpr uint32_t history_page = end_page + history_rows;
-constexpr uint32_t exchange_rows = history_page + history_rows;
+constexpr uint32_t exchange_rows = end_page + history_rows;
 // Compile-time index of a fabric connection the exchange core does not have.
 constexpr uint32_t no_fabric_connection = ~0U;
 // The exchange core's fabric connections: the SP neighbors, and on a turning 2D axis the links peer routes leave on.

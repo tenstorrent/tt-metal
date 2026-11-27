@@ -67,7 +67,6 @@ void kernel_main() {
         dfb_out.reserve_back(SECTION_NTILES);
 
         tile_regs_acquire();
-        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_init(in0_id);
 #if defined(SECTION_USE_COPY_TILE)
         for (uint32_t i = 0; i < SECTION_NTILES; ++i) {
@@ -76,7 +75,6 @@ void kernel_main() {
 #else
         copy_block(in0_id, /*start_in_tile_index=*/0, /*start_dst_tile_index=*/DST_TILE_START, SECTION_NTILES);
 #endif
-        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t i = 0; i < SECTION_NTILES; ++i) {
@@ -98,7 +96,6 @@ void kernel_main() {
             dfb_out.reserve_back(1);
 
             tile_regs_acquire();
-            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             copy_init(in0_id);
             copy_tile(in0_id, /*tile_index=*/0, /*dst_index=*/DST_TILE_START);
 #if defined(SFPU_BINARY_OP) || defined(SFPU_TERNARY_OP)
@@ -109,7 +106,6 @@ void kernel_main() {
             copy_init(in2_id);
             copy_tile(in2_id, /*tile_index=*/0, /*dst_index=*/2);
 #endif
-            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 #ifdef SFPU_OP_CHAIN_0
             SFPU_OP_CHAIN_0
 #endif

@@ -10,7 +10,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 

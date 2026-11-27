@@ -12,8 +12,8 @@
 #include <unordered_map>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "moe_compute_device_operation.hpp"
 #include "moe_expert_rows_plan.hpp"

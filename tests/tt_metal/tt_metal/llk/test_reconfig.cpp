@@ -8,7 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/data_formats/bfloat8.hpp>
+#include <tt-metalium/bfloat8.hpp>
 #include <bit>
 #include <functional>
 #include <limits>
@@ -19,30 +19,29 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <tt-umd/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
@@ -523,7 +522,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         .work_units = {wu},
     };
 
-    Program program(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     // Random stimulus: U(0, 1) per element (keep magnitudes small so matmul output
     // stays in a sensible bfloat16 range; each output element is sum of 32 products).
@@ -633,7 +632,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
 
     LaunchProgram(*mesh_device, std::move(program));
 
@@ -878,7 +877,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
         .work_units = {wu},
     };
 
-    Program program(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     constexpr int kRandMax = 1;
     constexpr std::uint32_t elems_per_tile = tt::constants::TILE_HW;
@@ -1004,7 +1003,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
 
     LaunchProgram(*mesh_device, std::move(program));
 
@@ -1112,8 +1111,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 
 TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP()
-            << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
     }
     for (bool explicit_reconfig : {true, false}) {
         for (bool split_src_reconfig : {true, false}) {
@@ -1152,8 +1150,7 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
 
 TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP()
-            << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
     }
     for (bool l1_acc : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -1167,13 +1164,15 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
     }
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixUnpackReconfigQuasarDfb) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixUnpackReconfigQuasarDfb) {
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::reconfig::single_core_unpack_reconfig_quasar(device));
     }
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixPackReconfigQuasarDfb) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixPackReconfigQuasarDfb) {
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(device));
     }

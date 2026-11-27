@@ -8,8 +8,8 @@
 // Tests both noc0 and noc1 for single-dimension wraps (Y-only or X-only).
 
 #include <gtest/gtest.h>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "debug_tools_fixture.hpp"
 #include <tt_metal/impl/dispatch/slow_dispatch.hpp>
 #include <tt-logger/tt-logger.hpp>

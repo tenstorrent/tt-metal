@@ -10,8 +10,8 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <vector>
 
 namespace {
@@ -168,6 +168,7 @@ TEST(ProgramUtilsCoreWalk, ComputeWorkSplitMatchesSplitWorkToCores) {
             ASSERT_EQ(split.units_per_core_group_1, units_1) << "grid " << grid.str() << " units " << units;
             ASSERT_EQ(split.units_per_core_group_2, units_2) << "grid " << grid.str() << " units " << units;
             ASSERT_EQ(split.has_group_2(), !group_2.ranges().empty()) << "grid " << grid.str() << " units " << units;
+            EXPECT_NO_THROW(ttml::metal::check_work_split(split, num_cores, group_1, group_2, units_1, units_2));
 
             // Walking the WorkSplit must visit exactly what the CoreRangeSet-driven walk visits.
             const auto expected = collect(num_cores, static_cast<uint32_t>(grid.y), group_1, group_2, units_1, units_2);
@@ -183,4 +184,12 @@ TEST(ProgramUtilsCoreWalk, ComputeWorkSplitMatchesSplitWorkToCores) {
             }
         }
     }
+}
+
+TEST(ProgramUtilsCoreWalk, CheckWorkSplitRejectsAMismatch) {
+    const CoreCoord grid{8, 8};
+    auto [num_cores, all_cores, group_1, group_2, units_1, units_2] = tt::tt_metal::split_work_to_cores(grid, 70U);
+    auto split = ttml::metal::compute_work_split(grid, 70U);
+    ++split.num_group_1_cores;
+    EXPECT_ANY_THROW(ttml::metal::check_work_split(split, num_cores, group_1, group_2, units_1, units_2));
 }

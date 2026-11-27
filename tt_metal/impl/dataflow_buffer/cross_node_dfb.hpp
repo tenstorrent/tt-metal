@@ -10,9 +10,9 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 namespace tt::tt_metal {

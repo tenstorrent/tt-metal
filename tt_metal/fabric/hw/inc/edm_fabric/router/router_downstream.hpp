@@ -31,36 +31,26 @@ namespace fabric_router {
 // Downstreams of a VC
 // ---------------------------------------------------------------------------------------------------------------------
 
-// The host's downstream args exist per VC for the VCs that forward to other routers: VC0, VC1, and VC2 on inter-domain
-// fabrics (VC<n>_DOWNSTREAM_EDM_SIZE, DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY, the runtime args' per-VC blocks).
-constexpr std::array<size_t, 3> DOWNSTREAM_EDM_COUNT_BY_VC = {
-    VC0_DOWNSTREAM_EDM_SIZE, VC1_DOWNSTREAM_EDM_SIZE, VC2_DOWNSTREAM_EDM_SIZE};
-
-// The host's placement of this router's traffic on each downstream router, per VC that forwards to routers: 4 bits per
-// downstream entry (the host's compact order), holding the fabric position of the sender channel there that takes
-// traffic arriving from this router's direction (DOWNSTREAM_VC<n>_SENDER_POSITIONS). The host owns the placement: it
-// reads the channel off the downstream router's own producer-slot mapping, so the router does not derive it.
-constexpr uint32_t downstream_sender_position_bits = 4;
-constexpr std::array<uint32_t, 3> DOWNSTREAM_SENDER_POSITIONS_BY_VC = {
-    NAMED_CT_ARG("DOWNSTREAM_VC0_SENDER_POSITIONS"),
-    NAMED_CT_ARG("DOWNSTREAM_VC1_SENDER_POSITIONS"),
-    NAMED_CT_ARG("DOWNSTREAM_VC2_SENDER_POSITIONS")};
-static_assert(
-    MAX_NUM_SENDER_CHANNELS <= (1u << downstream_sender_position_bits),
-    "a fabric position does not fit in a DOWNSTREAM_VC<n>_SENDER_POSITIONS field");
+// The host's downstream args exist per VC for the VCs that forward to other routers: VC0 and VC1
+// (VC<n>_DOWNSTREAM_EDM_SIZE, DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY, the runtime args' per-VC blocks).
+constexpr std::array<size_t, 2> DOWNSTREAM_EDM_COUNT_BY_VC = {VC0_DOWNSTREAM_EDM_SIZE, VC1_DOWNSTREAM_EDM_SIZE};
 
 // The downstreams a router can forward to on VC, one bit per name. In 2D, the directions with an entry, but an
 // E/W-facing router inside a mesh never turns a packet onto N/S (Y first); intermesh routers (a landing decodes Y
 // first) and routers on a mesh's edge (an exit may leave in any direction) can. In 1D, downstream 0.
 template <size_t VC>
 constexpr uint32_t live_downstreams() {
-    if constexpr (is_2d) {
-        return Routing2DCodec::live_downstreams<static_cast<eth_chan_directions>(my_direction)>(
-            DOWNSTREAM_EDM_COUNT_BY_VC[VC], is_intermesh_router, is_intramesh_router_on_edge);
-    } else {
-        // In 1d, we either have one downstream or none
-        return DOWNSTREAM_EDM_COUNT_BY_VC[VC] > 0 ? 1u : 0u;
+    constexpr bool east_west =
+        is_2d && (my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST);
+    constexpr bool turns = is_intermesh_router || is_intramesh_router_on_edge;
+    uint32_t live = 0;
+    for (size_t entry = 0; entry < DOWNSTREAM_EDM_COUNT_BY_VC[VC]; entry++) {
+        const size_t name = downstream_name(entry);
+        if (!(east_west && !turns && (name == eth_chan_directions::NORTH || name == eth_chan_directions::SOUTH))) {
+            live |= 1u << name;
+        }
     }
+    return live;
 }
 
 // Whether VC's forwards can use the destination preset of their forward buffer pair: no receiver channel here
@@ -94,7 +84,7 @@ constexpr bool pair_has_one_destination(std::index_sequence<VCs...>) {
 // The downstream routers of VC, as the host sets them.
 template <size_t VC>
 struct DownstreamTraits {
-    static_assert(VC < DOWNSTREAM_EDM_COUNT_BY_VC.size(), "the host lists downstream routers for VC0, VC1 and VC2");
+    static_assert(VC < DOWNSTREAM_EDM_COUNT_BY_VC.size(), "the host lists downstream routers for VC0 and VC1");
     static constexpr size_t count = DOWNSTREAM_EDM_COUNT_BY_VC[VC];
     static constexpr uint32_t num_slots = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[VC];
     // The last slot's offset from the ring's base (the ring wraps after it).
@@ -106,33 +96,18 @@ struct DownstreamTraits {
     // This router's local copy of entry ENTRY's free-slots register (the downstream credits it as it sends).
     template <size_t ENTRY>
     static constexpr uint32_t local_credit_stream = local_downstream_credit_streams[VC][ENTRY];
-    // The position the direction ranking gives entry ENTRY's sender channel for this router's traffic: VC's first
-    // forwarding position (VC0's channel 0 is its worker channel), plus this router's direction's compact index on the
-    // downstream; a 1D downstream has one forwarding channel. Only forwarding_position's check reads it.
+    // Entry ENTRY's sender channel for traffic arriving from this router's direction, by its fabric position: VC's
+    // first forwarding position (VC0's channel 0 is its worker channel), plus this router's direction's compact index
+    // on the downstream. A 1D downstream has one forwarding channel.
     template <size_t ENTRY>
-    static constexpr size_t ranked_forwarding_position() {
-        constexpr size_t first = VC == 0 ? 1 : VC == 1 ? VC1_FABRIC_POSITION_START : VC2_FABRIC_POSITION_START + 1;
+    static constexpr size_t forwarding_position() {
+        constexpr size_t first = VC == 0 ? 1 : VC1_FABRIC_POSITION_START;
         if constexpr (is_2d) {
             constexpr size_t facing = static_cast<size_t>(downstream_direction(ENTRY));
             return first + compact_index_on(facing, static_cast<size_t>(my_direction));
         } else {
             return first;
         }
-    }
-    // Entry ENTRY's sender channel for traffic arriving from this router's direction, by its fabric position, as the
-    // host placed it (DOWNSTREAM_SENDER_POSITIONS_BY_VC).
-    template <size_t ENTRY>
-    static constexpr size_t forwarding_position() {
-        static_assert(ENTRY * downstream_sender_position_bits < 32, "the host packs the positions in one word");
-        constexpr size_t position =
-            (DOWNSTREAM_SENDER_POSITIONS_BY_VC[VC] >> (ENTRY * downstream_sender_position_bits)) &
-            ((1u << downstream_sender_position_bits) - 1);
-        // While every router of a fabric has the same sender layout, the host's placement is the direction ranking
-        // (ranked_forwarding_position). This check holds the host to it until routers' layouts differ, when it goes.
-        static_assert(
-            position == ranked_forwarding_position<ENTRY>(),
-            "the host's downstream sender position differs from the direction ranking");
-        return position;
     }
     // That channel's free-slots register, on the downstream.
     template <size_t ENTRY>
@@ -241,7 +216,7 @@ struct FullPresetForwards {
     __attribute__((noinline)) static void preset(const DownstreamArgs& args) {
         constexpr size_t entry = downstream_entry(lowest_bit(live_downstreams<VC>()));
         if ((args.entries >> entry) & 1u) {
-            constexpr uint8_t noc_vc = tt::tt_fabric::forward_noc_vc;
+            constexpr uint8_t noc_vc = tt::tt_fabric::forward_and_local_write_noc_vc;
             const uint32_t dense = popcount(args.entries & ((1u << entry) - 1));  // entries below it with a downstream
             const uint32_t x = dense_noc_x(args, dense);
             const uint32_t y = dense_noc_y(args, dense);
@@ -360,7 +335,7 @@ struct PartialPresetForwards {
 
 private:
     __attribute__((noinline)) static void preset_cmd_bufs() {
-        constexpr uint8_t noc_vc = tt::tt_fabric::forward_noc_vc;
+        constexpr uint8_t noc_vc = tt::tt_fabric::forward_and_local_write_noc_vc;
         noc_async_write_one_packet_with_trid_set_state</*posted=*/true>(0, Traits::data_cmd_buf, Traits::noc, noc_vc);
         noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/true>(
             0,
@@ -504,12 +479,11 @@ private:
 };
 
 // The receiver's downstream connections: the downstream routers of each VC a receiver channel here forwards on
-// (any_forwards_on_vc: VC0's, VC1's, VC2's), and UDM's relay, each where this router has it. In memory (the receiver
-// loop takes them by reference): only forwards touch them, so they stay out of the registers every packet needs.
+// (any_forwards_on_vc: VC0's, VC1's), and UDM's relay, each where this router has it. In memory (the receiver loop
+// takes them by reference): only forwards touch them, so they stay out of the registers every packet needs.
 struct DownstreamConnections {
     [[no_unique_address]] Present<any_forwards_on_vc(0), Downstreams<0>, 0> vc0;
     [[no_unique_address]] Present<any_forwards_on_vc(1), Downstreams<1>, 1> vc1;
-    [[no_unique_address]] Present<any_forwards_on_vc(2), Downstreams<2>, 3> vc2;
     [[no_unique_address]] Present<udm_mode, Relay, 2> relay;
 
     // VC's downstream routers.
@@ -518,10 +492,8 @@ struct DownstreamConnections {
         static_assert(any_forwards_on_vc(VC));
         if constexpr (VC == 0) {
             return vc0;
-        } else if constexpr (VC == 1) {
-            return vc1;
         } else {
-            return vc2;
+            return vc1;
         }
     }
 };

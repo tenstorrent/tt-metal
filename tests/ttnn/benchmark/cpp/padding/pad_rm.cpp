@@ -10,9 +10,9 @@
 #include <tt_stl/span.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <ttnn/tensor/storage.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <ttnn/tensor/host_buffer/functions.hpp>
-#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/small_vector.hpp>
 
 namespace {

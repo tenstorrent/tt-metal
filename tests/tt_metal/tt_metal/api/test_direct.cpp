@@ -6,9 +6,9 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <sys/types.h>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -17,25 +17,24 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/workload/specification/compute_hardware_config.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -295,7 +294,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         .work_units = {wu},
     };
 
-    Program program(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -318,7 +317,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
                  {"dram_page_stride", per_tile_stride}}),
         },
     };
-    program.set_program_run_args(params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     LaunchProgram(*mesh_device, std::move(program));
 
@@ -520,7 +519,7 @@ bool reader_datacopy_writer(
         .work_units = {wu},
     };
 
-    distributed::MeshWorkload workload(*mesh_device, spec);
+    distributed::MeshWorkload workload = tt_metal::experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
     log_info(tt::LogTest, "Num tiles per thread: {}", num_tiles_per_thread);
@@ -547,7 +546,7 @@ bool reader_datacopy_writer(
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    program.set_program_run_args(params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
 

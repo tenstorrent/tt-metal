@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include "hostdev/streaming_profiler_common.h"
 #include "impl/context/context_types.hpp"

@@ -23,13 +23,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 from helpers.counters import LLK_COUNTERS_HEADER, _parse_perf_cfg
-from helpers.llk_params import (
-    ApproximationMode,
-    DestAccumulation,
-    PerfRunType,
-    StochasticRounding,
-)
-from helpers.perf.blaze import compile_only
+from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
 from helpers.perf.core import (
     PerfConfig,
     PerfReport,
@@ -57,12 +51,7 @@ from helpers.perf.test_schemas import (
 from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS, OUTPUT_SCHEMA
 from helpers.profiler import Profiler, ProfilerData, _stats_l1_to_l1
 from helpers.test_config import BuildMode, TestConfig
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    LOOP_FACTOR,
-    STOCHASTIC_ROUNDING,
-    TILE_COUNT,
-)
+from helpers.test_variant_parameters import APPROX_MODE, LOOP_FACTOR, TILE_COUNT
 
 _SCHEMA_NAMES = {c.name for c in OUTPUT_SCHEMA}
 
@@ -91,17 +80,6 @@ def _timing_result(run_type: PerfRunType) -> pd.DataFrame:
             stat_column(rt, STD): [1.0, 2.0],
         }
     )
-
-
-def test_perf_config_forwards_variant_include_dirs(tmp_path):
-    cfg = PerfConfig(
-        test_name="perf_include_dirs",
-        formats=None,
-        run_types=[PerfRunType.L1_TO_L1],
-        include_dirs=[tmp_path],
-    )
-
-    assert cfg.include_dirs == [tmp_path.resolve()]
 
 
 def _build(formats_config):
@@ -149,13 +127,6 @@ def test_report_columns_conform_to_output_schema():
         stat_column("MATH_ISOLATE", STD),
     ]:
         assert expected in combined.columns, f"missing expected column {expected!r}"
-
-
-def test_compile_only_template_is_omitted_from_report():
-    param = compile_only(STOCHASTIC_ROUNDING(StochasticRounding.No))
-
-    assert "STOCHASTIC_RND" in param.convert_to_cpp()
-    assert PerfConfig._dataclass_name_and_values(param) == []
 
 
 def test_report_without_formats_still_conforms():
@@ -1281,23 +1252,3 @@ def test_unpaired_zone_records_are_rejected(entries):
         ValueError, match="buffer corruption"
     ):
         Profiler._parse_thread("unpack", _zone_words(entries), _ZONE_META)
-
-
-def test_each_code_position_dumps_only_its_own_rows(tmp_path, monkeypatch):
-    from helpers import llk_pytest_plugin as plugin
-
-    monkeypatch.setattr(plugin, "_MODULE_REPORTS", {})
-    for position, tile_cnt in (("p0", 4), ("p4", 8)):
-        monkeypatch.setattr(
-            TestConfig, "PERF_DATA_DIR", tmp_path / position, raising=False
-        )
-        (tmp_path / position).mkdir()
-        frame = _build(_fake_formats())
-        frame["tile_cnt"] = tile_cnt
-        report = PerfReport()
-        report.append(frame)
-        plugin._dump_perf_report("perf_x", "gw0", report)
-
-    for position, tile_cnt in (("p0", 4), ("p4", 8)):
-        rows = pd.read_csv(tmp_path / position / "perf_x.gw0.csv")
-        assert rows["tile_cnt"].tolist() == [tile_cnt] * len(rows)

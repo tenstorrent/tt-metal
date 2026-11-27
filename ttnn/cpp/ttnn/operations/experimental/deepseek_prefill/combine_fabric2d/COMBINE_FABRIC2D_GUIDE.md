@@ -140,8 +140,7 @@ Integer slicing makes adjacent shares meet exactly even when the token count is
 not divisible by `n`.
 
 The host constructs and validates this static schedule in
-[`../fabric2d_common/fabric2d_assignments.hpp`](../fabric2d_common/fabric2d_assignments.hpp),
-the ring schedule combine shares with dispatch_fabric2d.
+[`device/combine_fabric2d_assignments.cpp`](device/combine_fabric2d_assignments.cpp).
 For each local expert, a stream executes:
 
 ```text
@@ -259,7 +258,7 @@ direction; its default is 5.
 
 1. [`combine_fabric2d_nanobind.cpp`](combine_fabric2d_nanobind.cpp): semantic contract.
 2. [`device/combine_fabric2d_device_operation.cpp`](device/combine_fabric2d_device_operation.cpp): all legal shape/layout/fabric constraints.
-3. [`../fabric2d_common/fabric2d_assignments.hpp`](../fabric2d_common/fabric2d_assignments.hpp): the static routing schedule, shared with dispatch_fabric2d.
+3. [`device/combine_fabric2d_assignments.cpp`](device/combine_fabric2d_assignments.cpp): the static routing schedule.
 4. [`device/combine_fabric2d_program_factory.cpp`](device/combine_fabric2d_program_factory.cpp): placement, semaphores, forwarding allocation, and kernel construction.
 5. [`device/kernels/dataflow/reader_combine_fabric2d.cpp`](device/kernels/dataflow/reader_combine_fabric2d.cpp): routing decisions and DRAM movement.
 6. [`device/kernels/dataflow/sender_combine_fabric2d.cpp`](device/kernels/dataflow/sender_combine_fabric2d.cpp): one-hop Fabric transport.

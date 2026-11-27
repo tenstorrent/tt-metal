@@ -12,7 +12,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <tt-metalium/vocabulary/device_types.hpp>
+#include <tt-metalium/device_types.hpp>
 
 namespace tt::tt_metal::experimental {
 

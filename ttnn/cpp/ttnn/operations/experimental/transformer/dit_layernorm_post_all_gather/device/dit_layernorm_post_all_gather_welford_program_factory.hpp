@@ -7,7 +7,7 @@
 #include "dit_layernorm_post_all_gather_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 

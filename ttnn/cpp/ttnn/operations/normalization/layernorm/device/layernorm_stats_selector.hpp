@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace ttnn::prim::layernorm {
 

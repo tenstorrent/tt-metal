@@ -12,8 +12,8 @@
 #include "selective_reduce_combine_device_operation_types.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::experimental::prim {
 

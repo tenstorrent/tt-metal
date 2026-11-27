@@ -15,7 +15,6 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import MathOperation
 from helpers.param_config import (
-    flat_axes,
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
@@ -60,16 +59,14 @@ SFPU_SQUARE_COMBINATIONS = [
 ]
 
 
-SFPU_SQUARE_FLAT_NAMES = ("formats", "dest_acc", "input_dimensions")
-
-
 @pytest.mark.quasar
-@parametrize(**flat_axes(SFPU_SQUARE_FLAT_NAMES, SFPU_SQUARE_COMBINATIONS))
-def test_isolate_sfpu_square_quasar(formats, dest_acc, input_dimensions):
+@parametrize(formats_dest_acc_input_dims=SFPU_SQUARE_COMBINATIONS)
+def test_isolate_sfpu_square_quasar(formats_dest_acc_input_dims):
     """
     Test isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
     No MATH kernel (stub only).
     """
+    formats, dest_acc, input_dimensions = formats_dest_acc_input_dims[0]
 
     torch.manual_seed(42)
 

@@ -12,7 +12,7 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/tensor.hpp"

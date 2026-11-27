@@ -14,10 +14,10 @@ using namespace tt::tt_metal::quasar::dispatch;
 #include "quasar/qa_hal.hpp"
 #include "quasar/qa_hal_dispatch_asserts.hpp"
 #include "dev_mem_map.h"
-#include "llrt/hal_types.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt_stl/assert.hpp>
 #include <enchantum/enchantum.hpp>

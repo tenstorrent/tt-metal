@@ -20,7 +20,6 @@ from helpers.matmul_sweep import (
     unpack_matmul_fits_perf_ring,
 )
 from helpers.param_config import (
-    flat_axes,
     input_output_formats,
     max_dest_tiles,
     parametrize,
@@ -90,64 +89,42 @@ def matmul_combos(
     }
 
     return [
-        (
-            format,
-            accumulation,
-            dest_sync,
-            matrix_b[1] // TILE_DIM,
-            matrix_a[0] // TILE_DIM,
-            matrix_a[1] // TILE_DIM,
-        )
+        (format, accumulation, dest_sync, dims)
         for format in formats
         for accumulation in _acc_modes(format)
         for dest_sync in DEST_SYNC_MODES
-        for matrix_a, matrix_b in dimensions[
-            _max_tiles(format, accumulation, dest_sync)
-        ]
+        for dims in dimensions[_max_tiles(format, accumulation, dest_sync)]
     ]
-
-
-MATMUL_AXIS_NAMES = ("formats", "dest_acc", "dest_sync", "ct_dim", "rt_dim", "kt_dim")
 
 
 @pytest.mark.perf
 @parametrize(
-    **flat_axes(
-        MATMUL_AXIS_NAMES,
-        matmul_combos(
-            formats=input_output_formats(
-                [
-                    DataFormat.Float16_b,
-                    DataFormat.Float32,
-                    DataFormat.Bfp8_b,
-                ]
-            ),
-            dest_acc=lambda formats: (
-                [DestAccumulation.Yes]
-                if is_dest_acc_needed(formats)
-                else [DestAccumulation.No, DestAccumulation.Yes]
-            ),
+    combos=matmul_combos(
+        formats=input_output_formats(
+            [
+                DataFormat.Float16_b,
+                DataFormat.Float32,
+                DataFormat.Bfp8_b,
+            ]
+        ),
+        dest_acc=lambda formats: (
+            [DestAccumulation.Yes]
+            if is_dest_acc_needed(formats)
+            else [DestAccumulation.No, DestAccumulation.Yes]
         ),
     ),
     math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_perf_matmul(
     perf_report,
-    formats,
-    dest_acc,
-    dest_sync,
-    ct_dim,
-    rt_dim,
-    kt_dim,
+    combos,
     math_fidelity,
 ):
+
+    formats, dest_acc, dest_sync, (matrix_a, matrix_b) = combos
+
     # Calculate all matmul dimensions using helper function
-    dims = generate_tile_dims(
-        (
-            [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
-            [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
-        )
-    )
+    dims = generate_tile_dims((matrix_a, matrix_b))
 
     variant_tile_count = dims.rt_dim * dims.ct_dim * dims.kt_dim
     # PERF_ADDRESS rings are PERF_RING_TILES (tests/helpers/include/perf.h).

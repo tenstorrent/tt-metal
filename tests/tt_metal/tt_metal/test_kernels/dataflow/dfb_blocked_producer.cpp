@@ -35,10 +35,11 @@ void kernel_main() {
         }
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = block_base_page / block_size}, {});
+            noc.async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = block_base_page}, {});
 #endif
         } else {
             // Pages are read one at a time: an interleaved tensor's block is not contiguous in DRAM.
+            // The implicit-sync path above reads a whole block per call and needs a contiguous source.
             dfb.reserve_back(block_size);
             for (uint32_t i = 0; i < block_size; ++i) {
                 noc.async_read(

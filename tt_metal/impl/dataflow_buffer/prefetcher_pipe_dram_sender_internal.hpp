@@ -14,7 +14,7 @@
 //
 #include <span>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 namespace tt::tt_metal::experimental {

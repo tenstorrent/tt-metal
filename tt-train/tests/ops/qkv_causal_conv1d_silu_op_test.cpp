@@ -9,7 +9,7 @@
 
 #include <array>
 #include <random>
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"

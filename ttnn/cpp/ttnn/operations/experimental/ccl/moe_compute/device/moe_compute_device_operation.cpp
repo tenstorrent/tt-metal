@@ -13,10 +13,10 @@
 
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <tt-umd/types/arch.hpp>
 

@@ -17,11 +17,11 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/offline_kernel_compile.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/data_formats/tile.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
 #include "device_fixture.hpp"
 #include "impl/context/metal_context.hpp"

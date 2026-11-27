@@ -12,10 +12,10 @@
 #include <cstddef>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "emule_live_ranges.hpp"

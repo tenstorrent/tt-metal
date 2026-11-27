@@ -19,12 +19,12 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/unique_ptr.h>
 
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/tensor/d2d_pipeline_descriptor.hpp"

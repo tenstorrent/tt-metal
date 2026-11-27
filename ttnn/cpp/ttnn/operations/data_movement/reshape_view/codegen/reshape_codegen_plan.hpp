@@ -13,9 +13,9 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_mapped_plan.hpp"
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_rows_plan.hpp"

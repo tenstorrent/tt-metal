@@ -120,8 +120,4 @@ bool embed_mcast_reverse_trees(
     std::uint8_t* mcast_trees,
     std::string* failure = nullptr);
 
-// This chip's route table for a 2D mesh over the same chips with every axis a line: dimension-order routes
-// that never take a wrap or an express chord.
-route_table_2d_t line_route_table_2d(const MeshGraph& mesh_graph, MeshId mesh_id, int my_y, int my_x);
-
 }  // namespace tt::tt_fabric

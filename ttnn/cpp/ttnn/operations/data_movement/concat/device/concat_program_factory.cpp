@@ -11,15 +11,285 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim {
+
+namespace {
+
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::CoreRangeSet;
+using tt::tt_metal::MeshTensor;
+
+constexpr bool kRmOrientation = false;
+
+// How the output pages are split over the cores. With the full compute grid and at least as many
+// pages as cores, the core set is the whole grid for any page count, and only the counts change.
+struct ConcatSplit {
+    uint32_t num_output_pages = 0;
+    CoreRangeSet all_cores;
+    std::vector<CoreCoord> cores;
+    uint32_t g1_num_cores = 0;
+    uint32_t pages_per_core_g1 = 0;
+    uint32_t pages_per_core_g2 = 0;
+};
+
+ConcatSplit split_concat_work(const MeshTensor& output, const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace tt::constants;
+    using namespace tt::tt_metal;
+    const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
+    ConcatSplit split;
+    split.num_output_pages =
+        rm_layout ? output.physical_volume() / output.padded_shape()[-1] : output.physical_volume() / TILE_HW;
+    if (sub_core_grids.has_value() && !output.is_sharded()) {
+        // Use sub_core_grids for interleaved output
+        uint32_t ncores = sub_core_grids->num_cores();
+        TT_FATAL(ncores != 0, "number of cores cannot be 0");
+
+        // Find the maximum number of cores that evenly divides num_output_pages
+        for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
+            if (split.num_output_pages % core_id == 0) {
+                ncores = core_id;
+                break;
+            }
+            ncores--;
+        }
+        TT_FATAL(
+            (split.num_output_pages % ncores == 0),
+            "{} num of pages are not split uniformly across {} num of cores",
+            split.num_output_pages,
+            ncores);
+
+        split.cores = corerange_to_cores(sub_core_grids.value(), ncores, kRmOrientation);
+        split.all_cores =
+            num_cores_to_corerangeset_in_subcoregrids(split.cores[0], ncores, sub_core_grids.value(), kRmOrientation);
+        if (ncores == 1) {
+            split.all_cores = ttnn::CoreRangeSet(ttnn::CoreRange(split.cores[0]));
+        }
+        split.g1_num_cores = ncores;
+        split.pages_per_core_g1 = split.num_output_pages / ncores;
+        split.pages_per_core_g2 = 0;
+    } else {
+        // Use full compute grid
+        const CoreCoord grid = output.device().compute_with_storage_grid_size();
+        auto [num_cores, all_cores, core_group_1, core_group_2, pages_g1, pages_g2] =
+            split_work_to_cores(grid, split.num_output_pages, kRmOrientation);
+        split.all_cores = all_cores;
+        split.cores = grid_to_cores(num_cores, grid.x, grid.y, kRmOrientation);
+        split.g1_num_cores = core_group_1.num_cores();
+        split.pages_per_core_g1 = pages_g1;
+        split.pages_per_core_g2 = pages_g2;
+    }
+    return split;
+}
+
+// Pages each input contributes to one output block (the dims from `dim` inward), and the output's.
+struct ConcatBlocks {
+    std::vector<uint32_t> num_pages_per_block;
+    std::vector<uint32_t> page_size_per_tensor;
+    uint32_t num_output_pages_per_block = 0;
+};
+
+ConcatBlocks concat_blocks(
+    const std::vector<std::reference_wrapper<const MeshTensor>>& inputs, const MeshTensor& output, uint32_t dim) {
+    using namespace tt::constants;
+    using namespace tt::tt_metal;
+    const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
+    const uint32_t num_input_tensors = inputs.size();
+    const uint32_t num_dims = output.padded_shape().rank();
+    ConcatBlocks blocks;
+    blocks.num_pages_per_block.resize(num_input_tensors);
+    blocks.page_size_per_tensor.resize(num_input_tensors);
+
+    uint32_t num_accum_pages = 1;
+    uint32_t scale_factor = 1;
+
+    // RM is special cased in the loop (dim_units = 1 for last dim else it's the dim size)
+    if (!rm_layout) {
+        if (dim == num_dims - 2) {
+            scale_factor = TILE_HEIGHT;
+        } else if (dim == num_dims - 1) {
+            scale_factor = TILE_WIDTH;
+        }
+    }
+
+    for (uint32_t i = dim + 1; i < num_dims; ++i) {
+        num_accum_pages *= output.padded_shape()[i];
+    }
+    if (rm_layout) {
+        if (num_dims > 1 && dim < num_dims - 1) {
+            num_accum_pages /= output.padded_shape()[-1];
+        }
+    } else {
+        if (dim < num_dims - 2) {
+            num_accum_pages /= TILE_HW;
+        } else if (dim == num_dims - 2) {
+            num_accum_pages /= TILE_WIDTH;
+        }
+    }
+
+    if (rm_layout) {
+        for (uint32_t i = 0; i < num_input_tensors; ++i) {
+            blocks.page_size_per_tensor[i] = inputs[i].get().mesh_buffer().page_size();
+            if (dim == num_dims - 1) {
+                blocks.num_pages_per_block[i] = num_accum_pages;
+            } else {
+                uint32_t dim_pages = inputs[i].get().padded_shape()[dim];
+                blocks.num_pages_per_block[i] = num_accum_pages * dim_pages;
+                blocks.num_output_pages_per_block += num_accum_pages * dim_pages;
+            }
+        }
+        if (dim == num_dims - 1) {
+            blocks.num_output_pages_per_block = 1;
+        }
+    } else {
+        for (uint32_t i = 0; i < num_input_tensors; ++i) {
+            blocks.page_size_per_tensor[i] = inputs[i].get().mesh_buffer().page_size();
+            uint32_t dim_pages = inputs[i].get().padded_shape()[dim] / scale_factor;
+            blocks.num_pages_per_block[i] = num_accum_pages * dim_pages;
+            blocks.num_output_pages_per_block += num_accum_pages * dim_pages;
+        }
+    }
+    return blocks;
+}
+
+std::vector<std::reference_wrapper<const MeshTensor>> concat_inputs(const ConcatInputs& tensor_args) {
+    std::vector<std::reference_wrapper<const MeshTensor>> inputs;
+    inputs.reserve(tensor_args.input_tensors.size());
+    for (const auto& input_tensor : tensor_args.input_tensors) {
+        inputs.emplace_back(input_tensor.mesh_tensor());
+    }
+    return inputs;
+}
+
+std::vector<tt::tt_metal::TensorParamName> concat_input_names(uint32_t num_input_tensors) {
+    // One TensorParameter per input. The count is an op attribute (up to 47 inputs), so these are
+    // built rather than declared.
+    std::vector<tt::tt_metal::TensorParamName> names;
+    names.reserve(num_input_tensors);
+    for (uint32_t i = 0; i < num_input_tensors; ++i) {
+        names.emplace_back(tt::tt_metal::TensorParamName{"input_" + std::to_string(i)});
+    }
+    return names;
+}
+
+// The per-core runtime args and the tensor bindings: everything in a cache entry that follows the
+// page counts, so a hit at another page count can rewrite it.
+tt::tt_metal::ProgramRunArgs concat_run_args(
+    const ConcatSplit& split,
+    const ConcatBlocks& blocks,
+    const std::vector<std::reference_wrapper<const MeshTensor>>& inputs,
+    const MeshTensor& output) {
+    using namespace tt::tt_metal;
+    using tt::tt_metal::experimental::AdvancedKernelRunArgs;
+    const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
+    const uint32_t num_input_tensors = inputs.size();
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const TensorParamName OUTPUT{"output"};
+    const auto INPUTS = concat_input_names(num_input_tensors);
+
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    std::vector<uint32_t> page_id_per_tensor(num_input_tensors);
+
+    for (uint32_t i = 0, num_pages_written = 0; i < split.cores.size(); ++i) {
+        const CoreCoord& core = split.cores[i];
+        const uint32_t num_pages_per_core =
+            (i < split.g1_num_cores) ? split.pages_per_core_g1 : split.pages_per_core_g2;
+        const uint32_t block_id = num_pages_written / blocks.num_output_pages_per_block;
+        uint32_t id_within_block = num_pages_written % blocks.num_output_pages_per_block;
+        uint32_t curr_tensor = 0;
+        uint32_t curr_tensor_id = 0;
+        for (uint32_t j = 0; j < num_input_tensors; j++) {
+            page_id_per_tensor[j] = block_id * blocks.num_pages_per_block[j];
+            if (id_within_block == 0) {
+                continue;
+            }
+            if (id_within_block >= blocks.num_pages_per_block[j]) {
+                page_id_per_tensor[j] += blocks.num_pages_per_block[j];
+                id_within_block -= blocks.num_pages_per_block[j];
+                curr_tensor = j + 1;
+            } else {
+                page_id_per_tensor[j] += id_within_block;
+                curr_tensor = j;
+                curr_tensor_id = id_within_block;
+                id_within_block = 0;
+            }
+        }
+
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{rm_layout ? "num_pages" : "num_tiles", num_pages_per_core},
+             {"start_tensor", curr_tensor},
+             {"start_tensor_id", curr_tensor_id}});
+
+        AdvancedKernelRunArgs::Varargs reader_varargs;
+        reader_varargs.reserve(2 * num_input_tensors);
+        reader_varargs.insert(
+            reader_varargs.end(), blocks.num_pages_per_block.cbegin(), blocks.num_pages_per_block.cend());
+        reader_varargs.insert(reader_varargs.end(), page_id_per_tensor.cbegin(), page_id_per_tensor.cend());
+        reader_run_args.advanced_options.runtime_varargs.emplace(core, std::move(reader_varargs));
+
+        if (rm_layout) {
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"stick_size", static_cast<uint32_t>(output.mesh_buffer().page_size())},
+                 {"num_sticks", num_pages_per_core},
+                 {"start_id", num_pages_written}});
+        } else {
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"num_pages", num_pages_per_core}, {"start_id", num_pages_written}});
+        }
+        num_pages_written += num_pages_per_core;
+    }
+
+    ProgramRunArgs run_args;
+    // push_back rather than brace-init: an initializer_list would copy the per-node arg tables.
+    run_args.kernel_run_args.reserve(2);
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    for (uint32_t i = 0; i < num_input_tensors; ++i) {
+        run_args.tensor_args.emplace(INPUTS[i], inputs[i].get());
+    }
+    run_args.tensor_args.emplace(OUTPUT, output);
+    return run_args;
+}
+
+}  // namespace
+
+bool concat_program_is_row_free(const ConcatParams& operation_attributes, const ConcatInputs& tensor_args) {
+    using namespace tt::tt_metal;
+    const auto& inputs = tensor_args.input_tensors;
+    const auto& first = inputs.front();
+    const uint32_t rank = first.padded_shape().rank();
+    if (first.layout() != Layout::TILE || rank < 2 || operation_attributes.dim != rank - 2 ||
+        operation_attributes.sub_core_grids.has_value() || operation_attributes.output_mem_config.is_sharded()) {
+        return false;
+    }
+    uint64_t output_tiles = 0;
+    for (const auto& input : inputs) {
+        // Rows of whole tiles, so the inputs' tiles add up to the output's.
+        if (input.is_sharded() || input.layout() != Layout::TILE ||
+            input.logical_shape()[-2] != input.padded_shape()[-2]) {
+            return false;
+        }
+        output_tiles += input.physical_volume() / tt::constants::TILE_HW;
+    }
+    // Every core of the grid gets pages, so the core set does not follow the page count.
+    const CoreCoord grid = first.device()->compute_with_storage_grid_size();
+    return output_tiles >= static_cast<uint64_t>(grid.x) * grid.y;
+}
 
 ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_artifacts(
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
@@ -59,83 +329,19 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
 
     const tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(output.dtype());
     const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
-    constexpr bool rm_orientation = false;
 
-    uint32_t num_output_pages;
     uint32_t single_page_size;
-    // Max over every input's alignment (not just inputs[0]) so mixed L1/DRAM inputs don't overflow the DFB page.
-    uint32_t common_align_len = output.mesh_buffer().get_reference_buffer()->alignment();
-    for (const auto& in : inputs) {
-        common_align_len = std::max(common_align_len, in.get().mesh_buffer().get_reference_buffer()->alignment());
-    }
+    const uint32_t common_align_len = std::max(
+        inputs[0].get().mesh_buffer().get_reference_buffer()->alignment(),
+        output.mesh_buffer().get_reference_buffer()->alignment());
     if (rm_layout) {
-        num_output_pages = output.physical_volume() / output.padded_shape()[-1];
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
     } else {
-        num_output_pages = output.physical_volume() / TILE_HW;
         single_page_size = tt::tile_size(dfb_data_format);
     }
 
-    CoreRangeSet all_cores;
-    CoreRangeSet core_group_1;
-    CoreRangeSet core_group_2;
-    uint32_t num_cores;
-    uint32_t num_tiles_per_core_group_1;
-    uint32_t num_tiles_per_core_group_2;
-    uint32_t num_cores_x = 0;
-    uint32_t num_cores_y = 0;
-    std::vector<CoreCoord> cores_list;
-
-    if (sub_core_grids.has_value() && !output.is_sharded()) {
-        // Use sub_core_grids for interleaved output
-        uint32_t ncores = sub_core_grids->num_cores();
-        TT_FATAL(ncores != 0, "number of cores cannot be 0");
-
-        // Find the maximum number of cores that evenly divides num_output_pages
-        for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
-            if (num_output_pages % core_id == 0) {
-                ncores = core_id;
-                break;
-            }
-            ncores--;
-        }
-        TT_FATAL(
-            (num_output_pages % ncores == 0),
-            "{} num of pages are not split uniformly across {} num of cores",
-            num_output_pages,
-            ncores);
-
-        cores_list = corerange_to_cores(sub_core_grids.value(), ncores, rm_orientation);
-        all_cores =
-            num_cores_to_corerangeset_in_subcoregrids(cores_list[0], ncores, sub_core_grids.value(), rm_orientation);
-        if (ncores == 1) {
-            all_cores = ttnn::CoreRangeSet(ttnn::CoreRange(cores_list[0]));
-        }
-        num_cores = ncores;
-        num_tiles_per_core_group_1 = num_output_pages / ncores;
-        num_tiles_per_core_group_2 = 0;
-        core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet();
-    } else {
-        // Use full compute grid
-        const CoreCoord compute_with_storage_grid_size = device.compute_with_storage_grid_size();
-        num_cores_x = compute_with_storage_grid_size.x;
-        num_cores_y = compute_with_storage_grid_size.y;
-        auto
-            [num_cores_result,
-             all_cores_result,
-             core_group_1_result,
-             core_group_2_result,
-             num_tiles_per_core_group_1_result,
-             num_tiles_per_core_group_2_result] =
-                split_work_to_cores(compute_with_storage_grid_size, num_output_pages, rm_orientation);
-        num_cores = num_cores_result;
-        all_cores = all_cores_result;
-        core_group_1 = core_group_1_result;
-        core_group_2 = core_group_2_result;
-        num_tiles_per_core_group_1 = num_tiles_per_core_group_1_result;
-        num_tiles_per_core_group_2 = num_tiles_per_core_group_2_result;
-    }
+    const ConcatSplit split = split_concat_work(output, sub_core_grids);
+    const CoreRangeSet& all_cores = split.all_cores;
 
     // Depth=2 is a prefetch optimization; fall back to depth=1 when it would overflow L1.
     const uint32_t l1_budget =
@@ -163,62 +369,8 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
     };
 
     const uint32_t num_dims = output.padded_shape().rank();
-
-    std::vector<uint32_t> num_pages_per_block(num_input_tensors);
-    std::vector<uint32_t> page_id_per_tensor(num_input_tensors);
-    std::vector<uint32_t> page_size_per_tensor(num_input_tensors);
-
-    uint32_t num_accum_pages = 1;
-    uint32_t scale_factor = 1;
-
-    // RM is special cased in the loop (dim_units = 1 for last dim else it's the dim size)
-    if (!rm_layout) {
-        if (dim == num_dims - 2) {
-            scale_factor = TILE_HEIGHT;
-        } else if (dim == num_dims - 1) {
-            scale_factor = TILE_WIDTH;
-        }
-    }
-
-    for (uint32_t i = dim + 1; i < num_dims; ++i) {
-        num_accum_pages *= output.padded_shape()[i];
-    }
-    if (rm_layout) {
-        if (num_dims > 1 && dim < num_dims - 1) {
-            num_accum_pages /= output.padded_shape()[-1];
-        }
-    } else {
-        if (dim < num_dims - 2) {
-            num_accum_pages /= TILE_HW;
-        } else if (dim == num_dims - 2) {
-            num_accum_pages /= TILE_WIDTH;
-        }
-    }
-
-    uint32_t num_output_pages_per_block = 0;
-
-    if (rm_layout) {
-        for (uint32_t i = 0; i < num_input_tensors; ++i) {
-            page_size_per_tensor[i] = inputs[i].get().mesh_buffer().page_size();
-            if (dim == num_dims - 1) {
-                num_pages_per_block[i] = num_accum_pages;
-            } else {
-                uint32_t dim_pages = inputs[i].get().padded_shape()[dim];
-                num_pages_per_block[i] = num_accum_pages * dim_pages;
-                num_output_pages_per_block += num_accum_pages * dim_pages;
-            }
-        }
-        if (dim == num_dims - 1) {
-            num_output_pages_per_block = 1;
-        }
-    } else {
-        for (uint32_t i = 0; i < num_input_tensors; ++i) {
-            page_size_per_tensor[i] = inputs[i].get().mesh_buffer().page_size();
-            uint32_t dim_pages = inputs[i].get().padded_shape()[dim] / scale_factor;
-            num_pages_per_block[i] = num_accum_pages * dim_pages;
-            num_output_pages_per_block += num_accum_pages * dim_pages;
-        }
-    }
+    const ConcatBlocks blocks = concat_blocks(inputs, output, dim);
+    const std::vector<uint32_t>& page_size_per_tensor = blocks.page_size_per_tensor;
 
     // --- Reader kernel ---
 
@@ -322,17 +474,24 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
     kernels.push_back(std::move(reader_spec));
     kernels.push_back(std::move(writer_spec));
 
+    // A row-free program serves every row count (see concat_program_is_row_free), so its tensors
+    // may differ from these in shape. Interleaved tiles keep their accessors at any shape.
+    TensorSpecRelaxations relaxations;
+    relaxations.dynamic_tensor_shape = concat_program_is_row_free(operation_attributes, tensor_args);
+
     Group<TensorParameter> tensor_parameters;
     tensor_parameters.reserve(num_input_tensors + 1);
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
         tensor_parameters.push_back(TensorParameter{
             .unique_id = INPUTS[i],
             .spec = inputs[i].get().tensor_spec(),
+            .relaxations = relaxations,
         });
     }
     tensor_parameters.push_back(TensorParameter{
         .unique_id = OUTPUT,
         .spec = output.tensor_spec(),
+        .relaxations = relaxations,
     });
 
     ProgramSpec spec{
@@ -351,83 +510,38 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
     };
 
     // --- Per-core runtime args ---
-
-    const auto cores = (sub_core_grids.has_value() && !output.is_sharded())
-                           ? cores_list
-                           : grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
-    const uint32_t g1_num_cores = core_group_1.num_cores();
-
-    KernelRunArgs reader_run_args{.kernel = READER};
-    KernelRunArgs writer_run_args{.kernel = WRITER};
-
-    for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
-        const CoreCoord& core = cores[i];
-        const uint32_t num_pages_per_core =
-            (i < g1_num_cores) ? num_tiles_per_core_group_1 : num_tiles_per_core_group_2;
-        const uint32_t block_id = num_pages_written / num_output_pages_per_block;
-        uint32_t id_within_block = num_pages_written % num_output_pages_per_block;
-        uint32_t curr_tensor = 0;
-        uint32_t curr_tensor_id = 0;
-        for (uint32_t j = 0; j < num_input_tensors; j++) {
-            page_id_per_tensor[j] = block_id * num_pages_per_block[j];
-            if (id_within_block == 0) {
-                continue;
-            }
-            if (id_within_block >= num_pages_per_block[j]) {
-                page_id_per_tensor[j] += num_pages_per_block[j];
-                id_within_block -= num_pages_per_block[j];
-                curr_tensor = j + 1;
-            } else {
-                page_id_per_tensor[j] += id_within_block;
-                curr_tensor = j;
-                curr_tensor_id = id_within_block;
-                id_within_block = 0;
-            }
-        }
-
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values,
-            core,
-            {{rm_layout ? "num_pages" : "num_tiles", num_pages_per_core},
-             {"start_tensor", curr_tensor},
-             {"start_tensor_id", curr_tensor_id}});
-
-        AdvancedKernelRunArgs::Varargs reader_varargs;
-        reader_varargs.reserve(2 * num_input_tensors);
-        reader_varargs.insert(reader_varargs.end(), num_pages_per_block.cbegin(), num_pages_per_block.cend());
-        reader_varargs.insert(reader_varargs.end(), page_id_per_tensor.cbegin(), page_id_per_tensor.cend());
-        reader_run_args.advanced_options.runtime_varargs.emplace(core, std::move(reader_varargs));
-
-        if (rm_layout) {
-            AddRuntimeArgsForNode(
-                writer_run_args.runtime_arg_values,
-                core,
-                {{"stick_size", static_cast<uint32_t>(output.mesh_buffer().page_size())},
-                 {"num_sticks", num_pages_per_core},
-                 {"start_id", num_pages_written}});
-        } else {
-            AddRuntimeArgsForNode(
-                writer_run_args.runtime_arg_values,
-                core,
-                {{"num_pages", num_pages_per_core}, {"start_id", num_pages_written}});
-        }
-        num_pages_written += num_pages_per_core;
-    }
-
-    ProgramRunArgs run_args;
-    // push_back rather than brace-init: an initializer_list would copy the per-node arg tables.
-    run_args.kernel_run_args.reserve(2);
-    run_args.kernel_run_args.push_back(std::move(reader_run_args));
-    run_args.kernel_run_args.push_back(std::move(writer_run_args));
-    for (uint32_t i = 0; i < num_input_tensors; ++i) {
-        run_args.tensor_args.emplace(INPUTS[i], inputs[i].get());
-    }
-    run_args.tensor_args.emplace(OUTPUT, output);
+    ProgramRunArgs run_args = concat_run_args(split, blocks, inputs, output);
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_args),
     };
+}
+
+tt::tt_metal::ProgramRunArgs ConcatProgramFactory::override_runtime_arguments(
+    const ConcatParams& operation_attributes,
+    const ConcatInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // A hit can serve another row count when concat_program_is_row_free holds: the core set is
+    // then the whole grid at every count, and the counts and start pages are runtime args.
+    // Otherwise the hash holds the full shapes, and only the tensors change.
+    const auto& output = tensor_return_value.mesh_tensor();
+    const auto inputs = concat_inputs(tensor_args);
+    if (!concat_program_is_row_free(operation_attributes, tensor_args)) {
+        tt::tt_metal::ProgramRunArgs run_args;
+        const auto names = concat_input_names(inputs.size());
+        for (uint32_t i = 0; i < inputs.size(); ++i) {
+            run_args.tensor_args.emplace(names[i], inputs[i].get());
+        }
+        run_args.tensor_args.emplace(tt::tt_metal::TensorParamName{"output"}, output);
+        return run_args;
+    }
+    return concat_run_args(
+        split_concat_work(output, operation_attributes.sub_core_grids),
+        concat_blocks(inputs, output, operation_attributes.dim),
+        inputs,
+        output);
 }
 
 }  // namespace ttnn::prim

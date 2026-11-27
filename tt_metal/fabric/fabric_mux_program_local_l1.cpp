@@ -7,10 +7,10 @@
 #include <bitset>
 #include <cstddef>
 
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/assert.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"

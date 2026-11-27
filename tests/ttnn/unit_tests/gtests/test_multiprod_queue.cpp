@@ -12,10 +12,10 @@
 #include <thread>
 #include <vector>
 
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "gmock/gmock.h"
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"

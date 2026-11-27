@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <core_coord.hpp>
 
 #include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"

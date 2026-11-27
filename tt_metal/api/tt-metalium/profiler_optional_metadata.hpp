@@ -1,16 +1,33 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-// DEPRECATED-FORWARDING-HEADER: <tt-metalium/profiler_optional_metadata.hpp> moved to
-// <tt-metalium/observability/profiler/profiler_optional_metadata.hpp>. This forwarding header will be removed after
-// 2027-03-05.
-#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
-// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
-#warning \
-    "<tt-metalium/profiler_optional_metadata.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/observability/profiler/profiler_optional_metadata.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
-#endif
+#include <cstdint>
+#include <map>
+#include <string>
+#include <utility>
 
-#include <tt-metalium/observability/profiler/profiler_optional_metadata.hpp>  // IWYU pragma: export
+#include <tt-metalium/device_types.hpp>
+
+class ProfilerOptionalMetadata {
+    using RuntimeID = uint32_t;
+
+public:
+    ProfilerOptionalMetadata(std::map<std::pair<tt::ChipId, RuntimeID>, std::string>&& runtime_map) :
+        runtime_id_to_opname_(std::move(runtime_map)) {}
+
+    const std::string& get_op_name(tt::ChipId device_id, RuntimeID runtime_id) const {
+        static const std::string empty_string;
+        auto key = std::make_pair(device_id, runtime_id);
+        auto it = runtime_id_to_opname_.find(key);
+        if (it != runtime_id_to_opname_.end()) {
+            return it->second;
+        }
+        return empty_string;
+    }
+
+private:
+    std::map<std::pair<tt::ChipId, RuntimeID>, std::string> runtime_id_to_opname_;
+};

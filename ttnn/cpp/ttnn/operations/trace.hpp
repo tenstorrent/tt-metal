@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 
 #include <optional>
 

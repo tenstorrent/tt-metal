@@ -36,9 +36,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
-    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     copy_block(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
-    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 
     mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back

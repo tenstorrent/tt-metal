@@ -23,12 +23,12 @@
 #include <unistd.h>
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-logger/tt-logger.hpp>
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"

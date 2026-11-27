@@ -4,8 +4,8 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
 #include <cstdlib>
 #include <map>
@@ -13,22 +13,22 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "env_lib.hpp"
+#include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "impl/context/metal_env_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -43,10 +43,11 @@ void build_and_run_program(
     uint32_t MAX_LOOP,
     uint32_t page_size,
     bool mix_noc_mode) {
-    const uint32_t num_nocs = device->impl().metal_env().get_hal().get_num_nocs();
-    if (num_nocs < 2) {
-        GTEST_SKIP() << "Dynamic NOC mode needs 2 NOCs, but " << device->arch() << " has only " << num_nocs;
-    }
+    // Make random
+    auto random_seed = 0; // (unsigned int)time(NULL);
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    srand(seed);
 
     CoreCoord worker_grid_size = {1,1};
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -178,23 +179,33 @@ void build_and_run_program_ethernet(
     uint32_t MAX_LOOP,
     uint32_t page_size,
     bool mix_noc_mode) {
+    if (not slow_dispatch) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+        return;
+    }
+    // Make random
+    auto random_seed = 0;  // (unsigned int)time(NULL);
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    srand(seed);
+
     auto* device_0 = device->impl().get_devices()[0];
 
-    // We need at least 2 ERISCs (ERISC0 and ERISC1) to run this test
+    // Query the number of ethernet ERISCs
     const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+
+    // We need at least 2 ERISCs (ERISC0 and ERISC1) to run this test
     if (erisc_count < 2) {
         GTEST_SKIP() << "Skipping test as this test requires at least 2 ERISCs, but only " << erisc_count
                      << " available.";
+        return;
     }
 
+    // Get active ethernet cores
     const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
     if (active_eth_cores.empty()) {
         GTEST_SKIP() << "Skipping test as this test requires at least 1 active ethernet core, but none are available.";
-    }
-
-    if (not slow_dispatch) {
-        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
         return;
     }
 

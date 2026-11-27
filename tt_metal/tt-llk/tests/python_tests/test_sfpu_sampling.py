@@ -53,14 +53,12 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import DestAccumulation, VectorMode, format_dict
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
+from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    LOOP_FACTOR,
     SAMPLING_OP,
     SAMPLING_PRGM0_HAZARD,
     SFPU_UNARY_SCALAR,
-    TILE_COUNT,
     VECTOR_MODE,
     fp32_bits,
 )
@@ -210,17 +208,7 @@ def assert_even_columns(
     op=list(SAMPLING_OPS.keys()),
     vector_mode=[VectorMode.None_, VectorMode.C],
 )
-def test_sfpu_sampling(
-    formats,
-    dest_acc,
-    op,
-    vector_mode,
-    *,
-    is_perf=False,
-    perf_report=None,
-    run_types=None,
-    loop_factor=1,
-):
+def test_sfpu_sampling(formats, dest_acc, op, vector_mode):
     is_binary, rows_per_face = SAMPLING_OPS[op]
 
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
@@ -268,38 +256,31 @@ def test_sfpu_sampling(
 
     scalar_bits = fp32_bits(CLAMP_MAX if op == "clamp_max_scalar" else MUL_SCALAR)
 
-    outcome = execute_llk(
-        is_perf=is_perf,
-        perf_report=perf_report,
-        run_types=run_types,
-        loop_factor=loop_factor,
-        test_config_kwargs=dict(
-            test_name="sources/sfpu_sampling_test.cpp",
-            formats=formats,
-            templates=[
-                SAMPLING_OP(sampling_op=op),
-                SFPU_UNARY_SCALAR(value_bits=scalar_bits),
-                VECTOR_MODE(vector_mode=vector_mode),
-            ],
-            runtimes=[LOOP_FACTOR(1), TILE_COUNT(NUM_TILES)],
-            variant_stimuli=StimuliConfig(
-                src_A,
-                formats.input_format,
-                src_B,
-                formats.input_format,
-                formats.output_format,
-                tile_count_A=NUM_TILES,
-                tile_count_B=1,
-                tile_count_res=NUM_TILES,
-            ),
-            dest_acc=dest_acc,
-            # A 32-bit input goes straight to DEST rather than through srcA.
-            unpack_to_dest=formats.input_format.is_32_bit(),
+    configuration = TestConfig(
+        "sources/sfpu_sampling_test.cpp",
+        formats,
+        templates=[
+            SAMPLING_OP(sampling_op=op),
+            SFPU_UNARY_SCALAR(value_bits=scalar_bits),
+            VECTOR_MODE(vector_mode=vector_mode),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=NUM_TILES,
+            tile_count_B=1,
+            tile_count_res=NUM_TILES,
         ),
+        dest_acc=dest_acc,
+        # A 32-bit input goes straight to DEST rather than through srcA.
+        unpack_to_dest=formats.input_format.is_32_bit(),
     )
-    if is_perf:
-        return
-    res_from_L1 = outcome.result
+
+    res_from_L1 = configuration.run().result
     res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     result_tiles = [
@@ -426,37 +407,31 @@ def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, skip_init):
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
     scalar_bits = fp32_bits(MUL_SCALAR)
 
-    # Kept off the name ``templates`` so the perf schema reader, which records
-    # every templates= list in this file, does not treat the hazard-only param
-    # as a column of the sampling perf CSV.
-    hazard_params = [
-        SAMPLING_OP(sampling_op="recip_scalar"),
-        SFPU_UNARY_SCALAR(value_bits=scalar_bits),
-        VECTOR_MODE(vector_mode=VectorMode.None_),
-        SAMPLING_PRGM0_HAZARD(pollute=True, skip_init=skip_init),
-    ]
-    outcome = execute_llk(
-        test_config_kwargs=dict(
-            test_name="sources/sfpu_sampling_test.cpp",
-            formats=formats,
-            templates=hazard_params,
-            runtimes=[LOOP_FACTOR(1)],
-            variant_stimuli=StimuliConfig(
-                src_A,
-                formats.input_format,
-                src_B,
-                formats.input_format,
-                formats.output_format,
-                tile_count_A=NUM_TILES,
-                tile_count_B=1,
-                tile_count_res=NUM_TILES,
-            ),
-            dest_acc=dest_acc,
-            unpack_to_dest=formats.input_format.is_32_bit(),
-        )
+    configuration = TestConfig(
+        "sources/sfpu_sampling_test.cpp",
+        formats,
+        templates=[
+            SAMPLING_OP(sampling_op="recip_scalar"),
+            SFPU_UNARY_SCALAR(value_bits=scalar_bits),
+            VECTOR_MODE(vector_mode=VectorMode.None_),
+            SAMPLING_PRGM0_HAZARD(pollute=True, skip_init=skip_init),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=NUM_TILES,
+            tile_count_B=1,
+            tile_count_res=NUM_TILES,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=formats.input_format.is_32_bit(),
     )
 
-    res_from_L1 = outcome.result
+    res_from_L1 = configuration.run().result
     res_tensor = result_tensor(res_from_L1, formats.output_format)
     out_face = untilize_block(
         res_tensor[:ELEMENTS_PER_TILE],

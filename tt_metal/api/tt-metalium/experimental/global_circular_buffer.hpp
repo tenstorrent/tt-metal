@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/sender_core_type.hpp>
 
 namespace tt::tt_metal::experimental {

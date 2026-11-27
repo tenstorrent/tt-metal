@@ -8,7 +8,7 @@
 #include <ostream>
 #include <utility>
 
-#include "tt-metalium/vocabulary/shape2d.hpp"
+#include "shape2d.hpp"
 
 namespace tt::tt_metal {
 

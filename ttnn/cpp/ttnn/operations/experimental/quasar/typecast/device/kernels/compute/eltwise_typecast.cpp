@@ -28,9 +28,7 @@ void kernel_main() {
             // Pop tile after tile, copy to DST and pack
             cb_in.wait_front(1);
 
-            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             copy_tile(input_cb, 0, 0);
-            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 
             TYPECAST_LLK_INIT();
             TYPECAST_LLK(0);

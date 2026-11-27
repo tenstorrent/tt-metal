@@ -6,9 +6,9 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <cstdint>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -23,27 +23,25 @@
 #include <vector>
 #include <array>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/dispatch_core_config.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "perf/perf_contract_benchmark.hpp"
 #include <tt-umd/types/xy_pair.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "llrt/hal_types.hpp"
@@ -310,7 +308,7 @@ PrefetcherPipes make_prefetcher_pipes(const TestInfo& info, MeshDevice& mesh_dev
     }
     // Kernels are nullified, so nothing moves through a ring: the smallest legal ring, one L1-aligned entry, is enough.
     prefetcher_pipes.space = tt_metal::experimental::CreatePrefetcherPipeSpace(
-        mesh_device.mesh_command_queue(0),
+        mesh_device,
         {.sender_cores = senders,
          .receiver_domain = prefetcher_pipes.receivers,
          .ring_size = tt_metal::hal::get_l1_alignment(),
@@ -463,8 +461,8 @@ bool initialize_program(
         total_kg.start_coord.x = total_kg.end_coord.x;
     }
 
-    program = m2::Program(*mesh_device, spec);
-    program.set_program_run_args(run_args);
+    program = m2::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    m2::experimental::SetProgramRunArgs(program, run_args);
     return true;
 }
 
@@ -635,9 +633,7 @@ void set_benchmark_counters(
 
         state.counters["IterationTime"] = benchmark::Counter(
             total_iterations, benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
-        const int aiclk_mhz = get_tt_npu_clock(device);
-        state.counters["Clock"] = benchmark::Counter(aiclk_mhz, benchmark::Counter::kDefaults);
-        tt::perf::add_case_context(state, "aiclk_mhz", aiclk_mhz);
+        state.counters["Clock"] = benchmark::Counter(get_tt_npu_clock(device), benchmark::Counter::kDefaults);
     }
 }
 
@@ -887,19 +883,19 @@ static void BM_pgm_dispatch_vary_slow_cycles(benchmark::State& state, TestInfo i
 static void BM_pgm_dispatch_random(benchmark::State& state, TestInfo info) { pgm_dispatch(state, info); }
 
 static void Max12288Args(benchmark::internal::Benchmark* b) {
-    b->ArgName("kernel_size")->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
+    b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
 }
 
 static void Max8192Args(benchmark::internal::Benchmark* b) {
-    b->ArgName("kernel_size")->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192);
+    b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192);
 }
 static void Range512To12KArgs(benchmark::internal::Benchmark* b) {
-    b->ArgName("kernel_size")->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
+    b->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
 }
 
 static void KernelCycleArgs(benchmark::internal::Benchmark* b) {
     // Dispatch time for most normal kernels is around 3000-4000 cycles.
-    b->ArgName("slow_kernel_cycles")->Arg(0)->Arg(1000)->Arg(2000)->Arg(3000)->Arg(4000)->Arg(5000)->Arg(10000);
+    b->Arg(0)->Arg(1000)->Arg(2000)->Arg(3000)->Arg(4000)->Arg(5000)->Arg(10000);
 }
 
 // Which processors are enabled (BRISC/NCRISC/TRISC); single core unless *_all_cores.
@@ -1354,7 +1350,6 @@ int main(int argc, char** argv) {
             ->UseManualTime();
     }
 
-    tt::perf::declare_metric("IterationTime", {"s", tt::perf::Better::Lower, tt::perf::Aggregate::Min});
     benchmark::Initialize(&argc, argv);
     benchmark::RunSpecifiedBenchmarks();
     benchmark::Shutdown();

@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <optional>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
 namespace ttml::metal::ops::softmax_backward::device {

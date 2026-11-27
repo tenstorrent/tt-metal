@@ -5,7 +5,7 @@
 #include <string>
 
 #include "moreh_matmul_device_operation.hpp"
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"

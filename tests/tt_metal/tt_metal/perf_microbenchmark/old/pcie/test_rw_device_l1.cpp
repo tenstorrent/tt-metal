@@ -8,10 +8,10 @@
 #include <cstdint>
 #include <cstdlib>
 #include <ctime>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <algorithm>
 #include <cstring>
 #include <exception>
@@ -20,7 +20,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"

@@ -11,12 +11,12 @@
 #include <gtest/gtest.h>
 
 #include <impl/context/metal_context.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "llk_device_fixture.hpp"
 
@@ -137,7 +137,7 @@ bool single_core_compute_kernel_sentinel(
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeKernelSentinel) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "compute kernel sentinel is not ported to Quasar (tenstorrent/tt-metal#66886)";
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
     }
     unit_tests::compute::compute_kernel_sentinel::ComputeKernelSentinelTestConfig test_config = {
         .num_tiles = 1, .fp32_dest_acc_en = false, .dst_full_sync_en = false};

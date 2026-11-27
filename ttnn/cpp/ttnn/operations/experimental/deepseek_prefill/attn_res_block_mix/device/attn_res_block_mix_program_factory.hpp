@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "attn_res_block_mix_device_operation_types.hpp"
 

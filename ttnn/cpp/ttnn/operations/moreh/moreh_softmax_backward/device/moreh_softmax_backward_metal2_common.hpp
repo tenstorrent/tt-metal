@@ -8,12 +8,12 @@
 #include <initializer_list>
 #include <utility>
 
-#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/workload/specification/compute_hardware_config.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
 

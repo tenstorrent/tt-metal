@@ -213,7 +213,6 @@ class LTXAttention(Module):
             q_chunk_size=256,
             k_chunk_size=256,
             exp_approx_mode=False,
-            min_blocked_pack_tiles=2,
         )
 
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)
@@ -228,7 +227,6 @@ class LTXAttention(Module):
             q_chunk_size=ring_sdpa_chunk_size[0],
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,
-            min_blocked_pack_tiles=2,
         )
         self._ring_pc_by_n = {
             n: ttnn.SDPAProgramConfig(
@@ -236,7 +234,6 @@ class LTXAttention(Module):
                 q_chunk_size=chunk[0],
                 k_chunk_size=chunk[1],
                 exp_approx_mode=False,
-                min_blocked_pack_tiles=2,
             )
             for (b, sp, tp, n), chunk in self.ring_sdpa_chunk_by_n.items()
             if (b, sp, tp) == mesh_key
@@ -247,7 +244,6 @@ class LTXAttention(Module):
                 q_chunk_size=chunk[0],
                 k_chunk_size=chunk[1],
                 exp_approx_mode=False,
-                min_blocked_pack_tiles=2,
             )
             for (b, q, kv), chunk in self.sdpa_chunk_by_shape.items()
             if b == mesh_key[0]
@@ -261,7 +257,6 @@ class LTXAttention(Module):
             q_chunk_size=cross_ring_q_chunk,
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,
-            min_blocked_pack_tiles=2,
         )
 
         # All SDPA (ring + cross) runs HiFi2, matching the Wan attention config.

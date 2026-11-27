@@ -7,16 +7,16 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
-#include <tt-metalium/mesh/mesh_config.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 
 #include <tt-umd/types/arch.hpp>
 

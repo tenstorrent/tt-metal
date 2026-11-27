@@ -39,7 +39,6 @@ from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import resolve_mesh_preset
 from ....utils.check import assert_quality
-from ....utils.tracing import Tracer
 from .common import build_audio_decoder, load_config, psnr, weights_subdir
 
 # The vocoder needs extra L1 scratch, as the LTX audio tests do.
@@ -481,7 +480,7 @@ def test_audio_decode_traced(mesh_device):
         f"PERF audio_decode_5s untraced {untraced_s:.4f} s | traced {traced_s:.4f} s "
         f"-> {untraced_s / traced_s:.2f}x"
     )
-    Tracer.release_all()
+    decoder.release_trace()
 
     assert psnr_db > 60.0, f"traced output diverges from untraced: PSNR {psnr_db:.2f} dB"
 

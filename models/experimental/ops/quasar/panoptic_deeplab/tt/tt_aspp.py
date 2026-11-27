@@ -6,11 +6,9 @@ from math import floor
 import ttnn
 from loguru import logger
 
-from models.experimental.ops.quasar.panoptic_deeplab.tt.quasar_ops import TtConv2d
+from models.tt_cnn.tt.builder import TtConv2d
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.ops.quasar.panoptic_deeplab.tt.common import reshape_flattened_conv_output
-from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype, uses_20_core_path
-from models.experimental.ops.quasar.panoptic_deeplab.tt import quasar_ops
 
 try:
     from tracy import signpost
@@ -52,7 +50,8 @@ class TtASPP(LightweightModule):
         self.dropout = dropout
         self.model_configs = model_configs
         use_bias = False
-        self.is_20_core = uses_20_core_path(device)  # also every grid without a tuned profile
+        compute_grid = device.compute_with_storage_grid_size()
+        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
 
         self.device = device
         self.pool_kernel_size = pool_kernel_size
@@ -177,7 +176,7 @@ class TtASPP(LightweightModule):
             logger.info(f"  Flattening input for global pooling: {x.shape} -> (1, 1, {H*W}, {C})")
             x_for_pooling = ttnn.reshape(x, (1, 1, H * W, C))
 
-        pooled = quasar_ops.op(self.device, "avg_pool2d")(
+        pooled = ttnn.avg_pool2d(
             input_tensor=x_for_pooling,
             batch_size=N,
             input_h=H,
@@ -228,7 +227,7 @@ class TtASPP(LightweightModule):
         res.append(pooled)
 
         # Ensure all tensors have the same dtype before concatenation
-        target_dtype = block_float_dtype(self.device)
+        target_dtype = ttnn.bfloat8_b
         for i in range(len(res)):
             if res[i].dtype != target_dtype:
                 res[i] = ttnn.typecast(res[i], target_dtype)
@@ -304,7 +303,7 @@ class TtASPP(LightweightModule):
             logger.info(f"  Flattening input for global pooling: {x_l1.shape} -> (1, 1, {H*W}, {C})")
             x_for_pooling = ttnn.reshape(x_l1, (1, 1, H * W, C))
 
-        pooled = quasar_ops.op(self.device, "avg_pool2d")(
+        pooled = ttnn.avg_pool2d(
             input_tensor=x_for_pooling,
             batch_size=N,
             input_h=H,
@@ -341,7 +340,7 @@ class TtASPP(LightweightModule):
         res.append(pooled)
 
         # Ensure all tensors have the same dtype before concatenation
-        target_dtype = block_float_dtype(self.device)
+        target_dtype = ttnn.bfloat8_b
         for i in range(len(res)):
             if res[i].dtype != target_dtype:
                 res[i] = ttnn.typecast(res[i], target_dtype)

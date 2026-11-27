@@ -9,7 +9,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"

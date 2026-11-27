@@ -12,8 +12,8 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 #include "impl/context/metal_env_impl.hpp"
 #include "llrt/core_descriptor_types.hpp"
 

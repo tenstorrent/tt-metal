@@ -5,7 +5,6 @@ from loguru import logger
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.ops.quasar.panoptic_deeplab.tt import quasar_ops
 
 
 class BilinearUpsampleTorch(LightweightModule):
@@ -198,8 +197,7 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
         ), f"Input dtype {img_ttnn.dtype} does not match expected output dtype {self.output_dtype}"
 
         # Step 1: Width interpolation
-        Y_width = quasar_ops.matmul(
-            self.device,
+        Y_width = ttnn.matmul(
             img_ttnn,
             self.Mw,
             memory_config=img_ttnn.memory_config(),
@@ -209,8 +207,7 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
         logger.debug(f"{Y_width.shape=} = {img_ttnn.shape=} @ {self.Mw.shape=}")
 
         # Step 2: Height interpolation
-        Y_final = quasar_ops.matmul(
-            self.device,
+        Y_final = ttnn.matmul(
             self.MhT,
             Y_width,
             memory_config=self.output_memory_config,

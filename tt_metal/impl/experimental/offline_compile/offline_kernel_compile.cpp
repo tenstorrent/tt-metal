@@ -4,8 +4,8 @@
 
 #include <tt-metalium/experimental/offline_kernel_compile.hpp>
 
-#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/program.hpp>
 
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/kernels/kernel.hpp"

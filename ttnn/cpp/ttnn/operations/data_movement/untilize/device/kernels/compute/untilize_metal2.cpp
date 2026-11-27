@@ -8,6 +8,8 @@
 // tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py still reads
 // its source text as fusion input, so it is not retired and changes here likely belong there too.
 // Its binding names (dfb::src / dfb::out) and named args are the shared interface — do not rename.
+// With UNTILIZE_RUNTIME_BLOCK_CNT defined, per_core_block_cnt is a runtime arg instead of a
+// compile-time one, so one binary serves every height.
 
 #include <cstdint>
 
@@ -15,7 +17,15 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+#ifdef UNTILIZE_RUNTIME_BLOCK_CNT
+    const uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    // A program over the whole grid leaves the cores past the work idle; the helper asserts at least one block.
+    if (per_core_block_cnt == 0) {
+        return;
+    }
+#else
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+#endif
     constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
     compute_kernel_hw_startup(dfb::src, dfb::out);

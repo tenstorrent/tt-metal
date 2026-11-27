@@ -5,14 +5,14 @@
 #include <cerrno>
 #include <fmt/base.h>
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include <cstring>
 #include <exception>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"

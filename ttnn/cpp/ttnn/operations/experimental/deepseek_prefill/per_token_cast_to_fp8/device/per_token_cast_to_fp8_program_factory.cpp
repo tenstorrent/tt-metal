@@ -8,11 +8,11 @@
 #include <map>
 #include <string>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
@@ -274,7 +274,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         scale_scratch_bytes = scale_page_bytes;
     }
 
-    Program program = CreateProgram(*input.device());
+    Program program{};
     auto compute_grid = input.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, crs1, crs2, upc1, upc2] = split_work_to_cores(compute_grid, total_units);
 

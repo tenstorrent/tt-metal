@@ -13,22 +13,22 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -160,7 +160,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
         .work_units = {wu},
     };
 
-    Program program(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     const uint32_t result_size_bytes = static_cast<uint32_t>(expected_scalar_reads.size() * sizeof(DataT));
     const uint32_t result_l1_addr = top_of_l1_scratch_addr(this->device(), result_size_bytes);
@@ -178,7 +178,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
         },
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}};
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
 
     const uint32_t total_words = num_entries * words_per_entry;
     auto input = tt::test_utils::generate_uniform_random_vector<DataT>(0, 1000000, total_words);
@@ -454,7 +454,7 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
         .work_units = {wu},
     };
 
-    Program program(mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     const uint32_t producer_records = params.num_producers * params.producer.num_tc_snapshots;
     const uint32_t consumer_records = params.consumer.num_tc_snapshots;
@@ -473,7 +473,7 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
             .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", consumer_result_l1}}),
         },
     };
-    program.set_program_run_args(run_args);
+    experimental::SetProgramRunArgs(program, run_args);
 
     LaunchProgram(mesh_device, std::move(program));
     tt_driver_atomics::mfence();

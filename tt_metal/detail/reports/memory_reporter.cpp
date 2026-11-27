@@ -12,9 +12,9 @@
 #include <utility>
 #include <enchantum/enchantum.hpp>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"

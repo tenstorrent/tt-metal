@@ -8,14 +8,14 @@
 
 #include <cmath>
 #include <cstdint>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::rotate {
 

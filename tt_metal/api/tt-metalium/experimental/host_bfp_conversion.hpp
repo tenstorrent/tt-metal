@@ -6,8 +6,8 @@
 #include <optional>
 #include <span>
 
-#include <tt-metalium/memory/tensor/host_tensor.hpp>
-#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal::experimental {
 

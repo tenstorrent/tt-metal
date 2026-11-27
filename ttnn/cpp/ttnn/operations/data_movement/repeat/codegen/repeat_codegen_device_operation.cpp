@@ -94,23 +94,16 @@ ttsl::hash::hash_t RepeatCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     uint32_t cb_batch = 0;
     uint32_t cb_depth = 0;
-    bool cb_doubling = false;
     if (tensor_args.input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        const auto cb_plan = rm_cb_plan_for_call(
-            tensor_args.input, compute_output_specs(operation_attributes, tensor_args), operation_attributes);
+        const auto cb_plan =
+            rm_cb_plan_for_call(tensor_args.input, compute_output_specs(operation_attributes, tensor_args));
         if (cb_plan.has_value()) {
             cb_batch = cb_plan->batch;
             cb_depth = cb_plan->depth;
-            cb_doubling = cb_plan->doubling;
         }
     }
     return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<RepeatCodegenDeviceOperation>,
-        operation_attributes,
-        tensor_args,
-        cb_batch,
-        cb_depth,
-        cb_doubling);
+        ttsl::hash::type_hash<RepeatCodegenDeviceOperation>, operation_attributes, tensor_args, cb_batch, cb_depth);
 }
 
 RepeatCodegenDeviceOperation::spec_return_value_t RepeatCodegenDeviceOperation::compute_output_specs(

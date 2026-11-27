@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 
 #include "nlp_create_qkv_heads_boltz_device_operation.hpp"

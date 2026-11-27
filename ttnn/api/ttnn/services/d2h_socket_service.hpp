@@ -21,13 +21,13 @@
 
 #include <map>
 
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
-#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/services/stream_counter.hpp"
@@ -119,8 +119,6 @@ public:
     DeviceAddr get_metadata_addr(const distributed::MeshCoordinate& coord) const;
     // Service-core control words: [0] terminate, [1] abandon data the host never read (owner only).
     DeviceAddr get_termination_addr(const distributed::MeshCoordinate& coord) const;
-    // Every coordinate's write-ack counter, service core, metadata input and control words (owner only).
-    std::shared_ptr<const StreamSenderCoordTable> get_sender_coord_table() const;
 
     std::string export_descriptor(const std::string& service_id);
     static std::unique_ptr<D2HStreamService> connect(
@@ -185,7 +183,6 @@ private:
     std::shared_ptr<distributed::MeshBuffer> metadata_worker_buffer_;
     DeviceAddr metadata_worker_l1_addr_ = 0;
     std::map<distributed::MeshCoordinate, DeviceAddr> metadata_input_addrs_;
-    mutable StreamSenderCoordTableCache sender_coord_table_cache_;
     uint32_t num_workers_ = 0;
     CoreCoord metadata_master_core_{0, 0};
 

@@ -6,28 +6,29 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
-#include "experimental/kernel_args.h"
 
 // No-issue flow: wait for writer to finish first batch (no lock) -> lock -> signal locked -> unlock -> signal unlocked
 void kernel_main() {
-    uint32_t l1_buffer_addr = get_arg(args::l1_buffer_addr);
-    uint32_t num_elements = get_arg(args::num_elements);
-    uint32_t writer_noc_x = get_arg(args::writer_noc_x);
-    uint32_t writer_noc_y = get_arg(args::writer_noc_y);
+    uint32_t l1_buffer_addr = get_arg_val<uint32_t>(0);
+    uint32_t num_elements = get_arg_val<uint32_t>(1);
+    uint32_t my_sem_id = get_arg_val<uint32_t>(2);     // locker_sem: wait for "writer first batch done"
+    uint32_t other_sem_id = get_arg_val<uint32_t>(3);  // writer_sem: signal "locked" then "unlocked"
+    uint32_t other_noc_x = get_arg_val<uint32_t>(4);
+    uint32_t other_noc_y = get_arg_val<uint32_t>(5);
 
-    Semaphore first_batch_written(sem::first_batch_written);  // we wait on ours; the writer remote-ups it
-    Semaphore lock_state_changed(sem::lock_state_changed);    // the writer waits on its own instance; we remote-up it
+    Semaphore my_sem(my_sem_id);
+    Semaphore other_sem(other_sem_id);
     Noc noc;
     CoreLocalMem<uint32_t> buffer(l1_buffer_addr);
 
     // Wait for writer to complete first batch of writes (while buffer was not locked)
-    first_batch_written.down(1);
+    my_sem.down(1);
 
     {
         // Lock this buffer for num_elements
         auto lock = buffer.scoped_lock(num_elements);
-        lock_state_changed.up(noc, writer_noc_x, writer_noc_y, 1);  // signal "locked"
+        other_sem.up(noc, other_noc_x, other_noc_y, 1);  // signal "locked"
     }
 
-    lock_state_changed.up(noc, writer_noc_x, writer_noc_y, 1);  // signal "unlocked"
+    other_sem.up(noc, other_noc_x, other_noc_y, 1);
 }

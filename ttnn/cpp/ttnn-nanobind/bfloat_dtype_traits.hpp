@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <ttnn/tensor/tensor_impl.hpp>
 
 NAMESPACE_BEGIN(NB_NAMESPACE)

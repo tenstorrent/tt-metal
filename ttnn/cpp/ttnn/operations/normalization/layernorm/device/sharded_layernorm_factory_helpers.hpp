@@ -10,8 +10,8 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -396,6 +396,8 @@ struct RuntimeArgsContext {
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
 
     // Storage core info for write-back
+    std::vector<uint32_t> storage_core_noc_x;
+    std::vector<uint32_t> storage_core_noc_y;
     uint32_t num_storage_cores = 0;
 };
 

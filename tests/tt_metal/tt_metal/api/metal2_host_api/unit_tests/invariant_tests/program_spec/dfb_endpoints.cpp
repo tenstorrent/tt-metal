@@ -4,8 +4,7 @@
 
 // ProgramSpec structural invariants on DataflowBufferSpec endpoints (program_spec.hpp): every bound DFB has
 // a producer and a consumer; same-role bindings agree on access pattern, num_threads, kind and (Gen1)
-// processor; self-loop sides match; Gen2 DM sides agree on implicit sync; Gen2 compute sides agree on the SFPU
-// pipeline.
+// processor; self-loop sides match; Gen2 DM sides agree on implicit sync.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -15,14 +14,12 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
-
-#include "metal2_host_api/test_helpers/dfb_placement_test_helpers.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -53,7 +50,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithOnlyProducerFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has no consumer")));
 }
 
@@ -74,7 +71,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithOnlyConsumerFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has no producer")));
 }
 
@@ -104,7 +101,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBMultiBindingAccessPatternMismatchFails) {
     };
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("DFB 'dfb' has multiple CONSUMER bindings with mismatched access_pattern")));
 }
@@ -135,7 +132,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBMultiBindingNumThreadsMismatchFails) {
     };
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("DFB 'dfb' has multiple CONSUMER KernelSpecs with mismatched num_threads")));
 }
@@ -170,7 +167,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBMultiBindingMixingComputeAndDMOnSameRoleFai
     };
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mixing compute and data-movement kinds")));
 }
 
@@ -199,7 +196,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBMixedKindProducersOnSameNodeFailsWithoutFlag)
         MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "producer_dm", "consumer"})};
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mixing compute and data-movement kinds")));
 }
 
@@ -229,7 +226,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBMixedKindProducersOnSameNodeSucceedsWithFlag)
     spec.work_units = std::vector<WorkUnitSpec>{
         MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "producer_dm", "consumer"})};
 
-    EXPECT_NO_THROW(Program(*mesh_device_, spec));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 // On Gen1 (WH/BH) the per-kernel risc_mask is a deterministic function of the
@@ -263,7 +260,7 @@ TEST_F(ProgramSpecTestGen1, CPU_MultiBindingProducerMaskMismatchFails) {
     };
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("DFB 'dfb' has multiple PRODUCER KernelSpecs ('producer_g1', 'producer_g2') with "
                                  "mismatched processor placement")));
@@ -299,7 +296,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBMultiBindingSelfLoopWithMatchingSidesSuccee
         MakeMinimalWorkUnit("wu_g2", node1, {"self_loop_2"}),
     };
 
-    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBSelfLoopWithExtraProducerSideKernelFails) {
@@ -338,7 +335,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBSelfLoopWithExtraProducerSideKernelFails) {
     };
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("DFB 'dfb' is self-looped (some kernel appears as both producer and consumer), but "
                                  "the set of producer KernelSpecs differs from the set of consumer KernelSpecs")));
@@ -382,7 +379,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DisableImplicitSyncForAllDisagreementAcrossPro
     };
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("disagreeing implicit-sync opt-out state")));
 }
 
@@ -418,160 +415,9 @@ TEST_F(ProgramSpecTestQuasar, CPU_DisableImplicitSyncForAllAgreesWithExplicitLis
         MakeMinimalWorkUnit("wu_g2", node1, {"producer2", "consumer"}),
     };
 
-    Program program(*mesh_device_, spec);
+    auto program = MakeProgramFromSpec(*mesh_device_, spec);
     const uint32_t dfb_id = program.impl().get_dfb_handle("dfb");
     EXPECT_FALSE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementIgnoresExcludedUnpairedEndpoint) {
-    // A producer without a consumer is accepted on a node excluded from DFB placement.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
-    spec.work_units = {
-        MakeMinimalWorkUnit("paired", NodeCoord{0, 0}, {"dm_kernel", "compute_kernel"}),
-        MakeMinimalWorkUnit("lone-producer", NodeCoord{1, 0}, {"dm_kernel"})};
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    EXPECT_NO_THROW(Program(fixture_device, spec));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsReservationWithoutEitherEndpoint) {
-    // A reservation outside both disjoint endpoint placements has no usable FIFO.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
-    spec.work_units = {
-        MakeMinimalWorkUnit("lone-producer", NodeCoord{0, 0}, {"dm_kernel"}),
-        MakeMinimalWorkUnit("lone-consumer", NodeCoord{1, 0}, {"compute_kernel"})};
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
-    EXPECT_THAT(
-        [&] { Program(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no producer or consumer")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsReservedUnpairedProducer) {
-    // A reserved node with a producer but no consumer is rejected.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
-    spec.work_units = {
-        MakeMinimalWorkUnit("paired", NodeCoord{0, 0}, {"dm_kernel", "compute_kernel"}),
-        MakeMinimalWorkUnit("lone-producer", NodeCoord{1, 0}, {"dm_kernel"})};
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {1, 0}));
-    EXPECT_THAT(
-        [&] { Program(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("producer but no consumer")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsReservedUnpairedConsumer) {
-    // A reserved node with a consumer but no producer is rejected.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
-    spec.work_units = {
-        MakeMinimalWorkUnit("paired", NodeCoord{0, 0}, {"dm_kernel", "compute_kernel"}),
-        MakeMinimalWorkUnit("lone-consumer", NodeCoord{1, 0}, {"compute_kernel"})};
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {1, 0}));
-    EXPECT_THAT(
-        [&] { Program(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("consumer but no producer")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementPreservesBindingCompatibility) {
-    // Mismatched consumer access patterns are rejected even when one consumer is outside DFB placement.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
-    auto other = spec.kernels[1];
-    other.unique_id = KernelSpecName{"other_consumer"};
-    other.dfb_bindings[0].access_pattern = DFBAccessPattern::ALL;
-    spec.kernels.push_back(other);
-    spec.work_units.push_back(MakeMinimalWorkUnit("other", NodeCoord{1, 0}, {"other_consumer"}));
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    EXPECT_THAT(
-        [&] { Program(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mismatched access_pattern")));
-}
-
-TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementDoesNotEnableMultiBinding) {
-    // On Gen1, two producers on a reserved node are rejected when multi-binding is disabled.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBWithTwoGen1Producers();
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    EXPECT_THAT(
-        [&] { Program(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Multiple same-role kernel instances")));
-}
-
-TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementAllowsExplicitGen1MultiBinding) {
-    // On Gen1, two producers on a reserved node are accepted when multi-binding is enabled.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBWithTwoGen1Producers();
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    spec.dataflow_buffers[0].advanced_options.allow_instance_multi_binding = true;
-    EXPECT_NO_THROW(Program(fixture_device, spec));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBMultiBindingSfpuPipelineMismatchFails) {
-    NodeCoord node0{0, 0};
-    NodeCoord node1{1, 0};
-
-    ProgramSpec spec;
-    spec.name = "test_program";
-
-    // Two compute producers on disjoint nodes; only one hands "dfb" to the SFPU pipeline. The DFB has one
-    // producer pipeline, so same-role bindings must agree.
-    auto producer_pack = MakeMinimalGen2ComputeKernel("producer_pack");
-    auto producer_sfpu = MakeMinimalGen2ComputeKernel("producer_sfpu");
-    auto consumer = MakeMinimalGen2DMKernel("consumer");
-    std::get<ComputeHardwareConfig>(producer_sfpu.hw_config).config_2xx =
-        ComputeHardwareConfig::Compute2XXConfig{.sfpu_pipeline_produced_dfbs = {DFBSpecName{"dfb"}}};
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    producer_pack.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    producer_sfpu.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {producer_pack, producer_sfpu, consumer};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("wu_g1", node0, {"producer_pack", "consumer"}),
-        MakeMinimalWorkUnit("wu_g2", node1, {"producer_sfpu", "consumer"}),
-    };
-
-    EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mismatched sfpu_pipeline_produced_dfbs")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBMultiBindingSfpuPipelineConsumerMismatchFails) {
-    NodeCoord node0{0, 0};
-    NodeCoord node1{1, 0};
-
-    ProgramSpec spec;
-    spec.name = "test_program";
-
-    // Two compute consumers on disjoint nodes; only one hands "dfb" to the SFPU pipeline.
-    auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer_unpack = MakeMinimalGen2ComputeKernel("consumer_unpack");
-    auto consumer_sfpu = MakeMinimalGen2ComputeKernel("consumer_sfpu");
-    std::get<ComputeHardwareConfig>(consumer_sfpu.hw_config).config_2xx =
-        ComputeHardwareConfig::Compute2XXConfig{.sfpu_pipeline_consumed_dfbs = {DFBSpecName{"dfb"}}};
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    consumer_unpack.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-    consumer_sfpu.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {producer, consumer_unpack, consumer_sfpu};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("wu_g1", node0, {"producer", "consumer_unpack"}),
-        MakeMinimalWorkUnit("wu_g2", node1, {"producer", "consumer_sfpu"}),
-    };
-
-    EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mismatched sfpu_pipeline_consumed_dfbs")));
 }
 
 }  // namespace

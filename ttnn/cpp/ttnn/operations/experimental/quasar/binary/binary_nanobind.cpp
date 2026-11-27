@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_nanobind.hpp"
-#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 #include <array>
 #include <string>

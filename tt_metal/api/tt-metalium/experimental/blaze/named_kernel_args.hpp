@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal {
 

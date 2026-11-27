@@ -7,7 +7,7 @@
 #include "isin_common.hpp"
 #include "device/isin_device_operation.hpp"
 
-#include "tt-metalium/vocabulary/shape.hpp"
+#include "tt-metalium/shape.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 #include <enchantum/enchantum.hpp>

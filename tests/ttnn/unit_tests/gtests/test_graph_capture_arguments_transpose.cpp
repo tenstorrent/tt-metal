@@ -10,9 +10,9 @@
 
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
-#include <tt-metalium/observability/capture_hooks.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"

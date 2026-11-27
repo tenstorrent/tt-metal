@@ -7,7 +7,7 @@
 #include <vector>
 
 #include <internal/l1_ecc_halt.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 
 // Blackhole silicon: BRISC halts on an L1 DBE and writes l1_ecc_halt_slot_t::record. Waits detect halts through

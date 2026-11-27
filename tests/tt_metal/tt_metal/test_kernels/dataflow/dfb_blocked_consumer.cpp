@@ -35,7 +35,7 @@ void kernel_main() {
         }
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_write<NocOptions::TXN_ID>(dfb, tensor_accessor, {}, {.page_id = block_base_page / block_size});
+            noc.async_write<NocOptions::TXN_ID>(dfb, tensor_accessor, {}, {.page_id = block_base_page});
 #endif
         } else {
             // Pages are written one at a time: an interleaved tensor's block is not contiguous in DRAM.

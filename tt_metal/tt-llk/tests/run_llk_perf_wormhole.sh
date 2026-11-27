@@ -70,13 +70,13 @@ RUN_XML="${REPORT}-run.xml"
 if [[ "$PHASE" != run ]]; then
   pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "perf and not accuracy" --timeout=60 \
     --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
-    --junitxml="$COMPILE_XML" -o "python_files=perf_*.py" .
+    --junitxml="$COMPILE_XML" .
 fi
 [[ "$PHASE" == compile ]] && exit 0
 
 pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 "${EXITFIRST_ARGS[@]}" -m "perf and not accuracy" --timeout=60 \
   --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
-  --junitxml="$RUN_XML" -o "python_files=perf_*.py" .
+  --junitxml="$RUN_XML" .
 if [[ -f "$COMPILE_XML" ]]; then
   junitparser merge "$COMPILE_XML" "$RUN_XML" "${REPORT}.xml"
 else

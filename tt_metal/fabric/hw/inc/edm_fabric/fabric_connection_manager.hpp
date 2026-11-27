@@ -72,58 +72,37 @@ public:
     //         User must call open_finish() manually, later, if they use this mode.
     template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
     static FabricConnectionManager build_from_args(std::size_t& arg_idx) {
+        constexpr bool connect = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||
+                                 build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY;
+        constexpr bool wait_for_connection_open_finish = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION;
         FabricConnectionManager connection_manager;
         connection_manager.connection_flags = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++) != 0)
                                               << FORWARD_CONNECTION_FLAG_OFFSET;
         if (connection_manager.has_forward_connection()) {
             connection_manager.forward_fabric_sender =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-            start_open<build_mode>(connection_manager.forward_fabric_sender);
+            if constexpr (connect) {
+                connection_manager.forward_fabric_sender.open_start();
+            }
         }
         connection_manager.connection_flags |= static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++) != 0)
                                                << BACKWARD_CONNECTION_FLAG_OFFSET;
         if (connection_manager.has_backward_connection()) {
             connection_manager.backward_fabric_sender =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-            start_open<build_mode>(connection_manager.backward_fabric_sender);
+            if constexpr (connect) {
+                connection_manager.backward_fabric_sender.open_start();
+            }
         }
-        connection_manager.finish_open<build_mode>();
-        return connection_manager;
-    }
 
-    // Builds a manager from a Metal 2.0 fabric connection binding with two targets, {forward, backward}: one
-    // connection for each target.
-    // precondition: the binding has exactly two targets.
-    template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
-    static FabricConnectionManager build_from_binding(FabricConnectionBindingToken token) {
-        ASSERT(token.num_targets() == 2);
-        FabricConnectionManager connection_manager;
-        connection_manager.connection_flags = 0;
-        connection_manager.add_forward_connection<build_mode>(token, 0);
-        connection_manager.add_backward_connection<build_mode>(token, 1);
-        connection_manager.finish_open<build_mode>();
-        return connection_manager;
-    }
-
-    // Builds a manager from two optional Metal 2.0 fabric connection bindings: a forward connection if `forward` is
-    // not nullptr, and a backward connection if `backward` is not nullptr.
-    // A kernel source that runs on every device of a line passes fabric::get_token_if_present for each side, and each
-    // device binds only the sides that it has.
-    // precondition: each token that is not nullptr has exactly one target.
-    template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
-    static FabricConnectionManager build_from_optional_bindings(
-        const FabricConnectionBindingToken* forward, const FabricConnectionBindingToken* backward) {
-        ASSERT(forward == nullptr || forward->num_targets() == 1);
-        ASSERT(backward == nullptr || backward->num_targets() == 1);
-        FabricConnectionManager connection_manager;
-        connection_manager.connection_flags = 0;
-        if (forward != nullptr) {
-            connection_manager.add_forward_connection<build_mode>(*forward, 0);
+        if constexpr (connect && wait_for_connection_open_finish) {
+            if (connection_manager.has_forward_connection()) {
+                connection_manager.forward_fabric_sender.open_finish();
+            }
+            if (connection_manager.has_backward_connection()) {
+                connection_manager.backward_fabric_sender.open_finish();
+            }
         }
-        if (backward != nullptr) {
-            connection_manager.add_backward_connection<build_mode>(*backward, 0);
-        }
-        connection_manager.finish_open<build_mode>();
         return connection_manager;
     }
 
@@ -146,49 +125,6 @@ public:
     }
 
 private:
-    // The sender of target `target_index` of a binding.
-    static tt::tt_fabric::WorkerToFabricEdmSender build_sender_of_target(
-        FabricConnectionBindingToken token, uint32_t target_index) {
-        std::size_t arg_idx = tt::tt_fabric::fabric_connection_binding::target_rta_word(token, target_index);
-        return tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-    }
-
-    // Makes target `target_index` of `token` the forward connection, and sends its open request if `build_mode` opens
-    // connections.
-    template <BuildFromArgsMode build_mode>
-    void add_forward_connection(FabricConnectionBindingToken token, uint32_t target_index) {
-        connection_flags |= FORWARD_CONNECTION_FLAG_MASK;
-        forward_fabric_sender = build_sender_of_target(token, target_index);
-        start_open<build_mode>(forward_fabric_sender);
-    }
-
-    // Makes target `target_index` of `token` the backward connection, and sends its open request if `build_mode`
-    // opens connections.
-    template <BuildFromArgsMode build_mode>
-    void add_backward_connection(FabricConnectionBindingToken token, uint32_t target_index) {
-        connection_flags |= BACKWARD_CONNECTION_FLAG_MASK;
-        backward_fabric_sender = build_sender_of_target(token, target_index);
-        start_open<build_mode>(backward_fabric_sender);
-    }
-
-    // Sends the open request of a just-built connection if `build_mode` opens connections.
-    template <BuildFromArgsMode build_mode>
-    static void start_open(tt::tt_fabric::WorkerToFabricEdmSender& sender) {
-        if constexpr (
-            build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||
-            build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY) {
-            sender.open_start();
-        }
-    }
-
-    // Waits for the open requests of the built connections if `build_mode` waits for them.
-    template <BuildFromArgsMode build_mode>
-    void finish_open() {
-        if constexpr (build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION) {
-            open_finish();
-        }
-    }
-
     static constexpr uint8_t FORWARD_CONNECTION_FLAG_MASK = 0x01;
     static constexpr uint8_t BACKWARD_CONNECTION_FLAG_MASK = 0x02;
     static constexpr uint8_t FORWARD_CONNECTION_FLAG_OFFSET = 0x0;

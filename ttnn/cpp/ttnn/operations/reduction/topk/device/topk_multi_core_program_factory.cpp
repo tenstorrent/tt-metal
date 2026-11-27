@@ -4,8 +4,8 @@
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"

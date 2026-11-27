@@ -4,10 +4,10 @@
 
 #include "ttnn/tensor/topology_check.hpp"
 
-#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/memory/buffer/host_buffer.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/distributed/tensor_topology.hpp"

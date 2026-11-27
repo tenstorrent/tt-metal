@@ -13,6 +13,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
+#include "c_tensix_core.h"
 #include "internal/local_mem/address_access.h"
 
 void kernel_main() {
@@ -23,16 +24,15 @@ void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
 
     const uint32_t n = pad.size();
-    {
-        auto lock = pad.scoped_lock(0, n);
-        for (uint32_t i = 0; i < n; i++) {
-            pad[i] = pattern;
-        }
+    for (uint32_t i = 0; i < n; i++) {
+        pad[i] = pattern;
     }
     asm("fence");  // ensure the L1 writes land before the NoC reads them
 
     if (stall_cycles) {
-        riscv_wait(stall_cycles);
+        const uint64_t end = c_tensix_core::read_wall_clock() + stall_cycles;
+        while (c_tensix_core::read_wall_clock() < end) {
+        }
     }
 
     // Vanilla C NoC path: build the interleaved-DRAM NoC address for page 0 (bank 0, offset 0) and push the

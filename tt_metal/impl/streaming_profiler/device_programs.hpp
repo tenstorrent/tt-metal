@@ -13,9 +13,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include "impl/streaming_profiler/capture_context.hpp"
 

@@ -31,12 +31,6 @@ static const mailbox_t mailbox_pack   = mailboxes_arr + 2;
 static const mailbox_t trisc_pc_bufs[] = {
     reinterpret_cast<mailbox_t>(PC_BUF_BASE), reinterpret_cast<mailbox_t>(PC1_BUF_BASE), reinterpret_cast<mailbox_t>(PC2_BUF_BASE)};
 
-// 3 x 64 Tensix GPRs copied below the mailboxes, keep in sync with GPR_DUMP_WORDS in tensix.py.
-constexpr std::uint32_t GPRS_PER_THREAD = 64;
-constexpr std::uint32_t TENSIX_THREADS  = 3;
-constexpr std::uint32_t GPR_DUMP_WORDS  = GPRS_PER_THREAD * TENSIX_THREADS;
-static const mailbox_t gpr_dump         = mailboxes_arr - GPR_DUMP_WORDS;
-
 // One launch per release from soft reset: the host loads the kernels and releases BRISC, BRISC starts the TRISCs, waits
 // on their PC buffers with no L1 traffic (L1 mailboxes on ttsim), marks the launch done for the host on silicon, then puts
 // all four cores back in soft reset, which simulator hosts poll.
@@ -77,10 +71,6 @@ int main()
     for (const mailbox_t pc_buf : trisc_pc_bufs)
     {
         (void)ckernel::load_blocking(pc_buf);
-    }
-    for (std::uint32_t i = 0; i < GPR_DUMP_WORDS; i++)
-    {
-        ckernel::store_blocking(gpr_dump + i, ckernel::regfile[i]);
     }
     // The host polls this during the kernel and reads RISCV_DEBUG_REG_SOFT_RESET_0 only once it is marked: polling that
     // register during the kernel moved timings, as it sits in the RISC-V debug register block with the wall clock.

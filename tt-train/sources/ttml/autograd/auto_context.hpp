@@ -21,18 +21,10 @@ namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
 
-// Context-parallel options; every CP rank must use the same values.
-struct ContextParallelConfig {
-    // Ring attention keeps the forward's K/V for backward instead of shifting them again, at the cost of
-    // 2 * (cp_size - 2) K-sized tensors per device (see ops::distributed::ring_attention_sdpa).
-    bool reuse_forward_kv = false;
-};
-
 struct DistributedConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
-    // Set: context parallelism is on, with these options.
-    std::optional<ContextParallelConfig> cp = std::nullopt;
+    bool enable_cp = false;
 };
 
 class ParallelismContext {
@@ -68,16 +60,12 @@ public:
     [[nodiscard]] const bool is_cp_enabled() const {
         return m_cp_axis.has_value();
     }
-    [[nodiscard]] const ContextParallelConfig& get_cp_config() const {
-        return m_cp_config;
-    }
 
 private:
     std::optional<uint32_t> m_ddp_axis = std::nullopt;
     std::optional<uint32_t> m_tp_axis = std::nullopt;
     std::optional<uint32_t> m_cp_axis = std::nullopt;
     uint32_t m_num_cp_devices = 1U;
-    ContextParallelConfig m_cp_config;
     uint32_t m_num_ddp_devices = 1U;
     uint32_t m_num_tp_devices = 1U;
 };
@@ -119,8 +107,7 @@ public:
 
     void open_device(
         const tt::tt_metal::distributed::MeshShape& mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1),
-        const std::vector<int>& device_ids = std::vector<int>{},
-        std::size_t num_command_queues = 1);
+        const std::vector<int>& device_ids = std::vector<int>{});
 
     void close_device();
 
@@ -148,15 +135,7 @@ public:
 
     [[nodiscard]] bool is_parallelism_context_initialized() const;
 
-    // Describes the open mesh's axes; close_device drops it, so each mesh initializes its own.
     void initialize_parallelism_context(const DistributedConfig& config);
-
-    // The dtype the gradient syncs (core::distributed::synchronize_gradients, ttml.sync_gradients, and FSDP's
-    // backward_post) sum in when a call passes none: BFLOAT16 or FLOAT32, or unset to sum in each gradient's own dtype.
-    // core::apply_precision_config stores it from every config it applies, an unset or null
-    // training_config.precision.reduce_dtype clearing it; close_device clears it with the rest of the run's state.
-    void set_gradient_reduce_dtype(std::optional<ttnn::DataType> dtype);
-    [[nodiscard]] std::optional<ttnn::DataType> get_gradient_reduce_dtype() const;
 
 private:
     AutoContext();
@@ -178,8 +157,6 @@ private:
     std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
 
     std::unique_ptr<ParallelismContext> m_parallelism_context;
-
-    std::optional<ttnn::DataType> m_gradient_reduce_dtype;
 
     friend class ttsl::Indestructible<AutoContext>;
 };

@@ -7,8 +7,8 @@
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 // Include the test device and fixture headers

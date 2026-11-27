@@ -11,11 +11,11 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_gold_impls.hpp"
 

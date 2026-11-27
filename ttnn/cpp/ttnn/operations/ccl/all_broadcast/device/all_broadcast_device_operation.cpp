@@ -8,6 +8,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 namespace ttnn::prim {
 void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
@@ -35,6 +36,15 @@ void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
+}
+
+ttsl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const Tensor& input) {
+    if (all_broadcast_program_is_row_free(operation_attributes, input)) {
+        return tt::tt_metal::operation::hash_operation<AllBroadcastDeviceOperation>(
+            operation_attributes, ttnn::operations::common::hash_spec_without_rows(input));
+    }
+    return tt::tt_metal::operation::hash_operation<AllBroadcastDeviceOperation>(operation_attributes, input);
 }
 
 std::vector<tt::tt_metal::TensorSpec> AllBroadcastDeviceOperation::compute_output_specs(

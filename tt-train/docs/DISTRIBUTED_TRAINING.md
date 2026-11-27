@@ -57,7 +57,7 @@ ctx.open_device({4, 8});  // 4×8 = 32 devices
 ctx.initialize_parallelism_context({
     .enable_ddp = true,   // Data parallelism on axis 0
     .enable_tp = true,    // Tensor parallelism on axis 1
-    .cp = std::nullopt    // No context parallelism (set a ContextParallelConfig to enable it)
+    .enable_cp = false    // No context parallelism
 });
 
 // Now you can query:
@@ -405,9 +405,7 @@ The default MGD directory used by the training scripts is:
 $TT_METAL_RUNTIME_ROOT/tt_metal/fabric/mesh_graph_descriptors/
 ```
 
-Common examples in that directory include `t3k_mesh_graph_descriptor.textproto` (8-device T3K, 2×4 mesh) and `single_galaxy_mesh_graph_descriptor.textproto` (32-device Galaxy, 8×4 mesh).
-
-The 1D descriptors used by several training examples are in `$TT_METAL_HOME/tests/tt_metal/tt_fabric/custom_mesh_descriptors/`:
+Common examples include:
 - `galaxy_1x32_mesh_graph_descriptor.textproto` - For 32-device Galaxy setups (1×32 mesh)
 - `t3k_1x8_mesh_graph_descriptor.textproto` - For 8-device T3K setups (1×8 mesh)
 
@@ -480,7 +478,6 @@ In the device config, you can specify which parallelism strategies to use:
 - **`enable_ddp`**: Enable data parallelism (replicate model, shard data)
 - **`enable_pp`**: Enable pipeline parallelism (shard layers sequentially)
 - **`enable_cp`**: Enable context parallelism (shard input along sequence dimension)
-- **`cp_reuse_forward_kv`**: With CP, ring attention keeps the forward's K/V for backward instead of shifting them again (default off; costs 2 × (cp_size − 2) K-sized tensors per device per layer that holds them)
 
 ### Mesh Shape Determination
 
@@ -532,13 +529,13 @@ if (is_line_topology) {
         if (mesh_shape[i] > 1) { active_axis = i; break; }
     }
     if (config.enable_ddp)      m_ddp_axis = active_axis;
-    else if (config.cp)         m_cp_axis  = active_axis;
+    else if (config.enable_cp)  m_cp_axis  = active_axis;
     else if (config.enable_tp)  m_tp_axis  = active_axis;
 } else {
     // 2D mesh: must enable exactly 2 parallelisms; assign in order DDP -> CP -> TP
     uint32_t axis = 0;
     if (config.enable_ddp) { m_ddp_axis = axis++; }
-    if (config.cp)         { m_cp_axis  = axis++; }
+    if (config.enable_cp)  { m_cp_axis  = axis++; }
     if (config.enable_tp)  { m_tp_axis  = axis++; }
 }
 ```
@@ -582,9 +579,8 @@ export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
 ### 3. Run Training
 
 ```bash
-cd "$TT_METAL_RUNTIME_ROOT"
-./build/tt-train/sources/examples/nano_gpt/nano_gpt \
-    --config tt-train/configs/training_configs/training_llama8b_tp_ddp_galaxy.yaml
+./build/examples/nano_gpt/nano_gpt \
+    --config configs/training_configs/training_llama8b_tp_ddp_galaxy.yaml
 ```
 
 ### 4. What Happens

@@ -5,8 +5,8 @@
 #include "ttnn/operation.hpp"
 #include "device/interleaved_to_sharded_op.hpp"
 #include "interleaved_to_sharded.hpp"
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
 

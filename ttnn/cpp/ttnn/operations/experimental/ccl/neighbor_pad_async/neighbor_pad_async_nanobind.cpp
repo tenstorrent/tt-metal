@@ -40,6 +40,9 @@ void bind_neighbor_pad_async(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
             persistent_output_buffer (ttnn.Tensor, optional): Pre-allocated output buffer. When provided, skips the H writer startup barrier since the output buffer is guaranteed to exist on all devices. Defaults to `None`.
+            logical_h (int, optional): Zeroes the interior rows at a global index of at least this value. Defaults to `0`, no masking.
+            t_front_pad (int, optional): Number of zero frames prepended to dim - 1. Defaults to `0`.
+            runtime_shapes (bool, optional): One program for every size of the padded dims and the dims between them, for an interleaved output and a padded dim other than 0; a cache hit then rebuilds every runtime arg, at more host time per call. Other calls keep one program per shape. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: the padded output tensor.
@@ -59,7 +62,8 @@ void bind_neighbor_pad_async(nb::module_& mod) {
         nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
         nb::arg("persistent_output_buffer") = nb::none(),
         nb::arg("logical_h") = 0,
-        nb::arg("t_front_pad") = 0);
+        nb::arg("t_front_pad") = 0,
+        nb::arg("runtime_shapes") = false);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

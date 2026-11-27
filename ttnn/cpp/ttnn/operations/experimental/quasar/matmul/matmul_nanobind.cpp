@@ -9,13 +9,12 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/matmul_device_operation.hpp"
@@ -854,7 +853,6 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
-            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver `input_tensor_b` to the cores instead of the op reading it from DRAM, with a :class:`MatmulUnifiedProgramConfig` or no program config. Every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes, whose producer (such as ``ttnn.dram_prefetcher``) the caller runs; with worker senders ``K_chunk_tiles`` must be set to the K tiles of each entry the producer sends. Their receivers are the cores: each computes all of M for one slice of N, and the receiver at row-major position ``i`` gets slice ``i``'s K chunks in K order. Over the Tensor prefetcher's pipes the op queues the prefetch request itself, so the prefetcher must be running (``ttnn.experimental.start_tensor_prefetcher``) and the caller queues none; `input_tensor_b` is then a DRAM weight in the receiver-contiguous or K-row-major layout. The request goes out before the program launches, so a launch that fails after validation (a kernel compile error, say) leaves it undrained and ``ttnn.experimental.stop_tensor_prefetcher`` hangs. Each pipe's ring_size must hold at least two K chunks. Defaults to an empty list (none).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -930,8 +928,7 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none(),
-            nb::arg("prefetcher_pipes") = PrefetcherPipeList{}));
+            nb::arg("sub_device_id") = nb::none()));
 
     ttnn::bind_function<"linear", "ttnn.experimental.quasar.">(
         mod,
@@ -983,7 +980,6 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
-            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): see matmul. Defaults to an empty list (none).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1005,8 +1001,7 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none(),
-            nb::arg("prefetcher_pipes") = PrefetcherPipeList{}));
+            nb::arg("sub_device_id") = nb::none()));
 
     ttnn::bind_function<"matmul_batched_weights", "ttnn.experimental.quasar.">(
         mod,

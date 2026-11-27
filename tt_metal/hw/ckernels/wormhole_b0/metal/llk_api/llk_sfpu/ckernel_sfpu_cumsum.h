@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "lltt.h"
 
 using namespace sfpi;
 
@@ -35,7 +36,7 @@ inline void tile_columns_pass(Scan scan) {
 // scan step.
 template <std::uint32_t STEP, std::uint32_t PASS>
 inline void scan_tile_columns_pass() {
-    tile_columns_pass<PASS, (PASS % 2) * 4>([] { TTI_REPLAY((PASS % 2) * STEP, STEP, 0, 0); });
+    tile_columns_pass<PASS, (PASS % 2) * 4>([] { lltt::replay((PASS % 2) * STEP, STEP); });
 }
 
 // Sets LREG4-7, which carry the running column values between tiles, to the constant in LREG<VALUE>.
@@ -77,7 +78,7 @@ inline void calculate_cumsum(const bool first) {
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void cumsum_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    TTI_REPLAY(0, 2 * cumsum_step, 0, 1);
+    lltt::record(0, 2 * cumsum_step);
     // FIXME: These should all be TT_SFP...
     TTI_SFPADD(10, 7, 0, 0, 0);
     TTI_SFPNOP;

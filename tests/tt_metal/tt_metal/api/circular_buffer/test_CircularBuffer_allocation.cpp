@@ -4,11 +4,11 @@
 
 #include <chrono>
 #include <cstdint>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -16,26 +16,26 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "circular_buffer_test_utils.hpp"
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
-#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 
@@ -377,40 +377,6 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
         UpdateDynamicCircularBufferAddress(program_, cb_ids[0], *l1_buffer->get_reference_buffer());
         golden_addresses_per_core[core0][0] = l1_buffer->address();
         validate_cb_address(workload, device, cr_set, golden_addresses_per_core);
-    }
-}
-
-TEST_F(MeshDeviceFixture, TensixTestCircularBufferBoundLater) {
-    for (auto& device : this->devices_) {
-        distributed::MeshWorkload workload;
-        auto zero_coord = distributed::MeshCoordinate(0, 0);
-        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        workload.add_program(device_range, CreateProgram(*device));
-        auto& program_ = workload.get_programs().at(device_range);
-        CBConfig cb_config;
-        CoreCoord core0(0, 0);
-        CoreRangeSet cr_set({CoreRange(core0, core0)});
-        initialize_program(program_, cr_set);
-
-        CBDescriptor descriptor{
-            .total_size = cb_config.page_size,
-            .core_ranges = cr_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = 0, .data_format = cb_config.data_format, .page_size = cb_config.page_size}}},
-            .experimental_options = {.globally_allocated_bound_later = true},
-        };
-        EXPECT_NE(
-            CircularBufferConfig(descriptor),
-            CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
-                .set_page_size(0, cb_config.page_size));
-        auto cb = CreateCircularBuffer(program_, core0, CircularBufferConfig(descriptor));
-
-        auto l1_buffer = distributed::MeshBuffer::create(
-            distributed::ReplicatedBufferConfig{.size = cb_config.page_size},
-            {.page_size = cb_config.page_size, .buffer_type = tt::tt_metal::BufferType::L1},
-            device.get());
-        UpdateDynamicCircularBufferAddress(program_, cb, *l1_buffer->get_reference_buffer());
-        validate_cb_address(workload, device, cr_set, {{core0, {{0, l1_buffer->address()}}}});
     }
 }
 

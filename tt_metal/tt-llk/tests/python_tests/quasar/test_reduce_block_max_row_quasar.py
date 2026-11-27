@@ -49,15 +49,13 @@ TILE_DIMENSIONS = [(32, 32), (16, 32), (8, 32), (4, 32)]
     + [InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b)],
     block_ct_dim=runtime(BLOCK_CT_DIMS),
     tile_dimensions=runtime(TILE_DIMENSIONS),
-    dest_sync=[DestSync.Half, DestSync.Full],
-    dest_acc=[DestAccumulation.No],
+    dest_sync_mode=[DestSync.Half, DestSync.Full],
 )
 def test_reduce_block_max_row_quasar(
     formats,
     block_ct_dim,
     tile_dimensions,
-    dest_sync,
-    dest_acc,
+    dest_sync_mode,
     num_rows=1,
 ):
     """*num_rows* rows of block_ct_dim tiles, each reduced into its own result tile and Dest section."""
@@ -104,7 +102,7 @@ def test_reduce_block_max_row_quasar(
         formats,
         templates=[
             UNPACKER_ENGINE_SEL(),
-            DEST_SYNC(dest_sync),
+            DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
             TILE_COUNT(block_ct_dim),
@@ -129,7 +127,7 @@ def test_reduce_block_max_row_quasar(
             use_dense_tile_dimensions=True,
         ),
         unpack_to_dest=False,
-        dest_acc=dest_acc,
+        dest_acc=DestAccumulation.No,
     )
 
     res_from_L1 = configuration.run().result
@@ -150,20 +148,15 @@ def test_reduce_block_max_row_quasar(
     formats=input_output_formats([DataFormat.Float16_b]),
     block_ct_dim=runtime([3, 8]),
     num_rows=runtime(list(DEST_DEPTH_BLOCK_COUNTS)),
-    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_sync_mode=[DestSync.Half, DestSync.Full],
 )
 def test_reduce_block_max_row_dest_depth_quasar(
     formats,
     block_ct_dim,
     num_rows,
-    dest_sync,
+    dest_sync_mode,
 ):
     """4 and 8 rows, one Dest section each."""
     test_reduce_block_max_row_quasar(
-        formats,
-        block_ct_dim,
-        (32, 32),
-        dest_sync,
-        DestAccumulation.No,
-        num_rows=num_rows,
+        formats, block_ct_dim, (32, 32), dest_sync_mode, num_rows=num_rows
     )

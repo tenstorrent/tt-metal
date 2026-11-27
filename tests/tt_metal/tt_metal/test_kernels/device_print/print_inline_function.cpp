@@ -60,7 +60,7 @@
  * the inline function >:( .
  */
 inline void inline_function_device_print() {
-    [[maybe_unused]] const ct_string kernel = CTSTR("THIS IS REQUIRED TO BREAK THE FOLLOWING DEVICE_PRINT");
+    const ct_string kernel = CTSTR("THIS IS REQUIRED TO BREAK THE FOLLOWING DEVICE_PRINT");
     DEVICE_PRINT("INLINE!!!\n");
 }
 

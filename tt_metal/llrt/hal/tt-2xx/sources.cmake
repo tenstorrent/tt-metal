@@ -10,7 +10,6 @@ set(QA_HAL_VARIANT_L1_SOURCES
     quasar/qa_hal_grendel_l1.cpp
     quasar/qa_hal_horizon_l1.cpp
     quasar/qa_hal_trinity_l1.cpp
-    quasar/qa_hal_saturn_l1.cpp
 )
 
 set(HAL_2XX_SOURCES hal_2xx_common.cpp)

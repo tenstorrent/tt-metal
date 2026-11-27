@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/vocabulary/shape2d.hpp>
-#include <tt-metalium/mesh/mesh_device_view.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"

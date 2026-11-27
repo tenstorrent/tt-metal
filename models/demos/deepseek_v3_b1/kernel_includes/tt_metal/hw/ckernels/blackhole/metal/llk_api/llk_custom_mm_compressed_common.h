@@ -117,13 +117,13 @@ inline void _llk_unpack_AB_custom_mm_compressed_mop_config_() {
                 }
             });
 
-            const std::uint32_t ctx0_full = TT_OP_REPLAY(0, full_len, 0, 0);
-            const std::uint32_t ctx1_full = TT_OP_REPLAY(full_len, full_len, 0, 0);
-            const std::uint32_t ct_dim_2 = TT_OP_REPLAY(0, full_len + reuse_len, 0, 0);
-            const std::uint32_t ctx1_r_tail = TT_OP_REPLAY(full_len + reuse_len + 1, (ct_dim - 1) * reuse_len, 0, 0);
-            const std::uint32_t ctx0_r_tail = TT_OP_REPLAY(full_len + reuse_len - 2, (ct_dim - 1) * reuse_len, 0, 0);
-            const std::uint32_t first_half = TT_OP_REPLAY(0, 2 + (ct_dim / 2) * reuse_len, 0, 0);
-            const std::uint32_t second_half = TT_OP_REPLAY(full_len + reuse_len, (ct_dim / 2) * reuse_len, 0, 0);
+            const std::uint32_t ctx0_full = lltt::replay_insn(0, full_len);
+            const std::uint32_t ctx1_full = lltt::replay_insn(full_len, full_len);
+            const std::uint32_t ct_dim_2 = lltt::replay_insn(0, full_len + reuse_len);
+            const std::uint32_t ctx1_r_tail = lltt::replay_insn(full_len + reuse_len + 1, (ct_dim - 1) * reuse_len);
+            const std::uint32_t ctx0_r_tail = lltt::replay_insn(full_len + reuse_len - 2, (ct_dim - 1) * reuse_len);
+            const std::uint32_t first_half = lltt::replay_insn(0, 2 + (ct_dim / 2) * reuse_len);
+            const std::uint32_t second_half = lltt::replay_insn(full_len + reuse_len, (ct_dim / 2) * reuse_len);
             const std::uint32_t even_A0 = ct_dim == 2 ? ct_dim_2 : first_half;
 
             ckernel_unpack_template tmp = ckernel_unpack_template(
@@ -184,11 +184,11 @@ inline void _llk_unpack_AB_custom_mm_compressed_mop_config_() {
                 }
             });
 
-            const uint32_t ctx0_full = TT_OP_REPLAY(0, full_len, 0, 0);
-            const uint32_t ctx1_full = TT_OP_REPLAY(full_len, full_len, 0, 0);
-            const uint32_t ct_dim_2 = TT_OP_REPLAY(0, full_len + reuse_len, 0, 0);
-            const uint32_t first_half = TT_OP_REPLAY(0, full_len - reuse_len + (ct_dim / 2) * reuse_len, 0, 0);
-            const uint32_t second_half = TT_OP_REPLAY(full_len + reuse_len, (ct_dim / 2) * reuse_len, 0, 0);
+            const uint32_t ctx0_full = lltt::replay_insn(0, full_len);
+            const uint32_t ctx1_full = lltt::replay_insn(full_len, full_len);
+            const uint32_t ct_dim_2 = lltt::replay_insn(0, full_len + reuse_len);
+            const uint32_t first_half = lltt::replay_insn(0, full_len - reuse_len + (ct_dim / 2) * reuse_len);
+            const uint32_t second_half = lltt::replay_insn(full_len + reuse_len, (ct_dim / 2) * reuse_len);
             const uint32_t even_A0 = ct_dim == 2 ? ct_dim_2 : first_half;
 
             ckernel_unpack_template tmp = ckernel_unpack_template(

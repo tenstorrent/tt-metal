@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt-metalium/vocabulary/core_coord.hpp"
+#include "tt-metalium/core_coord.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::matmul {

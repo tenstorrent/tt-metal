@@ -7,8 +7,8 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"

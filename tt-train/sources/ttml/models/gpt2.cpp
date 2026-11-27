@@ -4,14 +4,12 @@
 
 #include "gpt2.hpp"
 
-#include <string_view>
-
 #include "autograd/tensor.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "serialization/safetensors.hpp"
 #include "serialization/serializable.hpp"
-#include "serialization/serialization.hpp"
 
 namespace {
 
@@ -218,38 +216,44 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
         if (it == parameters.end()) {
             throw std::runtime_error(fmt::format("Parameter {} not found in the model", name));
         }
-        fmt::print(" Parameter {}, shape: {}\n", name, it->second->get_shape());
+        fmt::print(" Parameter {}, shape: {}\n", name, it->second->get_value().logical_shape());
         return it->second;
     };
-    // Each value is loaded in the dtype its parameter is stored in.
-    auto load = [&get_parameter](const std::string &name, const std::vector<float> &values) {
-        serialization::assign_from_floats(get_parameter(name), values);
-    };
     serialization::SafetensorSerialization::TensorCallback loading_callback =
-        [&get_parameter, &load](
+        [&get_parameter](
             const serialization::SafetensorSerialization::TensorInfo &info, std::span<const std::byte> bytes) {
             fmt::print("Loading tensor: {}, shape:{}, format: {}\n", info.name, info.shape, info.dtype);
             auto float_vec = serialization::SafetensorSerialization::bytes_to_float_vec(bytes, info.dtype);
             if (info.name == "wte.weight") {
                 auto out_tensor1 = get_parameter("transformer/fc/weight");
-                const auto &shape = out_tensor1->get_shape();
                 fmt::print("Original shape {}, {}", info.shape[0], info.shape[1]);
-                fmt::print("Transformed shape {}, {}\n", shape[-2], shape[-1]);
-                auto padded_emb = pad_rows_flat(float_vec, info.shape[0], info.shape[1], shape[-2]);
-                serialization::assign_from_floats(out_tensor1, padded_emb);
+                fmt::print(
+                    "Transformed shape {}, {}\n",
+                    out_tensor1->get_value().logical_shape()[-2],
+                    out_tensor1->get_value().logical_shape()[-1]);
+                auto padded_emb = pad_rows_flat(
+                    float_vec, info.shape[0], info.shape[1], out_tensor1->get_value().logical_shape()[-2]);
+                out_tensor1->set_value(core::from_vector(
+                    padded_emb, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
             }
 
             //  pos_emb -> wpe.weight
             if (info.name == "wpe.weight") {
-                load("transformer/pos_emb/weight", float_vec);
+                auto out_tensor1 = get_parameter("transformer/pos_emb/weight");
+                out_tensor1->set_value(core::from_vector(
+                    float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
             }
 
             //  ln_f.{weight,bias}
             if (info.name == "ln_f.weight") {
-                load("transformer/ln_fc/gamma", float_vec);
+                auto out_tensor1 = get_parameter("transformer/ln_fc/gamma");
+                out_tensor1->set_value(core::from_vector(
+                    float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
             }
             if (info.name == "ln_f.bias") {
-                load("transformer/ln_fc/beta", float_vec);
+                auto out_tensor1 = get_parameter("transformer/ln_fc/beta");
+                out_tensor1->set_value(core::from_vector(
+                    float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
             }
 
             // ---- Per-block mappings ----
@@ -257,57 +261,91 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
             // {"attn.c_attn.weight", "attn.c_proj.weight", "mlp.c_fc.weight", "mlp.c_proj.weight"}
             for (int i = 0; i < 12; ++i) {
                 const std::string pfx = "h." + std::to_string(i);
-                const auto block = [i](std::string_view suffix) {
-                    return fmt::format("transformer/gpt_block_{}/{}", i, suffix);
-                };
-                const auto transposed = [&] { return transpose_2d_flat(float_vec, info.shape[0], info.shape[1]); };
 
                 // ln1
                 if (info.name == pfx + ".ln_1.weight") {
-                    load(block("ln1/gamma"), float_vec);
+                    auto block_name = fmt::format("transformer/gpt_block_{}/ln1/gamma", i);
+                    auto out_tensor1 = get_parameter(block_name);
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
                 if (info.name == pfx + ".ln_1.bias") {
-                    load(block("ln1/beta"), float_vec);
+                    auto block_name = fmt::format("transformer/gpt_block_{}/ln1/beta", i);
+                    auto out_tensor1 = get_parameter(block_name);
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
 
                 // attention: qkv_linear <- attn.c_attn.{weight,bias}
                 if (info.name == pfx + ".attn.c_attn.weight") {
-                    load(block("attention/qkv_linear/weight"), transposed());
+                    auto block_name = fmt::format("transformer/gpt_block_{}/attention/qkv_linear/weight", i);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto out_tensor1 = get_parameter(block_name);
+                    out_tensor1->set_value(core::from_vector(
+                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
                 if (info.name == pfx + ".attn.c_attn.bias") {
-                    load(block("attention/qkv_linear/bias"), float_vec);
+                    auto block_name = fmt::format("transformer/gpt_block_{}/attention/qkv_linear/bias", i);
+                    auto out_tensor1 = get_parameter(block_name);
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
 
                 // attention: out_linear <- attn.c_proj.{weight,bias}
                 if (info.name == pfx + ".attn.c_proj.weight") {
-                    load(block("attention/out_linear/weight"), transposed());
+                    auto block_name = fmt::format("transformer/gpt_block_{}/attention/out_linear/weight", i);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto out_tensor1 = get_parameter(block_name);
+                    out_tensor1->set_value(core::from_vector(
+                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
                 if (info.name == pfx + ".attn.c_proj.bias") {
-                    load(block("attention/out_linear/bias"), float_vec);
+                    auto block_name = fmt::format("transformer/gpt_block_{}/attention/out_linear/bias", i);
+                    auto out_tensor1 = get_parameter(block_name);
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
 
                 // ln2
                 if (info.name == pfx + ".ln_2.weight") {
-                    load(block("ln2/gamma"), float_vec);
+                    auto block_name = fmt::format("transformer/gpt_block_{}/ln2/gamma", i);
+                    auto out_tensor1 = get_parameter(block_name);
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
                 if (info.name == pfx + ".ln_2.bias") {
-                    load(block("ln2/beta"), float_vec);
+                    auto block_name = fmt::format("transformer/gpt_block_{}/ln2/beta", i);
+                    auto out_tensor1 = get_parameter(block_name);
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
 
                 // mlp: fc1 <- mlp.c_fc.{weight,bias}
                 if (info.name == pfx + ".mlp.c_fc.weight") {
-                    load(block("mlp/fc1/weight"), transposed());
+                    auto out_tensor1 = get_parameter("transformer/gpt_block_" + std::to_string(i) + "/mlp/fc1/weight");
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    out_tensor1->set_value(core::from_vector(
+                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
                 if (info.name == pfx + ".mlp.c_fc.bias") {
-                    load(block("mlp/fc1/bias"), float_vec);
+                    auto block_name = fmt::format("transformer/gpt_block_{}/mlp/fc1/bias", i);
+                    auto out_tensor1 = get_parameter(block_name);
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
 
                 // mlp: fc2 <- mlp.c_proj.{weight,bias}
                 if (info.name == pfx + ".mlp.c_proj.weight") {
-                    load(block("mlp/fc2/weight"), transposed());
+                    auto out_tensor1 = get_parameter("transformer/gpt_block_" + std::to_string(i) + "/mlp/fc2/weight");
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    out_tensor1->set_value(core::from_vector(
+                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
                 if (info.name == pfx + ".mlp.c_proj.bias") {
-                    load(block("mlp/fc2/bias"), float_vec);
+                    auto block_name = fmt::format("transformer/gpt_block_{}/mlp/fc2/bias", i);
+                    auto out_tensor1 = get_parameter(block_name);
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
             }
             return true;

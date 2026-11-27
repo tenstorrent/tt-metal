@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/span.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/mesh/allocator.hpp>
+#include <device.hpp>
+#include <tt-metalium/allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <algorithm>
 #include <mutex>
@@ -15,7 +15,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "allocator/allocator.hpp"
-#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include "buffer_types.hpp"
 #include "dispatch.hpp"
 #include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -23,17 +23,17 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/utils/math.hpp"
+#include "math.hpp"
 #include <tt_stl/strong_type.hpp>
-#include "tt-metalium/mesh/sub_device_types.hpp"
+#include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/event/dispatch.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
-#include <tt-metalium/observability/capture_hooks.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt_stl/overloaded.hpp>
 #include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"
@@ -1614,26 +1614,26 @@ void copy_interleaved_buffer_to_completion_queue(
 }
 
 // Functions used to copy buffer data from completion queue into user space
-ReadBufferDescriptor generate_sharded_buffer_read_descriptor(
+std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
     void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer) {
     // Increment the src_page_index after the Read Buffer Descriptor has been populated
     // for the current core/txn
     dispatch_params.src_page_index += dispatch_params.pages_per_txn;
-    // Not owning: the caller makes the last descriptor of a read own the mapping.
-    return ReadBufferDescriptor(
+    return std::make_shared<tt::tt_metal::CompletionReaderVariant>(
+        std::in_place_type<tt::tt_metal::ReadBufferDescriptor>,
         buffer.page_size(),
         dispatch_params.padded_page_size,
         dst,
         dispatch_params.unpadded_dst_offset,
         dispatch_params.pages_per_txn,
-        std::shared_ptr<const BufferPageMapping>(
-            std::shared_ptr<const void>(), dispatch_params.buffer_page_mapping.get()),
+        dispatch_params.buffer_page_mapping,
         dispatch_params.core_page_mapping);
 }
 
-ReadBufferDescriptor generate_interleaved_buffer_read_descriptor(
+std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
     void* dst, const BufferReadDispatchParams& dispatch_params, Buffer& buffer) {
-    return ReadBufferDescriptor(
+    return std::make_shared<tt::tt_metal::CompletionReaderVariant>(
+        std::in_place_type<tt::tt_metal::ReadBufferDescriptor>,
         buffer.page_size(),
         dispatch_params.padded_page_size,
         dst,

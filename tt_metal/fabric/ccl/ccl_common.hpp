@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 namespace tt::tt_fabric {
 

@@ -6,9 +6,8 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/discovery/cluster.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "mesh_dispatch_fixture.hpp"
 
 namespace tt::tt_metal {

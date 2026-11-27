@@ -15,9 +15,9 @@
 
 #include <benchmark/benchmark.h>
 
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace leg_bench {
 

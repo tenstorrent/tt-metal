@@ -4,8 +4,8 @@
 
 #include "reduce_scatter_validate_utils.hpp"
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 using namespace tt::tt_metal;

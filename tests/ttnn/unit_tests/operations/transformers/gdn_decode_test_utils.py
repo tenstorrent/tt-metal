@@ -261,15 +261,13 @@ def golden_cases():
 
 def _head_commit():
     """The short hash of HEAD, with "-dirty" appended when the working tree has uncommitted changes, so the JSON records
-    which code produced the digests (a regeneration run is usually made before the commit that carries it). The goldens
-    file is left out of the check: the run rewrites it after each case, which would mark every later case dirty."""
+    which code produced the digests (a regeneration run is usually made before the commit that carries it)."""
     try:
         run = lambda *args: subprocess.run(
             ["git", *args], cwd=GOLDENS_PATH.parent, capture_output=True, text=True, check=True
         ).stdout.strip()
         head = run("rev-parse", "--short=11", "HEAD")
-        dirty = run("status", "--porcelain", "--", ":/", f":(exclude){GOLDENS_PATH.name}")
-        return head + ("-dirty" if dirty else "")
+        return head + ("-dirty" if run("status", "--porcelain") else "")
     except Exception:
         return "unknown"
 

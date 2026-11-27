@@ -13,6 +13,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "lltt.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -117,7 +118,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShap
         {
             // FP32 path records the same 15-instruction layout as num_faces=4 (2 GMPOOLs + hi/lo
             // transpose + CLR_B). Only the execute-side replay differs (single face-row, done below).
-            TTI_REPLAY(0, 15, 0, 1);
+            lltt::record(0, 15);
 
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
@@ -147,7 +148,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShap
         else
         {
             // Non-FP32 single face-row: 2 GMPOOLs + one transpose block (6 instrs) + CLR_B = 9 instructions.
-            TTI_REPLAY(0, 9, 0, 1);
+            lltt::record(0, 9);
 
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
@@ -186,7 +187,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShap
 
     // See _llk_math_reduce_max_row_ for a full algorithm explanation
     // Put the following 15 instructions in a REPLAY buffer
-    TTI_REPLAY(0, 15, 0, 1);
+    lltt::record(0, 15);
 
     // Two GMPOOLs to pool F0 and F1 (or F2 and F3) together
     TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
@@ -316,7 +317,7 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
 
             // Replay the 13 instructions (recorded slots 2-14) to transpose the single reduced
             // face-row: hi/lo transpose + CLR_B.
-            TTI_REPLAY(2, 13, 0, 0);
+            lltt::replay(2, 13);
 
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
             math::_configure_src_zero_flag_(false);
@@ -325,7 +326,7 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
         {
             // Replay the 7 instructions (recorded slots 2-8) to transpose the single reduced
             // face-row. 7th instruction (CLR_B) releases SrcB bank and clears all address counters.
-            TTI_REPLAY(2, 7, 0, 0);
+            lltt::replay(2, 7);
         }
         return;
     }
@@ -338,7 +339,7 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
     }
 
     // Replay the 13 instructions to transpose the reduced results
-    TTI_REPLAY(2, 13, 0, 0);
+    lltt::replay(2, 13);
 
     if constexpr (is_fp32_dest_acc_en)
     {

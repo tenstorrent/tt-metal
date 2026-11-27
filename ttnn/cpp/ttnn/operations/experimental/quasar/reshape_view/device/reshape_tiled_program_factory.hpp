@@ -6,8 +6,8 @@
 
 #include <array>
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/device/reshape_device_operation_types.hpp"

@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary.hpp"
-#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"

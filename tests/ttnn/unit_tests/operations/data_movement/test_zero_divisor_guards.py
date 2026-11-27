@@ -94,19 +94,6 @@ def _interleaved_to_sharded_partial_shard_shape(device):
     _interleaved_to_sharded_partial(device, shard_shape=(0, 64), num_slices=1)
 
 
-def _interleaved_to_sharded_partial_scheme(device):
-    x = ttnn.from_torch(torch.randn(1, 1, 64, 64).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.interleaved_to_sharded_partial(
-        x,
-        ttnn.CoreCoord(1, 1),
-        [32, 64],
-        1,
-        0,
-        ttnn.TensorMemoryLayout.INTERLEAVED,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-
-
 @pytest.mark.parametrize(
     "run, message",
     [
@@ -119,7 +106,6 @@ def _interleaved_to_sharded_partial_scheme(device):
         (_interleaved_to_sharded_memory_config, "shard_shape must be greater than 0"),
         (_interleaved_to_sharded_partial, "num_slices must be greater than 0"),
         (_interleaved_to_sharded_partial_shard_shape, "shard_shape must be greater than 0"),
-        (_interleaved_to_sharded_partial_scheme, "Unsupported sharding scheme"),
     ],
     ids=[
         "fold",
@@ -131,7 +117,6 @@ def _interleaved_to_sharded_partial_scheme(device):
         "i2s_memory_config",
         "i2s_partial",
         "i2s_partial_shard_shape",
-        "i2s_partial_scheme",
     ],
 )
 def test_zero_divisor_raises(device, expect_error, run, message):

@@ -4,10 +4,10 @@
 
 #include <fmt/base.h>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/tensor/shape/shape.hpp"

@@ -14,7 +14,7 @@
 #include <ostream>
 #include <random>
 #include <string>
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <ttnn/tensor/serialization.hpp>
 #include <vector>
 

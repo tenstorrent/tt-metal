@@ -12,11 +12,11 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/fmt.hpp>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include "common/env_lib.hpp"
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <host_api.hpp>
+#include "env_lib.hpp"
+#include <tt-metalium/tt_metal.hpp>
 #include "trace/trace_buffer.hpp"
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/device.hpp>
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 

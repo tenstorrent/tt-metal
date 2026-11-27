@@ -7,7 +7,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/tensor/types.hpp"

@@ -19,7 +19,6 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
-    flat_axes,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -106,11 +105,6 @@ def generate_qsr_pack_l1_acc_combinations(
     return combinations
 
 
-# Column names of the tuples ``generate_qsr_pack_l1_acc_combinations`` returns.
-PACK_L1_ACC_FLAT_NAMES = (
-    "formats",
-    "dest_acc",
-)
 ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(
     PACK_L1_ACC_FORMATS
 )
@@ -118,16 +112,15 @@ ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    **flat_axes(PACK_L1_ACC_FLAT_NAMES, ALL_PACK_L1_ACC_COMBINATIONS),
-    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
+    formats_dest_acc=ALL_PACK_L1_ACC_COMBINATIONS,
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_l1_acc_quasar(
-    formats,
-    dest_acc,
-    dest_sync,
+    formats_dest_acc,
+    dest_sync_mode,
     input_dimensions,
     run_types,
     loop_factor,
@@ -136,6 +129,8 @@ def test_pack_l1_acc_quasar(
     is_perf=False,
     perf_report=None,
 ):
+    formats, dest_acc = formats_dest_acc
+
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
         [tile_rows, tile_cols]
@@ -146,7 +141,7 @@ def test_pack_l1_acc_quasar(
     tile_cnt = (rows // tile_rows) * (cols // tile_cols)
 
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync,
+        dest_sync_mode,
         dest_acc,
         formats,
         input_dimensions,
@@ -202,7 +197,7 @@ def test_pack_l1_acc_quasar(
         "test_name": "sources/quasar/pack_l1_acc_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            DEST_SYNC(dest_sync),
+            DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),

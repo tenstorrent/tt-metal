@@ -7,8 +7,8 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/workload/specification/compute_modes.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

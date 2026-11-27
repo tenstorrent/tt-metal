@@ -7,12 +7,12 @@
 #include <algorithm>
 #include <optional>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"

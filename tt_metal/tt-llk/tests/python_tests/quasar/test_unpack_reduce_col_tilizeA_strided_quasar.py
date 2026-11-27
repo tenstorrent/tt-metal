@@ -27,7 +27,6 @@ from helpers.llk_params import (
     ReducePool,
 )
 from helpers.param_config import (
-    flat_axes,
     generate_perf_input_dimensions,
     input_output_formats,
     max_dest_tiles,
@@ -169,15 +168,6 @@ UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = input_output_formats(
         DataFormat.Int32,
     ],
 )
-# Column names of the tuples ``generate_unpack_reduce_col_tilizeA_strided_combinations`` returns.
-UNPACK_REDUCE_COL_TILIZEA_STRIDED_FLAT_NAMES = (
-    "formats",
-    "dest_acc",
-    "dest_sync",
-    "input_dimensions",
-    "pool_type",
-    "tile_dimensions",
-)
 ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
     generate_unpack_reduce_col_tilizeA_strided_combinations(
         UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS
@@ -201,20 +191,12 @@ def generate_reduce_scaler(
 
 @pytest.mark.quasar
 @parametrize(
-    **flat_axes(
-        UNPACK_REDUCE_COL_TILIZEA_STRIDED_FLAT_NAMES,
-        ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
-    ),
+    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_reduce_col_tilizeA_strided_quasar(
-    formats,
-    dest_acc,
-    dest_sync,
-    input_dimensions,
-    pool_type,
-    tile_dimensions,
+    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -222,6 +204,15 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
     is_perf=False,
     perf_report=None,
 ):
+    (
+        formats,
+        dest_acc,
+        dest_sync_mode,
+        input_dimensions,
+        pool_type,
+        tile_dimensions,
+    ) = formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims
+
     tile_shape = construct_tile_shape(tile_dimensions)
     num_faces = tile_shape.total_num_faces()
     reduce_dim = ReduceDimension.Column
@@ -281,7 +272,7 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         "templates": [
             MATH_OP(mathop=mathop, pool_type=pool_type),
             MATH_FIDELITY(math_fidelity),
-            DEST_SYNC(dest_sync),
+            DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
             generate_input_dim(

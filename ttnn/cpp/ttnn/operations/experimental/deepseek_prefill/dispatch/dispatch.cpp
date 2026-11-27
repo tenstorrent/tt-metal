@@ -6,7 +6,7 @@
 #include "device/dispatch_device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operation.hpp"
-#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 

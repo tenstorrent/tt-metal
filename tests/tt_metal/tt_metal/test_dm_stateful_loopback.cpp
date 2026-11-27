@@ -4,12 +4,11 @@
 
 #include "common/device_fixture.hpp"
 
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -76,7 +75,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
             .target_nodes = node,
         }},
     };
-    Program program(this->device(), spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -87,7 +86,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
              {"dram_out_addr", dram_out_address},
              {"l1_addr", l1_address},
              {"dram_bank_id", 0u}})});
-    program.set_program_run_args(params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

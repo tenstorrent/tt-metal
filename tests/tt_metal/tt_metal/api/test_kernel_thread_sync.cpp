@@ -7,13 +7,13 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -123,7 +123,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     }
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, work_unit_kernel_names)};
 
-    Program program(this->device(), spec);
+    Program program = MakeProgramFromSpec(this->device(), spec);
 
     uint32_t total_zeros = 0;
     for (const auto& cfg : kernel_configs) {
@@ -137,7 +137,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
         params.kernel_run_args.push_back(
             make_run_params(KernelSpecName{cfg.name}, node, cfg.layout, kRounds, kSkewIters));
     }
-    program.set_program_run_args(params);
+    SetProgramRunArgs(program, params);
     LaunchProgram(this->device(), std::move(program));
 
     for (const auto& cfg : kernel_configs) {
@@ -195,7 +195,7 @@ TEST_F(KernelThreadSyncTest, ComputeBarrierSynchronizesAllTriscs) {
     spec.kernels = {kernel_spec};
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, {"compute_barrier_kernel"})};
 
-    Program program(this->device(), spec);
+    Program program = MakeProgramFromSpec(this->device(), spec);
 
     std::vector<uint32_t> zeros(total_words, 0);
     slow_dispatch::WriteToL1(this->device(), kCore, l1_base, zeros);
@@ -217,7 +217,7 @@ TEST_F(KernelThreadSyncTest, ComputeBarrierSynchronizesAllTriscs) {
                       }}},
             },
     });
-    program.set_program_run_args(params);
+    SetProgramRunArgs(program, params);
     LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> observed;
@@ -304,7 +304,7 @@ TEST_F(KernelThreadSyncTest, PerKernelBarriersAreIndependentAcrossDmAndCompute) 
     spec.kernels = specs;
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, kernel_names)};
 
-    Program program(this->device(), spec);
+    Program program = MakeProgramFromSpec(this->device(), spec);
 
     uint32_t total_words = compute_total_words;
     for (const auto& layout : dm_layouts) {
@@ -334,7 +334,7 @@ TEST_F(KernelThreadSyncTest, PerKernelBarriersAreIndependentAcrossDmAndCompute) 
                       }}},
             },
     });
-    program.set_program_run_args(params);
+    SetProgramRunArgs(program, params);
     LaunchProgram(this->device(), std::move(program));
 
     // Every DM kernel must see exactly its own two threads, never another kernel's.
@@ -416,7 +416,7 @@ TEST_F(KernelThreadSyncTest, DmComputeBarrierSynchronizesDmAndTriscs) {
     spec.kernels = {dm_spec, compute_spec};
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, {"dm_barrier_kernel", "compute_barrier_kernel"})};
 
-    Program program(this->device(), spec);
+    Program program = MakeProgramFromSpec(this->device(), spec);
 
     std::vector<uint32_t> zeros(total_words, 0);
     slow_dispatch::WriteToL1(this->device(), kCore, l1_base, zeros);
@@ -441,7 +441,7 @@ TEST_F(KernelThreadSyncTest, DmComputeBarrierSynchronizesDmAndTriscs) {
         .kernel = KernelSpecName{"compute_barrier_kernel"},
         .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node, runtime_args}}},
     });
-    program.set_program_run_args(params);
+    SetProgramRunArgs(program, params);
     LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> observed;

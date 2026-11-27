@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 import os
 from typing import TYPE_CHECKING, TypeVar
@@ -21,16 +22,16 @@ from PIL import Image
 import ttnn
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, event_section, null_callback
 
+from ...blocks.attention_opt import total_sequence_length_tensor
 from ...models.transformers.transformer_flux2 import Flux2Transformer
+from ...models.vae.vae import flat_to_row_major
 from ...models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, Flux2VaeParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
-from ...utils.tensor import fast_device_to_host, float_to_uint8, from_torch, to_torch
-from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
+from ...utils.tensor import fast_device_to_host, float_to_uint8, from_torch
 from ...utils.tracing import StateTensor, Tracer
-from ..pipeline_api import PipelineAPIMixin
 from .prompt_encoder import PromptEncoder
 
 if TYPE_CHECKING:
@@ -40,29 +41,26 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 # The image sizes (width, height) a pipeline supports by default: the square sizes the inference
-# server offers. Other aspect ratios would need padding the latents to whole tiles per device.
+# server offers. Other sizes work where the fused group norm accepts each device's share of the
+# latents, a whole number of tiles of pixels.
 _DEFAULT_RESOLUTIONS = ((1024, 1024), (2048, 2048))
 
+# The prompt's token count, padded to it whatever the prompt.
+_PROMPT_SEQUENCE_LENGTH = 512
+
 # The parallel layout per mesh shape: the DiT's SP and TP axes, the text encoder's TP axis, the VAE's
-# channel (TP) and row (H) axes, and the CCL links and topology.
+# row (H) and column (W) axes, and the CCL links and topology. The VAE splits the image only, not the
+# channels: a channel split adds a reduce-scatter and all-gathers whose programs compile at every new
+# image size. Rows go on the longer mesh axis.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
-    (1, 8): {
-        "sp_axis": 0,
-        "tp_axis": 1,
-        "encoder_tp_axis": 1,
-        "vae_tp_axis": 1,
-        "vae_h_axis": 0,
-        "num_links": 1,
-        "topology": ttnn.Topology.Linear,
-    },
-    # SP4/TP2 denoised Klein 1% faster than SP2/TP4 at 1024². TP2 + H4 decoded faster than H2xW4 or H4xW2
-    # without TP (0.47 s against 0.78 and 0.56).
+    # SP4/TP2 denoised Klein 1% faster than SP2/TP4 at 1024². H4xW2 decoded faster than H2xW4 (0.56 s
+    # against 0.78); a channel split TP2 + H4 was faster still (0.47 s).
     (2, 4): {
         "sp_axis": 1,
         "tp_axis": 0,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 0,
         "vae_h_axis": 1,
+        "vae_w_axis": 0,
         "num_links": 1,
         "topology": ttnn.Topology.Linear,
     },
@@ -73,8 +71,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 1,
         "vae_h_axis": 0,
+        "vae_w_axis": 1,
         "num_links": 2,
         "topology": ttnn.Topology.Linear,
     },
@@ -82,8 +80,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 1,
-        "vae_h_axis": 0,
+        "vae_h_axis": 1,
+        "vae_w_axis": 0,
         "num_links": 2,
         "topology": ttnn.Topology.Linear,
     },
@@ -91,12 +89,23 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 0,
         "vae_h_axis": 1,
+        "vae_w_axis": 0,
         "num_links": 2,
         "topology": ttnn.Topology.Linear,
     },
 }
+
+
+def _release_module_trace(module: object | None) -> None:
+    """Release the trace captured on ``module.forward``, if it has one."""
+    forward = getattr(type(module), "forward", None)
+    tracers = getattr(forward, "_tracers", None)
+    if tracers is None:
+        return
+    tracer = tracers.get(module)
+    if tracer is not None:
+        tracer.release_trace()
 
 
 class Flux2TransformerState:
@@ -113,7 +122,7 @@ class Flux2TransformerState:
 
 
 class _DenoiseState:
-    """The denoising state of one image size and number of reference images: the latents, the
+    """The denoising state of one image size, with or without a reference image: the latents, the
     reference tokens, their RoPE and the trace."""
 
     def __init__(self, *, step_tracer: Tracer) -> None:
@@ -126,7 +135,7 @@ class _DenoiseState:
         self.combined_rope_sin = StateTensor()
 
 
-class Flux2Pipeline(PipelineAPIMixin):
+class Flux2Pipeline:
     def __init__(
         self,
         *,
@@ -148,8 +157,9 @@ class Flux2Pipeline(PipelineAPIMixin):
     ) -> None:
         """Build the pipeline.
 
-        ``resolutions`` are the image sizes (width, height) that ``__call__`` accepts, all warmed
-        up here; ``width`` and ``height`` give the default one.
+        ``resolutions`` are the image sizes (width, height) that ``__call__`` accepts; ``width`` and
+        ``height`` give the default one. The default size is warmed up here, and with
+        ``trace_warmup`` every size, untraced and traced.
         """
         self._resolutions = tuple(resolutions)
         if (width, height) not in self._resolutions:
@@ -169,9 +179,10 @@ class Flux2Pipeline(PipelineAPIMixin):
         self.is_fsdp = is_fsdp
         self.dynamic_load = dynamic_load
 
-        # The denoising states by image size and number of reference images, and the VAE traces by
-        # image size.
-        self._denoise_states: dict[tuple[int, int, int], _DenoiseState] = {}
+        # The denoising states by image size and whether there is a reference image, and the VAE
+        # traces by image size. A pipeline without trace warmup keeps them only for traced calls.
+        self._trace_warmup = trace_warmup
+        self._denoise_states: dict[tuple[int, int, bool], _DenoiseState] = {}
         self._vae_decoder_tracers: dict[tuple[int, int], Tracer] = {}
         self._vae_encoder_tracers: dict[tuple[int, int], Tracer] = {}
 
@@ -231,6 +242,7 @@ class Flux2Pipeline(PipelineAPIMixin):
             is_fsdp=self.is_fsdp,
             shard_prompt=self._shard_prompt,
             guidance_embeds=self._guidance_embeds,
+            row_capacity=self._transformer_row_capacity(),
         )
 
         self._pos_embed = self._torch_transformer.pos_embed
@@ -259,6 +271,7 @@ class Flux2Pipeline(PipelineAPIMixin):
             ccl_manager=self._vae_ccl_manager,
             use_conv3d=self._vae_use_conv3d,
         )
+        self._vae_decoder.warm_sdpa((height, width) for width, height in self._resolutions)
 
         # Editing is not supported with dynamic loading, which would have to evict the encoder too.
         if self.dynamic_load:
@@ -274,6 +287,11 @@ class Flux2Pipeline(PipelineAPIMixin):
                 parallel_config=self._vae_parallel,
                 ccl_manager=self._vae_ccl_manager,
             )
+            # The reference images are encoded at most at one megapixel (_reference_size).
+            self._vae_encoder.warm_sdpa(
+                (h, w)
+                for w, h in (self._reference_size(width=width, height=height) for width, height in self._resolutions)
+            )
             cache.load_model(
                 tt_model=self._vae_encoder,
                 get_torch_state_dict=self._torch_vae.state_dict,
@@ -288,34 +306,10 @@ class Flux2Pipeline(PipelineAPIMixin):
             self._torch_vae.bn.running_var.float() + self._torch_vae.config.batch_norm_eps
         )
 
-        encoder = self._prompt_encoder.encoder
-        dynamic = self.dynamic_load
-        self.residency.register(
-            self.transformer,
-            {
-                "get_torch_state_dict": self._torch_transformer.state_dict,
-                "model_name": os.path.basename(self.checkpoint_name),
-                "subfolder": "transformer",
-                "parallel_config": self._parallel_config,
-                "mesh_shape": tuple(self._mesh_device.shape),
-                "mesh_device": self._mesh_device,
-                "is_fsdp": self.is_fsdp,
-            },
-            evicts=[encoder, self._vae_decoder] if dynamic else [],
-        )
-        self.residency.register(encoder, self._prompt_encoder.spec, evicts=[self.transformer] if dynamic else [])
-        self.residency.register(
-            self._vae_decoder,
-            {
-                "get_torch_state_dict": self._torch_vae.state_dict,
-                "model_name": os.path.basename(self.checkpoint_name),
-                "subfolder": "vae",
-                "parallel_config": self._vae_parallel,
-                "mesh_shape": tuple(self._mesh_device.shape),
-                "mesh_device": self._mesh_device,
-            },
-            evicts=[self.transformer] if dynamic else [],
-        )
+        if self.dynamic_load:
+            self.transformer.register_coresident_exclusions(self._prompt_encoder._encoder, self._vae_decoder)
+            self._prompt_encoder._encoder.register_coresident_exclusions(self.transformer)
+            self._vae_decoder.register_coresident_exclusions(self.transformer)
 
         # Load in reverse order of use so the first-used model (encoder) stays loaded before __call__.
         self._prepare_vae()
@@ -325,7 +319,7 @@ class Flux2Pipeline(PipelineAPIMixin):
         self.ts = Flux2TransformerState()
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
-        text_ids = _prepare_ids(text_sequence_length=512)  # matches sequence_length=512 in encode
+        text_ids = _prepare_ids(text_sequence_length=_PROMPT_SEQUENCE_LENGTH)
         prompt_rope_cos, prompt_rope_sin = self._pos_embed.forward(text_ids)
         # Store rope tensors pre-shaped as (1, 1, seq, head_dim) so attention blocks never
         # need to reshape per-call (2800 ops per inference). SP sharding is on dim 2 (seq).
@@ -340,11 +334,14 @@ class Flux2Pipeline(PipelineAPIMixin):
             prompt_rope_sin.unsqueeze(0).unsqueeze(0), False, mesh_axes=prompt_rope_mesh_axes, device=self._mesh_device
         )
 
-        # Every size runs untraced before the first capture. The buffers that the first run at a size
-        # allocates and keeps, such as conv weights and CCL buffers, would otherwise be allocated
-        # after an earlier trace was captured, and that trace's replay would overwrite them.
+        # Untraced, a size needs no warmup of its own, so warming the default size is enough. With
+        # trace warmup every size runs untraced before the first capture, since each size is captured
+        # on its own and the buffers its first run allocates and keeps, such as its denoising state,
+        # would otherwise be allocated after an earlier trace was captured, and that trace's replay
+        # would overwrite them.
         edits = (False, True) if self._vae_encoder is not None else (False,)
-        for width, height in self._resolutions:
+        warm_sizes = self._resolutions if trace_warmup else ((self._width, self._height),)
+        for width, height in warm_sizes:
             for edit in edits:
                 self.warmup(width=width, height=height, edit=edit, warmup_info="e2e warmup")
         if trace_warmup:
@@ -381,16 +378,58 @@ class Flux2Pipeline(PipelineAPIMixin):
             traced=traced,
         )
 
+    def _release_denoise_trace(self) -> None:
+        """Release the captured denoise traces, if any."""
+        for state in self._denoise_states.values():
+            state.step_tracer.release_trace()
+
+    def _release_vae_traces(self) -> None:
+        for tracer in itertools.chain(self._vae_decoder_tracers.values(), self._vae_encoder_tracers.values()):
+            tracer.release_trace()
+
+    def release_traces(self) -> None:
+        """Release every trace captured by this pipeline or its submodules."""
+        self._release_denoise_trace()
+        self._release_vae_traces()
+        _release_module_trace(getattr(self._prompt_encoder, "_encoder", None))
+
     def _prepare_transformer(self) -> None:
-        self.residency.load(self.transformer)
+        # A trace bakes its weights' addresses, so drop the traces this load will evict.
+        if self.dynamic_load and not self.transformer.is_loaded():
+            self._release_vae_traces()
+            _release_module_trace(getattr(self._prompt_encoder, "_encoder", None))
+        cache.load_model(
+            tt_model=self.transformer,
+            get_torch_state_dict=self._torch_transformer.state_dict,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="transformer",
+            parallel_config=self._parallel_config,
+            mesh_shape=tuple(self._mesh_device.shape),
+            mesh_device=self._mesh_device,
+            is_fsdp=self.is_fsdp,
+        )
         ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_prompt_encoder(self) -> None:
-        self.residency.load(self._prompt_encoder.encoder)
+        encoder = getattr(self._prompt_encoder, "_encoder", None)
+        encoder_is_loaded = getattr(encoder, "is_loaded", None)
+        if self.dynamic_load and encoder_is_loaded is not None and not encoder_is_loaded():
+            self._release_denoise_trace()
+        self._prompt_encoder.load_weights()
         ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_vae(self) -> None:
-        self.residency.load(self._vae_decoder)
+        if self.dynamic_load and not self._vae_decoder.is_loaded():
+            self._release_denoise_trace()
+        cache.load_model(
+            tt_model=self._vae_decoder,
+            get_torch_state_dict=self._torch_vae.state_dict,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="vae",
+            parallel_config=self._vae_parallel,
+            mesh_shape=tuple(self._mesh_device.shape),
+            mesh_device=self._mesh_device,
+        )
         ttnn.synchronize_device(self._mesh_device)
 
     @staticmethod
@@ -440,8 +479,8 @@ class Flux2Pipeline(PipelineAPIMixin):
         num_links = from_preset("num_links", num_links)
         topology = from_preset("topology", topology)
         if vae_tp_axis is None and vae_h_axis is None and vae_w_axis is None:
-            vae_tp_axis = from_preset("vae_tp_axis", vae_tp_axis)
             vae_h_axis = from_preset("vae_h_axis", vae_h_axis)
+            vae_w_axis = from_preset("vae_w_axis", vae_w_axis)
 
         dit_parallel_config = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=int(mesh_device.shape[tp_axis]), mesh_axis=tp_axis),
@@ -472,7 +511,6 @@ class Flux2Pipeline(PipelineAPIMixin):
             shard_prompt=shard_prompt,
         )
 
-    @cap_torch_threads_to_half_the_cpus()
     def __call__(
         self,
         *,
@@ -488,17 +526,20 @@ class Flux2Pipeline(PipelineAPIMixin):
         traced: bool = False,
         on_event: PipelineEventCallback | None = None,
     ) -> list[Image.Image]:
-        """Generate an image, or edit if ``images`` holds one or more reference images.
+        """Generate an image, or edit one if ``images`` holds a reference image.
 
         ``width`` and ``height`` default to the size the pipeline was created with and must be one
-        of ``resolutions``. Each reference image is center-cropped to the output's aspect ratio and
-        resized to the output size, at most one megapixel. Each size and number of reference images
-        gets its own denoising trace, captured on the first traced call.
+        of ``resolutions``. The reference image is center-cropped to the output's aspect ratio and
+        resized to the output size, at most one megapixel. Each size gets its own
+        traces, with and without a reference, captured on the first traced call.
         """
+        if images and len(images) > 1:
+            msg = "editing with more than one reference image is not supported"
+            raise NotImplementedError(msg)
         if images and self._vae_encoder is None:
             msg = "editing is not supported with dynamic loading"
             raise NotImplementedError(msg)
-        reference_images = list(images) if images else []
+        reference_image = images[0] if images else None
 
         width = width if width is not None else self._width
         height = height if height is not None else self._height
@@ -536,20 +577,17 @@ class Flux2Pipeline(PipelineAPIMixin):
             prompt_embeds, _mask = self._prompt_encoder.encode(
                 prompts,
                 num_images_per_prompt=num_images_per_prompt,
-                sequence_length=512,
+                sequence_length=_PROMPT_SEQUENCE_LENGTH,
                 traced=traced,
             )
             _, prompt_sequence_length, _ = prompt_embeds.shape
 
-        if reference_images:
-            logger.info(f"encoding {len(reference_images)} reference image(s)...")
+        if reference_image is not None:
+            logger.info("encoding the reference image...")
             with event_section(on_event, "image_encoder"):
-                encoded = [
-                    self._encode_reference(image, width=width, height=height, index=i, traced=traced)
-                    for i, image in enumerate(reference_images)
-                ]
-            reference = torch.cat([tokens for tokens, _ in encoded], dim=1)
-            reference_ids = torch.cat([ids for _, ids in encoded], dim=0)
+                reference, reference_ids = self._encode_reference(
+                    reference_image, width=width, height=height, traced=traced
+                )
             reference_sequence_length = reference.shape[1]
         else:
             reference = reference_ids = None
@@ -573,11 +611,11 @@ class Flux2Pipeline(PipelineAPIMixin):
         shape = [transformer_batch_size, self._num_channels_latents * p * p, latents_height // p, latents_width // p]
         latents = torch.randn(shape, generator=generator, dtype=torch.bfloat16).flatten(2).transpose(1, 2).float()
 
-        state = self._denoise_state(width, height, reference_count=len(reference_images))
+        state = self._denoise_state(width, height, edit=reference is not None, traced=traced)
         image_ids = _prepare_ids(height=latents_height // self._patch_size, width=latents_width // self._patch_size)
         rope_cos, rope_sin = self._pos_embed.forward(image_ids)
 
-        state.latents.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
+        state.latents.update(self._to_device(latents, mesh_axes=[None, sp_axis, None]), traced)
 
         # Each device runs the transformer on its shard of the latents followed by its shard of the
         # reference tokens, so the RoPE is arranged the same way. The attention does not depend on
@@ -587,13 +625,13 @@ class Flux2Pipeline(PipelineAPIMixin):
             reference_rope_cos, reference_rope_sin = self._pos_embed.forward(reference_ids)
             rope_cos = _interleave_shards(rope_cos, reference_rope_cos, sp_factor)
             rope_sin = _interleave_shards(rope_sin, reference_rope_sin, sp_factor)
-            state.reference.update(reference, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
+            state.reference.update(self._to_device(reference, mesh_axes=[None, sp_axis, None]), traced)
 
         # Store rope tensors pre-shaped as (1, 1, seq, head_dim) so attention blocks never
         # need to reshape per-call. SP sharding is on dim 2 (seq).
         rope_mesh_axes = [None, None, sp_axis, None]
-        state.rope_cos.update(rope_cos[None, None], traced, mesh_axes=rope_mesh_axes, device=self._mesh_device)
-        state.rope_sin.update(rope_sin[None, None], traced, mesh_axes=rope_mesh_axes, device=self._mesh_device)
+        state.rope_cos.update(self._to_device(rope_cos[None, None], mesh_axes=rope_mesh_axes), traced)
+        state.rope_sin.update(self._to_device(rope_sin[None, None], mesh_axes=rope_mesh_axes), traced)
         # The single blocks run on the concatenated [spatial | prompt] sequence and need the matching
         # rope. It is constant across the denoising steps, so concat once here.
         state.combined_rope_cos.update(ttnn.concat([state.rope_cos.data, self.ts.tt_prompt_rope_cos], dim=2), traced)
@@ -611,6 +649,14 @@ class Flux2Pipeline(PipelineAPIMixin):
         tt_prompt_embeds = from_torch(prompt_embeds, device=self._mesh_device, mesh_axes=prompt_embeds_mesh_axes)
         self.ts._tt_embedded_prompt.update(self.transformer.context_embedder(tt_prompt_embeds), traced)
         ttnn.deallocate(tt_prompt_embeds)
+
+        # The token count the attention reads at run time. Traced, it goes in as a host tensor, which
+        # the step's Tracer copies into the trace's own input on every replay.
+        total_sequence_length = total_sequence_length_tensor(
+            spatial_sequence_length + reference_sequence_length + prompt_sequence_length,
+            self._mesh_device,
+            on_host=traced,
+        )
 
         with event_section(on_event, "denoising"):
             for i, t in enumerate(tqdm.tqdm(timesteps)):
@@ -643,6 +689,7 @@ class Flux2Pipeline(PipelineAPIMixin):
                         "combined_rope": (state.combined_rope_cos.data, state.combined_rope_sin.data),
                         "spatial_sequence_length": spatial_sequence_length + reference_sequence_length,
                         "prompt_sequence_length": prompt_sequence_length,
+                        "total_sequence_length": total_sequence_length,
                     }
                     state.step_tracer(**step_inputs, traced=traced)
 
@@ -650,68 +697,86 @@ class Flux2Pipeline(PipelineAPIMixin):
         with event_section(on_event, "vae"):
             self._prepare_vae()
 
-            # Latents arrive SP-sharded on dim=1 (patchified token dim). Redistribute to
-            # whatever spatial sharding the VAE conv pyramid expects before unpatchifying.
-            #
-            # H (token dim=1): gather SP, then re-shard to H axis if on a different axis.
-            # W (spatial dim=2): can only be applied after unpatchify since H/W are interleaved
-            #   in patchified tokens; mesh_partition is applied right after the reshape below.
-            if self._vae_parallel.h_parallel is not None and self._vae_parallel.h_parallel.mesh_axis == sp_axis:
-                tt_latents = state.latents.data
-            else:
-                tt_latents = self._ccl_manager.all_gather(
-                    state.latents.data,
-                    dim=1,
-                    mesh_axis=sp_axis,
-                    use_hyperparams=True,
-                )
-                if self._vae_parallel.h_parallel is not None:
-                    tt_latents = ttnn.mesh_partition(
-                        tt_latents,
-                        dim=1,
-                        cluster_axis=self._vae_parallel.h_parallel.mesh_axis,
-                        memory_config=tt_latents.memory_config(),
-                    )
-
+            # Latents arrive SP-sharded on dim=1 (patchified token dim). The decoder undoes the patchify on the host
+            # and uploads the result split over its H and W axes.
+            latents = tensor.to_torch(state.latents.data, mesh_axes=(None, sp_axis, None))
             tt_latents = self._vae_decoder.preprocess_and_unpatchify(
-                tt_latents, height=latents_height, width=latents_width
+                latents, height=latents_height, width=latents_width
             )
 
-            if self._vae_parallel.w_parallel is not None:
-                tt_latents = ttnn.mesh_partition(
-                    tt_latents,
-                    dim=2,
-                    cluster_axis=self._vae_parallel.w_parallel.mesh_axis,
-                    memory_config=tt_latents.memory_config(),
-                )
-
-            tracer = self._vae_decoder_tracers.get((width, height))
-            if tracer is None:
-                tracer = Tracer(self._vae_decoder.forward, device=self._mesh_device, clone_prep_inputs=False)
-                self._vae_decoder_tracers[width, height] = tracer
-            tt_decoded_output = tracer(tt_latents, traced=traced)
+            if self._keeps_size_state(traced):
+                tracer = self._vae_decoder_tracers.get((width, height))
+                if tracer is None:
+                    tracer = Tracer(self._vae_decoder.forward, device=self._mesh_device, clone_prep_inputs=False)
+                    self._vae_decoder_tracers[width, height] = tracer
+                tt_decoded_output = tracer(tt_latents, traced=traced)
+            else:
+                tt_decoded_output = self._vae_decoder.forward(tt_latents)
+            # The decoder's output is flat, [N, 1, H * W, 3] tiled. float_to_uint8 maps it in tiles and
+            # untilizes the flat tensor, and the uint8 image is then made [N, H, W, 3] as a view.
+            image_hw = self._vae_decoder.output_hw((tt_latents.shape[1], tt_latents.shape[2]))
+            tt_image = float_to_uint8(tt_decoded_output, runtime_shapes=self._vae_decoder.runtime_shapes)
+            tt_image = ttnn.reshape(tt_image, (tt_image.shape[0], *image_hw, tt_image.shape[-1]))
             decoded_output = fast_device_to_host(
-                tt_decoded_output,
+                tt_image,
                 self._mesh_device,
-                [None, None],
+                self._vae_decoder.output_concat_dims(),
                 ccl_manager=self._vae_ccl_manager,
-                pre_transfer_fn=float_to_uint8,
             )
             output = [Image.fromarray(image.numpy()) for image in decoded_output]
 
         on_event(SectionEnd("total"))
         return output
 
-    def _denoise_state(self, width: int, height: int, *, reference_count: int) -> _DenoiseState:
-        state = self._denoise_states.get((width, height, reference_count))
+    def _keeps_size_state(self, traced: bool) -> bool:
+        """Whether a call keeps its size's denoising state and VAE tracers. A trace fixes its inputs'
+        buffers, so a traced size needs its own. A pipeline with trace warmup also keeps them for its
+        untraced calls, which allocate them before the first capture."""
+        return traced or self._trace_warmup
+
+    def _denoise_state(self, width: int, height: int, *, edit: bool, traced: bool) -> _DenoiseState:
+        # The step updates the latents in place, so the run before the capture works on copies.
+        if not self._keeps_size_state(traced):
+            return _DenoiseState(step_tracer=Tracer(self._step, device=self._mesh_device, clone_prep_inputs=True))
+        state = self._denoise_states.get((width, height, edit))
         if state is None:
-            # The step updates the latents in place, so the run before the capture works on copies.
             state = _DenoiseState(step_tracer=Tracer(self._step, device=self._mesh_device, clone_prep_inputs=True))
-            self._denoise_states[width, height, reference_count] = state
+            self._denoise_states[width, height, edit] = state
         return state
 
+    def _to_device(self, x: torch.Tensor, *, mesh_axes: Sequence[int | None]) -> ttnn.Tensor:
+        """Convert a tensor whose size follows the image size to bfloat16 tiles on the host, then move
+        it to the device. Converting on the device, as ttnn.from_torch does when it can, runs a
+        tilize and a typecast whose programs compile at every new size."""
+        host = from_torch(x, device=self._mesh_device, mesh_axes=mesh_axes, on_host=True)
+        return ttnn.to_device(host, self._mesh_device)
+
+    def _reference_size(self, *, width: int, height: int) -> tuple[int, int]:
+        """The size (width, height) a reference image is encoded at for an output of the given size:
+        the output size scaled down to at most one megapixel, rounded down to whole tokens."""
+        scale = min(1.0, math.sqrt(1024 * 1024 / (width * height)))
+        multiple = self._vae_scale_factor * self._patch_size
+        return int(width * scale) // multiple * multiple, int(height * scale) // multiple * multiple
+
+    def _transformer_row_capacity(self) -> int:
+        """The most tokens per device the transformer sees over all resolutions, rounded up to whole
+        tiles: the single blocks' spatial, reference and prompt tokens of an edit, or without a
+        reference when dynamic loading rules out editing."""
+        sp_factor = self._parallel_config.sequence_parallel.factor
+        token_size = self._vae_scale_factor * self._patch_size
+        prompt_rows = -(-_PROMPT_SEQUENCE_LENGTH // sp_factor) if self._shard_prompt else _PROMPT_SEQUENCE_LENGTH
+        rows = 0
+        for width, height in self._resolutions:
+            reference_width, reference_height = self._reference_size(width=width, height=height)
+            spatial_tokens = (height // token_size) * (width // token_size)
+            reference_tokens = (
+                0 if self.dynamic_load else (reference_height // token_size) * (reference_width // token_size)
+            )
+            rows = max(rows, -(-spatial_tokens // sp_factor) + -(-reference_tokens // sp_factor) + prompt_rows)
+        return -(-rows // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
     def _encode_reference(
-        self, image: Image.Image, *, width: int, height: int, index: int, traced: bool
+        self, image: Image.Image, *, width: int, height: int, traced: bool
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Encode a reference image into normalized latent tokens and their position ids.
 
@@ -720,10 +785,8 @@ class Flux2Pipeline(PipelineAPIMixin):
         """
         assert self._vae_encoder is not None
 
-        scale = min(1.0, math.sqrt(1024 * 1024 / (width * height)))
         multiple = self._vae_scale_factor * self._patch_size
-        reference_width = int(width * scale) // multiple * multiple
-        reference_height = int(height * scale) // multiple * multiple
+        reference_width, reference_height = self._reference_size(width=width, height=height)
 
         image = image.convert("RGB")
         crop_width = min(image.width, round(image.height * width / height))
@@ -736,23 +799,44 @@ class Flux2Pipeline(PipelineAPIMixin):
         pixels = torch.from_numpy(np.asarray(image)).float()[None] / 127.5 - 1.0
         h_axis = self._vae_parallel.h_parallel.mesh_axis if self._vae_parallel.h_parallel is not None else None
         w_axis = self._vae_parallel.w_parallel.mesh_axis if self._vae_parallel.w_parallel is not None else None
+        # Workaround: converted to bfloat16 in torch, so from_torch converts nothing on the device. With
+        # float32 it would tilize, typecast and untilize there, and those programs take their per-core
+        # block count at compile time, so they would compile at every new reference size. Converting
+        # in ttnn on the host instead is slower (about 45 ms against 20 ms at 1024²).
         tt_pixels = from_torch(
-            pixels, device=self._mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, h_axis, w_axis, None]
+            pixels.to(torch.bfloat16),
+            device=self._mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_axes=[None, h_axis, w_axis, None],
         )
 
-        tracer = self._vae_encoder_tracers.get((reference_width, reference_height))
-        if tracer is None:
-            tracer = Tracer(self._vae_encoder.forward, device=self._mesh_device, clone_prep_inputs=False)
-            self._vae_encoder_tracers[reference_width, reference_height] = tracer
-        tt_latents = tracer(tt_pixels, traced=traced)
+        if self._keeps_size_state(traced):
+            tracer = self._vae_encoder_tracers.get((reference_width, reference_height))
+            if tracer is None:
+                tracer = Tracer(self._vae_encoder.forward, device=self._mesh_device, clone_prep_inputs=False)
+                self._vae_encoder_tracers[reference_width, reference_height] = tracer
+            tt_latents = tracer(tt_pixels, traced=traced)
+        else:
+            tt_latents = self._vae_encoder.forward(tt_pixels)
 
-        latents = to_torch(tt_latents).float()
+        # The encoder leaves its output split over the H and W axes; the host assembles it, as for the
+        # decoded image, so on a single host no gather program is built per reference size.
+        latents = fast_device_to_host(
+            flat_to_row_major(
+                tt_latents,
+                self._vae_encoder.output_hw((tt_pixels.shape[1], tt_pixels.shape[2])),
+                runtime_shapes=self._vae_encoder.runtime_shapes,
+            ),
+            self._mesh_device,
+            self._vae_encoder.output_concat_dims(),
+            ccl_manager=self._vae_ccl_manager,
+        ).float()
         tokens = (self._patchify(latents) - self._latents_bn_mean) / self._latents_bn_std
-        # As diffusers, reference image i is at time 10 + 10 * i.
+        # As diffusers, the first reference image is at time 10.
         ids = _prepare_ids(
             height=reference_height // multiple,
             width=reference_width // multiple,
-            time=10 + 10 * index,
+            time=10,
         )
         return tokens, ids
 
@@ -770,6 +854,7 @@ class Flux2Pipeline(PipelineAPIMixin):
         combined_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         spatial_sequence_length: int,
         prompt_sequence_length: int,
+        total_sequence_length: ttnn.Tensor,
     ) -> None:
         noise_pred = self.transformer.forward(
             spatial=ttnn.concat([spatial, reference], dim=1) if reference is not None else spatial,
@@ -781,6 +866,7 @@ class Flux2Pipeline(PipelineAPIMixin):
             combined_rope=combined_rope,
             spatial_sequence_length=spatial_sequence_length,
             prompt_sequence_length=prompt_sequence_length,
+            total_sequence_length=total_sequence_length,
         )
         if reference is not None:
             noise_pred = noise_pred[:, : spatial.shape[1], :]

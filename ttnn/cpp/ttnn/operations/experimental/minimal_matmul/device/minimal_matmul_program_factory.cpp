@@ -4,13 +4,13 @@
 
 #include "minimal_matmul_program_factory.hpp"
 #include "kernels/minimal_matmul_runtime_args.hpp"
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 
 #include <algorithm>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -736,7 +736,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             tt::tt_metal::ComputeConfigDescriptor{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en,
                 .math_approx_mode = math_approx_mode,
             },
     });

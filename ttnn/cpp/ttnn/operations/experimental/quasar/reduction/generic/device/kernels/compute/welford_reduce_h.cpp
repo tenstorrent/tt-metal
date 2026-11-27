@@ -115,9 +115,7 @@ void kernel_main() {
             cb_in_obj.wait_front(onetile);
             // copy_tile reads cb_in. For FP32 input, c_0 carries UnpackToDestFp32 so the
             // FP32 mantissa is preserved into DEST for the welford SFPU consumer.
-            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             copy_tile(cb_in, 0, input_dst);
-            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
             cb_in_obj.pop_front(onetile);
 
             if (ht < (Ht - 1)) {

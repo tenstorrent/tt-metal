@@ -6,8 +6,12 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#ifdef ARCH_QUASAR
+#include "llk_math_eltwise_unary_sfpu_binop_with_scalar.h"
+#else
 #include "ckernel_sfpu_binop_with_unary.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
+#endif
 #endif
 
 namespace ckernel {
@@ -27,6 +31,7 @@ namespace ckernel {
  */
 // clang-format on
 enum { ADD_UNARY = 0, SUB_UNARY = 1, MUL_UNARY = 2, DIV_UNARY = 3, RSUB_UNARY = 4 };
+#ifndef ARCH_QUASAR
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_UNARY_CALL(
@@ -50,9 +55,13 @@ ALWI void sub_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode 
         vector_mode,
         param1));
 }
+#endif
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode = VectorMode::RC) {
+#ifdef ARCH_QUASAR
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, sfpu::BinopMode::Mul>(idst, param1, vector_mode)));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -61,8 +70,10 @@ ALWI void mul_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode 
         idst,
         vector_mode,
         param1));
+#endif
 }
 
+#ifndef ARCH_QUASAR
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void div_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_UNARY_CALL(
@@ -138,62 +149,17 @@ ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
         VectorMode::RC,
         param1));
 }
-
-// clang-format off
-/**
-* Performs element-wise add operation with uint32 scalar, wrapping modulo 2^32. The DST
-* register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
-* compute engine.
-*
-* Return value: None
-*
-* | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
-* |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
-* | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
-* | param1          | uint32 value scalar                                                        | uint32_t |                                                       | True     |
-*/
-// clang-format on
-
-ALWI void add_unary_tile_uint32(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_add_uint32,
-        (APPROX, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        param1));
-}
-
-// clang-format off
-/**
-* Performs element-wise sub operation with uint32 scalar, wrapping modulo 2^32. The DST
-* register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
-* compute engine.
-*
-* Return value: None
-*
-* | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
-* |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
-* | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
-* | param1          | uint32 value scalar                                                        | uint32_t |                                                       | True     |
-*/
-// clang-format on
-
-ALWI void sub_unary_tile_uint32(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_sub_uint32,
-        (APPROX, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        param1));
-}
+#endif
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void binop_with_scalar_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void binop_with_scalar_tile_init() {
+#ifdef ARCH_QUASAR
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init()));
+#else
+    MATH(SFPU_UNARY_INIT(unused));
+#endif
+}
 
 }  // namespace ckernel

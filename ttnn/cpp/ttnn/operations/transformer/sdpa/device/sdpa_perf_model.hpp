@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/base_types.hpp>
 
 namespace ttnn::operations::transformer::sdpa {
 

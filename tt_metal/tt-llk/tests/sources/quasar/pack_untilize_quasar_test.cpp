@@ -17,7 +17,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "ckernel_buf_desc.h"
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -69,8 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             l1_addr_16B = L1_ADDRESS(buffer_A[0]);
         }
 
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
-        constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
+        const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
 
         if constexpr (unpack_to_dest)
         {
@@ -238,8 +237,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "ckernel_buf_desc.h"
 #include "cpack_common.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
 #include "params.h"
@@ -275,16 +274,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+        std::uint8_t bfd_pack;
         if (_llk_pack_untilize_is_strided_(tensor_shape))
         {
             // PACR_STRIDE quirk: non-32x32 tiles index L1 rows as tiles, so the BD is built with y_dim = 1.
-            ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0, ckernel::trisc::L1AccessMode::Strided>(
+            bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Strided>(
                 tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         }
         else
         {
-            ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0, ckernel::trisc::L1AccessMode::Continuous>(
+            bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Continuous>(
                 tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         }
 

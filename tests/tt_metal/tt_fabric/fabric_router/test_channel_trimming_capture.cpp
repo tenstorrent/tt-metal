@@ -26,18 +26,16 @@
 #include <limits>
 #include <vector>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/discovery/cluster.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "context/metal_env_accessor.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"

@@ -13,8 +13,8 @@
 #include <string_view>
 #include <vector>
 
-#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <internal/mesh_device.hpp>
 #include <ttnn/distributed/api.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>

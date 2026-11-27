@@ -6,8 +6,8 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "reduce_to_root_op.hpp"
 
 #include "ttnn/operations/creation/creation.hpp"
@@ -206,7 +206,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     uint32_t packet_size_bytes = input_num_tiles * input_page_size_bytes;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
+    tt::tt_metal::Program program{};
 
     // sdpa compute values
     const auto tile_width = input_tensor_l.tensor_spec().tile().get_width();

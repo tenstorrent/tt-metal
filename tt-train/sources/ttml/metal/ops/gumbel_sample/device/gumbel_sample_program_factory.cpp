@@ -10,9 +10,9 @@
 #include <cmath>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include "gumbel_sample_device_operation.hpp"
 #include "gumbel_sample_device_operation_types.hpp"
@@ -136,7 +136,7 @@ uint32_t count_split_tiles(const ttnn::Shape& padded_shape, bool position_aware)
 }
 
 // The program's structure, derived once per create_descriptor() call. A cache hit recomputes only
-// the walk (`split`, from count_split_tiles).
+// the walk (`split`, from count_split_tiles); compute_layout pins it to split_work_to_cores.
 struct GumbelSampleLayout {
     uint32_t Wt{};             // vocab tiles per row
     uint32_t Ht{};             // token tiles per batch entry
@@ -177,6 +177,7 @@ GumbelSampleLayout compute_layout(const ttnn::Tensor& logits, bool position_awar
 
     auto [num_cores, all_cores, group_1, group_2, tiles_1, tiles_2] =
         tt::tt_metal::split_work_to_cores(grid, layout.total_tiles);
+    check_work_split(layout.split, num_cores, group_1, group_2, tiles_1, tiles_2);
     layout.num_cores = num_cores;
     layout.all_cores = all_cores;
     layout.core_group_1 = group_1;

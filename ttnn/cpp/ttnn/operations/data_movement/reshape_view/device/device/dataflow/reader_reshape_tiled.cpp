@@ -20,11 +20,12 @@ void kernel_main() {
     uint32_t start_output_page_idx = get_arg(args::start_output_page_idx);
     uint32_t end_output_page_idx = get_arg(args::end_output_page_idx);
 
-    constexpr uint32_t Max_Map_Size_Bytes = get_arg(args::Max_Map_Size_Bytes);
+    // The mapping page size depends on the shapes, so it is a runtime arg and the binary does not
+    // depend on them.
+    const uint32_t Max_Map_Size_Bytes = get_arg(args::Max_Map_Size_Bytes);
     constexpr uint32_t Tile_size_bytes = get_arg(args::Tile_size_bytes);
 
-    constexpr uint32_t Max_Map_Entries = Max_Map_Size_Bytes / sizeof(SegmentMapData);
-    constexpr uint32_t Max_Map_Elements = Max_Map_Entries * SegmentMapData::size;
+    const uint32_t Max_Map_Entries = Max_Map_Size_Bytes / sizeof(SegmentMapData);
 
     const auto input_addr_gen = TensorAccessor(tensor::input);
     const auto map_addr_gen = TensorAccessor(tensor::map);
@@ -37,7 +38,9 @@ void kernel_main() {
         dfb_mapping.reserve_back(One_Tile_Reserve);
         const uint64_t map_noc_addr = map_addr_gen.get_noc_addr(out_page_idx);
         const uint32_t map_addr = dfb_mapping.get_write_ptr();
-        enhanced_noc_async_read<Max_Map_Size_Bytes, true>(noc, map_noc_addr, map_addr, Max_Map_Size_Bytes);
+        // The read size is known only at runtime, so take the any-length path (a size template above
+        // the burst size), which also handles a mapping page larger than one burst.
+        enhanced_noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(noc, map_noc_addr, map_addr, Max_Map_Size_Bytes);
         noc.async_read_barrier();
         dfb_mapping.push_back(1);
 

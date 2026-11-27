@@ -6,7 +6,7 @@ import torch
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, PerfRunType, format_dict
+from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -14,7 +14,6 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
-    PERF_RUN_TYPE,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -88,7 +87,7 @@ def test_fast_tilize(
     configuration = TestConfig(
         "sources/fast_tilize_test.cpp",
         formats,
-        templates=[PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        templates=[],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),

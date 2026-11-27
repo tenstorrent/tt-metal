@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <string_view>
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
@@ -95,12 +93,6 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
     const bool enable_32_bit_dest = compute_config.enable_32_bit_dest;
     const bool is_gen2 = is_gen2_arch(arch);
 
-    // On Quasar, skip a DFB the kernel gives to the SFPU pipeline, the Unpack stage never unpacks it.
-    auto unpacked = [&](const DFBBinding& binding) {
-        return binding.endpoint_type == DFBEndpointType::CONSUMER &&
-               !(is_gen2 && ComputeKernelUsesSfpuPipeline(kernel, binding.dfb_spec_name, DFBEndpointType::CONSUMER));
-    };
-
     // Index the kernel's DFB bindings: which it binds at all, and which it CONSUMES. A self-loop
     // DFB appears as two separate bindings (one PRODUCER, one CONSUMER — there is no BOTH endpoint
     // type); indexing by name into a set dedups them, and membership in consumed_dfbs makes the
@@ -109,7 +101,7 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
     std::unordered_set<DFBSpecName> consumed_dfbs;
     for (const auto& binding : kernel.dfb_bindings) {
         bound_dfbs.insert(binding.dfb_spec_name);
-        if (unpacked(binding)) {
+        if (binding.endpoint_type == DFBEndpointType::CONSUMER) {
             consumed_dfbs.insert(binding.dfb_spec_name);
         }
     }
@@ -132,13 +124,6 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
         //////////////////////////
         // mode == UnpackToDest
         //////////////////////////
-        TT_FATAL(
-            !(is_gen2 && ComputeKernelUsesSfpuPipeline(kernel, dfb_name, DFBEndpointType::CONSUMER)),
-            "Kernel '{}' unpack_modes gives DFB '{}' UnpackToDest, but the DFB is in "
-            "config_2xx->sfpu_pipeline_consumed_dfbs: the Unpack stage never unpacks it, and UnpackToDest would "
-            "switch the whole kernel to unpack-to-Dest",
-            kernel.unique_id,
-            dfb_name);
         if (!consumed_dfbs.contains(dfb_name)) {
             continue;  // Compute kernel is bound as the DFB Producer: inert, tolerated.
         }
@@ -187,7 +172,7 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
     //       This check should be extended to int32/uint32. (TODO: Issue #49936)
     if (enable_32_bit_dest) {
         for (const auto& binding : kernel.dfb_bindings) {
-            if (!unpacked(binding)) {
+            if (binding.endpoint_type != DFBEndpointType::CONSUMER) {
                 continue;
             }
             const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
@@ -216,7 +201,7 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
     // bits never have to survive as a 32-bit FPU datum.
     if (enable_32_bit_dest && arch == tt::ARCH::QUASAR) {
         for (const auto& binding : kernel.dfb_bindings) {
-            if (!unpacked(binding)) {
+            if (binding.endpoint_type != DFBEndpointType::CONSUMER) {
                 continue;
             }
             const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
@@ -267,48 +252,12 @@ void ValidateImplicitSyncOptOuts(const KernelSpec& kernel) {
     }
 }
 
-// Check the kernel's two SFPU lists: no DFB is listed twice, and each is a DFB the kernel binds on that side.
-void ValidateSfpuPipelineDfbs(const KernelSpec& kernel) {
-    if (!kernel.is_compute_kernel()) {
-        return;
-    }
-    const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-    if (!compute_config.config_2xx.has_value()) {
-        return;
-    }
-    auto check_side = [&](const Group<DFBSpecName>& listed, DFBEndpointType side, std::string_view field) {
-        std::unordered_set<DFBSpecName> seen;
-        for (const auto& dfb_name : listed) {
-            TT_FATAL(
-                seen.insert(dfb_name).second,
-                "Kernel '{}' {} lists DFB '{}' more than once",
-                kernel.unique_id,
-                field,
-                dfb_name);
-            const bool bound_on_side = std::ranges::any_of(kernel.dfb_bindings, [&](const DFBBinding& binding) {
-                return binding.dfb_spec_name == dfb_name && binding.endpoint_type == side;
-            });
-            TT_FATAL(
-                bound_on_side,
-                "Kernel '{}' {} entry references DFB '{}', which the kernel does not bind as a {}",
-                kernel.unique_id,
-                field,
-                dfb_name,
-                side == DFBEndpointType::CONSUMER ? "consumer" : "producer");
-        }
-    };
-    const auto& config_2xx = *compute_config.config_2xx;
-    check_side(config_2xx.sfpu_pipeline_consumed_dfbs, DFBEndpointType::CONSUMER, "sfpu_pipeline_consumed_dfbs");
-    check_side(config_2xx.sfpu_pipeline_produced_dfbs, DFBEndpointType::PRODUCER, "sfpu_pipeline_produced_dfbs");
-}
-
 }  // namespace
 
 void ValidateKernelHardwareConfig(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch) {
     ValidateGen1DataMovementConfig(kernel, arch);
     ValidateUnpackModes(kernel, ctx.collected, arch);
     ValidateImplicitSyncOptOuts(kernel);
-    ValidateSfpuPipelineDfbs(kernel);
 }
 
 }  // namespace tt::tt_metal

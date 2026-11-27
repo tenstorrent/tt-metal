@@ -11,11 +11,11 @@
 
 #include <cstddef>
 #include <stdexcept>
-#include <tt-metalium/vocabulary/shape.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
 

@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <variant>
 
-#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn {

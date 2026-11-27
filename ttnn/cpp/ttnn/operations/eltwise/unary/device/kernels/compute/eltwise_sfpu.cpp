@@ -36,9 +36,7 @@ void kernel_main() {
         dfb_in.wait_front(1);
         dfb_out.reserve_back(1);
 
-        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(cb_input, 0, 0);
-        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 
 #ifdef SFPU_OP_CHAIN_0
         SFPU_OP_CHAIN_0

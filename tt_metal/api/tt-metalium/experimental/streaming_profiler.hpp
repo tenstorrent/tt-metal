@@ -18,8 +18,8 @@
 #include <type_traits>
 #include <utility>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/vocabulary/device_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device_types.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // The streaming profiler's host API. A callback registered here receives the profiler records that device kernels emit.

@@ -4,11 +4,11 @@
 
 #include "generic_pools.hpp"
 
-#include "tt-metalium/data_formats/tile_constants.hpp"
+#include "tt-metalium/constants.hpp"
 #include "ttnn/operations/experimental/quasar/pool_generic/device/pool_op.hpp"
 #include <cmath>
 #include <optional>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
@@ -27,9 +27,9 @@
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::pool::quasar {
 
@@ -97,8 +97,7 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
             return_indices,
             output_layout,
             output_dtype,
-            config_tensor_in_dram,
-            QUASAR_POOL_PRE_TILIZE_TILE_ROWS);
+            config_tensor_in_dram);
         TT_FATAL(
             sw_parallel_config.has_value(),
             "autosharding could not determine valid shard scheme, please check tensor dimensions");
@@ -499,8 +498,7 @@ public:
                 return_indices,
                 output_layout,
                 dtype,
-                config_tensor_in_dram,
-                QUASAR_POOL_PRE_TILIZE_TILE_ROWS);
+                config_tensor_in_dram);
 
             if (parallel_config.has_value()) {
                 shard_layout = parallel_config->shard_scheme;
@@ -635,8 +633,7 @@ public:
             output_layout,
             sliced_input_memory_config,
             sliding_window_config,
-            config_tensor_in_dram,
-            QUASAR_POOL_PRE_TILIZE_TILE_ROWS);
+            config_tensor_in_dram);
 
         log_trace(
             tt::LogOp,

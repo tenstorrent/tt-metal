@@ -10,9 +10,9 @@
 #include <optional>
 #include <utility>
 #include <tt-metalium/experimental/udm/types.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/shape.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 

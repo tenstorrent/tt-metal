@@ -4,7 +4,7 @@
 
 #include <tt-metalium/experimental/mesh_device_properties.hpp>
 
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "distributed/mesh_device_impl.hpp"

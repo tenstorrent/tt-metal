@@ -6,7 +6,7 @@
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 
 #include <array>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 
 namespace ttnn::kernel_lib::host {
 

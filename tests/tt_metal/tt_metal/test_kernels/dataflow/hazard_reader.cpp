@@ -15,6 +15,7 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "c_tensix_core.h"
 
 void kernel_main() {
     const uint32_t stall_cycles = get_arg(args::stall);
@@ -25,7 +26,9 @@ void kernel_main() {
 
     // Deliberate stall BEFORE the read so the read happens late (widens the window for a relaxed racing writer).
     if (stall_cycles) {
-        riscv_wait(stall_cycles);
+        const uint64_t end = c_tensix_core::read_wall_clock() + stall_cycles;
+        while (c_tensix_core::read_wall_clock() < end) {
+        }
     }
 
     Noc noc;

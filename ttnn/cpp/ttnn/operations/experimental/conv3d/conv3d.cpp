@@ -5,9 +5,9 @@
 #include "conv3d.hpp"
 #include "device/conv3d_device_operation.hpp"
 #include "ttnn/operations/experimental/conv3d/prepare_conv3d_weights.hpp"
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/common/constants.hpp"
 #include <numeric>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

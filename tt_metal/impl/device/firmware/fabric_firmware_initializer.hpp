@@ -7,7 +7,6 @@
 #include <atomic>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <unordered_set>
 #include <vector>
 
@@ -17,7 +16,6 @@
 namespace tt::tt_fabric {
 class ControlPlane;
 class FabricBuildSession;
-struct FabricDeviceBuild;
 }  // namespace tt::tt_fabric
 
 namespace tt::tt_metal {
@@ -44,23 +42,20 @@ private:
     void compile_and_configure_fabric();
 
     // Mock only: compile the fabric program on every device, without programming or syncing routers.
-    // Builds but does not compile when debug tooling disables erisc IRAM.
+    // No-op when debug tooling disables erisc IRAM.
     void compile_fabric_only();
 
     // Every fabric launch builds through here: start the launch's build session, then build each device's fabric
     // program into fabric_programs_. on_compiled(i) runs on the calling thread, in device order, once device i is done.
-    // With compile false it stops after the layout exchange.
-    void build_fabric_programs(bool parallel, const std::function<void(size_t)>& on_compiled = {}, bool compile = true);
+    void build_fabric_programs(bool parallel, const std::function<void(size_t)>& on_compiled = {});
 
     // task(i) for every device, on worker threads when parallel; on_done(i) as in build_fabric_programs().
     void for_each_device(
         bool parallel, const std::function<void(size_t)>& task, const std::function<void(size_t)>& on_done = {}) const;
 
-    // The two phases of build_fabric_programs(): every device's routers are created and wired (build_fabric), the
-    // routers' channel layouts are exchanged across hosts, then each device's program is compiled (compile_fabric).
-    // build_fabric returns nullopt, and compile_fabric then nullptr, for a device without routers.
-    std::optional<tt::tt_fabric::FabricDeviceBuild> build_fabric(Device* dev) const;
-    std::unique_ptr<Program> compile_fabric(Device* dev, std::optional<tt::tt_fabric::FabricDeviceBuild> build) const;
+    // Build and compile the fabric program for one device with this launch's build session.
+    // Returns nullptr if the device has no fabric routers.
+    std::unique_ptr<Program> compile_fabric(Device* dev) const;
 
     // Write runtime args and launch messages for an already-compiled fabric program on one device.
     void configure_fabric(Device* dev, Program& fabric_program) const;

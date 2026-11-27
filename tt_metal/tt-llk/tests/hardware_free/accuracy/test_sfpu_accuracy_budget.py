@@ -31,10 +31,14 @@ from helpers.llk_params import (
 )
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
+    TOLERANCE_CONTRACT,
+    AccuracyContract,
+    BudgetKey,
     accuracy_contract,
     assert_against_contract,
     domains_of,
     enrolled_ops,
+    resolve_contract,
     validate_registry,
 )
 from helpers.sfpu_domains import sfpu_unary_ops, swept_unary_ops
@@ -46,13 +50,9 @@ from helpers.ulp_table import (
     MEASURED_ARCH,
     OTHER_ARCH,
     TABLE_PATHS,
-    TOLERANCE_CONTRACT,
-    AccuracyContract,
-    BudgetKey,
     Metric,
     Row,
     load_table,
-    most_specific,
 )
 from helpers.utils import passed_test
 
@@ -66,10 +66,17 @@ QUERYABLE_INPUT_FORMATS = [*ULP_FORMATS, None]
 _LANES = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 
+def _contracts(*rows: Row):
+    """One op's rows as the registry holds them."""
+    return {row.key: row.contract for row in rows}
+
+
 def _op_wide_budget(monkeypatch, op):
     """Hold *op* to 0 steps by one op-wide row, which binds on the table's own
     architecture."""
-    monkeypatch.setitem(_SFPU_ACCURACY_BUDGET, op, (Row(measured=0),))
+    monkeypatch.setitem(
+        _SFPU_ACCURACY_BUDGET, op, {BudgetKey(): AccuracyContract(max_ulp=0)}
+    )
 
 
 def _every_variant(op):
@@ -268,55 +275,53 @@ def test_a_bad_query_is_refused_before_the_unenrolled_early_return():
 @pytest.mark.parametrize(
     "broad, narrow",
     [
-        (Row(measured=64), Row(output=DataFormat.Float32, measured=4)),
+        (AccuracyContract(max_ulp=64), AccuracyContract(max_ulp=4)),
         (
-            Row(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
-            Row(
-                output=DataFormat.Float32,
-                metric=Metric.TOLERANCE,
-                atol=0.001,
-                rtol=0.001,
-            ),
+            AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
+            AccuracyContract(metric=Metric.TOLERANCE, atol=0.001, rtol=0.001),
         ),
     ],
     ids=["ulp", "tolerance"],
 )
 def test_a_more_specific_key_wins_over_the_default(broad, narrow):
+    table = {BudgetKey(): broad, BudgetKey(output_format=DataFormat.Float32): narrow}
     for fmt, expected in ((DataFormat.Float32, narrow), (DataFormat.Float16_b, broad)):
         query = BudgetKey(output_format=fmt, arch=MEASURED_ARCH)
-        assert most_specific((broad, narrow), query) == expected, fmt.name
+        assert resolve_contract(table, query) == expected, fmt.name
 
 
 def test_specificity_counts_every_set_dimension():
     """Only an equal-specificity tie raises, so a miscount would silently repoint
     budgets."""
-    rows = (
-        Row(output=DataFormat.Float32, measured=4),
-        Row(output=DataFormat.Float32, dest=DestAccumulation.No, measured=8),
-    )
+    table = {
+        BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=4),
+        BudgetKey(
+            output_format=DataFormat.Float32, dest_acc=DestAccumulation.No
+        ): AccuracyContract(max_ulp=8),
+    }
     for dest_acc, expected in ((DestAccumulation.No, 8), (DestAccumulation.Yes, 4)):
         query = BudgetKey(output_format=DataFormat.Float32, dest_acc=dest_acc)
-        assert most_specific(rows, query).measured == expected
+        assert resolve_contract(table, query).max_ulp == expected
 
 
 def test_an_unset_query_dimension_only_matches_a_wildcard():
     """A caller that does not know `dest_acc` must not get a budget measured for one
     setting of it."""
-    rows = (Row(dest=DestAccumulation.Yes, measured=1),)
+    table = {BudgetKey(dest_acc=DestAccumulation.Yes): AccuracyContract(max_ulp=1)}
     query = BudgetKey(output_format=DataFormat.Float32)
-    assert most_specific(rows, query) is None
+    assert resolve_contract(table, query) is TOLERANCE_CONTRACT
 
 
 def test_equally_specific_keys_are_an_error_not_a_tie_break():
-    rows = (
-        Row(approx=ApproximationMode.No, measured=4),
-        Row(output=DataFormat.Float32, measured=64),
-    )
+    table = {
+        BudgetKey(approx_mode=ApproximationMode.No): AccuracyContract(max_ulp=4),
+        BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=64),
+    }
     query = BudgetKey(
         output_format=DataFormat.Float32, approx_mode=ApproximationMode.No
     )
     with refused(Problem.AMBIGUOUS):
-        most_specific(rows, query)
+        resolve_contract(table, query)
 
 
 # ── accuracy_contract: fallbacks and downgrades ───────────────────────────────
@@ -410,10 +415,12 @@ def test_a_downgrade_lands_on_the_ops_own_tolerance_row(
     monkeypatch.setitem(
         _SFPU_ACCURACY_BUDGET,
         MathOperation.Abs,
-        (
-            Row(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
-            Row(output=DataFormat.Float16_b, measured=3),
-        ),
+        {
+            BudgetKey(): AccuracyContract(
+                metric=Metric.TOLERANCE, atol=0.13, rtol=0.05
+            ),
+            BudgetKey(output_format=DataFormat.Float16_b): AccuracyContract(max_ulp=3),
+        },
     )
     gated = accuracy_contract(
         MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
@@ -436,15 +443,17 @@ def test_a_bare_tolerance_row_opts_out_of_ulp_without_retracting_a_declared_atol
     monkeypatch.setitem(
         _SFPU_ACCURACY_BUDGET,
         op,
-        (
-            Row(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
-            Row(
-                input=DataFormat.Float16_b,
-                output=DataFormat.Float16_b,
-                metric=Metric.TOLERANCE,
+        {
+            BudgetKey(): AccuracyContract(
+                metric=Metric.TOLERANCE, atol=0.13, rtol=0.05
             ),
-            Row(output=DataFormat.Float32, metric=Metric.TOLERANCE, atol=0.5, rtol=0.5),
-        ),
+            BudgetKey(
+                input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
+            ): AccuracyContract(metric=Metric.TOLERANCE),
+            BudgetKey(output_format=DataFormat.Float32): AccuracyContract(
+                metric=Metric.TOLERANCE, atol=0.5, rtol=0.5
+            ),
+        },
     )
     bare_cell = accuracy_contract(
         op,
@@ -461,7 +470,7 @@ def test_a_bare_tolerance_row_opts_out_of_ulp_without_retracting_a_declared_atol
     monkeypatch.setitem(
         _SFPU_ACCURACY_BUDGET,
         op,
-        (Row(output=DataFormat.Float16_b, metric=Metric.TOLERANCE),),
+        {BudgetKey(output_format=DataFormat.Float16_b): TOLERANCE_CONTRACT},
     )
     only_bare = accuracy_contract(
         op, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
@@ -475,10 +484,12 @@ def test_a_ulp_row_that_names_its_arch_binds_there(monkeypatch):
     monkeypatch.setitem(
         _SFPU_ACCURACY_BUDGET,
         MathOperation.Abs,
-        (
-            Row(output=DataFormat.Float16_b, measured=3),
-            Row(output=DataFormat.Float16_b, arch=arch, measured=5),
-        ),
+        {
+            BudgetKey(output_format=DataFormat.Float16_b): AccuracyContract(max_ulp=3),
+            BudgetKey(output_format=DataFormat.Float16_b, arch=arch): AccuracyContract(
+                max_ulp=5
+            ),
+        },
     )
 
     def resolved(on):
@@ -1118,7 +1129,9 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
     ),
     (MathOperation.Rpow, None, None, None, None): (
         "2**x for |x| above ~8e31: 1 where the answer is inf on a 16-bit Dest, whose "
-        "power body has no overflow guard (#52675)"
+        "power body has no overflow guard (#52675), and inf where it is 0 on a 32-bit "
+        "Dest, whose Veltkamp split overflows (#55129); NaN on a Float16 output is the "
+        "store's inf (#57215)"
     ),
 }
 
@@ -1183,10 +1196,10 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     ): 2,
     (MathOperation.Expm1Cw, None, None, None, None): 15,
     (MathOperation.I0, None, None, None, None): 10,
-    (MathOperation.I1, None, None, None, None): 16,
+    (MathOperation.I1, None, None, None, None): 10,
     (MathOperation.Lgamma, None, None, None, None): 1,
     (MathOperation.Polygamma, None, None, None, None): 11,
-    (MathOperation.Rpow, None, None, None, None): 4,
+    (MathOperation.Rpow, None, None, None, None): 10,
 }
 
 # The same pins where another architecture's table parks a different number of cells
@@ -1227,7 +1240,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON = {
             None,
         ): 1,
         (MathOperation.Expm1Cw, None, None, None, None): 13,
-        (MathOperation.I1, None, None, None, None): 16,
+        (MathOperation.I1, None, None, None, None): 20,
         (MathOperation.Polygamma, None, None, None, None): 12,
     },
 }
@@ -1371,7 +1384,9 @@ def test_domains_of_hands_the_sweep_driver_the_list_and_the_floor(monkeypatch):
     """Pure: beside the driver's one `accuracy_contract` lookup it must not publish a
     query of its own, or the recorder would drop that test's reading. A list binds only
     on its table's architecture, as a figure does."""
-    monkeypatch.setattr(budget, "_SFPU_ACCURACY_BUDGET", {MathOperation.Tanh: (_TANH,)})
+    monkeypatch.setattr(
+        budget, "_SFPU_ACCURACY_BUDGET", {MathOperation.Tanh: _contracts(_TANH)}
+    )
     monkeypatch.setattr(budget, "LAST_QUERY", None)
     query = dict(
         output_format=DataFormat.Float16_b,

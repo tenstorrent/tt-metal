@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/tensor/types.hpp"

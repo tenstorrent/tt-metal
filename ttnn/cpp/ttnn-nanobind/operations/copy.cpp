@@ -28,6 +28,7 @@ void bind_global_typecast(nb::module_& mod) {
         Keyword Args:
             memory_config (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
             output_tensor (Optional[ttnn.Tensor]): Preallocated tensor to store the output.
+            runtime_shapes (bool, optional): for a non-empty interleaved ROW_MAJOR device tensor with an interleaved output and without sub_core_grids or a preallocated output, one program serves every row count of the same row width and rank from one row per core up, at more host time per call. Has no effect on other tensors. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: The tensor with the updated data type. The output tensor will be in the same layout as the input tensor and have the given data type.
@@ -65,13 +66,15 @@ void bind_global_typecast(nb::module_& mod) {
                 const DataType&,
                 const std::optional<MemoryConfig>&,
                 const std::optional<Tensor>&,
-                const std::optional<CoreRangeSet>&>(&ttnn::typecast),
+                const std::optional<CoreRangeSet>&,
+                bool>(&ttnn::typecast),
             nb::arg("input_tensor"),
             nb::arg("dtype"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("runtime_shapes") = false),
         ttnn::overload_t(
             nb::overload_cast<
                 const Tensor&,
@@ -79,14 +82,16 @@ void bind_global_typecast(nb::module_& mod) {
                 const DataType&,
                 const std::optional<MemoryConfig>&,
                 const std::optional<Tensor>&,
-                const std::optional<CoreRangeSet>&>(&ttnn::typecast),
+                const std::optional<CoreRangeSet>&,
+                bool>(&ttnn::typecast),
             nb::arg("input_tensor"),
             nb::arg("input_dtype"),
             nb::arg("output_dtype"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("runtime_shapes") = false));
 }
 
 }  // namespace

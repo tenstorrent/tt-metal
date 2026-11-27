@@ -4,7 +4,7 @@
 
 #include "interleaved_to_sharded_op.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/hal.hpp>
 #include <ttnn/operation.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
 

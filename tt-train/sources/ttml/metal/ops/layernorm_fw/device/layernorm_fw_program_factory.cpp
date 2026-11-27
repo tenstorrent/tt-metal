@@ -6,13 +6,13 @@
 
 #include <cstdint>
 #include <optional>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "layernorm_fw_device_operation.hpp"
 #include "metal/common/program_utils.hpp"
-#include "tt-metalium/mesh/legacy/device.hpp"
+#include "tt-metalium/device.hpp"
 
 namespace {
 
@@ -180,6 +180,8 @@ tt::tt_metal::ProgramDescriptor LayerNormForwardProgramFactory::create_descripto
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
     const WorkSplit split = compute_tile_row_work_split(input);
+    check_work_split(
+        split, num_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
 
     uint32_t packed_scaler = pack_two_bfloat16_to_uint32(static_cast<float>(1.F / num_inner));
     uint32_t packed_eps = pack_two_bfloat16_to_uint32(epsilon);

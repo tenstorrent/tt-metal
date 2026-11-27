@@ -11,11 +11,11 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
@@ -975,11 +975,9 @@ UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, descriptor_adapter_t::shared_variables_t> shared_variables;
     const tt::tt_metal::WorkloadDescriptor no_workload_descriptor;
-    // Bind each program to its mesh's context, as the adapter does.
-    auto& mesh_device = *ttnn::device_operation::mesh_device_operation_utils::get_mesh_device(args, tensor_args);
     for (const auto& range : tensor_coords.ranges()) {
         auto desc = ProgramFactory::create_descriptor(args, tensor_args, output, range.start_coord());
-        tt::tt_metal::Program program{mesh_device, desc};
+        tt::tt_metal::Program program{desc};
         auto collected = descriptor_adapter_t::collect_tensor_buffers(tensor_args, output, no_workload_descriptor);
         auto bindings = tt::tt_metal::resolve_bindings(program, desc, collected.buffers, collected.num_input_buffers);
         workload.add_program(range, std::move(program));

@@ -13,20 +13,20 @@
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>  // FabricMuxConfig, get_tt_fabric_channel_buffer_size_bytes
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <algorithm>
 #include <map>
 #include <string>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/hal.hpp>
 
 #include <optional>
 #include <ranges>
@@ -734,7 +734,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     (void)tensor_return_value;  // output IS the pre-allocated tensor_args.halo_buffer
     auto* mesh_device = tensor_args.input_tensor.device();
 
-    Program program = CreateProgram(*mesh_device);
+    Program program{};
 
     // Padded-output fused mode: mux worker/mux core ranges
     CoreRangeSet occ_hw_workers, occ_hmux, occ_w_workers, occ_wmux;

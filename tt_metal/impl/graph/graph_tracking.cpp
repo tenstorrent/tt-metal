@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/observability/capture_hooks.hpp>
+#include <graph_tracking.hpp>
 #include <internal/graph_function_abort.hpp>
 
 #include <algorithm>
@@ -12,7 +12,7 @@
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"

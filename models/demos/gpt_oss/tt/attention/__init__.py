@@ -81,7 +81,6 @@ class Attention:
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
             fused_decode=fused_decode,
-            unpadded_o_proj_prefill=program_config.prefill_unpadded_o_proj,
         )
 
         # Initialize KV cache
@@ -123,7 +122,6 @@ class Attention:
         is_decode=True,
         user_id=0,
         batch_size=1,
-        sequence_parallel=False,
     ):
         """
         Forward pass - automatically dispatches to decode or prefill.
@@ -136,7 +134,6 @@ class Attention:
             kv_cache: External KV cache (optional, uses internal if not provided)
             is_decode: Whether this is decode mode (default: True)
             user_id: User/batch index for KV cache fill in prefill mode (default: 0)
-            sequence_parallel: prefill only: return the output reduce-scattered over the sequence (prefill_forward)
 
         Returns:
             Attention output [batch, seq_len, hidden_size]
@@ -190,6 +187,5 @@ class Attention:
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
                 batch_size=batch_size,
-                sequence_parallel=sequence_parallel,
                 fused_decode=self.fused_decode,
             )

@@ -5,17 +5,17 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
-#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <vector>
 
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/execution/mesh_command_queue.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-umd/types/xy_pair.hpp>

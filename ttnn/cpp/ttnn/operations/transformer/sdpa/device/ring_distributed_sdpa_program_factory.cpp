@@ -14,11 +14,11 @@
 #include <string>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -118,11 +118,6 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
             ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
             : true;
 
-    TT_FATAL(
-        grid_size.x > 0 && grid_size.y > 0,
-        "compute_with_storage_grid_size must be non-zero, got ({}, {})",
-        grid_size.x,
-        grid_size.y);
     auto core_grid = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
     uint32_t num_cores = grid_size.x * grid_size.y;
 

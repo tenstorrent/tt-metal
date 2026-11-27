@@ -23,7 +23,7 @@
 #include <vector>
 
 #include <internal/graph_function_abort.hpp>
-#include <tt-metalium/observability/capture_hooks.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace tt::tt_metal::graph_tracking_test {
 

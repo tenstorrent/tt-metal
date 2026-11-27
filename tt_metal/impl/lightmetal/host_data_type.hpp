@@ -8,7 +8,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 namespace tt::tt_metal {
 

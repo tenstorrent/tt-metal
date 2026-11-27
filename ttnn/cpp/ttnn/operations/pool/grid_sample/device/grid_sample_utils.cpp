@@ -4,8 +4,8 @@
 
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_utils.hpp"
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::prim {
 

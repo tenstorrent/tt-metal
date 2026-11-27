@@ -8,9 +8,9 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail {
 

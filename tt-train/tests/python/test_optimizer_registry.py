@@ -8,12 +8,8 @@ import numpy as np
 import pytest
 import ttml
 import ttnn
-from ttml.common import muon_optimizer
-from ttml.common.config import TrainingConfig
-from ttml.common.utils import apply_precision, create_optimizer
+from ttml.common.utils import create_optimizer
 from ttml.modules import AbstractModuleBase, Parameter
-
-from tensor_helpers import stored_dtypes
 
 
 def _make_python_optimizer_class():
@@ -368,126 +364,6 @@ def test_muon_with_adamw_group_options_cover_both_inner_optimizers(expect_error)
     assert opt.adamw_optimizer().get_param_groups()[0]["weight_decay"] == pytest.approx(0.05)
 
 
-@pytest.mark.requires_device
-def test_muon_with_adamw_rejects_fp32_master_weights(expect_error):
-    """Muon updates bf16 parameters only: MuonComposite refuses fp32 master weights before MuonWithAdamW builds its AdamW
-    half, with a message that names the parameter and points to fused AdamW."""
-    from ttml.common.muon_optimizer import MuonWithAdamW
-
-    model = _make_block_model()  # attention/weight and mlp/weight go to Muon
-    MuonWithAdamW({}, model.parameters())
-
-    ttml.core.apply_precision_config({"precision": {"master_dtype": "float32"}}, model.parameters())
-    with expect_error(RuntimeError, "MuonComposite supports bf16 parameters only, but parameter .* is stored as"):
-        MuonWithAdamW({}, model.parameters())
-
-
-class _PythonSGD(ttml.optimizers.OptimizerBase):
-    """A plain SGD written in Python, as a user registers one. Its update is bf16 math, so it casts fp32 gradients
-    first, as the C++ bf16-only optimizers do."""
-
-    def __init__(self, params):
-        super().__init__(params)
-        self._params = params
-
-    def get_name(self):
-        return "PythonSGD"
-
-    def step(self):
-        ttml.core.cast_fp32_gradients_to_bf16(self._params)
-        for tensor in self._params.values():
-            if tensor.is_grad_initialized():
-                tensor.set_value(ttnn.subtract(tensor.get_value(), ttnn.multiply(tensor.get_grad(), 1e-3)))
-
-    def zero_grad(self):
-        pass
-
-    def get_state_dict(self):
-        return {}
-
-    def set_state_dict(self, d):
-        pass
-
-    def get_steps(self):
-        return 0
-
-    def set_steps(self, s):
-        pass
-
-    def get_group_lrs(self):
-        return [1e-3]
-
-    def set_group_lrs(self, lrs):
-        pass
-
-
-@pytest.mark.requires_device
-def test_every_registered_optimizer_steps_on_fp32_gradients():
-    """With reduce_dtype float32 a parameter's gradient can reach any optimizer in fp32. Every type create_optimizer
-    accepts, C++ or registered from Python, steps on fp32 gradients and leaves its bf16 parameters bf16."""
-    muon_optimizer.register()  # what train.py does before it creates an optimizer
-    ttml.optimizers.register_optimizer("PythonSGD", lambda config, params: _PythonSGD(params))
-    types = ttml.optimizers.registered_optimizer_types()
-    assert {"AdamW", "SGD", "MuonComposite", "MuonWithAdamW", "NoOp", "PythonSGD"} <= set(types)
-    for optimizer_type in types:
-        model = _make_block_model()
-        parameters = model.parameters()
-        for tensor in parameters.values():
-            shape = tensor.get_value().shape
-            values = np.random.default_rng(1).uniform(-1.0, 1.0, size=tuple(shape)).astype(np.float32)
-            grad = ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.FLOAT32)
-            tensor.set_grad(grad.get_value(ttml.autograd.PreferredPrecision.NATIVE))
-            assert tensor.get_grad().dtype == ttnn.DataType.FLOAT32
-        optimizer = ttml.optimizers.create_optimizer({"type": optimizer_type, "lr": 1e-3}, parameters)
-        optimizer.step()
-        assert stored_dtypes(model) == {ttnn.DataType.BFLOAT16}, optimizer_type
-
-
-def test_module_parameters_are_marked_as_parameters():
-    """Registering a tensor in a module marks it as a parameter, the tensors whose gradients add up in fp32 under
-    reduce_dtype float32; a tensor no module registered isn't one. Empty tensors, so this needs no device."""
-    model = AbstractModuleBase()
-    model.weight = Parameter(ttml.autograd.Tensor())
-    assert [tensor.is_parameter() for tensor in model.parameters().values()] == [True]
-    assert not ttml.autograd.Tensor().is_parameter()
-
-
-@pytest.mark.requires_device
-def test_parameters_are_marked_however_they_reach_a_module(gradient_reduce_default):
-    """Every way a tensor becomes a module's parameter marks it: materialized after a lazy build, assigned to a name
-    that already holds a tensor (the module then overrides the one it has), or created by a LoRA wrapper. Under
-    reduce_dtype float32 each trainable one adds its gradients in fp32 from the second add."""
-    ttml.autograd.AutoContext.get_instance().get_device()
-    with ttml.lazy_init():
-        lazy = ttml.modules.LinearLayer(64, 32, has_bias=True)
-    assert len(lazy.parameters()) == 0
-    ttml.materialize_module(lazy)
-
-    replaced = ttml.modules.LinearLayer(64, 32, has_bias=False)
-    shape = tuple(replaced.weight.tensor.shape())
-    fresh = ttml.autograd.Tensor.from_numpy(np.ones(shape, np.float32), new_type=ttnn.DataType.BFLOAT16)
-    assert not fresh.is_parameter()
-    replaced.weight = Parameter(fresh)
-    assert fresh.is_parameter()
-
-    lora = ttml.modules.LoraLinear(
-        ttml.modules.LinearLayer(64, 32, has_bias=False), ttml.modules.LoraConfig(rank=4, alpha=8.0)
-    )
-
-    gradient_reduce_default(ttnn.DataType.FLOAT32)
-    for module, trainable in ((lazy, 2), (replaced, 1), (lora, 2)):
-        parameters = module.parameters()
-        assert all(tensor.is_parameter() for tensor in parameters.values())
-        accumulating = [tensor for tensor in parameters.values() if tensor.get_requires_grad()]
-        assert len(accumulating) == trainable
-        for tensor in accumulating:
-            grad = ttnn.zeros_like(tensor.get_value())
-            tensor.add_grad(grad)
-            assert tensor.get_grad().dtype == ttnn.DataType.BFLOAT16
-            tensor.add_grad(grad)
-            assert tensor.get_grad().dtype == ttnn.DataType.FLOAT32
-
-
 def test_registry_reads_variant_only_adamw_options():
     """Stochastic Rounding (AdamW) and Kahan Summation (AdamWComposite) are parsed only for the config that has the
     field, so a renamed field would silently drop its YAML key."""
@@ -500,6 +376,10 @@ def test_registry_reads_variant_only_adamw_options():
     for kahan_summation, num_buffers in ((True, len(params)), (False, 0)):
         opt = ttml.optimizers.create_optimizer({"type": "AdamWComposite", "kahan_summation": kahan_summation}, params)
         assert len(opt.get_state_dict()["kahan_compensation"]) == num_buffers
+
+
+def _stored_dtypes(model) -> set:
+    return {t.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for t in model.parameters().values()}
 
 
 @pytest.mark.requires_device
@@ -522,7 +402,7 @@ def test_create_optimizer_applies_master_dtype(precision, expected):
 
     create_optimizer(model, {"training_config": training_config})
 
-    assert stored_dtypes(model) == {expected}
+    assert _stored_dtypes(model) == {expected}
 
 
 class _ModelWithoutParameters:
@@ -537,103 +417,9 @@ def test_create_optimizer_rejects_an_unknown_master_dtype(expect_error):
         create_optimizer(_ModelWithoutParameters(), config)
 
 
-@pytest.mark.parametrize(
-    "precision, expected",
-    [
-        ({"reduce_dtype": "float32"}, ttnn.DataType.FLOAT32),
-        ({"reduce_dtype": "bfloat16"}, ttnn.DataType.BFLOAT16),
-        ({}, None),
-    ],
-)
-def test_create_optimizer_stores_the_reduce_dtype(gradient_reduce_default, precision, expected):
-    """With a full config, create_optimizer also stores precision.reduce_dtype as the default the gradient syncs sum in:
-    ttml.sync_gradients and the FSDP backward hook read it when a call passes none. A config without the key stores
-    none, whatever was stored before. No parameter is touched, so this needs no device."""
-    gradient_reduce_default(ttnn.DataType.FLOAT32 if expected is None else None)
-    config = {"training_config": {"precision": precision, "optimizer": {"type": "AdamW"}}}
-
-    create_optimizer(_ModelWithoutParameters(), config)
-
-    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == expected
-
-
 def test_create_optimizer_rejects_an_unknown_precision_key(expect_error):
     """A typo under precision stops the run instead of training in the model's dtype; checked before any parameter is
     touched, so this needs no device."""
     config = {"training_config": {"precision": {"params_dtype": "float32"}, "optimizer": {"type": "AdamW"}}}
     with expect_error(RuntimeError, "Unknown key precision.params_dtype"):
         create_optimizer(_ModelWithoutParameters(), config)
-
-
-# The checks behind these bindings are covered case by case by ParameterDtypeTest in C++; Python adds the dict-to-YAML
-# conversion and the exception type, so each binding keeps one valid and one invalid case.
-
-
-def test_validate_precision_config_checks_without_applying(gradient_reduce_default, expect_error):
-    """A runner checks the block right after loading its config; a valid block stores nothing, an invalid one raises
-    what apply_precision_config would. No device needed."""
-    gradient_reduce_default(ttnn.DataType.BFLOAT16)
-    ttml.core.validate_precision_config({"precision": {"master_dtype": "float32", "reduce_dtype": "float32"}})
-    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.BFLOAT16
-
-    with expect_error(RuntimeError, 'precision.reduce_dtype must be "bfloat16" or "float32"'):
-        ttml.core.validate_precision_config({"precision": {"reduce_dtype": "float16"}})
-
-
-def test_training_config_checks_the_precision_block_and_exposes_it(expect_error):
-    """TrainingConfig, which the runners build right after loading the YAML, checks the precision block, so a typo stops
-    the run before the model is built, and hands the block on as ``.precision``. No device needed."""
-    precision = {"master_dtype": "float32", "reduce_dtype": "float32"}
-    assert TrainingConfig({"training_config": {"precision": precision}}).precision == precision
-    with expect_error(RuntimeError, "Unknown key precision.master_dtpye"):
-        TrainingConfig({"training_config": {"precision": {"master_dtpye": "float32"}}})
-
-
-def test_apply_precision_takes_ttnn_dtypes_and_none_means_no_block(gradient_reduce_default):
-    """A ``ttnn.DataType`` value means what its YAML name does, as it does for ``fully_shard`` and
-    ``ttml.sync_gradients``; ``None`` is no block and stores no reduce dtype, as ``create_optimizer`` does for a config
-    without one. No parameter is touched, so this needs no device."""
-    apply_precision(_ModelWithoutParameters(), {"reduce_dtype": ttnn.DataType.FLOAT32})
-    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
-
-    apply_precision(_ModelWithoutParameters(), None)
-    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() is None
-
-
-@pytest.mark.parametrize("value", [ttnn.DataType.UINT32, 32])
-def test_apply_precision_rejects_values_that_would_read_as_unset(expect_error, value):
-    """Anything but a name, None or a bf16/fp32 ``ttnn.DataType`` would reach C++ as a YAML null and read as unset, so
-    it raises naming the key. No device needed."""
-    with expect_error(TypeError, "precision.reduce_dtype must be"):
-        apply_precision(_ModelWithoutParameters(), {"reduce_dtype": value})
-
-
-@pytest.mark.parametrize("block", [ttnn.DataType.FLOAT32, ("master_dtype", "float32"), "float32"])
-def test_apply_precision_rejects_a_block_that_is_not_a_dict(gradient_reduce_default, expect_error, block):
-    """A block that isn't a mapping could reach C++ as a YAML null and read as no block, clearing the stored reduce
-    dtype without a word, so it raises. No device needed."""
-    gradient_reduce_default(ttnn.DataType.FLOAT32)
-    with expect_error(TypeError, "precision must be a dict"):
-        apply_precision(_ModelWithoutParameters(), block)
-    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
-
-
-def test_create_optimizer_takes_ttnn_dtypes_in_a_whole_config(gradient_reduce_default, expect_error):
-    """The block of a whole config goes through the same conversion as ``apply_precision``'s. No device needed."""
-    gradient_reduce_default(None)
-    config = {"training_config": {"precision": {"reduce_dtype": ttnn.DataType.FLOAT32}, "optimizer": {"type": "AdamW"}}}
-    create_optimizer(_ModelWithoutParameters(), config)
-    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
-
-    config["training_config"]["precision"] = {"reduce_dtype": ttnn.DataType.UINT32}
-    with expect_error(TypeError, "precision.reduce_dtype must be BFLOAT16 or FLOAT32"):
-        create_optimizer(_ModelWithoutParameters(), config)
-
-
-def test_training_config_checks_ttnn_dtypes_when_the_config_is_parsed(expect_error):
-    """TrainingConfig's early check reads the block as ``apply_precision`` will, so a ``ttnn.DataType`` it can't take
-    stops the run before the model is built, and one it can take passes. No device needed."""
-    precision = {"reduce_dtype": ttnn.DataType.FLOAT32}
-    assert TrainingConfig({"training_config": {"precision": precision}}).precision == precision
-    with expect_error(TypeError, "precision.reduce_dtype must be BFLOAT16 or FLOAT32"):
-        TrainingConfig({"training_config": {"precision": {"reduce_dtype": ttnn.DataType.UINT32}}})

@@ -13,8 +13,8 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <utility>
@@ -30,7 +30,21 @@ struct UpsampleBilinearProgramFactory {
 struct UpsampleMultiCoreInterleavedProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
+
+    // Rewrites the row counts, start rows and output height and width on a hit at another shape, and rebinds
+    // the tensors.
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
+        const UpsampleParams& operation_attributes,
+        const Tensor& input_tensor,
+        Tensor& output_tensor,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
+
+// Whether an interleaved program can serve another shape with the same channel count: with runtime_shapes, a
+// non-empty, unpadded row-major input and an interleaved output. Its kernels take the row counts and the output
+// height and width at run time, so only the row width (the page size) and, up to one row per core, the row count
+// shape the program.
+bool upsample_interleaved_is_shape_free(const UpsampleParams& operation_attributes, const Tensor& input_tensor);
 
 struct UpsampleMultiCoreShardedProgramFactory {
     // create_program_artifacts() uploads the per-core halo lookup config tensor and parks it in
@@ -57,6 +71,7 @@ struct UpsampleOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t& args, const Tensor& input);
     static void validate_on_program_cache_miss(const operation_attributes_t& args, const Tensor& input);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t& args, const Tensor& input);
     static spec_return_value_t compute_output_specs(const operation_attributes_t& args, const Tensor& input);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const Tensor& input);
 };
@@ -68,6 +83,7 @@ ttnn::Tensor upsample(
     const std::string& mode,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config = std::nullopt);
+    const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config = std::nullopt,
+    bool runtime_shapes = false);
 
 }  // namespace ttnn::prim

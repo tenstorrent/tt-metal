@@ -4,8 +4,8 @@
 
 // #include <lightmetal_capture_utils.hpp>
 // #include <stdint.h>
-// #include <tt-metalium/memory/buffer/buffer.hpp>
-// #include <tt-metalium/workload/legacy/host_api.hpp>
+// #include <tt-metalium/buffer.hpp>
+// #include <tt-metalium/host_api.hpp>
 // #include <cstddef>
 // #include <vector>
 

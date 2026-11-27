@@ -10,12 +10,12 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
+#include "tt-metalium/buffer_types.hpp"
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -3831,18 +3831,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
-    // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode, and cb_intermed0 holds 32-bit
-    // partials under fp32 accumulation. UnpackToSrc, unlike matmul_unified's UnpackToDest: the fused bias add
-    // here reads the partials as an FPU SrcA operand, and on Quasar UnpackToDest is kernel-wide (UnpackToDestEn
-    // sends every copy_tile through Dest, see #62102). The cost is that the reload between K blocks rounds
-    // through SrcA (TF32) and loses fp32 precision at every block boundary. The non-Quasar mcast factories
-    // avoid that loss by marking interm0 UnpackToDest (or, with a fused bias, an alias of it) (#50250).
-    const bool interm0_is_32bit = interm0_data_format == tt::DataFormat::Float32 ||
-                                  interm0_data_format == tt::DataFormat::Int32 ||
-                                  interm0_data_format == tt::DataFormat::UInt32;
-    if (fp32_dest_acc_en && interm0_is_32bit) {
-        compute_hw_config.unpack_modes.emplace(RO_INTERM0_DFB, m2::UnpackMode::UnpackToSrc);
-    }
 
     // in1 reader uses the optimized reader noc; in0 the dram-write noc. (The legacy split-half
     // _other receivers ran on the opposite NOC for perf; the Metal 2.0 host API selects the NOC via

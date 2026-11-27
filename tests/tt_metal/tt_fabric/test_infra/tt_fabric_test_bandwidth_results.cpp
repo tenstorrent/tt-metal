@@ -12,7 +12,7 @@
 #include <iomanip>
 #include <numeric>
 #include <sstream>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common.hpp"

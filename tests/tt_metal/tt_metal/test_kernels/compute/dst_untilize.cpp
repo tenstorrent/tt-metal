@@ -42,11 +42,9 @@ void kernel_main() {
         for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
             dfb_in0.wait_front(block_ct_dim);
             tile_regs_acquire();
-            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             for (uint32_t i = 0; i < block_ct_dim; ++i) {
                 copy_tile(dfb::in, i, i);
             }
-            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
             tile_regs_commit();
             tile_regs_wait();
             pack_untilize_dest<block_ct_dim, full_ct_dim>(dfb::out, 1, b);

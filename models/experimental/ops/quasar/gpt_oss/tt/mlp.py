@@ -6,7 +6,7 @@ MoE MLP: Router + Experts with minimal abstraction
 """
 import ttnn
 from models.experimental.ops.quasar.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
-from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_cache_file_name, get_compute_grid_size
+from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_cache_file_name
 from models.experimental.ops.quasar.gpt_oss.utils.substate import substate
 
 from .experts import ExpertConfig, Experts
@@ -139,10 +139,8 @@ class MLP:
                 swiglu_limit=hf_config.swiglu_limit,
             )
 
-            # Use GPT-OSS specific program config. Its core grids assume a device with at least 6 core rows, so
-            # each grid is fitted to the device's compute grid.
-            grid = get_compute_grid_size(mesh_device)
-            program_config = GPTOSSProgramConfig(max_grid=(grid.x, grid.y))
+            # Use GPT-OSS specific program config
+            program_config = GPTOSSProgramConfig()
 
             # Create experts with new modular implementation
             self.experts = Experts(

@@ -4,6 +4,7 @@
 
 #include "no_op.hpp"
 
+#include "core/tt_tensor_utils.hpp"
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
@@ -13,7 +14,11 @@ NoOp::NoOp(ttml::serialization::NamedParameters parameters) : OptimizerBase(std:
 }
 
 void NoOp::zero_grad() {
-    clear_gradients();
+    for (auto& [name, tensor_ptr] : m_parameters) {
+        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
+            tensor_ptr->set_grad(core::zeros_like(tensor_ptr->get_value()));
+        }
+    }
 }
 
 void NoOp::step() {

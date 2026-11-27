@@ -232,8 +232,6 @@ def test_prefill_block_loop(
     logger.info(f"Loading layer {real_layer_idx} weights...")
     layer_raw = sub_state_dict(state_dict, f"model.layers.{real_layer_idx}.")
     layer_dequant = dequantize_state_dict(layer_raw, hf_config)
-    # BF16 tensors of the FP8 checkpoint can sit at odd mmap offsets, which from_torch cannot borrow.
-    layer_dequant = {k: v.clone() if v.data_ptr() % v.element_size() else v for k, v in layer_dequant.items()}
 
     # --- Build TT state dict for TtPrefillBlock ---
     layer_sd = {

@@ -9,10 +9,10 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 

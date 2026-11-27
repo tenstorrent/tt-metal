@@ -8,12 +8,12 @@
 #include "offset_cumsum_device_operation_types.hpp"
 
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 

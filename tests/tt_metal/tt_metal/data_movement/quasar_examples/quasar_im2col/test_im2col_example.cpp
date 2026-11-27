@@ -7,9 +7,8 @@
 #include <cstdint>
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace tt::tt_metal {
 
@@ -45,11 +44,11 @@ bool run_im2col_test(
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());

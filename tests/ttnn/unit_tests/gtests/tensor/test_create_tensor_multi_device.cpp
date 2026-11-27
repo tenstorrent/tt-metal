@@ -8,7 +8,7 @@
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "ttnn/operations/creation/creation.hpp"

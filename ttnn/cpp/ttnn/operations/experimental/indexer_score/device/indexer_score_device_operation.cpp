@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>  // q.device()->get_view().shape() for block-cyclic sp derivation
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/mesh_device.hpp>  // q.device()->get_view().shape() for block-cyclic sp derivation
 
 #include "kernels/indexer_score_work_split.hpp"  // banded grid mapping (banded_core_count)
 #include "indexer_score_host_common.hpp"         // program::ring_size_for (shared with the fused factory)
@@ -93,8 +93,7 @@ void validate_runtime_values(const operation_attributes_t& attrs, const tensor_a
             // Metadata path: the slot is a device word, so only the recomposition stride is checkable.
             // Skip the slot-range check ONLY -- falling through keeps the kv_len block below covered.
             TT_FATAL(
-                attrs.index_cache_num_layers > 0 && attrs.index_cache_num_layers <= kB &&
-                    kB % attrs.index_cache_num_layers == 0,
+                attrs.index_cache_num_layers <= kB && kB % attrs.index_cache_num_layers == 0,
                 "indexer_score index_cache_num_layers {} must divide the index cache's {} slots (user-major)",
                 attrs.index_cache_num_layers,
                 kB);
@@ -1328,7 +1327,7 @@ ttnn::Tensor ring_indexer_score_dsa(
             "extent; got {} and {}",
             q.logical_shape()[2],
             weights.logical_shape()[2]);
-        const auto fabric_config = tt::tt_fabric::GetFabricConfig(*q.device());
+        const auto fabric_config = tt::tt_fabric::GetFabricConfig();
         // A full mesh is gathered as one snake across both axes, which only a 2D fabric can route.
         TT_FATAL(
             tt::tt_fabric::is_2d_fabric_config(fabric_config),

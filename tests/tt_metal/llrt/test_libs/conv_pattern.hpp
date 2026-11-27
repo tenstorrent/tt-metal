@@ -6,7 +6,7 @@
 #include <map>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 using namespace tt::constants;
 class ConvParameters {
 public:

@@ -6,12 +6,12 @@
 
 // #include "dispatch_fixture.hpp"
 // #include "env_lib.hpp"
-// #include <tt-metalium/mesh/legacy/device.hpp>
+// #include <tt-metalium/device.hpp>
 // #include "impl/context/metal_context.hpp"
-// #include <tt-metalium/workload/legacy/host_api.hpp>
-// #include <tt-metalium/execution/slow_dispatch.hpp>
-// #include <tt-metalium/workload/legacy/circular_buffer_constants.h>
-// #include <tt-metalium/data_formats/data_format.hpp>
+// #include <tt-metalium/host_api.hpp>
+// #include <tt-metalium/tt_metal.hpp>
+// #include <circular_buffer_constants.h>
+// #include <tt-metalium/tt_backend_api_types.hpp>
 // #include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
 // #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 // #include "command_queue_fixture.hpp"

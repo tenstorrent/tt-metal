@@ -11,8 +11,8 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/cluster.hpp>
 #include <internal/cluster_noc_helpers.hpp>
 
 #include "ttnn/cluster.hpp"

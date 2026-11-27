@@ -12,7 +12,7 @@
 #include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 using namespace tt::tt_metal;
 

@@ -12,12 +12,7 @@ set_target_properties(
             api
 )
 
-file(
-    GLOB_RECURSE kernels
-    device/kernels/*.cpp
-    device/kernels/*.h
-    device/kernels/*.hpp
-)
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_experimental_modulated_deform_conv2d
     PUBLIC

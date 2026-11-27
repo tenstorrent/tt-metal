@@ -4,7 +4,7 @@
 
 #include "paged_fill_cache_device_operation.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"

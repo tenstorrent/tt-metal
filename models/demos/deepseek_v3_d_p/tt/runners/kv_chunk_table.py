@@ -70,10 +70,9 @@ def dflash_config_name(kind: str, head_idx: int) -> str:
 
 @dataclass(frozen=True)
 class KdaTableSpec:
-    """The Kimi-K3 KDA state slabs as the table sees them: the recurrent and convolution configs, named after
-    the block-cyclic caches -- "01"/"02" for K3 (kvpe only), "02"/"03" for K3.1 (kvpe + DSA index).
+    """The Kimi-K3 KDA state slabs as the table sees them: configs "01" (recurrent) and "02" (convolution).
 
-    ``geometry`` fixes the segment numbering, the device groups and the slab strides; ``recurrent`` / ``convolution`` are this rank's slabs when it
+    ``geometry`` fixes the segment numbering; ``recurrent`` / ``convolution`` are this rank's slabs when it
     holds any (None on a rank that builds the table for KDA layers it does not own); the two layouts are
     the all-gathered ``KvCacheStage`` layouts in compacted KDA-slot space; ``layer_rows`` maps that
     space to model layers. See ``populate_kv_chunk_address_table_kda``.
@@ -139,7 +138,6 @@ def build_and_serialize_kv_chunk_table(
     num_users,
     chunk_size_global,
     path,
-    cache_num_users=None,
     index_kv_cache=None,
     dflash_caches=None,
     dflash_spec=None,
@@ -159,9 +157,8 @@ def build_and_serialize_kv_chunk_table(
     ``kvpe_alias_rows`` (``{alias row: source row}``): config-0 rows published at another row's
     addresses, for decode MTP levels that share one KV cache. Merged (DSA) table only.
 
-    ``kda`` (Kimi-K3/K3.1): a :class:`KdaTableSpec` describing the KDA state slabs. It adds the recurrent and
-    convolution configs after the block-cyclic ones -- "01"/"02" after kvpe alone (K3), "02"/"03" after kvpe
-    and the DSA index cache (K3.1) -- on the contract's synthetic position axis
+    ``kda`` (Kimi-K3 only): a :class:`KdaTableSpec` describing the KDA state slabs. It adds configs "01"
+    (recurrent) and "02" (convolution) after the kvpe config, on the contract's synthetic position axis
     (strides 96 / 64 over one window, see ``kda_position``), tagged Snapshot, and published on the
     model's layer axis via its own ``layer_rows``; ``layer_rows`` (the kvpe map) is honoured on the merged
     path as well.
@@ -203,10 +200,6 @@ def build_and_serialize_kv_chunk_table(
     per-stage layout per block-cyclic cache (config order), so rank 0 builds one table spanning every
     stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests).
 
-    ``cache_num_users``: slots the caches are allocated with, when more than the ``num_users`` the table
-    publishes. A traced packed forward adds a scratch slot after them (``kv_cache_slots``); it only changes
-    the layer count derived from a cache's folded batch dim. Defaults to ``num_users``.
-
     KV dedup is read from the KVPE cache's declared topology (is_tp_deduped_kv_cache), so the table cannot
     disagree with the allocation. ``tp_axis`` is the dflash head-count geometry, not the dedup switch."""
 
@@ -223,6 +216,7 @@ def build_and_serialize_kv_chunk_table(
         assert dflash_caches is None, "pass the drafter either as local tensors or as a staged spec, not both"
         all_caches.append(("dflash_staged", dflash_spec))
     if kda is not None:
+        assert index_kv_cache is None, "a DSA index cache and KDA state slabs in one table is not a supported layout"
         all_caches.extend((kind, kda) for kind in KDA_TABLE_KINDS)
     if index_kv_cache is not None or dflash_caches is not None or dflash_spec is not None or kda is not None:
         return _build_and_serialize_merged_kv_chunk_table(
@@ -236,7 +230,6 @@ def build_and_serialize_kv_chunk_table(
             num_users=num_users,
             chunk_size_global=chunk_size_global,
             path=path,
-            cache_num_users=cache_num_users,
             stage_layouts=stage_layouts,
             index_layer_ids=index_layer_ids,
             dflash_first_layer=dflash_first_layer,
@@ -265,7 +258,6 @@ def build_and_serialize_kv_chunk_table(
             layer_rows=layer_rows,
             tp_axis=tp_axis if kv_dedup else None,
             chunk_size_global=chunk_size_global,
-            cache_num_users=cache_num_users,
         )
 
     return serialize_kv_chunk_table(
@@ -291,7 +283,6 @@ def _build_and_serialize_merged_kv_chunk_table(
     path,
     tp_axis,
     chunk_size_global=None,
-    cache_num_users=None,
     stage_layouts=None,
     index_layer_ids=None,
     dflash_first_layer=0,
@@ -315,9 +306,8 @@ def _build_and_serialize_merged_kv_chunk_table(
     ``kvpe_alias_rows``: ``{alias row: source row}`` past config 0's rows, each published at its source's
     addresses. Config 0 widens to cover them; config 1 widens with it (one layer axis) but gets no aliases.
 
-    ``("kda_recurrent", spec)`` / ``("kda_convolution", spec)`` (Kimi-K3/K3.1): a :class:`KdaTableSpec`; these
-    take the decimal names after the block-cyclic caches (00 kvpe / 01 index / 02 recurrent / 03 convolution
-    when all are present) and are populated by
+    ``("kda_recurrent", spec)`` / ``("kda_convolution", spec)`` (Kimi-K3): a :class:`KdaTableSpec`; these
+    take the decimal names after the block-cyclic caches and are populated by
     ``populate_kv_chunk_address_table_kda`` from the layouts the spec carries.
 
     ``stage_layouts`` is one all-gathered layout per block-cyclic cache, in the same order — each config
@@ -406,7 +396,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                 int(cache.buffer_address()),
                 mesh_shape,
                 first_layer_idx=0,
-                num_my_layers=_num_layers_from_cache(cache, cache_num_users or num_users),
+                num_my_layers=_num_layers_from_cache(cache, num_users),
             )
             for _, cache in block_cyclic
         ]
@@ -495,17 +485,6 @@ def _build_and_serialize_merged_kv_chunk_table(
         cfg.tensor_type = disagg.KvChunkTensorType.Snapshot
         tensor = spec.tensor(kind)
         if tensor is not None:
-            # The walk strides the slab by the geometry's stored heads; a slab sized otherwise would be
-            # published at the wrong addresses.
-            stored = (
-                spec.geometry.stored_recurrent_shape
-                if kind == "kda_recurrent"
-                else spec.geometry.stored_convolution_shape
-            )
-            per_layer = tuple(tensor.shape)[1:]  # a ttnn.Shape does not slice
-            assert per_layer == tuple(
-                stored[1:]
-            ), f"{kind} slab holds {per_layer} per layer but the geometry stores {tuple(stored[1:])}"
             page = tensor.buffer_aligned_page_size()
             assert (
                 cfg.chunk_size_bytes % page == 0

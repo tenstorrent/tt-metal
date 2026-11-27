@@ -7,7 +7,7 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 #include "fused_rmsnorm_pre_all_gather_device_operation_types.hpp"

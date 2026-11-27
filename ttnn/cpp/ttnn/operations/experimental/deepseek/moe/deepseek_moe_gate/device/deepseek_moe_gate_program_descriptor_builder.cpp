@@ -8,12 +8,12 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/memory/tensor/tensor_types.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 

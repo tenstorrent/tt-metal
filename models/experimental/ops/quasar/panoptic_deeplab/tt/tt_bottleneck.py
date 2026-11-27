@@ -5,10 +5,8 @@ import ttnn
 from loguru import logger
 from dataclasses import replace
 
-from models.experimental.ops.quasar.panoptic_deeplab.tt.quasar_ops import TtConv2d
+from models.tt_cnn.tt.builder import TtConv2d
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import uses_20_core_path
-from models.experimental.ops.quasar.panoptic_deeplab.tt import quasar_ops
 
 
 class TtBottleneck(LightweightModule):
@@ -44,7 +42,8 @@ class TtBottleneck(LightweightModule):
         self.has_shortcut = has_shortcut
         self.block_id = block_id
         self.model_configs = model_configs
-        self.is_20_core = uses_20_core_path(device)  # also every grid without a tuned profile
+        compute_grid = device.compute_with_storage_grid_size()
+        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
 
         logger.debug(f"Initializing TtBottleneck {block_id} with TT CNN Builder API")
 
@@ -180,7 +179,7 @@ class TtBottleneck(LightweightModule):
             else:
                 # Only move if not already in DRAM
                 if identity.memory_config().buffer_type != ttnn.BufferType.DRAM:
-                    identity = quasar_ops.op(self.device, "move")(identity)
+                    identity = ttnn.move(identity)
             logger.debug(f"TtBottleneck {self.block_id} shortcut processing complete, shape: {identity.shape}")
 
         # Main path: Conv1 + separate ReLU (BatchNorm fused into Conv1)
@@ -188,7 +187,7 @@ class TtBottleneck(LightweightModule):
         out = self.conv1(x)
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
         if out.memory_config().buffer_type != ttnn.BufferType.DRAM:
-            out = quasar_ops.op(self.device, "move")(out)
+            out = ttnn.move(out)
         logger.debug(f"TtBottleneck {self.block_id} conv1 complete, output shape: {out.shape}")
 
         # dilated convs in res5 experience huge circular buffers if input is L1 sharded
@@ -204,7 +203,7 @@ class TtBottleneck(LightweightModule):
 
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
         if out.memory_config().buffer_type != ttnn.BufferType.DRAM:
-            out = quasar_ops.op(self.device, "move")(out)
+            out = ttnn.move(out)
         logger.debug(f"TtBottleneck {self.block_id} conv2 complete, output shape: {out.shape}")
 
         # Conv3 (no ReLU yet, BatchNorm fused into Conv3)
@@ -212,24 +211,19 @@ class TtBottleneck(LightweightModule):
         out = self.conv3(out)
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
         if out.memory_config().buffer_type != ttnn.BufferType.DRAM:
-            out = quasar_ops.op(self.device, "move")(out)
+            out = ttnn.move(out)
         logger.debug(f"TtBottleneck {self.block_id} conv3 complete, output shape: {out.shape}")
 
         # Residual connection + ReLU
         logger.debug(f"TtBottleneck {self.block_id} adding residual connection and applying final ReLU")
         # Reshard identity to match output memory config when shortcuts use BlockSharded strategy
         # This is needed for res3.0 and res4.0 where shortcut uses BlockSharded but conv3 outputs HeightSharded
-        # On grids without a tuned profile (AnyGridOptimiser) the convs choose their own layouts, so
-        # either side may be interleaved; to_memory_config handles any pair.
         if "res4.0" in self.block_id:
-            if identity.is_sharded() and out.is_sharded():
-                identity = ttnn.reshard(identity, out.memory_config())
-            elif identity.memory_config() != out.memory_config():
-                identity = ttnn.to_memory_config(identity, out.memory_config())
+            identity = ttnn.reshard(identity, out.memory_config())
         # Always add residual - shapes should match after reshape
-        out = quasar_ops.op(self.device, "add")(out, identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+        out = ttnn.add(out, identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
         if out.memory_config().buffer_type != ttnn.BufferType.DRAM:
-            out = quasar_ops.op(self.device, "move")(out)
+            out = ttnn.move(out)
 
         logger.debug(f"TtBottleneck {self.block_id} forward pass complete, final output shape: {out.shape}")
         return out
@@ -278,7 +272,7 @@ class TtBottleneck(LightweightModule):
             identity = ttnn.reshard(identity, out.memory_config())
             ttnn.deallocate(identity_old)
 
-        out = quasar_ops.op(self.device, "add")(out, identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+        out = ttnn.add(out, identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
 
         # Keep final output in L1 - no movement to DRAM
 

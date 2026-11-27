@@ -3,12 +3,12 @@
 
 #pragma once
 
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
-#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
-#include <tt-metalium/mesh/sub_device.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/buffer_types.hpp>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"

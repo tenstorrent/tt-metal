@@ -35,9 +35,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 using namespace tt::tt_metal;
 

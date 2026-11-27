@@ -27,7 +27,6 @@ set(TTNN_CORE_SRCS
     core/global_circular_buffer.cpp
     core/global_semaphore.cpp
     core/per_device_program_merge.cpp
-    core/per_device_run_args.cpp
     core/operation.cpp
     core/graph/graph_processor.cpp
     core/graph/graph_trace_utils.cpp
@@ -78,7 +77,6 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/generic/generic_op.cpp
     cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
     cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
-    cpp/ttnn/operations/generic/device/generic_program_spec_device_operation.cpp
     cpp/ttnn/operations/experimental/fusion/device/fusion_dispatch_op_device_operation.cpp
     cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
@@ -120,7 +118,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/__init__.cpp
     cpp/ttnn-nanobind/activation.cpp
     cpp/ttnn-nanobind/cluster.cpp
-    cpp/ttnn-nanobind/compiled_program.cpp
     cpp/ttnn-nanobind/core.cpp
     cpp/ttnn-nanobind/device.cpp
     cpp/ttnn-nanobind/events.cpp
@@ -197,11 +194,9 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/async_runtime.hpp
     api/ttnn/cluster.hpp
     api/ttnn/command_list.hpp
-    api/ttnn/command_list_params.hpp
     api/ttnn/common/constants.hpp
     api/ttnn/common/guard.hpp
     api/ttnn/common/queue_id.hpp
-    api/ttnn/compiled_program.hpp
     api/ttnn/config.hpp
     api/ttnn/core.hpp
     api/ttnn/device.hpp
@@ -238,7 +233,6 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/operation.hpp
     api/ttnn/operation_concepts.hpp
     api/ttnn/per_device_program_merge.hpp
-    api/ttnn/per_device_run_args.hpp
     api/ttnn/prefetcher_pipe.hpp
     api/ttnn/reports.hpp
     api/ttnn/tensor/d2d_pipeline_descriptor.hpp

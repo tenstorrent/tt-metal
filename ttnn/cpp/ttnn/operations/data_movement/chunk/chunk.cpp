@@ -5,7 +5,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn {
 

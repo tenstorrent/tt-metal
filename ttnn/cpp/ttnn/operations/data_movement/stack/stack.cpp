@@ -8,7 +8,7 @@
 #include <numeric>
 #include <vector>
 
-#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"

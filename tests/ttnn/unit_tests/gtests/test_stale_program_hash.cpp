@@ -19,9 +19,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
-#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_device_op.hpp"
 #include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/device/strided_reduce_scatter_async_op_device_operation.hpp"

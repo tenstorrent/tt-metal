@@ -402,7 +402,7 @@ Each step is a blocking MPI `send`/`recv` on the host. Intra-context transfers u
 #include <cstring>
 #include <vector>
 
-#include "tt-metalium/mesh/multihost/distributed_context.hpp"
+#include "tt-metalium/distributed_context.hpp"
 #include "tt_metal/distributed/multihost/inter_context.hpp"
 
 using namespace tt::tt_metal::distributed;
@@ -521,10 +521,10 @@ This test shows the full picture: two sub-contexts each open a `MeshDevice` with
 #include <cstring>
 #include <vector>
 
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/distributed/multihost/inter_context.hpp"
@@ -685,7 +685,7 @@ TEST(SubContextTest, PrefillDecodeDisaggregated) {
 | `ttnn/ttnn/distributed/ttrun.py` | **`--rank-bindings-mapping`** and **`-m`/`-M`** landed; C++ **`get_world_context()`** / **`inter_context_*`** still planned beyond mock smoke tests |
 | `tt_metal/distributed/multihost/mpi_distributed_context.cpp` | Auto-split in `create()`, store `world_context_` |
 | `tt_metal/distributed/multihost/mpi_distributed_context.hpp` | `world_context_` static field |
-| `tt_metal/api/tt-metalium/mesh/multihost/distributed_context.hpp` | `get_world_context()`; **`subcontext_id()`**, **`subcontext_count()`**, **`subcontext_size(id)`**, **`subcontext_sizes()`**; **`local_to_world_rank(subcontext_id, local_rank)`** (names illustrative) |
+| `tt_metal/api/tt-metalium/distributed_context.hpp` | `get_world_context()`; **`subcontext_id()`**, **`subcontext_count()`**, **`subcontext_size(id)`**, **`subcontext_sizes()`**; **`local_to_world_rank(subcontext_id, local_rank)`** (names illustrative) |
 | `tt_metal/distributed/multihost/distributed_context.cpp` | Dispatch new static/instance methods; cache merged launch metadata at init |
 | `tt_metal/distributed/multihost/inter_context.hpp` / `.cpp` | `inter_context_send` / `recv` / `barrier` |
 | `tests/tt_metal/multihost/single_host_mp_tests/test_sub_context.cpp` | Full pipeline + prefill/decode style tests |

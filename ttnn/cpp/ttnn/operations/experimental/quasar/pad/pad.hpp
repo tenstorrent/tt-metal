@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include <ranges>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::quasar {

@@ -48,10 +48,10 @@ target_precompile_headers(
         <tt_stl/reflection.hpp>
         <gtest/gtest.h>
         <gmock/gmock.h>
-        <tt-metalium/workload/legacy/host_api.hpp>
-        <tt-metalium/execution/slow_dispatch.hpp>
-        <tt-metalium/execution/distributed.hpp>
-        <tt-metalium/mesh/mesh_device.hpp>
+        <tt-metalium/host_api.hpp>
+        <tt-metalium/tt_metal.hpp>
+        <tt-metalium/distributed.hpp>
+        <tt-metalium/mesh_device.hpp>
         ${PROJECT_SOURCE_DIR}/tt_metal/impl/context/metal_context.hpp
         ${PROJECT_SOURCE_DIR}/tt_metal/llrt/tt_cluster.hpp
 )

@@ -30,13 +30,13 @@
 #include "emule_tile_geometry.hpp"           // resolve_tile_geometry, ResolvedTileGeometry
 #include "host_sanitizers.hpp"               // emule_asan_enabled (host ASAN master switch)
 #include "jit_build/jit_build_settings.hpp"  // NamedCTArgNamespaces, NamedRuntimeArgNamespaces
-#include <tt-metalium/workload/legacy/kernel_types.hpp>  // DataMovementConfig/ComputeConfig, DataMovementProcessor
+#include <tt-metalium/kernel_types.hpp>      // DataMovementConfig/ComputeConfig, DataMovementProcessor
 
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/data_formats/face_geometry.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/face_geometry.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
 #include <tt-metalium/experimental/fabric/control_plane.hpp>  // get_fabric_node_id_from_physical_chip_id
@@ -394,8 +394,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 kd.is_quasar_compute = kd.is_compute && (qck != nullptr);
             }
             TT_FATAL(
-                k.global_semaphore_binding_handles().empty(),
-                "Kernel '{}' binds a GlobalSemaphore, which emulation does not support yet",
+                k.get_array_args().empty(),
+                "Kernel '{}' declares array arguments, which emulation does not support yet",
                 k.kernel_source().name());
             // Metal 2.0 binding handles (mirror build_metal2_snapshot).
             kd.bindings.is_metal2 = k.is_metal2_kernel();
@@ -424,9 +424,13 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                                                  uint32_t addr_offset,
                                                  uint32_t /*num_rt*/,
                                                  const LLKMetadata& llk) {
+                TT_FATAL(
+                    !is_per_node,
+                    "Tensor binding '{}' is bound to a per-node tensor, which emulation does not support yet",
+                    name);
                 // num_rt needs no handling: crta_vararg_offset (below) already counts those words.
                 kd.bindings.tensor.push_back(
-                    TensorBinding{name, cta_off, addr_offset, serialize_llk_metadata(llk, arch), is_per_node});
+                    TensorBinding{name, cta_off, addr_offset, serialize_llk_metadata(llk, arch)});
             });
             k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
                 kd.bindings.prefetcher_pipe.push_back(PrefetcherPipeBinding{name, prefetcher_pipe_id});
@@ -440,17 +444,6 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk, arch) : ""});
             });
             kd.bindings.crta_vararg_offset = k.get_crta_layout().vararg_section_offset;
-            kd.bindings.rta_vararg_offset = k.get_rta_layout().vararg_section_offset;
-            {
-                const KernelArrayArgs& arrays = k.get_array_args();
-                for (const auto& a : arrays.runtime) {
-                    kd.bindings.array_args.runtime.push_back(ArrayArg{a.name, a.word_offset, a.size});
-                }
-                for (const auto& a : arrays.common_runtime) {
-                    kd.bindings.array_args.common_runtime.push_back(ArrayArg{a.name, a.word_offset, a.size});
-                }
-                kd.bindings.array_args.compile_time = arrays.compile_time;
-            }
             k.process_tensor_binding_sequences([&kd](const std::string& name, const std::vector<std::string>& members) {
                 kd.bindings.tensor_sequences.push_back(TensorBindingSequence{name, members});
             });

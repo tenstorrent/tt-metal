@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "lltt.h"
 
 using namespace sfpi;
 
@@ -124,18 +125,18 @@ inline void calculate_binary_max_min_int32(
 
 #pragma GCC unroll 4
     for (int i = 0; i < ITERATIONS / 2; ++i) {
-        TTI_REPLAY(0, 10, 0, 0);
+        lltt::replay(0, 10);
     }
 
     if constexpr (ITERATIONS & 1) {
-        TTI_REPLAY(0, 5, 0, 0);
+        lltt::replay(0, 5);
         TTI_SFPNOP;
         TTI_SFPNOP;
-        TTI_REPLAY(5 + 2, 2, 0, 0);
+        lltt::replay(5 + 2, 2);
     } else {
         TTI_SFPNOP;
         TTI_SFPNOP;
-        TTI_REPLAY(2, 2, 0, 0);
+        lltt::replay(2, 2);
     }
 
     TTI_SFPNOP;

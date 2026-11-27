@@ -6,11 +6,11 @@
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

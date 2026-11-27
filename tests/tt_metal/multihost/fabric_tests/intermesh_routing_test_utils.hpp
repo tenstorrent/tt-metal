@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
 

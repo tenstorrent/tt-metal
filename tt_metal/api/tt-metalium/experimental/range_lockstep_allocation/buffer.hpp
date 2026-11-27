@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/buffer.hpp>
 
 namespace tt::tt_metal::experimental::range_lockstep_allocation {
 

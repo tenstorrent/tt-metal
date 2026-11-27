@@ -7,8 +7,8 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <algorithm>

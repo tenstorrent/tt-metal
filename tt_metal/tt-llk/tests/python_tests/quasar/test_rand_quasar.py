@@ -19,7 +19,6 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     QuasarSfpuVariant,
-    flat_axes,
     generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
@@ -305,12 +304,10 @@ def _run_rand(configuration, format_variant: QuasarSfpuVariant, element_count: i
     return values
 
 
-RAND_FLAT_NAMES = ("case", "format_variant", "dest_sync", "input_dimensions")
-
-
 @pytest.mark.quasar
-@parametrize(**flat_axes(RAND_FLAT_NAMES, generate_rand_combinations()))
-def test_rand_quasar(case, format_variant, dest_sync, input_dimensions):
+@parametrize(rand_case_formats_sync_dims=generate_rand_combinations())
+def test_rand_quasar(rand_case_formats_sync_dims):
+    case, format_variant, dest_sync, input_dimensions = rand_case_formats_sync_dims[0]
     configuration = _rand_config(case, format_variant, dest_sync, input_dimensions)
     values = _run_rand(
         configuration, format_variant, input_dimensions[0] * input_dimensions[1]

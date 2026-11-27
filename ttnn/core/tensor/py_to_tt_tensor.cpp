@@ -8,7 +8,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt_stl/unreachable.hpp>
 

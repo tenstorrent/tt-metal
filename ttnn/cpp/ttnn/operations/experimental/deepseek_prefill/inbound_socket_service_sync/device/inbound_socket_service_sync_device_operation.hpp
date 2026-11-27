@@ -8,7 +8,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "inbound_socket_service_sync_device_operation_types.hpp"
 #include "inbound_socket_service_sync_program_factory.hpp"

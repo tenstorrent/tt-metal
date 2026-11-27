@@ -6,8 +6,8 @@
 
 #include <variant>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include "../scatter_enums.hpp"
 #include "scatter_device_operation_types.hpp"

@@ -2,19 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <random>
 #include <string_view>
 #include <vector>
-#include "tt-metalium/workload/specification/compute_modes.hpp"
+#include "tt-metalium/base_types.hpp"
 
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX

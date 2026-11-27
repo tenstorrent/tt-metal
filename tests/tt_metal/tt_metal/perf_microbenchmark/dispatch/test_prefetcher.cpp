@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #include "tests/tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
@@ -15,7 +15,7 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/context/context_types.hpp"
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/host_api/temp_quasar_api.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"

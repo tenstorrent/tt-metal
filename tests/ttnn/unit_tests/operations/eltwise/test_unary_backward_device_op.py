@@ -238,7 +238,7 @@ def test_sigmoid_bw_program_cache_distinguishes_dtypes(device):
 @pytest.mark.parametrize("shard_inputs", [True, False], ids=["sharded_inputs", "sharded_output_request"])
 def test_sigmoid_bw_sharded(shard_inputs, device):
     """Sharded calls run on the fused device operation. Operands all L1-sharded on the same
-    grid, shard shape and orientation borrow the tensor's own shard as their dataflow buffers;
+    grid, shard shape and orientation alias their circular buffers to the tensor's own shard;
     anything else (DRAM-sharded, mixed sharded/interleaved) is addressed by logical page through
     TensorAccessor. Both must return the requested layout."""
     torch.manual_seed(0)
@@ -358,9 +358,8 @@ def test_sigmoid_bw_rejects_mismatched_shapes_on_warm_cache(device, expect_error
 
 
 def test_sigmoid_bw_program_cache_same_padded_shape(device):
-    """Inputs with the same padded shape but different logical shapes and Alignments share one cache entry. The
-    factory works only from the padded shape, so the key frees both via match_padded_shape_only +
-    relax_tensor_layout_alignment (#59915). Each output must still match torch."""
+    """Two inputs with the same padded shape but different logical shapes must get separate cache entries.
+    Their TensorSpecs differ and the Metal 2.0 TensorParameter match would reject one on the other's entry."""
     torch.manual_seed(0)
     padded_shape = [1, 1, 96, 96]
 
@@ -393,7 +392,7 @@ def test_sigmoid_bw_program_cache_same_padded_shape(device):
         torch.testing.assert_close(ttnn.to_torch(output).float()[logical], expected, rtol=8e-3, atol=1e-4)
 
     added = device.num_program_cache_entries() - start
-    assert added == 1, f"expected 1 program cache entry shared by all three calls, got {added}"
+    assert added == 2, f"expected 2 program cache entries (one per TensorSpec, third call a hit), got {added}"
 
 
 def test_unary_backward_program_cache_keys_each_tensor(device):

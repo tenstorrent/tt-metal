@@ -5,7 +5,7 @@
 #include "nlp_create_qkv_heads_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"

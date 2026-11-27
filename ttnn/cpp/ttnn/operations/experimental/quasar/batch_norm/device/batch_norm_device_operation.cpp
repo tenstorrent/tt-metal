@@ -4,9 +4,9 @@
 
 #include "batch_norm_device_operation.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tile.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>

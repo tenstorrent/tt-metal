@@ -4,9 +4,8 @@
 
 #pragma once
 
-#include <string>
 #include <variant>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -119,11 +118,6 @@ Tensor sparse_matmul(
     const std::optional<Tensor>& indices = std::nullopt,
     const std::optional<Tensor>& bias = std::nullopt,
     const PrefetcherPipeList& prefetcher_pipes = {});
-
-// Testing/benchmark only: what the opt-in matmul config model (ttnn.CONFIG.matmul_model_config) did on this thread's
-// last matmul without a program config: "model: <program config>", or "default: <why>" when the default selection
-// ran. Empty if the flag has been off.
-std::string matmul_model_last_pick();
 
 }  // namespace operations::matmul
 

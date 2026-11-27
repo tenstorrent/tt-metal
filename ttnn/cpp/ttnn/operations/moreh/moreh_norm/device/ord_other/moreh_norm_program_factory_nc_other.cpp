@@ -4,7 +4,7 @@
 
 #include <limits>
 
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"

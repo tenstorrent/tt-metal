@@ -9,7 +9,7 @@
 #include <variant>
 
 #include <utility>
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -22,7 +22,7 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/hal.hpp>
 #include <cstdint>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -31,7 +31,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
-#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 namespace ttnn::detail {
 
 // Function variance of whole tensor.
@@ -145,10 +145,10 @@ std::vector<Tensor> split_tensor_for_glu(
     std::vector<Tensor> t_split;
     // The slices below always split dim 3; callers have already mapped -1 to 3.
     TT_FATAL(dim == 3, "glu-family ops only support the last dimension, got dim={}", dim);
-    ttnn::Shape inshape(input_a.logical_shape());
-    TT_FATAL(inshape[3] % 2 == 0, "glu-family ops split the last dimension in half, so it must be even, got {}", inshape[3]);
+    ttnn::Shape inshape(input_a.padded_shape());
+    TT_FATAL(((inshape[3] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
     ttsl::SmallVector<std::uint32_t> s_a = {0, 0, 0, 0};
-    ttsl::SmallVector<std::uint32_t> e_a = {inshape[0], inshape[1], inshape[2], inshape[3] / 2};
+    ttsl::SmallVector<std::uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
     ttsl::SmallVector<std::uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
     ttsl::SmallVector<std::uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
@@ -366,22 +366,6 @@ Tensor swiglu(const Tensor& input_a, std::int32_t dim, const std::optional<Memor
     }
 
     std::vector<Tensor> ab = detail::split_tensor_for_glu(input_a, dim, output_mem_config);
-    // silu_glu's own SFPU kernel computes this product as one program.
-    // With more than one sub-device loaded the unary and multiply below run as they always have.
-    if (ab[0].dtype() == DataType::BFLOAT16 && ab[1].dtype() == DataType::BFLOAT16 &&
-        (ab[0].device()->arch() == tt::ARCH::BLACKHOLE) && ab[0].device()->get_sub_device_ids().size() == 1) {
-        return ttnn::detail::invoke_binary_ng(
-            ab[1],
-            ab[0],
-            ttnn::operations::binary::BinaryOpType::SILU_GLU,
-            std::nullopt,
-            output_mem_config,
-            std::nullopt,
-            {},
-            {},
-            {},
-            std::nullopt);
-    }
 
     Tensor swish_b = ttnn::swish(ab[1], output_mem_config);
     Tensor swiglu_result = ttnn::multiply(ab[0], swish_b, std::nullopt, output_mem_config);

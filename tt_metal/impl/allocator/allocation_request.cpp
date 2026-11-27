@@ -4,7 +4,7 @@
 
 #include "tt_metal/impl/allocator/allocation_request.hpp"
 
-#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::allocator {

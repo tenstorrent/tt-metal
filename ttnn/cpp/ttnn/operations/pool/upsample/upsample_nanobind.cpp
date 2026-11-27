@@ -45,6 +45,7 @@ void bind_upsample(nb::module_& mod) {
             mode (str, optional): upsampling mode - 'nearest' or 'bilinear'. Defaults to 'nearest'.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration. Defaults to `None`.
+            runtime_shapes (bool, optional): for a 'nearest' upsample with integer scales of a non-empty, unpadded interleaved ROW_MAJOR input with an interleaved output, one program serves every image size of the same channel count with more rows than cores, at more host time per call. Has no effect on other upsamples. Defaults to `False`.
 
 
         Returns:
@@ -74,7 +75,8 @@ void bind_upsample(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("mode") = "nearest",
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("runtime_shapes") = false);
 }
 
 }  // namespace

@@ -10,10 +10,10 @@
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-umd/types/arch.hpp>
 
 #include "context/metal_context.hpp"

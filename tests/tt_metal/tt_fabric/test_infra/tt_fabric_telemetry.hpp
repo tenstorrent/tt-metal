@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <cstdint>
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 
@@ -42,6 +43,8 @@ struct CodeProfilingEntry {
     uint64_t num_instances{};
     double avg_cycles_per_instance{};
 };
+
+const uint32_t telemetry_addr = ::tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
 // TODO: Define enum for filtering
 enum class EthCoreFilter { All, IgnoreTunnelerRouter };

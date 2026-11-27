@@ -4,7 +4,7 @@
 
 #include "polynorm_bw.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include <vector>
 
 #include "device/polynorm_bw_device_operation.hpp"

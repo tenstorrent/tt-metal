@@ -11,9 +11,9 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh/sub_device_types.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 

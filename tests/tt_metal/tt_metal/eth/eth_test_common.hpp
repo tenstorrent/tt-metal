@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 

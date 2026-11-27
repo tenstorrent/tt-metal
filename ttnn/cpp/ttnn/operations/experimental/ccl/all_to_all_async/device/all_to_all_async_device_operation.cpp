@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-#include <tt-metalium/mesh/mesh_device_view.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"

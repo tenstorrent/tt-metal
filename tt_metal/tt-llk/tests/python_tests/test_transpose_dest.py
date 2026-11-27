@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from itertools import product
+
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -38,52 +40,83 @@ TRANSPOSE_DEST_FLOAT_FORMATS = input_output_formats(
 )
 
 
-def transpose_dest_float_dest_acc(formats):
-    """16-bit inputs run with both a 16-bit and a 32-bit dest; 32-bit inputs need a 32-bit dest."""
-    if formats.input_format.is_32_bit():
-        return [DestAccumulation.Yes]
-    return [DestAccumulation.No, DestAccumulation.Yes]
+def generate_transpose_dest_float_combinations(formats_list):
+    """
+    Generate transpose dest combinations that respect constraints.
 
-
-def transpose_dest_float_math_transpose_faces(formats):
-    """Transpose of 16-bit values in dest is supported only for math_transpose_faces = Yes."""
-    if formats.input_format.is_32_bit():
-        return [Transpose.Yes, Transpose.No]
-    return [Transpose.Yes]
-
-
-def transpose_dest_float_unpack_to_dest(formats, math_transpose_faces):
-    """Lossy (unpack to src regs) and lossless (unpack to dest) transpose for 32-bit inputs.
+    Key rules:
+    1. math_transpose_faces = Transpose.No is not supported for 16-bit dest.
+    2. math_transpose_faces = Transpose.No and 32-bit dest will transpose within faces, and can be combined with
+       unpack_transpose_faces = Transpose.Yes in order to transpose faces.
+    3. math_transpose_faces = Transpose.Yes and 16-bit dest is supported.
+    1. math_transpose_faces = Transpose.No and 32-bit dest is supported.
 
     Covered combinations:
-    1. Lossless transpose of 32-bit values in dest -> input_format=Float32, dest_acc=Yes and unpack_to_dest=True.
-    2. Transpose of 32-bit values with precision loss (Float32 unpacked to src registers truncates to Tf32) ->
-       input_format=Float32, dest_acc=Yes and unpack_to_dest=False.
-    3. Transpose of 32-bit values with potential precision loss -> input_format=[Bfp8_b, Float16_b],
-       dest_acc=Yes and unpack_to_dest=False (intermediate data is 32-bit in dest).
+    1. Lossless transpose of 32-bit values in dest -> input_format=Float32, dest_acc=DestAccumulation.Yes and unpack_to_dest=True.
+    2. Transpose of 32-bit values in dest with precision loss (unpacks Float32 to src registers, Float32 truncates to Tf32) ->
+       input_format=Float32, dest_acc=DestAccumulation.Yes and unpack_to_dest=False.
+    3. Transpose of 32-bit values in dest with potential precision loss -> input_format=[Bfp8_b, Float16_b],
+       dest_acc=DestAccumulation.Yes and unpack_to_dest=False (intermediate data is 32-bit in dest).
     4. Transpose of 16-bit values in dest -> input_format=[Float16_b, Bfp8_b],
-       dest_acc=No and unpack_to_dest=False.
+       dest_acc=DestAccumulation.No and unpack_to_dest=False.
 
-    math_transpose_faces = Transpose.No transposes within faces only (32-bit dest) and always unpacks to dest.
+    Args:
+        formats_list: List of InputOutputFormat combinations
+    Returns:
+        List of tuples: (format, dest_acc, math_transpose_faces, unpack_to_dest)
     """
-    if math_transpose_faces == Transpose.Yes:
-        return [False, True] if formats.input_format.is_32_bit() else [False]
-    return [True]
+
+    combinations = []
+
+    for fmt in formats_list:
+        is_input_32bit = fmt.input_format.is_32_bit()
+        # 16-bit inputs run with both a 16-bit and a 32-bit dest (combinations 3 and 4)
+        dest_acc_list = (
+            [DestAccumulation.Yes]
+            if is_input_32bit
+            else [DestAccumulation.No, DestAccumulation.Yes]
+        )
+
+        # Transpose of 16-bit values in dest is supported only for math_transpose_faces = True
+        math_transpose_faces_list = (
+            [Transpose.Yes, Transpose.No] if is_input_32bit else [Transpose.Yes]
+        )
+
+        for dest_acc, math_transpose_faces in product(
+            dest_acc_list, math_transpose_faces_list
+        ):
+            # Test both loss (unpacking to src registers) and lossless (unpacking to dest) transpose dest
+            # for 32bit inputs when math_transpose_faces = Transpose.Yes
+            if math_transpose_faces == Transpose.Yes:
+                unpack_to_dest_list = [False, True] if is_input_32bit else [False]
+            else:
+                unpack_to_dest_list = [True]
+
+            combinations.extend(
+                (fmt, dest_acc, math_transpose_faces, unpack_to_dest)
+                for unpack_to_dest in unpack_to_dest_list
+            )
+
+    return combinations
 
 
 @parametrize(
-    formats=TRANSPOSE_DEST_FLOAT_FORMATS,
-    dest_acc=transpose_dest_float_dest_acc,
-    math_transpose_faces=transpose_dest_float_math_transpose_faces,
-    unpack_to_dest=transpose_dest_float_unpack_to_dest,
+    fmt_dest_acc_math_transp_unpack_to_dest=generate_transpose_dest_float_combinations(
+        TRANSPOSE_DEST_FLOAT_FORMATS
+    ),
 )
 def test_transpose_dest_float(
-    formats,
-    dest_acc,
-    math_transpose_faces,
-    unpack_to_dest,
+    fmt_dest_acc_math_transp_unpack_to_dest,
 ):
-    transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest)
+
+    fmt_dest_acc_math_transp_unpack_to_dest = fmt_dest_acc_math_transp_unpack_to_dest[0]
+
+    transpose_dest(
+        formats=fmt_dest_acc_math_transp_unpack_to_dest[0],
+        dest_acc=fmt_dest_acc_math_transp_unpack_to_dest[1],
+        math_transpose_faces=fmt_dest_acc_math_transp_unpack_to_dest[2],
+        unpack_to_dest=fmt_dest_acc_math_transp_unpack_to_dest[3],
+    )
 
 
 @parametrize(
@@ -99,6 +132,127 @@ def test_transpose_dest_int(
     unpack_to_dest,
 ):
     transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int8], same=True),
+    dest_acc=[DestAccumulation.Yes],
+    math_transpose_faces=[Transpose.Yes],
+    unpack_to_dest=[False],
+)
+def test_transpose_dest_int8(
+    formats,
+    dest_acc,
+    math_transpose_faces,
+    unpack_to_dest,
+):
+    """
+    Test transpose_tile with Int8 format using the haloize unpack path.
+
+    Int8 uses the non-unpack-to-dest path in transpose_init/transpose_tile:
+    the unpacker performs transpose_of_faces + within_face_16x16_transpose (haloize), and
+    the math thread uses A2D datacopy with is_int_fpu_en=true to reconstruct Int8 in DEST.
+    No _llk_math_transpose_dest_ call is made — the unpacker already produced the transposed tile.
+    """
+    transpose_dest_int8(formats, dest_acc, math_transpose_faces, unpack_to_dest)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int8], same=True),
+    dest_acc=[DestAccumulation.Yes],
+    math_transpose_faces=[Transpose.Yes],
+    unpack_to_dest=[False],
+)
+def test_transpose_dest_int8_single_tile(
+    formats,
+    dest_acc,
+    math_transpose_faces,
+    unpack_to_dest,
+):
+    """
+    Single-tile (32x32) variant of test_transpose_dest_int8.
+
+    Exercises the Int8 haloize unpack path on a single tile (tile_cnt == 1),
+    covering the face / within-face 16x16 transpose edge case where the whole
+    transpose fits in one tile rather than spanning a multi-tile grid.
+    """
+    transpose_dest_int8(
+        formats,
+        dest_acc,
+        math_transpose_faces,
+        unpack_to_dest,
+        input_dimensions=[32, 32],
+    )
+
+
+def transpose_dest_int8(
+    formats, dest_acc, math_transpose_faces, unpack_to_dest, input_dimensions=None
+):
+
+    if input_dimensions is None:
+        input_dimensions = [64, 64]
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+        t_matrix = get_golden_generator(TransposeGolden)
+        # The haloize unpack path performs transpose_of_faces + within_face_16x16_transpose.
+        # There is no DataCopy golden step (the A2D datacopy only moves data to DEST; it does
+        # not change the transpose already done by the unpacker). Generate the golden by
+        # applying both transpose steps directly to the raw input.
+        golden_faces = t_matrix.transpose_faces_multi_tile(
+            src_A,
+            formats.output_format,
+            num_tiles=tile_cnt_A,
+            tilize=False,
+            input_dimensions=input_dimensions,
+        )
+        golden_tensor = t_matrix.transpose_within_faces_multi_tile(
+            golden_faces,
+            formats.output_format,
+            num_tiles=tile_cnt_A,
+            untilize=False,
+            input_dimensions=input_dimensions,
+        )
+    else:
+        golden_tensor = []
+
+    configuration = TestConfig(
+        "sources/transpose_wh_int8_test.cpp",
+        formats,
+        templates=[MATH_TRANSPOSE_FACES(math_transpose_faces)],
+        runtimes=[
+            # The kernel hard-codes transpose_of_faces=1 (the haloize path); this
+            # param is currently unused by transpose_wh_int8_test.cpp but is set to
+            # Yes to stay aligned with the kernel's actual behavior.
+            UNPACK_TRANS_FACES(Transpose.Yes),
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
+
+    assert torch.equal(res_tensor, golden_tensor), "Assert against golden failed"
 
 
 def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):

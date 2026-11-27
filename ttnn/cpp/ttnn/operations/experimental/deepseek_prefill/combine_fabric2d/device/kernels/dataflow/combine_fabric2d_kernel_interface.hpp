@@ -28,9 +28,9 @@ constexpr uint32_t NO_SEMAPHORE = 0xFFFFFFFFu;
 #ifndef KERNEL_BUILD
 #include <vector>
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "../../combine_fabric2d_placement.hpp"
 #include "../../combine_fabric2d_types.hpp"

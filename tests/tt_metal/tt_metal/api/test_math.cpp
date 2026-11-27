@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <csignal>
 #include <cstddef>

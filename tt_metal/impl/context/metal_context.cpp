@@ -18,16 +18,16 @@
 #include <internal/service/service_core_manager.hpp>
 #include "context/metal_env_accessor.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
-#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include "dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "metal_env_impl.hpp"
 #include "context_descriptor.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include "core_coord.hpp"
 #include "device/firmware/risc_firmware_initializer.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "hal_types.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_tensix_builder.hpp"
 #include "llrt/core_descriptor.hpp"
@@ -43,16 +43,16 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/mock_device/mock_device.hpp>
 #include "device/device_manager.hpp"
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
-#include <tt-metalium/discovery/system_mesh.hpp>
+#include <system_mesh.hpp>
 
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt_metal.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
 #include "dispatch/host_transfer_stats.hpp"
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_core_manager.hpp>
@@ -787,14 +787,6 @@ void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker
 // ─── Command queue id stack ──────────────────────────────────────────────────
 
 thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
-
-uint8_t MetalContext::current_command_queue_id_for_thread() {
-    if (!MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
-        return 0;
-    }
-    const auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
-    return cq_stack.empty() ? 0 : cq_stack.back();
-}
 
 MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
     return MetalContext::command_queue_id_stack_for_thread_;

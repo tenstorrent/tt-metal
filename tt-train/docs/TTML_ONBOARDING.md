@@ -17,16 +17,16 @@
 
 ## **Quick Install**
 
-For prerequisites and full setup instructions, see [INSTALLING_TTML.md](INSTALLING_TTML.md).
+**Prerequisites:** Ensure `tt-metal` is installed first (see [INSTALLING.md](../INSTALLING.md)).
 
 ```bash
-# 1. Build tt-train as part of tt-metal
+# 1. Activate tt-metal Python environment
 cd /path/to/tt-metal
-./build_metal.sh --build-tt-train
-
-# 2. Set up the Python environment, including ttml
-./create_venv.sh
 source python_env/bin/activate
+
+# 2. Install tt-train
+cd tt-train
+pip install --no-build-isolation -e .
 
 # 3. Verify installation
 python -c "import ttml; print('TTML installed successfully')"
@@ -191,7 +191,7 @@ os.chdir(os.path.join(os.environ.get("TT_METAL_HOME", "."), "tt-train"))
 # ============================================================
 # 2. Load Model Configuration
 # ============================================================
-model_config_path = "configs/model_configs/tinyllama_bpe.yaml"
+model_config_path = "configs/model_configs/tinyllama.yaml"
 model_yaml = load_config(model_config_path)
 print(f"Loaded model config: {model_config_path}")
 
@@ -262,17 +262,13 @@ ctx.close_device()
 ```
 
 **Quick Command (C++):**
-
-The model configuration defaults to `tt-train/configs/model_configs/tinyllama_bpe.yaml`;
-pass `--model-config <path>` if your weights use a different one.
-
 ```bash
 # Build the inference example
-cd "$TT_METAL_HOME"
+cd $TT_METAL_HOME/tt-train
 cmake --build build --target llama_inference
 
 # Run with pre-trained weights
-./build/tt-train/sources/examples/nano_gpt/llama_inference \
+./build/sources/examples/nano_gpt/llama_inference \
   --model-path path/to/model.msgpack \
   --prompt "1,2,3" \
   --max-tokens 50
@@ -445,7 +441,7 @@ python3 tt-train/sources/examples/train/train.py -c training_shakespeare_nanogpt
 To run the nanogpt C++ training example:
 ```bash
 export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
-cd "$TT_METAL_RUNTIME_ROOT"
+cd tt-train
 ./build/tt-train/sources/examples/nano_gpt/nano_gpt -c ./tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml
 ```
 
@@ -1030,12 +1026,9 @@ Profile kernel execution times and identify bottlenecks:
 
 **Run with Tracy:**
 ```bash
-# Run from the tt-metal root directory
-export TT_METAL_RUNTIME_ROOT="$PWD"
 env -u TT_METAL_DPRINT_CORES \
 TT_METAL_WATCHER_NOINLINE=1 \
-python -m tracy -r -v -p ./build/tt-train/sources/examples/nano_gpt/nano_gpt \
-  --config tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml
+python -m tracy -r -v -p ./build/sources/examples/nano_gpt/nano_gpt
 ```
 
 **Output:**
@@ -1103,26 +1096,24 @@ print(f"Samples/s: {samples_per_second:.2f}, Tokens/s: {tokens_per_second:.2f}")
 git clone https://github.com/tenstorrent/tt-metal.git
 cd tt-metal
 git submodule update --init --recursive
-```
-
-### **Step 2: Build TT-Train and Set Up Python**
-
-```shell
-# Run from the tt-metal root directory
-./build_metal.sh --build-tt-train --debug
+./build_metal.sh
 ./create_venv.sh
 source python_env/bin/activate
 ```
 
-This builds the C++ components and the `_ttml` extension. `create_venv.sh`
-adds the Python sources and built extension to the environment through `.pth`
-files, so Python source changes are reflected immediately. See
-[INSTALLING_TTML.md](INSTALLING_TTML.md) for details.
-
-### **Step 3: Rebuild C++ Components After Changes**
+### **Step 2: Install TT-Train (Editable)**
 
 ```shell
-# Run from the tt-metal root directory
+cd tt-train
+pip install --no-build-isolation -e .
+```
+
+The `-e` flag enables editable mode—changes to Python code are reflected immediately.
+
+### **Step 3: Build C++ Components**
+
+```shell
+cmake -DCMAKE_BUILD_TYPE=Debug -B build -GNinja
 cmake --build build
 ```
 
@@ -1372,14 +1363,11 @@ ctest --test-dir build -R NIGHTLY_
 ### **Tracy Profiler**
 
 ```shell
-# Run from the tt-metal root directory
-export TT_METAL_RUNTIME_ROOT="$PWD"
 # Build with profiling
 ./build_metal.sh -b Release --build-tt-train
 
 # Run with Tracy
-python -m tracy -r -v -p ./build/tt-train/sources/examples/nano_gpt/nano_gpt \
-  --config tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml
+python -m tracy -r -v -p ./build/sources/examples/nano_gpt/nano_gpt
 ```
 
 ### **Memory Tracking**

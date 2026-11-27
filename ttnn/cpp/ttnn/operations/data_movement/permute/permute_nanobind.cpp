@@ -27,6 +27,7 @@ void bind_permute(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`: an interleaved input keeps its memory configuration, and for a sharded input the output's memory configuration is derived from the input's. A ROW_MAJOR WIDTH_SHARDED or BLOCK_SHARDED input whose last two dims are not both multiples of 32 gives an L1 interleaved output when ``dims`` moves any dimension.
             pad_value (float, optional): value used to fill the tile padding that a permute exposes on ``BFLOAT16``, ``FLOAT32`` and ``UINT32`` TILE tensors. Defaults to `0.0`.
+            runtime_shapes (bool, optional): for a non-empty interleaved ROW_MAJOR input and output and a ``dims`` that moves the last dimension (other than a plain swap of the last two), one program serves every shape of the same rank and row widths with at least as many blocks as cores, at more host time per call. Has no effect on other permutes. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: the output tensor, with the same dtype and layout as the input.
@@ -64,12 +65,14 @@ void bind_permute(nb::module_& mod) {
                 const ttnn::Tensor&,
                 const ttsl::SmallVector<int64_t>&,
                 const std::optional<ttnn::MemoryConfig>&,
-                float>(&ttnn::permute),
+                float,
+                bool>(&ttnn::permute),
             nb::arg("input_tensor").noconvert(),
             nb::arg("dims"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = 0.0f),
+            nb::arg("pad_value") = 0.0f,
+            nb::arg("runtime_shapes") = false),
         ttnn::overload_t(
             nb::overload_cast<const ttnn::Tensor&, const ttsl::SmallVector<int64_t>&, float>(&ttnn::permute),
             nb::arg("input_tensor").noconvert(),

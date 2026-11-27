@@ -11,7 +11,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 #include "ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

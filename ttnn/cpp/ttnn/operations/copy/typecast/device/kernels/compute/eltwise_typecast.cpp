@@ -9,8 +9,14 @@
 
 namespace ckl = compute_kernel_lib;
 
+// With TYPECAST_RUNTIME_BLOCK_CNT defined, per_core_block_cnt is a runtime arg instead of a
+// compile-time one, so one binary serves every tensor size.
 void kernel_main() {
+#ifdef TYPECAST_RUNTIME_BLOCK_CNT
+    const uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+#else
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+#endif
     constexpr uint32_t per_core_block_dim = get_arg(args::per_core_block_dim);
     // Passed explicitly rather than read off the buffers since an Int8 tensor is carried in a UInt8
     // buffer.

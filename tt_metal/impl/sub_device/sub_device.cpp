@@ -4,15 +4,15 @@
 
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/sub_device.hpp>
+#include <core_coord.hpp>
+#include <sub_device.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <utility>
 
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "hal_types.hpp"
 #include "llrt/hal_types.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 

@@ -14,7 +14,7 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::experimental::prim {

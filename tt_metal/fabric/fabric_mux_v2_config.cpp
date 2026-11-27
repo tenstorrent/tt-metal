@@ -9,11 +9,11 @@
 #include <limits>
 #include <unordered_map>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <hostdevcommon/fabric_mux_v2_common.h>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"

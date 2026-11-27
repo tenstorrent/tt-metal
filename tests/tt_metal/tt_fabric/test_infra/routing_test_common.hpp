@@ -5,7 +5,7 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "llrt.hpp"

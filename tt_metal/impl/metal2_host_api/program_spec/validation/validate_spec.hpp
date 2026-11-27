@@ -6,7 +6,7 @@
 
 #include <functional>
 
-#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"

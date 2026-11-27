@@ -156,7 +156,8 @@ inline std::uint32_t _llk_unpack_matmul_load_tile_replay_(
             {
                 if (needs_src_clear)
                 {
-                    TTI_UNPACR_NOP(UNP_SEL, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /*clear current bank*/, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+                    TTI_UNPACR_NOP(
+                        UNP_SEL, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /*clear current bank*/, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC_ZERO /*UNP_CLR_SRC*/);
                 }
 
                 for (std::uint32_t tile = 0; tile < num_hw_tiles; tile++)

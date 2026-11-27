@@ -4,7 +4,7 @@
 
 #include "prefetch.hpp"
 
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include <map>
 #include <span>
@@ -14,13 +14,13 @@
 
 #include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
-#include "tt-metalium/mesh/legacy/device.hpp"
+#include "device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_s.hpp"
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "hal_types.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "impl/debug/inspector/inspector.hpp"
 #include <tt-umd/types/core_coordinates.hpp>

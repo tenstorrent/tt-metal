@@ -12,7 +12,7 @@
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "context/metal_context.hpp"

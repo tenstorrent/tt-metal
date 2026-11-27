@@ -148,11 +148,6 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/subtract_at_target.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_program_factory.cpp
-    # All-gather weight + minimal matmul (FSDP)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_minimal_matmul_outer_dim_async/all_gather_minimal_matmul_outer_dim_async.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_minimal_matmul_outer_dim_async/device/all_gather_minimal_matmul_outer_dim_async_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_minimal_matmul_outer_dim_async/device/all_gather_minimal_matmul_outer_dim_async_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/all_gather_minimal_matmul_outer_dim_async/device/stripe_layout.cpp
     # K-Split Gram Matmul (multicast)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/k_split_gram_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/device/k_split_gram_matmul_device_operation.cpp
@@ -543,25 +538,6 @@ install(
 )
 
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
-
-# Device kernels are JIT-compiled from paths relative to the tt-metalium root, so an installed
-# ttml needs the kernel sources and the headers they include under that root. They ship in
-# ttml-validation only because ttml_tests is the sole packaged consumer (the ttml component is
-# excluded from CPACK_COMPONENTS_ALL); a ttml runtime package must ship them itself.
-# TODO: move them to a runtime component (https://github.com/tenstorrent/tt-metal/issues/63795).
-install(
-    DIRECTORY
-        ${CMAKE_CURRENT_SOURCE_DIR}/metal/
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt-train/sources/ttml/metal
-    COMPONENT ttml-validation
-    FILES_MATCHING
-    PATTERN
-    "*.h"
-    PATTERN
-    "*.hpp"
-    REGEX
-    "/kernels/.*\\.cpp$"
-)
 
 # CPack configuration for creating ttml deb package
 set(CPACK_GENERATOR "DEB")

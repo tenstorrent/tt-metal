@@ -7,9 +7,9 @@
 #include "program_types_generated.h"
 #include <variant>
 #include "kernels/kernel.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <core_coord.hpp>
+#include <kernel_types.hpp>
+#include <sub_device_types.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {

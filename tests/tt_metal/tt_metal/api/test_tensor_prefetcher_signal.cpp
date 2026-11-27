@@ -14,11 +14,11 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
 
 #include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -86,7 +86,7 @@ void run_signal_kernel(
     uint32_t signal_addr,
     uint32_t num_signals,
     const SignalSource& source) {
-    Program program = CreateProgram(mesh_device);
+    Program program;
     const KernelHandle kernel = CreateKernel(
         program,
         kSignalKernel,

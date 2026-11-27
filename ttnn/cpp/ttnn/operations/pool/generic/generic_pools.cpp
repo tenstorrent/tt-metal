@@ -4,11 +4,11 @@
 
 #include "generic_pools.hpp"
 
-#include "tt-metalium/data_formats/tile_constants.hpp"
+#include "tt-metalium/constants.hpp"
 #include "ttnn/operations/pool/generic/device/pool_op.hpp"
 #include <cmath>
 #include <optional>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
@@ -22,9 +22,9 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::pool {
 

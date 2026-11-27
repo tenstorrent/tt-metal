@@ -11,9 +11,9 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/observability/capture_hooks.hpp>
-#include <tt-metalium/utils/program_cache.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <cstdint>
@@ -21,8 +21,6 @@
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::device_operation {
-
-struct RangeRunArgs;  // ttnn/metal_v2_artifacts.hpp
 
 template <typename T>
 concept ProgramFactoryConcept = requires {
@@ -78,8 +76,8 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // Metal 2.0 factory concept: factories that return
 // ProgramArtifacts (a ProgramSpec + ProgramRunArgs + any op-owned tensors) from
 // create_program_artifacts. The framework adapter maps that same ProgramSpec onto
-// tensor_coords via the MeshWorkload constructor on cache miss, and
-// patches every TensorArg (io and op-owned alike) via Program::update_tensor_args
+// tensor_coords via tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs on cache miss, and
+// patches every TensorArg (io and op-owned alike) via tt::tt_metal::experimental::UpdateTensorArgs
 // on cache hit.
 //
 // NOTE: Each TensorArgument in ProgramRunArgs MUST reference a MeshTensor reachable from
@@ -114,20 +112,6 @@ concept HasSpecRuntimeArgsOverride = requires {
         typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
         tt::tt_metal::ProgramRunArgs>;
 };
-
-// True iff T has a single static override_runtime_arguments returning RangeRunArgs: the cache-hit form of a
-// MeshWorkloadSpecFactoryConcept factory with per-device run args. Kept apart from HasSpecRuntimeArgsOverride, which
-// also routes SPMD spec factories, so a mis-typed SPMD factory cannot land in the mesh adapter.
-template <typename T>
-concept HasRangeRunArgsOverride = requires {
-    requires std::same_as<
-        typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
-        ttnn::device_operation::RangeRunArgs>;
-};
-
-// True iff T maps its TTNN command-list parameters, which a recording binds through the cache miss's tensor bindings.
-template <typename T>
-concept MapsCmdListParameters = requires { &T::map_cmd_list_parameters; };
 }  // namespace detail
 
 // A factory whose programs vary across the mesh: one call returns the workload-scoped resources
@@ -141,35 +125,24 @@ concept MapsCmdListParameters = requires { &T::map_cmd_list_parameters; };
 //       const ttnn::MeshCoordinateRange& range);
 // One Program backs a whole range, so the override is called once per range and takes the range
 // rather than a coordinate: what it returns applies to every device the range covers.
-// A factory whose devices differ only in a few named kernel run args declares
-//   static constexpr bool uses_per_device_run_args = true;
-// returns per-device values in PerCoordProgram::per_device_run_params, and overrides with
-//   static RangeRunArgs override_runtime_arguments(..., const ttnn::MeshCoordinateRange& range);
-// or, if its per-device values depend only on the coordinate and the hashed attributes, opts out of the override with
-//   static constexpr bool fixed_per_device_run_args = true;
-// (see MeshWorkloadSpecFactoryAdapter).
 template <typename T>
 concept MeshWorkloadSpecFactoryConcept = requires {
     &T::create_mesh_workload_artifacts;
 } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
-// Base spec factory: cache hit refreshes only tensor, PrefetcherPipe and GlobalSemaphore bindings. SPMD-shaped -- one
+// Base spec factory: cache hit refreshes only tensor and PrefetcherPipe bindings. SPMD-shaped -- one
 // ProgramSpec, replicated across the mesh. A factory whose programs differ per device is a
 // MeshWorkloadSpecFactoryConcept instead. Every spec factory's PrefetcherPipeArguments must name pipes
-// in operation_attributes_t::prefetcher_pipes, which the cache hit rebinds them from. Likewise its
-// GlobalSemaphoreArguments name GlobalSemaphores in operation_attributes_t::global_semaphores (a
-// std::vector<GlobalSemaphore>), or, for a MeshWorkloadSpecFactoryConcept factory only, ones it allocates
-// in MeshWorkloadArtifacts::global_semaphores, which the program cache keeps allocated. A factory whose
-// override_runtime_arguments supplies its run args on every hit (as generic_op does) may bind others.
+// in operation_attributes_t::prefetcher_pipes, which the cache hit rebinds them from.
 template <typename T>
 concept ProgramSpecFactoryConcept =
     requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&
     !ProgramDescriptorFactoryConcept<T> && !MeshWorkloadSpecFactoryConcept<T> && !detail::HasSpecRuntimeArgsOverride<T>;
 
 // Spec factory that additionally re-applies per-dispatch runtime args on every cache hit: its
-// override_runtime_arguments returns a ProgramRunArgs applied via Program::update_program_run_args (the
+// override_runtime_arguments returns a ProgramRunArgs applied via UpdateProgramRunArgs (the
 // spec-path analog of the ProgramDescriptor path's get_dynamic_runtime_args). Args it omits are
-// retained from the cache-miss Program::set_program_run_args, so they must be enqueue-loop invariant. Full
+// retained from the cache-miss SetProgramRunArgs, so they must be enqueue-loop invariant. Full
 // signature (only the return type is concept-enforced):
 //   static ProgramRunArgs override_runtime_arguments(
 //       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,

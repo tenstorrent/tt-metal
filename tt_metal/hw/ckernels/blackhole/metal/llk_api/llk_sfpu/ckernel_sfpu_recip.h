@@ -11,10 +11,12 @@
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
+#include "lltt.h"
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
+
 // Computes the reciprocal of a floating point value x.
 // normalized=true requires a finite input with magnitude in [1, 2).
 template <int max_iter = 2, bool normalized = false>
@@ -196,18 +198,18 @@ inline void _calculate_reciprocal_fast_24b_5c_(const int iterations) {
     // 2 |      |                        |                         |         |
     // 3 |      |                        |                         | [z]     |
 
-    TTI_REPLAY(0, 4, 0, 0);
+    lltt::replay(0, 4);
     TTI_SFPLOAD(7, 0, ADDR_MOD_6, 0);
 
 #pragma GCC unroll 7
     for (int d = 0; d < iterations - 1; d++) {
-        TTI_REPLAY(0, 5, 0, 0);
+        lltt::replay(0, 5);
     }
 
     TTI_SFPNOP;
-    TTI_REPLAY(1, 1, 0, 0);
+    lltt::replay(1, 1);
     TTI_SFPNOP;
-    TTI_REPLAY(3, 2, 0, 0);
+    lltt::replay(3, 2);
 
     TTI_SFPNOP;
     TTI_SFPNOP;
@@ -398,11 +400,13 @@ void recip_init() {
     // SFPU replay slots 0-5. Reinitialize another SFPU macro/replay owner before using it again.
     // Scalar/first-column sfpu_reciprocal_iter callers only need generic unary SFPU init plus
     // sfpu_reciprocal_init; they must not pay for or clobber state with this full-tile setup.
-    // Common SFPU init (SFPU config register + counter reset), then the
-    // op-specific reciprocal setup below -- one self-contained init, matching exp_init.
+    // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + reciprocal's ADDR_MOD_6 + counter
+    // reset), then the op-specific reciprocal setup below -- one self-contained init, matching exp_init.
     // SDPA runs reciprocal in its softmax after matmul/exp, so the general SFPU state is re-established
-    // here, not just reset. Reciprocal uses ADDR_MOD_6 (dest incr 2) on Blackhole, at its invariant.
+    // here, not just reset. Reciprocal uses ADDR_MOD_6 (dest incr 2) on Blackhole.
     sfpu::_init_sfpu_config_reg();
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
     if constexpr (APPROXIMATION_MODE) {

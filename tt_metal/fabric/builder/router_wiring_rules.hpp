@@ -112,10 +112,6 @@ struct RouterVcShape {
     std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_counts{};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_flat_base{};
 
-    std::optional<uint32_t> host_rdma_channel;
-
-    std::array<uint32_t, builder_config::MAX_NUM_VCS> producer_sender_counts() const;
-
     // Bounds-checked (vc, channel) to flat-index conversion.
     uint32_t flat_sender_id(uint32_t vc, uint32_t channel) const {
         TT_FATAL(
@@ -145,9 +141,6 @@ struct RouterVcShape {
  * with zero VC1 channels. The derivation emits all flat bases and enforces the channel ceilings.
  * Reading facing capability and Z role from one capability set prevents inconsistent inputs.
  */
-// Fill the flat-index bases from the counts and enforce the channel ceilings.
-void finalize_vc_shape_bases(RouterVcShape& shape);
-
 RouterVcShape router_vc_shape(
     Topology topology,
     RoutingDirection facing,

@@ -4,7 +4,7 @@
 
 #include "llama_reduce_scatter.hpp"
 #include "device/llama_reduce_scatter_device_operation.hpp"
-#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::experimental {

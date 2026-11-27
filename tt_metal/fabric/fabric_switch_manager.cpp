@@ -5,7 +5,7 @@
 #include <tt-metalium/experimental/fabric/fabric_switch_manager.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 
 #include <vector>
 

@@ -4,12 +4,12 @@
 
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-umd/types/arch.hpp>
 
 #include <cstdlib>

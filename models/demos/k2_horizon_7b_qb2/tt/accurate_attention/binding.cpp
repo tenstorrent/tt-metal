@@ -8,8 +8,8 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_device_operation.hpp"
 #include "ttnn/operations/generic/generic_op.hpp"
-#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/reflection.hpp>
 #include <array>
 #include <stdexcept>

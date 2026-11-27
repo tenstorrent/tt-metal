@@ -10,11 +10,11 @@
 #include <optional>
 #include <string>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <exception>
 #include <limits>
 #include <unordered_map>
@@ -22,13 +22,13 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/program.hpp>
 
 // Access to internal API: ProgramImpl::finalize_offsets, get_sem_base_addr, MeshDeviceImpl, MetalEnvImpl
 #include "impl/program/program_impl.hpp"

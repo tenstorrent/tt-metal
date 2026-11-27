@@ -8,9 +8,9 @@
 
 // Circular buffer constants for device (kernel/firmware) code.
 //
-// This is the device-side counterpart of the host header tt-metalium/workload/legacy/circular_buffer_constants.h. The
-// two files are deliberately separate: one is compiled by the host compiler, the other by the RISC-V kernel compiler,
-// and neither may include the other.
+// This is the device-side counterpart of the host header tt-metalium/circular_buffer_constants.h. The two files
+// are deliberately separate: one is compiled by the host compiler, the other by the RISC-V kernel compiler, and
+// neither may include the other.
 //
 // Device compilation context:
 //   - ARCH_WORMHOLE is defined ONLY when compiling for Wormhole

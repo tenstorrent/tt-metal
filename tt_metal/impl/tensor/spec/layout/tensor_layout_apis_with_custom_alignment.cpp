@@ -4,7 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <tt_stl/assert.hpp>
 

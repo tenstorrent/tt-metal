@@ -8,7 +8,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <cstddef>
 #include <optional>
 

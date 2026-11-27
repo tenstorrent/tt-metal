@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 #include "pad_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -244,32 +244,15 @@ PadDeviceOperation::tensor_return_value_t pad(
     const std::optional<ttnn::Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = PadDeviceOperation;
-    const auto attributes = [&](const tt::tt_metal::MemoryConfig& mem_config, bool multicore) {
-        return OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             output_logical_shape,
             output_padded_shape,
             input_tensor_start,
             pad_value,
-            mem_config,
-            multicore,
-            sub_core_grids};
-    };
-    return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
-        input,
-        output_mem_config,
-        preallocated_output,
-        [&] {
-            return OperationType::compute_output_specs(
-                attributes(output_mem_config, use_multicore), OperationType::tensor_args_t{input, preallocated_output});
-        },
-        [&](const Tensor& launch_input, const std::optional<tt::tt_metal::MemoryConfig>& explicit_mem_config) {
-            // A sharded input always takes a multicore factory. Keep it on one when it was moved to interleaved
-            // memory: the single-core factory writes each row to one page, so it cannot write a sharded output.
-            const bool multicore = use_multicore || (input.is_sharded() && !launch_input.is_sharded());
-            return ttnn::device_operation::launch<OperationType>(
-                attributes(explicit_mem_config.value_or(output_mem_config), multicore),
-                OperationType::tensor_args_t{
-                    launch_input, explicit_mem_config.has_value() ? std::nullopt : preallocated_output});
-        });
+            output_mem_config,
+            use_multicore,
+            sub_core_grids},
+        OperationType::tensor_args_t{input, preallocated_output});
 }
 }  // namespace ttnn::prim

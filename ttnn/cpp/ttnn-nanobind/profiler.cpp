@@ -4,7 +4,7 @@
 
 #include "profiler.hpp"
 
-#include <tt-metalium/vocabulary/device_types.hpp>
+#include <tt-metalium/device_types.hpp>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/set.h>

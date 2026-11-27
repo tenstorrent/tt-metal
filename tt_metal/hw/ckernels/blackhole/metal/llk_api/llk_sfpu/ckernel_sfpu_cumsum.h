@@ -35,7 +35,7 @@ inline void tile_columns_pass(Scan scan) {
 // scan step.
 template <std::uint32_t STEP, std::uint32_t PASS>
 inline void scan_tile_columns_pass() {
-    tile_columns_pass<PASS, (PASS % 2) * 4>([] { TTI_REPLAY((PASS % 2) * STEP, STEP, 0, 0); });
+    tile_columns_pass<PASS, (PASS % 2) * 4>([] { lltt::replay((PASS % 2) * STEP, STEP); });
 }
 
 // Sets LREG4-7, which carry the running column values between tiles, to the constant in LREG<VALUE>.

@@ -25,17 +25,11 @@ template <
     bool is_fp32_dest_acc_en = false,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
-    PackMode pack_mode = PackMode::Default,
-    bool acc_to_dest = false>
+    PackMode pack_mode = PackMode::Default>
 inline void llk_math_eltwise_unary_datacopy_init() {
     constexpr std::uint8_t RegFmt = ckernel::infer_unpack_reg_fmt(DESC.format, is_fp32_dest_acc_en);
-    llk_math_eltwise_unary_datacopy_init_impl<
-        type,
-        is_fp32_dest_acc_en,
-        src_b_bcast_type,
-        is_int_fpu_en,
-        pack_mode,
-        acc_to_dest>(DESC.shape.total_num_faces(), RegFmt);
+    llk_math_eltwise_unary_datacopy_init_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
+        DESC.shape.total_num_faces(), RegFmt);
 }
 
 template <
@@ -43,11 +37,10 @@ template <
     DataCopyType type = DataCopyType::A2D,
     bool is_fp32_dest_acc_en = false,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    bool unpack_to_dest = false,
-    bool acc_to_dest = false>
+    bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index) {
     SAN_HOOK(unsupported());
     constexpr std::uint8_t RegFmt = ckernel::infer_unpack_reg_fmt(DESC.format, is_fp32_dest_acc_en);
-    llk_math_eltwise_unary_datacopy_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest, acc_to_dest>(
+    llk_math_eltwise_unary_datacopy_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
         dst_index, static_cast<std::uint32_t>(DESC.format), RegFmt);
 }

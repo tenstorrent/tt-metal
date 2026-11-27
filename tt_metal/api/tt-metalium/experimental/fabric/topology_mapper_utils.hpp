@@ -19,7 +19,7 @@
 #include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <fmt/base.h>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 

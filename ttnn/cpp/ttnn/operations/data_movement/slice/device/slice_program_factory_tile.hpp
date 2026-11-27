@@ -12,6 +12,16 @@
 
 namespace ttnn::prim {
 
+// Whether a SliceTileProgramFactory program can serve another row count: interleaved tiles, unit
+// steps, bounds given as attributes and the full grid. Everything that follows the shapes and bounds
+// is then a runtime argument, so the program hash leaves the input's rows and the row bounds out.
+bool slice_tile_program_is_row_free(const SliceParams& args, const SliceInputs& tensor_args);
+
+// Whether a row-free slice has at least one output tile per core. Its core set is then the whole grid
+// at every row count, and the hash leaves the output's rows out too. With fewer tiles the core set
+// follows the output's tile count, so the hash keeps the whole output spec.
+bool slice_tile_program_fills_grid(const SliceParams& args, const SliceInputs& tensor_args);
+
 struct SliceTileProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);

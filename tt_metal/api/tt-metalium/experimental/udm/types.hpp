@@ -9,12 +9,12 @@
 #include <utility>
 #include <vector>
 #include <unordered_map>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::experimental::udm {

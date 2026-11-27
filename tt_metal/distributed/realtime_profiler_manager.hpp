@@ -17,8 +17,8 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 #include "context/context_types.hpp"
 #include "tt_metal/common/broadcast_ring.hpp"

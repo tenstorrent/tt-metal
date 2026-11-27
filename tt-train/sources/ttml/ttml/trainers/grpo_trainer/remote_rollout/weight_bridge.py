@@ -10,15 +10,16 @@ can share one MPI context without crosstalk.
 
 from __future__ import annotations
 
+import io
 import json
+import struct
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
+import torch
 import ttnn
 from ttnn import distributed_context_recv_bytes as _mpi_recv_bytes
 from ttnn import distributed_context_send_bytes as _mpi_send_bytes
-
-from .transport import recv_frame, recv_weight_dict, send_frame, send_weight_dict
 
 
 SENDER_RANK: int = 0
@@ -104,31 +105,35 @@ def _validate_source_tensor(key: str, tensor: "ttnn.Tensor") -> None:
         )
 
 
-def _manifest_entries(weights: dict, keys: List[str]) -> List[dict]:
-    return [
-        {
-            "key": k,
-            "shape": _shape_to_list(weights[k].shape),
-            "dtype": weights[k].dtype.name,
-            "layout": weights[k].layout.name,
-        }
-        for k in keys
-    ]
-
-
 def _send_manifest(peer_rank: int, weights: dict, keys: List[str]) -> None:
     """Send a length-prefixed JSON manifest (per-key shape/dtype/layout)."""
-    body = json.dumps({"version": 1, "entries": _manifest_entries(weights, keys)}).encode("utf-8")
-    send_frame(_mpi_send_bytes, body, peer_rank, _MANIFEST_LEN_TAG, _MANIFEST_BODY_TAG)
+    manifest = {
+        "version": 1,
+        "entries": [
+            {
+                "key": k,
+                "shape": _shape_to_list(weights[k].shape),
+                "dtype": weights[k].dtype.name,
+                "layout": weights[k].layout.name,
+            }
+            for k in keys
+        ],
+    }
+    body = json.dumps(manifest).encode("utf-8")
+    _mpi_send_bytes(struct.pack("<Q", len(body)), peer_rank, _MANIFEST_LEN_TAG)
+    _mpi_send_bytes(body, peer_rank, _MANIFEST_BODY_TAG)
 
 
 def _recv_manifest(peer_rank: int) -> dict:
-    return json.loads(recv_frame(_mpi_recv_bytes, peer_rank, _MANIFEST_LEN_TAG, _MANIFEST_BODY_TAG).decode("utf-8"))
+    header = _mpi_recv_bytes(8, peer_rank, _MANIFEST_LEN_TAG)
+    (n,) = struct.unpack("<Q", header)
+    body = _mpi_recv_bytes(int(n), peer_rank, _MANIFEST_BODY_TAG)
+    return json.loads(body.decode("utf-8"))
 
 
-def _device0_to_host(tensor: "ttnn.Tensor", cq_id: Optional[int] = None):
+def _device0_to_host(tensor: "ttnn.Tensor"):
     """Bring device 0's (replicated) copy of ``tensor`` to host as torch."""
-    return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0], cq_id=cq_id)
+    return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
 
 
 def _replicate_from_host(host_tensor, device: "ttnn.MeshDevice") -> "ttnn.Tensor":
@@ -141,6 +146,16 @@ def _replicate_from_host(host_tensor, device: "ttnn.MeshDevice") -> "ttnn.Tensor
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(device),
     )
+
+
+def _torch_save_bytes(t) -> bytes:
+    buf = io.BytesIO()
+    torch.save(t, buf)
+    return buf.getvalue()
+
+
+def _torch_load_bytes(blob: bytes):
+    return torch.load(io.BytesIO(blob), weights_only=True)
 
 
 class WeightBridge(ABC):
@@ -215,17 +230,19 @@ class HostWeightBridge(WeightBridge):
             raise RuntimeError("HostWeightBridge.send_weights called on a receiver.")
         keys = sorted(weights.keys())
         _send_manifest(self._peer_rank, weights, keys)
-        send_weight_dict(_mpi_send_bytes, weights, _device0_to_host, self._peer_rank, _WEIGHT_LEN_TAG, _WEIGHT_BLOB_TAG)
+        for k in keys:
+            blob = _torch_save_bytes(_device0_to_host(weights[k]))
+            _mpi_send_bytes(struct.pack("<Q", len(blob)), self._peer_rank, _WEIGHT_LEN_TAG)
+            _mpi_send_bytes(blob, self._peer_rank, _WEIGHT_BLOB_TAG)
 
     def receive_weights(self) -> List[dict[str, "ttnn.Tensor"]]:
         if self._role != _ROLE_RECEIVER:
             raise RuntimeError("HostWeightBridge.receive_weights called on a sender.")
         manifest = _recv_manifest(self._peer_rank)
         dicts: List[dict[str, ttnn.Tensor]] = [{} for _ in self._targets]
-        entries = recv_weight_dict(
-            _mpi_recv_bytes, manifest["entries"], self._peer_rank, _WEIGHT_LEN_TAG, _WEIGHT_BLOB_TAG
-        )
-        for entry, host_tensor in entries:
+        for entry in manifest["entries"]:
+            (blob_len,) = struct.unpack("<Q", _mpi_recv_bytes(8, self._peer_rank, _WEIGHT_LEN_TAG))
+            host_tensor = _torch_load_bytes(_mpi_recv_bytes(int(blob_len), self._peer_rank, _WEIGHT_BLOB_TAG))
             for i, target in enumerate(self._targets):
                 dicts[i][entry["key"]] = _replicate_from_host(host_tensor, target)
         return dicts

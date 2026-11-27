@@ -13,13 +13,9 @@
 namespace ttnn {
 
 DeviceComputeKernelConfig layernorm_default_compute_config(tt::ARCH arch) {
-    const bool approx_mode = false;
-    const bool fp32_acc = true;
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
-    // fp32_dest_acc_en is always on here, so use HiFi3 on Wormhole (less likely to give bad results).
-    const auto math_fidelity =
-        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
-    return init_device_compute_kernel_config(arch, std::nullopt, math_fidelity, approx_mode, fp32_acc);
+    bool approx_mode = false;
+    bool fp32_acc = true;
+    return init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, approx_mode, fp32_acc);
 }
 
 Tensor layer_norm(
@@ -31,8 +27,7 @@ Tensor layer_norm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const Tensor>& recip_tensor,
-    const std::optional<const DataType>& dtype) {
+    const std::optional<const Tensor>& recip_tensor) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().rank();
 
@@ -41,12 +36,11 @@ Tensor layer_norm(
 
     // For 0V tensors
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
-        return ttnn::clone(input_tensor, dtype, output_memory_config, compute_kernel_config);
+        return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, output_memory_config, compute_kernel_config);
     }
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
-    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     auto kernel_config_val = compute_kernel_config.value_or(layernorm_default_compute_config(arch));
 
     return ttnn::prim::layer_norm(
@@ -61,7 +55,7 @@ Tensor layer_norm(
             input_tensor.tensor_spec().tile().get_height(),
             input_tensor.tensor_spec().tile().get_width())),
         kernel_config_val,
-        dtype,
+        std::nullopt,                                      // dtype
         prim::LayerNormType::LAYERNORM,                    // norm_type
         prim::DistributedLayerNormStage::NOT_DISTRIBUTED,  // distributed_norm_stage
         std::nullopt,                                      // stats

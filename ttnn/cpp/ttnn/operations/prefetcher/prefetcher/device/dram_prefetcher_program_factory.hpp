@@ -7,9 +7,9 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/span.hpp>
 
 #include "dram_prefetcher_device_operation_types.hpp"

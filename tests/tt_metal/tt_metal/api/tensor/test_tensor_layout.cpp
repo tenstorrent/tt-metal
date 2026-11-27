@@ -2,21 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/vocabulary/shape2d.hpp>
+#include <tt-metalium/shape2d.hpp>
 #include <initializer_list>
 #include <memory>
 #include <optional>
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "common_tensor_test_utils.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/vocabulary/shape.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/alignment.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tensor/spec/layout/alignment.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 

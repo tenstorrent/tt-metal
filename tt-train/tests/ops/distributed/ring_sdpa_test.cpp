@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <core/xtensor_utils.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
@@ -43,7 +43,7 @@ public:
 
             // Configure parallelism context for CP (CP axis will be 0)
             ttml::autograd::ctx().initialize_parallelism_context(
-                {.enable_ddp = false, .enable_tp = true, .cp = ttml::autograd::ContextParallelConfig{}});
+                {.enable_ddp = false, .enable_tp = true, .enable_cp = true});
         }
     }
     static void TearDownTestSuite() {
@@ -54,24 +54,6 @@ public:
 
     void SetUp() override {
         SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
-    }
-};
-
-// CP2 ring attention on a 1x2 mesh.
-class Mesh1x2RingSDPATest : public ttml::test_utils::Mesh1x2SuiteFixture {
-protected:
-    static void SetUpTestSuite() {
-        Mesh1x2SuiteFixture::SetUpTestSuite();
-        if (ttml::test_utils::system_supports_mesh(mesh_shape())) {
-            if (!ttml::autograd::ctx().is_distributed_context_initialized()) {
-                ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
-            }
-            ttml::autograd::ctx().set_seed(42);
-            ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
-            // A 1x2 mesh is a line, so CP takes its only non-trivial axis: cp_axis = 1, ring size 2.
-            ttml::autograd::ctx().initialize_parallelism_context(
-                {.enable_ddp = false, .enable_tp = false, .cp = ttml::autograd::ContextParallelConfig{}});
-        }
     }
 };
 
@@ -505,75 +487,4 @@ TEST_F(GalaxyRingSDPATest, LargerSequenceCausalMaskBackward) {
         /*seq_len=*/256,
         /*head_dim=*/64,
         /*test_backward=*/true);
-}
-
-// CP2: step 0 is the diagonal block on both devices; at step 1 device 0 skips (its K/V come from later in the
-// sequence) while device 1 attends to device 0's chunk without a mask.
-TEST_F(Mesh1x2RingSDPATest, WithCausalMask) {
-    TestRingAttention(
-        /*batch=*/1,
-        /*num_heads=*/4,
-        /*seq_len=*/128,
-        /*head_dim=*/64,
-        /*test_backward=*/false);
-}
-
-TEST_F(Mesh1x2RingSDPATest, WithCausalMaskBackward) {
-    TestRingAttention(
-        /*batch=*/1,
-        /*num_heads=*/4,
-        /*seq_len=*/128,
-        /*head_dim=*/64,
-        /*test_backward=*/true);
-}
-
-// 256 rows per device, so each step's SDPA spans several tile rows, heads and batch entries.
-TEST_F(Mesh1x2RingSDPATest, LargerBatchSequenceBackward) {
-    TestRingAttention(
-        /*batch=*/2,
-        /*num_heads=*/8,
-        /*seq_len=*/512,
-        /*head_dim=*/64,
-        /*test_backward=*/true);
-}
-
-// Backward with the forward's K/V handles must give the very same bits as re-shifting K/V:
-// a ring shift only moves data, so both paths feed identical tensors to the kernels.
-TEST_F(GalaxyRingSDPATest, ReuseMatchesReshiftBitExact) {
-    using namespace ttml;
-
-    auto* device = &autograd::ctx().get_device();
-    const uint32_t cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis().value();
-    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
-
-    auto& rng = autograd::ctx().get_generator();
-    const std::array<std::size_t, 4> shape{2, 4, 256, 64};
-    std::array<xt::xarray<float>, 4> inputs;  // Q, K, V, dO
-    for (auto& input : inputs) {
-        input = ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng());
-    }
-    const auto to_device = [&](const xt::xarray<float>& data) {
-        return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, device, ttnn::Layout::TILE, mapper.get());
-    };
-
-    // Per-device dQ, dK, dV
-    const auto run = [&](const bool reuse_forward_kv) {
-        auto query = autograd::create_tensor(to_device(inputs[0]), /* requires_grad */ true);
-        auto key = autograd::create_tensor(to_device(inputs[1]), /* requires_grad */ true);
-        auto value = autograd::create_tensor(to_device(inputs[2]), /* requires_grad */ true);
-        auto output = ops::distributed::ring_attention_sdpa(
-            query, key, value, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal, reuse_forward_kv);
-        output->set_grad(to_device(inputs[3]));
-        output->backward();
-        return std::array{
-            core::to_xtensor<float>(query->get_grad(), core::IdentityComposer{}),
-            core::to_xtensor<float>(key->get_grad(), core::IdentityComposer{}),
-            core::to_xtensor<float>(value->get_grad(), core::IdentityComposer{})};
-    };
-
-    const auto reused = run(/*reuse_forward_kv=*/true);
-    const auto reshifted = run(/*reuse_forward_kv=*/false);
-    EXPECT_TRUE(reused[0] == reshifted[0]) << "dQ differs";
-    EXPECT_TRUE(reused[1] == reshifted[1]) << "dK differs";
-    EXPECT_TRUE(reused[2] == reshifted[2]) << "dV differs";
 }

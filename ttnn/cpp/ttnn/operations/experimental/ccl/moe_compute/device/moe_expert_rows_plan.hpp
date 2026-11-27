@@ -17,10 +17,10 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-umd/types/arch.hpp>
 
 #include "kernels/expert_rows/expert_rows_common.h"

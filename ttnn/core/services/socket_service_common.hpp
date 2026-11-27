@@ -12,7 +12,7 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 

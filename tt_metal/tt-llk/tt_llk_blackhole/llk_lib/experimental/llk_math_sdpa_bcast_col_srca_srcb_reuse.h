@@ -32,7 +32,7 @@ inline void sdpa_bcast_col_srca_srcb_reuse_configure_mop(const std::uint32_t num
             TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 4, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 4);
         });
 
-    std::uint32_t d2a_instr = TT_OP_REPLAY(ckernel::math::replay_buf_offset, 2, 0, 0);
+    std::uint32_t d2a_instr = lltt::replay_insn(ckernel::math::replay_buf_offset, 2);
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD)
     {
         ckernel_template tmp(1, num_faces, d2a_instr, TT_OP_ELWADD(p_setrwc::CLR_NONE, acc_to_dest, broadcast_type, ADDR_MOD_0, 0));

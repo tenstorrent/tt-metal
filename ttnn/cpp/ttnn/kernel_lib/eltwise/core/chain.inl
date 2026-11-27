@@ -1082,29 +1082,13 @@ struct detail::CopyTileImpl : InputStream<DataflowBufferType>, CopyTileTag {
         check_bound_dataflow_buffer<Cb>(in);
     }
 
-    // Quasar unpacks a 32-bit input straight to Dest, which needs a loan from MATH around the copy. The unpack
-    // dst-format table is generated for the UNPACK and MATH TRISCs only; the loan does nothing on PACK.
-    static constexpr bool unpacks_to_dest =
-#if defined(ARCH_QUASAR) && (defined(TRISC_UNPACK) || defined(TRISC_MATH))
-        unpack_dst_format[Cb] == static_cast<uint8_t>(DataFormat::Float32) ||
-        unpack_dst_format[Cb] == static_cast<uint8_t>(DataFormat::Int32);
-#else
-        false;
-#endif
-
     // ---- chain pipeline hooks ----
     static ALWI void init() { copy_init(Cb); }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         const uint32_t in_idx = tile_base_value<Addressing>(tile_base) +
                                 detail::input_idx<Mapping, Wait, Pop, Addressing>(i_flat, ht, wt, row_stride);
-        if constexpr (unpacks_to_dest) {
-            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
-        }
         copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
-        if constexpr (unpacks_to_dest) {
-            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
-        }
     }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;

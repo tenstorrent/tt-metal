@@ -110,9 +110,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
-    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     copy_block(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
-    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 
     mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
@@ -139,12 +137,10 @@ inline void reblock_and_untilize(
         out_cb.reserve_back(out_block_w);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             tile_regs_acquire();
-            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             for (uint32_t w = 0; w < out_subblock_w; w++) {
                 uint32_t tile_index = block_offset + within_block_index + w;
                 copy_tile(interm_cb_id, tile_index, w);
             }
-            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
             tile_regs_commit();
             tile_regs_wait();
             pack_untilize_dest<out_subblock_w, out_block_w>(out_cb_id, 1, n);
@@ -488,7 +484,7 @@ void kernel_main() {
 #ifdef FUSE_BIAS
                     if (block < num_blocks_inner_dim - 1) {
                         // TEN-4746 (#48552): drain mm_partials without consuming it. dummy_unpack() orders the
-                        // POP after the WAIT via an UNPACR_NOP (required on Quasar, no-op on WH/BH);
+                        // POP after the WAIT via a clear-SrcA UNPACR_NOP (required on Quasar, no-op on WH/BH);
                         // it reads nothing, so PACKER_L1_ACC is undisturbed.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);

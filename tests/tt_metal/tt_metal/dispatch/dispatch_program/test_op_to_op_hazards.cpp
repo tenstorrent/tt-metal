@@ -27,19 +27,19 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
-#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -47,7 +47,6 @@
 #include "command_queue_fixture.hpp"
 #include "device_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "unit_tests_dispatch_utils.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -137,13 +136,13 @@ Program build_writer(
     };
     spec.tensor_parameters = {TensorParameter{.unique_id = TensorParamName{"dst"}, .spec = dst.tensor_spec()}};
 
-    Program program(md, spec);
+    Program program = experimental::MakeProgramFromSpec(md, spec);
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"writer"},
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"pattern", pattern}, {"stall", stall}})}};
     params.tensor_args = {{TensorParamName{"dst"}, TensorArgument{dst}}};
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
     return program;
 }
 
@@ -174,7 +173,7 @@ Program build_reader(
         TensorParameter{.unique_id = TensorParamName{"dst"}, .spec = dst.tensor_spec()},
     };
 
-    Program program(md, spec);
+    Program program = experimental::MakeProgramFromSpec(md, spec);
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"reader"},
@@ -183,7 +182,7 @@ Program build_reader(
         {TensorParamName{"src"}, TensorArgument{src}},
         {TensorParamName{"dst"}, TensorArgument{dst}},
     };
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
     return program;
 }
 
@@ -209,14 +208,14 @@ Program build_raw_writer(
             .name = "wu", .kernels = {KernelSpecName{"raw_writer"}}, .target_nodes = node}},
     };
 
-    Program program(md, spec);
+    Program program = experimental::MakeProgramFromSpec(md, spec);
     const uint32_t dst_addr = static_cast<uint32_t>(dst.mesh_buffer().get_reference_buffer()->address());
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"raw_writer"},
         .runtime_arg_values =
             MakeRuntimeArgsForSingleNode(node, {{"dst_addr", dst_addr}, {"pattern", pattern}, {"stall", stall}})}};
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
     return program;
 }
 
@@ -256,7 +255,7 @@ Program build_multi(
         TensorParameter{.unique_id = TensorParamName{"out"}, .spec = out.tensor_spec()},
     };
 
-    Program program(md, spec);
+    Program program = experimental::MakeProgramFromSpec(md, spec);
     ProgramRunArgs params;
     params.tensor_args = {
         {TensorParamName{"in0"}, TensorArgument{in0}},
@@ -264,7 +263,7 @@ Program build_multi(
         {TensorParamName{"in2"}, TensorArgument{in2}},
         {TensorParamName{"out"}, TensorArgument{out}},
     };
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
     return program;
 }
 
@@ -299,6 +298,9 @@ void expect_all(const std::vector<uint32_t>& v, uint32_t val) {
         ASSERT_EQ(v[i], val) << "mismatch at word " << i;
     }
 }
+
+// Gen1 (WH/BH) only, mirroring test_scratchpad_hw.cpp's guard.
+bool skip_if_not_gen1(tt::ARCH arch) { return arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE; }
 
 // Confirm a kernel's ELF buffer-R/W info (op-to-op R/W inference). This reads what the loader harvested
 // from the compiled .tt.BUF_RW section (see Kernel::query_buf_rw), keyed off the KernelSpec name, so it
@@ -341,8 +343,8 @@ void expect_buf_rw(
 // RAW hazard, DRAM: producer writes W to DRAM X (stalled); consumer reads X -> Y; barrier => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardDram) {
     auto md = devices_.at(0);
-    if (!has_at_least_worker_cores(*md, 2)) {
-        GTEST_SKIP();
+    if (skip_if_not_gen1(md->arch())) {
+        GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
     distributed::MeshCoordinateRange range(md->shape());
@@ -364,8 +366,8 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardDram) {
 // RAW hazard, L1: producer writes W to L1 X (stalled); consumer reads X -> Y; barrier => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardL1) {
     auto md = devices_.at(0);
-    if (!has_at_least_worker_cores(*md, 2)) {
-        GTEST_SKIP();
+    if (skip_if_not_gen1(md->arch())) {
+        GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
     distributed::MeshCoordinateRange range(md->shape());
@@ -388,8 +390,8 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardL1) {
 // serial/overlap timing probe (long stalls on two different nodes) used later to confirm concurrency.
 TEST_F(UnitMeshCQSingleCardFixture, RawFreeDisjointAndOverlapProbe) {
     auto md = devices_.at(0);
-    if (!has_at_least_worker_cores(*md, 2)) {
-        GTEST_SKIP();
+    if (skip_if_not_gen1(md->arch())) {
+        GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
     distributed::MeshCoordinateRange range(md->shape());
@@ -415,8 +417,8 @@ TEST_F(UnitMeshCQSingleCardFixture, RawFreeDisjointAndOverlapProbe) {
 // WAR hazard: consumer reads X (stalled) -> Y; producer then writes W to X; barrier => Y == D (original).
 TEST_F(UnitMeshCQSingleCardFixture, WarHazard) {
     auto md = devices_.at(0);
-    if (!has_at_least_worker_cores(*md, 2)) {
-        GTEST_SKIP();
+    if (skip_if_not_gen1(md->arch())) {
+        GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
     distributed::MeshCoordinateRange range(md->shape());
@@ -440,8 +442,8 @@ TEST_F(UnitMeshCQSingleCardFixture, WarHazard) {
 // WAR-free (disjoint): consumer reads Z (doped W) -> Y; producer writes a DISJOINT X => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, WarFreeDisjoint) {
     auto md = devices_.at(0);
-    if (!has_at_least_worker_cores(*md, 2)) {
-        GTEST_SKIP();
+    if (skip_if_not_gen1(md->arch())) {
+        GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
     distributed::MeshCoordinateRange range(md->shape());
@@ -465,8 +467,8 @@ TEST_F(UnitMeshCQSingleCardFixture, WarFreeDisjoint) {
 // WAW: two producers write X (W1 then W2); consumer reads X -> Y; barrier => Y == W2 (last write wins).
 TEST_F(UnitMeshCQSingleCardFixture, WawLastWriteWins) {
     auto md = devices_.at(0);
-    if (!has_at_least_worker_cores(*md, 2)) {
-        GTEST_SKIP();
+    if (skip_if_not_gen1(md->arch())) {
+        GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
     distributed::MeshCoordinateRange range(md->shape());
@@ -487,8 +489,8 @@ TEST_F(UnitMeshCQSingleCardFixture, WawLastWriteWins) {
 // Transitive N/N+1/N+2: N writes X=W (stalled), N+1 touches a disjoint buffer, N+2 reads X -> Z => Z == W.
 TEST_F(UnitMeshCQSingleCardFixture, TransitiveSkipDependency) {
     auto md = devices_.at(0);
-    if (!has_at_least_worker_cores(*md, 3)) {
-        GTEST_SKIP();
+    if (skip_if_not_gen1(md->arch())) {
+        GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
     distributed::MeshCoordinateRange range(md->shape());
@@ -516,8 +518,8 @@ TEST_F(UnitMeshCQSingleCardFixture, TransitiveSkipDependency) {
 // buffer usage, so a future detector must conservatively KEEP the barrier. Passes today.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardFreeFunctionKernelBail) {
     auto md = devices_.at(0);
-    if (!has_at_least_worker_cores(*md, 2)) {
-        GTEST_SKIP();
+    if (skip_if_not_gen1(md->arch())) {
+        GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
     distributed::MeshCoordinateRange range(md->shape());
@@ -545,6 +547,9 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardFreeFunctionKernelBail) {
 TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
     auto md = devices_.at(0);
     auto* dev = md->impl().get_devices()[0];
+    if (skip_if_not_gen1(md->arch())) {
+        GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
+    }
     auto& cq = md->mesh_command_queue();
     distributed::MeshCoordinateRange range(md->shape());
     auto in0 = alloc(*md, BufferType::DRAM);
@@ -614,13 +619,13 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
         "unused"};
     std::vector<MeshTensor> tensors;
     std::vector<std::pair<std::string, const MeshTensor*>> bound;
-    tensors.reserve(dram_names.size() + 5);
-    bound.reserve(dram_names.size() + 5);
+    tensors.reserve(dram_names.size() + 3);
+    bound.reserve(dram_names.size() + 3);
     for (size_t i = 0; i < dram_names.size(); ++i) {
         tensors.push_back(alloc(*md, BufferType::DRAM));
     }
     tensors.push_back(alloc(*md, BufferType::L1));
-    for (int i = 0; i < 4; ++i) {  // "shard", "shard_iter", "shard_once_r", "shard_once_w"
+    for (int i = 0; i < 2; ++i) {  // "shard", "shard_iter"
         ShardSpec shard_spec(CoreRangeSet(CoreRange(CoreCoord{0, 0})), {1, 32}, ShardOrientation::ROW_MAJOR);
         MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
         TensorLayout layout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config);
@@ -632,8 +637,6 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
     bound.emplace_back("local", &tensors[dram_names.size()]);
     bound.emplace_back("shard", &tensors[dram_names.size() + 1]);
     bound.emplace_back("shard_iter", &tensors[dram_names.size() + 2]);
-    bound.emplace_back("shard_once_r", &tensors[dram_names.size() + 3]);
-    bound.emplace_back("shard_once_w", &tensors[dram_names.size() + 4]);
 
     KernelSpec k{
         .unique_id = KernelSpecName{"paths"},
@@ -658,8 +661,8 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
         params.tensor_args.emplace(TensorParamName{name}, TensorArgument{*tensor});
     }
     spec.kernels = {k};
-    Program program(*md, spec);
-    program.set_program_run_args(params);
+    Program program = experimental::MakeProgramFromSpec(*md, spec);
+    experimental::SetProgramRunArgs(program, params);
     distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
 
     const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
@@ -679,20 +682,10 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
     EXPECT_EQ(
         names(rw.reads),
         (std::set<std::string_view>{
-            "view",
-            "iter",
-            "shard_iter",
-            "shard",
-            "shard_once_r",
-            "bank_r",
-            "bank_state",
-            "legacy_r",
-            "wrap",
-            "escape",
-            "local"}));
+            "view", "iter", "shard_iter", "shard", "bank_r", "bank_state", "legacy_r", "wrap", "escape", "local"}));
     EXPECT_EQ(
         names(rw.writes),
-        (std::set<std::string_view>{"shard_once_w", "bank_w", "state", "zero", "legacy_w", "wrap", "escape", "local"}));
+        (std::set<std::string_view>{"bank_w", "state", "zero", "legacy_w", "wrap", "escape", "local"}));
 }
 
 // Every public raw-address API family, independently: each FAMILY_* build of hazard_raw_family_coverage.cpp
@@ -767,8 +760,8 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwEveryRawFamilyIndependentlyO
             .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
                 .name = "wu", .kernels = {KernelSpecName{"raw"}}, .target_nodes = node}},
         };
-        Program program(*md, spec);
-        program.set_program_run_args(ProgramRunArgs{});
+        Program program = experimental::MakeProgramFromSpec(*md, spec);
+        experimental::SetProgramRunArgs(program, ProgramRunArgs{});
         distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
 
         const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
@@ -817,10 +810,10 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwShardedPagesIteratorIsExact)
     spec.tensor_parameters = {
         TensorParameter{.unique_id = TensorParamName{"src"}, .spec = src.tensor_spec()},
         TensorParameter{.unique_id = TensorParamName{"dst"}, .spec = dst.tensor_spec()}};
-    Program program(*md, spec);
+    Program program = experimental::MakeProgramFromSpec(*md, spec);
     ProgramRunArgs params;
     params.tensor_args = {{TensorParamName{"src"}, TensorArgument{src}}, {TensorParamName{"dst"}, TensorArgument{dst}}};
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
     distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
 
     const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
@@ -864,10 +857,10 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwUnresolvedSlotIsOpaque) {
             .name = "wu", .kernels = {KernelSpecName{"unresolved"}}, .target_nodes = NodeCoord{0, 0}}},
     };
     spec.tensor_parameters = {TensorParameter{.unique_id = TensorParamName{"in"}, .spec = in.tensor_spec()}};
-    Program program(*md, spec);
+    Program program = experimental::MakeProgramFromSpec(*md, spec);
     ProgramRunArgs params;
     params.tensor_args = {{TensorParamName{"in"}, TensorArgument{in}}};
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
     distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
 
     const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();

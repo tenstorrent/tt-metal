@@ -9,9 +9,9 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -190,8 +190,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
                     {"num_tiles_per_2d", num_tiles_2d},
                     {"third_dim", third_dim},
                     {"total_tiles_per_row", total_tiles_per_row},
-                    {"out_dim_c", 1u},
-                    {"in_dim_c", 1u},
                 },
             .runtime_arg_schema =
                 {

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <device.hpp>
 #include <fstream>
 
 namespace tt::tt_metal {

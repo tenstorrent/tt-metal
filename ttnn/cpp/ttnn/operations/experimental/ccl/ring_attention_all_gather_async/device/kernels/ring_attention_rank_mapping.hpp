@@ -14,8 +14,6 @@ namespace ttnn::ring_attention_all_gather {
 // as the last reader arg. Must stay equal to the reader kernel's kNumFixedCompileTimeArgs sentinel.
 constexpr uint32_t kReaderFixedCompileTimeArgCount = 23;
 constexpr uint32_t kWriterFixedCompileTimeArgCount = 24;
-// Runtime args of sparse_ring_sdpa's load-balancing block on the writer (ring_attention_balance.hpp).
-constexpr uint32_t kBalanceWriterArgCount = 34;
 
 // Values of the kernels' full-mesh rank-mapping compile-time arg. An axis ring keeps its transport order;
 // a full-mesh snake numbers tensor ranks row-major over the mesh, or column-major when the split-KV

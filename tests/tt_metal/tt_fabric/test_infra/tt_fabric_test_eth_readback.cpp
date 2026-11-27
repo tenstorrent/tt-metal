@@ -7,9 +7,9 @@
 #include "impl/context/metal_context.hpp"
 
 // Include the necessary headers for the implementation
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 // Include the test device and fixture headers
 #include "tt_fabric_test_device_setup.hpp"

@@ -34,6 +34,9 @@ struct SDPAParams {
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
     bool output_concat_heads = false;
+    // The kernels take the Q and K sequence lengths at run time, so a new length builds a program from
+    // compiled kernels instead of compiling new ones (non-causal, no mask, standard compute path).
+    bool runtime_seq_len = false;
 };
 
 struct SDPAInputs {

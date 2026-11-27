@@ -4,12 +4,72 @@
 
 #pragma once
 
-// DEPRECATED-FORWARDING-HEADER: <tt-metalium/tensor/tensor_apis.hpp> moved to
-// <tt-metalium/memory/tensor/tensor_apis.hpp>. This forwarding header will be removed after 2027-03-05.
-#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
-// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
-#warning \
-    "<tt-metalium/tensor/tensor_apis.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/memory/tensor/tensor_apis.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
-#endif
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tile.hpp>
 
-#include <tt-metalium/memory/tensor/tensor_apis.hpp>  // IWYU pragma: export
+#include <tt_stl/span.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/tensor/spec/layout/layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+
+namespace tt::tt_metal {
+
+// ======================================================================================
+//                                  .to_layout()
+// ======================================================================================
+
+HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
+HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile);
+HostTensor to_row_major_layout(const HostTensor& tensor);
+
+// ======================================================================================
+//                                  .to_dtype()
+// ======================================================================================
+
+HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
+
+// ======================================================================================
+//                                  .to_tensor_spec()
+// ======================================================================================
+
+template <typename T>
+HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec);
+
+// ======================================================================================
+//                                  Utility functions
+// ======================================================================================
+
+namespace host_buffer {
+
+// HostTensor overloads also appear in distributed_tensor_apis.hpp during the deprecation period.
+// TODO(#40348): This function has single device assumptions over inheritely multi-device constructs.
+[[deprecated(
+    "Include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp> instead. "
+    "This API will be removed from this header after 2026-12-01.")]]
+// NOLINTNEXTLINE(readability-redundant-declaration)
+HostBuffer get_host_buffer(const HostTensor& tensor);
+
+template <typename T>
+ttsl::Span<const T> get_as(const HostBuffer& buffer);
+
+template <typename T>
+ttsl::Span<T> get_as(HostBuffer& buffer);
+
+template <typename T>
+[[deprecated(
+    "Include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp> instead. "
+    "This API will be removed from this header after 2026-12-01.")]]
+// NOLINTNEXTLINE(readability-redundant-declaration)
+ttsl::Span<const T> get_as(const HostTensor& tensor);
+
+template <typename T>
+[[deprecated(
+    "Include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp> instead. "
+    "This API will be removed from this header after 2026-12-01.")]]
+// NOLINTNEXTLINE(readability-redundant-declaration)
+ttsl::Span<T> get_as(HostTensor& tensor);
+
+}  // namespace host_buffer
+
+}  // namespace tt::tt_metal

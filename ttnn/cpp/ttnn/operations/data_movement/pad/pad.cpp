@@ -205,9 +205,7 @@ ttnn::Tensor pad_impl(
         if (eq_spans(input_logical_shape, output_padded_shape)) {
             return input_tensor;
         }
-        // Tensor::pad keeps the input logical shape; ttnn.pad returns the padded shape as logical, like on device.
-        auto output = input_tensor.pad(ttnn::Shape(output_padded_shape), ttnn::Shape{input_tensor_start}, value);
-        return ttnn::experimental::view(output, output.padded_shape());
+        return input_tensor.pad(ttnn::Shape(output_padded_shape), ttnn::Shape{input_tensor_start}, value);
     }
 
     // on device
@@ -305,14 +303,11 @@ ttnn::Tensor pad_impl(
                     ShardStrategy::HEIGHT,
                     ShardOrientation::ROW_MAJOR);
 
-                ttsl::SmallVector<uint32_t> height_pad_input_tensor_start{
-                    input_tensor_start[0], input_tensor_start[1], input_tensor_start[2], 0};
-
                 // then pad height
                 auto output_tensor_height_padded = pad_impl(
                     output_tensor_width_padded,
                     output_padded_shape,
-                    height_pad_input_tensor_start,
+                    input_tensor_start,
                     value,
                     use_multicore,
                     memory_config_arg.value_or(height_pad_memory_config));

@@ -12,7 +12,7 @@
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "api/alignment.h"
 #else
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 #endif
 
 // Per-core work split from one runtime length word. Host factories and device kernels derive every

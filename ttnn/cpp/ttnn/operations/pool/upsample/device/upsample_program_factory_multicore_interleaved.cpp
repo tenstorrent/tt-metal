@@ -6,12 +6,12 @@
 #include <cstdint>
 #include <string>
 
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
@@ -22,12 +22,105 @@ namespace ttnn::prim {
 using namespace tt::tt_metal;
 namespace metal2 = tt::tt_metal;
 
+namespace {
+
+// Each core's row range and, for tiled input, its block count. A block is a row of input tiles for tiled input
+// and one input row (stick) for row-major input.
+metal2::ProgramRunArgs interleaved_run_args(const Tensor& input, const Tensor& output) {
+    const metal2::KernelSpecName READER{"reader"};
+    const metal2::KernelSpecName WRITER{"writer"};
+    const metal2::KernelSpecName COMPUTE{"compute"};
+    const metal2::TensorParamName INPUT{"input"};
+    const metal2::TensorParamName OUTPUT{"output"};
+
+    const bool is_tiled_layout = input.layout() == Layout::TILE;
+    const auto& output_shape = output.padded_shape();
+    const auto grid = output.device()->compute_with_storage_grid_size();
+    const std::uint32_t num_cores_y = grid.y;
+    std::uint32_t input_cb_required_pages = 1;
+    std::uint32_t work_units_to_split = input.physical_volume() / input.padded_shape()[-1];
+    if (is_tiled_layout) {
+        const auto& tile_shape = input.tensor_spec().tile().get_tile_shape();
+        input_cb_required_pages = input.padded_shape()[-1] / tile_shape[1];
+        work_units_to_split /= tile_shape[0];
+    }
+    const auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_group_1, work_per_core_group_2] =
+        split_work_to_cores(grid, work_units_to_split);
+
+    metal2::KernelRunArgs reader_run_args{.kernel = READER};
+    metal2::KernelRunArgs writer_run_args{.kernel = WRITER};
+    metal2::KernelRunArgs compute_run_args{.kernel = COMPUTE};
+    for (std::uint32_t i = 0, blocks_processed = 0; i < num_cores; i++) {
+        const CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        std::uint32_t blocks_per_core = 0;
+        if (core_group_1.contains(core)) {
+            blocks_per_core = work_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            blocks_per_core = work_per_core_group_2;
+        } else {
+            TT_ASSERT(false, "Core not in specified core ranges");
+        }
+
+        const std::uint32_t reader_units = blocks_per_core * input_cb_required_pages;
+        const std::uint32_t reader_start = blocks_processed * input_cb_required_pages;
+
+        metal2::AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, core, {{"num_pages", reader_units}, {"start_page_id", reader_start}});
+        metal2::AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"num_blocks_to_read", blocks_per_core},
+             {"start_block_id", blocks_processed},
+             {"height", output_shape[1]},
+             {"width", output_shape[2]}});
+        if (is_tiled_layout) {
+            metal2::AddRuntimeArgsForNode(
+                compute_run_args.runtime_arg_values, core, {{"per_core_block_cnt", blocks_per_core}});
+        }
+
+        blocks_processed += blocks_per_core;
+    }
+    metal2::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    if (is_tiled_layout) {
+        run_args.kernel_run_args.push_back(std::move(compute_run_args));
+    }
+    run_args.tensor_args = {
+        {INPUT, metal2::TensorArgument{input.mesh_tensor()}},
+        {OUTPUT, metal2::TensorArgument{output.mesh_tensor()}},
+    };
+    return run_args;
+}
+
+}  // namespace
+
+bool upsample_interleaved_is_shape_free(const UpsampleParams& operation_attributes, const Tensor& input_tensor) {
+    // The writer steps through logical rows, so the rows split over the cores must not include padding.
+    return operation_attributes.runtime_shapes && input_tensor.layout() == Layout::ROW_MAJOR &&
+           !input_tensor.is_sharded() && !operation_attributes.output_mem_config.is_sharded() &&
+           input_tensor.logical_volume() != 0 && input_tensor.padded_shape() == input_tensor.logical_shape();
+}
+
+metal2::ProgramRunArgs UpsampleMultiCoreInterleavedProgramFactory::override_runtime_arguments(
+    const UpsampleParams& operation_attributes,
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    if (!upsample_interleaved_is_shape_free(operation_attributes, input_tensor)) {
+        // The hash holds the full shapes, so only the tensors change.
+        metal2::ProgramRunArgs run_args;
+        run_args.tensor_args.insert({metal2::TensorParamName{"input"}, input_tensor.mesh_tensor()});
+        run_args.tensor_args.insert({metal2::TensorParamName{"output"}, output_tensor.mesh_tensor()});
+        return run_args;
+    }
+    return interleaved_run_args(input_tensor, output_tensor);
+}
+
 ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFactory::create_program_artifacts(
     const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
     const metal2::KernelSpecName READER{"reader"};
     const metal2::KernelSpecName WRITER{"writer"};
-    const metal2::KernelSpecName COMPUTE_G1{"compute_g1"};
-    const metal2::KernelSpecName COMPUTE_G2{"compute_g2"};
+    const metal2::KernelSpecName COMPUTE{"compute"};
     const metal2::DFBSpecName SRC0{"src0"};
     const metal2::DFBSpecName OUT{"out"};
     const metal2::TensorParamName INPUT{"input"};
@@ -58,11 +151,9 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
     const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
-    const auto& output_shape = output.padded_shape();
     MeshDevice* const device = output.device();
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Declare variables that will be set based on layout
     std::uint32_t input_unit_size;
@@ -161,8 +252,6 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         {"output_page_size", static_cast<std::uint32_t>(writer_unit_size)},
         {"scale_h", scale_factor_h},
         {"scale_w", scale_factor_w},
-        {"height", output_shape[1]},
-        {"width", output_shape[2]},
     };
 
     if (is_tiled_layout) {
@@ -193,9 +282,15 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
             .endpoint_type = metal2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {metal2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .compile_time_args = std::move(writer_cta),
-        .runtime_arg_schema = {.runtime_arg_names = {"num_blocks_to_read", "start_block_id"}},
+        // The output height and width are runtime args, so the binary does not depend on them.
+        .runtime_arg_schema = {.runtime_arg_names = {"num_blocks_to_read", "start_block_id", "height", "width"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
+
+    // The row width, and so the page size, stays in the key.
+    metal2::TensorSpecRelaxations relaxations;
+    relaxations.dynamic_tensor_shape = upsample_interleaved_is_shape_free(operation_attributes, input_tensor);
+    relaxations.match_page_size = relaxations.dynamic_tensor_shape;
 
     metal2::ProgramSpec spec{
         .name = "upsample_multicore_interleaved",
@@ -203,8 +298,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         .dataflow_buffers = {src0_dfb},
         .tensor_parameters =
             {
-                {.unique_id = INPUT, .spec = input_mesh.tensor_spec()},
-                {.unique_id = OUTPUT, .spec = output_mesh.tensor_spec()},
+                {.unique_id = INPUT, .spec = input_mesh.tensor_spec(), .relaxations = relaxations},
+                {.unique_id = OUTPUT, .spec = output_mesh.tensor_spec(), .relaxations = relaxations},
             },
     };
     if (out_dfb) {
@@ -213,9 +308,9 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
 
     // WorkUnitSpecs must have disjoint target_nodes, so a shared READER/WRITER can't sit in one
     // WorkUnitSpec spanning all_cores while COMPUTE sits in another over a sub-range of the same
-    // cores. Row-major (no compute) needs only one WU over all_cores; tiled lists READER/WRITER in
-    // each per-group WU alongside that group's COMPUTE instance — their combined placement (the
-    // union of the WUs they appear in) is still all_cores.
+    // cores. Row-major (no compute) needs only one WU over all_cores; tiled lists READER, WRITER
+    // and the shared COMPUTE in each per-group WU — their combined placement (the union of the WUs
+    // they appear in) is still all_cores.
     if (!is_tiled_layout) {
         spec.work_units.push_back(metal2::WorkUnitSpec{
             .name = "main",
@@ -226,104 +321,41 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         const std::uint32_t num_input_tiles_in_row =
             input.padded_shape()[-1] / input.tensor_spec().tile().get_tile_shape()[1];
 
+        // One compute kernel for both core groups: the block count per core is a runtime arg, so
+        // the groups differ only in their runtime args and the binary does not depend on the height.
+        spec.kernels.push_back(metal2::KernelSpec{
+            .unique_id = COMPUTE,
+            .source = std::filesystem::path{UNTILIZE_METAL2_KERNEL},
+            .compiler_options =
+                {.defines = {{"UNTILIZE_RUNTIME_BLOCK_CNT", "1"}}, .opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings =
+                {metal2::DFBBinding{
+                     .dfb_spec_name = SRC0, .accessor_name = "src", .endpoint_type = metal2::DFBEndpointType::CONSUMER},
+                 metal2::DFBBinding{
+                     .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = metal2::DFBEndpointType::PRODUCER}},
+            .compile_time_args = {{"per_core_block_tile_cnt", num_input_tiles_in_row}},
+            .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
+            .hw_config = metal2::ComputeHardwareConfig{},
+        });
         if (core_group_1.num_cores() > 0) {
-            metal2::KernelSpec compute_g1{
-                .unique_id = COMPUTE_G1,
-                .source = std::filesystem::path{UNTILIZE_METAL2_KERNEL},
-                .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
-                .dfb_bindings =
-                    {metal2::DFBBinding{
-                         .dfb_spec_name = SRC0,
-                         .accessor_name = "src",
-                         .endpoint_type = metal2::DFBEndpointType::CONSUMER},
-                     metal2::DFBBinding{
-                         .dfb_spec_name = OUT,
-                         .accessor_name = "out",
-                         .endpoint_type = metal2::DFBEndpointType::PRODUCER}},
-                .compile_time_args =
-                    {
-                        {"per_core_block_cnt", work_per_core_group_1},
-                        {"per_core_block_tile_cnt", num_input_tiles_in_row},
-                    },
-                .hw_config = metal2::ComputeHardwareConfig{},
-            };
-            spec.kernels.push_back(compute_g1);
             spec.work_units.push_back(metal2::WorkUnitSpec{
                 .name = "wu_g1",
-                .kernels = {READER, WRITER, COMPUTE_G1},
+                .kernels = {READER, WRITER, COMPUTE},
                 .target_nodes = core_group_1,
             });
         }
-
         if (core_group_2.num_cores() > 0) {
-            metal2::KernelSpec compute_g2{
-                .unique_id = COMPUTE_G2,
-                .source = std::filesystem::path{UNTILIZE_METAL2_KERNEL},
-                .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
-                .dfb_bindings =
-                    {metal2::DFBBinding{
-                         .dfb_spec_name = SRC0,
-                         .accessor_name = "src",
-                         .endpoint_type = metal2::DFBEndpointType::CONSUMER},
-                     metal2::DFBBinding{
-                         .dfb_spec_name = OUT,
-                         .accessor_name = "out",
-                         .endpoint_type = metal2::DFBEndpointType::PRODUCER}},
-                .compile_time_args =
-                    {
-                        {"per_core_block_cnt", work_per_core_group_2},
-                        {"per_core_block_tile_cnt", num_input_tiles_in_row},
-                    },
-                .hw_config = metal2::ComputeHardwareConfig{},
-            };
-            spec.kernels.push_back(compute_g2);
             spec.work_units.push_back(metal2::WorkUnitSpec{
                 .name = "wu_g2",
-                .kernels = {READER, WRITER, COMPUTE_G2},
+                .kernels = {READER, WRITER, COMPUTE},
                 .target_nodes = core_group_2,
             });
         }
     }
 
     // Per-core runtime args
-    /*
-    For tiled input, a block refers to a row of input tiles
-    For row-major input, a block refers to a single input row (stick)
-    */
-    metal2::ProgramRunArgs run_args;
-    metal2::KernelRunArgs reader_run_args{.kernel = READER};
-    metal2::KernelRunArgs writer_run_args{.kernel = WRITER};
-
-    for (std::uint32_t i = 0, blocks_processed = 0; i < num_cores; i++) {
-        const CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        std::uint32_t blocks_per_core = 0;
-        if (core_group_1.contains(core)) {
-            blocks_per_core = work_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            blocks_per_core = work_per_core_group_2;
-        } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
-        }
-
-        const std::uint32_t reader_units = blocks_per_core * input_cb_required_pages;
-        const std::uint32_t reader_start = blocks_processed * input_cb_required_pages;
-
-        metal2::AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values, core, {{"num_pages", reader_units}, {"start_page_id", reader_start}});
-        metal2::AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            core,
-            {{"num_blocks_to_read", blocks_per_core}, {"start_block_id", blocks_processed}});
-
-        blocks_processed += blocks_per_core;
-    }
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
-    run_args.tensor_args = {
-        {INPUT, metal2::TensorArgument{input_mesh}},
-        {OUTPUT, metal2::TensorArgument{output_mesh}},
-    };
-
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec), .run_params = interleaved_run_args(input, output)};
 }
 
 }  // namespace ttnn::prim

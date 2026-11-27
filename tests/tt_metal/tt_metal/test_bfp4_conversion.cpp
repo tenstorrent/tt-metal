@@ -7,10 +7,10 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/data_formats/bfloat4.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 
 using namespace tt;
 

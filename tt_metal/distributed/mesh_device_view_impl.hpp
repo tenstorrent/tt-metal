@@ -8,11 +8,11 @@
 #include <unordered_map>
 #include <optional>
 
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/mesh/mesh_config.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/vocabulary/shape2d.hpp>
-#include <tt-metalium/vocabulary/maybe_remote.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/maybe_remote.hpp>
 #include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal::distributed {

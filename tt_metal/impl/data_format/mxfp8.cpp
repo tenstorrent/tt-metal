@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/data_formats/mxfp8.hpp>
+#include <tt-metalium/mxfp8.hpp>
 
 #include <optional>
 #include <vector>
 
 #include <tt_stl/span.hpp>
 
-#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/tile.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 #include "mx_tile_pack.hpp"

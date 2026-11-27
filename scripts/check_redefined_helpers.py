@@ -20,22 +20,17 @@ import argparse
 import bisect
 import os
 import re
+import subprocess
 import sys
 
-from precommit_common import (
-    REPO_ROOT,
-    blank_noncode,
-    git_output,
-    name_status_entries,
-    precommit_revisions,
-    safe_repo_path,
-)
+from precommit_common import REPO_ROOT, blank_noncode, safe_git_rev, safe_repo_path
 
 # Files that are the source of truth. Definitions inside them are the API.
 ALLOWLIST = {
-    "tt_metal/api/tt-metalium/utils/math.hpp",
-    "tt_metal/api/tt-metalium/data_formats/tile_constants.hpp",
-    "tt_metal/api/tt-metalium/data_formats/tilize_utils.hpp",
+    "tt_metal/api/tt-metalium/math.hpp",
+    "tt_metal/api/tt-metalium/constants.hpp",
+    "tt_metal/api/tt-metalium/tt_align.hpp",
+    "tt_metal/api/tt-metalium/tilize_utils.hpp",
     "tt_metal/impl/data_format/tilize_utils.cpp",
     "tt_metal/hw/inc/api/tile_constants.h",
     "tt_metal/hw/inc/api/alignment.h",
@@ -59,15 +54,15 @@ CATALOG = """\
 Host (g++ / the ttnn and tt_metal host libraries)
   Ceiling division, round to a multiple, round down, power-of-two align
     tt::div_up, tt::round_up, tt::round_down, tt::align
-    #include <tt-metalium/utils/math.hpp>
+    #include <tt-metalium/math.hpp>
     tt::align requires a positive power-of-two alignment. tt::round_up does not.
   Default 32x32 tile and 16x16 face
     tt::constants::TILE_HEIGHT, TILE_WIDTH, TILE_HW, FACE_HEIGHT, FACE_WIDTH, FACE_HW
-    #include <tt-metalium/data_formats/tile_constants.hpp>
+    #include <tt-metalium/constants.hpp>
     Host only. Device code must not include this header.
   Tile-multiple wrappers around the same math
     round_up_to_mul16, round_up_to_mul32, round_up_to_tile
-    #include <tt-metalium/data_formats/tilize_utils.hpp>
+    #include <tt-metalium/tilize_utils.hpp>
     Prefer tt::round_up(value, tt::constants::TILE_HEIGHT) in new code.
   Power-of-two test, ttnn host only
     tt::tt_metal::is_power_of_two
@@ -84,7 +79,7 @@ Host (g++ / the ttnn and tt_metal host libraries)
     Declared in ttnn/operations/data_movement/common/common.hpp.
   Alignment in bytes, from the architecture rather than a literal 16 or 32
     tt::tt_metal::hal::get_l1_alignment, get_dram_alignment, get_pcie_alignment
-    #include <tt-metalium/discovery/hal.hpp>
+    #include <tt-metalium/hal.hpp>
 
 Device (RISC-V kernels, firmware, tt_metal/hw)
   Default 32x32 tile and 16x16 face
@@ -466,12 +461,12 @@ def is_function_declarator(line, match):
 
 
 def advice_for(kind, name, side):
-    host_math = "include <tt-metalium/utils/math.hpp> and call tt::div_up, tt::round_up, tt::round_down, or tt::align"
+    host_math = "include <tt-metalium/math.hpp> and call tt::div_up, tt::round_up, tt::round_down, or tt::align"
     device_align = 'include "api/alignment.h" and call align (any multiple) or align_power_of_2'
     if kind == "const":
         if name == "L1_ALIGNMENT":
             if side == "host":
-                return "include <tt-metalium/discovery/hal.hpp> and call tt::tt_metal::hal::get_l1_alignment()"
+                return "include <tt-metalium/hal.hpp> and call tt::tt_metal::hal::get_l1_alignment()"
             return "use the L1_ALIGNMENT macro from the architecture noc parameters header"
         if side == "device":
             return 'include "api/tile_constants.h" and use tt::constants::' + name
@@ -479,10 +474,10 @@ def advice_for(kind, name, side):
             return (
                 "host code uses tt::constants::"
                 + name
-                + " from <tt-metalium/data_formats/tile_constants.hpp>; device code uses the same name from "
+                + " from <tt-metalium/constants.hpp>; device code uses the same name from "
                 + '"api/tile_constants.h". A shared header should take the value as an argument'
             )
-        return "include <tt-metalium/data_formats/tile_constants.hpp> and use tt::constants::" + name
+        return "include <tt-metalium/constants.hpp> and use tt::constants::" + name
     if kind == "l1":
         return (
             "call ttnn::operations::data_movement::get_max_l1_space (live free L1) or "
@@ -503,8 +498,8 @@ def advice_for(kind, name, side):
         )
     if name.startswith("round_up_to_tile") or name in {"round_up_to_mul16", "round_up_to_mul32"}:
         return (
-            "call tt::round_up(value, tt::constants::TILE_HEIGHT) from <tt-metalium/utils/math.hpp> "
-            "and <tt-metalium/data_formats/tile_constants.hpp>, or the existing wrappers in <tt-metalium/data_formats/tilize_utils.hpp>"
+            "call tt::round_up(value, tt::constants::TILE_HEIGHT) from <tt-metalium/math.hpp> "
+            "and <tt-metalium/constants.hpp>, or the existing wrappers in <tt-metalium/tilize_utils.hpp>"
         )
     return host_math
 
@@ -736,66 +731,36 @@ def added_lines_by_path(diff_text):
     return found
 
 
-def _diff_paths(paths):
-    """Repo-relative paths safe to place after ``--`` in a git diff.
-
-    ``--literal-pathspecs`` stops a name such as ``:(exclude)*`` from becoming a pathspec.
-    ``safe_repo_path`` rejects a path that leaves the repository.
-    """
-    scoped = []
-    for path in paths or []:
-        resolved = safe_repo_path(path)
-        if resolved is None:
-            continue
-        rel = os.path.relpath(resolved, REPO_ROOT).replace("\\", "/")
-        if rel == ".." or rel.startswith("../"):
-            continue
-        scoped.append(rel)
-    return scoped
-
-
-def _git_diff(args, paths=None):
-    return git_output(["--literal-pathspecs", "diff", "-U0", "-M", "--no-ext-diff", *args, "--", *(paths or [])])
-
-
-def _rename_sources(revisions, paths):
-    """Old paths of the given files that this change renames.
-
-    git pairs a rename only when both paths are in the pathspec. With the new path alone,
-    the whole moved file reads as added and its existing helpers would be reported.
-    The local lookup reads the index only, so it does not stat the work tree.
-    """
-    if not paths:
-        return []
-    payload = git_output(
-        ["diff", "--name-status", "-z", "-M", "--no-ext-diff", "--diff-filter=R", *(revisions or ["--cached"])]
-    )
-    if not payload:
-        return []
-    wanted = set(paths)
-    return [old for _status, (old, new) in name_status_entries(payload) if new in wanted]
-
-
-def commit_added_lines(paths=None):
-    """Added lines for the given files, or the whole commit when no path is usable.
-
-    ``git diff HEAD -- <files>`` sees staged and unstaged edits in those files and does not
-    stat the rest of the work tree. ``PRE_COMMIT`` is also set for ``pre-commit run --files``,
-    which does not stash unstaged changes, so the index alone would hide them.
-    ``PRE_COMMIT_FROM_REF`` and ``PRE_COMMIT_TO_REF`` are passed only after ``safe_git_rev``.
-    None when git cannot answer.
-    """
-    scoped = _diff_paths(paths)
-    revisions = precommit_revisions()
-    if revisions is None:
+def _git_diff(args):
+    try:
+        return subprocess.check_output(
+            ["git", "diff", "-U0", "--no-ext-diff", *args, "--"],
+            cwd=REPO_ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return None
-    scoped += _rename_sources(revisions, scoped)
-    if revisions:
-        diff = _git_diff(revisions, scoped)
+
+
+def commit_added_lines():
+    """Added lines for every file in this commit. None when git cannot answer.
+
+    The diff is of the whole commit. Caller-supplied paths are not command arguments.
+    ``PRE_COMMIT_FROM_REF`` and ``PRE_COMMIT_TO_REF`` are passed only after ``safe_git_rev``.
+    """
+    from_ref = os.environ.get("PRE_COMMIT_FROM_REF")
+    to_ref = os.environ.get("PRE_COMMIT_TO_REF")
+    if from_ref or to_ref:
+        safe_from = safe_git_rev(from_ref)
+        safe_to = safe_git_rev(to_ref)
+        if safe_from is None or safe_to is None:
+            return None
+        diff = _git_diff([safe_from, safe_to])
     else:
-        diff = _git_diff(["HEAD"], scoped)
+        diff = _git_diff(["HEAD"])
         if diff is None:
-            diff = _git_diff(["--cached"], scoped)
+            diff = _git_diff(["--cached"])
     return None if diff is None else added_lines_by_path(diff)
 
 
@@ -818,7 +783,7 @@ def main(argv=None):
 
     added = None
     if not args.all_lines:
-        added = commit_added_lines(args.files)
+        added = commit_added_lines()
         if added is None:
             print(
                 "check_redefined_helpers: git diff failed or the revision was rejected; skipping (fail open)",

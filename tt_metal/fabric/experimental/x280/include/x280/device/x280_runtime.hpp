@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-// Coordinate callers include <tt-metalium/vocabulary/core_coord.hpp> and
+// Coordinate callers include <tt-metalium/core_coord.hpp> and
 // <umd/device/types/core_coordinates.hpp> for these Metal/UMD definitions.
 namespace tt {
 struct xy_pair;

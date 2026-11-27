@@ -9,7 +9,7 @@
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include "tt-metalium/workload/legacy/host_api.hpp"
+#include "tt-metalium/host_api.hpp"
 
 using namespace tt::tt_metal;
 

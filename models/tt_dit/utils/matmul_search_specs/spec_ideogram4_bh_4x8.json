@@ -1,0 +1,101 @@
+{
+  "arch": "blackhole",
+  "grid": [
+    11,
+    10
+  ],
+  "variables": {
+    "M": {
+      "start": 736,
+      "stop": 2304,
+      "step": 32
+    }
+  },
+  "matmuls": [
+    {
+      "name": "layers.*.ff2",
+      "K": 12288,
+      "N": 1152,
+      "calls": [
+        [
+          "M",
+          68
+        ]
+      ]
+    },
+    {
+      "name": "input_proj",
+      "K": 128,
+      "N": 4608,
+      "bias": true,
+      "math_fidelity": "HiFi4",
+      "calls": [
+        [
+          "M",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "final_layer.linear",
+      "K": 4608,
+      "N": 128,
+      "bias": true,
+      "math_fidelity": "HiFi4",
+      "calls": [
+        [
+          "M",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "layers.*.ff1",
+      "K": 4608,
+      "N": 6144,
+      "fuse_swiglu": true,
+      "calls": [
+        [
+          "M",
+          68
+        ]
+      ]
+    },
+    {
+      "name": "layers.*.o",
+      "K": 5120,
+      "N": 1152,
+      "calls": [
+        [
+          "M",
+          68
+        ]
+      ]
+    },
+    {
+      "name": "llm_cond_proj",
+      "K": 53248,
+      "N": 4608,
+      "bias": true,
+      "math_fidelity": "HiFi4",
+      "calls": [
+        [
+          "M",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "layers.*.qkv",
+      "K": 4608,
+      "N": 3840,
+      "op": "split",
+      "calls": [
+        [
+          "M",
+          68
+        ]
+      ]
+    }
+  ]
+}

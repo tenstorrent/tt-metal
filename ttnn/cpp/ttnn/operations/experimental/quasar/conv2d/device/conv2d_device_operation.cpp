@@ -11,13 +11,13 @@
 #include <cstdlib>
 #include <optional>
 #include <utility>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/constants.hpp>
 
-#include <tt-metalium/utils/work_split.hpp>
-#include "tt-metalium/vocabulary/shape.hpp"
+#include <tt-metalium/work_split.hpp>
+#include "tt-metalium/shape.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -225,6 +225,30 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
                 "Error");
         }
     }
+}
+
+ttsl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    hashable_operation_attributes_t hashable_args = {
+        .sliding_window_config = args.sliding_window_config,
+        .output_channels = args.output_channels,
+        .groups = args.groups,
+        .untilize_out = args.untilize_out,
+        .has_bias = args.has_bias,
+        .activation = args.activation,
+        .parallelization_config = args.parallelization_config,
+        .block_config = args.block_config,
+        .memory_config = args.memory_config,
+        .dtype = args.dtype,
+        .input_tensor_shape = args.input_tensor_shape,
+        .compute_kernel_config = args.compute_kernel_config,
+        .enable_act_double_buffer = args.enable_act_double_buffer,
+        .enable_weights_double_buffer = args.enable_weights_double_buffer,
+        .enable_activation_reuse = args.enable_activation_reuse,
+        .config_tensors_in_dram = args.config_tensors_in_dram,
+        .force_split_reader = args.force_split_reader,
+    };
+    return ttsl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation::create_op_performance_model(

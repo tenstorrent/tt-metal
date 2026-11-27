@@ -8,7 +8,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/types.hpp"
 

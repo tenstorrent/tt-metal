@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "deepseek_moe_fast_reduce_nc_fused_device_operation_types.hpp"
 

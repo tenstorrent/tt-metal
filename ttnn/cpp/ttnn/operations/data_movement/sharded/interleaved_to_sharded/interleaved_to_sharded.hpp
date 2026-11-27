@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/types.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn {
 

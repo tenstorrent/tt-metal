@@ -7,10 +7,10 @@
 #include <algorithm>
 #include <string_view>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/tensor/tensor.hpp"

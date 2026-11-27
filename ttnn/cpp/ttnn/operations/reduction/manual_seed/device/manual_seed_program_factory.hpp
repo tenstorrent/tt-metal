@@ -6,8 +6,8 @@
 
 #include "manual_seed_device_operation_types.hpp"
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 

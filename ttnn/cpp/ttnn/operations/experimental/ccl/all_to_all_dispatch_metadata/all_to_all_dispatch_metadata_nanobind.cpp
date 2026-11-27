@@ -14,7 +14,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "all_to_all_dispatch_metadata.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::ccl {

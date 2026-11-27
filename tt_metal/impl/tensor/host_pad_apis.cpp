@@ -8,16 +8,16 @@
 
 #include <tt-metalium/experimental/tensor_host_pad_apis.hpp>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/memory/tensor/tensor_apis.hpp>
-#include <tt-metalium/memory/tensor/tensor_types.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
-#include <tt-metalium/data_formats/tile.hpp>
-#include <tt-metalium/data_formats/bfloat4.hpp>
-#include <tt-metalium/data_formats/bfloat8.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>

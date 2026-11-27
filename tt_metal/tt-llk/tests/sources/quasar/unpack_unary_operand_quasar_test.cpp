@@ -17,7 +17,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "ckernel_buf_desc.h"
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -74,9 +74,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         // Record the descriptor under the engine UNPACKER_ENGINE_SEL actually drives (UNP_B -> UNPACR1/Unp1).
-        constexpr auto unp_res = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BFD_ID_UNP1 : ckernel::trisc::BFD_ID_UNP0;
-        ckernel::trisc::program_bfd<unp_res>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
-        constexpr std::uint8_t bfd_unpack = unp_res;
+        constexpr auto unp_res = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BfdResource::Unp1 : ckernel::trisc::BfdResource::Unp0;
+        const auto bfd_unpack  = ckernel::trisc::bfd_alloc_and_program<unp_res>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
@@ -93,7 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Placer API under the dest-dvalid scheme set up above: the placers carry no synchronization, and the
             // bank tile offset reset to 0 keeps every section at DEST tile 0, as the bare UNP_DEST MOP had it.
             _llk_unpack_dest_init_();
-            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack, tensor_shape_A);
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
         }
         else
         {
@@ -132,8 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     if constexpr (unpack_to_dest)
                     {
                         // One section of tiles_in_block tiles at DEST tile 0, then the dest-dvalid hand-off to the packer.
-                        _llk_unpack_unary_operand_to_dest_block_(
-                            block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block, 1 /*l1_tile_stride*/, tensor_shape_A);
+                        _llk_unpack_unary_operand_to_dest_block_(block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block);
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
                             _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -250,7 +248,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "ckernel_buf_desc.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -291,8 +289,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+        const auto bfd_pack =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(bfd_pack, tensor_shape_A, tiles_in_block);
         PROFILER_SYNC();

@@ -5,16 +5,16 @@
 #include <fmt/base.h>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <memory>
 #include <vector>
 
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"

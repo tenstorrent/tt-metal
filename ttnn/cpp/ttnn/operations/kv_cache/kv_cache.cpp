@@ -5,7 +5,7 @@
 #include "kv_cache.hpp"
 #include "ttnn/operations/kv_cache/device/update_cache_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn {
 

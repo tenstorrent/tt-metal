@@ -9,7 +9,7 @@
 #include "all_to_all_dispatch_metadata_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(

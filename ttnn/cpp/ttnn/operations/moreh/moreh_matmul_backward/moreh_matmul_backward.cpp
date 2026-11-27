@@ -6,11 +6,9 @@
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
-#include "ttnn/operations/data_movement/copy/copy.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
+#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul_backward {
@@ -58,43 +56,15 @@ std::vector<std::optional<Tensor>> moreh_matmul_backward(
         TT_FATAL(input_grad.has_value(), "Input gradient is marked required but not provided.");
         const auto& input_grad_tensor = input_grad.value();
         if (operations::moreh::moreh_matmul::is_same_batch_dim(output_grad, input_grad_tensor)) {
-            ttnn::matmul(
-                output_grad,
-                other,
-                /*transpose_a=*/false,
-                /*transpose_b=*/true,
-                input_grad_tensor.memory_config(),
-                /*dtype=*/std::nullopt,
-                /*program_config=*/std::nullopt,
-                /*activation=*/std::nullopt,
-                compute_kernel_config,
-                /*core_grid=*/std::nullopt,
-                /*output_tile=*/std::nullopt,
-                /*optional_output_tensor=*/input_grad_tensor);
+            ttnn::moreh_matmul(
+                output_grad, other, false, true, input_grad_tensor, std::nullopt, memory_config, compute_kernel_config);
         } else {
-            const auto& temp_input_grad = ttnn::matmul(
-                output_grad,
-                other,
-                /*transpose_a=*/false,
-                /*transpose_b=*/true,
-                memory_config.value_or(output_grad.memory_config()),
-                /*dtype=*/std::nullopt,
-                /*program_config=*/std::nullopt,
-                /*activation=*/std::nullopt,
-                compute_kernel_config,
-                /*core_grid=*/std::nullopt,
-                /*output_tile=*/std::nullopt,
-                /*optional_output_tensor=*/std::nullopt);
+            const auto& temp_input_grad = ttnn::moreh_matmul(
+                output_grad, other, false, true, std::nullopt, std::nullopt, memory_config, compute_kernel_config);
             auto reduce_dims = operations::moreh::moreh_matmul::find_reduce_dim(
                 temp_input_grad.padded_shape(), input_grad_tensor.padded_shape());
-            // The grad drops the leading broadcast dims that the keepdim sum leaves as size 1.
-            const auto reduced = ttnn::sum(
-                temp_input_grad,
-                ttsl::SmallVector<int>(reduce_dims.begin(), reduce_dims.end()),
-                /*keepdim=*/true,
-                memory_config,
-                compute_kernel_config);
-            ttnn::assign(ttnn::reshape(reduced, input_grad_tensor.logical_shape()), input_grad_tensor);
+            ttnn::moreh_sum(
+                temp_input_grad, reduce_dims, true, input_grad_tensor, memory_config, compute_kernel_config);
         }
         outputs[0] = input_grad_tensor;
     }
@@ -103,43 +73,15 @@ std::vector<std::optional<Tensor>> moreh_matmul_backward(
         TT_FATAL(other_grad.has_value(), "Other gradient is marked required but not provided.");
         const auto& other_grad_tensor = other_grad.value();
         if (operations::moreh::moreh_matmul::is_same_batch_dim(output_grad, other_grad_tensor)) {
-            ttnn::matmul(
-                input,
-                output_grad,
-                /*transpose_a=*/true,
-                /*transpose_b=*/false,
-                other_grad_tensor.memory_config(),
-                /*dtype=*/std::nullopt,
-                /*program_config=*/std::nullopt,
-                /*activation=*/std::nullopt,
-                compute_kernel_config,
-                /*core_grid=*/std::nullopt,
-                /*output_tile=*/std::nullopt,
-                /*optional_output_tensor=*/other_grad_tensor);
+            ttnn::moreh_matmul(
+                input, output_grad, true, false, other_grad_tensor, std::nullopt, memory_config, compute_kernel_config);
         } else {
-            const auto& temp_other_grad = ttnn::matmul(
-                input,
-                output_grad,
-                /*transpose_a=*/true,
-                /*transpose_b=*/false,
-                memory_config.value_or(input.memory_config()),
-                /*dtype=*/std::nullopt,
-                /*program_config=*/std::nullopt,
-                /*activation=*/std::nullopt,
-                compute_kernel_config,
-                /*core_grid=*/std::nullopt,
-                /*output_tile=*/std::nullopt,
-                /*optional_output_tensor=*/std::nullopt);
+            const auto& temp_other_grad = ttnn::moreh_matmul(
+                input, output_grad, true, false, std::nullopt, std::nullopt, memory_config, compute_kernel_config);
             auto reduce_dims = operations::moreh::moreh_matmul::find_reduce_dim(
                 temp_other_grad.padded_shape(), other_grad_tensor.padded_shape());
-            // The grad drops the leading broadcast dims that the keepdim sum leaves as size 1.
-            const auto reduced = ttnn::sum(
-                temp_other_grad,
-                ttsl::SmallVector<int>(reduce_dims.begin(), reduce_dims.end()),
-                /*keepdim=*/true,
-                memory_config,
-                compute_kernel_config);
-            ttnn::assign(ttnn::reshape(reduced, other_grad_tensor.logical_shape()), other_grad_tensor);
+            ttnn::moreh_sum(
+                temp_other_grad, reduce_dims, true, other_grad_tensor, memory_config, compute_kernel_config);
         }
         outputs[1] = other_grad_tensor;
     }

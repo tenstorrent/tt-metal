@@ -18,28 +18,11 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "api/alignment.h"
 #include "api/debug/assert.h"
-#include "api/dataflow/fabric_connection_binding_token.h"
 
 #include <cstdint>
 #include <array>
 
 namespace tt::tt_fabric {
-
-// Metal 2.0 fabric connection bindings (KernelAdvancedOptions::FabricConnectionBinding): each target of a binding owns
-// a block of runtime args, [router ethernet channel, teardown semaphore id, buffer index semaphore id], followed on a
-// 2D fabric by [destination chip id, destination mesh id].
-namespace fabric_connection_binding {
-#if defined(FABRIC_2D)
-inline constexpr uint32_t kWordsPerTarget = 5;
-#else
-inline constexpr uint32_t kWordsPerTarget = 3;
-#endif
-
-// The index of the first runtime arg of target `target_index` of `token`.
-constexpr uint32_t target_rta_word(FabricConnectionBindingToken token, uint32_t target_index) {
-    return token.rta_word() + (target_index * kWordsPerTarget);
-}
-}  // namespace fabric_connection_binding
 
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0, uint8_t VC_ID = 0>
 struct WorkerToFabricEdmSenderBase;
@@ -104,15 +87,6 @@ struct WorkerToFabricEdmSenderBase {
     // HACK: Need a way to properly set this up
 
     WorkerToFabricEdmSenderBase() = default;
-
-    // Builds the sender of the only target of a Metal 2.0 fabric connection binding.
-    // precondition: the binding has exactly one target.
-    static WorkerToFabricEdmSenderBase build_from_binding(FabricConnectionBindingToken token) {
-        static_assert(VC_ID == 0, "A fabric connection binding holds a VC0 worker connection");
-        ASSERT(token.num_targets() == 1);
-        std::size_t arg_idx = fabric_connection_binding::target_rta_word(token, 0);
-        return build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-    }
 
     // my_core_type identifies the programmable core executing this adapter and selects
     // the core-specific address space used while resolving runtime arguments.

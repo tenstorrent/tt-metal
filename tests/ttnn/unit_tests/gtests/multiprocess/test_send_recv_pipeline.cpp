@@ -12,7 +12,7 @@
 
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 

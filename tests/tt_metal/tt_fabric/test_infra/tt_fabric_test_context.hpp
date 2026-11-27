@@ -34,8 +34,8 @@
 #include "tt_fabric_telemetry_manager.hpp"
 #include "tt_fabric_test_constants.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 using tt::tt_fabric::fabric_tests::CI_ARTIFACTS_DIR;
 using tt::tt_fabric::fabric_tests::DEFAULT_BUILT_TESTS_DUMP_FILE;

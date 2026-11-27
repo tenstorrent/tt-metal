@@ -11,8 +11,8 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/prefetcher_pipe.hpp"
 

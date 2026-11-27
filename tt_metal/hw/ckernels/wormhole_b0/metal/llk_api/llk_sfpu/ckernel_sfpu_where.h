@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "llk_defs.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -33,7 +34,7 @@ inline void _calculate_where_(
 #ifdef DISABLE_SFPLOADMACRO
     int offset3 = (dst_index_out * 32) << 1;
 
-    TTI_REPLAY(0, 6, 0, 1);
+    lltt::record(0, 6);
     TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_3, offset0);
     TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_3, offset1);
     TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
@@ -43,7 +44,7 @@ inline void _calculate_where_(
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_REPLAY(0, 6, 0, 0);
+        lltt::replay(0, 6);
     }
 #else
     if (dst_index_out == dst_index_in0) {
@@ -55,14 +56,14 @@ inline void _calculate_where_(
         // SFPLOAD L0=Dst[offset2] | SFPENCC (LaneEnabled=true)     |
         // (next SFPLOAD L0)       |                                | SFPSTORE Dst[offset0]=L0
 
-        TTI_REPLAY(0, 3, 0, 1);
+        lltt::record(0, 3);
         TT_SFPLOADMACRO((0 << 2), mod0, ADDR_MOD_3, offset0);
         TT_SFPLOADMACRO((2 << 2), mod0, ADDR_MOD_3, offset1);
         TT_SFPLOAD(0, mod0, ADDR_MOD_2, offset2);
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            TTI_REPLAY(0, 3, 0, 0);
+            lltt::replay(0, 3);
         }
     } else {
         // We use macros 1 and 2 to schedule the following, which achieves 4 cycles per input row of 32 values:
@@ -76,7 +77,7 @@ inline void _calculate_where_(
 
         int offset3 = (dst_index_out * 32) << 1;
 
-        TTI_REPLAY(0, 4, 0, 1);
+        lltt::record(0, 4);
         TT_SFPLOADMACRO((1 << 2), mod0, ADDR_MOD_3, offset0);
         TT_SFPLOADMACRO((2 << 2), mod0, ADDR_MOD_3, offset1);
         TT_SFPLOAD(0, mod0, ADDR_MOD_3, offset2);
@@ -84,7 +85,7 @@ inline void _calculate_where_(
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            TTI_REPLAY(0, 4, 0, 0);
+            lltt::replay(0, 4);
         }
     }
 #endif

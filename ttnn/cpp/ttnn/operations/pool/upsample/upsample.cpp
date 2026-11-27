@@ -4,16 +4,15 @@
 
 #include "upsample.hpp"
 #include <algorithm>
-#include "tt-metalium/vocabulary/shape.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
+#include "tt-metalium/shape.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
-#include "tt-metalium/memory/buffer/buffer_types.hpp"
-#include "tt-metalium/utils/work_split.hpp"
+#include "tt-metalium/buffer_types.hpp"
+#include "tt-metalium/work_split.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::upsample {
 
@@ -87,7 +86,8 @@ ttnn::Tensor upsample(
     std::variant<int, std::array<int, 2>, float, std::array<float, 2>> scale_factor,
     const std::string& mode,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    bool runtime_shapes) {
     tt::tt_metal::MemoryConfig mem_config = output_mem_config.value_or(input_tensor.memory_config());
 
     // Parse scale factors from variant - extract as floats
@@ -115,15 +115,7 @@ ttnn::Tensor upsample(
         },
         scale_factor);
 
-    // The device operation validates the rest, but bilinear mode builds the halo from these scales first.
-    TT_FATAL(scale_h > 0.0f, "scale_factor_h must be positive, got {}", scale_h);
-    TT_FATAL(scale_w > 0.0f, "scale_factor_w must be positive, got {}", scale_w);
-    TT_FATAL(
-        mode != "bilinear" || (operations::pool::upsample::is_integer_scale(scale_h) &&
-                               operations::pool::upsample::is_integer_scale(scale_w)),
-        "bilinear mode requires integer scale factors, got ({}, {})",
-        scale_h,
-        scale_w);
+    // Validation is handled by the device operation's validate_on_program_cache_miss
 
     auto* device = input_tensor.device();
     TT_FATAL(device != nullptr, "upsample expects an allocated device tensor as input");
@@ -163,6 +155,6 @@ ttnn::Tensor upsample(
     }
 
     // For nearest mode, pass to unified prim (device op handles factory selection)
-    return ttnn::prim::upsample(input_tensor, scale_h, scale_w, mode, mem_config, config);
+    return ttnn::prim::upsample(input_tensor, scale_h, scale_w, mode, mem_config, config, std::nullopt, runtime_shapes);
 }
 }  // namespace ttnn::operations::upsample

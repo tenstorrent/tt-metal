@@ -10,10 +10,10 @@
 #include <optional>
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 
 #include "impl/kernels/kernel.hpp"
 

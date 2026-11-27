@@ -21,7 +21,7 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
 #include <ttnn/distributed/tensor_topology.hpp>
 

@@ -177,7 +177,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
                     TTI_MVMUL(last_clr, 0, ADDR_MOD_3, 0);
                 });
 
-            ckernel_template tmp(1, inner_loops, TT_OP_REPLAY(replay_start, replay_buf_len, 0, 0));
+            ckernel_template tmp(1, inner_loops, lltt::replay_insn(replay_start, replay_buf_len));
             if constexpr (high_fidelity)
             {
                 tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD_F));
@@ -218,7 +218,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
                     }
                 });
 
-            const std::uint32_t replay_op = TT_OP_REPLAY(replay_start, replay_buf_len, 0, 0);
+            const std::uint32_t replay_op = lltt::replay_insn(replay_start, replay_buf_len);
             ckernel_template tmp(tensor_shape.num_faces_r_dim, 1, replay_op);
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_B));
             tmp.program();

@@ -8,19 +8,19 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena_properties.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
-#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 #include <tt_stl/assert.hpp>
-#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "buffer.hpp"
 
 namespace tt::tt_metal::experimental {
 

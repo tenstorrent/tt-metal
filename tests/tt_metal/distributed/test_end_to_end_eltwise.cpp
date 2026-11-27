@@ -3,20 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <functional>
 
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/mesh/sub_device.hpp>
+
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <gmock/gmock-matchers.h>
 
-#include "tt-metalium/workload/legacy/host_api.hpp"
+#include "host_api.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt::tt_metal {
 

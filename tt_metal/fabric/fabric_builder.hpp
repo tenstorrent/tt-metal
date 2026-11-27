@@ -32,7 +32,7 @@ class FabricBuilderContext;
  *   1. Construct with device, program, and contexts
  *   2. Call build phases in order:
  *      discover_channels() -> create_routers() -> connect_routers() ->
- *      compile_ancillary_kernels() -> choose_master_router() -> create_kernels()
+ *      compile_ancillary_kernels() -> create_kernels()
  *   3. FabricBuilder is destroyed, router builders are destroyed
  *
  * A subclass builds routers another way through make_router() and wires them through connect_routers().
@@ -68,14 +68,6 @@ public:
     void compile_ancillary_kernels();
 
     /**
-     * Choose the router that leads the chip's local handshake. A heuristic finds the optimal router, which is a router
-     * that already has a small kernel (master router kernel has extra code to handle the handshake).
-     * Must be called after connect_routers(), as the heuristic needs to know the router's downstream connections,
-     * and before create_kernels(), as the kernel creation process needs to know the master router.
-     */
-    void choose_master_router();
-
-    /**
      * Create the main ERISC router kernels.
      */
     void create_kernels();
@@ -95,18 +87,6 @@ protected:
      * The router for one live eth channel.
      */
     virtual std::unique_ptr<FabricRouterBuilder> make_router(const RouterLocation& location);
-
-    virtual std::vector<RouterLocation> perimeter_router_locations() const { return {}; }
-
-    /**
-     * The chip's handshake master router, once its routers exist. Stock takes the first in routers_.
-     */
-    virtual chan_id_t pick_master_router_chan() const;
-
-    /**
-     * What every router kernel on the chip is told about the chip's routers.
-     */
-    virtual KernelCreationContext kernel_creation_context() const;
 
     /**
      * RouterConnectionPair - Internal struct for router connection info
@@ -160,7 +140,7 @@ protected:
     // ControlPlane queries downstream.
     ChipRoutingFacts chip_facts_;
 
-    // Master router channel, set by choose_master_router()
+    // Master router channel (first in map)
     chan_id_t master_router_chan_ = 0;
 };
 

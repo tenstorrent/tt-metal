@@ -22,6 +22,7 @@
 // This header is included on non-trisc builds, for reasons
 // unknown. lltt is only available on trisc
 #if defined(COMPILE_FOR_TRISC)
+#include "lltt.h"
 #endif
 
 #define UNROLL_LOOP(factor) GCC unroll factor
@@ -668,8 +669,9 @@ inline void enable_gathering()
 // replay buffer, and LEN is the number of instructions to record
 // (should match the expansion of CALLABLE). CALLABLE is a callable,
 // to which ARGS are forwarded.
-// Every record goes through here, never a raw TTI_REPLAY: loading the replay
+// Every record goes through here, never a raw lltt::record / TTI_REPLAY: loading the replay
 // buffer is incompatible with Blackhole instruction gathering, which this disables around it.
+// When we move to c++23 we can use 'using enum lltt::ExecBool;'
 enum ExecBool : bool
 {
     NoExec,
@@ -686,7 +688,7 @@ template <ExecBool Exec = NoExec, typename Callable, typename... Args>
 #endif
 
     // Issue instruction to load replay buffer
-    TT_REPLAY(start, len, Exec, 1);
+    lltt::record<lltt::ExecBool(Exec)>(start, len);
 
     // Send in the user's desired instructions
     callable(std::forward<Args>(args)...);

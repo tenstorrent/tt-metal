@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <vector>
 
 namespace ttnn::prim {

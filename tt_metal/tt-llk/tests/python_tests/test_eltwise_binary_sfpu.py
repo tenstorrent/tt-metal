@@ -11,7 +11,6 @@ from typing import Dict
 import numpy as np
 import pytest
 import torch
-from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
@@ -225,7 +224,6 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuEqInt,
         MathOperation.SfpuFmodInt32,
         MathOperation.SfpuGcd,
-        MathOperation.SfpuGegluTanh,
         MathOperation.SfpuIsclose,
         MathOperation.SfpuIscloseEqualNan,
         MathOperation.SfpuLcm,
@@ -242,7 +240,6 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuRemainderUint32,
         MathOperation.SfpuRsubInt32,
         MathOperation.SfpuCopyDest,
-        MathOperation.SfpuSiluGlu,
     }
 )
 
@@ -841,7 +838,7 @@ FLOAT_SWEEP = dict(
             DataFormat.Bfp8_b,
         ]
     ),
-    broadcast_type=[
+    bcast_dim=[
         LlkBroadcastType.None_,
         LlkBroadcastType.Row,
         LlkBroadcastType.Column,
@@ -932,7 +929,7 @@ def test_eltwise_binary_sfpu_float(
     formats,
     dest_acc,
     mathop,
-    broadcast_type,
+    bcast_dim,
     **run_kwargs,
 ):
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
@@ -940,10 +937,7 @@ def test_eltwise_binary_sfpu_float(
     # copy_dest_value copies src1 onto src0 and does not broadcast. A broadcast
     # row would compare against the broadcast golden, which this kernel does not
     # compute.
-    if (
-        mathop == MathOperation.SfpuCopyDest
-        and broadcast_type != LlkBroadcastType.None_
-    ):
+    if mathop == MathOperation.SfpuCopyDest and bcast_dim != LlkBroadcastType.None_:
         pytest.skip("COPY_DEST does not broadcast; the None_ row covers the kernel")
 
     # Bfp8_b quantization can map small positive operands to zero, making xlogy's
@@ -966,7 +960,7 @@ def test_eltwise_binary_sfpu_float(
         )
 
     if (
-        broadcast_type == LlkBroadcastType.Row
+        bcast_dim == LlkBroadcastType.Row
         and effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
         == DestAccumulation.Yes
     ):
@@ -978,7 +972,7 @@ def test_eltwise_binary_sfpu_float(
         formats,
         dest_acc,
         mathop,
-        broadcast_type=broadcast_type,
+        broadcast_type=bcast_dim,
         **run_kwargs,
     )
 
@@ -1127,28 +1121,6 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop, **run_kwa
     )
 
 
-# -0.0 dividends, the extended sweep only feeds remainder positive values
-_REMAINDER_SIGNED_ZERO_PAIRS = [
-    (a, b) for a in (-0.0, 0.0) for b in (2.0, 3.0, 0.5, 7.25, -2.0, -3.0, -0.5)
-] + [(a, b) for a in (5.5, -5.5) for b in (2.0, -2.0)]
-
-
-# Float32 with a 32-bit Dest is the pipeline that delivers -0.0 to the SFPU intact.
-@parametrize(
-    formats=input_output_formats([DataFormat.Float32]),
-    dest_acc=[DestAccumulation.Yes],
-)
-def test_eltwise_binary_sfpu_remainder_signed_zero(formats, dest_acc):
-    sfpu_binary(
-        formats,
-        dest_acc,
-        MathOperation.SfpuBinaryRemainder,
-        src_A_override=_build_paired_tile_override(
-            _REMAINDER_SIGNED_ZERO_PAIRS, torch.float32
-        ),
-    )
-
-
 @parametrize(**MASK_SWEEP)
 def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0
@@ -1231,31 +1203,6 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
 
     spec_A, spec_B = _isclose_nan_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
-
-
-SILU_GLU_SWEEP = dict(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    mathop=[MathOperation.SfpuSiluGlu],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-
-
-@skip_for_quasar
-@skip_for_wormhole
-@parametrize(**SILU_GLU_SWEEP)
-def test_eltwise_binary_sfpu_silu_glu(formats, dest_acc, mathop, **run_kwargs):
-    # silu_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
-    # Both signs, past each clamp and below where the logistic factor underflows.
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=-110.0, high=16.0
-        ),
-        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
-        **run_kwargs,
-    )
 
 
 # dest_acc stays an axis: a single-axis `parametrize` hands pytest 1-tuples, which `--op` cannot
@@ -1936,29 +1883,6 @@ INT_SWEEP = dict(
     ],
     dest_acc=[DestAccumulation.Yes],
 )
-
-
-GEGLU_TANH_SWEEP = dict(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    mathop=[MathOperation.SfpuGegluTanh],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-
-
-@skip_for_quasar
-@skip_for_wormhole
-@parametrize(**GEGLU_TANH_SWEEP)
-def test_eltwise_binary_sfpu_geglu_tanh(formats, dest_acc, mathop, **run_kwargs):
-    # geglu_tanh(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
-    # Both signs, past each clamp and below where the logistic factor underflows.
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-13.0, high=16.0),
-        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
-        **run_kwargs,
-    )
 
 
 @parametrize(**INT_SWEEP)
@@ -2859,7 +2783,7 @@ BCAST_SWEEP = dict(
         ],
         same=True,
     ),
-    sfpu_bcast_dim=[LlkBroadcastType.Row, LlkBroadcastType.Column],
+    bcast_dim=[LlkBroadcastType.Row, LlkBroadcastType.Column],
     mathop=[
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
@@ -2872,7 +2796,7 @@ BCAST_SWEEP = dict(
 def _golden_sfpu_binary_bcast(
     src_A: torch.Tensor,
     src_B: torch.Tensor,
-    broadcast_type: LlkBroadcastType,
+    bcast_dim: LlkBroadcastType,
     op,
     stimuli_format: DataFormat,
 ) -> torch.Tensor:
@@ -2882,7 +2806,7 @@ def _golden_sfpu_binary_bcast(
     a = src_A.flatten()[:1024].reshape(32, 32)
     b = src_B.flatten()[:1024].reshape(32, 32)
 
-    if broadcast_type == LlkBroadcastType.Row:
+    if bcast_dim == LlkBroadcastType.Row:
         b_bcast = b[0].unsqueeze(0).expand_as(b)
     else:
         b_bcast = b[:, 0].unsqueeze(1).expand_as(b)
@@ -2895,7 +2819,7 @@ def _golden_sfpu_binary_bcast(
 
 def _run_sfpu_binary_bcast(
     formats,
-    broadcast_type,
+    bcast_dim,
     mathop,
     dest_acc,
     *,
@@ -2930,7 +2854,7 @@ def _run_sfpu_binary_bcast(
         else formats.input_format
     )
     golden_tensor = _golden_sfpu_binary_bcast(
-        src_A, src_B, broadcast_type, _BCAST_BINARY_OPS[mathop], golden_format
+        src_A, src_B, bcast_dim, _BCAST_BINARY_OPS[mathop], golden_format
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -2952,7 +2876,7 @@ def _run_sfpu_binary_bcast(
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
             BROADCAST_TYPE(LlkBroadcastType.None_),
-            SFPU_BCAST_DIM(broadcast_type),
+            SFPU_BCAST_DIM(bcast_dim),
             # Unread by this kernel. Present so the report columns match sfpu_binary.
             SFPU_DST_ROUNDING_MODE(),
             SIGN_MAGNITUDE_FORMAT(False),
@@ -3007,7 +2931,7 @@ def _run_sfpu_binary_bcast(
 @parametrize(**BCAST_SWEEP)
 def test_eltwise_binary_sfpu_bcast(
     formats,
-    sfpu_bcast_dim,
+    bcast_dim,
     mathop,
     dest_acc,
     **run_kwargs,
@@ -3022,7 +2946,7 @@ def test_eltwise_binary_sfpu_bcast(
     ):
         dest_acc = DestAccumulation.Yes
 
-    _run_sfpu_binary_bcast(formats, sfpu_bcast_dim, mathop, dest_acc, **run_kwargs)
+    _run_sfpu_binary_bcast(formats, bcast_dim, mathop, dest_acc, **run_kwargs)
 
 
 # BCAST_COL loads the even columns, so SFPU lanes 1..7 hold the discarded tile columns 2, 4, ..., 14;

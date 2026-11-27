@@ -11,10 +11,9 @@ Header locations below are relative to `tt_metal/api/`.
 
 | Header location | Audience | Allowed API dependencies |
 | --- | --- | --- |
-| `tt-metalium/`, excluding `experimental/` and `legacy/` | Stable public API | Stable |
-| `tt-metalium/<component>/legacy/` | A replacement exists in the stable API; retained for existing callers | Stable, legacy |
+| `tt-metalium/`, excluding `experimental/` | Stable public API | Stable |
 | `tt-metalium/experimental/` | External users accepting change | Stable, experimental |
-| `internal/` | Tenstorrent components only | Stable, experimental, internal, legacy |
+| `internal/` | Tenstorrent components only | Stable, experimental, internal |
 
 Internal headers belong in `tt_metal/api/internal/`, never `tt_metal/api/tt-metalium/internal/`.
 See the [internal API README](../../tt_metal/api/internal/README.md) for the
@@ -36,10 +35,8 @@ python3 scripts/validate_api/validate_api.py tt_metal/api
 python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
 ```
 
-The `validate-metalium-api` pre-commit hook runs this command when a commit
-touches `tt_metal/api/` or `scripts/validate_api/`, including a deletion.
-Pre-commit does not report deleted paths, so the hook starts on every commit
-and the script checks the diff itself before scanning. The `all-static-checks.yaml`
+The `validate-metalium-api` pre-commit hook runs all API validation
+through this command. The `all-static-checks.yaml`
 workflow runs on PR updates and merge groups. Checker failures fail its
 `Run Pre-commit Hooks` job. The checker tests also run through pre-commit when
 files under `scripts/validate_api/` change.

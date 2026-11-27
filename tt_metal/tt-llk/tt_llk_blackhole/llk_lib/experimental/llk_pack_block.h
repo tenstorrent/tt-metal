@@ -131,7 +131,7 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
     // END_OP0: W++ (next Tile32x32 slot)
     // END_OP1: Z=0 (reset for next tile's face traversal)
 
-    const std::uint32_t start_op = (replay_len > 0) ? TT_OP_REPLAY(0, replay_len, 0, 0) : TT_OP_NOP;
+    const std::uint32_t start_op = (replay_len > 0) ? lltt::replay_insn(0, replay_len) : TT_OP_NOP;
 
     ckernel::ckernel_template tmp(
         1,        // OUTER (placeholder — overwritten by mop_cfg[0] in _llk_pack_block_contiguous_)

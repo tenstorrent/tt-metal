@@ -4,11 +4,11 @@
 
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/data_formats/tilize_utils.hpp>
-#include <tt-metalium/memory/tensor/tensor_apis.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -33,8 +33,8 @@
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
 #include "distribution_mode.hpp"
-#include <tt-metalium/execution/mesh_command_queue.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::distributed {

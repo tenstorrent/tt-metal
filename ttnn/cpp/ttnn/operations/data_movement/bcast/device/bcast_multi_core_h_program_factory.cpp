@@ -8,8 +8,8 @@
 #include <map>
 #include <string>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <cstdint>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"

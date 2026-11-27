@@ -15,17 +15,17 @@
 #include <unordered_map>
 #include <utility>
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/vocabulary/shape.hpp>
-#include <tt-metalium/vocabulary/shape_base.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "impl/context/metal_context.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include <ttnn/distributed/tensor_topology.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -48,7 +48,6 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/discovery/cluster.hpp>
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"

@@ -5,7 +5,7 @@
 #pragma once
 #include <algorithm>
 #include <limits>
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <tt-logger/tt-logger.hpp>

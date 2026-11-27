@@ -7,10 +7,9 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/observability/profiler/device_profiler.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

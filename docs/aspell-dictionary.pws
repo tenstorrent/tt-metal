@@ -56,7 +56,6 @@ DeallocateBuffer
 DeviceOperation
 DeviceStorage
 DeviceZoneScopedN
-DeviceZoneScopedNIf
 DstMode
 ReadDeviceProfilerResults
 ReadMeshDeviceProfilerResults

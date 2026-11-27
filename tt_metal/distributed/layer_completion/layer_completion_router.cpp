@@ -14,7 +14,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 #include <internal/disaggregation/layer_completion_message.hpp>
 #include <internal/disaggregation/layer_completion_queue.hpp>

@@ -5,28 +5,28 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <cstdlib>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/discovery/cluster.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <map>
 #include <optional>
 #include <string>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/rtoptions.hpp"
 #include <tt-umd/types/arch.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -158,6 +158,9 @@ TEST(DeviceInitFabric, RejectsSingleHost1ChipMesh) {
     }
     if (*MetalContext::instance().global_distributed_context().size() > 1) {
         GTEST_SKIP() << "Multi-host 1-local-chip meshes are allowed to launch fabric";
+    }
+    if (cluster.is_galaxy_cluster()) {
+        GTEST_SKIP() << "Galaxy opens the full cluster when fabric is enabled, so a 1x1 mesh never hits this guard";
     }
     if (cluster.mmio_chip_ids().size() != cluster.all_chip_ids().size()) {
         GTEST_SKIP() << "Clusters with remote chips fatal earlier when fabric is launched on a subset of devices";

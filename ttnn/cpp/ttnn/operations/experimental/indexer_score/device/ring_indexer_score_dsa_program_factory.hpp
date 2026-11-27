@@ -9,7 +9,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "indexer_score_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"

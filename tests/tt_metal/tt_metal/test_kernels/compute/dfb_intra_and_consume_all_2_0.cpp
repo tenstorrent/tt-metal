@@ -41,13 +41,11 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_consumer.get_id(), dfb_consumer.get_id());
     copy_init(dfb_consumer.get_id());
     for (uint32_t i = 0; i < num_entries_consumer; ++i) {
-        tile_regs_acquire();
-        tile_regs_wait();
+        acquire_dst();
         dfb_consumer.wait_front(1);
         copy_tile(dfb_consumer.get_id(), 0, 0);
         dfb_consumer.pop_front(1);
-        tile_regs_commit();
-        tile_regs_release();
+        release_dst();
     }
     dfb_consumer.finish();
 
@@ -86,9 +84,7 @@ void kernel_main() {
 #endif
         dfb_intra.push_back(1);
 
-        tile_regs_acquire();
-
-        tile_regs_wait();
+        acquire_dst();
         dfb_intra.wait_front(1);
         copy_tile(dfb_intra.get_id(), 0, 0);  // UNPACR -> satisfies pop_front read-done
 #ifdef UCK_CHLKC_UNPACK
@@ -102,8 +98,7 @@ void kernel_main() {
         }
 #endif
         dfb_intra.pop_front(1);
-        tile_regs_commit();
-        tile_regs_release();
+        release_dst();
     }
     dfb_intra.finish();
 }

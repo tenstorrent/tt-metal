@@ -11,7 +11,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <ttnn/tensor/layout/layout.hpp>
 #include <ttnn/distributed/types.hpp>
-#include "tt-metalium/vocabulary/mesh_coord.hpp"
+#include "tt-metalium/mesh_coord.hpp"
 
 #include "ttnn/tensor/storage.hpp"
 

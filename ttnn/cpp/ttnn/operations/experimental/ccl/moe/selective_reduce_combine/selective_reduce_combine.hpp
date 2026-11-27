@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/global_semaphore.hpp"
-#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "device/selective_reduce_combine_device_operation.hpp"
 

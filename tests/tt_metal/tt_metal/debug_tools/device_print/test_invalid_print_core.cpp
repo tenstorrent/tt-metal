@@ -4,8 +4,8 @@
 #include <map>
 #include <vector>
 
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "impl/context/metal_context.hpp"

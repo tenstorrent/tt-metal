@@ -13,7 +13,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/sub_device.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 

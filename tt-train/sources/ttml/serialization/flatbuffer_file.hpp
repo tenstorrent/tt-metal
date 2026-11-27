@@ -13,8 +13,8 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/memory/utils/memory_pin.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/memory_pin.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <variant>
 #include <vector>

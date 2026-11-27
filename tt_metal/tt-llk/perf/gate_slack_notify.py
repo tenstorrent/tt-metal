@@ -139,7 +139,6 @@ def verdict(
     comparison_finished=True,
     measure_failed=False,
     measure_reason="",
-    regressions=0,
 ):
     """``(status, reason)`` — ``regressed`` | ``skipped`` | ``clean``."""
     if measure_failed:
@@ -157,10 +156,6 @@ def verdict(
         return "skipped", (
             "The comparison started but did not finish, so its " "verdict is unknown."
         )
-    if exit_code == 2:
-        if regressions:
-            return "regressed", "The gate also did not compare every point."
-        return "skipped", "The gate did not compare every point."
     return ("regressed", "") if exit_code != 0 else ("clean", "")
 
 
@@ -337,7 +332,6 @@ def main(argv=None):
             have_baseline = fh.read().strip() == "true"
 
     report_written = bool(a.report) and os.path.exists(a.report)
-    found = read_regressions(a.regressions)
     status, reason = verdict(
         exit_code=a.exit_code,
         have_baseline=have_baseline,
@@ -345,12 +339,8 @@ def main(argv=None):
         comparison_finished=a.comparison_finished.strip().lower() != "false",
         measure_failed=not _measure_complete(a.measure_result),
         measure_reason=a.measure_reason,
-        regressions=len(found),
     )
-    rows = found if status == "regressed" else []
-    note = a.note
-    if a.exit_code == 2 and status == "regressed":
-        note = " ".join(x for x in (note, reason) if x)
+    rows = read_regressions(a.regressions) if status == "regressed" else []
 
     should_post = status != "clean" or a.post_pass.strip().lower() != "false"
 
@@ -370,7 +360,7 @@ def main(argv=None):
         "reason": reason,
         "gate_name": a.gate_name,
         "trigger": a.trigger,
-        "note": note,
+        "note": a.note,
         "threshold": a.threshold,
         "min_cycles": a.min_cycles,
         "module_thresholds": a.module_thresholds,

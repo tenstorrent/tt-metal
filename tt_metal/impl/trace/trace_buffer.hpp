@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace tt::tt_metal {
 

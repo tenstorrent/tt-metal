@@ -170,7 +170,7 @@ If we assume that work units are the output tiles, the function may be called as
 
 .. code-block:: cpp
 
-   #include <tt-metalium/utils/work_split.hpp>
+   #include <tt-metalium/work_split.hpp>
 
    CoreCoord core_grid = device->compute_with_storage_grid_size();
    uint32_t work_units = (M * N) / (TILE_HEIGHT * TILE_WIDTH);

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::distributed {

@@ -7,18 +7,18 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
@@ -100,7 +100,7 @@ void sliding_halo_exchange_helper(
     const auto op_config = ttnn::ccl::CCLOpConfig(mutable_input_tensors, output_tensors, transport_topology);
     auto unicast_forward_args = std::get<0>(ttnn::ccl::get_forward_backward_line_unicast_configuration(
         target_device_coord, unicast_destination_coord, std::nullopt, mesh_device));
-    if (tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device))) {
+    if (tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
         unicast_forward_args[1] = halo.distance;
     }
 

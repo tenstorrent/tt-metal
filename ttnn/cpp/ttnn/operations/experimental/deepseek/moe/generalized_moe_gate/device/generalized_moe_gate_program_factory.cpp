@@ -6,8 +6,8 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
 
 #include "generalized_moe_gate_program_descriptor_builder.hpp"
 

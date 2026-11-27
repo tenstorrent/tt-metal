@@ -9,9 +9,9 @@
 #include <enchantum/enchantum.hpp>
 #include <cstdlib>
 #include <sys/types.h>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -27,20 +27,20 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
@@ -100,7 +100,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram(*device);
+        tt_metal::Program program = tt_metal::CreateProgram();
 
         tt::tt_metal::CoreCoord core = {0, 0};
 

@@ -13,8 +13,8 @@
 #include <set>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn {

@@ -4,9 +4,9 @@
 
 #include <benchmark/benchmark.h>
 #include <cstdint>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -17,14 +17,13 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/execution/mesh_command_queue.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "context.hpp"
 #include "device_utils.hpp"
-#include "perf/perf_contract_benchmark.hpp"
 #include "host_utils.hpp"
 #include "impl/program/program_impl.hpp"
-#include "tt-metalium/workload/program.hpp"
+#include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include "work_thread.hpp"
@@ -224,7 +223,6 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     }
 
     report_device_bw(state, results);
-    tt::perf::add_case_context(state, "aiclk_mhz", device->get_clock_rate_mhz());
     return results;
 }
 
@@ -451,7 +449,6 @@ void register_basic_benchmark_suite() {
     // N cores reading the hugepage on the host
     ::benchmark::RegisterBenchmark("Device Reading Host", mem_bench_copy_with_active_kernel)
         ->Apply(global_bench_args)
-        ->ArgNames({"size", "page_size", "readers", "writers", "host_copy"})
         ->ArgsProduct({
             {1_GB},
             {32_KB},
@@ -462,7 +459,6 @@ void register_basic_benchmark_suite() {
     // N cores writing the hugepage on the host
     ::benchmark::RegisterBenchmark("Device Writing Host", mem_bench_copy_with_active_kernel)
         ->Apply(global_bench_args)
-        ->ArgNames({"size", "page_size", "readers", "writers", "host_copy"})
         ->ArgsProduct({
             {1_GB},
             {32_KB},
@@ -593,8 +589,6 @@ int main(int argc, char* argv[]) {
         register_full_benchmark_suite();
     }
 
-    // Only the device bandwidth suites report dev_bw; runtime perf CI filters to those.
-    tt::perf::declare_metric("dev_bw", {"B/s", tt::perf::Better::Higher, tt::perf::Aggregate::Max});
     ::benchmark::Initialize(&argc, argv);
     ::benchmark::RunSpecifiedBenchmarks();
     ::benchmark::Shutdown();

@@ -8,10 +8,6 @@
 
 #include "mesh_command_queue_base.hpp"
 
-namespace tt::tt_metal::experimental {
-class KernelConfigBufferImpl;
-}  // namespace tt::tt_metal::experimental
-
 namespace tt::tt_metal::distributed {
 
 struct PerDeviceRuntimeArgs;
@@ -51,7 +47,6 @@ public:
     SDMeshCommandQueue(
         MeshDevice* mesh_device,
         uint32_t id,
-        std::shared_ptr<ThreadPool> dispatch_thread_pool,
         std::function<std::lock_guard<std::mutex>()> lock_api_function,
         std::shared_ptr<distributed::multihost::DistributedContext> distributed_context);
     ~SDMeshCommandQueue() override;
@@ -60,8 +55,6 @@ public:
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
-    void enqueue_mesh_workload(
-        MeshWorkload& mesh_workload, const experimental::KernelConfigBufferImpl& kernel_config_buffer, bool blocking);
 
     MeshEvent enqueue_record_event(
         ttsl::Span<const SubDeviceId> sub_device_ids = {},
@@ -97,8 +90,6 @@ public:
 
 private:
     void wait_for_cores_idle();
-    void enqueue_mesh_workload_impl(
-        MeshWorkload& mesh_workload, bool blocking, const experimental::KernelConfigBufferImpl* kernel_config_buffer);
 
     std::unordered_map<ChipId, std::vector<std::vector<CoreCoord>>> logical_cores_for_previous_workload_;
 
@@ -112,8 +103,7 @@ private:
         const MeshCoordinateRange& coord_range,
         Program& program,
         bool blocking,
-        const PerDeviceRuntimeArgs* per_device_runtime_args = nullptr,
-        const experimental::KernelConfigBufferImpl* kernel_config_buffer = nullptr);
+        const PerDeviceRuntimeArgs* per_device_runtime_args = nullptr);
     std::mutex logical_cores_mutex_;
 };
 

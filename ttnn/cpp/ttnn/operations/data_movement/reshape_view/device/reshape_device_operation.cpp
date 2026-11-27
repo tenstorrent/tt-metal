@@ -11,9 +11,12 @@
 namespace ttnn::prim {
 
 ReshapeViewDeviceOperation::program_factory_t ReshapeViewDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         return ReshapeViewRMProgramFactory{};
+    }
+    if (reshape_view_tiled_keeps_last_dim(operation_attributes, tensor_args.input)) {
+        return ReshapeViewTiledRowsProgramFactory{};
     }
     return ReshapeViewTiledProgramFactory{};
 }
@@ -25,9 +28,8 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_a.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::UINT32 or
-            input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::INT32 or
-            input_tensor_a.dtype() == DataType::UINT8,
-        "Can only work with bfloat16/float32 or int32/uint32/uint8 tensors");
+            input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::INT32,
+        "Can only work with bfloat16/float32 or int32/uint32 tensors");
 }
 
 ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::compute_output_specs(
@@ -52,15 +54,25 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
     log_trace(tt::LogOp, "ReshapeViewDeviceOperation::compute_program_hash is called");
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
-    const uint32_t num_dest_write_slots = std::holds_alternative<ReshapeViewRMProgramFactory>(program_factory)
-                                              ? reshape_rm_num_dest_write_slots(operation_attributes, tensor_args)
-                                              : 0u;
+
+    if (std::holds_alternative<ReshapeViewTiledRowsProgramFactory>(program_factory) &&
+        reshape_view_tiled_rows_is_shape_free(operation_attributes, tensor_args.input)) {
+        // The row counts and tile ranges are runtime args, on the whole grid; the key keeps the row (dtype and last
+        // dim) and the buffers.
+        const auto& input = tensor_args.input;
+        return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(
+            program_factory.index(),
+            operation_attributes.output_mem_config,
+            input.dtype(),
+            input.memory_config(),
+            input.logical_shape()[-1],
+            input.padded_shape()[-1],
+            input.tensor_spec().tile());
+    }
 
     // don't hash on operation_attributes_t::recreate_mapping_tensor
     return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(
         operation_attributes.logical_output_shape,
-        operation_attributes.padded_output_shape,
-        num_dest_write_slots,
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grid.has_value(),
         operation_attributes.sub_core_grid.has_value() ? operation_attributes.sub_core_grid.value()
@@ -75,10 +87,16 @@ ttnn::Tensor reshape_view(
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    bool runtime_shapes) {
     return ttnn::device_operation::launch<ReshapeViewDeviceOperation>(
         ReshapeViewParams{
-            logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor, sub_core_grid},
+            logical_output_shape,
+            padded_output_shape,
+            output_mem_config,
+            recreate_mapping_tensor,
+            sub_core_grid,
+            runtime_shapes},
         ReshapeViewInputs{input});
 }
 

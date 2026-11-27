@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include <fmt/format.h>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include "impl/data_format/hw_data_format.hpp"
 

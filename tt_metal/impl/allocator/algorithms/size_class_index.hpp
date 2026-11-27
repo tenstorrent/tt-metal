@@ -13,7 +13,7 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "hal_types.hpp"
 
 namespace tt::tt_metal::allocator {
 

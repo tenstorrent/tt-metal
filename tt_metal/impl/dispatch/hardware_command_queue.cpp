@@ -5,7 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "hardware_command_queue.hpp"
 
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <device.hpp>
 #include "dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"
@@ -66,6 +66,7 @@ const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
 
 void HWCommandQueue::terminate() {
     TTZoneScopedDN(DISPATCH, "HWCommandQueue_terminate");
+    TT_FATAL(!this->manager_.get_bypass_mode(), "Terminate cannot be used with tracing");
     log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE

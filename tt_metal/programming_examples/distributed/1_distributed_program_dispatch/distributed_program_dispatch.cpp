@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 // Stand-alone example demonstrating usage of native multi-device TT-Metalium APIs
 // for issuing a program dispatch across a mesh of devices.

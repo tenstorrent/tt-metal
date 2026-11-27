@@ -8,12 +8,12 @@
 #include <numeric>
 #include <tuple>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/layout/page_config.hpp>
 #include <tt_stl/fmt.hpp>

@@ -10,18 +10,18 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_stats_selector.hpp"
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/program_cache_l1.hpp"
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <optional>
 #include <bit>
@@ -234,7 +234,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
     const std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
     const auto input_format = datatype_to_dataformat_converter(input.dtype());
-    const auto output_format = datatype_to_dataformat_converter(operation_attributes.dtype.value_or(input.dtype()));
+    const auto output_format = input_format;
     const bool row_major_affine = (gamma.has_value() && gamma->layout() == Layout::ROW_MAJOR) ||
                                   (beta.has_value() && beta->layout() == Layout::ROW_MAJOR);
     const bool fp32_finalizer_arch = device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0;

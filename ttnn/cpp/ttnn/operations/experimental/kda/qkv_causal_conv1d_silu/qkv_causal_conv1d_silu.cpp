@@ -114,10 +114,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis,
     uint32_t input_column_offset,
-    std::optional<uint32_t> page_channels,
-    const std::optional<ttnn::Tensor>& slab_index,
-    uint32_t slab_index_scale,
-    uint32_t slab_index_offset) {
+    std::optional<uint32_t> page_channels) {
     auto params = make_params(
         input,
         q_width,
@@ -129,8 +126,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
         sequence_parallel_axis,
         input_column_offset,
         page_channels);
-    params.slab_index_scale = slab_index_scale;
-    params.slab_index_offset = slab_index_offset;
     TT_FATAL(
         exchange_semaphores.size() == params.exchange_semaphore_addresses.size(),
         "qkv_causal_conv1d_silu_with_carry: pass {} exchange_semaphores",
@@ -165,8 +160,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
             .tap3 = tap3,
             .actual_start = actual_start,
             .exchange_buffer = exchange_buffer,
-            .actual_end = actual_end,
-            .slab_index = slab_index});
+            .actual_end = actual_end});
     return {outputs[0], outputs[1], outputs[2], outputs[3]};
 }
 

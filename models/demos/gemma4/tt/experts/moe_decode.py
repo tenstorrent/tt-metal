@@ -14,7 +14,6 @@ GEMMA4_MOE_DECODE_TILE_TAIL=1 keeps the kernel output in TILE layout through the
 re-tilize pair of the frame tail); the packed routing of GEMMA4_MOE_FUSED=1 builds the dispatch inputs with
 ``custom_ops/moe_frame_prep`` (one program instead of the pad / layout / partition / typecast / copy glue).
 """
-
 import os
 from pathlib import Path
 
@@ -161,7 +160,8 @@ class Gemma4MoEDecode:
             f"{getattr(tt_config, 'use_post_combine_tilize', None)}, topology={tt_config.topology}"
         )
 
-    def _topology(self):
+    @staticmethod
+    def _topology():
         """Dispatch / combine topology from the mesh's 1-D fabric: Ring on FABRIC_1D_RING (the Galaxy's 8-row dispatch
         axis), Linear on a FABRIC_1D line (the (2,4) block, whose p150_x8 MESH descriptor has no wraparound: a ring
         fabric cannot even open there). GEMMA4_MOE_DECODE_TOPOLOGY=ring|linear overrides the detection."""
@@ -169,7 +169,7 @@ class Gemma4MoEDecode:
         if forced in ("ring", "linear"):
             return ttnn.Topology.Ring if forced == "ring" else ttnn.Topology.Linear
         try:
-            fabric = ttnn.get_fabric_config(self.mesh_device)
+            fabric = ttnn.get_fabric_config()
         except Exception:  # noqa: BLE001 - no query on this build: the served default
             return ttnn.Topology.Ring
         name = getattr(fabric, "name", None) or str(fabric).rsplit(".", 1)[-1]

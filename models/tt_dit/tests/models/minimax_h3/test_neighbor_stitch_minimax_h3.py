@@ -87,9 +87,10 @@ def test_neighbor_stitch_matches_gather(mesh_device, reset_seeds):
         mesh_device=mesh_device,
         ccl_manager=CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring),
         device_stitch=True,
+        weight_loader=load_cached,
         pixel_denorm=pixel_denorm,
     )
-    load_cached(vae.decoder, vae.get_module_subfolder(vae.decoder), {})
+    load_cached(vae.decoder, vae._decoder_subfolder(), {})
 
     num_frames = vae.decoder.latent_shape[0]
     latent_h, latent_w = LATENT_HW

@@ -8,8 +8,7 @@
 
 #include <chrono>
 #include <cstdlib>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"

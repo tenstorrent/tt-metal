@@ -9,9 +9,9 @@
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include "tilize_multi_core_width_sharded_program_factory.hpp"
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
@@ -96,10 +96,6 @@ bool can_use_sharded_optimized_factories(
     // widens the 64-entry field. tiles-per-shard is layout-independent: shard_h * shard_w / TILE_HW.
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         const auto& in_shard_shape = input_tensor.shard_spec().value().shape;
-        // The output reuses the input shard spec, so the shard must be whole tiles.
-        if (in_shard_shape[0] % tt::constants::TILE_HEIGHT != 0 || in_shard_shape[1] % tt::constants::TILE_WIDTH != 0) {
-            return false;
-        }
         const uint32_t in_tiles_per_shard =
             (in_shard_shape[0] * in_shard_shape[1]) / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
         if (in_tiles_per_shard > 64) {

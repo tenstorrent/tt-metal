@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import math
 
 import pytest
 import torch
@@ -765,18 +764,18 @@ def test_rdiv_bw_with_keyword_rounding_mode_in_comparison_mode(device, rounding_
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_rpow_bw_matches_exponential_derivative_in_comparison_mode(device):
+def test_rpow_bw_matches_device_power_derivative_in_comparison_mode(device):
     torch_grad = torch.ones(SINGLE_TILE, dtype=torch.bfloat16)
     torch_input = torch.linspace(0.5, 2.0, 1024).reshape(SINGLE_TILE).to(torch.bfloat16)
     grad = _to_device(torch_grad, device)
     input_tensor = _to_device(torch_input, device)
 
-    # The forward rpow(x, exponent) is exponent ** x, so rpow_bw returns grad * ln(exponent) * exponent ** x. PCC
-    # cannot tell that curve apart from the derivative of x ** exponent, so both are also checked against it directly.
+    # rpow_bw on device differentiates x ** exponent (not the forward rpow's exponent ** x), and PCC cannot tell
+    # the two monotone curves apart, so both are also checked against grad * exponent * x ** (exponent - 1).
     with comparison_mode():
         output = ttnn.rpow_bw(grad, input_tensor, 3.0)
 
-    ideal = torch_grad.float() * math.log(3.0) * 3.0 ** torch_input.float()
+    ideal = torch_grad.float() * 3.0 * torch_input.float() ** 2
     golden = _registered_golden_output(ttnn.rpow_bw, grad, input_tensor, 3.0)[0]
     torch.testing.assert_close(golden.float(), ideal, rtol=2e-2, atol=2e-2)
     torch.testing.assert_close(ttnn.to_torch(output[0]).float(), ideal, rtol=2e-2, atol=2e-2)

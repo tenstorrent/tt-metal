@@ -27,17 +27,17 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"
@@ -96,7 +96,7 @@ PipeSet make_pipe_set(
         max_receivers = std::max(max_receivers, receivers.num_cores());
     }
     set.space.emplace(experimental::CreatePrefetcherPipeSpace(
-        mesh_device.mesh_command_queue(0),
+        mesh_device,
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = {},
             .num_dram_senders = static_cast<uint32_t>(2 * bank_to_receivers.size()),
@@ -214,8 +214,8 @@ void run_push_and_pop(
               .kernels = {KernelSpecName{"receiver"}},
               .target_nodes = experimental::GetPrefetcherPipeReceiverCores(set.pipe_refs())}},
         .advanced_options = {.prefetcher_pipe_parameters = std::move(pipe_parameters)}};
-    Program receiver_program(mesh_device, spec);
-    receiver_program.set_program_run_args(run_args);
+    Program receiver_program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    experimental::SetProgramRunArgs(receiver_program, run_args);
 
     const uint32_t pattern_base = static_cast<uint32_t>(drisc_pattern_base(mesh_device));
     Program sender_program = CreateProgram(mesh_device);
@@ -507,7 +507,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, RejectsDuplicateBank) {
 TEST_F(PrefetcherPipeDramSenderFixture, InvalidBatchLeavesSpaceReusable) {
     const CoreRangeSet receiver_domain(CoreRange({0, 0}, {1, 0}));
     auto space = experimental::CreatePrefetcherPipeSpace(
-        mesh_device_->mesh_command_queue(0),
+        *mesh_device_,
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = {},
             .num_dram_senders = 2,
@@ -534,7 +534,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, InvalidBatchLeavesSpaceReusable) {
 
 TEST_F(PrefetcherPipeDramSenderFixture, DirectSenderReservationRejectsInvalidDramCoordinate) {
     auto space = experimental::CreatePrefetcherPipeSpace(
-        mesh_device_->mesh_command_queue(0),
+        *mesh_device_,
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = {},
             .num_dram_senders = 1,
@@ -640,10 +640,10 @@ TEST_F(PrefetcherPipeDramSenderFixture, BindingAcceptsAnyEntrySizeTheRingHolds) 
                      .receivers = receiver_cores,
                      .ring_size = ring_size,
                      .entry_size = entry_size}}}};
-        Program program(*mesh_device_, spec);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
         ProgramRunArgs args;
         args.advanced_options.prefetcher_pipe_args.emplace(name, experimental::PrefetcherPipeArgument{set.pipes[0]});
-        program.set_program_run_args(args);
+        experimental::SetProgramRunArgs(program, args);
     };
     // L1-aligned and well inside the ring, so only a divisibility rule could have rejected it.
     constexpr uint32_t kRingIndivisibleEntrySize = 48;

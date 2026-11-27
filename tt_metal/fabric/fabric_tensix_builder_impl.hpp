@@ -9,12 +9,12 @@
 #include <memory>
 #include <array>
 
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include "core_coord.hpp"
 
 namespace tt::tt_fabric {
 

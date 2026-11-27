@@ -75,8 +75,6 @@ elseif(NOT "${SFPI_hash}" STREQUAL "")
         "${SFPI_BASE}/sfpi"
     )
     FetchContent_MakeAvailable(sfpi)
-    # Date stamp the compiler to now, not when the archive was created.
-    file(TOUCH_NOCREATE "${SFPI_BASE}/sfpi/compiler/bin/riscv-tt-elf-g++")
 else()
     message(STATUS "No downloadable SFPI tarball for ${SFPI_arch} ${SFPI_dist}")
     if(EXISTS "${SFPI_BASE}/${SFPI_filename}")
@@ -403,7 +401,6 @@ foreach(ARCH IN LISTS ARCHS)
             DEPENDS
                 ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
-                ${GPP_CMD}
             COMMENT "Building ${ARCH} hw lib ${HWOBJ}"
             VERBATIM
         )
@@ -480,7 +477,6 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
                 DEPENDS
                     ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                     ${PROJECT_SOURCE_DIR}/${HWSRC}
-                    ${GPP_CMD}
                 COMMENT "Building ${ARCH}:${CPU} hw lib ${HW_OBJ_FILE} from ${HWSRC}"
                 VERBATIM
             )

@@ -8,8 +8,8 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 

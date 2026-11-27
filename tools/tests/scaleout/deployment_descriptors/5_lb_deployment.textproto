@@ -3,7 +3,7 @@ hosts: {
   aisle: "A"
   rack: 1
   shelf_u: 12
-  node_type: "N300_LB"
+  node_type: "N300_LB_DEFAULT"
   host: "metal-wh-03"
 }
 hosts: {
@@ -11,7 +11,7 @@ hosts: {
   aisle: "A"
   rack: 1
   shelf_u: 28
-  node_type: "N300_LB"
+  node_type: "N300_LB_DEFAULT"
   host: "metal-wh-08"
 }
 hosts: {
@@ -19,7 +19,7 @@ hosts: {
   aisle: "A"
   rack: 1
   shelf_u: 18
-  node_type: "N300_LB"
+  node_type: "N300_LB_DEFAULT"
   host: "metal-wh-02"
 }
 hosts: {
@@ -27,7 +27,7 @@ hosts: {
   aisle: "A"
   rack: 1
   shelf_u: 22
-  node_type: "N300_LB"
+  node_type: "N300_LB_DEFAULT"
   host: "metal-wh-01"
 }
 hosts: {
@@ -35,6 +35,6 @@ hosts: {
   aisle: "A"
   rack: 1
   shelf_u: 4
-  node_type: "N300_LB"
+  node_type: "N300_LB_DEFAULT"
   host: "metal-wh-05"
 }

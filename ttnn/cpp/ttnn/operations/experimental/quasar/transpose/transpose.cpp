@@ -12,7 +12,7 @@
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/hal.hpp>
 
 #include <algorithm>
 #include <array>

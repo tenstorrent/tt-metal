@@ -13,9 +13,9 @@
 #include <optional>
 #include <string>
 #include <tracy/Tracy.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
 #include <vector>
 
 #include "benchmark_utils.hpp"

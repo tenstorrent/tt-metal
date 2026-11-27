@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/shape.hpp>
 
 namespace ttnn {
 using tt::tt_metal::Shape;

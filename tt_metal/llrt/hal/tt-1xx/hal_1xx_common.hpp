@@ -4,10 +4,7 @@
 
 #pragma once
 
-#include <cstdint>
-#include <optional>
-
-#include "llrt/hal.hpp"
+#include "hal.hpp"
 
 namespace tt::tt_metal::hal_1xx {
 
@@ -22,10 +19,6 @@ public:
     std::string weakened_firmware_target_name(const Params& params) const override;
 
 protected:
-    // Value BRISC firmware writes to RISC_PREFETCH_CTRL at boot. nullopt leaves the I$ prefetchers at their reset
-    // value of off.
-    virtual std::optional<uint32_t> default_risc_prefetch_ctrl() const { return std::nullopt; }
-
     const Hal& hal_;
 };
 

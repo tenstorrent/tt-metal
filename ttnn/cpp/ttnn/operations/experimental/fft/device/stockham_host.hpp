@@ -27,9 +27,9 @@
 
 #pragma once
 
-#include "tt-metalium/workload/legacy/host_api.hpp"
-#include "tt-metalium/execution/distributed.hpp"
-#include "tt-metalium/mesh/mesh_device.hpp"
+#include "tt-metalium/host_api.hpp"
+#include "tt-metalium/distributed.hpp"
+#include "tt-metalium/mesh_device.hpp"
 #include "fft_inner_host.hpp"  // fft_example::{log2u, kTileElems}
 #include "ttnn/operations/experimental/fft/device/leak_static_cache.hpp"
 #include "ttnn/tensor/tensor.hpp"

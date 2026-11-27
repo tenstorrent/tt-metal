@@ -10,7 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 
 namespace tt::tt_metal::distributed {
 

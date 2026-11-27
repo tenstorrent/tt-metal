@@ -5,9 +5,9 @@
 #include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_program_factory.hpp"
 
 #include <ttnn/tensor/types.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::prim {
 

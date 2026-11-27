@@ -7,7 +7,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
@@ -16,8 +16,6 @@
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::unary {
-
-void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype);
 
 struct UnaryDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;

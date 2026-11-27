@@ -24,7 +24,8 @@ ttnn::Tensor padded_slice(
     ttsl::Span<const T> step,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& /*pad_value*/) {
+    const std::optional<float>& /*pad_value*/,
+    bool runtime_shapes) {
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
     const auto& input_shape = input_tensor.logical_shape();
@@ -67,8 +68,8 @@ ttnn::Tensor padded_slice(
     std::array<uint32_t, 2> shard_shape = memory_config.shard_spec().value().shape;
     bool no_pad = (shard_shape[1] == input_tensor.padded_shape()[3]);
     bool rm_input = input_tensor.layout() == Layout::ROW_MAJOR;
-    // No-op check
-    if (no_step && starts_zero && ends_max && no_pad && rm_input) {
+    // No-op check. Not with runtime_shapes, whose program serves the other starts and sizes too.
+    if (no_step && starts_zero && ends_max && no_pad && rm_input && !runtime_shapes) {
         return ret_adjustment(input_tensor);
     }
 
@@ -132,7 +133,8 @@ ttnn::Tensor padded_slice(
         ttnn::Shape(padded_ends),
         ttnn::Shape(modified_step),
         memory_config,
-        optional_output_tensor);
+        optional_output_tensor,
+        runtime_shapes);
 
     // If padded_slice should return a sharded tensor, then the op must created the sharded tensor in the requested
     // memory config
@@ -157,7 +159,8 @@ template ttnn::Tensor padded_slice<int>(
     ttsl::Span<const int> step,
     const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
+    const std::optional<float>& pad_value,
+    bool runtime_shapes);
 
 template ttnn::Tensor padded_slice<uint32_t>(
     const ttnn::Tensor& input_tensor,
@@ -166,6 +169,7 @@ template ttnn::Tensor padded_slice<uint32_t>(
     ttsl::Span<const uint32_t> step,
     const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
+    const std::optional<float>& pad_value,
+    bool runtime_shapes);
 
 }  // namespace ttnn::experimental

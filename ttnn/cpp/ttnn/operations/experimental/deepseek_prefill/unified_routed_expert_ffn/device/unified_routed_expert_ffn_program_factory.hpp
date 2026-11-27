@@ -6,8 +6,8 @@
 
 #include <optional>
 
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "unified_routed_expert_ffn_types.hpp"
 #include "ttnn/distributed/types.hpp"

@@ -5,8 +5,8 @@
 #include "ttnn/operations/experimental/quasar/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
@@ -223,6 +223,7 @@ Tensor tilize_with_val_padding(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
     bool use_multicore,
+    bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::device_operation::launch<TilizeWithValPaddingDeviceOperation>(
@@ -232,6 +233,7 @@ Tensor tilize_with_val_padding(
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .output_dtype = output_dtype.value_or(input_tensor.dtype()),
             .use_multicore = use_multicore,
+            .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .sub_core_grids = sub_core_grids,
         },

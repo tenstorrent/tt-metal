@@ -8,8 +8,8 @@
 #include <optional>
 #include <cstdint>
 
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <ttnn/distributed/types.hpp>
 
 namespace ttnn::operations::debug {

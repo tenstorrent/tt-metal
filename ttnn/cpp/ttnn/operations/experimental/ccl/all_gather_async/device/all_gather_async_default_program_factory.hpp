@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include <functional>
 
@@ -13,8 +13,8 @@
 
 #include <optional>
 
-#include <tt-metalium/workload/legacy/runtime_args_data.hpp>
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 
 #include "all_gather_async_device_operation_types.hpp"

@@ -32,7 +32,8 @@ ttnn::Tensor dit_fused_distributed_groupnorm_wrapper(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const std::optional<std::string>& activation) {
+    const std::optional<std::string>& activation,
+    std::optional<uint32_t> second_cluster_axis) {
     std::optional<ttnn::operations::unary::UnaryWithParam> act_param = std::nullopt;
     if (activation.has_value()) {
         act_param = ttnn::operations::unary::utils::string_to_unary_with_param(activation.value());
@@ -52,7 +53,8 @@ ttnn::Tensor dit_fused_distributed_groupnorm_wrapper(
         compute_kernel_config,
         persistent_output_buffer,
         subdevice_id,
-        act_param);
+        act_param,
+        second_cluster_axis);
 }
 
 void bind_dit_fused_distributed_groupnorm(nb::module_& mod) {
@@ -73,6 +75,12 @@ void bind_dit_fused_distributed_groupnorm(nb::module_& mod) {
             without the extra full-tensor DRAM read/write. The activation
             consumes the fp32 DEST value (after gamma/beta), so it is applied
             before the output is rounded to the output dtype.
+
+            ``second_cluster_axis`` is for input sharded on both mesh axes: the
+            stats merged over ``cluster_axis`` are then exchanged and merged
+            over this axis too. It needs two semaphores in
+            ``multi_device_global_semaphore`` and a stats buffer created with
+            the same ``second_cluster_axis``.
         )doc",
         &dit_fused_distributed_groupnorm_wrapper,
         nb::arg("input_tensor"),
@@ -90,7 +98,8 @@ void bind_dit_fused_distributed_groupnorm(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("persistent_output_buffer") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
-        nb::arg("activation") = nb::none());
+        nb::arg("activation") = nb::none(),
+        nb::arg("second_cluster_axis") = nb::none());
 
     ttnn::bind_function<"dit_fused_distributed_groupnorm_create_stats_buffer", "ttnn.experimental.">(
         mod,
@@ -98,7 +107,9 @@ void bind_dit_fused_distributed_groupnorm(nb::module_& mod) {
             Allocate the persistent DRAM stats scratch buffer for
             `dit_fused_distributed_groupnorm`'s all-gather path (cluster width > 1).
 
-            Returns None when cluster width is 1 (no AG). The caller must hold the
+            Returns None when cluster width is 1 (no AG); a ``second_cluster_axis``
+            wider than 1 then fails, so pass the wide axis as ``cluster_axis``.
+            The caller must hold the
             tensor across launches and pass it via `persistent_output_buffer`.
             Always sized for a single fabric link.
         )doc",
@@ -106,7 +117,8 @@ void bind_dit_fused_distributed_groupnorm(nb::module_& mod) {
         nb::arg("input_tensor"),
         nb::arg("num_groups"),
         nb::arg("cluster_axis"),
-        nb::arg("mesh_device"));
+        nb::arg("mesh_device"),
+        nb::arg("second_cluster_axis") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

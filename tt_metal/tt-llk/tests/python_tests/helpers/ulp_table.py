@@ -14,13 +14,11 @@ import functools
 import json
 import math
 import types
-from collections.abc import Callable, Iterable
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from enum import Enum
-from functools import cached_property
 from itertools import product
 from pathlib import Path
-from typing import Any, Union, get_args, get_origin, get_type_hints
+from typing import Any, TypeVar, Union, get_args, get_origin, get_type_hints
 
 import yaml
 
@@ -143,19 +141,21 @@ class AccuracyContract:
     def tolerance_kwargs(self) -> dict[str, Any]:
         """``passed_test`` arguments for a caller that keeps today's tolerance on a ULP
         cell (the unary functional driver samples too few values for a sweep budget)."""
-        return {} if self.metric is Metric.ULP else self.passed_test_kwargs()
+        if self.metric is Metric.ULP:
+            return {}
+        return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
     def passed_test_kwargs(
         self, flush_subnormals: bool | None = None
     ) -> dict[str, Any]:
         """The contract as ``passed_test`` keyword arguments; *flush_subnormals* overrides
         the ULP arm's per-dtype default."""
-        if self.metric is not Metric.ULP:
-            return {"custom_atol": self.atol, "custom_rtol": self.rtol}
-        kwargs = {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
-        if flush_subnormals is not None:
-            kwargs["flush_subnormals"] = flush_subnormals
-        return kwargs
+        if self.metric is Metric.ULP:
+            kwargs = {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
+            if flush_subnormals is not None:
+                kwargs["flush_subnormals"] = flush_subnormals
+            return kwargs
+        return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
 
 # What an unenrolled op, or an enrolled one off the formats the SFPU computes in, is
@@ -189,7 +189,7 @@ class BudgetKey:
 
     def matches(self, query: "BudgetKey") -> bool:
         """Whether this key covers *query*; an unset query dimension matches only a
-        wildcard. Spelled out, with `_values` cached: this is `validate_table`'s hot
+        wildcard. Spelled out, with `_values` cached: this is `validate_contracts`' hot
         loop (via `most_specific`), and a generator over `zip` here costs that host
         test 1.3 s."""
         a, i, o, d, r = self._values
@@ -231,6 +231,29 @@ _KEY_TYPES = tuple(
     next(a for a in get_args(hint) if a is not type(None))
     for hint in get_type_hints(BudgetKey).values()
 )
+
+V = TypeVar("V")
+
+
+def most_specific(
+    table: dict[BudgetKey, V],
+    query: BudgetKey,
+    only: "Any" = lambda value: True,
+) -> tuple[BudgetKey, V] | None:
+    """The single most specific entry of *table* covering *query* whose value passes
+    *only*, or ``None``; two equally specific entries are :attr:`Problem.AMBIGUOUS`."""
+    matched = [
+        (key, value)
+        for key, value in table.items()
+        if key.matches(query) and only(value)
+    ]
+    if not matched:
+        return None
+    best = max(key.specificity for key, _ in matched)
+    winners = [(key, value) for key, value in matched if key.specificity == best]
+    if len(winners) > 1:
+        raise TableError(Problem.AMBIGUOUS, [key.describe() for key, _ in winners])
+    return winners[0]
 
 
 def steps_bind(
@@ -303,7 +326,7 @@ class Row:
         # Built once, so a half-converted row is refused here, not on first use.
         object.__setattr__(self, "_contract", self._derive_contract())
 
-    @cached_property
+    @property
     def key(self) -> BudgetKey:
         return BudgetKey(
             approx_mode=self.approx,
@@ -354,84 +377,76 @@ class Row:
 Table = dict[MathOperation, tuple[Row, ...]]
 
 
-def most_specific(
-    rows: Iterable[Row],
+def declared_tolerance(
+    contracts: dict[BudgetKey, AccuracyContract],
     query: BudgetKey,
-    only: Callable[[Row], bool] = lambda row: True,
-) -> Row | None:
-    """The single most specific of *rows* covering *query* that passes *only*, or
-    ``None``; two equally specific rows are :attr:`Problem.AMBIGUOUS`."""
-    matched = [row for row in rows if row.key.matches(query) and only(row)]
-    if not matched:
-        return None
-    best = max(row.key.specificity for row in matched)
-    winners = [row for row in matched if row.key.specificity == best]
-    if len(winners) > 1:
-        raise TableError(Problem.AMBIGUOUS, [row.key.describe() for row in winners])
-    return winners[0]
+    fallback: AccuracyContract,
+) -> AccuracyContract:
+    """The most specific tolerance row *with numbers* covering *query*, or
+    *fallback*."""
+    found = most_specific(contracts, query, only=lambda c: c.declares_tolerance)
+    return fallback if found is None else found[1]
 
 
-def _declares_tolerance(row: Row) -> bool:
-    return row.contract.declares_tolerance
+def resolve_variant(
+    contracts: dict[BudgetKey, AccuracyContract], query: BudgetKey
+) -> AccuracyContract:
+    """The contract one op variant is held to, given that op's keyed *contracts*: the
+    most specific row, a step budget only where :func:`steps_bind` says it binds, and
+    the op's declared tolerance where it does not. Pure; the driver-facing lookup is
+    ``sfpu_accuracy_budget.accuracy_contract``."""
+    found = most_specific(contracts, query)
+    if found is None:
+        return TOLERANCE_CONTRACT
+    key, contract = found
+    if contract.metric is Metric.ULP:
+        if steps_bind(key, query):
+            return contract
+        return declared_tolerance(contracts, query, TOLERANCE_CONTRACT)
+    if not contract.declares_tolerance:
+        # A numberless tolerance row opts its cell out of the ULP metric without
+        # retracting an atol/rtol the op declares on a broader row.
+        return declared_tolerance(contracts, query, contract)
+    return contract
 
 
-@dataclass(frozen=True)
-class Resolved:
-    """What one variant is held to: the most specific *row* covering it, whether that
-    row's step budget binds it (*gated*), and where it does not the most specific row
-    *declared* with an ``atol`` or ``rtol``."""
-
-    row: Row | None
-    gated: bool
-    declared: Row | None
-
-    @property
-    def contract(self) -> AccuracyContract:
-        """The row's step budget where it binds, else the op's declared tolerance. A
-        numberless tolerance row opts its cell out of the ULP metric without retracting
-        an atol/rtol the op declares on a broader row."""
-        if self.gated:
-            return self.row.contract
-        if self.declared is not None:
-            return self.declared.contract
-        if self.row is None or self.row.contract.metric is Metric.ULP:
-            return TOLERANCE_CONTRACT
-        return self.row.contract
+def contracts_of(
+    table: Table,
+) -> dict[MathOperation, dict[BudgetKey, AccuracyContract]]:
+    """Each op of *table* as its keyed contracts, the shape the resolver reads."""
+    return {op: {row.key: row.contract for row in rows} for op, rows in table.items()}
 
 
-def resolve(
-    rows: Iterable[Row], query: BudgetKey, arch: ChipArchitecture | None = None
-) -> Resolved:
-    """One op variant against that op's *rows*, by the one rule every reader of the
-    table shares: the registry (``sfpu_accuracy_budget.accuracy_contract``), ``diff``
-    and ``headroom``. An unkeyed step budget binds on *arch* (:func:`steps_bind`)."""
-    rows = tuple(rows)
-    row = most_specific(rows, query)
-    gated = (
-        row is not None
-        and row.contract.metric is Metric.ULP
-        and steps_bind(row.key, query, arch)
-    )
-    declared = None if gated else most_specific(rows, query, only=_declares_tolerance)
-    return Resolved(row, gated, declared)
+def validate_contracts(
+    by_op: dict[MathOperation, dict[BudgetKey, AccuracyContract]],
+) -> None:
+    """Raise if any op of *by_op* can resolve ambiguously, for any variant a driver may
+    ask about, on any architecture: both lookups :func:`resolve_variant` can make are
+    checked, whether or not a step budget binds. Per op, an axis is the values its own
+    rows pin, plus ``None``: any other value matches the same rows ``None`` does."""
+    for op, contracts in by_op.items():
 
+        def pinned(field: str) -> list:
+            return sorted(
+                {getattr(key, field) for key in contracts} - {None}, key=str
+            ) + [None]
 
-def validate_table(table: Table) -> None:
-    """Raise if any op of *table* can resolve ambiguously, for any variant a driver may
-    ask about, on any architecture: both lookups :func:`resolve` can make are checked,
-    whether or not a step budget binds. Per op, an axis is the values its own rows pin,
-    plus ``None``: any other value matches the same rows ``None`` does."""
-    for op, rows in table.items():
-        keys = [row.key for row in rows]
-        axes = [
-            sorted({getattr(key, f.name) for key in keys} - {None}, key=str) + [None]
-            for f in fields(BudgetKey)
-        ]
-        for combo in product(*axes):
-            query = BudgetKey(*combo)
+        for approx_mode, input_format, output_format, dest_acc, arch in product(
+            *map(
+                pinned,
+                ("approx_mode", "input_format", "output_format", "dest_acc", "arch"),
+            )
+        ):
+            query = BudgetKey(
+                approx_mode=approx_mode,
+                input_format=input_format,
+                output_format=output_format,
+                dest_acc=dest_acc,
+                arch=arch,
+            )
             try:
-                most_specific(rows, query)
-                most_specific(rows, query, only=_declares_tolerance)
+                most_specific(contracts, query)
+                most_specific(contracts, query, only=lambda c: c.declares_tolerance)
             except TableError as error:
                 raise TableError(error.problem, f"{op.name}: {error}") from error
 
@@ -615,7 +630,7 @@ def write_table_file(table: Table, path: Path | None = None) -> None:
     """Dump *table* to *path* (by default this session's table) after reading the dump
     back: a table that would not load is never written."""
     text = dump_table(table)
-    validate_table(read_table(text))
+    validate_contracts(contracts_of(read_table(text)))
     path = TABLE_PATHS[measured_arch()] if path is None else Path(path)
     path.write_text(text, encoding="utf-8")
 

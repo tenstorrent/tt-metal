@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include <algorithm>
 #include <cmath>
 #include <numbers>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"

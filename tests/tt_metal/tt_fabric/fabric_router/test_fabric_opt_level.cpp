@@ -3,7 +3,7 @@
 
 #include <cstdlib>
 #include <gtest/gtest.h>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "rtoptions.hpp"
 #include "fabric_fixture.hpp"
 #include "impl/context/metal_context.hpp"

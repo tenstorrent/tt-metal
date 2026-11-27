@@ -5,8 +5,8 @@
 #include "combine.hpp"
 #include "device/combine_device_operation.hpp"
 #include "ttnn/operation.hpp"
-#include <tt-metalium/mesh/sub_device.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 

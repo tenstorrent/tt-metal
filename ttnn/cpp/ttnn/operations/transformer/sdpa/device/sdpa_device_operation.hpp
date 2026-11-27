@@ -10,8 +10,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include <optional>
 #include <variant>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -28,7 +28,28 @@ struct SDPAOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<SDPAProgramFactory>;
+    // runtime_seq_len: the same program, keyed without the sequence lengths; a cache hit at another length
+    // rebuilds the descriptor and applies its runtime args (the work split and the K/V chains follow the length).
+    // A factory of its own so that the other callers keep the binding-only hit path.
+    struct SDPARuntimeSeqLenFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
+    };
+
+    using program_factory_t = std::variant<SDPAProgramFactory, SDPARuntimeSeqLenFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -39,6 +60,10 @@ struct SDPAOperation {
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 };
+
+// 2 when a core may get more than one Q chunk, else 1: it sizes the Q circular buffer, so a runtime_seq_len
+// program keys on it. Mirrors the factory's global Q split for the non-causal calls runtime_seq_len allows.
+uint32_t sdpa_q_buffer_factor(const SDPAParams& operation_attributes, const SDPAInputs& tensor_args);
 
 Tensor sdpa(
     const Tensor& input_tensor_q,
@@ -62,6 +87,7 @@ Tensor sdpa(
     const std::optional<Tensor>& windowed_q_token_offset_tensor = std::nullopt,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     bool output_concat_heads = false,
-    const std::optional<Tensor>& attn_mask_block_map = std::nullopt);
+    const std::optional<Tensor>& attn_mask_block_map = std::nullopt,
+    bool runtime_seq_len = false);
 
 }  // namespace ttnn::prim

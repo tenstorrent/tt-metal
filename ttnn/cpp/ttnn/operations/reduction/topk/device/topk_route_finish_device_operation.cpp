@@ -5,7 +5,7 @@
 #include "topk_route_finish_device_operation.hpp"
 #include "topk_utils.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include <limits>
 

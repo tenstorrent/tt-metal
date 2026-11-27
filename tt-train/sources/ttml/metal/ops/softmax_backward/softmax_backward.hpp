@@ -5,7 +5,7 @@
 #pragma once
 
 #include <optional>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 

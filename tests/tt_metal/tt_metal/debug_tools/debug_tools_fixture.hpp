@@ -8,7 +8,7 @@
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 
 #include "debug_tools_test_utils.hpp"
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "hal_types.hpp"
 #include <impl/debug/dprint_server.hpp>
 #include <impl/debug/watcher_server.hpp>
 #include <sys/mman.h>
@@ -24,7 +24,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <filesystem>
@@ -312,7 +312,6 @@ protected:
 
         rtoptions.set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, true);
         rtoptions.set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
-        rtoptions.set_feature_tag_firmware(tt::llrt::RunTimeDebugFeatureDprint, true);
         rtoptions.set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassWorker);
         rtoptions.set_feature_all_cores(
@@ -464,10 +463,10 @@ public:
         // Get the first available mesh device
         auto mesh_device = this->devices_.at(0);
 
-        // The Program constructor compiles eagerly, so the ELF exists on disk once it returns and a
+        // MakeProgramFromSpec compiles eagerly, so the ELF exists on disk once it returns and a
         // build failure surfaces here as a throw (which the compilation-failure tests rely on).
         auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
-        Program program(*mesh_device, spec);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
 
         program.impl().compile(mesh_device.get());
@@ -491,7 +490,7 @@ public:
         const std::string& kernel_path,
         ttsl::Span<const uint32_t> runtime_args = {}) {
         auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
-        Program program(*mesh_device, spec);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
 
         distributed::MeshWorkload workload;
@@ -540,7 +539,7 @@ private:
         };
     }
 
-    // Program::set_program_run_args requires an entry for every kernel that declares runtime args and rejects
+    // SetProgramRunArgs requires an entry for every kernel that declares runtime args and rejects
     // entries for kernels that declare none, so this is a no-op when the kernel takes no arguments.
     static void SetSingleDmPrintArgs(Program& program, ttsl::Span<const uint32_t> runtime_args) {
         if (runtime_args.empty()) {
@@ -552,37 +551,14 @@ private:
 
         ProgramRunArgs run_args;
         run_args.kernel_run_args.push_back(std::move(kernel_run_args));
-        program.set_program_run_args(run_args);
+        experimental::SetProgramRunArgs(program, run_args);
     }
 };
 
 class DevicePrintSeparateFilesFixture : public DevicePrintFixture {
 public:
     static constexpr std::array<std::string_view, 5> suffixes = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
-
-    // The file that one-file-per-RISC mode writes for `risc` (BRISC, NCRISC, TRISC0, ...) of worker core (0,0).
-    static std::string output_file_name(ChipId device_id, std::string_view risc) {
-        return fmt::format(
-            "{}generated/dprint/device-{}_worker-core-0-0_{}.txt",
-            tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(),
-            device_id,
-            risc);
-    }
-
-    // Deletes the files check_output reads. A RISC's file is rewritten only when the RISC prints, so without this a
-    // RISC that prints nothing would be checked against a file left over from an earlier run. The print server keeps
-    // each RISC's file open once the RISC has printed, so it closes them first; otherwise a later run in the same test
-    // would write into the deleted files.
-    static void remove_output_files(ChipId device_id) {
-        if (const auto& dprint_server = MetalContext::instance().dprint_server()) {
-            dprint_server->reset_for_new_run();
-        }
-        for (const auto& suffix : suffixes) {
-            std::filesystem::remove(output_file_name(device_id, suffix));
-        }
-    }
-
-    static void check_output(ChipId device_id, std::span<const std::string> expected) {
+    static void check_output(std::span<const std::string> expected) {
         const auto& enabled_processors = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(
             tt::llrt::RunTimeDebugFeatureDprint);
         ASSERT_EQ(expected.size(), suffixes.size());
@@ -590,7 +566,11 @@ public:
             if (!enabled_processors.contains(HalProgrammableCoreType::TENSIX, i)) {
                 continue;
             }
-            EXPECT_TRUE(FilesMatchesString(output_file_name(device_id, suffixes[i]), expected[i]));
+            auto filename = fmt::format(
+                "{}generated/dprint/device-0_worker-core-0-0_{}.txt",
+                tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(),
+                suffixes[i]);
+            EXPECT_TRUE(FilesMatchesString(filename, expected[i]));
         }
     }
 

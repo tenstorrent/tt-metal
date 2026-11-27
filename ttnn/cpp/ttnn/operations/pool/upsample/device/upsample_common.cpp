@@ -5,7 +5,7 @@
 #include "upsample_common.hpp"
 
 #include <cmath>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::pool::upsample {
 

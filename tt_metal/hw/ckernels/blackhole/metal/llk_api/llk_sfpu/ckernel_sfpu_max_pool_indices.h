@@ -80,7 +80,7 @@ inline void _calculate_max_pool_with_indices_(
             TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, indices_tile_offset + 12 + col_offset);
 
             // sort 4 rows
-            TTI_REPLAY(0, 7, 0, 0);
+            lltt::replay(0, 7);
 
             // data
             TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + 16 + col_offset);
@@ -114,7 +114,7 @@ inline void _calculate_max_pool_with_indices_(
         TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, indices_tile_offset + 6);
 
         // sort 4 rows
-        TTI_REPLAY(0, 7, 0, 0);
+        lltt::replay(0, 7);
 
         // data
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + 8);   // even cols
@@ -146,7 +146,7 @@ inline void _calculate_max_pool_with_indices_(
         TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, indices_tile_offset + face_offset + 6);
 
         // sort 4 rows
-        TTI_REPLAY(0, 7, 0, 0);
+        lltt::replay(0, 7);
 
         // data
         TT_SFPLOAD(
@@ -226,7 +226,7 @@ inline void _calculate_max_pool_with_indices_generic_(
                 TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, idx_base + 12);
 
                 // Reduce 8 rows to max in LREG0/LREG4 via replay buffer
-                TTI_REPLAY(0, 7, 0, 0);
+                lltt::replay(0, 7);
 
                 // Only store when necessary - caller controls this
                 if (store_result) {

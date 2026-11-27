@@ -8,10 +8,10 @@
 #include <array>
 #include <vector>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 

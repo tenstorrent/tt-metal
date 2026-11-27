@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/data_formats/float8.hpp>
+#include <tt-metalium/float8.hpp>
 
 #include <bit>
 #include <cmath>

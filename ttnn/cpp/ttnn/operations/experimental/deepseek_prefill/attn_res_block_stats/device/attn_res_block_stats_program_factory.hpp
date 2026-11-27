@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "attn_res_block_stats_device_operation_types.hpp"
 #include "ttnn/distributed/types.hpp"

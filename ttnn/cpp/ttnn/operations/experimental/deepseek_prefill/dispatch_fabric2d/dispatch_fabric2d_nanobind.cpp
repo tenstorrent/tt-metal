@@ -10,7 +10,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
-#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "dispatch_fabric2d.hpp"

@@ -6,17 +6,17 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstdint>
-#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <cmath>
 #include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/shape.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "ttnn/async_runtime.hpp"
@@ -24,7 +24,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -60,7 +60,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     }
     // Create golden data using tt_eager APIs
     Tensor np_tensor = ttnn::full(input_shape, static_cast<float>(1), DataType::BFLOAT16, Layout::TILE, *device_);
-    Tensor np_out = ttnn::sum(np_tensor, 3, /*keepdim=*/true);
+    ttsl::SmallVector<int64_t> reduce_dims = {3};
+    Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
     Tensor np_out_host = np_out.cpu();
     const Tensor reference_tensor = ttnn::distributed::get_device_tensors(np_out_host).front();
     auto golden_output = host_buffer::get_as<bfloat16>(reference_tensor);
@@ -82,17 +83,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     // Host stalls until write is completed, before sending workload
     ttnn::event_synchronize(write_event);
     // Dispatch workload. Preallocated output_tensor is populated by op/
-    ttnn::sum(
-        input_tensor,
-        3,
-        /*keepdim=*/true,
-        /*memory_config_arg=*/std::nullopt,
-        /*compute_kernel_config=*/std::nullopt,
-        /*scalar=*/1.0f,
-        /*sub_core_grids=*/std::nullopt,
-        /*fast_and_approximate_mode=*/false,
-        /*output_layout=*/std::nullopt,
-        output_tensor);
+    ttnn::moreh_sum(input_tensor, /*dim*/ 3, false, output_tensor, std::nullopt, std::nullopt);
     // Record completion of workload
     auto workload_event = ttnn::record_event_to_host(device_->mesh_command_queue(*workload_dispatch_cq));
     ttnn::event_synchronize(workload_event);

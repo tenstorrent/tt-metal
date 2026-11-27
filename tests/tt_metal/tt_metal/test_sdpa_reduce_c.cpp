@@ -8,13 +8,13 @@
 #include <functional>
 #include <random>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/data_formats/tilize_utils.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using std::vector;

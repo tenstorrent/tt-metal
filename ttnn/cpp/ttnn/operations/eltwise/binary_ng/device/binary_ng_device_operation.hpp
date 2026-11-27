@@ -11,8 +11,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include <tt-metalium/mesh/sub_device_types.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/distributed/types.hpp"
 namespace ttnn::operations::binary_ng {

@@ -7,10 +7,10 @@
 #include <initializer_list>
 #include <utility>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include "kernels/csa_compressor_runtime_args.hpp"
 
@@ -375,11 +375,7 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = compression_cores;
     compute.compile_time_args = {kCandidateKvCb, kCandidateScoreCb, kPooledCb, kCaBiasCb, kCbBiasCb};
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
-    // Use HiFi3 with fp32_dest_acc_en on Wormhole (less likely to give bad results).
-    const auto math_fidelity = args.kv.device()->arch() == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3
-                                                                                 : tt::tt_metal::MathFidelity::HiFi4;
-    compute.config = ComputeConfigDescriptor{.math_fidelity = math_fidelity, .fp32_dest_acc_en = true};
+    compute.config = ComputeConfigDescriptor{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = true};
 
     std::vector<uint32_t> writer_compile_args = {kPooledCb};
     TensorAccessorArgs(outputs[0].buffer()).append_to(writer_compile_args);

@@ -13,7 +13,7 @@
 #include "rtoptions.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
-#include "llrt/hal_types.hpp"
+#include "hal_types.hpp"
 #include "hostdev/l1_ecc_halt_constants.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
@@ -254,6 +254,11 @@ public:
         if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
             return {};
         }
+        // -march is the exact ISA string -mcpu=tt-bh-tensix resolves to (per
+        // `riscv-tt-elf-g++ -mcpu=tt-bh-tensix -v`), plus _zve32f. Passed after -mcpu (recipe
+        // cflags are appended after common_flags), so it overrides the arch while keeping the
+        // tt-bh-tensix tuning.
+        //
         // -fno-lto: emit a plain (non-LTO) object for this TU. With -flto the RVV builtins are
         // streamed as GIMPLE and re-expanded by the link-stage LTRANS units, which do not carry
         // the vector -march, breaking code generation at link time (observed with sfpi 7.70.0).
@@ -264,7 +269,7 @@ public:
         //
         // -Wno-error=array-bounds: RVV intrinsic loads/stores through casted L1 pointers trip
         // -Warray-bounds false positives at -O3 under -Werror.
-        return "-mcpu=tt-bh-vector-tensix -fno-lto "
+        return "-march=rv32im_zmmul_zaamo_zba_zbb_xtttensixbh_zve32f -fno-lto "
                "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
     }
 
@@ -483,10 +488,8 @@ void Hal::initialize_bh(
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
-    this->noc_addr_local_bits_ = NOC_ADDR_LOCAL_BITS;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
     this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
-    this->noc_max_bytes_in_packet_ = NOC_MAX_BURST_SIZE;  // no overlay packetization below the burst size
     this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;

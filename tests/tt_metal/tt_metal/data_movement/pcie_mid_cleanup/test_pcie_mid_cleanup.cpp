@@ -11,11 +11,11 @@
 #include <cstring>
 
 #include "device_fixture.hpp"
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "dm_common.hpp"
 #include <distributed/mesh_device_impl.hpp>
 

@@ -15,14 +15,14 @@
 
 #include <benchmark/benchmark.h>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "hd_socket_test_utils.hpp"
 #include "leg_benchmark_common.hpp"

@@ -12,19 +12,19 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/mesh/mesh_config.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/discovery/system_mesh.hpp>
-#include <tt-metalium/vocabulary/maybe_remote.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/maybe_remote.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal::distributed {

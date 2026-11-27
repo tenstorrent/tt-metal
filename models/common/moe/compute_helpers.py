@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import functools
 import os
 import random
 

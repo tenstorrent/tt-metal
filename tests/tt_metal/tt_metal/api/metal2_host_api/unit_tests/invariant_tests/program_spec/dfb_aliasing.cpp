@@ -11,12 +11,10 @@
 #include <stdexcept>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
-
-#include "metal2_host_api/test_helpers/dfb_placement_test_helpers.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -74,7 +72,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnMismatchedTotalSize) {
     auto spec = MakeAliasProgramSpec(node, dfb_a, dfb_b);
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different total sizes")));
 }
 
@@ -89,7 +87,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnAsymmetricDeclaration) {
     auto spec = MakeAliasProgramSpec(node, dfb_a, dfb_b);
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("do not declare the same alias group")));
 }
 
@@ -125,7 +123,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBMatmulStyleSucceeds) {
     spec.dataflow_buffers = {dfb_a, dfb_b};
     spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel", "other_kernel"})};
 
-    EXPECT_NO_THROW(Program(*mesh_device_, spec));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnDifferentNodeCoverage) {
@@ -158,7 +156,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnDifferentNodeCoverage) {
     };
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cover different sets of nodes")));
 }
 
@@ -191,7 +189,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnInconsistentBorrowedFrom) {
     spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel"})};
 
     EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("inconsistent borrowed_from")));
 }
 
@@ -204,7 +202,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsUseSameArena) {
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}};
     spec.dataflow_buffers[1].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}};
-    EXPECT_NO_THROW(Program(fixture_device, spec));
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsUseSameNonzeroOffset) {
@@ -216,7 +214,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsUseSameNonzeroOffset) {
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}, .offset = 4096};
     spec.dataflow_buffers[1].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}, .offset = 4096};
-    EXPECT_NO_THROW(Program(fixture_device, spec));
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsRejectDifferentOffsets) {
@@ -228,7 +226,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsRejectDifferentOffsets) {
     spec.dataflow_buffers[1].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}, .offset = 4096};
     EXPECT_THAT(
-        [&] { Program(fixture_device, spec); },
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different allocation_override offsets")));
 }
 
@@ -241,7 +239,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsRejectDifferentArenas) {
     spec.dataflow_buffers[1].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"second_arena"}};
     EXPECT_THAT(
-        [&] { Program(fixture_device, spec); },
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("inconsistent allocation_override arena parameters")));
 }
@@ -253,7 +251,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsRejectDefaultAllocation) {
     spec.dataflow_buffers[0].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}};
     EXPECT_THAT(
-        [&] { Program(fixture_device, spec); },
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("inconsistent allocation_override arena parameters")));
 }
@@ -268,7 +266,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsRejectClearedOverrideOnOne
     spec.dataflow_buffers[1].advanced_options.allocation_override = allocation;
     spec.dataflow_buffers[1].advanced_options.allocation_override = std::nullopt;
     EXPECT_THAT(
-        [&] { Program(fixture_device, spec); },
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("inconsistent allocation_override arena parameters")));
 }
@@ -284,43 +282,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBsWithClearedArenaOverridesUseDefaultAl
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"second_arena"}, .offset = 4096};
     spec.dataflow_buffers[0].advanced_options.allocation_override = std::nullopt;
     spec.dataflow_buffers[1].advanced_options.allocation_override = std::nullopt;
-    EXPECT_NO_THROW(Program(fixture_device, spec));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAcceptsAliasesWithDifferentEndpointNodes) {
-    // Kernels on different node sets can alias DFBs on their common endpoint node.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeNestedQuasarDFBEndpointPlacementsForTest();
-    spec.dataflow_buffers[0].advanced_options.alias_with = {DFBSpecName{"dfb_1"}};
-    spec.dataflow_buffers[1].advanced_options.alias_with = {DFBSpecName{"dfb_0"}};
-    for (auto& dfb : spec.dataflow_buffers) {
-        dfb.advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    }
-    EXPECT_NO_THROW(Program(fixture_device, spec));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsDifferentAliasNodes) {
-    // Aliased DFBs with different reserved nodes are rejected even when their endpoint nodes match.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR, 2);
-    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
-    spec.dataflow_buffers[0].advanced_options.alias_with = {DFBSpecName{"dfb_1"}};
-    spec.dataflow_buffers[1].advanced_options.alias_with = {DFBSpecName{"dfb_0"}};
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
-    EXPECT_THAT(
-        [&] { Program(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different sets of nodes")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAllowsInferredAndExplicitAliases) {
-    // Aliasing is accepted when inferred and overridden placements contain the same nodes.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR, 2);
-    spec.dataflow_buffers[0].advanced_options.alias_with = {DFBSpecName{"dfb_1"}};
-    spec.dataflow_buffers[1].advanced_options.alias_with = {DFBSpecName{"dfb_0"}};
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    EXPECT_NO_THROW(Program(fixture_device, spec));
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
 }
 
 }  // namespace

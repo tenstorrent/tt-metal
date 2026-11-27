@@ -15,12 +15,12 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "debug_tools_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
@@ -132,7 +132,7 @@ void RunSemaphoreMulticastTest(
             .target_nodes = kSender,
         }},
     };
-    LaunchAndCheck(mesh_device, Program(mesh_device, spec), expect_error);
+    LaunchAndCheck(mesh_device, experimental::MakeProgramFromSpec(mesh_device, spec), expect_error);
 }
 
 // The sender multicasts one entry of its DFB over the rectangle from logical node (0,0) to (end_x,0). The DFB's
@@ -198,17 +198,19 @@ void RunDataflowBufferMulticastTest(
         }},
     };
     if (!backing_nodes.has_value()) {
-        LaunchAndCheck(mesh_device, Program(mesh_device, spec), expect_error);
+        LaunchAndCheck(mesh_device, experimental::MakeProgramFromSpec(mesh_device, spec), expect_error);
         return;
     }
     const TensorSpec backing_spec = MakeBackingSpec(*backing_nodes);
     spec.dataflow_buffers[0].borrowed_from = backing_name;
     spec.tensor_parameters = {{.unique_id = backing_name, .spec = backing_spec}};
     const MeshTensor backing = MeshTensor::allocate_on_device(mesh_device, backing_spec);
-    Program program(mesh_device, spec);
-    program.set_program_run_args(ProgramRunArgs{
-        .tensor_args = {{backing_name, TensorArgument{backing}}},
-    });
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    experimental::SetProgramRunArgs(
+        program,
+        ProgramRunArgs{
+            .tensor_args = {{backing_name, TensorArgument{backing}}},
+        });
     LaunchAndCheck(mesh_device, std::move(program), expect_error);
 }
 
@@ -288,7 +290,7 @@ void RunDataflowBufferReadPointerTest(distributed::MeshDevice& mesh_device) {
             .target_nodes = kResourceNodes,
         }},
     };
-    LaunchAndCheck(mesh_device, Program(mesh_device, spec), /*expect_error=*/false);
+    LaunchAndCheck(mesh_device, experimental::MakeProgramFromSpec(mesh_device, spec), /*expect_error=*/false);
 }
 
 }  // namespace

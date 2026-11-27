@@ -37,18 +37,11 @@ def configure_math(
     old_math: DataFormat,
     new_math: DataFormat,
 ) -> str:
-    # Quasar matches tt-metal: each FPU op init programs the ALU itself via configure_alu_cfg,
-    # so the sentinel only tracks the format here and emits nothing.
-    return ""
-
-
-def configure_alu_cfg(config: "GlobalConfig", cfg_type: str) -> str:
-    """Emit the ALU format config an FPU op init owns, as every metal llk_api op init does."""
-    math_fmt = config.sentinel._math_format.cpp_enum_value
-    dest_acc = config.dest_acc.cpp_enum_value
+    math_fmt = new_math.cpp_enum_value
     return (
-        f"_configure_alu_cfg_<{cfg_type}, {dest_acc}>(\n"
-        f"    {math_fmt}, {math_fmt}\n"
+        f"_configure_alu_formats_<{dest_acc}>(\n"
+        f"    {math_fmt}, {math_fmt},\n"
+        f"    _is_src_fmt_int32_dest_compatible_({math_fmt}) && {dest_acc}, DataFormat::Invalid\n"
         f");\n"
     )
 
@@ -63,7 +56,10 @@ def math_pack_sync_init(config: "GlobalConfig", operation: "L1Operation") -> str
         return ""
     code = f"_llk_math_pack_sync_init_<{dest_sync}>();\n"
     if config.uses_unpack_to_dest_sync:
-        code += "set_up_zero_dest_dvalid_handshake_for_math();\n"
+        code += (
+            "set_up_zero_dest_dvalid_handshake_for_math();\n"
+            "_llk_sync_spin_until_posted_(semaphore::UNPACK_MATH);\n"
+        )
     return code
 
 
@@ -72,10 +68,7 @@ def math_wait_for_dest(config: "GlobalConfig", operation: "L1Operation") -> str:
         code = ""
         if config.uses_unpack_to_dest_pack_sync:
             code += "_llk_math_wait_for_dest_available_();\n"
-        code += (
-            "_llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();\n"
-            "_llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();\n"
-        )
+        code += "_llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);\n"
         return code
     if config.skip_sync or config.quasar_use_dvalid:
         return ""
@@ -84,9 +77,13 @@ def math_wait_for_dest(config: "GlobalConfig", operation: "L1Operation") -> str:
 
 def math_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
     if config.uses_unpack_to_dest_sync:
-        code = ""
         if config.uses_unpack_to_dest_pack_sync:
-            code += "_llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);\n"
+            code = (
+                "_llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);\n"
+                "_llk_sync_get_(semaphore::UNPACK_MATH);\n"
+            )
+        else:
+            code = "_llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);\n"
         if operation.dest_sync == DestSync.Half:
             code += (
                 "_llk_sync_advance_dest_section_<ckernel::TRISC_ID, "

@@ -13,7 +13,7 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/variant.h>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp"

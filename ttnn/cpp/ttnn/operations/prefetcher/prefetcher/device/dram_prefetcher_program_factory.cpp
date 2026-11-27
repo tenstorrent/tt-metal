@@ -6,12 +6,12 @@
 #include <cstdint>
 #include <tuple>
 
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 #include "dram_prefetcher_program_factory.hpp"
 

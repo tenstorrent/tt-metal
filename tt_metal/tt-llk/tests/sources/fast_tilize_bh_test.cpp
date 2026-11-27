@@ -298,10 +298,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tile_bytes  = GET_L1_HEADERLESS_TILE_SIZE(formats.pack_dst) << 4;
 
     // Guard tile sentinel: gated by NUM_GUARD_TILES runtime param.
-#ifndef SPEED_OF_LIGHT
-    const std::uint32_t NUM_GUARD = params.NUM_GUARD_TILES;
+    // Perf tests compile with LLK_PROFILER and don't have this param in their struct.
+#ifdef LLK_PROFILER
+    constexpr std::uint32_t NUM_GUARD = 0;
 #else
-    constexpr std::uint32_t NUM_GUARD = NUM_GUARD_TILES;
+    const std::uint32_t NUM_GUARD = params.NUM_GUARD_TILES;
 #endif
     if (NUM_GUARD > 0)
     {

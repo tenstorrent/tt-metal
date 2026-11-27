@@ -6,7 +6,7 @@
 #include "tt_metal/distributed/distributed_coordinate_translator.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 namespace {

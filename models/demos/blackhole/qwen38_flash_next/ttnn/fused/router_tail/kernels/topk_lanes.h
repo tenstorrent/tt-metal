@@ -39,8 +39,6 @@ inline void _bitonic_topk_phases_steps_lanes(
     const int i_end_step,
     const int i_start_step,
     const std::uint32_t pass_mask) {
-    // The alternate stores advance dest through ADDR_MOD_6 by 32 rows.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
     // NOTE (stable sort): TIE_ORDER is the GLOBAL sort order, not this call's idir. Callers may run
     // this network with a flipped idir to build bitonic sequences; the tie polarity must not follow it.
     // If more than 1 phase is requested, do all the steps from all phases
@@ -85,7 +83,7 @@ inline void _bitonic_topk_phases_steps_lanes(
                                     });
                                     init_load = false;
                                 } else {
-                                    TTI_REPLAY(0, ldst_count, 0, 0);
+                                    lltt::replay(0, ldst_count);
                                 }
                                 if constexpr (STABLE_SORT) {
                                     // Stable sequence exceeds the replay window; issue inline.
@@ -99,7 +97,7 @@ inline void _bitonic_topk_phases_steps_lanes(
                                         });
                                         init_phase = false;
                                     } else {
-                                        TTI_REPLAY(16, replay_count, 0, 0);
+                                        lltt::replay(16, replay_count);
                                     }
                                 }
                                 if (init_store) {
@@ -108,7 +106,7 @@ inline void _bitonic_topk_phases_steps_lanes(
                                     });
                                     init_store = false;
                                 } else {
-                                    TTI_REPLAY(8, ldst_count, 0, 0);
+                                    lltt::replay(8, ldst_count);
                                 }
                             }
                             break;
@@ -116,7 +114,7 @@ inline void _bitonic_topk_phases_steps_lanes(
                         case 1: {
                             // Groups of 16 datums being sorted at the same time
                             for (int d = 0; d < 4; d++) {
-                                TTI_REPLAY(0, ldst_count, 0, 0);
+                                lltt::replay(0, ldst_count);
                                 if constexpr (STABLE_SORT) {
                                     // Stable sequence exceeds the replay window; issue inline.
                                     bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
@@ -129,16 +127,16 @@ inline void _bitonic_topk_phases_steps_lanes(
                                         });
                                         init_phase = false;
                                     } else {
-                                        TTI_REPLAY(16, replay_count, 0, 0);
+                                        lltt::replay(16, replay_count);
                                     }
                                 }
-                                TTI_REPLAY(8, ldst_count, 0, 0);
+                                lltt::replay(8, ldst_count);
                             }
                             break;
                         }
                         case 2: {
                             for (int d = 0; d < 4; d++) {
-                                TTI_REPLAY(0, ldst_count, 0, 0);
+                                lltt::replay(0, ldst_count);
                                 if constexpr (STABLE_SORT) {
                                     // Stable sequence exceeds the replay window; issue inline.
                                     bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>();
@@ -151,18 +149,18 @@ inline void _bitonic_topk_phases_steps_lanes(
                                         });
                                         init_phase = false;
                                     } else {
-                                        TTI_REPLAY(16, replay_count, 0, 0);
+                                        lltt::replay(16, replay_count);
                                     }
                                 }
-                                TTI_REPLAY(8, ldst_count, 0, 0);
+                                lltt::replay(8, ldst_count);
                             }
                             break;
                         }
                         case 3:
                             for (int d = 0; d < 4; d++) {
-                                TTI_REPLAY(0, ldst_count, 0, 0);
+                                lltt::replay(0, ldst_count);
                                 bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED, TIE_ORDER>(dir, init_phase, 16);
-                                TTI_REPLAY(8, ldst_count, 0, 0);
+                                lltt::replay(8, ldst_count);
                                 dir = !dir;
                             }
                             break;
@@ -198,7 +196,7 @@ inline void _bitonic_topk_phases_steps_lanes(
                                                         4, 2 * dist);
                                                 });
                                         } else {
-                                            TTI_REPLAY(TOPK_STEP_LOAD_REPLAY_START, step_io_replay_count, 0, 0);
+                                            lltt::replay(TOPK_STEP_LOAD_REPLAY_START, step_io_replay_count);
                                         }
                                         bitonic_topk_step_N<STABLE_SORT, TIE_ORDER>(dir);
                                         if (init_step_replay) {
@@ -209,7 +207,7 @@ inline void _bitonic_topk_phases_steps_lanes(
                                             });
                                             init_step_replay = false;
                                         } else {
-                                            TTI_REPLAY(TOPK_STEP_STORE_REPLAY_START, step_io_replay_count, 0, 0);
+                                            lltt::replay(TOPK_STEP_STORE_REPLAY_START, step_io_replay_count);
                                         }
                                         std::uint32_t dst_inc = 8;
                                         dst_offset += dst_inc;
@@ -233,9 +231,9 @@ inline void _bitonic_topk_phases_steps_lanes(
                             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                             datums_compared = 0;
                             while (datums_compared < total_datums_to_compare) {
-                                TTI_REPLAY(0, ldst_count, 0, 0);
+                                lltt::replay(0, ldst_count);
                                 bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED, TIE_ORDER>(dir, init_phase, 16);
-                                TTI_REPLAY(8, ldst_count, 0, 0);
+                                lltt::replay(8, ldst_count);
                                 datums_compared += 16;
                                 dir = (datums_compared == sorted_seq_length) ? !dir : dir;
                             }
@@ -249,9 +247,6 @@ inline void _bitonic_topk_phases_steps_lanes(
         set_dst_write_addr(dst_addr_offset);
     }
     topk_replay_init = -1;
-
-    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 // ---- end of the copy ----
 

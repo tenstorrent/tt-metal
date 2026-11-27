@@ -7,11 +7,10 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/profiler/profiler_paths.hpp"
 #include "impl/profiler/tt_metal_profiler.hpp"
@@ -88,7 +87,7 @@ protected:
 
         distributed::MeshWorkload workload;
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device_->shape());
-        Program program = CreateProgram(*mesh_device_);
+        Program program = CreateProgram();
         program.set_runtime_id(program_runtime_id_++);
 
         CreateKernel(

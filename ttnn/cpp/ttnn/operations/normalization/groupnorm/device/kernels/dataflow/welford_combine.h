@@ -34,6 +34,52 @@ constexpr WelfordStats<T> make_welford_stats(T mean, T variance, std::uint32_t c
 }
 
 /**
+ * @brief Statistics over a population that excludes padding zeros, from statistics that include them.
+ * @param padded Mean and population variance (bfloat16) and count over the padded population.
+ * @param scale Padded count / logical count, at least 1.
+ *
+ * With P = scale * N values of which P - N are zeros, sum(x) = P * mean and
+ * sum(x^2) = P * (variance + mean^2), so the logical mean is scale * mean and the logical variance is
+ * scale * variance - scale * (scale - 1) * mean^2. The second form avoids the cancellation of
+ * sum(x^2) / N - mean^2 when scale is close to 1. The bfloat16 inputs still leave a variance error
+ * that grows with (scale - 1) * mean^2.
+ */
+inline WelfordStats<std::uint16_t> unpad_welford_stats(const WelfordStats<std::uint16_t>& padded, float scale) {
+    const float m = bf16_to_fp32(padded.mean);
+    const float v = bf16_to_fp32(padded.variance);
+    float logical_variance = scale * v - scale * (scale - 1.0f) * m * m;
+    logical_variance = logical_variance < 0.0f ? 0.0f : logical_variance;
+    return {
+        .mean = fp32_to_bf16_truncate(scale * m),
+        .variance = fp32_to_bf16_truncate(logical_variance),
+        .count = static_cast<std::uint32_t>(static_cast<float>(padded.count) / scale + 0.5f)};
+}
+
+/**
+ * @brief Zeroes the rows at and below valid_rows of a 32x32 tile in L1, in the 16x16 face layout.
+ * @tparam elem_bytes 2 for bfloat16, 4 for float32.
+ */
+template <std::uint32_t elem_bytes>
+inline void zero_tile_rows_from(std::uint32_t tile_addr, std::uint32_t valid_rows) {
+    static_assert(elem_bytes == 2 || elem_bytes == 4, "zero_tile_rows_from supports bfloat16 and float32 tiles");
+    constexpr std::uint32_t face_dim = 16;
+    constexpr std::uint32_t face_row_words = face_dim * elem_bytes / 4;
+    constexpr std::uint32_t face_words = face_dim * face_row_words;
+    auto* words = reinterpret_cast<volatile std::uint32_t*>(tile_addr);
+    for (std::uint32_t row = valid_rows; row < 2 * face_dim; ++row) {
+        // Rows 0-15 are in faces 0 and 1, rows 16-31 in faces 2 and 3.
+        const std::uint32_t first_face = row < face_dim ? 0 : 2;
+        const std::uint32_t face_row = row % face_dim;
+        for (std::uint32_t face = first_face; face < first_face + 2; ++face) {
+            auto* p = words + face * face_words + face_row * face_row_words;
+            for (std::uint32_t w = 0; w < face_row_words; ++w) {
+                p[w] = 0;
+            }
+        }
+    }
+}
+
+/**
  * @brief Combine two sets of Welford stats into one.
  *        This is the core building block—use iteratively for multiple groups.
  * @param a First WelfordStats.
@@ -132,4 +178,84 @@ inline WelfordStats<std::uint16_t> combine_welford_stats(T means, T vars) {
     result.count = ARRAY_SIZE * COUNT_PER_VALUE;
 
     return result;
+}
+
+/**
+ * @brief The equal-count combine of bfloat16 subgroup stats, with the number of subgroups and their
+ *        size given at run time, returning fp32 stats. Same arithmetic as the template above, without
+ *        its final rounding to bfloat16. array_size must be at least 1.
+ */
+template <std::uint32_t STRIDE, typename T>
+inline WelfordStats<float> combine_welford_stats_fp32(
+    T means, T vars, std::uint32_t array_size, std::uint32_t count_per_value) {
+    static_assert(
+        std::is_same_v<std::remove_volatile_t<std::remove_pointer_t<T>>, std::uint16_t>,
+        "T must be uint16_t* or volatile uint16_t*");
+
+    const float base_mean = bf16_to_fp32(means[0]);
+    float mean_delta_sum = 0.0f;
+    float mean_delta_sq_sum = 0.0f;
+    float var_sum = bf16_to_fp32(vars[0]);
+
+    for (std::uint32_t i = 1; i < array_size; ++i) {
+        const float next_mean = bf16_to_fp32(means[i * STRIDE]);
+        const float delta = next_mean - base_mean;
+        mean_delta_sum += delta;
+        mean_delta_sq_sum += delta * delta;
+        var_sum += bf16_to_fp32(vars[i * STRIDE]);
+    }
+
+    const float inv_size = 1.0f / static_cast<float>(array_size);
+    const float mean_delta = mean_delta_sum * inv_size;
+    const float means_m2 = mean_delta_sq_sum - (mean_delta_sum * mean_delta);
+
+    WelfordStats<float> result;
+    result.mean = base_mean + mean_delta;
+    result.variance = (var_sum + means_m2) * inv_size;
+    result.count = array_size * count_per_value;
+
+    return result;
+}
+
+/**
+ * @brief The bfloat16 combine with the number of subgroups and their size given at run time.
+ *        Same arithmetic as the template above. array_size must be at least 1.
+ */
+template <std::uint32_t STRIDE, typename T>
+inline WelfordStats<std::uint16_t> combine_welford_stats(
+    T means, T vars, std::uint32_t array_size, std::uint32_t count_per_value) {
+    const WelfordStats<float> result = combine_welford_stats_fp32<STRIDE>(means, vars, array_size, count_per_value);
+    return {
+        .mean = fp32_to_bf16_truncate(result.mean),
+        .variance = fp32_to_bf16_truncate(result.variance),
+        .count = result.count};
+}
+
+/**
+ * @brief Combine array_size bfloat16 subgroup stats whose first num_first subgroups hold first_count
+ *        elements each and the others rest_count each.
+ *
+ * Each run of equal counts is combined as above, and the two runs are merged with Chan's parallel
+ * algorithm, weighted by their counts. With num_first == 0 this is the equal-count combine, bit for
+ * bit. num_first must be below array_size.
+ */
+template <std::uint32_t STRIDE, typename T>
+inline WelfordStats<std::uint16_t> combine_welford_stats_two_counts(
+    T means,
+    T vars,
+    std::uint32_t array_size,
+    std::uint32_t num_first,
+    std::uint32_t first_count,
+    std::uint32_t rest_count) {
+    if (num_first == 0) {
+        return combine_welford_stats<STRIDE>(means, vars, array_size, rest_count);
+    }
+    const WelfordStats<float> first = combine_welford_stats_fp32<STRIDE>(means, vars, num_first, first_count);
+    const WelfordStats<float> rest = combine_welford_stats_fp32<STRIDE>(
+        means + num_first * STRIDE, vars + num_first * STRIDE, array_size - num_first, rest_count);
+    const WelfordStats<float> result = combine(first, rest);
+    return {
+        .mean = fp32_to_bf16_truncate(result.mean),
+        .variance = fp32_to_bf16_truncate(result.variance),
+        .count = result.count};
 }

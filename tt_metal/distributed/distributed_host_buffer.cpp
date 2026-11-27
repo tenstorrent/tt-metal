@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 #include <vector>

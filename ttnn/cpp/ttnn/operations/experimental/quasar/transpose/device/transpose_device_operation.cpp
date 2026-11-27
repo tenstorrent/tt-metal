@@ -6,8 +6,8 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::constants;
@@ -268,24 +268,14 @@ ttnn::Tensor transpose(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     float pad_value) {
     using OperationType = ttnn::prim::qsr::TransposeDeviceOperation;
-    const auto attributes = [&](const tt::tt_metal::MemoryConfig& mem_config) {
-        return OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .dim = dim,
-            .output_mem_config = mem_config,
+            .output_mem_config = output_mem_config,
             .pad_value = pad_value,
-        };
-    };
-    return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
-        input_tensor,
-        output_mem_config,
-        std::nullopt,
-        [&] {
-            return OperationType::compute_output_specs(
-                attributes(output_mem_config), TransposeInputs{.input = input_tensor});
         },
-        [&](const Tensor& input, const std::optional<tt::tt_metal::MemoryConfig>& explicit_mem_config) {
-            return ttnn::device_operation::launch<OperationType>(
-                attributes(explicit_mem_config.value_or(output_mem_config)), TransposeInputs{.input = input});
+        TransposeInputs{
+            .input = input_tensor,
         });
 }
 }  // namespace ttnn::prim::qsr

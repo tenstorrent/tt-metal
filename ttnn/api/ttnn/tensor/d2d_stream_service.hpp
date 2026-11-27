@@ -13,13 +13,13 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/services/stream_counter.hpp"
@@ -256,9 +256,6 @@ public:
     // drain. Per-coord because each device's service core is independent.
     // TT_FATALs if metadata was not configured (Config::metadata_size_bytes == 0).
     tt::tt_metal::DeviceAddr get_metadata_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
-
-    // Every coordinate's data_ready counter, service core and metadata buffer (no control words).
-    std::shared_ptr<const tt::tt_metal::StreamSenderCoordTable> get_sender_coord_table() const;
 
     // This coord's output counters. produced is the data_ready counter: one step is every worker's inc for a
     // transfer. pushed is consumed_sem on the first worker core: the service multicasts 1 per drained transfer.

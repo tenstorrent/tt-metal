@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"

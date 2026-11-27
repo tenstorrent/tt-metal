@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/services/d2h_socket_service.hpp"
-#include "ttnn/core.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -18,22 +17,22 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <internal/service/service_core_manager.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/memory/utils/memory_pin.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "socket_service_common.hpp"
 #include "tensor/tensor_ops.hpp"
@@ -235,7 +234,6 @@ uint64_t service_core_cb_l1_budget(uint64_t free_l1_bytes) {
 //   [0]  socket_config_addr
 //   [1]  termination_semaphore_addr
 Program build_persistent_d2h_program(
-    distributed::MeshDevice& mesh_device,
     const Buffer* device_buffer,
     const CoreCoord& sender_core,
     uint32_t socket_config_buffer_address,
@@ -246,7 +244,7 @@ Program build_persistent_d2h_program(
     bool tensor_enabled,
     const D2HWorkerSyncArgs& worker_sync,
     const D2HMetadataArgs& metadata) {
-    auto program = CreateProgram(mesh_device);
+    auto program = CreateProgram();
 
     constexpr tt::CBIndex data_cb_index = tt::CBIndex::c_0;
     const auto data_format = datatype_to_dataformat_converter(dtype);
@@ -613,7 +611,6 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         }
 
         auto program = build_persistent_d2h_program(
-            *mesh_device_,
             dbuf,
             core.core_coord,
             s->get_config_buffer_address(),
@@ -627,7 +624,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         workload_->add_program(distributed::MeshCoordinateRange(core.device_coord), std::move(program));
     }
 
-    EnqueueMeshWorkload(ttnn::core::current_mesh_command_queue(*mesh_device_), *workload_, /*blocking=*/false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
     start_host_read_workers();
 }
 
@@ -687,7 +684,7 @@ D2HStreamService::~D2HStreamService() {
                 signal_abandon();
             }
             signal_termination();
-            distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device_));
+            distributed::Finish(mesh_device_->mesh_command_queue());
         }
 
         if (device_live) {
@@ -1010,24 +1007,6 @@ DeviceAddr D2HStreamService::get_metadata_input_addr(const distributed::MeshCoor
         "D2HStreamService::get_metadata_input_addr: no metadata input region at coord {}",
         coord);
     return it->second;
-}
-
-std::shared_ptr<const StreamSenderCoordTable> D2HStreamService::get_sender_coord_table() const {
-    require_d2h_owner(is_owner_, "D2HStreamService::get_sender_coord_table");
-    TT_FATAL(mesh_device_ != nullptr, "D2HStreamService::get_sender_coord_table: mesh device unavailable");
-    const auto& shape = mesh_device_->shape();
-    TT_FATAL(shape.dims() == 2, "D2HStreamService::get_sender_coord_table: expects a 2D mesh");
-    return sender_coord_table_cache_.get(shape[0], shape[1], [this](uint32_t row, uint32_t col, auto& table) {
-        const distributed::MeshCoordinate coord(row, col);
-        table.data_ready_addrs.push_back(static_cast<uint32_t>(get_data_ready_counter_addr(coord)));
-        table.service_cores.push_back(get_service_core(coord));
-        if (!metadata_input_addrs_.empty()) {
-            table.metadata_addrs.push_back(static_cast<uint32_t>(get_metadata_addr(coord)));
-        }
-        if (!termination_addrs_.empty()) {
-            table.termination_addrs.push_back(static_cast<uint32_t>(get_termination_addr(coord)));
-        }
-    });
 }
 
 DeviceAddr D2HStreamService::get_transfer_done_sem_addr() const {

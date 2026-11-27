@@ -6,17 +6,17 @@
 #include <gtest/gtest.h>
 #include <cstdlib>
 #include <tt-umd/types/arch.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <cstdint>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "eth_test_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
 

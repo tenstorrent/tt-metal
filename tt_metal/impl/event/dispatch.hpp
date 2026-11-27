@@ -5,8 +5,8 @@
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/mesh/sub_device_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <sub_device_types.hpp>
+#include <tt-metalium/device.hpp>
 
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"

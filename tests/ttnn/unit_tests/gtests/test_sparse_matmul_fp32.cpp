@@ -10,7 +10,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/tile.hpp>
 
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"

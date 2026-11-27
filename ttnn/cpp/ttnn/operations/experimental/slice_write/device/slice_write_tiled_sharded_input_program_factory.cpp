@@ -6,15 +6,15 @@
 
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_write_device_operation_types.hpp"
-#include "tt-metalium/utils/math.hpp"
+#include "tt-metalium/math.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/padded_slice/device/padded_slice_utils.hpp"
 #include "ttnn/operations/experimental/padded_slice/device/slice_cb_descriptor.hpp"
@@ -27,13 +27,29 @@ namespace ttnn::experimental::prim {
 
 namespace {
 constexpr uint32_t cb_input_index = 0;
+constexpr uint32_t kSliceWriteTiledWriterAddressArgIdx = 0;
+
+void emplace_slice_write_tiled_writer_args(
+    KernelDescriptor& kernel, const CoreCoord& core, const std::vector<uint32_t>& args, Buffer* output_buffer) {
+    KernelDescriptor::RTArgList runtime_args;
+    runtime_args.reserve(args.size());
+    for (uint32_t arg_idx = 0; arg_idx < args.size(); ++arg_idx) {
+        if (arg_idx == kSliceWriteTiledWriterAddressArgIdx) {
+            runtime_args.push_back(output_buffer);
+        } else {
+            runtime_args.push_back(args[arg_idx]);
+        }
+    }
+    kernel.emplace_runtime_args(core, runtime_args);
+}
 
 SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end,
-    const std::vector<CoreCoord>& cores) {
+    const std::vector<CoreCoord>& cores,
+    bool clip = false) {
     auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto actual_input_shape = input_tensor.logical_shape();
@@ -113,9 +129,8 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         output_tensor_start[-1]);
 
     log_debug(tt::LogOp, "Output Buffer address: {}", output_buffer->address());
-    // RTA 9 is the writer's per-page byte offset; this factory folds its width offset into start_id instead.
     std::vector<uint32_t> common_writer_kernel_args = {
-        0u, input_single_tile_size, input_single_tile_size, input_single_tile_size, num_dims, 0, 0, 0, 0, 0u};
+        0u, input_single_tile_size, input_single_tile_size, input_single_tile_size, num_dims, 0, 0, 0, 0};
 
     common_writer_kernel_args.insert(
         common_writer_kernel_args.end(), num_input_tiles_per_dim.begin(), num_input_tiles_per_dim.end());
@@ -133,6 +148,13 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     SliceWriteRuntimeArgs ret_val(num_cores_total);
 
     uint32_t start_offset = ttnn::operations::data_movement::get_tiled_start_offset(output_tensor, output_tensor_start);
+    // With clip, the slice's tile columns and rows inside the output; the writer skips the others.
+    const auto inside = [](uint32_t start, uint32_t extent, uint32_t size) -> uint32_t {
+        return start < size ? std::min(extent, size - start) : 0;
+    };
+    const uint32_t valid_w_tiles = inside(
+        output_tensor_start[-2] / TILE_HEIGHT, num_input_tiles_per_dim[1], tt::div_up(output_shape[-2], TILE_HEIGHT));
+    const uint32_t valid_h = inside(output_tensor_start[-3], actual_input_shape[-3], output_shape[-3]);
     uint32_t core_index = 0;
     for (const auto& core : cores) {
         uint32_t core_w_index = 0;
@@ -188,6 +210,10 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         writer_kernel_args[addr_offset] = 1;
         writer_kernel_args.insert(writer_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
         writer_kernel_args.push_back(num_tiles_per_channel - channels_tiles_this_core);
+        if (clip) {
+            writer_kernel_args.push_back(valid_w_tiles);
+            writer_kernel_args.push_back(valid_h);
+        }
 
         ReaderKernelArgs reader_kernel_args = {num_tiles_this_core};
         ret_val[core_index] = {reader_kernel_args, writer_kernel_args};
@@ -196,10 +222,13 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 
     return ret_val;
 }
-}  // namespace
 
-ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
-    const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value) {
+// With clip, the writer skips the slice's tiles past the output's rows and tile columns (CLIP_SLICE).
+ProgramDescriptor slice_write_tiled_sharded_input_descriptor(
+    const SliceWriteParams& operation_attributes,
+    const SliceWriteInputs& tensor_args,
+    Tensor& tensor_return_value,
+    bool clip) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& output_tensor_start = operation_attributes.slice_start;
@@ -221,10 +250,8 @@ ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
 
     log_debug(tt::LogOp, "Slice Write Input Shape : {} ,Actual Input Shape: {}", input_shape, input_shape);
     TT_FATAL(input.dtype() == output.dtype(), "Input & output should have the same dtype");
-    TT_FATAL(output_tensor_start[-1] == 0, "Slice write expects output start for the last dimension to be 0");
-    TT_FATAL(
-        output_tensor_start[-2] % TILE_HEIGHT == 0,
-        "Slice write expects output start for the second last dimension to be a multiple of tile height");
+    // The start checks are in validate_on_program_cache_miss, which also runs on a hit: the runtime-shapes factory's
+    // key leaves out the start.
 
     TT_FATAL(
         input_padded_shape[-2] % TILE_HEIGHT == 0,
@@ -287,6 +314,9 @@ ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
     if (num_tiles_channel_per_core * TILE_WIDTH * num_cores_channels > output_shape[-1]) {
         writer_defines.emplace_back("UNPAD_INPUT_WIDTH", "1");
     }
+    if (clip) {
+        writer_defines.emplace_back("CLIP_SLICE", "1");
+    }
     KernelDescriptor reader_kernel;
     reader_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
@@ -308,18 +338,78 @@ ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
     const auto iter_cores = corerange_to_cores(input_cores, std::nullopt, rm_orientation);
 
     auto all_runtime_args = get_slice_write_runtime_args_tiled_sharded_input(
-        input, output, output_tensor_start, output_tensor_end, iter_cores);
+        input, output, output_tensor_start, output_tensor_end, iter_cores, clip);
 
     uint32_t i = 0;
     for (const auto& core : iter_cores) {
         reader_kernel.runtime_args.emplace_back(core, all_runtime_args[i].first);
-        emplace_slice_write_runtime_args(writer_kernel, core, all_runtime_args[i].second, dst_buffer);
+        emplace_slice_write_tiled_writer_args(writer_kernel, core, all_runtime_args[i].second, dst_buffer);
         i++;
     }
 
+    // The runtime-shapes factory's override addresses the kernels by these indices.
     desc.kernels.push_back(std::move(reader_kernel));
     desc.kernels.push_back(std::move(writer_kernel));
     return desc;
+}
+
+constexpr uint32_t kSliceWriteTiledReaderKernelIdx = 0;
+constexpr uint32_t kSliceWriteTiledWriterKernelIdx = 1;
+}  // namespace
+
+ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
+    const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value) {
+    return slice_write_tiled_sharded_input_descriptor(operation_attributes, tensor_args, tensor_return_value, false);
+}
+
+ProgramDescriptor SliceWriteTiledShardedInputRuntimeShapesProgramFactory::create_descriptor(
+    const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value) {
+    return slice_write_tiled_sharded_input_descriptor(operation_attributes, tensor_args, tensor_return_value, true);
+}
+
+void SliceWriteTiledShardedInputRuntimeShapesProgramFactory::override_runtime_arguments(
+    Program& program,
+    const SliceWriteParams& operation_attributes,
+    const SliceWriteInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
+    const auto& input = tensor_args.input;
+    auto* input_buffer = input.buffer();
+    TT_FATAL(input_buffer != nullptr, "Input buffer should be allocated on device");
+    auto* dst_buffer = tensor_return_value.buffer();
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    const auto shard_spec = input.shard_spec().value();
+    const auto iter_cores =
+        corerange_to_cores(shard_spec.grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    const auto all_runtime_args = get_slice_write_runtime_args_tiled_sharded_input(
+        input, tensor_return_value, operation_attributes.slice_start, operation_attributes.slice_end, iter_cores, true);
+
+    // With this hook the adapter rebinds nothing itself: every arg, the output address and the input-backed CB.
+    const auto patch = [&](uint32_t kernel_idx, const CoreCoord& core, const std::vector<uint32_t>& expected) {
+        auto& args = GetRuntimeArgs(program, kernel_idx, core);
+        TT_FATAL(
+            args.size() == expected.size(),
+            "Slice-write tiled kernel {} has {} runtime args on core {}, expected {}",
+            kernel_idx,
+            args.size(),
+            core.str(),
+            expected.size());
+        for (uint32_t arg_idx = 0; arg_idx < expected.size(); ++arg_idx) {
+            args[arg_idx] = expected[arg_idx];
+        }
+    };
+    for (uint32_t i = 0; i < iter_cores.size(); i++) {
+        patch(kSliceWriteTiledReaderKernelIdx, iter_cores[i], all_runtime_args[i].first);
+        auto writer_args = all_runtime_args[i].second;
+        writer_args[kSliceWriteTiledWriterAddressArgIdx] = dst_buffer->address();
+        patch(kSliceWriteTiledWriterKernelIdx, iter_cores[i], writer_args);
+    }
+    for (const auto& cb : program.circular_buffers()) {
+        if (cb->globally_allocated()) {
+            UpdateDynamicCircularBufferAddress(program, cb->id(), *input_buffer);
+        }
+    }
 }
 
 }  // namespace ttnn::experimental::prim

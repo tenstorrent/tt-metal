@@ -7,13 +7,12 @@
 
 #include <chrono>
 
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -92,7 +91,7 @@ distributed::MeshWorkload create_workload(
         .kernels = kernel_specs,
         .work_units = {main_wu},
     };
-    Program program(mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
 
     ProgramRunArgs params;
     for (uint32_t i = 0; i < kNumUserDMThreads; i++) {
@@ -107,7 +106,7 @@ distributed::MeshWorkload create_workload(
         .kernel = COMPUTE_KERNEL,
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"l1_address", compute_address}}),
     });
-    program.set_program_run_args(params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     return workload;
@@ -134,7 +133,7 @@ void set_multi_node_run_args(
         AddRuntimeArgsForNode(compute_args.runtime_arg_values, nodes[i], {{"l1_address", compute_addresses[i]}});
     }
     params.kernel_run_args = {std::move(dm_args), std::move(compute_args)};
-    program.set_program_run_args(params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 }
 
 distributed::MeshWorkload create_multi_node_workload(
@@ -165,7 +164,7 @@ distributed::MeshWorkload create_multi_node_workload(
         .work_units = {WorkUnitSpec{
             .name = "multi_node", .kernels = {dm_kernel, compute_kernel}, .target_nodes = node_range}},
     };
-    Program program(mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
     set_multi_node_run_args(program, nodes, dm_addresses, dm_value, compute_addresses);
 
     distributed::MeshWorkload workload;
@@ -442,14 +441,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMeshDeviceCloseDrainsNonBlockingWo
         }},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {DELAYED_KERNEL}, .target_nodes = node}},
     };
-    Program program(this->device(), spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = DELAYED_KERNEL,
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", base_address}}),
         .common_runtime_arg_values = {{"value", kDoneValue}, {"delay_cycles", kDelayCycles}},
     });
-    program.set_program_run_args(params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
 

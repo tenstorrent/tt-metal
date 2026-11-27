@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include "tt_metal/llrt/hal.hpp"

@@ -154,7 +154,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
                     TTI_INSN(clear_srcb);
                     TTI_INSN(unpack_srcb);
                 });
-            ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, TT_OP_REPLAY(0, replay_buf_len, 0, 0));
+            ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, lltt::replay_insn(0, replay_buf_len));
             tmp.program();
             return;
         }

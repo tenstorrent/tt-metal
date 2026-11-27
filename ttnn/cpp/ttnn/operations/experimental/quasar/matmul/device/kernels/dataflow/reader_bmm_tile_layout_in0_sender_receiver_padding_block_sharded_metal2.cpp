@@ -332,21 +332,7 @@ void kernel_main() {
                                 in0_mcast_num_cores);
                         }
 
-                        // Ordering and completion of the in0 block + VALID multicasts:
-                        //  - The data multicast and the semaphore multicast are issued on the same noc id and the
-                        //    same vc (VCs are static, NOC_CMD_STATIC_VC), even though the cmd bufs differ. So remote
-                        //    receivers see the block land before they see VALID, with no barrier between the two.
-                        //  - The semaphore multicast reads receiver_sem's L1 value as its source. The sender must not
-                        //    overwrite receiver_sem (INVALID on the next block) before the NoC has read VALID, or
-                        //    receivers would see INVALID and hang. A flush (requests have left this core) is enough
-                        //    to protect that source value.
-                        //  - If this sender is also in the receiver grid, it consumes its own looped-back copies of
-                        //    the block and of VALID. A flush does not show those have landed, so a late VALID could
-                        //    overwrite the next block's INVALID, or push_back could expose an unwritten block.
-                        //    Only write acks prove the landing, so a write barrier is required in that case.
-                        if constexpr (core_in_in0_receiver_mcast_grid) {
-                            noc.async_write_barrier();
-                        } else {
+                        if constexpr (!(core_in_in0_receiver_mcast_grid && (in0_mcast_num_cores == 1))) {
                             noc.async_writes_flushed();
                         }
                         // [DEBUG #47797] Sender finished issuing the in0 data + VALID multicast for

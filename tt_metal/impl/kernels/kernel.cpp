@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <core_coord.hpp>
+#include <device.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <kernel_types.hpp>
 #include <internal/kernel_build_options.hpp>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
@@ -19,8 +19,8 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
-#include "tt-metalium/workload/specification/compute_modes.hpp"
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "base_types.hpp"
+#include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
@@ -401,29 +401,6 @@ void Kernel::process_scratchpad_binding_handles(const std::function<void(
                                                     const std::optional<LLKMetadata>&)>& callback) const {
     for (const auto& handle : this->scratchpad_binding_handles_) {
         callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word, handle.llk_metadata);
-    }
-}
-
-void Kernel::process_global_semaphore_binding_handles(
-    std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)> callback) const {
-    for (const auto& handle : this->global_semaphore_binding_handles_) {
-        callback(handle.accessor_name, handle.addr_crta_word);
-    }
-}
-
-void Kernel::process_fabric_connection_binding_handles(
-    std::function<void(const std::string& accessor_name, uint32_t rta_word, uint32_t num_targets)> callback) const {
-    for (const auto& handle : this->fabric_connection_binding_handles_) {
-        callback(handle.accessor_name, handle.rta_word, handle.num_targets);
-    }
-}
-
-void Kernel::write_fabric_connection_runtime_args() {
-    for (const auto& handle : this->fabric_connection_binding_handles_) {
-        for (const CoreCoord& node : this->logical_cores()) {
-            std::ranges::copy(
-                handle.words_by_device.front().second.at(node), this->runtime_args_data(node).data() + handle.rta_word);
-        }
     }
 }
 
@@ -819,21 +796,6 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
         hash_llk_metadata(handle.llk_metadata);
     }
-    // GlobalSemaphore binding handles: the address word index is baked into the generated `global_sem::`
-    // token. The parameter name is omitted, as it does not appear in the generated headers.
-    hasher.update(static_cast<uint64_t>(this->global_semaphore_binding_handles_.size()));
-    for (const auto& handle : this->global_semaphore_binding_handles_) {
-        hasher.update(handle.accessor_name);
-        hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
-    }
-    // Fabric connection binding handles: the first RTA word and the number of targets are baked into the generated
-    // `fabric::` token. The connection words are runtime args, so they are not part of the cache key.
-    hasher.update(static_cast<uint64_t>(this->fabric_connection_binding_handles_.size()));
-    for (const auto& handle : this->fabric_connection_binding_handles_) {
-        hasher.update(handle.accessor_name);
-        hasher.update(static_cast<uint64_t>(handle.rta_word));
-        hasher.update(static_cast<uint64_t>(handle.num_targets));
-    }
     // PrefetcherPipe binding handles: the slot id is baked into the generated `pipe::` token.
     hasher.update(static_cast<uint64_t>(this->prefetcher_pipe_binding_handles_.size()));
     for (const auto& handle : this->prefetcher_pipe_binding_handles_) {
@@ -922,12 +884,6 @@ uint64_t Kernel::compute_hash() const {
     // Independent of compile_time_args_ values: same words with a different split must not collide.
     hasher.update(static_cast<uint64_t>(this->compile_time_vararg_count_));
     hasher.update(this->config_hash());
-    // The -O level passed to the compiler and the linker: the same source built at another level is a different
-    // binary. Hashed here rather than in each config_hash() so that every kernel type picks it up.
-    for (std::string_view opt_level : {this->get_compiler_opt_level(), this->get_linker_opt_level()}) {
-        hasher.update(static_cast<uint64_t>(opt_level.size()));
-        hasher.update(opt_level);
-    }
 
     // Include paths affect compilation: the gcc -I order is significant (left-to-right
     // header resolution), so different lists or orderings must produce different binaries.
@@ -1006,7 +962,7 @@ void SetScratchpadBindingAddress(Kernel& kernel, ScratchpadBindingHandle& bindin
     // Patch the allocated address into the kernel's CRTA buffer if it exists.
     // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
     // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-    // (legacy order: Program::set_program_run_args first), Program::set_program_run_args copies
+    // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
     // handle.allocated_address into the scratchpad section when it builds the buffer.
     // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
     //

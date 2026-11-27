@@ -513,7 +513,8 @@ class VAEDecoderAdapter:
     """Torch-in (NHWC), torch-out (BCHW) VAE decoder for the SD3.5-family VAE.
 
     Applies an optional pre-decode unpack, then scaling/shift inversion. Supports both the
-    PyTorch and TT-NN implementations; the TT-NN backend supports tracing.
+    PyTorch and TT-NN implementations; the TT-NN backend supports tracing and dynamic load /
+    unload of weights via ``deallocate_weights``/``reload_weights``.
     """
 
     def __init__(
@@ -538,6 +539,7 @@ class VAEDecoderAdapter:
             self._torch_vae = torch_vae
             self._decoder = None
             self._tracer = None
+            self._decoder_state_dict = None
         else:
             self._torch_vae = None
             self._decoder = VAEDecoder.from_torch(
@@ -547,6 +549,7 @@ class VAEDecoderAdapter:
                 ccl_manager=ccl_manager,
             )
             self._tracer = Tracer(self._decoder.forward, device=self.device, prep_run=False)
+            self._decoder_state_dict = torch_vae.decoder.state_dict()
 
     @torch.no_grad()
     def decode(self, latents: torch.Tensor, *, traced: bool) -> torch.Tensor:
@@ -565,3 +568,12 @@ class VAEDecoderAdapter:
 
     def is_loaded(self) -> bool:
         return self._torch_vae is not None or self._decoder.is_loaded()
+
+    def deallocate_weights(self) -> None:
+        if self._decoder is not None:
+            self._decoder.deallocate_weights()
+
+    def reload_weights(self) -> None:
+        if self._decoder is None or self._decoder.is_loaded():
+            return
+        self._decoder.load_torch_state_dict(self._decoder_state_dict)

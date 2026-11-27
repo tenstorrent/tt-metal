@@ -10,12 +10,12 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/experimental/quasar/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
-#include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -23,7 +23,7 @@
 #include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 #include <variant>
-#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn::operations::experimental::quasar::binary {
 

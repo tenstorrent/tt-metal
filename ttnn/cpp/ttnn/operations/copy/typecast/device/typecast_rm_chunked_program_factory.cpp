@@ -4,11 +4,11 @@
 
 #include "typecast_rm_chunked_program_factory.hpp"
 
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/span.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -64,7 +64,73 @@ ChunkSizeConfig calculate_chunk_config(
     };
 }
 
+tt::tt_metal::ProgramRunArgs rm_chunked_run_args(const Tensor& input, const Tensor& output) {
+    using namespace tt::tt_metal;
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    const uint32_t input_element_size = tt::datum_size(cb_dataformat_for(input.dtype()));
+    const uint32_t output_element_size = tt::datum_size(cb_dataformat_for(output.dtype()));
+    const auto& padded_shape = input.padded_shape();
+    const ChunkSizeConfig chunk_config =
+        calculate_chunk_config(padded_shape[-1], input_element_size, output_element_size);
+    const uint32_t chunks_per_row_total = chunk_config.full_chunks_per_row + chunk_config.partial_chunks_per_row;
+    const uint32_t num_rows = input.mesh_buffer().num_pages();
+
+    const CoreCoord grid = input.device()->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(grid, num_rows, true);
+    (void)num_cores;
+
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
+    uint32_t row_idx = 0;
+    for (const auto& core : corerange_to_cores(all_cores, std::nullopt, true)) {
+        const uint32_t num_rows_for_core =
+            core_group_1.contains(core) ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, core, {{"num_rows", num_rows_for_core}, {"start_row_id", row_idx}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values, core, {{"num_rows", num_rows_for_core}, {"start_row_id", row_idx}});
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values,
+            core,
+            {{"per_core_block_cnt", num_rows_for_core * chunks_per_row_total}});
+        row_idx += num_rows_for_core;
+    }
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
+    run_args.tensor_args = {
+        {TensorParamName{"input"}, input.mesh_tensor()}, {TensorParamName{"output"}, output.mesh_tensor()}};
+    return run_args;
+}
+
 }  // anonymous namespace
+
+bool typecast_rm_chunked_is_shape_free(const TypecastParams& args, const TypecastInputs& tensor_args) {
+    const auto& input = tensor_args.input;
+    return args.runtime_shapes && input.layout() == Layout::ROW_MAJOR && !input.is_sharded() &&
+           !args.sub_core_grids.has_value() && !args.output_memory_config.is_sharded() &&
+           !tensor_args.preallocated_output.has_value() && input.logical_volume() != 0;
+}
+
+tt::tt_metal::ProgramRunArgs TypecastRowMajorChunkedProgramFactory::override_runtime_arguments(
+    const TypecastParams& args,
+    const TypecastInputs& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    if (!typecast_rm_chunked_is_shape_free(args, tensor_args)) {
+        // The hash holds the full shapes, so only the tensors change.
+        tt::tt_metal::ProgramRunArgs run_args;
+        run_args.tensor_args.insert({tt::tt_metal::TensorParamName{"input"}, tensor_args.input.mesh_tensor()});
+        run_args.tensor_args.insert({tt::tt_metal::TensorParamName{"output"}, output.mesh_tensor()});
+        return run_args;
+    }
+    return rm_chunked_run_args(tensor_args.input, output);
+}
 
 ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::create_program_artifacts(
     const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
@@ -84,20 +150,10 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
     const auto* src_buffer = &input.mesh_buffer();
     const auto* dst_buffer = &output.mesh_buffer();
 
-    // Chunk size uses logical W to skip inner-W input padding; the kernel remaps logical rows
-    // to input/output padded page_ids. Padding-shape validation lives in validate.
-    const auto& input_padded_shape = input.padded_shape();
-    const auto& output_padded_shape = output.padded_shape();
-    const auto& logical_shape = input.logical_shape();
-    const uint32_t rank = logical_shape.rank();
-    const uint32_t row_width_elements = logical_shape[logical_shape.rank() - 1];
-    const uint32_t h_logical = rank >= 2 ? logical_shape[rank - 2] : 1;
-    const uint32_t h_padded_in = rank >= 2 ? input_padded_shape[input_padded_shape.rank() - 2] : 1;
-    const uint32_t h_padded_out = rank >= 2 ? output_padded_shape[output_padded_shape.rank() - 2] : 1;
-    uint32_t num_rows = 1;
-    for (uint32_t i = 0; i + 1 < rank; ++i) {
-        num_rows *= logical_shape[i];
-    }
+    // Get row information
+    const auto& padded_shape = input.padded_shape();
+    const uint32_t row_width_elements = padded_shape[padded_shape.rank() - 1];
+    const uint32_t num_rows = src_buffer->num_pages();
 
     // Calculate chunk configuration
     const ChunkSizeConfig chunk_config =
@@ -114,10 +170,10 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
 
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
-    // Split work by rows (each core handles complete rows with both full and partial chunks)
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, true);
-    (void)num_cores;
+    // Split work by rows (each core handles complete rows with both full and partial chunks); the rows per core
+    // are runtime args (rm_chunked_run_args).
+    const CoreRangeSet all_cores =
+        std::get<1>(tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, true));
 
     // ---- Resource names ----
     const DFBSpecName IN_DFB{"in"};    // legacy CBIndex::c_0
@@ -126,8 +182,7 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
     const TensorParamName OUTPUT{"output"};
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
-    const KernelSpecName COMPUTE_GROUP_1{"compute_group_1"};
-    const KernelSpecName COMPUTE_GROUP_2{"compute_group_2"};
+    const KernelSpecName COMPUTE{"compute"};
 
     constexpr uint32_t num_input_pages = 2;   // Always use double buffering
     constexpr uint32_t num_output_pages = 2;  // Always use double buffering
@@ -156,8 +211,12 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         .data_format_metadata = cb_data_format_output,
     };
 
-    const TensorParameter input_param{.unique_id = INPUT, .spec = input.tensor_spec()};
-    const TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
+    // The row width, and so the page size, stays in the key.
+    TensorSpecRelaxations relaxations;
+    relaxations.dynamic_tensor_shape = typecast_rm_chunked_is_shape_free(args, tensor_args);
+    relaxations.match_page_size = relaxations.dynamic_tensor_shape;
+    const TensorParameter input_param{.unique_id = INPUT, .spec = input.tensor_spec(), .relaxations = relaxations};
+    const TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec(), .relaxations = relaxations};
 
     const KernelSpec reader{
         .unique_id = READER,
@@ -168,11 +227,9 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         .compile_time_args =
             {
                 {"full_chunks_per_row", full_chunks_per_row},
-                {"partial_chunks_per_row", partial_chunks_per_row},            // 0 or 1
-                {"full_chunk_size_bytes", input_full_chunk_size_bytes},        // DRAM read size
-                {"partial_chunk_size_bytes", input_partial_chunk_size_bytes},  // DRAM read size
-                {"h_logical", h_logical},
-                {"h_padded", h_padded_in},
+                {"partial_chunks_per_row", partial_chunks_per_row},           // 0 or 1
+                {"full_chunk_size_bytes", input_full_chunk_size_bytes},       // DRAM read size
+                {"partial_chunk_size_bytes", input_partial_chunk_size_bytes}  // DRAM read size
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "start_row_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
@@ -187,18 +244,13 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         .compile_time_args =
             {
                 {"full_chunks_per_row", full_chunks_per_row},
-                {"partial_chunks_per_row", partial_chunks_per_row},             // 0 or 1
-                {"full_chunk_size_bytes", output_full_chunk_size_bytes},        // DRAM write size
-                {"partial_chunk_size_bytes", output_partial_chunk_size_bytes},  // DRAM write size
-                {"h_logical", h_logical},
-                {"h_padded", h_padded_out},
+                {"partial_chunks_per_row", partial_chunks_per_row},            // 0 or 1
+                {"full_chunk_size_bytes", output_full_chunk_size_bytes},       // DRAM write size
+                {"partial_chunk_size_bytes", output_partial_chunk_size_bytes}  // DRAM write size
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "start_row_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
-
-    // Create compute kernels - compute per_core_block_cnt as total chunks (full + partial) per core
-    const uint32_t chunks_per_row_total = full_chunks_per_row + partial_chunks_per_row;
 
     // Legacy set unpack_to_dest_mode[input_cb] = UnpackToDestFp32 when preserve_fp32_precision and
     // left every other CB at Default; the named equivalent is an UnpackToDest entry for the input DFB.
@@ -213,25 +265,27 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
 
     const char* const path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
-    // One KernelSpec per legacy compute KernelDescriptor: the per-group chunk count stays a
-    // compile-time arg, so the work-split multiplicity is preserved.
+    // One compute kernel for both core groups: the chunk count per core (rows * total chunks per
+    // row) is a runtime arg, so the groups differ only in their runtime args and the binary does
+    // not depend on the row count.
     // Field values carried over from the legacy ComputeConfigDescriptor: math_fidelity=HiFi4,
     // fp32_dest_acc_en, bfp8_pack_precise, math_approx_mode=false. dst_full_sync_en was left at its
     // legacy default (false) = double_buffer_dest true, which is also the Metal 2.0 default.
-    const auto make_compute = [&](const KernelSpecName& id, uint32_t per_core_block_cnt) {
+    const auto make_compute = [&](const KernelSpecName& id) {
         return KernelSpec{
             .unique_id = id,
             .source = path,
-            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .compiler_options =
+                {.defines = {{"TYPECAST_RUNTIME_BLOCK_CNT", "1"}}, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{
                      .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
-                {{"per_core_block_cnt", per_core_block_cnt},  // rows * total_chunks_per_row
-                 {"per_core_block_dim", 1u},
+                {{"per_core_block_dim", 1u},
                  {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
                  {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
+            .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
             // No bfp_pack_precision_mode on Quasar (TT-2.x.x; MXFP replaces BFP). WH/BH keep the
             // legacy config, with the BFP pack knob in config_1xx.
             .hw_config = [&]() -> ComputeHardwareConfig {
@@ -258,41 +312,10 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         };
     };
 
-    Group<KernelSpec> kernels = {reader, writer};
-    Group<WorkUnitSpec> work_units;
-    if (!core_group_1.ranges().empty()) {
-        kernels.push_back(make_compute(COMPUTE_GROUP_1, num_rows_per_core_group_1 * chunks_per_row_total));
-        work_units.push_back(WorkUnitSpec{
-            .name = "typecast_rm_group_1", .kernels = {READER, WRITER, COMPUTE_GROUP_1}, .target_nodes = core_group_1});
-    }
-    if (!core_group_2.ranges().empty()) {
-        kernels.push_back(make_compute(COMPUTE_GROUP_2, num_rows_per_core_group_2 * chunks_per_row_total));
-        work_units.push_back(WorkUnitSpec{
-            .name = "typecast_rm_group_2", .kernels = {READER, WRITER, COMPUTE_GROUP_2}, .target_nodes = core_group_2});
-    }
-
-    // Assign runtime args to cores (distributing rows)
-    auto cores_vec = corerange_to_cores(all_cores, std::nullopt, true);
-    uint32_t row_idx = 0;
-
-    KernelRunArgs reader_run_args{.kernel = READER};
-    KernelRunArgs writer_run_args{.kernel = WRITER};
-    for (const auto& core : cores_vec) {
-        bool is_group_1 = core_group_1.contains(core);
-        uint32_t num_rows_for_core = is_group_1 ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
-        uint32_t start_row_id = row_idx;
-
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values,
-            core,
-            {{"num_rows", num_rows_for_core}, {"start_row_id", start_row_id}});
-        AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            core,
-            {{"num_rows", num_rows_for_core}, {"start_row_id", start_row_id}});
-
-        row_idx += num_rows_for_core;
-    }
+    Group<KernelSpec> kernels = {reader, writer, make_compute(COMPUTE)};
+    // One work unit, so the program does not follow how the rows split into the two core groups.
+    Group<WorkUnitSpec> work_units = {
+        WorkUnitSpec{.name = "typecast_rm", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}};
 
     ProgramSpec spec{
         .name = "typecast_rm_chunked",
@@ -302,12 +325,8 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         .work_units = std::move(work_units),
     };
 
-    // The compute kernels have no runtime args, so they need no KernelRunArgs entry.
-    ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
-    run_args.tensor_args = {{INPUT, input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
-
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec), .run_params = rm_chunked_run_args(input, output)};
 }
 
 }  // namespace ttnn::prim

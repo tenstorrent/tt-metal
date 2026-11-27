@@ -13,11 +13,11 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
 #include "llrt/core_descriptor.hpp"
-#include "impl/profiler/tt_metal_profiler.hpp"
+#include "tt_metal_profiler.hpp"
 #include <fstream>
 
 #include "context/metal_env_accessor.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include "core_coord.hpp"
 #include "common/filesystem_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"

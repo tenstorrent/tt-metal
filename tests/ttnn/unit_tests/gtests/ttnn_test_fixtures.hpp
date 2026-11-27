@@ -10,9 +10,8 @@
 
 #include "gtest/gtest.h"
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/discovery/cluster.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 

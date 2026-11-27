@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt-metalium/execution/mesh_command_queue.hpp"
+#include "mesh_command_queue.hpp"
 
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
 

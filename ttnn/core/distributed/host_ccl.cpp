@@ -6,17 +6,17 @@
 #include "ttnn/distributed/host_ccl.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
-#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include <ttnn/tensor/storage.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
 #include "tt_stl/span.hpp"
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/memory/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
 
 namespace ttnn::distributed::host_ccl {
 

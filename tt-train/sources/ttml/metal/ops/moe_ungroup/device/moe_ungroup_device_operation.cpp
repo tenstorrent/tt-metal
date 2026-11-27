@@ -4,8 +4,8 @@
 
 #include "moe_ungroup_device_operation.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 
 #include "metal/common/tensor_validation.hpp"
 #include "moe_ungroup_program_factory.hpp"

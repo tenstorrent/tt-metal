@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp"
 #include "ttnn/distributed/api.hpp"
 

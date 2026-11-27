@@ -485,7 +485,9 @@ _BH_GALAXY_MAX_CORE_GRID = (11, 10)
 def get_matmul_core_grid(mesh_device):
     """Return the compute core grid, clamped to 11x10 on Blackhole Galaxy (power constraint)."""
     core_grid = mesh_device.compute_with_storage_grid_size()
-    if ttnn.device.is_blackhole() and mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
+    # Ask the device, not ttnn.device.is_blackhole(): without a device that builds a fresh
+    # RunTimeOptions on every call, about 140 us, and this runs once per matmul.
+    if mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES and ttnn.device.is_blackhole(mesh_device):
         core_grid = ttnn.CoreCoord(
             min(core_grid.x, _BH_GALAXY_MAX_CORE_GRID[0]),
             min(core_grid.y, _BH_GALAXY_MAX_CORE_GRID[1]),
@@ -665,7 +667,158 @@ def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, t
     return (Mb, Kb, Nb, sb) if sb is not None else (Mb, Kb, Nb)
 
 
-def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1):
+# One config per (K, N) for every row count, per architecture and mesh shape: the per-chip shapes
+# and their row ranges follow the mesh, so one (K, N) can need different configs on different meshes
+# (on BH 2x4 (3072, 2304) is the split qkv, on BH 4x8 the SwiGLU feed-forward). The FLUX.2 klein
+# tables are the results of the config searches of its presets (`matmul_config_search.py` with
+# `matmul_search_specs/spec_klein_<arch>_<mesh>.json`), which chose them for one denoising step over
+# the preset's row range, below the L1 the pipeline leaves free.
+# Values are (M_block, K_block, N_block, subblock_h, subblock_w, transpose_core_grid); True is the
+# M > N layout. A BH Galaxy's matmul grid is clamped to 11x10.
+_ROW_INDEPENDENT_CONFIGS: dict[tuple[str, tuple[int, int]], tuple[tuple[int, int], dict[tuple[int, int], tuple]]] = {
+    ("wormhole", (2, 4)): (
+        (8, 8),
+        {
+            (3072, 1536): (4, 6, 10, 2, 2, False),
+            (128, 1536): (1, 2, 6, 1, 3, False),
+            (3072, 128): (5, 8, 1, 1, 1, True),
+            (3072, 9216): (8, 8, 12, 2, 2, False),
+            (4608, 3072): (10, 6, 8, 1, 4, True),
+            (6144, 3072): (8, 6, 12, 1, 4, False),
+            (3072, 4608): (8, 4, 10, 2, 2, False),
+        },
+    ),
+    ("blackhole", (2, 2)): (
+        (11, 10),
+        {
+            (3072, 1536): (6, 4, 5, 3, 1, True),
+            (128, 1536): (1, 2, 9, 1, 3, False),
+            (3072, 128): (4, 8, 4, 4, 1, True),
+            (3072, 9216): (4, 16, 8, 1, 4, False),
+            (4608, 3072): (4, 3, 13, 4, 1, False),
+            (6144, 3072): (4, 4, 11, 4, 1, False),
+            (3072, 4608): (4, 3, 7, 4, 1, False),
+        },
+    ),
+    ("blackhole", (2, 4)): (
+        (11, 10),
+        {
+            (3072, 768): (7, 8, 3, 1, 3, True),
+            (128, 768): (1, 2, 4, 1, 4, False),
+            (2304, 3072): (4, 3, 9, 4, 1, False),
+            (3072, 128): (4, 8, 4, 4, 1, True),
+            (3072, 3072): (4, 3, 11, 4, 1, False),
+            (3072, 4608): (6, 8, 14, 2, 2, False),
+            (3072, 2304): (4, 4, 8, 4, 1, False),
+        },
+    ),
+    ("blackhole", (4, 8)): (
+        (11, 10),
+        {
+            (3072, 384): (6, 8, 2, 2, 2, True),
+            (1152, 3072): (4, 2, 9, 4, 1, False),
+            (128, 384): (8, 2, 2, 2, 2, True),
+            (1536, 3072): (5, 2, 9, 1, 3, False),
+            (3072, 128): (4, 8, 1, 4, 1, True),
+            (3072, 2304): (12, 4, 12, 1, 4, True),
+            (3072, 1152): (7, 4, 4, 1, 4, True),
+        },
+    ),
+}
+# Shapes whose per-chip (K, N) is the same on every mesh, for any mesh shape of the architecture. The VAE
+# attention's qkv 512 -> 1536 and out 512 -> 512 keep the blocks get_matmul_config picks from M = 256 up
+# on both grids and pin the M > N layout; its rows per chip cross 512 and 1536 within FLUX.2's size range
+# on a BH Galaxy, and stay above them on a T3000 and a QuietBox 2.
+_ROW_INDEPENDENT_SHARED_CONFIGS: dict[str, tuple[tuple[int, int], dict[tuple[int, int], tuple]]] = {
+    "blackhole": ((11, 10), {(512, 1536): (8, 8, 8, 2, 2, True), (512, 512): (8, 8, 8, 2, 2, True)}),
+    "wormhole": ((8, 8), {(512, 1536): (8, 8, 8, 2, 2, True), (512, 512): (8, 8, 8, 2, 2, True)}),
+}
+_row_independent_config_cache: dict[tuple, ttnn.MinimalMatmulConfig | None] = {}
+
+
+def _row_independent_matmul_config(
+    K: int, N: int, core_grid, mesh_shape: tuple[int, ...] | None
+) -> ttnn.MinimalMatmulConfig | None:
+    """One `MinimalMatmulConfig` for every row count of a (K, N) matmul on a mesh, or None for a
+    shape, grid or mesh without a measured config.
+
+    `get_matmul_config` picks blocks by M and the op transposes its grid once M > N, so a matmul whose
+    rows follow the image size compiles a new program at some sizes. This config is fixed per shape
+    and pins the grid orientation, so it compiles one program.
+    """
+    mesh_shape = None if mesh_shape is None else tuple(mesh_shape)
+    key = (K, N, core_grid.x, core_grid.y, mesh_shape)
+    if key not in _row_independent_config_cache:
+        arch = "blackhole" if is_blackhole() else "wormhole"
+        blocks = None
+        for grid, configs in (
+            _ROW_INDEPENDENT_CONFIGS.get((arch, mesh_shape), (None, {})),
+            _ROW_INDEPENDENT_SHARED_CONFIGS[arch],
+        ):
+            if (core_grid.x, core_grid.y) == grid and (K, N) in configs:
+                blocks = configs[(K, N)]
+                break
+        config = None
+        if blocks is not None:
+            m_block, k_block, n_block, subblock_h, subblock_w, transpose = blocks
+            config = ttnn.MinimalMatmulConfig(
+                M_block_size=m_block,
+                K_block_size=k_block,
+                N_block_size=n_block,
+                subblock_h=subblock_h,
+                subblock_w=subblock_w,
+                compute_with_storage_grid_size=core_grid,
+                transpose_core_grid=transpose,
+            )
+        else:
+            log_warning(
+                f"No row-independent matmul config for (K, N) = ({K}, {N}) on a "
+                f"{core_grid.x}x{core_grid.y} grid and a {mesh_shape} mesh; its program depends on M"
+            )
+        _row_independent_config_cache[key] = config
+    return _row_independent_config_cache[key]
+
+
+_matmul_config_cache: dict[tuple, ttnn.MinimalMatmulConfig] = {}
+
+
+def get_matmul_config(
+    M: int,
+    K: int,
+    N: int,
+    core_grid,
+    default_block_size: tuple[int, int, int] | None = None,
+    use_heuristic: bool = False,
+    num_k_shards: int = -1,
+    row_independent: bool = False,
+    mesh_shape: tuple[int, ...] | None = None,
+) -> ttnn.MinimalMatmulConfig:
+    """Get the matmul config for the given shape and core grid, see `_compute_matmul_config`.
+
+    The result depends only on the arguments and the static tables, and every matmul of every
+    forward pass asks again, so it is cached. An exact table miss otherwise scans the whole grid
+    table (`_same_m_per_core_match`) on every call.
+
+    `row_independent` is for a matmul whose row count follows the input size: it returns the
+    shape's one config for every M on the mesh of `mesh_shape` (`_ROW_INDEPENDENT_CONFIGS`), so the
+    op compiles one program, and takes precedence over `default_block_size`, `use_heuristic` and
+    `num_k_shards`. A shape without one warns and gets the config for M.
+    """
+    if row_independent and core_grid is not None:
+        config = _row_independent_matmul_config(K, N, core_grid, mesh_shape)
+        if config is not None:
+            return config
+    grid = None if core_grid is None else (getattr(core_grid, "x", None), getattr(core_grid, "y", None))
+    block = None if default_block_size is None else tuple(default_block_size)
+    key = (M, K, N, grid, block, use_heuristic, num_k_shards)
+    config = _matmul_config_cache.get(key)
+    if config is None:
+        config = _compute_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic, num_k_shards)
+        _matmul_config_cache[key] = config
+    return config
+
+
+def _compute_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1):
     """Get the matmul config for the given shape and core grid.
 
     Args:
@@ -765,27 +918,6 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
 
 
 _logged_ring_safe_k_block_signatures = set()
-
-
-def swiglu_safe_config(config: ttnn.MinimalMatmulConfig) -> ttnn.MinimalMatmulConfig:
-    """Round an odd `N_block_size` down to even, as minimal_matmul's fused SwiGLU requires.
-
-    The tables are keyed by (M, K, N) only, so a matmul with fused SwiGLU can match an entry swept for
-    another layer of the same shape without SwiGLU, whose N block may be odd. The subblock width drops
-    to 1 if it no longer divides the new N block.
-    """
-    if config.N_block_size % 2 == 0:
-        return config
-    n_block = max(2, config.N_block_size - 1)
-    subblock_w = config.subblock_w if n_block % config.subblock_w == 0 else 1
-    return ttnn.MinimalMatmulConfig(
-        M_block_size=config.M_block_size,
-        K_block_size=config.K_block_size,
-        N_block_size=n_block,
-        subblock_h=config.subblock_h,
-        subblock_w=subblock_w,
-        compute_with_storage_grid_size=config.compute_with_storage_grid_size,
-    )
 
 
 def _ring_safe_k_block(config, M, K, N, cluster_size):

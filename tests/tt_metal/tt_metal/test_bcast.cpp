@@ -11,13 +11,13 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/data_formats/tilize_utils.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"

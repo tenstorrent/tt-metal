@@ -28,25 +28,38 @@
  */
 
 namespace ckernel {
+
 #ifdef TRISC_MATH
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace sfpu {
+
 inline void _top2_configure_addrmod_() {
     // SFPU configuration shifts to use ADDRMOD4-7.
     constexpr uint32_t ADDRMOD_OFFSET = 4;
 
     addr_mod_t{
-        .dest = {.incr = 14, .clr = 0, .cr = 0, .c_to_cr = 0},
+        .dest = {.incr = 0, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
         .set(ADDRMOD_OFFSET + ADDR_MOD_0);
 
     addr_mod_t{
-        .dest = {.incr = -14, .clr = 0, .cr = 0, .c_to_cr = 0},
+        .dest = {.incr = 2, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
         .set(ADDRMOD_OFFSET + ADDR_MOD_1);
+
+    addr_mod_t{
+        .dest = {.incr = 14, .clr = 0, .cr = 0, .c_to_cr = 0},
+    }
+        .set(ADDRMOD_OFFSET + ADDR_MOD_2);
+
+    addr_mod_t{
+        .dest = {.incr = -14, .clr = 0, .cr = 0, .c_to_cr = 0},
+    }
+        .set(ADDRMOD_OFFSET + ADDR_MOD_3);
 }
 
 inline void _top2_calculate_top2_() {
@@ -61,14 +74,14 @@ inline void _top2_calculate_top2_() {
 
     //-------------------------------------------------------------------------
     // Group 0
-    TTI_REPLAY(0, 14, 1, 1);
+    lltt::record<lltt::Exec>(0, 14);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
     // Load 4 tile rows into LREG4-7
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_0, 0);
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     // Tournament on LREG4-7 to find top-2 of this batch
@@ -86,38 +99,38 @@ inline void _top2_calculate_top2_() {
     TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
 
     //-------------------------------------------------------------------------
-    TTI_REPLAY(0, 14, 0, 0);  // Group 1
-    TTI_REPLAY(0, 14, 0, 0);  // Group 2
-    TTI_REPLAY(0, 14, 0, 0);  // Group 3
+    lltt::replay(0, 14);  // Group 1
+    lltt::replay(0, 14);  // Group 2
+    lltt::replay(0, 14);  // Group 3
     //-------------------------------------------------------------------------
     // We are now reading in bottom two faces
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
-    TTI_REPLAY(14, 6, 1, 1);
+    lltt::record<lltt::Exec>(14, 6);
 
     // Group 4
     TTI_SFPTRANSP(0, 0, 0, 0);
     // Load 4 tile rows into LREG4-7
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 32);
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_0, 32);
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 32);
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 32);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 32);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    TTI_REPLAY(6, 8, 0, 0);
+    lltt::replay(6, 8);
 
     // Group 5
-    TTI_REPLAY(14, 6, 0, 0);
-    TTI_REPLAY(6, 8, 0, 0);
+    lltt::replay(14, 6);
+    lltt::replay(6, 8);
 
     // Group 6
-    TTI_REPLAY(14, 6, 0, 0);
-    TTI_REPLAY(6, 8, 0, 0);
+    lltt::replay(14, 6);
+    lltt::replay(6, 8);
 
     // Group 7
-    TTI_REPLAY(14, 6, 0, 0);
-    TTI_REPLAY(6, 8, 0, 0);
+    lltt::replay(14, 6);
+    lltt::replay(6, 8);
 
     // Store Results
     // Sum of top-2: LREG0 = LREG0 + LREG1
@@ -132,10 +145,10 @@ inline void _top2_calculate_top2_() {
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_3, 2);
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_3, 4);
-    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 6);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_0, 2);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_0, 4);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_0, 6);
 }
 
 }  // namespace sfpu

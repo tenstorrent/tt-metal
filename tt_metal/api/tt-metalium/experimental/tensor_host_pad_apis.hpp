@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/memory/tensor/host_tensor.hpp>
-#include <tt-metalium/vocabulary/shape.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/shape.hpp>
 
 namespace tt::tt_metal {
 
@@ -35,8 +35,7 @@ HostTensor pad(
     const HostTensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value);
 
 /**
- * Unpad **tensor** to the half-open range [**output_tensor_start**, **output_tensor_end**):
- * start indices are included, end indices are not.
+ * Unpad **tensor** to the inclusive range [**output_tensor_start**, **output_tensor_end**).
  *
  * Return: a new HostTensor containing only the selected sub-volume.
  *

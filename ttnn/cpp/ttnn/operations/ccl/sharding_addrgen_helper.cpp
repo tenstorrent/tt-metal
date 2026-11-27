@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 

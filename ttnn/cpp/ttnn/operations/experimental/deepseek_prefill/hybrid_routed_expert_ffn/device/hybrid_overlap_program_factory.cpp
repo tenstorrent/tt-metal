@@ -8,7 +8,7 @@
 #include <memory>
 #include <optional>
 
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <ttnn/global_semaphore.hpp>
 
 #include "hybrid_half_merge.hpp"

@@ -89,13 +89,6 @@ void ValidateSemaphoreSpec(const SemaphoreSpec& sem, tt::ARCH arch);
 void ValidateSemaphoreBindings(const KernelSpec& kernel, tt::ARCH arch);
 void ValidateComputeSemaphores(const ValidationContext& ctx);
 // no all-used requirement for semaphore
-void ValidateGlobalSemaphoreBindings(const KernelSpec& kernel);
-void ValidateGlobalSemaphoreParametersUsed(const ValidationContext& ctx);
-
-// fabric_connection.cpp
-void ValidateFabricConnectionsSpec(const experimental::FabricConnectionsSpec& connection);
-void ValidateFabricConnectionBindings(const KernelSpec& kernel, tt::ARCH arch);
-void ValidateFabricConnectionsUsed(const ValidationContext& ctx);
 
 // tensor.cpp
 void ValidateTensorBindings(const KernelSpec& kernel);

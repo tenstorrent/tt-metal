@@ -10,15 +10,15 @@
 #include <map>
 #include <vector>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 

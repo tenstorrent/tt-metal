@@ -18,7 +18,14 @@ void kernel_main() {
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);
     constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(10);
+#ifdef CONV_RUNTIME_SIZE_ARGS
+    // Set by the host only without activation reuse, whose reads need the width at compile time.
+    const uint32_t act_num_blocks_h = get_common_arg_val<uint32_t>(conv_size_args::NUM_BLOCKS_ACT_H);
+    const uint32_t conv_act_size_w_padded_rt = get_common_arg_val<uint32_t>(conv_size_args::PADDED_ACT_SIZE_W);
+#else
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
+    constexpr uint32_t conv_act_size_w_padded_rt = conv_act_size_w_padded;
+#endif
 
     constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(20) == 1;
     constexpr uint32_t cb_id_act = get_compile_time_arg_val(21);
@@ -37,7 +44,17 @@ void kernel_main() {
 
     uint32_t runtime_arg_idx = 0;
     uint32_t core_index = get_arg_val<uint32_t>(runtime_arg_idx++);
+#ifdef CONV_RUNTIME_SIZE_ARGS
+    load_config_tensor_if_in_dram_rt<31, cb_reader_indices>(
+        Noc(),
+        dfb_reader_idx,
+        core_index,
+        get_common_arg_val<uint32_t>(conv_size_args::CONFIG_ADDR),
+        get_common_arg_val<uint32_t>(conv_size_args::CONFIG_ALIGNED_PAGE),
+        get_common_arg_val<uint32_t>(conv_size_args::CONFIG_PAGE));
+#else
     load_config_tensor_if_in_dram<29, 30, 31, cb_reader_indices>(Noc(), dfb_reader_idx, core_index);
+#endif
     // Activation reuse args (offset by 4 from index 29: address + page_size + 2 TensorAccessorArgs)
     constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(33);
     constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(34);
@@ -57,6 +74,7 @@ void kernel_main() {
     }
 
     constexpr uint32_t window_outer_offset = conv_act_size_w_padded * conv_act_c_read_bytes * dilation_h;
+    const uint32_t window_outer_offset_rt = conv_act_size_w_padded_rt * conv_act_c_read_bytes * dilation_h;
 
     // LOOP TO FILL READER INDICES
 
@@ -107,7 +125,7 @@ void kernel_main() {
 
                 noc.async_read_barrier();
                 dfb_act.push_back(act_block_num_tiles);
-                reader_offset += window_outer_offset;
+                reader_offset += window_outer_offset_rt;
             } else {
                 read_sticks_activation_reuse<
                     coalesced_read_bytes,

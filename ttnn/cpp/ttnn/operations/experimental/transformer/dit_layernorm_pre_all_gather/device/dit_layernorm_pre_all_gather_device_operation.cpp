@@ -6,7 +6,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::constants;

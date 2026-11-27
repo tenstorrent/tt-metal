@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal::experimental {
 

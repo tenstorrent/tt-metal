@@ -4,24 +4,15 @@
 
 #include <chrono>
 #include <cstdlib>
-#include <map>
-#include <string>
 #include <thread>
-#include <utility>
-#include <vector>
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/observability/profiler/device_profiler.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <impl/context/metal_context.hpp>
 
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "hal_types.hpp"
 #include "noc_debugging_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
@@ -35,46 +26,6 @@ constexpr int BRISC_PROCESSOR_ID = 0;
 constexpr int NCRISC_PROCESSOR_ID = 1;
 
 using IssueChecker = std::function<bool(ChipId, CoreCoord, int)>;
-
-const DataMovementHardwareConfig kRiscv0OnNoc0 =
-    make_data_movement_config(tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::NOC_0);
-const DataMovementHardwareConfig kRiscv1OnNoc1 =
-    make_data_movement_config(tt_metal::DataMovementProcessor::RISCV_1, tt_metal::NOC::NOC_1);
-
-// One kernel per hardware config, all from the same source and all in one work unit over target_nodes.
-tt_metal::Program BuildProgram(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const std::string& kernel_source_path,
-    const Nodes& target_nodes,
-    const std::map<std::string, std::string>& defines,
-    const std::vector<DataMovementHardwareConfig>& hw_configs,
-    const std::vector<SemaphoreSpec>& semaphores = {},
-    const std::vector<SemaphoreBinding>& semaphore_bindings = {}) {
-    ProgramSpec spec{.name = "noc_debugging"};
-    spec.semaphores = semaphores;
-    WorkUnitSpec work_unit{.name = "noc_debugging_work_unit", .target_nodes = target_nodes};
-    ProgramRunArgs run_args;
-
-    for (size_t kernel_index = 0; kernel_index < hw_configs.size(); ++kernel_index) {
-        const KernelSpecName kernel_name{fmt::format("noc_debugging_kernel_{}", kernel_index)};
-        KernelSpec kernel_spec{
-            .unique_id = kernel_name,
-            .source = kernel_source_path,
-            .num_threads = 1,
-            .compiler_options = {.defines = KernelSpec::CompilerOptions::Defines{defines}},
-            .semaphore_bindings = semaphore_bindings,
-            .hw_config = hw_configs[kernel_index],
-        };
-        spec.kernels.push_back(std::move(kernel_spec));
-        work_unit.kernels.push_back(kernel_name);
-        run_args.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = kernel_name});
-    }
-    spec.work_units.push_back(work_unit);
-
-    tt_metal::Program program(*mesh_device, spec);
-    program.set_program_run_args(run_args);
-    return program;
-}
 
 void VerifyIssuesOnAllCores(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
@@ -130,6 +81,7 @@ void RunWritesTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -158,12 +110,23 @@ void RunWritesTest(
         defines["USE_TRID_BARRIER"] = "1";
     }
 
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
+    tt_metal::CreateKernel(
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_writes.cpp",
         core_range,
-        defines,
-        {kRiscv0OnNoc0, kRiscv1OnNoc1});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_writes.cpp",
+        core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .defines = defines});
 
     workload.add_program(device_range, std::move(program));
 
@@ -197,6 +160,7 @@ void RunPostedWriteTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -219,12 +183,15 @@ void RunPostedWriteTest(
         defines["USE_POSTED_FLUSH"] = "1";
     }
 
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
-        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_posted_writes.cpp",
-        core_range,
-        defines,
-        {kRiscv0OnNoc0, kRiscv1OnNoc1});
+    for (auto processor : {tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_1}) {
+        auto noc = processor == tt_metal::DataMovementProcessor::RISCV_0 ? tt_metal::NOC::RISCV_0_default
+                                                                         : tt_metal::NOC::RISCV_1_default;
+        tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_posted_writes.cpp",
+            core_range,
+            tt_metal::DataMovementConfig{.processor = processor, .noc = noc, .defines = defines});
+    }
 
     workload.add_program(device_range, std::move(program));
 
@@ -263,6 +230,7 @@ void RunSemaphoreIncTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -288,12 +256,23 @@ void RunSemaphoreIncTest(
         defines["USE_WRITE_BARRIER"] = "1";
     }
 
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
+    tt_metal::CreateKernel(
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_semaphore_inc.cpp",
         core_range,
-        defines,
-        {kRiscv0OnNoc0, kRiscv1OnNoc1});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_semaphore_inc.cpp",
+        core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .defines = defines});
 
     workload.add_program(device_range, std::move(program));
 
@@ -335,6 +314,7 @@ void RunSemaphoreIncMulticastTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     uint32_t num_dest_cores = CoreRange(mcast_start, mcast_end).size();
 
@@ -359,12 +339,14 @@ void RunSemaphoreIncMulticastTest(
         defines["USE_ATOMIC_BARRIER"] = "1";
     }
 
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
+    tt_metal::CreateKernel(
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_semaphore_inc.cpp",
         sender_range,
-        defines,
-        {kRiscv0OnNoc0});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
 
     workload.add_program(device_range, std::move(program));
 
@@ -408,6 +390,7 @@ void RunInlineWriteTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -429,12 +412,23 @@ void RunInlineWriteTest(
         defines["USE_WRITE_BARRIER"] = "1";
     }
 
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
+    tt_metal::CreateKernel(
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_inline_writes.cpp",
         core_range,
-        defines,
-        {kRiscv0OnNoc0, kRiscv1OnNoc1});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_inline_writes.cpp",
+        core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .defines = defines});
 
     workload.add_program(device_range, std::move(program));
 
@@ -481,6 +475,7 @@ void RunStatefulWriteTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -503,12 +498,15 @@ void RunStatefulWriteTest(
         defines["USE_WRITE_BARRIER"] = "1";
     }
 
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
-        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_stateful_writes.cpp",
-        core_range,
-        defines,
-        {kRiscv0OnNoc0, kRiscv1OnNoc1});
+    for (auto processor : {tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_1}) {
+        auto noc = processor == tt_metal::DataMovementProcessor::RISCV_0 ? tt_metal::NOC::RISCV_0_default
+                                                                         : tt_metal::NOC::RISCV_1_default;
+        tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_stateful_writes.cpp",
+            core_range,
+            tt_metal::DataMovementConfig{.processor = processor, .noc = noc, .defines = defines});
+    }
 
     workload.add_program(device_range, std::move(program));
 
@@ -542,6 +540,7 @@ void RunStatefulReadTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -564,12 +563,15 @@ void RunStatefulReadTest(
         defines["USE_READ_BARRIER"] = "1";
     }
 
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
-        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_stateful_reads.cpp",
-        core_range,
-        defines,
-        {kRiscv0OnNoc0, kRiscv1OnNoc1});
+    for (auto processor : {tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_1}) {
+        auto noc = processor == tt_metal::DataMovementProcessor::RISCV_0 ? tt_metal::NOC::RISCV_0_default
+                                                                         : tt_metal::NOC::RISCV_1_default;
+        tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_stateful_reads.cpp",
+            core_range,
+            tt_metal::DataMovementConfig{.processor = processor, .noc = noc, .defines = defines});
+    }
 
     workload.add_program(device_range, std::move(program));
 
@@ -606,6 +608,7 @@ void RunFullBarrierWritesSingleCore(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     distributed::DeviceLocalBufferConfig l1_config{
@@ -622,12 +625,14 @@ void RunFullBarrierWritesSingleCore(
         {"USE_FULL_BARRIER", "1"},
     };
 
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
+    tt_metal::CreateKernel(
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_writes.cpp",
         CoreRange(writer_core),
-        defines,
-        {kRiscv0OnNoc0});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
 
     workload.add_program(device_range, std::move(program));
     fixture->RunProgram(mesh_device, workload);
@@ -659,6 +664,7 @@ void RunAtomicBarrierWritesSingleCore(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     distributed::DeviceLocalBufferConfig l1_config{
@@ -675,12 +681,14 @@ void RunAtomicBarrierWritesSingleCore(
         {"USE_ATOMIC_BARRIER", "1"},
     };
 
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
+    tt_metal::CreateKernel(
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_writes.cpp",
         CoreRange(writer_core),
-        defines,
-        {kRiscv0OnNoc0});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
 
     workload.add_program(device_range, std::move(program));
     fixture->RunProgram(mesh_device, workload);
@@ -705,6 +713,7 @@ void RunReadsTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -726,12 +735,23 @@ void RunReadsTest(
         defines["USE_READ_BARRIER"] = "1";
     }
 
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
+    tt_metal::CreateKernel(
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_reads.cpp",
         core_range,
-        defines,
-        {kRiscv0OnNoc0, kRiscv1OnNoc1});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_reads.cpp",
+        core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .defines = defines});
 
     workload.add_program(device_range, std::move(program));
 
@@ -765,6 +785,7 @@ void RunInterleavedReadsWritesTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -790,12 +811,23 @@ void RunInterleavedReadsWritesTest(
         defines["USE_WRITE_BARRIER"] = "1";
     }
 
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
+    tt_metal::CreateKernel(
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/interleaved_async_reads_writes.cpp",
         core_range,
-        defines,
-        {kRiscv0OnNoc0, kRiscv1OnNoc1});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/interleaved_async_reads_writes.cpp",
+        core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .defines = defines});
 
     workload.add_program(device_range, std::move(program));
 
@@ -959,6 +991,7 @@ void run_stress_write_program(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     // Fixed-size buffer regardless of num_iterations; the kernel wraps its source within SRC_SLOTS slots so a huge
     // iteration count (e.g. 100000) stays in-bounds while still generating that many distinct profiler events.
     constexpr uint32_t kBufferBytes = 4096;
@@ -979,12 +1012,14 @@ void run_stress_write_program(
         defines["WAIT_ITERS"] = std::to_string(wait_iters);
         defines["BURST_SIZE"] = std::to_string(burst_size > 0 ? burst_size : num_iterations);
     }
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
+    tt_metal::CreateKernel(
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_stress_writes.cpp",
         sender_range,
-        defines,
-        {kRiscv0OnNoc0});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
     workload.add_program(device_range, std::move(program));
     fixture->RunProgram(mesh_device, workload);
     if (read_after) {
@@ -1352,9 +1387,6 @@ void RunMcastTest(
     bool use_write_mcast_flush,
     bool use_semaphore_mcast_flush) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
-    if (compute_grid_size.x * compute_grid_size.y < 2) {
-        GTEST_SKIP() << "Multicast test requires a compute grid of at least 2 cores";
-    }
 
     CoreCoord sender_core = {0, 0};
     CoreRange sender_range(sender_core, sender_core);
@@ -1367,6 +1399,7 @@ void RunMcastTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     uint32_t num_dest_cores = CoreRange(mcast_start, mcast_end).size();
 
@@ -1394,15 +1427,14 @@ void RunMcastTest(
         defines["USE_SEMAPHORE_MCAST_FLUSH"] = "1";
     }
 
-    const SemaphoreSpecName mcast_semaphore_name{"mcast_semaphore"};
-    tt_metal::Program program = BuildProgram(
-        mesh_device,
+    tt_metal::CreateKernel(
+        program,
         "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_mcast_semaphore.cpp",
         sender_range,
-        defines,
-        {kRiscv0OnNoc0},
-        {SemaphoreSpec{.unique_id = mcast_semaphore_name, .target_nodes = CoreRange(mcast_start, mcast_end)}},
-        {SemaphoreBinding{.semaphore_spec_name = mcast_semaphore_name, .accessor_name = "mcast_sem"}});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
 
     workload.add_program(device_range, std::move(program));
 
@@ -1448,9 +1480,6 @@ TEST_F(NOCDebuggingFixture, McastNoFlushes) {
                     fixture, mesh_device, /*use_write_mcast_flush=*/false, /*use_semaphore_mcast_flush=*/false);
             },
             mesh_device);
-        if (this->IsSkipped()) {
-            return;
-        }
     }
 }
 
@@ -1461,9 +1490,6 @@ TEST_F(NOCDebuggingFixture, McastOnlyWriteFlush) {
                 RunMcastTest(fixture, mesh_device, /*use_write_mcast_flush=*/true, /*use_semaphore_mcast_flush=*/false);
             },
             mesh_device);
-        if (this->IsSkipped()) {
-            return;
-        }
     }
 }
 
@@ -1474,9 +1500,6 @@ TEST_F(NOCDebuggingFixture, McastWithAllFlushes) {
                 RunMcastTest(fixture, mesh_device, /*use_write_mcast_flush=*/true, /*use_semaphore_mcast_flush=*/true);
             },
             mesh_device);
-        if (this->IsSkipped()) {
-            return;
-        }
     }
 }
 

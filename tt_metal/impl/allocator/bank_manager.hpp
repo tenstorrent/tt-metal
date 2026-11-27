@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <buffer_types.hpp>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -15,8 +15,8 @@
 #include <tt_stl/strong_type.hpp>
 
 #include "algorithms/allocator_algorithm.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include "core_coord.hpp"
+#include "hal_types.hpp"
 #include "allocator_state.hpp"
 
 namespace tt::tt_metal {

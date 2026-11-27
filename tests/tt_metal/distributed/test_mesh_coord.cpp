@@ -11,9 +11,9 @@
 #include <vector>
 
 #include "gmock/gmock.h"
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "distributed/mesh_coord_utils.hpp"
-#include <tt-metalium/vocabulary/shape_base.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include <tt_stl/span.hpp>
 
 // Verify that MeshCoordinateRange::Iterator satisfies the C++20 std::forward_iterator concept.

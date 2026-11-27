@@ -25,6 +25,20 @@ struct Op2DSliceConfig {
 
     // Number of slices that the output tensor should be divided into.
     uint32_t num_slices = 0;
+
+    // Fixed 2D slices: with both set, the output is cut into slices of slice_height x slice_width pixels each
+    // (over the whole batch), and slice_type and num_slices are ignored. The last slice along each axis is shifted
+    // back to end at the edge, so every slice has the same shape and the overlap is computed twice. Along W the
+    // slices start on whole tiles, so the last one ends at the output width rounded up to whole tiles; an input
+    // slice that reaches past the input is filled with zeros. With every slice the same shape, the per-slice
+    // programs are the same at every input size, and the slicing ops take their offsets at run time. An output
+    // smaller than one slice still gets the full slice, clipped when written. Needs an op that supports it
+    // (OpSliceAttr::enable_fixed_slices), a row-major interleaved input and a tiled output; slice_width is a whole
+    // number of tiles.
+    uint32_t slice_height = 0;
+    uint32_t slice_width = 0;
+
+    bool is_fixed() const { return slice_height > 0 && slice_width > 0; }
 };
 
 class OpSliceAttr {
@@ -49,6 +63,11 @@ public:
         const IOShape& output_slice_start,
         const IOShape& output_slice_end) = 0;
     virtual std::string name() const = 0;
+
+    // Switches the op to fixed 2D slices (Op2DSliceConfig::slice_height and slice_width), if it supports them:
+    // get_input_slice then returns input slices that may end past the input (run_sliced_op fills that part with
+    // zeros), and the slice's own padding covers only what lies before the input. Returns false if unsupported.
+    virtual bool enable_fixed_slices() { return false; }
 };
 
 Op2DSliceConfig determine_slice_config(

@@ -21,7 +21,8 @@ struct PaddedSliceRMProgramFactory {
 
     // Cache-hit hook: refreshes the input and output tensor bindings, which is what the program needs
     // between dispatches — every other argument follows from the slice bounds and the output sharding,
-    // both part of the program-cache key.
+    // both part of the program-cache key. With runtime_shapes (padded_slice_rm_is_shape_free) the key leaves out
+    // the start and the input's sizes, and it recomputes every per-core arg.
     static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const PaddedSliceParams& operation_attributes,
         const PaddedSliceInputs& tensor_args,

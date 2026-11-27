@@ -28,10 +28,8 @@ void kernel_main() {
         dfb_out.reserve_back(1);
 
         tile_regs_acquire();
-        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_init(dfb::in);
         copy_tile(dfb::in, 0, 0);
-        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 
         transpose_dest_init<DST_ACCUM_MODE, true /* transpose_of_faces */>(dfb::in);
         transpose_dest<DST_ACCUM_MODE, true /* transpose_of_faces */>(0);

@@ -22,22 +22,22 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
-#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
@@ -347,7 +347,7 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
         .work_units = {wu},
     };
 
-    Program program(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_args;
     ProgramRunArgs::KernelRunArgs producer_params{};
@@ -358,7 +358,7 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
     consumer_params.kernel = CONSUMER;
     run_args.kernel_run_args = {producer_params, consumer_params};
     run_args.tensor_args.emplace(IN_TENSOR, TensorArgument{in_tensor});
-    program.set_program_run_args(run_args);
+    experimental::SetProgramRunArgs(program, run_args);
 
     LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseBase");
 }
@@ -433,7 +433,7 @@ void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
         .work_units = {wu},
     };
 
-    Program program(*ctx.mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*ctx.mesh_device, spec);
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {
@@ -441,7 +441,7 @@ void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
         ProgramRunArgs::KernelRunArgs{.kernel = WRITER},
     };
-    program.set_program_run_args(run_args);
+    experimental::SetProgramRunArgs(program, run_args);
 
     LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseTwo");
 }
@@ -527,14 +527,14 @@ void run_benchmark_case_four(DfbInitTimingBenchContext& ctx) {
         .work_units = {wu},
     };
 
-    Program program(*ctx.mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*ctx.mesh_device, spec);
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{.kernel = READER},
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    program.set_program_run_args(run_args);
+    experimental::SetProgramRunArgs(program, run_args);
 
     LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseFour");
 }
@@ -616,14 +616,14 @@ void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
         .work_units = {wu},
     };
 
-    Program program(*ctx.mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*ctx.mesh_device, spec);
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{.kernel = READER},
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    program.set_program_run_args(run_args);
+    experimental::SetProgramRunArgs(program, run_args);
 
     LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseThree");
 }
@@ -741,13 +741,13 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
         .work_units = {wu},
     };
 
-    Program program(*ctx.mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*ctx.mesh_device, spec);
 
     ProgramRunArgs run_args;
     for (const auto& kid : all_kernel_ids) {
         run_args.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = kid});
     }
-    program.set_program_run_args(run_args);
+    experimental::SetProgramRunArgs(program, run_args);
 
     LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseFive");
 }
@@ -975,9 +975,9 @@ void run_benchmark_case_eight(DfbInitTimingBenchContext& ctx) {
         .work_units = {wu},
     };
 
-    Program program(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
     ProgramRunArgs run_args;
-    program.set_program_run_args(run_args);
+    experimental::SetProgramRunArgs(program, run_args);
 
     LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseEight");
 }
@@ -1392,7 +1392,7 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
         .work_units = {wu},
     };
 
-    Program program(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_args;
     ProgramRunArgs::KernelRunArgs producer_params{};
@@ -1403,7 +1403,7 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
     consumer_params.kernel = CONSUMER;
     run_args.kernel_run_args = {producer_params, consumer_params};
     run_args.tensor_args.emplace(IN_TENSOR, TensorArgument{in_tensor});
-    program.set_program_run_args(run_args);
+    experimental::SetProgramRunArgs(program, run_args);
 
     LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseSixDebugImplicitSyncProgramSpec");
 }

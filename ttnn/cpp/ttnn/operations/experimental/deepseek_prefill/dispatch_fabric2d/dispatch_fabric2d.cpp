@@ -4,7 +4,7 @@
 
 #include "dispatch_fabric2d.hpp"
 
-#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/sub_device.hpp>
 
 #include "device/dispatch_fabric2d_device_operation.hpp"
 #include "device/kernels/dataflow/dispatch_fabric2d_kernel_interface.hpp"

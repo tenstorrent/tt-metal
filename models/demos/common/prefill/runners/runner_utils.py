@@ -85,13 +85,9 @@ def open_mesh_device(
         fabric_config = fabric_mode_map[fabric_mode]
     elif fabric_mode:
         raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(fabric_mode_map)}, got {fabric_mode!r}")
-    elif os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
-        # A torus mode needs a descriptor declaring RING on each wrapped axis; a LINE one hangs at bring-up. So the
-        # descriptor decides: the control plane wraps exactly its RING axes (8x4 [RING, RING]: torus XY; a 4x4 tray
-        # half [LINE, RING]: torus X), whichever axis SP is on. tt-run always sets the descriptor.
-        fabric_config = ttnn.FabricConfig.MGD_DEFAULT
     else:
-        # No descriptor: the system default. SP on axis 1 is the 4x4 tray-half stage: wrap X only.
+        # A torus mode needs a descriptor declaring RING on each wrapped axis; a LINE one hangs at bring-up.
+        # SP on axis 1 is the 4x4 tray-half stage, whose descriptor is [LINE, RING]: wrap X only.
         fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if sp_axis == 0 else ttnn.FabricConfig.FABRIC_2D_TORUS_X
     logger.info(
         f"Fabric config: {fabric_config} (sp={sp} on axis {sp_axis}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})"
@@ -110,11 +106,9 @@ def open_mesh_device(
         ttnn.FabricManagerMode.DEFAULT,
         fabric_router_config,
     )
-    mesh_device = ttnn.open_mesh_device(
+    return ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size, trace_region_size=trace_region_size
     )
-    logger.info(f"Fabric opened: {ttnn.get_fabric_config(mesh_device)}")
-    return mesh_device
 
 
 H2D_PAGE_ALIGNMENT_BYTES = 64
@@ -150,25 +144,6 @@ def mtp_union_rows(chunk_size: int, sp_factor: int, mtp_levels: int) -> int:
     return rows
 
 
-# The SP-axis knob: the mesh axis that carries SP (TP takes the other). The runner reads it with the manifest's stage
-# layout as the default; tests read it through stage_sp_axis.
-SP_AXIS_ENV = "PREFILL_SP_AXIS"
-
-
-def default_sp_axis(mesh_shape: tuple) -> int:
-    """The axis a stage of ``mesh_shape`` carries SP on by default: axis 1 on a 4x4 tray half, whose only ring is
-    axis 1 (the 4x4 manifests' PREFILL_SP_AXIS=1), else axis 0."""
-    return 1 if tuple(mesh_shape) == (4, 4) else 0
-
-
-def stage_sp_axis(mesh_shape: tuple) -> int:
-    """The axis SP runs on for a stage of ``mesh_shape``: ``$PREFILL_SP_AXIS`` when set, else ``default_sp_axis``."""
-    value = os.environ.get(SP_AXIS_ENV, "").strip()
-    axis = int(value) if value else default_sp_axis(mesh_shape)
-    assert axis in (0, 1), f"{SP_AXIS_ENV} must be 0 or 1, got {value!r}"
-    return axis
-
-
 def stage_mesh_shape(sp_factor: int, tp_factor: int, sp_axis: int = 0) -> tuple:
     """The (axis 0, axis 1) mesh shape for SP on ``sp_axis`` and TP on the other axis."""
     assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
@@ -194,15 +169,8 @@ def make_token_spec(mesh_shape: tuple, row_len: int, sp_axis: int = 0) -> ttnn.T
     )
 
 
-def make_h2d_spec(
-    mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0, sp_axis: int = 0, forward_chunks: int = 1
-) -> ttnn.TensorSpec:
-    """One forward's H2D row per SP chip. ``chunk_size`` is the forward's tokens (forward_chunks chunks); with MTP the
-    row ends in one num_mtp_tokens(mtp_levels) lookahead block per chunk, after every chunk's ids."""
+def make_h2d_spec(mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0, sp_axis: int = 0) -> ttnn.TensorSpec:
     sp_factor = mesh_shape[sp_axis]
-    if mtp_levels and forward_chunks > 1:
-        row = h2d_row_len(chunk_size, sp_factor) + forward_chunks * num_mtp_tokens(mtp_levels)
-        return make_token_spec(mesh_shape, row, sp_axis)
     if mtp_levels:
         return make_token_spec(mesh_shape, mtp_union_rows(chunk_size, sp_factor, mtp_levels), sp_axis)
     return make_token_spec(mesh_shape, h2d_row_len(chunk_size, sp_factor), sp_axis)
@@ -248,18 +216,16 @@ def activation_global_spec(rows: int, hidden_size: int, planes: int = 1) -> ttnn
     )
 
 
-def mtp_id_segment_specs(
-    mesh_shape: tuple, chunk_size: int, mtp_levels: int, sp_axis: int = 0, forward_chunks: int = 1
-) -> list:
+def mtp_id_segment_specs(mesh_shape: tuple, chunk_size: int, mtp_levels: int, sp_axis: int = 0) -> list:
     """Global specs of the D2D segments that carry a chunk's MTP ids next to the activation: the chunk ids,
     then the lookahead ids. The same per-chip split the first rank cuts its H2D row into, so the first
-    rank forwards those two tensors as-is and the last rank gathers the union from them. ``chunk_size`` is the
-    forward's tokens; a packed forward's lookahead segment holds one block per chunk. Empty when MTP is off."""
+    rank forwards those two tensors as-is and the last rank gathers the union from them. Empty when MTP is
+    off."""
     if not mtp_levels:
         return []
     return [
         make_token_spec(mesh_shape, h2d_row_len(chunk_size, mesh_shape[sp_axis]), sp_axis),
-        make_token_spec(mesh_shape, forward_chunks * num_mtp_tokens(mtp_levels), sp_axis),
+        make_token_spec(mesh_shape, num_mtp_tokens(mtp_levels), sp_axis),
     ]
 
 

@@ -24,8 +24,7 @@ using fold_common::kFoldSrcCbDepthPerCTile;
 using fold_common::tile_native_fold_rejection_reason;
 using fold_common::tile_native_fold_scratch_bytes;
 
-// Fast path: L1 + HS + RM + concrete shard_spec. Shared by composite and device_op. The shard may be wider than the
-// logical channels; the kernel copies only the channels.
+// Fast path: L1 + HS + RM + concrete shard_spec. Shared by composite and device_op.
 bool is_fast_path_input(const Tensor& t);
 
 // Fresh shard-spec for specless sharded outputs, sized to the populated shard count (not the
@@ -40,8 +39,6 @@ struct Fold {
         uint32_t stride_w{};
         // true → emit collapsed (1,1,N·H'·W',C·sh·sw); false → folded_4d.
         bool collapse_output{};
-        // Output memory config; std::nullopt derives it from the input's.
-        std::optional<tt::tt_metal::MemoryConfig> output_mem_config = std::nullopt;
     };
 
     struct tensor_args_t {

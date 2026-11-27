@@ -6,10 +6,10 @@
 
 #include <algorithm>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "untilize_codegen_cb_plan.hpp"

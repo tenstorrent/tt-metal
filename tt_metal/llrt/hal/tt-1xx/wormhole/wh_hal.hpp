@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "llrt/hal.hpp"
+#include "hal.hpp"
 
 namespace tt::tt_metal::wormhole {
 

@@ -8,11 +8,11 @@
 #include "ttnn/operation.hpp"
 #include <array>
 #include <cstdint>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 

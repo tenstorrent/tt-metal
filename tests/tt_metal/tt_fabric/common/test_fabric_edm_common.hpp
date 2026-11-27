@@ -5,15 +5,14 @@
 #pragma once
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/mesh/sub_device_types.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/discovery/cluster.hpp>
-#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "erisc_datamover_builder.hpp"
-#include "tt-metalium/workload/legacy/kernel_types.hpp"
+#include "tt-metalium/kernel_types.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -22,14 +21,14 @@
 #include "tt_stl/small_vector.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/mesh/sub_device.hpp>
-#include <tt-metalium/mesh/mesh_device_view.hpp>
-#include <tt-metalium/discovery/system_mesh.hpp>
-#include <tt-metalium/data_formats/tile.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "impl/program/program_impl.hpp"
 
 #include <tt-umd/types/arch.hpp>

@@ -20,7 +20,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -74,14 +74,20 @@ Tensor local_sum(
     }
 
     bool do_typecast = false;
-    // Summing in bf16 and casting back rounds no worse than packing the sum straight to bfloat8_b.
+    // moreh_sum does not support bfloat8_b
     if (input_tensor.dtype() == DataType::BFLOAT8_B) {
         // cast up to bfloat16 prior to sum
         do_typecast = true;
         input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
     }
 
-    auto sum_tensor = ttnn::sum(input_tensor, reduce_dim, /*keepdim=*/true, memory_config);
+    auto sum_tensor = ttnn::moreh_sum(
+        input_tensor,
+        reduce_dim,
+        /* keep_dim */ true,
+        /* output */ std::nullopt,
+        memory_config,
+        /* device kernel config */ std::nullopt);
 
     if (do_typecast) {
         // cast back down to bfloat8_b
@@ -545,9 +551,7 @@ ttnn::Tensor all_reduce_async(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama,
-    bool fp32_dest_acc,
-    const std::optional<ttnn::Tensor>& residual_tensor,
-    bool one_shot) {
+    bool fp32_dest_acc) {
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
@@ -565,9 +569,7 @@ ttnn::Tensor all_reduce_async(
         worker_subdevice_id_opt,
         use_noc1_only,
         use_optimal_ccl_for_llama,
-        fp32_dest_acc,
-        residual_tensor,
-        one_shot);
+        fp32_dest_acc);
 }
 
 }  // namespace ttnn::experimental

@@ -49,7 +49,13 @@ class TransformerBlock(Module):
         attention_q_chunk_size: int = 128,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
+        row_capacity: int | None = None,
+        row_independent_matmul_config: bool = False,
     ) -> None:
+        """`row_capacity` is the largest per-device row count of the spatial stream (a multiple of
+        32); with it, its norms and attention serve every row count up to it with one program. The
+        prompt stream has a fixed length and does not need one. `row_independent_matmul_config` gives
+        the spatial stream's matmuls one config for every row count (see `get_matmul_config`)."""
         super().__init__()
 
         if modulation_dim is None:
@@ -58,6 +64,7 @@ class TransformerBlock(Module):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = head_dim
+        self.row_capacity = row_capacity
         self.add_attention_to_output = add_attention_to_output
 
         self.context_pre_only = context_pre_only
@@ -90,6 +97,7 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            row_capacity=row_capacity,
         )
 
         context_norm_dim = 6 * dim if not context_pre_only else 2 * dim
@@ -135,6 +143,8 @@ class TransformerBlock(Module):
             is_fsdp=is_fsdp,
             shard_prompt=shard_prompt,
             per_head_norm=True,
+            row_capacity=row_capacity,
+            row_independent_matmul_config=row_independent_matmul_config,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -145,6 +155,7 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            row_capacity=row_capacity,
         )
 
         self.ff = ParallelFeedForward(
@@ -157,6 +168,7 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            row_independent_matmul_config=row_independent_matmul_config,
         )
 
         self.norm2_context = None
@@ -231,10 +243,13 @@ class TransformerBlock(Module):
         temb_mod_params_img: tuple[ttnn.Tensor, ...] | None = None,
         temb_mod_params_txt: tuple[ttnn.Tensor, ...] | None = None,
         skip_time_embed_activation_fn: bool = False,
+        total_sequence_length: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Run the model forward.
 
         Args:
+            total_sequence_length: spatial_sequence_length + prompt_sequence_length as a `total_sequence_length_tensor`,
+                for the attention with `row_capacity`.
             spatial: Tensor with shape [batch_size, spatial_sequence_length / sp_factor, query_dim / tp_factor].
             prompt: Tensor with shape [batch_size, prompt_sequence_length, query_dim / tp_factor] (sequence is not sharded!).
             time_embed: Tensor with shape [batch_size, 1, query_dim].
@@ -345,6 +360,7 @@ class TransformerBlock(Module):
             addcmul_spatial_gate=spatial_gate_attn,
             addcmul_prompt_residual=prompt if not self.context_pre_only else None,
             addcmul_prompt_gate=prompt_gate_attn,
+            total_sequence_length=total_sequence_length,
         )
 
         if prompt_attn is not None:
@@ -371,15 +387,27 @@ class TransformerBlock(Module):
                 core_grid=Attention.get_core_grid(
                     spatial_normed.shape[-2], self.mesh_device.compute_with_storage_grid_size()
                 ),
+                persistent_buffer_rows=self.row_capacity,
             )
         else:
-            spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            # A persistent pair would be kept per row count, since the gather returns it as its output.
+            spatial_normed = self.ccl_manager.all_gather(
+                spatial_normed,
+                dim=2,
+                mesh_axis=tp_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=self.row_capacity is None,
             )
             spatial_ff = ttnn.squeeze(
-                self.ff(ttnn.unsqueeze(spatial_normed, 0), compute_kernel_config=self.ff_compute_kernel_config), 0
+                self.ff(
+                    ttnn.unsqueeze(spatial_normed, 0),
+                    compute_kernel_config=self.ff_compute_kernel_config,
+                    ff2_persistent_buffer_rows=self.row_capacity,
+                ),
+                0,
             )
-            spatial = ttnn.addcmul(spatial, spatial_ff, spatial_gate_ff)
+            # Not addcmul, which compiles a program per row count.
+            spatial = ttnn.add(spatial, ttnn.multiply(spatial_ff, spatial_gate_ff))
 
         if self.context_pre_only:
             return spatial, None
@@ -414,7 +442,7 @@ class TransformerBlock(Module):
                 self.ff_context(ttnn.unsqueeze(prompt_normed, 0), compute_kernel_config=self.ff_compute_kernel_config),
                 0,
             )
-            prompt = ttnn.addcmul(prompt, prompt_ff, prompt_gate_ff)
+            prompt = ttnn.add(prompt, ttnn.multiply(prompt_ff, prompt_gate_ff))
 
         return spatial, prompt
 

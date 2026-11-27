@@ -13,10 +13,10 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 

@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/base_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/global_semaphore.hpp"

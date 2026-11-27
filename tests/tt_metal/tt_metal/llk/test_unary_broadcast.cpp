@@ -8,7 +8,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstdint>
-#include <tt-metalium/data_formats/bfloat8.hpp>
+#include <tt-metalium/bfloat8.hpp>
 #include <cmath>
 #include <functional>
 #include <iterator>
@@ -21,22 +21,22 @@
 #include <string_view>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
-#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <impl/context/metal_context.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -46,11 +46,10 @@
 #include <tt-umd/types/arch.hpp>
 #include "single_core_compute_runners.hpp"
 #include "tt_metal/test_utils/bfloat_utils.hpp"
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -420,7 +419,7 @@ void run_single_core_unary_broadcast_quasar(
         .work_units = {wu},
     };
 
-    Program program(mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -436,7 +435,7 @@ void run_single_core_unary_broadcast_quasar(
     params.tensor_args = {
         {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
         {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}}};
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
 
     std::vector<std::uint32_t> packed_tilized_input;
     std::vector<std::uint32_t> golden_packed_tilized_output;

@@ -18,7 +18,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "ckernel_buf_desc.h"
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_reduce.h"
 #include "params.h"
@@ -29,27 +29,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR              = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT                 = params.TILE_CNT;
-    const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
-    const Operand& buffer_A                      = params.buffer_A;
-    const Operand& buffer_B                      = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_B         = params.buffer_B;
 #endif
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
         START_PERF_MEASURE("INIT")
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape_A, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
-        constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
+        const auto bfd_a =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        const auto bfd_b =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
 
         constexpr bool data_in_srcb = reduce_swaps_operands<POOL_TYPE, REDUCE_DIM>();
         const auto data_format      = static_cast<DataFormat>(formats.unpack_A_dst);
         const auto scaler_format    = static_cast<DataFormat>(formats.unpack_B_dst);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(data_in_srcb ? scaler_format : data_format, data_in_srcb ? data_format : scaler_format);
         const bool data_2x = data_format == DataFormat::MxFp4_2x_A || data_format == DataFormat::MxFp4_2x_B;
-        _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(bfd_a, bfd_b, tensor_shape_A, INPUT_NUM_TILES_IN_BLOCK, data_2x /*clear_data_src*/);
+        _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(bfd_a, bfd_b, tensor_shape_A, 1 /*num_tiles_per_unpack*/, data_2x /*clear_data_src*/);
         PROFILER_SYNC();
     }
     {
@@ -73,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < TILE_CNT; i += INPUT_NUM_TILES_IN_BLOCK)
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
                     _llk_unpack_reduce_<POOL_TYPE, REDUCE_DIM>(i, 0 /*start_l1_tile_idx_1*/, tensor_shape_A);
                 }
@@ -166,7 +165,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "ckernel_buf_desc.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -199,8 +198,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+        const auto bfd_pack =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(bfd_pack, tensor_shape_A, 1 /*num_tiles_per_pack*/);
         _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape_A);

@@ -5,7 +5,7 @@
 
 #include <array>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -201,7 +201,7 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     }
     return {
         TensorSpec(
-            Shape({attrs.batch_heads, attrs.num_chunks * tt::constants::TILE_HEIGHT, attrs.value_dim}), output_layout),
+            Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim}), output_layout),
         TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout)};
 }
 

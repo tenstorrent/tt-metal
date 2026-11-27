@@ -5,12 +5,11 @@
 
 #include <fmt/base.h>
 #include <cstdint>
-// #include <tt-metalium/data_formats/data_format.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/discovery/cluster.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+// #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
@@ -28,19 +27,19 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -339,12 +338,12 @@ bool RunWriteBWTest(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload sender_workload;
-    tt_metal::Program sender_program_ = tt_metal::CreateProgram(*sender_mesh_device);
+    tt_metal::Program sender_program_{};
     sender_workload.add_program(device_range, std::move(sender_program_));
     auto& sender_program = sender_workload.get_programs().at(device_range);
 
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program_ = tt_metal::CreateProgram(*receiver_mesh_device);
+    tt_metal::Program receiver_program_{};
     receiver_workload.add_program(device_range, std::move(receiver_program_));
     auto& receiver_program = receiver_workload.get_programs().at(device_range);
 

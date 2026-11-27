@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/mesh/sub_device.hpp>
-#include <tt-metalium/mesh/sub_device_types.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <internal/cluster_noc_helpers.hpp>
 #include "tests/tt_metal/tt_metal/common/host_transfer_stats_scope.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -32,9 +32,9 @@
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/operation_timeout.hpp>
-#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include <cstring>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 #include <internal/mesh_device.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-umd/io_window/io_window.hpp>

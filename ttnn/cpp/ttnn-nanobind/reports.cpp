@@ -10,8 +10,8 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn/reports.hpp"
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 using tt::tt_metal::distributed::MeshDevice;
 

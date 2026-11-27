@@ -15,14 +15,14 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 

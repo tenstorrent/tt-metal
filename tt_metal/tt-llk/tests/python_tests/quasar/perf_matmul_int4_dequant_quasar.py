@@ -11,9 +11,8 @@ from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR_4_TRISC,
 )
-from helpers.param_config import flat_axes, parametrize
+from helpers.param_config import parametrize
 from quasar.test_matmul_int4_dequant_quasar import (
-    MATMUL_GROUP_DIM_NAMES,
     PERF_GROUP_DIMS,
     dequant_register_format_hints,
 )
@@ -25,27 +24,21 @@ from quasar.test_matmul_int4_dequant_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    **flat_axes(MATMUL_GROUP_DIM_NAMES, PERF_GROUP_DIMS),
+    matmul_dims=PERF_GROUP_DIMS,
     register_format_hint=dequant_register_format_hints(),
     run_types=PERF_RUN_TYPES_QUASAR_4_TRISC,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
 )
 def test_perf_matmul_int4_dequant_quasar(
     perf_report,
-    ct_dim,
-    rt_dim,
-    kt_dim,
-    group_kt_dim,
+    matmul_dims,
     register_format_hint,
     run_types,
     loop_factor,
 ):
     run_matmul_int4_dequant(
         DataFormat.Int4,
-        ct_dim,
-        rt_dim,
-        kt_dim,
-        group_kt_dim,
+        matmul_dims,
         register_format_hint,
         run_types=run_types,
         loop_factor=loop_factor,

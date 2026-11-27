@@ -13,6 +13,7 @@
 #include "ckernel_sfpu_binary_bcast.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_reduce.h"
+#include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 

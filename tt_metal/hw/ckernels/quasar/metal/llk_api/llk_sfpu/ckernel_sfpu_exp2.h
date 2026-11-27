@@ -36,8 +36,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     r = 0x1.41cp-13f;
     r = r * f + 0x1.5f4p-10f;
     r = r * f + 0x1.3b4p-7f;
-    // Quasar: the Blackhole abs + copysgn pair relies on Blackhole's sign-magnitude integer behaviour.
-    // j is an integer-valued float in [-32767, 32767], so take i from j instead.
+    // Quasar: the Blackhole abs + copysgn pair relies on Blackhole's sign-magnitude integer behaviour (see
+    // _sfpu_exp_fp32_accurate_ in ckernel_sfpu_exp.h), and SFPCAST SM32_TO_INT32 maps the sign-magnitude -0
+    // that x in (-0.5, 0) rounds to onto INT_MIN (sfpi_constants.h). j is an integer-valued float in
+    // [-32767, 32767], so take i from j instead.
     _sfpu_round_to_nearest_int32_(j, i);
     y = r * f + sfpi::vConstFloatPrgm2;
     r = y * f + sfpi::vConstFloatPrgm1;
@@ -124,9 +126,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x, C0 c0, C1 c1, C2 c2) {
 sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
     return _sfpu_exp2_bf16_(x, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
 }
-
-// Whether BF16 DEST runs the generated exp2 kernel as one call over the whole tile.
-inline constexpr bool exp2_bf16_whole_tile = false;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_exp2() {

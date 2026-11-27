@@ -334,16 +334,11 @@ enum debug_assert_type_t {
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
-// Each field has one writer: only the host writes unpause, and only processor i writes flags[i] (with a byte store,
-// so processors sharing a word never touch each other's flags). A processor that pauses sets its flag to 1 + its bit
-// of unpause and waits for that bit to change; the host flips the bit to let it go, and the processor then clears its
-// own flag. The host never writes flags, so it can't overwrite a pause another processor raised at the same time.
 struct debug_pause_msg_t {
-    volatile uint32_t unpause;                              // written by the host only: bit i per processor i
-    volatile uint8_t flags[MaxProcessorsPerCoreType];       // written by the device only: 0 running, 1 or 2 paused
+    volatile uint8_t flags[MaxProcessorsPerCoreType];
     uint8_t pad[(4 - (MaxProcessorsPerCoreType % 4)) % 4];  // CODEGEN:skip
 };
-static_assert(MaxProcessorsPerCoreType <= 32);
+// Needs to be 32b-divisible, since the host clears pause flags from host using read_core()/write_core().
 static_assert(sizeof(debug_pause_msg_t) % sizeof(uint32_t) == 0);
 
 struct debug_ring_buf_msg_t {
@@ -358,7 +353,7 @@ struct debug_stack_usage_per_cpu_t {
 
 struct debug_stack_usage_t {
     debug_stack_usage_per_cpu_t cpu[MaxProcessorsPerCoreType];
-    uint8_t pad[8];  // CODEGEN:skip
+    uint8_t pad[12];  // CODEGEN:skip
 };
 
 struct debug_eth_link_t {

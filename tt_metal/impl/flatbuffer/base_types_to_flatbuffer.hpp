@@ -5,11 +5,11 @@
 #pragma once
 
 #include "base_types_generated.h"
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/data_formats/data_format.hpp>
-#include <tt-metalium/data_formats/tile.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <buffer_types.hpp>
+#include <kernel_types.hpp>
+#include <tt_backend_api_types.hpp>
+#include <tile.hpp>
+#include <circular_buffer_constants.h>
 #include "kernels/kernel.hpp"
 
 namespace tt::tt_metal {

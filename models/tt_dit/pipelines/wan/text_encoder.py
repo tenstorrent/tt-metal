@@ -17,6 +17,7 @@ from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
+from models.tt_dit.utils import cache
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -80,20 +81,16 @@ class TextEncoder:
             parallel_config=encoder_parallel_config,
         )
 
-    @property
-    def encoder(self) -> UMT5Encoder:
-        return self._tt_encoder
-
-    @property
-    def encoder_spec(self) -> dict:
-        return {
-            "model_name": os.path.basename(self._checkpoint_name),
-            "subfolder": "text_encoder",
-            "parallel_config": self._encoder_parallel_config,
-            "mesh_shape": tuple(self._device.shape),
-            "mesh_device": self._device,
-            "get_torch_state_dict": lambda: self._torch_text_encoder.state_dict(),
-        }
+    def prepare(self) -> None:
+        cache.load_model(
+            self._tt_encoder,
+            model_name=os.path.basename(self._checkpoint_name),
+            subfolder="text_encoder",
+            parallel_config=self._encoder_parallel_config,
+            mesh_shape=tuple(self._device.shape),
+            mesh_device=self._device,
+            get_torch_state_dict=lambda: self._torch_text_encoder.state_dict(),
+        )
 
     def encode_cfg(
         self,

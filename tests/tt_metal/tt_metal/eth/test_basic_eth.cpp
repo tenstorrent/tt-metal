@@ -9,8 +9,8 @@
 #include <chrono>
 #include <cstddef>
 #include <tt-umd/types/core_coordinates.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
 #include <iostream>
 #include <map>
@@ -22,20 +22,20 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-umd/types/arch.hpp>
@@ -852,7 +852,7 @@ TEST_F(BlackholeSingleCardFixture, EthFwStageKernelWhileKernelRuns) {
             }
 
             const CoreRangeSet core_ranges{ttsl::Span<const CoreCoord>(logical_cores)};
-            Program program = CreateProgram(*mesh_device);
+            Program program = CreateProgram();
             for (uint32_t processor = 0; processor < num_processors; processor++) {
                 EthernetConfig config;
                 config.eth_mode = core_type == HalProgrammableCoreType::IDLE_ETH ? Eth::IDLE : Eth::SENDER;

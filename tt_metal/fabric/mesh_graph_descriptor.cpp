@@ -18,9 +18,9 @@
 #include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <enchantum/enchantum.hpp>

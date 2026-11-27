@@ -6,7 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::experimental::prim {
 

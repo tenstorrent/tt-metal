@@ -10,26 +10,25 @@
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
 
-#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/workload/specification/compute_modes.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
-#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "common/mesh_dispatch_fixture.hpp"
 #include "jit_build/jit_build_settings.hpp"  // ::SemScope, host mirror of the device enum
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -144,7 +143,7 @@ protected:
             .semaphores = {counter_sem},
             .work_units = work_units,
         };
-        program = Program(*mesh_device_, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
         ProgramRunArgs params;
         params.kernel_run_args = {
@@ -165,7 +164,7 @@ protected:
                      {"wait_min_total", 0u}}),
             });
         }
-        program.set_program_run_args(params);
+        experimental::SetProgramRunArgs(program, params);
 
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
@@ -227,7 +226,7 @@ protected:
             .semaphores = {counter_sem, done_sem},
             .work_units = {main_wu},
         };
-        program = Program(*mesh_device_, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
         // Its own virtual coords, for MODE_SELF_NOC_UP's self-targeted remote up.
         const CoreCoord core_virtual = mesh_device_->worker_core_from_logical_core(core);
@@ -244,7 +243,7 @@ protected:
                      {"self_noc_y", static_cast<uint32_t>(core_virtual.y)}}),
             },
         };
-        program.set_program_run_args(params);
+        experimental::SetProgramRunArgs(program, params);
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
@@ -309,7 +308,7 @@ protected:
             .semaphores = {cached_sem, external_sem, done_sem},
             .work_units = {main_wu},
         };
-        program = Program(*mesh_device_, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
         ProgramRunArgs params;
         params.kernel_run_args = {
@@ -322,7 +321,7 @@ protected:
                      {"num_threads", num_dms_}}),
             },
         };
-        program.set_program_run_args(params);
+        experimental::SetProgramRunArgs(program, params);
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
@@ -384,7 +383,7 @@ protected:
             .semaphores = {counter_sem},
             .work_units = {wu_recv, wu_send},
         };
-        Program program(*mesh_device_, spec);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
         ProgramRunArgs params;
         params.kernel_run_args = {
@@ -402,7 +401,7 @@ protected:
                     MakeRuntimeArgsForSingleNode(core, {{"report_addr", report_addr}, {"expected", expected}}),
             },
         };
-        program.set_program_run_args(params);
+        experimental::SetProgramRunArgs(program, params);
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
@@ -490,8 +489,8 @@ protected:
         }
 
         ProgramSpec spec{.name = "sem_census", .kernels = kernel_specs, .semaphores = {sem}, .work_units = work_units};
-        Program program(*mesh_device_, spec);
-        program.set_program_run_args(params);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        experimental::SetProgramRunArgs(program, params);
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
@@ -619,8 +618,8 @@ protected:
                  .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                      core, {{"dst_addr", out_buffer->address()}, {"bank_id", 0u}, {"num_tiles", run.num_iters}})});
         }
-        Program program(*mesh_device_, spec);
-        program.set_program_run_args(params);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        experimental::SetProgramRunArgs(program, params);
 
         distributed::MeshWorkload workload;
         workload.add_program(distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
@@ -762,7 +761,7 @@ protected:
             .tensor_parameters = {{.unique_id = backing, .spec = storage_spec}},
             .work_units = {{.name = "main", .kernels = {compute}, .target_nodes = core}},
         };
-        Program program(*mesh_device_, spec);
+        Program program = MakeProgramFromSpec(*mesh_device_, spec);
         ProgramRunArgs params;
         params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
             .kernel = compute,
@@ -770,7 +769,7 @@ protected:
                 core, {{"num_iters", run.num_iters}, {"report_addr", base}, {"active_neos", run.active_neos}}),
         }};
         params.tensor_args.emplace(backing, TensorArgument{storage});
-        program.set_program_run_args(params);
+        SetProgramRunArgs(program, params);
 
         distributed::MeshWorkload workload;
         workload.add_program(distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
@@ -1094,7 +1093,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
         .kernels = {make_k(KA, SEM_A, threads_a), make_k(KB, SEM_B, threads_b)},
         .semaphores = {sem_a, sem_b},
         .work_units = {wu}};
-    Program program(*mesh_device_, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -1117,7 +1116,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
                  {"wait_min_total", 0u}}),
         },
     };
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord{0, 0};
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
@@ -1216,7 +1215,7 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
         .kernels = {make_k(KA, SEM_A, threads_a), make_k(KB, SEM_B, threads_b)},
         .semaphores = {sem_a, sem_b},
         .work_units = {wu}};
-    Program program(*mesh_device_, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -1239,7 +1238,7 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
                  {"wait_min_total", 0u}}),
         },
     };
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord{0, 0};
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
@@ -1359,7 +1358,7 @@ TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
     WorkUnitSpec wu{.name = "wu", .kernels = {K}, .target_nodes = core};
     ProgramSpec spec{
         .name = "sem_id_collision", .kernels = {ks}, .semaphores = {sem_near, sem_far}, .work_units = {wu}};
-    Program program(*mesh_device_, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -1368,7 +1367,7 @@ TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
             .runtime_arg_values = MakeRuntimeArgsForSingleNode(core, {{"report_addr", report_addr}}),
         },
     };
-    program.set_program_run_args(params);
+    experimental::SetProgramRunArgs(program, params);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord{0, 0};
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
@@ -1401,7 +1400,7 @@ TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
     WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
     ProgramSpec spec{.name = "sem_double_bind", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
     EXPECT_ANY_THROW({
-        Program program(*mesh_device_, spec);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
         (void)program;
     }) << "binding the same semaphore twice in one kernel must be rejected (it double-counts the census)";
 }

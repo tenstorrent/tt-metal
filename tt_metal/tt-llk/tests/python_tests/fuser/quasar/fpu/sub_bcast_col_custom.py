@@ -10,7 +10,6 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.sub_bcast_col_custom import sub_bcast_col_custom_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.quasar.fpu.common import configure_alu_cfg
 from helpers.llk_params import MathOperation
 
 from .eltwise import EltwiseFpu
@@ -35,7 +34,7 @@ class SubBcastColCustomFpu(EltwiseFpu):
         block: BlockData,
     ) -> str:
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
-        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
+        return (
             "_llk_math_eltwise_binary_init_custom_<ckernel::EltwiseBinaryType::ELWSUB, ckernel::BroadcastType::COL>"
             f"({tensor_shape});\n"
         )

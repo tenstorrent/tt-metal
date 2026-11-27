@@ -10,9 +10,9 @@
 #include <bit>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt-metalium/workload/specification/program_spec.hpp>

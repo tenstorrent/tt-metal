@@ -10,8 +10,8 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
-#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "tt-metalium/experimental/fabric/fabric.hpp"
 

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 

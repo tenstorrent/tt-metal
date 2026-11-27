@@ -16,7 +16,6 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
-#include "ring_attention_balance.hpp"
 #include "ring_attention_rank_mapping.hpp"
 #include <algorithm>
 #include <cstdint>
@@ -89,19 +88,13 @@ constexpr uint32_t mesh_cols = get_compile_time_arg_val(kMeshCols);
 constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialReadinessEnabled);
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
-#ifdef RING_ATTENTION_BALANCE
-constexpr bool has_balance = true;
-#else
-constexpr bool has_balance = false;
-#endif
 
 static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness requires one gathered input");
 static_assert(
     !partial_readiness_enabled || !split_forwarding_enabled,
     "partial readiness and split forwarding are mutually exclusive");
 
-// poll() runs after every packet (the load-balancing exchange's sends interleave with the gather's).
-template <typename AddrGenType, typename FabricSender, typename Poll>
+template <typename AddrGenType, typename FabricSender>
 FORCE_INLINE void write_bank_owned_slices(
     CircularBuffer& cb_output,
     AddrGenType& output_addrgen,
@@ -110,8 +103,7 @@ FORCE_INLINE void write_bank_owned_slices(
     uint32_t output_page_base,
     uint32_t valid_pages,
     uint32_t first_bank,
-    uint32_t bank_stride,
-    Poll& poll) {
+    uint32_t bank_stride) {
     ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
         output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
     uint32_t first_page_offset = 0;
@@ -126,7 +118,6 @@ FORCE_INLINE void write_bank_owned_slices(
             cb_output.get_read_ptr(),
             batch * output_page_size);
         cb_output.pop_front(packet_size_in_pages);
-        poll();
     }
 }
 
@@ -160,10 +151,6 @@ void kernel_main() {
                                              ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
                                              : (kNumFixedCompileTimeArgs + num_inputs);
     constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
-    // The balance accessors follow the gather's (ring_attention_balance::Accessors).
-    [[maybe_unused]] constexpr uint32_t kBalanceArgsOffset =
-        has_metadata ? meta_args.next_compile_time_args_offset()
-                     : std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset();
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -250,12 +237,6 @@ void kernel_main() {
             input_tile_id_end);
     }
 
-    // The balance runtime args (ring_attention_balance::Arg), then its scratch CB's id.
-    [[maybe_unused]] const uint32_t balance_args = arg_idx;
-    if constexpr (has_balance) {
-        arg_idx += ring_attention_balance::kNumArgs + 1;
-    }
-
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
     /* Args for overlapped all gather */
@@ -308,24 +289,6 @@ void kernel_main() {
         }
     };
 
-    [[maybe_unused]] volatile PACKET_HEADER_TYPE* balance_data_hdr = nullptr;
-    [[maybe_unused]] volatile PACKET_HEADER_TYPE* balance_inc_hdr = nullptr;
-    [[maybe_unused]] uint32_t balance_scratch = 0;
-    if constexpr (has_balance) {
-        cb_packet_header.reserve_back(1);
-        balance_data_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cb_packet_header.get_write_ptr());
-        cb_packet_header.push_back(1);
-        cb_packet_header.reserve_back(1);
-        balance_inc_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cb_packet_header.get_write_ptr());
-        cb_packet_header.push_back(1);
-        const auto& scratch_cb =
-            get_local_cb_interface(get_arg_val<uint32_t>(balance_args + ring_attention_balance::kNumArgs));
-        balance_scratch = scratch_cb.fifo_limit - scratch_cb.fifo_size;
-    }
-    ring_attention_balance::Exchange<has_balance, direction == 1, kBalanceArgsOffset> balance(
-        balance_args, balance_scratch, balance_data_hdr, balance_inc_hdr);
-    const auto balance_poll = [&]() { balance.poll(fabric_direction_connection); };
-
     uint32_t slice_writes = 0;
     const uint32_t my_tensor_rank =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
@@ -358,8 +321,7 @@ void kernel_main() {
                             output_page_base,
                             first_pages,
                             worker_link[input_idx],
-                            num_links,
-                            balance_poll);
+                            num_links);
                         signal_output_ready();
                         write_bank_owned_slices(
                             cb_output,
@@ -369,8 +331,7 @@ void kernel_main() {
                             output_page_base + first_pages,
                             input_valid_pages[input_idx] - first_pages,
                             worker_link[input_idx],
-                            num_links,
-                            balance_poll);
+                            num_links);
                     } else {
                         write_bank_owned_slices(
                             cb_output,
@@ -380,8 +341,7 @@ void kernel_main() {
                             output_page_base,
                             input_valid_pages[input_idx],
                             worker_link[input_idx],
-                            num_links,
-                            balance_poll);
+                            num_links);
                     }
                 } else {
                     discard_bank_owned_slices(
@@ -450,7 +410,6 @@ void kernel_main() {
 
                     tiles_read += num_pages_to_read;
                     cb_output.pop_front(packet_size_in_pages);
-                    balance_poll();
                 }
                 tile_id_start += output_pages_per_batch_head;
                 tiles_read = input_tile_id_start[input_idx];
@@ -549,8 +508,7 @@ void kernel_main() {
                             output_page_base,
                             first_pages,
                             first_bank,
-                            bank_stride,
-                            balance_poll);
+                            bank_stride);
                         signal_output_ready();
                         write_bank_owned_slices(
                             cb_output,
@@ -560,8 +518,7 @@ void kernel_main() {
                             output_page_base + first_pages,
                             input_valid_pages[input_idx] - first_pages,
                             first_bank,
-                            bank_stride,
-                            balance_poll);
+                            bank_stride);
                     } else {
                         write_bank_owned_slices(
                             cb_output,
@@ -571,8 +528,7 @@ void kernel_main() {
                             output_page_base,
                             input_valid_pages[input_idx],
                             first_bank,
-                            bank_stride,
-                            balance_poll);
+                            bank_stride);
                     }
                 }
             } else {
@@ -642,7 +598,6 @@ void kernel_main() {
 
                         tiles_read += num_pages_to_read;
                         cb_output.pop_front(packet_size_in_pages);
-                        balance_poll();
                     }
                     tile_id_start += output_pages_per_batch_head;
                     tiles_read = relay_start;
@@ -657,8 +612,6 @@ void kernel_main() {
 
         slice_writes++;
     }
-
-    balance.finish(fabric_direction_connection);
 
     // Drain in-flight writes BEFORE closing the EDM connections.
     noc_obj.async_atomic_barrier();

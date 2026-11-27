@@ -7,7 +7,7 @@
 #include <cmath>
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::rotate {

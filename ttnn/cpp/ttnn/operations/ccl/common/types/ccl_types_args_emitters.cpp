@@ -4,11 +4,11 @@
 
 #include <tt_stl/reflection.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 using namespace tt::tt_metal;

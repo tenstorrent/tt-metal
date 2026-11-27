@@ -20,10 +20,6 @@
 #include "api/compute/eltwise_unary/exp.h"
 #endif
 
-#ifdef SFPU_OP_GEGLU_TANH_INCLUDE
-#include "api/compute/geglu_tanh.h"
-#endif
-
 #ifdef SFPU_OP_GELU_INCLUDE
 #include "api/compute/eltwise_unary/gelu.h"
 #endif
@@ -134,10 +130,6 @@
 
 #ifdef SFPU_OP_DROPOUT_INCLUDE
 #include "api/compute/eltwise_unary/dropout.h"
-#endif
-
-#ifdef SFPU_OP_QUICK_GELU_INCLUDE
-#include "api/compute/quick_gelu.h"
 #endif
 
 #ifdef SFPU_OP_RAND_INCLUDE
@@ -331,14 +323,6 @@
 
 #ifdef SFPU_OP_BINARY_SUB_INT_INCLUDE
 #include "api/compute/sub_int_sfpu.h"
-#endif
-
-#ifdef SFPU_OP_BINARY_QUANT_INCLUDE
-#include "api/compute/quantization.h"
-#endif
-
-#ifdef SFPU_OP_SILU_GLU_INCLUDE
-#include "api/compute/silu_glu.h"
 #endif
 
 #ifdef SFPU_OP_SITU_GLU_INCLUDE

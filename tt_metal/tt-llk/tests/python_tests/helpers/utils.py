@@ -220,23 +220,19 @@ def print_faces(operand1, tile_shape=None):
 
 
 def run_shell_command(
-    command: Sequence[str],
+    command: str | Sequence[str],
     cwd: str | None = None,
     stdin_data: str | bytes = None,
     text=True,
 ):
-    """Run an argv sequence with ``shell=False``, so no argument is re-split.
-
-    A string is rejected: the build root comes from ``$RUNNER_TEMP``/``$TMPDIR``,
-    and a shell would split it on whitespace.
+    """Run a command. A string uses ``shell=True`` (legacy). A sequence is
+    executed with ``shell=False`` so path arguments are not re-split.
     """
-    if isinstance(command, str):
-        raise TypeError(
-            f"run_shell_command takes an argv sequence, not a string: {command!r}"
-        )
+    use_shell = isinstance(command, str)
     result = subprocess.run(
         command,
         cwd=cwd,
+        shell=use_shell,
         text=text,
         input=stdin_data,
         stdout=subprocess.DEVNULL,
@@ -244,7 +240,11 @@ def run_shell_command(
     )
 
     if result.returncode != 0:
-        pretty = " ".join(shlex.quote(str(part)) for part in command)
+        pretty = (
+            command
+            if use_shell
+            else " ".join(shlex.quote(str(part)) for part in command)
+        )
         raise RuntimeError(f"Command:\n{pretty}\n\nCommand's stderr:\n{result.stderr}")
     return result
 
@@ -273,31 +273,11 @@ def format_kernel_list(kernels, as_hex=False):
     return ",".join(formatter(i) for i in kernels)
 
 
-def _is_constant(x):
-    """True when every element of *x* has the same value (zero standard deviation).
-
-    An empty tensor counts as constant rather than raising. A NaN anywhere makes the
-    max/min comparison false, so a tensor holding one is not constant.
-    """
-    return x.numel() == 0 or bool(torch.max(x) == torch.min(x))
-
-
 def calculate_pcc(golden, input):
     """Calculate Pearson Correlation Coefficient between two tensors.
 
     Handles special cases like NaN/Inf values and returns correlation coefficient.
     1.0 indicates perfect correlation, 0.0 indicates no correlation.
-
-    NaN/Inf lanes are zeroed before the correlation is taken. A constant tensor (zero
-    standard deviation) has no defined correlation; constancy is judged on each
-    tensor's own finite lanes, before that zeroing, so a constant output with NaN/Inf
-    lanes still counts as constant. Then:
-
-    - one side constant, the other varying: 0.0, since a constant cannot follow the
-      other side's variation;
-    - both sides constant: 1.0 regardless of their values (1.0 vs 1.0078125 included).
-      This is not a measured perfect correlation; how far apart the two constants are
-      is left to a tolerance check.
 
     Args:
         golden: Reference tensor
@@ -336,10 +316,6 @@ def calculate_pcc(golden, input):
         x[mask] = 0
         return x
 
-    # Judged before masking: zeroed NaN/Inf lanes would make a constant side vary.
-    golden_constant = _is_constant(golden[torch.isfinite(golden)])
-    input_constant = _is_constant(input[torch.isfinite(input)])
-
     golden = mask_invalid(golden)
     input = mask_invalid(input)
 
@@ -347,16 +323,6 @@ def calculate_pcc(golden, input):
     if golden.dtype == torch.bfloat16:
         golden = golden.type(torch.float32)
         input = input.type(torch.float32)
-
-    # A constant tensor has zero standard deviation, so the correlation is undefined:
-    # corrcoef divides by zero and its NaN comes back as a masked constant. When only
-    # one side is constant it cannot follow the other side's variation at all, so
-    # there is no correlation. When both are constant there is no variation to
-    # disagree about; how far apart the two values are is the tolerance check's job.
-    if golden_constant != input_constant:
-        return 0.0
-    if golden_constant:
-        return 1.0
 
     # Calculate correlation
     pcc_result = np.min(
@@ -797,13 +763,7 @@ def passed_test(
     refused without a budget. A ``Bfp8_b`` budget is counted in bfloat16 steps and
     charges for block quantization (``helpers.ulp._ULP_PROXY_DTYPES``).
 
-    Without *max_ulp* the verdict is the tolerance check and, unless the golden is under
-    ``PCC_SIGNAL_FLOOR``, a PCC threshold. A golden that is constant on its finite
-    lanes gives PCC nothing to measure, so the tolerance check alone decides, except
-    that a result which is all zero on those lanes fails against a nonzero constant
-    golden (against an all-zero golden it goes to :func:`calculate_pcc`). A result
-    constant on its finite lanes against a varying golden has PCC 0.0 and fails. Outside those constant-tensor cases ``max_ulp=None`` gives the
-    previous verdict bit for bit. Under ``--ulp-report`` and
+    ``max_ulp=None`` gives the previous verdict bit for bit. Under ``--ulp-report`` and
     ``--ulp-measure`` the comparison is measured after the verdict, with subnormal
     outputs ranked flushed, and never read back. Every call spends the variant
     ``accuracy_contract`` last resolved.
@@ -1166,28 +1126,6 @@ def passed_test(
 
     if golden_tensor.abs().max().item() < PCC_SIGNAL_FLOOR:
         return bool(is_within_tolerance)
-
-    # A constant golden has no variation for PCC to measure: calculate_pcc calls it
-    # uncorrelated with any result that varies, even within tolerance. As with the
-    # floor above, the per-element tolerance check is the verdict. Constancy is judged
-    # on the golden's finite lanes, as calculate_pcc judges it.
-    # A result that is all zero on those lanes against a nonzero constant is a
-    # stuck-at-zero output and fails here, even within tolerance: calculate_pcc cannot
-    # be relied on for it, since NaN/Inf lanes on both sides defeat its all-zero check.
-    # Pair the lanes as the tolerance check did: the Bfp4_b/Bfp2_b compares flatten
-    # both sides (equal numel suffices), the torch.isclose-based ones broadcast them.
-    if output_data_format in (DataFormat.Bfp4_b, DataFormat.Bfp2_b):
-        golden_lanes, res_lanes = golden_tensor.flatten(), res_tensor.flatten()
-    else:
-        golden_lanes, res_lanes = torch.broadcast_tensors(golden_tensor, res_tensor)
-    finite_lanes = torch.isfinite(golden_lanes)
-    golden_finite = golden_lanes[finite_lanes]
-    if _is_constant(golden_finite):
-        result_nonzero = bool(torch.any(res_lanes[finite_lanes].bool()))
-        if not result_nonzero and bool(torch.any(golden_finite.bool())):
-            return False
-        if result_nonzero:
-            return bool(is_within_tolerance)
 
     pcc = calculate_pcc(res_tensor, golden_tensor)
 

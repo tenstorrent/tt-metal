@@ -11,7 +11,7 @@
 
 #include <algorithm>
 
-#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 

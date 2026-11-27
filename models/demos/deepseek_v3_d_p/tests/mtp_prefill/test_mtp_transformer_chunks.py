@@ -487,7 +487,6 @@ def test_mtp_transformer_chunks(
     )
 
     transformer = TtPrefillTransformer(
-        moe_impl="ttmoe",  # (TtMoe: tt/moe_impl.py)
         mesh_device=mesh_device,
         config=config,
         model_cfg=variant.model_config,

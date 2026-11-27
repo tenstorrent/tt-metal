@@ -554,14 +554,18 @@ def test_dram_group_norm_core_grid_none() -> None:
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    ("group_count", "input_shape"),
+    ("group_count", "input_shape", "offset"),
     [
         # NCHW; H must be divisible by cluster width. C % 32 == 0 for fused v1.
-        (32, (1, 128, 64, 64)),
-        (32, (1, 256, 128, 128)),
-        (8, (1, 64, 64, 64)),
+        (32, (1, 128, 64, 64), 0.0),
+        (32, (1, 256, 128, 128), 0.0),
+        (8, (1, 64, 64, 64), 0.0),
+        # Each device's H*W is not whole tiles, so the last tile row holds padding rows: 23 of 64
+        # rows on 8 devices (1 x 41), 24 of 352 on one. The offset makes padding counted as data
+        # shift the statistics well beyond the bfloat16 error.
+        (32, (1, 128, 8, 41), 1.0),
     ],
-    ids=["c128_h64", "c256_h128", "c64_g8"],
+    ids=["c128_h64", "c256_h128", "c64_g8", "c128_h8w41_padded"],
 )
 @pytest.mark.parametrize("activation_fn", [None, "silu"], ids=["no_act", "silu"])
 def test_distributed_group_norm(
@@ -570,6 +574,7 @@ def test_distributed_group_norm(
     cluster_axis: int,
     input_shape: tuple[int, int, int, int],
     group_count: int,
+    offset: float,
     activation_fn: str | None,
 ) -> None:
     """Spatially shard H on cluster_axis; match torch GroupNorm on the full tensor."""
@@ -585,7 +590,7 @@ def test_distributed_group_norm(
     torch.nn.init.normal_(torch_model.bias)
     torch_model.eval()
 
-    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    torch_input = torch.randn(input_shape, dtype=torch_dtype) + offset
     with torch.no_grad():
         torch_output = torch_model(torch_input)
         if activation_fn == "silu":
@@ -608,6 +613,99 @@ def test_distributed_group_norm(
     tt_output = tt_model(tt_input)
 
     tt_torch = _gather_group_norm_output(tt_output, mesh_device, cluster_axis, torch_output.shape[0])
+
+    assert_quality(torch_output, tt_torch, pcc=0.999_300)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, device_params",
+    [
+        pytest.param(
+            (2, 4),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh2x4_h1w0",
+        ),
+        pytest.param(
+            (2, 4),
+            0,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh2x4_h0w1",
+        ),
+        pytest.param(
+            (4, 8),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh4x8_h1w0",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("group_count", "input_shape", "offset"),
+    [
+        (32, (1, 128, 64, 64), 0.0),
+        (32, (1, 512, 128, 96), 0.0),
+        # Each device's H*W is not whole tiles: 2 x 42 or 4 x 21 (12 of 96 rows padding) on 2x4,
+        # 1 x 21 (11 of 32) on 4x8.
+        (32, (1, 128, 8, 84), 1.0),
+    ],
+    ids=["c128_h64w64", "c512_h128w96", "c128_h8w84_padded"],
+)
+@pytest.mark.parametrize("activation_fn", [None, "silu"], ids=["no_act", "silu"])
+def test_distributed_group_norm_2d(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    h_axis: int,
+    input_shape: tuple[int, int, int, int],
+    group_count: int,
+    offset: float,
+    activation_fn: str | None,
+) -> None:
+    """Shard H on h_axis and W on the other mesh axis; match torch GroupNorm on the full tensor."""
+    torch.manual_seed(0)
+    w_axis = 1 - h_axis
+
+    torch_model = torch.nn.GroupNorm(num_groups=group_count, num_channels=input_shape[1])
+    torch.nn.init.normal_(torch_model.weight)
+    torch.nn.init.normal_(torch_model.bias)
+    torch_model.eval()
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16) + offset
+    with torch.no_grad():
+        torch_output = torch_model(torch_input)
+        if activation_fn == "silu":
+            torch_output = torch.nn.functional.silu(torch_output)
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+    tt_model = DistributedGroupNorm.from_torch(
+        torch_ref=torch_model,
+        mesh_device=mesh_device,
+        cluster_axis=h_axis,
+        second_cluster_axis=w_axis,
+        mesh_axis=None,
+        ccl_manager=ccl_manager,
+        activation_fn=activation_fn,
+    )
+
+    # NHWC; mesh axis h_axis shards H (dim 1), w_axis shards W (dim 2).
+    dims = [None, None]
+    dims[h_axis] = 1
+    dims[w_axis] = 2
+    nhwc = torch_input.permute(0, 2, 3, 1).contiguous()
+    tt_input = ttnn.from_torch(
+        nhwc,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+    )
+
+    tt_output = tt_model(tt_input)
+    tt_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=dims, mesh_shape=tuple(mesh_device.shape)),
+    ).permute(0, 3, 1, 2)
 
     assert_quality(torch_output, tt_torch, pcc=0.999_300)
 
@@ -798,38 +896,123 @@ def test_distributed_group_norm_program_cache_hit(
             assert_quality(torch_model(torch_input), tt_out, pcc=0.999_300)
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize(
-    ("leading", "embedding_dim"),
-    [((1,), 5120), ((1, 16), 128), ((1, 2), 128), ((2, 16), 128)],
-    ids=["hidden", "q_heads", "k_heads", "batched"],
-)
-def test_rmsnorm_row_capacity(
-    mesh_device: ttnn.MeshDevice, leading: tuple[int, ...], embedding_dim: int, expect_error
-) -> None:
-    """`row_capacity` runs one program for every row count up to it and tracks the default program's result."""
-    torch.manual_seed(0)
-    row_capacity = 640
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+def _spatial_chunks_to_mesh(x: torch.Tensor, mesh_device: ttnn.MeshDevice, h_axis: int) -> ttnn.Tensor:
+    """NCHW -> one flattened [1, 1, h*w, C] chunk per device: H split over h_axis, W over the other."""
+    mesh_shape = tuple(mesh_device.shape)
+    h_parts, w_parts = mesh_shape[h_axis], mesh_shape[1 - h_axis]
+    nhwc = x.permute(0, 2, 3, 1)[0]
+    rows = []
+    for r in range(mesh_shape[0]):
+        cols = []
+        for c in range(mesh_shape[1]):
+            hi, wi = (c, r) if h_axis == 1 else (r, c)
+            chunk = nhwc.tensor_split(h_parts, dim=0)[hi].tensor_split(w_parts, dim=1)[wi]
+            cols.append(chunk.reshape(-1, chunk.shape[-1]))
+        rows.append(torch.stack(cols))
+    return ttnn.from_torch(
+        torch.stack(rows),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(0, 1)),
     )
 
-    torch_model = TorchRMSNorm(embedding_dim, norm_eps=1e-6, bias=False).to(dtype=torch.bfloat16)
-    tt_model = RMSNorm(embedding_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
-    tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    added = 0
-    for rows in (320, 32, row_capacity):
-        x = torch.randn(*leading, rows, embedding_dim, dtype=torch.bfloat16) * 2 + 4
-        tt_x = bf16_tensor(x, device=mesh_device)
-        default = ttnn.to_torch(tt_model(tt_x, compute_kernel_config=compute_kernel_config))
-        entries = mesh_device.num_program_cache_entries()
-        actual = ttnn.to_torch(tt_model(tt_x, compute_kernel_config=compute_kernel_config, row_capacity=row_capacity))
-        added += mesh_device.num_program_cache_entries() - entries
-        assert actual.shape == default.shape
-        assert_quality(default, actual, pcc=0.99999)
+def _mesh_to_spatial(t: ttnn.Tensor, mesh_device: ttnn.MeshDevice, h_axis: int, h: int, w: int) -> torch.Tensor:
+    """Inverse of _spatial_chunks_to_mesh, back to NCHW."""
+    mesh_shape = tuple(mesh_device.shape)
+    h_parts, w_parts = mesh_shape[h_axis], mesh_shape[1 - h_axis]
+    stacked = ttnn.to_torch(
+        t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_shape)
+    ).float()
+    hc, wc = h // h_parts, w // w_parts
+    out = torch.empty(h, w, stacked.shape[-1])
+    for r in range(mesh_shape[0]):
+        for c in range(mesh_shape[1]):
+            hi, wi = (c, r) if h_axis == 1 else (r, c)
+            out[hi * hc : (hi + 1) * hc, wi * wc : (wi + 1) * wc] = stacked[r, c, : hc * wc].reshape(hc, wc, -1)
+    return out.permute(2, 0, 1).unsqueeze(0)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, device_params",
+    [
+        pytest.param(
+            (1, 1),
+            1,
+            {"fabric_config": None, "require_exact_physical_num_devices": False},
+            id="local_1x1",
+        ),
+        pytest.param(
+            (2, 4),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh2x4_h1w0",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("channels", "sizes", "small_sizes"),
+    [
+        # On a Wormhole grid with two forwarders, 128 channels take 14 cores per group column and 512
+        # channels 7. The sizes give tile rows per device that the column does not divide evenly,
+        # including ones that are not whole tiles (28 of 448 rows padding at 40x84, 28 of 928 at
+        # 72x100 on 2x4). small_sizes have fewer tile rows per device than a column has cores.
+        (128, [(64, 64), (96, 80), (40, 84), (128, 128), (72, 100), (64, 64)], [(16, 64), (8, 84)]),
+        (512, [(64, 64), (56, 60), (96, 80)], [(32, 48)]),
+    ],
+    ids=["c128", "c512"],
+)
+def test_distributed_group_norm_sizes_one_program(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    h_axis: int,
+    channels: int,
+    sizes: list[tuple[int, int]],
+    small_sizes: list[tuple[int, int]],
+) -> None:
+    """One program serves every spatial size: after the first size no program cache entry is added.
+
+    Each device gets its spatial chunk already flattened to [1, 1, h*w, C], so the layer's reshape is
+    a view and the group norm is the only op that could add entries.
+    """
+    torch.manual_seed(0)
+    w_axis = 1 - h_axis
+    two_axes = tuple(mesh_device.shape)[w_axis] > 1
+
+    torch_model = torch.nn.GroupNorm(num_groups=32, num_channels=channels)
+    torch.nn.init.normal_(torch_model.weight)
+    torch.nn.init.normal_(torch_model.bias)
+    torch_model.eval()
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+    tt_model = DistributedGroupNorm.from_torch(
+        torch_ref=torch_model,
+        mesh_device=mesh_device,
+        cluster_axis=h_axis,
+        second_cluster_axis=w_axis if two_axes else None,
+        mesh_axis=None,
+        ccl_manager=ccl_manager,
+        activation_fn="silu",
+    )
+
+    def run(h: int, w: int) -> int:
+        """Checks the output against torch and returns the program cache entries the group norm added."""
+        # The offset makes padding rows counted as data shift the statistics well beyond the bfloat16 error.
+        torch_input = torch.randn((1, channels, h, w), dtype=torch.bfloat16) + 1.0
         with torch.no_grad():
-            assert_quality(torch_model(x), actual, pcc=0.9995)
-    assert added == 1, f"{added} row-capacity norm programs"
-    with expect_error(ValueError, "program_config"):
-        tt_model(tt_x, program_config=ttnn.LayerNormDefaultProgramConfig(), row_capacity=row_capacity)
+            torch_output = torch.nn.functional.silu(torch_model(torch_input.float()))
+        tt_input = _spatial_chunks_to_mesh(torch_input, mesh_device, h_axis)
+        entries_before = mesh_device.num_program_cache_entries()
+        tt_output = tt_model(tt_input)
+        added = mesh_device.num_program_cache_entries() - entries_before
+        logger.info(f"{h}x{w}, {tt_input.shape[2]} rows per device, {added} program cache entries added:")
+        assert_quality(torch_output, _mesh_to_spatial(tt_output, mesh_device, h_axis, h, w), pcc=0.999_300)
+        return added
+
+    added = [run(h, w) for h, w in sizes]
+    assert added[0] >= 1 and all(a == 0 for a in added[1:]), f"program cache entries added per size: {added}"
+
+    for h, w in small_sizes:
+        run(h, w)

@@ -8,8 +8,8 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include "llk_device_fixture.hpp"
 #include "single_core_compute_runners.hpp"
@@ -34,9 +34,8 @@ float selection_score(std::uint32_t expert) {
 
 // Compile-only program for the gate kernel; never launched. Mirrors the layout run_binary builds
 // (c_0 scores, c_1 bias, c_16 out) so only the Dest accumulation mode differs between cases.
-Program make_generic_moe_gate_compile_program(
-    distributed::MeshDevice& mesh_device, bool fp32_dest_acc_en, bool explicit_fp32_false = false) {
-    Program program = CreateProgram(mesh_device);
+Program make_generic_moe_gate_compile_program(bool fp32_dest_acc_en, bool explicit_fp32_false = false) {
+    Program program = CreateProgram();
     const CoreCoord core{0, 0};
     const std::uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16}) {
@@ -76,7 +75,7 @@ TEST_F(LLKBlackholeSingleCardFixture, GenericMoeGateRejectsFp32DestAcc) {
         SCOPED_TRACE(
             ::testing::Message() << "fp32_dest_acc_en=" << c.fp32_dest_acc_en
                                  << " explicit_fp32_false=" << c.explicit_fp32_false);
-        auto program = make_generic_moe_gate_compile_program(this->device(), c.fp32_dest_acc_en, c.explicit_fp32_false);
+        auto program = make_generic_moe_gate_compile_program(c.fp32_dest_acc_en, c.explicit_fp32_false);
         if (c.must_compile) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {

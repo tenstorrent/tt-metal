@@ -13,7 +13,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "ttnn/operations/experimental/fused_msda/fused_msda.hpp"

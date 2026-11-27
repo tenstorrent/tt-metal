@@ -4,7 +4,7 @@
 
 #include <tt-metalium/experimental/udm/mesh_circular_buffer.hpp>
 #include <tt-metalium/experimental/udm/mesh_builder.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::experimental::udm {

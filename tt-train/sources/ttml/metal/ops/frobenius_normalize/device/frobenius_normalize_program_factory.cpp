@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
 #include <optional>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "frobenius_normalize_device_operation.hpp"
 #include "frobenius_normalize_device_operation_types.hpp"
@@ -114,17 +114,6 @@ tt::tt_metal::ProgramDescriptor FrobeniusNormalizeProgramFactory::create_descrip
     uint32_t bf16_tile_size = tt::tile_size(bf16_format);
     uint32_t fp32_tile_size = tt::tile_size(fp32_format);
 
-    // The compute kernels count 32x32 tiles (total_tiles), the reader and writer the input's own
-    // (compute_tile_work_split): they agree only on 32x32 tiles.
-    const auto& input_tile = input.tensor_spec().tile();
-    TT_FATAL(
-        input_tile.get_height() == tt::constants::TILE_HEIGHT && input_tile.get_width() == tt::constants::TILE_WIDTH,
-        "Input tiles must be {}x{}, got {}x{}",
-        tt::constants::TILE_HEIGHT,
-        tt::constants::TILE_WIDTH,
-        input_tile.get_height(),
-        input_tile.get_width());
-
     uint32_t total_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
     auto compute_grid = device->compute_with_storage_grid_size();
@@ -132,6 +121,7 @@ tt::tt_metal::ProgramDescriptor FrobeniusNormalizeProgramFactory::create_descrip
     auto [num_cores, all_cores, core_group_1, core_group_2, tiles_per_core_g1, tiles_per_core_g2] =
         tt::tt_metal::split_work_to_cores(compute_grid, total_tiles);
     const WorkSplit split = compute_tile_work_split(input);
+    check_work_split(split, num_cores, core_group_1, core_group_2, tiles_per_core_g1, tiles_per_core_g2);
 
     uint32_t block_size = std::min(4U, tiles_per_core_g1);
 

@@ -10,7 +10,7 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include "kernels/dataflow/chunk_gdn_handoff.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"

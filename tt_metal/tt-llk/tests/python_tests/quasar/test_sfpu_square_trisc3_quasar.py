@@ -18,7 +18,6 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     QuasarSfpuVariant,
-    flat_axes,
     generate_dest_depth_input_dimensions,
     generate_quasar_sfpu_format_variants,
     parametrize,
@@ -94,21 +93,17 @@ def generate_sfpu_square_combinations(formats_list):
 
 @pytest.mark.quasar
 @parametrize(
-    **flat_axes(
-        ("format_variant", "dest_sync", "input_dimensions"),
-        generate_sfpu_square_combinations(SFPU_SQUARE_FORMATS),
-    ),
+    formats_dest_acc_sync_dims=generate_sfpu_square_combinations(SFPU_SQUARE_FORMATS),
 )
 def test_sfpu_square_trisc3_quasar(
-    format_variant,
-    dest_sync,
-    input_dimensions,
+    formats_dest_acc_sync_dims,
 ):
     """
     Test square operation on Quasar with SFPU on TRISC3.
 
     Same parameter coverage as test_sfpu_square_quasar.
     """
+    format_variant, dest_sync_mode, input_dimensions = formats_dest_acc_sync_dims[0]
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
@@ -148,7 +143,7 @@ def test_sfpu_square_trisc3_quasar(
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(dest_sync),
+            DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

@@ -6,8 +6,8 @@
 #include <cstdint>
 #include <string>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {

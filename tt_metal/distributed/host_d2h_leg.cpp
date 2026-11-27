@@ -7,13 +7,13 @@
 
 #include <fmt/format.h>
 
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include "tt_metal/distributed/host_ring_alias.hpp"
 #include "hostdevcommon/uva_layout.h"
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/context/metal_context.hpp"

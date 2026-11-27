@@ -29,29 +29,23 @@ inline void _llk_math_hw_cleanup_init_dest_sync_()
     _llk_math_pack_sync_init_<Dst, is_fp32_dest_acc_en>();
 }
 
-/**
- * @brief Zero the transient math/unpack-style ADDR_MOD_0..5 so stale increments cannot survive.
- *
- * ADDR_MOD_6/7 are left at their @ref _llk_math_hw_configure_ invariants (dest += 2 / zero advance),
- * which the SFPU ops after cleanup assume.
- */
+/** Zero math/unpack-style ADDR_MOD_0..7 so stale increments cannot survive. */
 inline void _llk_math_hw_cleanup_poison_addr_mods_()
 {
-    for (std::uint8_t mod_index = 0; mod_index < 6; ++mod_index)
+    for (std::uint8_t mod_index = 0; mod_index < 8; ++mod_index)
     {
         addr_mod_t {}.set(mod_index);
     }
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 /**
- * @brief Quiesces all TRISCs and restores math cfg bank 0 to canonical Float16_b formats.
+ * @brief Quiesces all TRISCs and restores math cfg banks to canonical Float16_b formats.
  * @tparam Dst Kernel DST_SYNC_MODE (compile-time; not modified by cleanup).
  * @tparam is_fp32_dest_acc_en Kernel DST_ACCUM_MODE (re-asserted, not changed).
- * @note On return cfg bank 0 uses Float16_b formats, the global Blackhole dest remap is
+ * @note On return both cfg banks use Float16_b formats, the global Blackhole dest remap is
  *       enabled, and bank 0 is selected.
- * @note On return dest half-sync is on section 0, MOP CFG is NOP-poisoned, ADDR_MOD_0..5 are
- *       zero, and ADDR_MOD_6/7 hold their hw_configure invariants (dest += 2 / zero advance).
+ * @note On return dest half-sync is on section 0, MOP CFG is NOP-poisoned, and ADDR_MOD_0..7
+ *       are zero.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_math_hw_cleanup_canonical_()
@@ -62,6 +56,11 @@ inline void _llk_math_hw_cleanup_canonical_()
 
     hw_cleanup::select_cfg_state(0);
     _llk_math_hw_cleanup_configure_current_bank_<is_fp32_dest_acc_en>();
+
+    hw_cleanup::select_cfg_state(1);
+    _llk_math_hw_cleanup_configure_current_bank_<is_fp32_dest_acc_en>();
+
+    hw_cleanup::select_cfg_state(0);
 
     _llk_math_reconfig_remap_(true);
 

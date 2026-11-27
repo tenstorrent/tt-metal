@@ -8,11 +8,11 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 // Exports symbols
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/memory/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 
 namespace ttnn {
 

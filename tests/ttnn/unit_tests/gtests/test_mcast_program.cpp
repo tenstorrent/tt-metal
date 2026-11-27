@@ -8,7 +8,7 @@ TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
     using namespace tt::tt_metal;
     const auto participants = grid({0, 0}, {1, 0});
     auto mcast = make_mcast(device_, {{participants, {{0, 0}}}});
-    Program program = CreateProgram(*device_);
+    Program program;
     program.impl().add_semaphore(participants, 0, 7, tt::CoreType::WORKER);
     program.impl().add_semaphore(participants, 2, 9, tt::CoreType::WORKER);
     const auto ct = attach_unplaced(mcast, program, {71});
@@ -24,7 +24,7 @@ TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
     auto copy = mcast;
     attach_unplaced(copy, program);
     EXPECT_EQ(program.impl().semaphores().size(), 4u);
-    Program other = CreateProgram(*device_);
+    Program other;
     EXPECT_ANY_THROW(attach_unplaced(copy, other));
     EXPECT_TRUE(other.impl().semaphores().empty());
     Program moved = std::move(program);
@@ -42,14 +42,14 @@ TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
 TEST_F(McastHostFixture, ProgramBindingCoversChainExhaustionAndUnsupportedPrograms) {
     using namespace tt::tt_metal;
     auto chain = make_mcast(device_, {{cores({{0, 0}, {1, 1}, {2, 0}}), {{0, 0}}}}, chain_config());
-    Program chain_program = CreateProgram(*device_);
+    Program chain_program;
     const auto ct = attach_unplaced(chain, chain_program);
     ASSERT_EQ(chain_program.impl().semaphores().size(), 3u);
     EXPECT_EQ(emitted_semaphore(ct, wire::SIGNAL_SOURCE), 2u);
 
     const auto participants = grid({0, 0}, {1, 0});
     auto mcast = make_mcast(device_, {{participants, {{0, 0}}}});
-    Program full = CreateProgram(*device_);
+    Program full;
     for (uint32_t id = 0; id < NUM_SEMAPHORES; ++id) {
         full.impl().add_semaphore(participants, id, 0, tt::CoreType::WORKER);
     }
@@ -62,7 +62,7 @@ TEST_F(McastHostFixture, ProgramBindingCoversChainExhaustionAndUnsupportedProgra
     kernel.core_ranges = grid({0, 0}, {0, 0});
     kernel.config = ReaderConfigDescriptor{};
     descriptor.kernels.push_back(kernel);
-    Program compiled(*device_, descriptor);
+    Program compiled(descriptor);
     compiled.impl().compile(device_);
     ASSERT_TRUE(compiled.impl().is_compiled());
     EXPECT_ANY_THROW(attach_unplaced(mcast, compiled));
@@ -74,7 +74,7 @@ TEST_F(McastHostFixture, ProgramAttachMeasuresRuntimePrefixAndAppendsToEveryCore
     const auto receivers = grid({0, 0}, {2, 0});
     // The default fixed sender is the first receiver, core (0, 0).
     Mcast mcast(*device_, McastConfig{.noc = NOC::NOC_0}, receivers, receivers.num_cores());
-    Program program = CreateProgram(*device_);
+    Program program;
     DataMovementConfig sender{.noc = NOC::NOC_0, .compile_args = {11, 12}, .named_compile_args = {{"other", 5}}};
     std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> sender_rt{{{0, 0}, {1, 2}}};
     mcast.attach(program, grid({0, 0}, {0, 0}), sender, "weights", sender_rt);
@@ -121,7 +121,7 @@ TEST_F(McastHostFixture, ProgramAttachMeasuresRuntimePrefixAndAppendsToEveryCore
     expect_rejected(program, row, {{{0, 0}, {1}}, {{1, 0}, {2}}});                    // Placed core without a prefix.
     expect_rejected(program, grid({1, 0}, {2, 0}), {{{0, 0}, {1}}});                  // Unplaced core.
     expect_rejected(program, row, {{{0, 0}, {1}}, {{0, 0}, {1}}});                    // Duplicate core.
-    Program other = CreateProgram(*device_);
+    Program other;
     expect_rejected(other, row, {});  // Another Program.
     EXPECT_TRUE(other.impl().semaphores().empty());
 
@@ -143,7 +143,7 @@ TEST_F(McastHostFixture, ProgramAttachChainsChannelsOnOneKernel) {
     const auto receivers = grid({0, 0}, {2, 0});
     Mcast first(*device_, McastConfig{.noc = NOC::NOC_0}, receivers, receivers.num_cores());
     Mcast second(*device_, McastConfig{.noc = NOC::NOC_0}, receivers, receivers.num_cores());
-    Program program = CreateProgram(*device_);
+    Program program;
     DataMovementConfig config{.noc = NOC::NOC_0, .compile_args = {11}};
     std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> rt{{{0, 0}, {1}}, {{1, 0}, {2}}, {{2, 0}, {3}}};
     first.attach(program, receivers, config, "first", rt);
@@ -178,7 +178,7 @@ TEST_F(McastHostFixture, ProgramAttachRejectsChainForwarderOnAnotherNoc) {
         receivers,
         receivers.num_cores(),
         McastExplicitFixedSenderConfig{.senders_per_group = {{0, 0}}});
-    Program program = CreateProgram(*device_);
+    Program program;
     const auto forwarder = grid({1, 1}, {1, 1});
     DataMovementConfig same_noc{.noc = NOC::NOC_0};
     std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> accepted;

@@ -75,7 +75,6 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     std::optional<ttnn::ccl::Topology> fsdp_topology = std::nullopt,
     bool fuse_swiglu = false,
     const std::vector<uint32_t>& chunk_sizes = {},
-    std::optional<bool> transpose_core_grid = std::nullopt,
-    bool use_mcast = false);
+    std::optional<bool> transpose_core_grid = std::nullopt);
 
 }  // namespace ttnn::prim

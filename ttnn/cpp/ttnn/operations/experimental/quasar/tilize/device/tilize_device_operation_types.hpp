@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include "tt-metalium/workload/legacy/kernel_types.hpp"
+#include "tt-metalium/kernel_types.hpp"
 
 namespace ttnn::prim::qsr {
 

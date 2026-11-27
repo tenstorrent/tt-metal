@@ -4,11 +4,11 @@
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_msa_common.hpp"
-#include <tt-metalium/memory/buffer/buffer.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <array>
 #include <bit>
 #include <map>

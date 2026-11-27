@@ -9,7 +9,7 @@
 #include <variant>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
 
@@ -74,22 +74,6 @@ static float pad_value_as_float(const PadValue& pad_value, DataType dtype) {
             return static_cast<float>(v);
         },
         pad_value);
-}
-
-// fill_implicit_tile_padding for an interleaved rank-3 tensor. fill_pad has no UINT8 kernel, so UINT8 is filled
-// in BFLOAT16 (every value 0..255 is exact there) and cast back, which leaves the logical data untouched.
-static ttnn::Tensor fill_tile_padding_interleaved(const ttnn::Tensor& tensor, float fill_value) {
-    // typecast needs interleaved tensors, so callers with a sharded tensor convert it first.
-    TT_FATAL(!tensor.memory_config().is_sharded(), "fill_tile_padding_interleaved requires an interleaved tensor");
-    if (tensor.dtype() != DataType::UINT8) {
-        return ttnn::fill_implicit_tile_padding(tensor, fill_value, std::nullopt);
-    }
-    // Normalize first so a fractional or out-of-range pad_value ends up as the same uint8 every other
-    // data-movement op writes (truncated, saturated), not whatever BFLOAT16 rounds it to.
-    const float uint8_fill_value = static_cast<float>(pack_scalar_into_uint32(DataType::UINT8, fill_value) & 0xFFu);
-    auto as_bf16 = ttnn::typecast(tensor, DataType::BFLOAT16);
-    as_bf16 = ttnn::fill_implicit_tile_padding(as_bf16, uint8_fill_value, std::nullopt);
-    return ttnn::typecast(as_bf16, DataType::UINT8);
 }
 
 // True if the inner-2D of `shape` is not tile-aligned, i.e. the tiled output has implicit padding lanes.
@@ -390,7 +374,8 @@ ttnn::Tensor reshape_tiled(
     const std::optional<CoreRangeSet>& sub_core_grid,
     bool explicit_memory_config,
     const bool skip_padding_fill,
-    const bool pad_value_explicit) {
+    const bool pad_value_explicit,
+    const bool runtime_shapes) {
     // fill_implicit_tile_padding takes float; integer pad is not bit-exact for all dtypes/values.
     const float fill_value = detail::pad_value_as_float(pad_value, tensor.dtype());
     // squeeze input tensor and requested shape to 3D
@@ -504,10 +489,10 @@ ttnn::Tensor reshape_tiled(
                 const auto sharded_mem_config = output_tensor_3d.memory_config();
                 MemoryConfig interleaved_mem{TensorMemoryLayout::INTERLEAVED, sharded_mem_config.buffer_type()};
                 auto interleaved = ttnn::sharded_to_interleaved(output_tensor_3d, interleaved_mem, std::nullopt);
-                interleaved = detail::fill_tile_padding_interleaved(interleaved, fill_value);
+                interleaved = ttnn::fill_implicit_tile_padding(interleaved, fill_value, std::nullopt);
                 output_tensor_3d = ttnn::interleaved_to_sharded(interleaved, sharded_mem_config, std::nullopt);
             } else {
-                output_tensor_3d = detail::fill_tile_padding_interleaved(output_tensor_3d, fill_value);
+                output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
             }
         }
 
@@ -551,7 +536,8 @@ ttnn::Tensor reshape_tiled(
         requested_padded_shape_3d,
         updated_mem_config,
         recreate_mapping_tensor,
-        sub_core_grid);
+        sub_core_grid,
+        runtime_shapes);
 
     // Fill rules:
     //   - Block-float (BFLOAT8_B / BFLOAT4_B): ALWAYS fill (skip_padding_fill is ignored). The downstream
@@ -565,7 +551,7 @@ ttnn::Tensor reshape_tiled(
     const bool is_block_float_output = is_block_float(tensor.dtype());
     const bool should_fill = is_block_float_output || (pad_value_explicit && !skip_padding_fill);
     if (should_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
-        output_tensor_3d = detail::fill_tile_padding_interleaved(output_tensor_3d, fill_value);
+        output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
     }
 
     if (is_block_float(tensor.dtype())) {
@@ -583,6 +569,32 @@ namespace {
 
 enum class ReshapeImpl { ROUTED, NATIVE, CODEGEN };
 
+// A tiled reshape that keeps the last dim runs natively on ReshapeViewTiledRowsProgramFactory: its kernels take the
+// shapes as runtime args, so they compile once for every shape, and it keeps no page map. On a Wormhole chip it beat
+// codegen's tile-rows program on most such shapes (median 0.78x of codegen's device time, 0.27x to 1.45x over 68
+// shapes), while codegen's tile-rows program compiles per shape. So routing leaves these calls to native. The worst
+// case was a large unflatten with whole-tile C, [1,1,4800,256] to [1,64,75,256], at 1.45x. Must accept only calls
+// that reshape_view_tiled_keeps_last_dim accepts after the squeeze to rank 3, or they land on the page-map factory.
+bool native_takes_row_factory(const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape) {
+    using tt::constants::TILE_HEIGHT;
+    using tt::constants::TILE_WIDTH;
+    const auto dtype = tensor.dtype();
+    const bool native_dtype = dtype == DataType::BFLOAT16 || dtype == DataType::FLOAT32 || dtype == DataType::INT32 ||
+                              dtype == DataType::UINT32 || is_block_float(dtype);
+    if (tensor.layout() != Layout::TILE || !native_dtype || logical_shape.rank() < 2 ||
+        tensor.logical_shape().rank() < 2 || tensor.logical_shape()[-1] != logical_shape[-1]) {
+        return false;
+    }
+    const auto& tile = tensor.tensor_spec().tile();
+    const auto tile_shape = tile.get_tile_shape();
+    const auto face_shape = tile.get_face_shape();
+    const auto& in = tensor.logical_shape();
+    const auto& padded = tensor.padded_shape();
+    return tile_shape[0] == TILE_HEIGHT && tile_shape[1] == TILE_WIDTH && face_shape[0] == 16 && face_shape[1] == 16 &&
+           padded.rank() == in.rank() && padded[-1] == tt::round_up(in[-1], TILE_WIDTH) &&
+           padded[-2] == tt::round_up(in[-2], TILE_HEIGHT);
+}
+
 // The codegen plan when routing should take it. The padded shape and pad_value are free-function arguments the prim
 // never sees, so call_contract_violation checks them here.
 std::optional<reshape_codegen::LaunchPlan> routed_codegen_plan(
@@ -593,6 +605,7 @@ std::optional<reshape_codegen::LaunchPlan> routed_codegen_plan(
     const MemoryConfig& mem_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     if (!operations::data_movement::codegen_supported_on_arch(tensor) ||
+        native_takes_row_factory(tensor, logical_shape) ||
         reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value) != nullptr) {
         return std::nullopt;
     }
@@ -829,7 +842,8 @@ ttnn::Tensor reshape_dispatch(
         sub_core_grid,
         explicit_memory_config,
         skip_padding_fill,
-        pad_value_explicit);
+        pad_value_explicit,
+        reshape_map_mode == TileReshapeMapMode::RUNTIME_SHAPES);
 }
 
 }  // namespace

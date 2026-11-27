@@ -14,7 +14,7 @@
 
 #include <benchmark/benchmark.h>
 
-#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/distributed/host_rdma_window.hpp"
 #include "hostdevcommon/uva_frame.h"
 #include "leg_benchmark_common.hpp"

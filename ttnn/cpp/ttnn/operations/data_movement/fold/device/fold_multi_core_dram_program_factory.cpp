@@ -15,12 +15,12 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/discovery/hal.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -318,9 +318,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         tt::tt_metal::num_cores_to_corerangeset(num_active_cores, compute_grid_size, /*row_wise=*/true);
     auto cores = grid_to_cores(num_active_cores, num_cores_x, num_cores_y, /*row_wise=*/true);
 
-    // A pixel is its logical channels. A sharded row-major input pads each pixel to a multiple of the shard width,
-    // and the output row must not take that padding.
-    uint32_t stick_nbytes = input_tensor.logical_shape()[3] * tt::datum_size(dfb_data_format);
+    uint32_t stick_nbytes = input_tensor.padded_shape()[3] * tt::datum_size(dfb_data_format);
     // Align to DRAM read alignment.
     uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, hal::get_dram_alignment());
 

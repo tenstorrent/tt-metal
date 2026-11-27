@@ -7,11 +7,10 @@
 #include "gather_device_operation_types.hpp"
 
 #include <optional>
-#include <string_view>
 #include <variant>
 
 #include "ttnn/types.hpp"
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
@@ -64,9 +63,5 @@ Tensor gather(
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& output_tensors,
     const std::optional<CoreRangeSet>& sub_core_grids);
-
-// The gather factory sizes its buffers with tt::tile_size and gives its output the default tile, so only 32x32
-// tiles are addressed correctly. Does nothing for a non-TILE tensor.
-void validate_gather_tile_shape(const Tensor& tensor, std::string_view name);
 
 }  // namespace ttnn::prim

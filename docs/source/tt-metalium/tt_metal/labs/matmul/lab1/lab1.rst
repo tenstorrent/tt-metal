@@ -678,7 +678,7 @@ However, some host-side objects contain information about data and code on the d
   but actual tensor data is stored in device DRAM.
 
 * ``TensorAccessorArgs`` objects exist on both host and device, but they are different underlying types,
-  defined in different headers (``tt_metal/api/tt-metalium/workload/legacy/tensor_accessor_args.hpp`` for host-side
+  defined in different headers (``tt_metal/api/tt-metalium/tensor_accessor_args.hpp`` for host-side
   and ``tt_metal/hw/inc/api/tensor/tensor_accessor_args.h`` for device-side).
 
 * Integers ``src0_addr``, ``src1_addr``, and ``dst_addr`` in the ``eltwise_add_tensix()`` function
@@ -788,7 +788,7 @@ A simplified example of printing a full tile from an output CB in a writer kerne
 
    #include "api/dataflow/dataflow_api.h"
    #include "api/debug/dprint.h"
-   #include "tt-metalium/data_formats/tile_constants.hpp"
+   #include "tt-metalium/constants.hpp"
 
    void kernel_main() {
        // Assume this circular buffer holds output tiles from a compute kernel.
@@ -1145,7 +1145,7 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    * Tiles will be square with dimensions ``TILE_HEIGHTxTILE_WIDTH`` (i.e. ``TILE_HEIGHT == TILE_WIDTH``).
 
    * All matrices will have dimensions that are divisible by the tile size.
-     Note that constants ``TILE_HEIGHT`` and ``TILE_WIDTH`` are defined in the ``tt_metal/api/tt-metalium/data_formats/tile_constants.hpp`` header in the ``tt::constants`` namespace,
+     Note that constants ``TILE_HEIGHT`` and ``TILE_WIDTH`` are defined in the ``tt_metal/api/tt-metalium/constants.hpp`` header in the ``tt::constants`` namespace,
      and height is equal to width for all existing Tenstorrent devices.
      You should add assertions (using ``TT_FATAL``) that check these assumptions.
 

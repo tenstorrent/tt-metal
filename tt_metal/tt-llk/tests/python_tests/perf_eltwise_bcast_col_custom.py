@@ -9,10 +9,9 @@ from helpers.llk_params import (
     DestAccumulation,
     MathOperation,
 )
-from helpers.param_config import flat_axes, input_output_formats, parametrize
+from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_eltwise_bcast_col_custom import (
-    BCAST_COL_CUSTOM_BLOCK_SHAPES,
     BCAST_COL_CUSTOM_TILE_DIMENSIONS,
     _run_eltwise_bcast_col_custom,
 )
@@ -30,7 +29,7 @@ from test_eltwise_bcast_col_custom import (
     math_fidelity=ALL_MATH_FIDELITIES,
     broadcast_type=[BroadcastType.Column],
     tile_dimensions=BCAST_COL_CUSTOM_TILE_DIMENSIONS,
-    **flat_axes(("ct_dim", "num_blocks"), BCAST_COL_CUSTOM_BLOCK_SHAPES),
+    input_width=list(range(32, 257, 32)) + [1024],
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[32],
     is_perf=[True],
@@ -43,8 +42,7 @@ def test_perf_eltwise_bcast_col_custom(
     math_fidelity,
     broadcast_type,
     tile_dimensions,
-    ct_dim,
-    num_blocks,
+    input_width,
     run_types,
     loop_factor,
     is_perf,
@@ -56,8 +54,7 @@ def test_perf_eltwise_bcast_col_custom(
         math_fidelity,
         broadcast_type,
         tile_dimensions,
-        ct_dim,
-        num_blocks,
+        input_width,
         is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,

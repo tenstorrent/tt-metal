@@ -12,8 +12,8 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/pow_int_device_operation.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -27,7 +27,7 @@
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include <variant>
-#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn {
 

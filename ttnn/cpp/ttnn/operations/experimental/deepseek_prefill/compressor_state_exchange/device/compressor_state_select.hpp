@@ -8,7 +8,7 @@
 #include <vector>
 
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"

@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include "build.hpp"
 

@@ -7,9 +7,9 @@
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "impl/lightmetal/host_data_type.hpp"
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <kernel_types.hpp>
 
 namespace tt::tt_metal {
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "op_slicing.hpp"
+#include <map>
 #include <tuple>
 #include <ttnn/operations/core/core.hpp>
 #include <ttnn/operations/data_movement/untilize/untilize.hpp>
@@ -280,11 +281,168 @@ Op2DSliceConfig determine_slice_config(
         op_slice_attr, input_shape, output_shape, slice_config_, output_layout, device, false);
 }
 
+// The starts of fixed slices of `slice` along an axis of `extent`: one every `slice`, the last shifted back to end at
+// the extent, so all have the same size. An extent of at most one slice gets one slice at 0, which reaches past it.
+static std::vector<uint32_t> fixed_slice_starts(uint32_t extent, uint32_t slice) {
+    std::vector<uint32_t> starts;
+    if (extent <= slice) {
+        return {0};
+    }
+    for (uint32_t start = 0; start + slice < extent; start += slice) {
+        starts.push_back(start);
+    }
+    starts.push_back(extent - slice);
+    return starts;
+}
+
+static void run_fixed_sliced_op(
+    const ttnn::Tensor& input_tensor,
+    std::vector<OpSliceAttr::RefTensor>& output_tensors,
+    OpSliceAttr* op_slice_attr,
+    const Op2DSliceConfig& slice_config) {
+    TT_FATAL(op_slice_attr->enable_fixed_slices(), "{} does not support fixed 2D DRAM slices", op_slice_attr->name());
+    TT_FATAL(
+        input_tensor.layout() == Layout::ROW_MAJOR && !input_tensor.is_sharded(),
+        "Fixed 2D DRAM slices need a row-major interleaved input, got {} {}",
+        input_tensor.layout(),
+        input_tensor.memory_config());
+    TT_FATAL(
+        slice_config.slice_width % tt::constants::TILE_HEIGHT == 0,
+        "The width of fixed 2D DRAM slices ({}) must be whole tiles",
+        slice_config.slice_width);
+    auto [batch_size, output_height, output_width, output_channels] =
+        output_tensors[0].get().logical_shape().to_array_4D();
+    const uint32_t input_channels = input_tensor.logical_shape()[-1];
+    for (const auto& output_tensor : output_tensors) {
+        TT_FATAL(output_tensor.get().layout() == Layout::TILE, "Fixed 2D DRAM slices need a tiled output");
+    }
+
+    // Along W the slices start on whole tiles of the tiled output, so they cover its width rounded up to whole tiles.
+    auto h_starts = fixed_slice_starts(output_height, slice_config.slice_height);
+    auto w_starts =
+        fixed_slice_starts(tt::round_up(output_width, tt::constants::TILE_HEIGHT), slice_config.slice_width);
+
+    // The input extent of the slice at an output start. A slice whose input window starts in the op's leading
+    // padding reads fewer input rows or columns and pads that part itself; past the leading padding all slices read
+    // the same extent, here taken at a start far from the edge.
+    const auto input_extent = [&](uint32_t h_start, uint32_t w_start) {
+        const auto [input_start, input_end] = op_slice_attr->get_input_slice(
+            {h_start, w_start}, {h_start + slice_config.slice_height, w_start + slice_config.slice_width});
+        return std::pair<uint32_t, uint32_t>{
+            std::get<0>(input_end) - std::get<0>(input_start), std::get<1>(input_end) - std::get<1>(input_start)};
+    };
+    constexpr uint32_t far_start = 1U << 16;
+    const auto [interior_h, interior_w] = input_extent(far_start, far_start);
+    // Only slices at start 0 may lie in the leading padding, so there are at most four kinds (top-left, top, left,
+    // interior) whatever the size. The last slice, shifted back to end at the edge, could land in the padding when
+    // the padding is wider than the stride (a 5x5 kernel with padding 2, say): it is moved forward until it doesn't,
+    // reaching further past the end, which is clipped. Along W it moves by whole tiles.
+    if (h_starts.size() > 1) {
+        while (input_extent(h_starts.back(), far_start).first < interior_h) {
+            h_starts.back()++;
+        }
+    }
+    if (w_starts.size() > 1) {
+        while (input_extent(far_start, w_starts.back()).second < interior_w) {
+            w_starts.back() += tt::constants::TILE_HEIGHT;
+        }
+    }
+    for (uint32_t i = 1; i < h_starts.size(); i++) {
+        TT_FATAL(
+            input_extent(h_starts[i], far_start).first == interior_h,
+            "{} fixed 2D DRAM slices: the slice height {} is too small for the op's top padding",
+            op_slice_attr->name(),
+            slice_config.slice_height);
+    }
+    for (uint32_t i = 1; i < w_starts.size(); i++) {
+        TT_FATAL(
+            input_extent(far_start, w_starts[i]).second == interior_w,
+            "{} fixed 2D DRAM slices: the slice width {} is too small for the op's left padding",
+            op_slice_attr->name(),
+            slice_config.slice_width);
+    }
+
+    // The memory config of a slice depends on its input extent, which tells the slice's leading padding, so the
+    // configs, which take a while to work out, are worked out once per extent. Fixed slices don't check
+    // get_L1_usage: a slice too big for L1 fails when its L1 op allocates, not up front.
+    std::map<std::pair<uint32_t, uint32_t>, MemoryConfig> input_memory_configs;
+    for (const uint32_t h_start : h_starts) {
+        for (const uint32_t w_start : w_starts) {
+            const OpSliceAttr::IOShape output_start{h_start, w_start};
+            const OpSliceAttr::IOShape output_end{
+                h_start + slice_config.slice_height, w_start + slice_config.slice_width};
+            const auto [input_start, input_end] = op_slice_attr->get_input_slice(output_start, output_end);
+            log_trace(
+                tt::LogOp,
+                "{} fixed DRAM slice: output ({}, {}) to ({}, {}), input ({}, {}) to ({}, {})",
+                op_slice_attr->name(),
+                h_start,
+                w_start,
+                std::get<0>(output_end),
+                std::get<1>(output_end),
+                std::get<0>(input_start),
+                std::get<1>(input_start),
+                std::get<0>(input_end),
+                std::get<1>(input_end));
+            const std::pair<uint32_t, uint32_t> kind{
+                std::get<0>(input_end) - std::get<0>(input_start), std::get<1>(input_end) - std::get<1>(input_start)};
+            auto memory_config = input_memory_configs.find(kind);
+            if (memory_config == input_memory_configs.end()) {
+                memory_config =
+                    input_memory_configs.emplace(kind, op_slice_attr->get_input_memory_config(output_start, output_end))
+                        .first;
+            }
+            // The input slice may reach past the input, where padded_slice reads zeros; it and slice_write take
+            // their offsets at run time, so every slice of every input size shares their programs.
+            const Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
+                input_tensor,
+                ttsl::SmallVector<uint32_t>{0, std::get<0>(input_start), std::get<1>(input_start), 0},
+                ttsl::SmallVector<uint32_t>{batch_size, std::get<0>(input_end), std::get<1>(input_end), input_channels},
+                ttsl::SmallVector<uint32_t>{1, 1, 1, 1},
+                memory_config->second,
+                std::nullopt,
+                std::nullopt,
+                /*runtime_shapes=*/true);
+            auto sliced_output_tensors = op_slice_attr->run_L1_op(sliced_input_tensor, output_start, output_end);
+            TT_FATAL(
+                sliced_output_tensors.size() == output_tensors.size(),
+                "Number of output tensors from run_L1_op {} does not match the expected number of output tensors {}",
+                sliced_output_tensors.size(),
+                output_tensors.size());
+            for (uint32_t i = 0; i < output_tensors.size(); i++) {
+                TT_FATAL(
+                    sliced_output_tensors[i].is_sharded() && sliced_output_tensors[i].layout() == Layout::TILE,
+                    "Fixed 2D DRAM slices need a sharded tiled output from {}",
+                    op_slice_attr->name());
+                // Written clipped to the output.
+                ttnn::experimental::slice_write(
+                    sliced_output_tensors[i],
+                    output_tensors[i].get(),
+                    ttsl::SmallVector<uint32_t>{0, h_start, w_start, 0},
+                    ttsl::SmallVector<uint32_t>{
+                        batch_size, std::get<0>(output_end), std::get<1>(output_end), output_channels},
+                    ttsl::SmallVector<uint32_t>{1, 1, 1, 1},
+                    /*runtime_shapes=*/true);
+            }
+        }
+    }
+}
+
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     std::vector<OpSliceAttr::RefTensor>& output_tensors,
     OpSliceAttr* op_slice_attr,
     const std::optional<Op2DSliceConfig> dram_slice_config_) {
+    TT_FATAL(
+        !dram_slice_config_.has_value() ||
+            (dram_slice_config_->slice_height > 0) == (dram_slice_config_->slice_width > 0),
+        "Fixed 2D DRAM slices need both slice_height and slice_width, got {} and {}",
+        dram_slice_config_.has_value() ? dram_slice_config_->slice_height : 0,
+        dram_slice_config_.has_value() ? dram_slice_config_->slice_width : 0);
+    if (dram_slice_config_.has_value() && dram_slice_config_->is_fixed()) {
+        run_fixed_sliced_op(input_tensor, output_tensors, op_slice_attr, dram_slice_config_.value());
+        return;
+    }
     Op2DSliceConfig dram_slice_config;
 
     tt::tt_metal::Layout output_layout = output_tensors[0].get().layout();
@@ -313,7 +471,8 @@ void run_sliced_op(
             dram_slice_config_,
             output_layout,
             input_tensor.device());
-        log_debug(tt::LogOp, "Auto determined DRAM Slice Config as {} for {}", dram_slice_config, op_slice_attr->name());
+        log_debug(
+            tt::LogOp, "Auto determined DRAM Slice Config as {} for {}", dram_slice_config, op_slice_attr->name());
 
         // If auto-determination resulted in num_slices==1, convert to L1_FULL to avoid DRAM slicing overhead
         // A single slice means the entire operation fits in L1, so we should use the L1 path instead

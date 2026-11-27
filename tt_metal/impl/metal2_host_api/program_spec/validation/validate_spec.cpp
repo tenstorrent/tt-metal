@@ -78,8 +78,10 @@ void ValidateProgramSpec(
     ValidateNodeCapacity(ctx, arch, max_slots_per_core);
 
     // NOTE:
-    // Kernels' node sets are the union of their containing WorkUnitSpecs' target_nodes.
-    // DFB endpoint coverage and scratchpad override coverage are validated above.
+    // Placement consistency between kernels, DFBs, and WorkUnitSpecs is now structural,
+    // not validated:
+    //  - Kernels' effective node sets ARE the union of their containing WorkUnitSpecs' target_nodes
+    //  - DFBs' allocation node sets are the union of their binding kernels' node sets
 }
 
 }  // namespace tt::tt_metal

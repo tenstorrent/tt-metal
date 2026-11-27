@@ -4,16 +4,16 @@
 
 #pragma once
 
-#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "reduce_scatter_minimal_async_op_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include <optional>
 #include <vector>

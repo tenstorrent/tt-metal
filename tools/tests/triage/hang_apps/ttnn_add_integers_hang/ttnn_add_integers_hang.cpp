@@ -14,9 +14,9 @@
 #include <sys/prctl.h>
 #include <vector>
 
-#include <tt-metalium/data_formats/bfloat16.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #include "add_integers_hang_op.hpp"
 #include "stop_simulation_on_termination.hpp"

@@ -76,10 +76,10 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    timeout-minutes: 120
+    timeout-minutes: ${{ matrix.test-group.timeout }}
     steps:
       - name: ⬇️ Checkout
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -246,7 +246,7 @@ jobs:
 
       - name: Run the tests
         if: matrix.test-group.scenario != 'tray_reset' && matrix.test-group.scenario != 'asic_reset'
-        timeout-minutes: ${{ matrix.test-group.timeout }}
+        timeout-minutes: 15
         run: |
           NUM_CONTAINERS=${{ matrix.test-group.num_containers }}
           CONTAINER_PREFIX="${{ matrix.test-group.container_prefix }}"
@@ -297,7 +297,7 @@ jobs:
       - name: Run reset isolation test
         if: matrix.test-group.scenario == 'tray_reset' || matrix.test-group.scenario == 'asic_reset'
         # Survivors hold one long run each; ~20min at the repeat_counts above.
-        timeout-minutes: ${{ matrix.test-group.timeout }}
+        timeout-minutes: 35
         run: |
           if [ "${{ matrix.test-group.scenario }}" = "tray_reset" ]; then
             RESET_DEVICE_IDS=$(python3 -c "

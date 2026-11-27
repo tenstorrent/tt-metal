@@ -1,15 +1,25 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-// DEPRECATED-FORWARDING-HEADER: <tt-metalium/bfloat4.hpp> moved to <tt-metalium/data_formats/bfloat4.hpp>.
-// This forwarding header will be removed after 2027-03-05.
-#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
-// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
-#warning \
-    "<tt-metalium/bfloat4.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/data_formats/bfloat4.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
-#endif
+#include <stdint.h>
+#include <tt-metalium/tile.hpp>
+#include <tt_stl/span.hpp>
 
-#include <tt-metalium/data_formats/bfloat4.hpp>  // IWYU pragma: export
+#include <optional>
+#include <vector>
+
+template <typename T>
+std::vector<uint32_t> pack_as_bfp4_tiles(
+    ttsl::Span<const T> data,
+    bool row_major_input,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
+
+std::vector<float> unpack_bfp4_tiles_into_float_vec(
+    ttsl::Span<const uint32_t> bfp_tiles,
+    bool row_major_output,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);

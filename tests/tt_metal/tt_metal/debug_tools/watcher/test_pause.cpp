@@ -13,20 +13,19 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/vocabulary/core_coord.hpp>
-#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
-#include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <tt-umd/types/xy_pair.hpp>
-#include <tt-metalium/workload/mesh_workload.hpp>
-#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -131,8 +130,8 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         .kernels = kernel_specs,
         .work_units = {wu},
     };
-    Program program(*mesh_device, spec);
-    program.set_program_run_args(params);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
     workload.add_program(device_range, std::move(program));
 
     // Run the program

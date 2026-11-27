@@ -57,9 +57,8 @@ void kernel_main() {
             if constexpr (control) {
                 result = receiver->receive_signal(round);
             } else {
-                constexpr bool chain = channel.transfer_mode == TransferMode::ChainUnicast;
                 [&](auto& pipe) {
-                    if constexpr (chain) {
+                    if constexpr (channel.transfer_mode == TransferMode::ChainUnicast) {
                         pipe.receive_and_forward(dst, 64, round);
                     } else {
                         pipe.receive(round);

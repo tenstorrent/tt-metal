@@ -9,7 +9,7 @@
 #include <span>
 #include <string_view>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
-#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include "program/program_impl.hpp"
 #include "impl/context/context_types.hpp"
 

@@ -4,17 +4,15 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include "api/compute/common_globals.h"
 
-#if defined(TRISC_PACK) && (defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR))
+#ifdef TRISC_PACK
 #include "experimental/llk_pack_block_api.h"
 #endif
 
 namespace ckernel {
 
-#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
+#ifdef ARCH_BLACKHOLE
 
 // clang-format off
 /**
@@ -22,11 +20,10 @@ namespace ckernel {
  * Call once after pack initialization (or when tile dimensions change).
  * Does NOT need to be called again when only `num_tiles` changes.
  *
- * Precondition: `pack_init` or other op-specific init must have been
+ * Precondition: `pack_tile` or other op-specific init must have been
  * called to set up the packer addr_mods and strides.
  *
- * Available on Blackhole and Quasar. On Quasar, call again when the output
- * DataFlow Buffer (DFB) changes: the MOP uses its buffer descriptor.
+ * Only available on Blackhole.
  *
  * Return value: None
  *
@@ -41,8 +38,7 @@ ALWI void pack_block_contiguous_init(uint32_t ocb) { PACK((llk_pack_block_contig
 /**
  * Packs `num_tiles` tiles from the DEST register to a specified circular
  * buffer in a single call. Tiles are read from sparse Tile32x32 DEST
- * slots on Blackhole, or the normal math tile layout on Quasar, and written
- * contiguously to L1. Quasar requires consecutive output DFB entries.
+ * slots (standard convention) and written contiguously to L1.
  *
  * Before calling this function, `pack_block_contiguous_init` must have
  * been called to configure the MOP, and `cb_reserve_back(n)` must have
@@ -50,7 +46,7 @@ ALWI void pack_block_contiguous_init(uint32_t ocb) { PACK((llk_pack_block_contig
  * The DEST register buffer must be in acquired state via *acquire_dst*.
  *
  * This call is blocking and is only available on the compute engine
- * (Blackhole and Quasar only).
+ * (Blackhole only).
  *
  * Operates in tandem with functions cb_reserve_back and cb_push_back.
  *
@@ -58,9 +54,9 @@ ALWI void pack_block_contiguous_init(uint32_t ocb) { PACK((llk_pack_block_contig
  *
  * | Param Type | Name      | Description                                       | Type     | Valid Range                                            | Required |
  * |------------|-----------|---------------------------------------------------|----------|--------------------------------------------------------|----------|
- * | Function   | ifrom_dst | The index of the first tile in the DEST register  | uint32_t | Source range must fit the current DEST section         | True     |
+ * | Function   | ifrom_dst | The index of the first tile in the DEST register  | uint32_t | Must be less than the size of the DEST register (16)   | True     |
  * | Function   | ocb       | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                                | True     |
- * | Function   | num_tiles | Number of tiles to pack from DEST to CB           | uint32_t | Positive; source range must fit the current DEST section | True     |
+ * | Function   | num_tiles | Number of tiles to pack from DEST to CB           | uint32_t | 1 to 8                                                 | True     |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>

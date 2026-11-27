@@ -5,13 +5,13 @@
 #include "per_token_cast_back_program_factory.hpp"
 
 #include <tuple>
-#include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/utils/work_split.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/hal.hpp>
 
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
@@ -128,8 +128,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     auto* counts_buffer = token_count_aware ? expert_token_counts->buffer() : nullptr;
     auto* table_buffer = token_count_aware ? global_expert_idx_table->buffer() : nullptr;
 
+    Program program{};
+
     auto* device = input_e4m3.device();
-    Program program = CreateProgram(*device);
     auto compute_grid = device->compute_with_storage_grid_size();
 
     // Split the work across the cores.

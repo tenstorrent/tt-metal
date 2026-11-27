@@ -13,7 +13,8 @@
 namespace hal::cfg::detail
 {
 
-// TODO: #58443 Remove the duplicate ckernel::reg_read, reg_write, and wait.
+// These duplicate ckernel::reg_read, reg_write, and wait.
+// TODO(njokovic) issue #58443: Remove ckernel:: implementations when HAL is applied to all kernels.
 /**
  * @brief Read a 32-bit register through RISC MMIO.
  *

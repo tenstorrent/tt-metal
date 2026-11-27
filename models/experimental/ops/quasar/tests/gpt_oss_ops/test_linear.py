@@ -29,7 +29,7 @@ import pytest
 import ttnn
 from models.experimental.ops.quasar.tests.gpt_oss_ops import graph_case as G
 
-_OP = ttnn.experimental.quasar.linear
+_OP = ttnn.linear
 
 CASES = [
     {

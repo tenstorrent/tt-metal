@@ -25,14 +25,14 @@
 namespace topk_xl_split
 {
 
-constexpr std::uint8_t F2S = ckernel::semaphore::FPU_SFPU;
-constexpr std::uint8_t S2F = ckernel::semaphore::UNPACK_MATH_DONE;
+constexpr std::uint8_t F2S                   = ckernel::semaphore::FPU_SFPU;
+constexpr std::uint8_t S2F                   = ckernel::semaphore::UNPACK_MATH_DONE;
 // The schedule runs ahead of PACK, so the shared semaphores need more than their default depth of 1.
 constexpr std::uint8_t TOKEN_DEPTH             = 15;
 constexpr std::uint8_t DEFAULT_SEMAPHORE_DEPTH = 1;
-constexpr std::uint32_t STEPS_PER_CHUNK        = 9;
-constexpr std::uint32_t STAGES_FIRST_CHUNK     = 7;
-constexpr std::uint32_t STAGES_MERGING_CHUNK   = 9;
+constexpr std::uint32_t STEPS_PER_CHUNK      = 9;
+constexpr std::uint32_t STAGES_FIRST_CHUNK   = 7;
+constexpr std::uint32_t STAGES_MERGING_CHUNK = 9;
 
 inline bool decode_step(const std::uint32_t c1, const std::uint32_t r, const std::uint32_t num_chunks, std::uint32_t& chunk, std::uint32_t& stage)
 {
@@ -376,25 +376,36 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
     {
         case 0:
             sfpu::_topk_xl_split_stamp_<K>(tile_offset, chunk);
-            sfpu::_topk_xl_split_sort_head_<K, true /*macros*/>(tile_offset, ascending);
+            if constexpr (K == 2048)
+            {
+                sfpu::_topk_xl_split_sort_head_2048_(tile_offset, ascending);
+            }
+            else if constexpr (K == 1024)
+            {
+                sfpu::_topk_xl_split_sort_head_1024_(tile_offset, ascending);
+            }
+            else
+            {
+                sfpu::_topk_xl_split_sort_head_512_<true /*macros*/>(tile_offset, ascending);
+            }
             break;
         case 1:
-            sfpu::_topk_xl_split_column_pairs_<K, 4 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_stride2_<K, 4 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 2:
-            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::EVERY_2_LANES>(tile_offset, ascending);
+            sfpu::_topk_xl_split_columns_<K, 0x5050 /*lane_mask*/>(tile_offset, ascending);
             break;
         case 3:
-            sfpu::_topk_xl_split_column_pairs_<K, 8 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_stride2_<K, 8 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 4:
-            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::EVERY_4_LANES>(tile_offset, ascending);
+            sfpu::_topk_xl_split_columns_<K, 0x5500 /*lane_mask*/>(tile_offset, ascending);
             break;
         case 5:
-            sfpu::_topk_xl_split_column_pairs_<K, 16 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_stride2_<K, 16 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 6:
-            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::NONE>(tile_offset, ascending);
+            sfpu::_topk_xl_split_columns_<K, 0 /*lane_mask*/>(tile_offset, ascending);
             if (chunk > 0)
             {
                 // The merge also stores into the previous survivor, whose Dst bank MATH's next step works in, so that step
@@ -429,7 +440,7 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
             sfpu::_topk_xl_split_rebuild_build_<K>(survivor_tile<K>(chunk, num_chunks) << 6, rebuild_dir);
             break;
         default:
-            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::NONE>(survivor_tile<K>(chunk, num_chunks) << 6, rebuild_dir);
+            sfpu::_topk_xl_split_columns_<K, 0 /*lane_mask*/>(survivor_tile<K>(chunk, num_chunks) << 6, rebuild_dir);
             break;
     }
 }
@@ -559,9 +570,6 @@ inline __attribute__((noinline)) void pack_head(const std::uint32_t num_chunks, 
 template <std::uint32_t K, typename Epilogue>
 inline void pack_row(const std::uint32_t num_chunks, const bool mirror_last, Epilogue&& epilogue)
 {
-    // The sort's alternate stores advance dest through ADDR_MOD_6 by one face row (+32).
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
-
     static_assert(supported_split<K>, "the split takes fused K = 512, 1024 and 2048 rows");
     LLK_ASSERT(num_chunks >= 1, "pack_row needs at least one chunk");
     // Only stages 7 and 8 read the rebuild direction, and a single-chunk row never reaches them, so it would
@@ -581,11 +589,6 @@ inline void pack_row(const std::uint32_t num_chunks, const bool mirror_last, Epi
         pack_slot<K>(c1, num_chunks, mirror_last);
     }
     epilogue();
-
-    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next PACK SFPU op. ADDR_MOD slots
-    // are per-thread config, so this restore is PACK-local -- it cannot land in MATH's section;
-    // MATH's own sections program their slot themselves.
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
 }
 

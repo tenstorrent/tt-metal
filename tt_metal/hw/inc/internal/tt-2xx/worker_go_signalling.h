@@ -13,15 +13,11 @@
 
 #ifdef FDS_SIGNALLING
 #include "overlay/fds_signalling.hpp"
-#include "internal/tt-2xx/machine_external_interrupts.h"
+#include "quasar/plic.hpp"
 
 constexpr uint32_t fds_num_go_groups = go_message_num_entries - 1;
 constexpr uint32_t fds_go_interrupt_mask = overlay::fds_signalling::go_interrupt_mask(fds_num_go_groups);
 static_assert(fds_go_interrupt_mask == 0x1FE, "FDS interrupt mask must cover exactly groups 1..8");
-// The handler table's bounds checks are asserts, which builds without the watcher compile out.
-static_assert(
-    overlay::fds_signalling::plic_source_for_go_group(fds_num_go_groups) < overlay::quasar::plic_num_sources,
-    "FDS go group PLIC sources must fit the machine-external handler table");
 
 // Go ring slot the interrupt handler marks for the next FDS go. An FDS go carries no slot, so the handler counts them:
 // each go is for the next launch message, and the firmware resets the count wherever it resets the launch message read
@@ -30,10 +26,19 @@ inline volatile uint32_t fds_go_ring_write_slot = 0;
 
 inline void reset_go_ring_write_slot() { fds_go_ring_write_slot = 0; }
 
-// Registered only for the go groups' sources, so plic_source always names a go group.
-inline void fds_go_interrupt_handler(uint32_t plic_source) {
+__attribute__((interrupt)) inline void fds_go_interrupt_handler() {
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
-    const uint32_t group_id = overlay::fds_signalling::go_group_from_plic_source(plic_source);
+    const uint32_t claimed_source = overlay::quasar::plic_claim();
+    if (claimed_source == 0) {
+        return;
+    }
+
+    const uint32_t group_id = overlay::fds_signalling::go_group_from_plic_source(claimed_source);
+    if (overlay::fds_signalling::sub_device_from_go_group(group_id) >= fds_num_go_groups) {
+        ASSERT(0);
+        // Not completing the claim stops the PLIC from delivering this source again.
+        return;
+    }
     const uint32_t handled_dispatch_lanes = overlay::fds_signalling::worker_read_group_status(group_id);
     uint32_t dispatch_lanes = handled_dispatch_lanes;
     while (dispatch_lanes != 0) {
@@ -45,12 +50,13 @@ inline void fds_go_interrupt_handler(uint32_t plic_source) {
     // that arrived on another lane since the read above keeps the interrupt raised.
     overlay::fds_signalling::worker_clear_group_status(group_id, handled_dispatch_lanes);
 
-    // The go interrupt is level-triggered, so the dispatcher completing the claim while the handled lanes still read
-    // set would make the PLIC deliver it again. Wait until a read shows them clear.
+    // The go interrupt is level-triggered, so completing the claim while the handled lanes still read set would make
+    // the PLIC deliver it again. Wait until a read shows them clear.
     WAYPOINT("FGCW");
     while ((overlay::fds_signalling::worker_read_group_status(group_id) & handled_dispatch_lanes) != 0) {
     }
     WAYPOINT("FGCD");
+    overlay::quasar::plic_complete(claimed_source);
 
     // The host rewrites go_message_index only after quiesce with no go in flight, so no locking is needed.
     if (group_id == overlay::fds_signalling::go_group_for_sub_device(mailboxes->go_message_index)) {
@@ -66,10 +72,13 @@ inline void fds_go_interrupt_handler(uint32_t plic_source) {
 
 // Brings up the NOC and whichever go-signal transport this build uses, then publishes the
 // firmware-ready RUN_MSG_DONE. The host's wait on that DONE is the only barrier before the dispatch
-// cores launch, so the FDS body must publish it last: after the go interrupt is armed. The FDS body needs
-// init_machine_external_interrupts to have run.
+// cores launch, so the FDS body must publish it last: after the go interrupt is armed.
 inline void init_go_signalling(tt_l1_ptr mailboxes_t* const mailboxes) {
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    register_handler_for_interrupt(MACHINE_EXTERNAL_INTERRUPT_OFFSET, fds_go_interrupt_handler);
+    // Registering a handler stores a jump instruction into the trap vector table, so the icache has
+    // to be invalidated before the first go interrupt fetches through that entry.
+    invalidate_l1_icache();
     const uint32_t previous_auto_dispatch_cycle_count =
         overlay::fds_signalling::worker_read_auto_dispatch_cycle_count();
     const uint32_t previous_auto_dispatch_enabled = overlay::fds_signalling::worker_read_auto_dispatch_enable();
@@ -100,19 +109,20 @@ inline void init_go_signalling(tt_l1_ptr mailboxes_t* const mailboxes) {
         // Where group status is sticky, a go a previous run left in it would fire as soon as the interrupt is armed.
         overlay::fds_signalling::worker_clear_group_status(go_group_id, overlay::fds_signalling::dispatch_lane_mask);
     }
+    overlay::quasar::plic_set_threshold(overlay::quasar::plic_threshold_allow_all);
     for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;
          ++go_group_id) {
-        register_machine_external_interrupt_handler(
-            overlay::fds_signalling::plic_source_for_go_group(go_group_id),
-            overlay::fds_signalling::plic_fds_priority,
-            fds_go_interrupt_handler);
+        const uint32_t plic_source = overlay::fds_signalling::plic_source_for_go_group(go_group_id);
+        overlay::quasar::plic_set_priority(plic_source, overlay::fds_signalling::plic_fds_priority);
     }
-    // A pending a previous run latched would reach the go handler as a spurious go. The drain claims every enabled
-    // source, so it runs before mie.MEIE is set, while nothing else can be pending for real.
+    overlay::quasar::plic_enable_only_sources(
+        overlay::fds_signalling::plic_source_for_go_group(overlay::fds_signalling::idle_group_id + 1),
+        overlay::fds_signalling::plic_source_for_go_group(overlay::fds_signalling::idle_group_id + fds_num_go_groups));
     overlay::quasar::plic_drain_pendings();
     // Thresholds and PLIC enables must be set before arming the FDS interrupt level at reset.
     overlay::fds_signalling::worker_config_interrupt_enable(fds_go_interrupt_mask);
-    arm_machine_external_interrupts();
+    asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
+    asm volatile("csrrs zero, mstatus, %0" : : "r"(uint32_t{1} << 3));
     clear_go_messages(mailboxes->go_messages);
 }
 

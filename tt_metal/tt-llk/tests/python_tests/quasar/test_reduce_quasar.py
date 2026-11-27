@@ -52,7 +52,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
-    NUM_TILES_IN_BLOCK,
     REDUCE_TO_ONE,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -71,9 +70,6 @@ mathop_mapping = {
 }
 
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
-
-# Per-tile SrcA scales: distinct magnitudes make a re-read SrcA tile miss the golden
-DISTINCT_TILE_SCALES = torch.tensor([1.0, 1.25, 1.5, 1.75])
 
 # Int8 data accumulates in an Int32 Dest. An Int8 output only holds a max without overflow.
 INT_REDUCE_FORMATS = [
@@ -156,7 +152,7 @@ def reduce_math_fidelities(formats, pool_type):
     pool_type=reduce_pool_types,
     math_fidelity=reduce_math_fidelities,
     is_reduce_to_one=reduce_is_reduce_to_one_modes,
-    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -168,14 +164,12 @@ def test_reduce_quasar(
     pool_type,
     math_fidelity,
     is_reduce_to_one,
-    dest_sync,
+    dest_sync_mode,
     run_types,
     loop_factor,
     *,
     is_perf=False,
     perf_report=None,
-    unpack_num_tiles=1,
-    distinct_tile_magnitudes=False,
     input_dimensions=None,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
@@ -190,17 +184,6 @@ def test_reduce_quasar(
         input_dimensions_B=tile_dimensions,
         tile_dimensions=tile_dimensions,
     )
-    assert (
-        tile_cnt % unpack_num_tiles == 0
-    ), f"tile_cnt {tile_cnt} must be a multiple of unpack_num_tiles {unpack_num_tiles}"
-
-    if distinct_tile_magnitudes:
-        tile_scales = DISTINCT_TILE_SCALES[
-            torch.arange(tile_cnt) % len(DISTINCT_TILE_SCALES)
-        ]
-        src_A = (
-            src_A * tile_scales.repeat_interleave(tile_shape.total_tile_size())
-        ).to(src_A.dtype)
 
     if pool_type in [
         ReducePool.Max,
@@ -268,7 +251,7 @@ def test_reduce_quasar(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            DEST_SYNC(dest_sync),
+            DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
             generate_input_dim(
@@ -277,7 +260,6 @@ def test_reduce_quasar(
                 tile_dimensions=tile_dimensions,
             ),
             TILE_COUNT(tile_cnt),
-            NUM_TILES_IN_BLOCK(input_num_tiles_in_block=unpack_num_tiles),
             REDUCE_TO_ONE(is_reduce_to_one),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
@@ -326,33 +308,6 @@ def test_reduce_quasar(
     ), "Assert against golden failed"
 
 
-@pytest.mark.quasar
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    tile_dimensions=[(32, 32), (16, 32)],
-    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type=POOL_TYPES,
-    unpack_num_tiles=[1, 2, 4],
-)
-def test_reduce_quasar_multi_tile_unpack(
-    formats, tile_dimensions, reduce_dim, pool_type, unpack_num_tiles
-):
-    test_reduce_quasar(
-        formats,
-        tile_dimensions,
-        DestAccumulation.No,
-        reduce_dim,
-        pool_type,
-        MathFidelity.LoFi,
-        is_reduce_to_one=False,
-        dest_sync=DEST_SYNC().dest_sync,  # DestSync.Half
-        run_types=[PerfRunType.L1_TO_L1],
-        loop_factor=1,
-        unpack_num_tiles=unpack_num_tiles,
-        distinct_tile_magnitudes=True,
-    )
-
-
 # Tiles folded into the single output tile: N >= 8.
 REDUCE_TO_ONE_TILE_COUNTS = [8, 16]
 
@@ -363,16 +318,16 @@ REDUCE_TO_ONE_TILE_COUNTS = [8, 16]
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=POOL_TYPES,
-    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
-    tile_cnt=runtime(REDUCE_TO_ONE_TILE_COUNTS),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    tile_count=runtime(REDUCE_TO_ONE_TILE_COUNTS),
 )
 def test_reduce_quasar_multi_tile_to_one(
     formats,
     dest_acc,
     reduce_dim,
     pool_type,
-    dest_sync,
-    tile_cnt,
+    dest_sync_mode,
+    tile_count,
 ):
     """Reduce N > 1 tiles into one DEST tile for every pool type and reduce dimension."""
     test_reduce_quasar(
@@ -383,10 +338,10 @@ def test_reduce_quasar_multi_tile_to_one(
         pool_type,
         MathFidelity.LoFi,
         True,
-        dest_sync,
+        dest_sync_mode,
         [PerfRunType.L1_TO_L1],
         1,
-        input_dimensions=[32 * tile_cnt, 32],
+        input_dimensions=[32 * tile_count, 32],
     )
 
 
@@ -396,7 +351,7 @@ def test_reduce_quasar_multi_tile_to_one(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column],
     pool_type=[ReducePool.Max, ReducePool.Sum],
-    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
     blocks=runtime(list(DEST_DEPTH_BLOCK_COUNTS)),
 )
 def test_reduce_quasar_dest_depth(
@@ -404,7 +359,7 @@ def test_reduce_quasar_dest_depth(
     dest_acc,
     reduce_dim,
     pool_type,
-    dest_sync,
+    dest_sync_mode,
     blocks,
 ):
     """Per-tile reduce over 4 and 8 Dest sections of SyncHalf size.
@@ -420,7 +375,7 @@ def test_reduce_quasar_dest_depth(
         pool_type,
         MathFidelity.LoFi,
         False,
-        dest_sync,
+        dest_sync_mode,
         [PerfRunType.L1_TO_L1],
         1,
         input_dimensions=[32 * blocks * max_dest_tiles(dest_acc, DestSync.Half), 32],
@@ -463,7 +418,7 @@ _ARCH = get_chip_architecture()
     reduce_dim=[ReduceDimension.Column, ReduceDimension.Row],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),
-    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -474,7 +429,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     reduce_dim,
     pool_type,
     math_fidelity,
-    dest_sync,
+    dest_sync_mode,
     run_types,
     loop_factor,
     *,
@@ -522,12 +477,11 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            DEST_SYNC(dest_sync),
+            DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
-            NUM_TILES_IN_BLOCK(),
             REDUCE_TO_ONE(False),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),

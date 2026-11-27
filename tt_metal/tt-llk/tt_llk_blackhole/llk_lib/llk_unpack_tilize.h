@@ -339,16 +339,15 @@ inline void _llk_unpack_tilize_(
         // Run MOP
         ckernel::ckernel_template::run();
 
+        // T6::SEMGET for context release
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+
         if (unpack_to_dest)
         {
             // Pair with set_dst_write_addr above (both keyed on unpack_src_format), so the
             // canonical Z-stride restore matches the value programmed on entry.
             unpack_to_dest_tile_done(unp_cfg_context, unpack_src_format);
         }
-
-        // T6::SEMGET for context release, after unpack_to_dest_tile_done's config writes so that
-        // configure_unpack_AB's wait_for_idle also waits for them
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
 
         // Switch unpacker config context
         switch_config_context(unp_cfg_context);
@@ -442,11 +441,11 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
     ckernel_unpack_template tmp = ckernel_unpack_template(
         false,                                     // src B
         false,                                     // halo - just used for 4 unpacks
-        TT_OP_REPLAY(0, replay_buf_half_len, 0, 0), // runs when context is 0
+        lltt::replay_insn(0, replay_buf_half_len), // runs when context is 0
         0,
         0,
         0,
-        TT_OP_REPLAY(replay_buf_half_len, replay_buf_half_len, 0, 0), // runs when context is 1
+        lltt::replay_insn(replay_buf_half_len, replay_buf_half_len), // runs when context is 1
         0,
         0);
 

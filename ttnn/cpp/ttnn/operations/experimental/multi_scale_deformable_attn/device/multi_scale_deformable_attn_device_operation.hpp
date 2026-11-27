@@ -9,7 +9,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::multi_scale_deformable_attn {
 

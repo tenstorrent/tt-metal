@@ -6,9 +6,9 @@
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
-#include <tt-metalium/vocabulary/mesh_coord.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 

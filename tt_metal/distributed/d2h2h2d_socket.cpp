@@ -9,11 +9,11 @@
 
 #include <fmt/format.h>
 
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
 #include "tt_metal/distributed/host_rdma_window.hpp"
-#include <tt-metalium/vocabulary/hal_types.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental {

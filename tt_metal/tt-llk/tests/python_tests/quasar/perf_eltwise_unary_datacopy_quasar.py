@@ -3,9 +3,8 @@
 
 import pytest
 from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR
-from helpers.param_config import flat_axes, parametrize
+from helpers.param_config import parametrize
 from quasar.test_eltwise_unary_datacopy_quasar import (
-    DATACOPY_FLAT_NAMES,
     PERF_DATACOPY_COMBINATIONS,
 )
 from quasar.test_eltwise_unary_datacopy_quasar import (
@@ -17,32 +16,20 @@ from quasar.test_eltwise_unary_datacopy_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    **flat_axes(DATACOPY_FLAT_NAMES, PERF_DATACOPY_COMBINATIONS),
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=PERF_DATACOPY_COMBINATIONS,
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_eltwise_unary_datacopy_quasar(
     perf_report,
-    formats,
-    dest_acc,
-    data_copy_type,
-    input_dimensions,
-    dest_sync,
-    dest_index,
-    tile_dimensions,
+    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
     run_types,
     loop_factor,
     is_perf,
 ):
     run_eltwise_unary_datacopy(
-        formats,
-        dest_acc,
-        data_copy_type,
-        input_dimensions,
-        dest_sync,
-        dest_index,
-        tile_dimensions,
+        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

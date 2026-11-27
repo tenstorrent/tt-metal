@@ -13,11 +13,10 @@ constexpr uint32_t L1_ECC_HALT_REASON_UNEXPECTED = 0xECC00003;
 
 // Blackhole Tensix ECC_CTRL fields. The two clears act while held at 1, so they are always pulsed.
 enum EccCtrl : uint32_t {
-    ECC_CTRL_VIEW_MASK = 0xFu,            // [3:0]: ECC_STATUS view select
-    ECC_CTRL_COUNTS_CLR = 1u << 4,        // [4]: also clears the last error's valid bit
-    ECC_CTRL_IRQ_CLR = 1u << 5,           // [5]
-    ECC_CTRL_L1_DBE_IRQ_EN = 1u << 9,     // [9]
-    ECC_CTRL_IRQ_EVERY_ERROR = 1u << 20,  // [20]: also forces the NoC error interrupt enables [23:21] on
+    ECC_CTRL_VIEW_MASK = 0xFu,         // [3:0]: ECC_STATUS view select
+    ECC_CTRL_COUNTS_CLR = 1u << 4,     // [4]: also clears the last error's valid bit
+    ECC_CTRL_IRQ_CLR = 1u << 5,        // [5]
+    ECC_CTRL_L1_DBE_IRQ_EN = 1u << 9,  // [9]
 };
 
 // ECC_STATUS views, selected by ECC_CTRL[3:0]. There is one last L1 error, in one of the 32 banks; its valid bit
@@ -35,17 +34,10 @@ enum class EccView : uint32_t {
     LAST_L1_ERROR_BANKS_16_31 = 6,
 };
 
-// ECC_CTRL's interrupt enables while armed. By default the hardware interrupts only on an error in a word other than
-// the last error's, so a DBE in the word of an earlier SBE would not interrupt. With [20] every DBE interrupts.
-constexpr uint32_t l1_ecc_ctrl_irq_enables = ECC_CTRL_L1_DBE_IRQ_EN | ECC_CTRL_IRQ_EVERY_ERROR;
-// ECC_CTRL after arming and after a false error.
-constexpr uint32_t l1_ecc_ctrl_armed = static_cast<uint32_t>(EccView::L1_COUNTS) | l1_ecc_ctrl_irq_enables;
-
 // ECC_STATUS fields. Masks are in place; a field's value is (status & MASK) >> SHIFT.
 enum EccStatus : uint32_t {
     // Views 1 and 2: L1 counts.
-    ECC_DBE_COUNT_MASK = 0x3Fu,       // [5:0]
-    ECC_DBE_OVERFLOW_MASK = 1u << 6,  // [6]: the DBE count wrapped
+    ECC_DBE_COUNT_MASK = 0x3Fu,  // [5:0]
     ECC_SBE_COUNT_SHIFT = 7,
     ECC_SBE_COUNT_MASK = 0xFFu << 7,  // [14:7]
     // Views 3 and 6: last L1 error.

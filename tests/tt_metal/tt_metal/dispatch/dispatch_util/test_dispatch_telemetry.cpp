@@ -22,11 +22,11 @@
 #include <vector>
 
 #include <tt-metalium/experimental/dispatch_telemetry.hpp>
-#include <tt-metalium/mesh/allocator.hpp>
-#include <tt-metalium/mesh/sub_device.hpp>
-#include <tt-metalium/mesh/sub_device_types.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
-#include <tt-umd/tt_device/protocol/pcie_interface.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 
@@ -585,10 +585,11 @@ TEST_F(DispatchTelemetryHostL1WaitTest, ReadInfoFromSeparateProcessWhileDeviceIn
     constexpr const char* observerChildFilter =
         "DispatchTelemetryObserverChild.ReadInfoFromDeviceOwnedByAnotherProcess";
 
-    if (tt_device().get_pcie_interface() == nullptr) {
+    auto* pci_device = tt_device().get_pci_device();
+    if (pci_device == nullptr) {
         GTEST_SKIP() << "Requires a PCIe-backed TTDevice";
     }
-    const int pci_device_num = tt_device().get_communication_device_id();
+    const int pci_device_num = pci_device->get_device_num();
 
     ASSERT_FALSE(metal_context_created_during_registration)
         << "A MetalContext was created during test registration (e.g. by an INSTANTIATE_TEST_SUITE_P generator); "

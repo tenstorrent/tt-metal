@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/execution/distributed.hpp>
-#include <tt-metalium/mesh/sub_device.hpp>
-#include <tt-metalium/mesh/sub_device_types.hpp>
-#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
@@ -19,9 +19,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
-#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include <cstring>
-#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/math.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed {

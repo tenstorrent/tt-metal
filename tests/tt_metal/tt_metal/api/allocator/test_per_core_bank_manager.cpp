@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/impl/allocator/bank_manager.hpp"
 
 namespace per_core_bank_manager_tests {

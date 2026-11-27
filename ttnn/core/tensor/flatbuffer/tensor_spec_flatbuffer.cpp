@@ -217,17 +217,9 @@ tt::tt_metal::TensorLayout from_flatbuffer(const flatbuffer::TensorLayout* layou
             case flatbuffer::PageConfig::tile: {
                 const auto* tile_page_config = layout->page_config_as_tile();
                 const auto* flat_tile = tile_page_config->tile();
-                const std::array tile_shape{flat_tile->tile_shape_h(), flat_tile->tile_shape_w()};
-                if (flat_tile->face_shape_h() == 0 && flat_tile->face_shape_w() == 0) {
-                    return tt::tt_metal::PageConfig(
-                        tt::tt_metal::Layout::TILE, tt::tt_metal::Tile(tile_shape, flat_tile->transpose_tile()));
-                }
-                return tt::tt_metal::PageConfig(
-                    tt::tt_metal::Layout::TILE,
-                    tt::tt_metal::Tile(
-                        tile_shape,
-                        std::array{flat_tile->face_shape_h(), flat_tile->face_shape_w()},
-                        flat_tile->transpose_tile()));
+                tt::tt_metal::Tile tile(
+                    std::array{flat_tile->tile_shape_h(), flat_tile->tile_shape_w()}, flat_tile->transpose_tile());
+                return tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, tile);
             }
             default: TT_THROW("Unsupported PageConfig type from flatbuffer.");
         }
@@ -248,13 +240,8 @@ flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(
     auto page_config = layout.get_page_config();
     if (page_config.get_layout() == tt::tt_metal::Layout::TILE) {
         auto tile = page_config.get_tile();
-        auto flat_tile = flatbuffer::CreateTile(
-            builder,
-            tile.get_height(),
-            tile.get_width(),
-            tile.get_transpose_of_faces(),
-            tile.get_face_shape()[0],
-            tile.get_face_shape()[1]);
+        auto flat_tile =
+            flatbuffer::CreateTile(builder, tile.get_height(), tile.get_width(), tile.get_transpose_of_faces());
         return flatbuffer::CreateTensorLayout(
             builder,
             to_flatbuffer(layout.get_data_type()),

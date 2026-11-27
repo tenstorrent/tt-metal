@@ -10,7 +10,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "unified_routed_expert_ffn.hpp"

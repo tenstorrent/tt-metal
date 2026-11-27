@@ -3,10 +3,10 @@
 
 #pragma once
 
-#include <tt-metalium/workload/specification/compute_modes.hpp>
-#include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/mesh/mesh_device.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

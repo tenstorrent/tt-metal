@@ -12,7 +12,7 @@ Typecast was ported from the legacy `ProgramDescriptor` API to Metal 2.0
     (`KernelDescriptor::emplace_runtime_args`) and the descriptor adapter patched those
     address slots in place on every dispatch.
   - Metal 2.0: the buffers are `TensorParameter`s bound by name; on a hit the adapter calls
-    `Program::update_tensor_args` to re-resolve every `TensorArgument` against the *current* tensors. For
+    `UpdateTensorArgs` to re-resolve every `TensorArgument` against the *current* tensors. For
     `TypecastShardedProgramFactory` this also re-attaches the borrowed-memory DFBs
     (`DataflowBufferSpec::borrowed_from`), whose backing L1 address comes straight from the
     tensor argument.
@@ -218,3 +218,43 @@ def test_typecast_row_major_chunked_program_cache_hit(device):
         golden=lambda t: t.to(torch.float32),
         typecast_kwargs={"memory_config": ttnn.DRAM_MEMORY_CONFIG},
     )
+
+
+def test_typecast_row_major_one_program_over_row_counts(device):
+    # With runtime_shapes the row-major program takes the row counts at run time, so from one row per core up
+    # every row count with the same row width shares it. FLUX.2's image conversion, over image sizes. The tensors
+    # stay alive so each call gets new buffers.
+    grid = device.compute_with_storage_grid_size()
+    device.cache_entries_counter.reset()
+    kept = []
+    for rows in [4 * grid.x * grid.y, 1000, 4567, grid.x * grid.y + 1]:
+        torch_input = torch.randint(0, 256, (1, 1, rows, 3)).to(torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with device.cache_entries_counter.measure():
+            y = ttnn.typecast(x, ttnn.uint8, runtime_shapes=True)
+        assert torch.equal(ttnn.to_torch(y).to(torch.int32), torch_input.to(torch.int32)), rows
+        kept += [x, y]
+    assert device.cache_entries_counter.total == 1
+
+
+def test_typecast_row_major_few_rows_get_their_own_programs(device):
+    # Up to one row per core the core set follows the row count, and another rank gets its own program.
+    device.cache_entries_counter.reset()
+    for shape in [(1, 1, 5, 3), (1, 1, 7, 3), (1000, 3), (1, 1, 1000, 3)]:
+        torch_input = torch.randint(0, 256, shape).to(torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with device.cache_entries_counter.measure():
+            y = ttnn.typecast(x, ttnn.uint8, runtime_shapes=True)
+        assert torch.equal(ttnn.to_torch(y).to(torch.int32), torch_input.to(torch.int32)), shape
+    assert device.cache_entries_counter.total == 4
+
+
+def test_typecast_row_major_without_runtime_shapes_keeps_one_program_per_row_count(device):
+    device.cache_entries_counter.reset()
+    for rows in [1000, 4567]:
+        torch_input = torch.randint(0, 256, (1, 1, rows, 3)).to(torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with device.cache_entries_counter.measure():
+            y = ttnn.typecast(x, ttnn.uint8)
+        assert torch.equal(ttnn.to_torch(y).to(torch.int32), torch_input.to(torch.int32)), rows
+    assert device.cache_entries_counter.total == 2

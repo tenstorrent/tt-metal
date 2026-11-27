@@ -4,7 +4,7 @@
 
 #include "ttnn/async_runtime.hpp"
 
-#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "ttnn/device_operation_detail.hpp"
 #include "ttnn/distributed/api.hpp"
 

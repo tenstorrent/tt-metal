@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <unordered_map>
 // #include "device_fixture.hpp"
-#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tuple>
 
 namespace tt::tt_metal::unit_tests::dm {

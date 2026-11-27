@@ -9,7 +9,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "kernels/dataflow/combine_fabric2d_stream.hpp"
