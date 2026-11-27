@@ -35,7 +35,7 @@
 - **Compute config**: none (no compute kernel)
 - **Golden baseline**: 58 / 89 registry cells passing (49/73 INPUTS + 9/16 LOOSE_CASES), 31 `xfail_expected`, 0 loud; 2/2 regression tests
 
-### [ ] Refinement 1 — bfloat8_b TILE input and sharded inputs (HEIGHT / BLOCK)
+### [x] Refinement 1 — bfloat8_b TILE input and sharded inputs (HEIGHT / BLOCK)
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and `ttnn.TensorMemoryLayout.HEIGHT_SHARDED`, `ttnn.TensorMemoryLayout.BLOCK_SHARDED` to `SUPPORTED["memory_layout"]`. Use the two deferred regimes of `op_design.md`:
 

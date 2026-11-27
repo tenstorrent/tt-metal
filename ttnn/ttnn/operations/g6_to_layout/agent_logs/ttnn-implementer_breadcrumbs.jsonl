@@ -19,3 +19,4 @@
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/g6_to_layout/test_g6_to_layout.py","detail":"31/31 regression net","ts":"2026-11-27T10:16:48-05:00"}
 {"event":"perf_measure","detail":"bf8b cells device kernel ns before/after NaN-scan fast path: c29 5399->4804, c43 13501->13447 (writer-bound, 298 64-B L1 row writes/core), c20 1370->1358, c37 12724->9298, c48 7687->6013. Scan preceded writer first row (NCRISC 6.2us on c37) -> unrolled non-volatile OR-reduce over exponent words.","ts":"2026-11-27T10:21:57-05:00"}
 {"event":"test_run","status":"pass","detail":"bf8b unit 11/11; golden -k BFLOAT8_B 8/8; golden bf16 reps c304/c294/c2038/c286/c1993/c309 11/11","ts":"2026-11-27T10:21:57-05:00"}
+{"event":"test_run","status":"pass","detail":"precision_baseline + perf (bf16 + bf8b) 21/21; refinement 1 complete [x]","ts":"2026-11-27T10:25:57-05:00"}
