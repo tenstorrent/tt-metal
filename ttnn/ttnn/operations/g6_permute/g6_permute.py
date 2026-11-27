@@ -4,7 +4,9 @@
 
 """g6_permute: torch.permute(x, dims) as one device program (registry model).
 
-Phase 0 builds regime rows_tile_scatter: TILE bfloat16 DRAM-interleaved rank 4, dims (0, 2, 1, 3).
+Regimes, selected on the host by (layout, canonical dims):
+- rows_tile_scatter: TILE bfloat16 rank 4, dims (0, 2, 1, 3);
+- blocks_rm_gather: ROW_MAJOR bfloat16 rank 6, dims (0, 1, 4, 2, 5, 3).
 """
 
 from __future__ import annotations
@@ -13,13 +15,14 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
+from . import g6_permute_blocks_rm_gather as blocks_rm_gather
+from . import g6_permute_program_descriptor as rows_tile_scatter
+from .g6_permute_blocks_rm_gather import BlocksPlan
 from .g6_permute_program_descriptor import (
     READER_KERNEL_INDEX,
     TILE_ROWS,
     WRITER_KERNEL_INDEX,
     Plan,
-    build_plan,
-    create_program_descriptor,
     worker_grid,
 )
 
@@ -97,12 +100,13 @@ INPUT_TAGGERS = {
 
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
-    "layout": [ttnn.TILE_LAYOUT],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "buffer": ["dram"],
-    "rank": [4],
-    # rows_tile_scatter keeps W, so padding columns land in output padding columns at every alignment.
+    "rank": [4, 6],
+    # rows_tile_scatter keeps W, so padding columns land in output padding columns at every alignment;
+    # ROW_MAJOR pages carry no padding.
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
-    "dims": [(0, 2, 1, 3)],
+    "dims": [(0, 2, 1, 3), (0, 1, 4, 2, 5, 3)],
 }
 
 
@@ -110,7 +114,11 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = []
+# Each regime serves one layout: these cells have no regime and no production case.
+EXCLUSIONS = [
+    {"layout": ttnn.TILE_LAYOUT, "dims": (0, 1, 4, 2, 5, 3)},
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "dims": (0, 2, 1, 3)},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +169,17 @@ def validate(input_tensor, dims):
 # Plan report and descriptor cache
 # ---------------------------------------------------------------------------
 
+_REGIMES = {
+    (ttnn.TILE_LAYOUT, (0, 2, 1, 3)): rows_tile_scatter,
+    (ttnn.ROW_MAJOR_LAYOUT, blocks_rm_gather.DIMS): blocks_rm_gather,
+}
+
+
+def _select_regime(input_tensor, canonical_dims):
+    """The regime module (build_plan, create_program_descriptor, knob_key) of a validated call."""
+    return _REGIMES[(input_tensor.layout, tuple(canonical_dims))]
+
+
 # One (plan, descriptor) per cache key; a hit only patches the two buffer addresses.
 _PROGRAM_CACHE: dict = {}
 
@@ -168,7 +187,12 @@ _PROGRAM_CACHE: dict = {}
 def _cache_key(input_tensor, canonical_dims):
     mem = input_tensor.memory_config()
     grid = worker_grid(input_tensor.device())
+    regime = _select_regime(input_tensor, canonical_dims)
     return (
+        regime.REGIME,
+        regime.knob_key(),
+        input_tensor.buffer_page_size(),
+        input_tensor.buffer_aligned_page_size(),
         tuple(int(d) for d in input_tensor.shape),
         tuple(int(d) for d in input_tensor.padded_shape),
         tuple(canonical_dims),
@@ -181,14 +205,14 @@ def _cache_key(input_tensor, canonical_dims):
     )
 
 
-def g6_permute_plan(input_tensor: ttnn.Tensor, dims) -> Plan:
-    """Report the plan a call selects (regime, active cores, block_in_tiles, blocks per core group,
+def g6_permute_plan(input_tensor: ttnn.Tensor, dims) -> Plan | BlocksPlan:
+    """Report the plan a call selects (regime, active cores, block extent, blocks per core group,
     per-core roles) without dispatching."""
     axes = validate(input_tensor, dims)
     entry = _PROGRAM_CACHE.get(_cache_key(input_tensor, axes["dims"]))
     if entry is not None:
         return entry[0]
-    return build_plan(input_tensor, axes["dims"])
+    return _select_regime(input_tensor, axes["dims"]).build_plan(input_tensor, axes["dims"])
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +236,9 @@ def g6_permute(input_tensor: ttnn.Tensor, dims) -> ttnn.Tensor:
     key = _cache_key(input_tensor, canonical_dims)
     entry = _PROGRAM_CACHE.get(key)
     if entry is None:
-        plan = build_plan(input_tensor, canonical_dims)
-        descriptor = create_program_descriptor(plan, input_tensor, output_tensor)
+        regime = _select_regime(input_tensor, canonical_dims)
+        plan = regime.build_plan(input_tensor, canonical_dims)
+        descriptor = regime.create_program_descriptor(plan, input_tensor, output_tensor)
         _PROGRAM_CACHE[key] = (plan, descriptor)
     else:
         _, descriptor = entry

@@ -70,11 +70,35 @@ def worker_grid(device):
     return device.compute_with_storage_grid_size()
 
 
-def _out_l1_bytes_per_core(output_buffer_type, tensor_out_tiles, out_page_bytes, device):
+def out_l1_bytes_per_core(output_buffer_type, out_num_pages, out_bank_page_bytes, device):
+    """The output's own L1 pages on one core; they count against L1_OP_BUDGET_BYTES (BB-05)."""
     if output_buffer_type != ttnn.BufferType.L1:
         return 0
     num_l1_banks = ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks
-    return _div_up(tensor_out_tiles, num_l1_banks) * out_page_bytes
+    return _div_up(out_num_pages, num_l1_banks) * out_bank_page_bytes
+
+
+def split_units(grid, num_units):
+    """split_work_to_cores over the full grid (row_wise=True) plus each core's contiguous unit range,
+    cores walked row-major: (num_cores, all_cores, units_g1, units_g2, [(core, start, count)])."""
+    num_cores, all_cores, core_group_1, core_group_2, units_g1, units_g2 = ttnn.split_work_to_cores(
+        grid, num_units, row_wise=True
+    )
+    assignment = []
+    start = 0
+    for group, per_core in ((core_group_1, units_g1), (core_group_2, units_g2)):
+        if per_core == 0:
+            continue
+        for core in ttnn.corerange_to_cores(group, None, True):
+            assignment.append((core, start, per_core))
+            start += per_core
+    assert start == num_units
+    return num_cores, all_cores, units_g1, units_g2, assignment
+
+
+def knob_key():
+    """Host knobs that reach this regime's CT args; part of the program cache key."""
+    return (INPUT_DEPTH, BLOCK_IN_TILES_LIMIT, STAGGER_ROWS)
 
 
 def build_plan(input_tensor, canonical_dims) -> Plan:
@@ -89,7 +113,7 @@ def build_plan(input_tensor, canonical_dims) -> Plan:
     assert tensor_in_tiles == input_tensor.buffer_num_pages()
     in_page_bytes = input_tensor.buffer_page_size()
 
-    out_l1 = _out_l1_bytes_per_core(
+    out_l1 = out_l1_bytes_per_core(
         input_tensor.memory_config().buffer_type, tensor_out_tiles, in_page_bytes, input_tensor.device()
     )
     block_cap = (L1_OP_BUDGET_BYTES - out_l1) // (INPUT_DEPTH * in_page_bytes)
@@ -99,15 +123,9 @@ def build_plan(input_tensor, canonical_dims) -> Plan:
             f"{L1_OP_BUDGET_BYTES} B of L1 per core (output pages take {out_l1} B)"
         )
 
-    grid = worker_grid(input_tensor.device())
-    (
-        num_cores,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        tiles_g1,
-        tiles_g2,
-    ) = ttnn.split_work_to_cores(grid, tensor_in_tiles, row_wise=True)
+    num_cores, all_cores, tiles_g1, tiles_g2, assignment = split_units(
+        worker_grid(input_tensor.device()), tensor_in_tiles
+    )
 
     block_in_tiles = min(tiles_g1, block_cap)
     if BLOCK_IN_TILES_LIMIT is not None:
@@ -115,16 +133,6 @@ def build_plan(input_tensor, canonical_dims) -> Plan:
     assert block_in_tiles >= 1
     max_blocks_per_core = _div_up(tiles_g1, block_in_tiles)
     input_depth = min(INPUT_DEPTH, max_blocks_per_core)
-
-    assignment = []
-    start = 0
-    for group, per_core in ((core_group_1, tiles_g1), (core_group_2, tiles_g2)):
-        if per_core == 0:
-            continue
-        for core in ttnn.corerange_to_cores(group, None, True):
-            assignment.append((core, start, per_core))
-            start += per_core
-    assert start == tensor_in_tiles
 
     core_roles = {f"{c.x},{c.y}": f"{REGIME} reader+writer input pages [{s}, {s + n})" for c, s, n in assignment}
 

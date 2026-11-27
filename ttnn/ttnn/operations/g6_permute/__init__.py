@@ -6,10 +6,20 @@ from .g6_permute import (
     EXCLUSIONS,
     INPUT_TAGGERS,
     SUPPORTED,
+    BlocksPlan,
     Plan,
     g6_permute,
     g6_permute_plan,
     validate,
 )
 
-__all__ = ["g6_permute", "g6_permute_plan", "Plan", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS", "validate"]
+__all__ = [
+    "g6_permute",
+    "g6_permute_plan",
+    "Plan",
+    "BlocksPlan",
+    "INPUT_TAGGERS",
+    "SUPPORTED",
+    "EXCLUSIONS",
+    "validate",
+]
