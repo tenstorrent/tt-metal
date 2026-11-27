@@ -2,329 +2,347 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_concat reader (NCRISC, NoC0). Fills cb_moved_pages one block at a time.
+// g6_concat reader (NCRISC, NOC0). Fills cb_output_pages one block of `block_pages` consecutive
+// output pages at a time, in one of two regimes fixed at program build (CT arg `regime`, so each
+// regime compiles to its own binary):
+//   page_copy  — each output page is one input page (whole, or its valid rows when trimmed);
+//   row_gather — each output page is assembled from row-range reads of the inputs whose rows land
+//                in it (h join with an input starting inside a tile).
 //
-// page_copy:  gather_pages_block — every output page has one source page; read its
-//             valid-row prefix straight into the slot.
-// row_gather: rows of several inputs share an output tile. Per block (one output tile row
-//             x `extent` columns) the run list is derived on the fly and moved in three
-//             barriered phases: off-parity runs DRAM -> stage, one span copy stage -> slot,
-//             on-parity runs DRAM -> slot. The span copy also lands stage garbage on
-//             on-parity rows (fixed by the later direct reads) and on padding rows (never
-//             written out), so the order of the three phases is load-bearing.
-//
-// Raw NoC + TensorAccessor: no kernel_lib dataflow helper copies whole or partial pages
-// (op_design.md, Helpers considered and rejected).
+// Raw dataflow API throughout: no kernel_lib helper copies pages or row ranges between buffers.
+// set_read_state/read_with_state (local_copy_helpers_dataflow.hpp) bake the transfer size into a
+// template parameter, while row pieces are runtime-sized, so only its local_addr() source builder
+// is used for the place phase.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/assert.h"
-#include "api/debug/kernel_profiler.hpp"
-#include "g6_concat_pages.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+#include "g6_concat_tile_rows.hpp"
 
-namespace {
+constexpr uint32_t REGIME_PAGE_COPY = 0;
+constexpr uint32_t REGIME_ROW_GATHER = 1;
 
-// Common runtime-arg table: header, then (base address, count) per input. count is the
-// input's page-matrix segment width (page_copy) or its row count along h (row_gather).
-constexpr uint32_t ARG_NUM_INPUTS = 0;
-constexpr uint32_t ARG_PM_COLS = 1;
-constexpr uint32_t ARG_OUT_TILE_COLS = 2;
-constexpr uint32_t ARG_OUT_TILE_ROWS_PER_IMAGE = 3;
-constexpr uint32_t ARG_OUT_ROWS_TAIL = 4;
-constexpr uint32_t HEADER_WORDS = 5;
-constexpr uint32_t WORDS_PER_INPUT = 2;
+constexpr uint32_t regime = get_compile_time_arg_val(0);
+constexpr uint32_t cb_output_pages = get_compile_time_arg_val(1);
+constexpr uint32_t cb_gather_staging = get_compile_time_arg_val(2);
+constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
+constexpr uint32_t row_bytes = get_compile_time_arg_val(4);
+constexpr uint32_t trim_rows_max = get_compile_time_arg_val(5);
+constexpr bool has_staging = get_compile_time_arg_val(6) != 0;
+constexpr uint32_t input_read_alignment = get_compile_time_arg_val(7);
+constexpr auto input_args = TensorAccessorArgs<8>();
 
-FORCE_INLINE uint32_t input_addr(uint32_t k) {
-    return get_common_arg_val<uint32_t>(HEADER_WORDS + WORDS_PER_INPUT * k);
-}
+constexpr uint32_t face_bytes = g6c::FACE_ROWS * row_bytes;
 
-FORCE_INLINE uint32_t input_count(uint32_t k) {
-    return get_common_arg_val<uint32_t>(HEADER_WORDS + WORDS_PER_INPUT * k + 1);
-}
+static_assert(page_bytes <= NOC_MAX_BURST_SIZE, "every transfer is issued as a single NoC packet");
+static_assert((input_read_alignment & (input_read_alignment - 1)) == 0, "read alignment must be a power of 2");
+static_assert(input_read_alignment == NOC_DRAM_READ_ALIGNMENT_BYTES, "host and device disagree on DRAM read alignment");
+// A whole face half moves as one span that is never staged; its offsets differ by whole faces.
+static_assert(face_bytes % input_read_alignment == 0, "face size must be a multiple of the read alignment");
 
-FORCE_INLINE uint32_t min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
-FORCE_INLINE uint32_t max_u32(uint32_t a, uint32_t b) { return a > b ? a : b; }
+// Common runtime args: [K, block_pages, out_Wt, out_Ht, v_last, (addr_k, extent_k) * K]
+// extent_k is C_k (pages of input k per outer slice) in page_copy and n_k (rows) in row_gather.
+constexpr uint32_t CARG_NUM_INPUTS = 0;
+constexpr uint32_t CARG_BLOCK_PAGES = 1;
+constexpr uint32_t CARG_OUT_WT = 2;
+constexpr uint32_t CARG_OUT_HT = 3;
+constexpr uint32_t CARG_LAST_VALID_ROWS = 4;
+constexpr uint32_t CARG_INPUTS = 5;
 
-// page_copy source of an output page. The output's pages form a matrix of pm_cols columns
-// per row; each row is K contiguous segments, segment k being seg_pages[k] pages of input k.
-// Column c of row a in segment k is page a * seg_pages[k] + (c - seg_start) of input k.
-struct SourceCursor {
-    uint32_t pm_cols;
-    uint32_t row;
-    uint32_t col;
+FORCE_INLINE uint32_t input_addr(uint32_t k) { return get_common_arg_val<uint32_t>(CARG_INPUTS + 2 * k); }
+FORCE_INLINE uint32_t input_extent(uint32_t k) { return get_common_arg_val<uint32_t>(CARG_INPUTS + 2 * k + 1); }
+
+FORCE_INLINE auto input_accessor(uint32_t k) { return TensorAccessor(input_args, input_addr(k), page_bytes); }
+
+// ---------------------------------------------------------------------------------------------
+// page_copy
+// ---------------------------------------------------------------------------------------------
+
+// Output page o*C + Coff_k + c' is input k's page o*C_k + c'.
+struct PageCopyCursor {
+    uint32_t slice;
     uint32_t input;
-    uint32_t seg_start;
-    uint32_t seg_pages;
-    uint32_t src_page;
-
-    SourceCursor(uint32_t first_page, uint32_t pm_cols_) : pm_cols(pm_cols_) {
-        row = first_page / pm_cols;
-        col = first_page - row * pm_cols;
-        input = 0;
-        seg_start = 0;
-        seg_pages = input_count(0);
-        while (col >= seg_start + seg_pages) {
-            seg_start += seg_pages;
-            seg_pages = input_count(++input);
-        }
-        src_page = row * seg_pages + (col - seg_start);
-    }
-
-    void advance() {
-        ++col;
-        ++src_page;
-        if (col == seg_start + seg_pages) {
-            if (col == pm_cols) {
-                col = 0;
-                ++row;
-                input = 0;
-                seg_start = 0;
-            } else {
-                seg_start = col;
-                ++input;
-            }
-            seg_pages = input_count(input);
-            src_page = row * seg_pages;
-        }
-    }
+    uint32_t page_in_slice;
+    uint32_t num_inputs;
 };
 
-// Calls fn(input, src_tile_row, src_row, dst_row, rows) for each run piece of output rows
-// [row_lo, row_lo + valid_rows) of image `image`. A piece is rows of one input inside one
-// source tile row and inside one face band (rows 0-15 or 16-31) on both sides. Only an
-// input's logical rows are visited: its tile padding never reaches an output row.
-template <typename Fn>
-FORCE_INLINE void for_each_run_piece(
-    uint32_t num_inputs, uint32_t image, uint32_t row_lo, uint32_t valid_rows, Fn&& fn) {
-    const uint32_t row_hi = row_lo + valid_rows;
-    uint32_t offset = 0;
-    for (uint32_t k = 0; k < num_inputs && offset < row_hi; ++k) {
-        const uint32_t rows_k = input_count(k);
-        const uint32_t lo = max_u32(row_lo, offset);
-        const uint32_t hi = min_u32(row_hi, offset + rows_k);
-        if (lo < hi) {
-            const uint32_t tile_rows_k = (rows_k + g6c::TILE_ROWS - 1) / g6c::TILE_ROWS;
-            for (uint32_t r = lo; r < hi;) {
-                const uint32_t j = r - offset;
-                const uint32_t src_row = j % g6c::TILE_ROWS;
-                const uint32_t dst_row = r - row_lo;
-                uint32_t rows = hi - r;
-                rows = min_u32(rows, g6c::FACE_ROWS - (src_row % g6c::FACE_ROWS));
-                rows = min_u32(rows, g6c::FACE_ROWS - (dst_row % g6c::FACE_ROWS));
-                fn(k, image * tile_rows_k + j / g6c::TILE_ROWS, src_row, dst_row, rows);
-                r += rows;
-            }
-        }
-        offset += rows_k;
+template <typename Accessor>
+FORCE_INLINE void read_page(const Accessor& acc, uint32_t page, uint32_t slot, uint32_t valid_rows) {
+    if (g6c::trimmed<trim_rows_max>(valid_rows)) {
+        // Same in-tile offset on both sides: always alignment-legal.
+        g6c::for_each_valid_row_span(valid_rows, row_bytes, [&](uint32_t offset, uint32_t bytes) {
+            noc_async_read<NOC_MAX_BURST_SIZE>(acc.get_noc_addr(page, offset), slot + offset, bytes);
+        });
+    } else {
+        noc_async_read<NOC_MAX_BURST_SIZE>(acc.get_noc_addr(page), slot, page_bytes);
     }
 }
 
-// Byte layout of one run piece inside a tile: the left-face run and, at +face_bytes, the
-// right-face run. A full band (16 rows) is the two faces back to back: one transfer.
-template <uint32_t face_row_bytes>
-struct PieceLayout {
-    static constexpr uint32_t face_bytes = g6c::FACE_ROWS * face_row_bytes;
-    uint32_t src_off;
-    uint32_t dst_off;
-    uint32_t bytes;
-    bool full_band;
-
-    PieceLayout(uint32_t src_row, uint32_t dst_row, uint32_t rows) {
-        src_off = (src_row / g6c::FACE_ROWS) * 2 * face_bytes + (src_row % g6c::FACE_ROWS) * face_row_bytes;
-        dst_off = (dst_row / g6c::FACE_ROWS) * 2 * face_bytes + (dst_row % g6c::FACE_ROWS) * face_row_bytes;
-        full_band = rows == g6c::FACE_ROWS;
-        bytes = full_band ? 2 * face_bytes : rows * face_row_bytes;
-    }
-
-    // End of the bytes this piece covers in a tile, relative to the tile base.
-    uint32_t dst_end() const { return full_band ? dst_off + bytes : dst_off + face_bytes + bytes; }
-
-    template <uint32_t page_bytes, typename Accessor>
-    FORCE_INLINE void read(const Accessor& src, uint32_t src_page, uint32_t dst_tile_addr) const {
-        noc_async_read<page_bytes>(src.get_noc_addr(src_page, src_off), dst_tile_addr + dst_off, bytes);
-        if (!full_band) {
-            noc_async_read<page_bytes>(
-                src.get_noc_addr(src_page, src_off + face_bytes), dst_tile_addr + dst_off + face_bytes, bytes);
+void page_fetch_block(uint32_t extent, PageCopyCursor& cur, g6c::OutputRowCursor& rows, uint32_t slot) {
+    uint32_t remaining = extent;
+    while (remaining > 0) {
+        const uint32_t pages_per_slice = input_extent(cur.input);
+        uint32_t run = pages_per_slice - cur.page_in_slice;
+        if (run > remaining) {
+            run = remaining;
         }
+        const auto acc = input_accessor(cur.input);
+        uint32_t page = cur.slice * pages_per_slice + cur.page_in_slice;
+        for (uint32_t i = 0; i < run; ++i) {
+            read_page(acc, page, slot, rows.valid_rows());
+            rows.advance();
+            ++page;
+            slot += page_bytes;
+        }
+        cur.page_in_slice += run;
+        if (cur.page_in_slice == pages_per_slice) {
+            cur.page_in_slice = 0;
+            if (++cur.input == cur.num_inputs) {
+                cur.input = 0;
+                ++cur.slice;
+            }
+        }
+        remaining -= run;
     }
+    noc_async_read_barrier();
+}
+
+// ---------------------------------------------------------------------------------------------
+// row_gather
+// ---------------------------------------------------------------------------------------------
+
+struct GatherGeometry {
+    uint32_t num_inputs;
+    uint32_t tiles_per_row;
+    uint32_t tile_rows;
+    uint32_t last_valid_rows;
 };
 
-}  // namespace
+// Position of the next output page: image, tile row, tile column.
+struct GatherCursor {
+    uint32_t image;
+    uint32_t tile_row;
+    uint32_t col;
+};
+
+// Visits the run table of output tile row `tile_row`: every maximal row range of one input that
+// lands in it, split so no piece crosses row 16 (face half) on the source or the destination.
+// fn(k, input_tile_row, src_row, dst_row, num_rows). Only logical input rows are visited, each once.
+template <typename Fn>
+FORCE_INLINE void for_each_row_piece(uint32_t tile_row, const GatherGeometry& geo, Fn&& fn) {
+    const uint32_t row_lo = tile_row * g6c::TILE_ROWS;
+    const uint32_t row_hi = row_lo + (tile_row == geo.tile_rows - 1 ? geo.last_valid_rows : g6c::TILE_ROWS);
+    uint32_t input_offset = 0;
+    for (uint32_t k = 0; k < geo.num_inputs && input_offset < row_hi; ++k) {
+        const uint32_t input_end = input_offset + input_extent(k);
+        if (input_end > row_lo) {
+            uint32_t out_row = input_offset > row_lo ? input_offset : row_lo;
+            const uint32_t out_end = input_end < row_hi ? input_end : row_hi;
+            uint32_t in_row = out_row - input_offset;
+            while (out_row < out_end) {
+                const uint32_t src_row = in_row % g6c::TILE_ROWS;
+                const uint32_t dst_row = out_row - row_lo;
+                uint32_t num_rows = out_end - out_row;
+                const uint32_t src_room = g6c::FACE_ROWS - src_row % g6c::FACE_ROWS;
+                const uint32_t dst_room = g6c::FACE_ROWS - dst_row % g6c::FACE_ROWS;
+                num_rows = num_rows < src_room ? num_rows : src_room;
+                num_rows = num_rows < dst_room ? num_rows : dst_room;
+                fn(k, in_row / g6c::TILE_ROWS, src_row, dst_row, num_rows);
+                out_row += num_rows;
+                in_row += num_rows;
+            }
+        }
+        input_offset = input_end;
+    }
+}
+
+// A whole face half (16 rows starting on row 0 or 16 on both sides) is one contiguous span across
+// both face columns; anything shorter is one span per face column.
+FORCE_INLINE bool whole_face_half(uint32_t num_rows) { return num_rows == g6c::FACE_ROWS; }
+
+// Phase A for one output-row segment: columns [col_begin, col_begin + num_cols) of one tile row.
+// Piece-major, page-minor: offsets and the direct/staged choice are fixed across the page sweep.
+// A piece whose source and destination differ mod the read alignment lands in the staging mirror
+// slot at dst_off + shift so the DRAM read is legal; phase B moves it into place.
+void gather_fetch_segment(
+    const GatherCursor& seg, uint32_t num_cols, const GatherGeometry& geo, uint32_t out_slot, uint32_t staging_slot) {
+    for_each_row_piece(
+        seg.tile_row,
+        geo,
+        [&](uint32_t k, uint32_t input_tile_row, uint32_t src_row, uint32_t dst_row, uint32_t num_rows) {
+            const auto acc = input_accessor(k);
+            const uint32_t input_tile_rows = (input_extent(k) + g6c::TILE_ROWS - 1) / g6c::TILE_ROWS;
+            const uint32_t first_page = (seg.image * input_tile_rows + input_tile_row) * geo.tiles_per_row + seg.col;
+            const bool merged = whole_face_half(num_rows);
+            const uint32_t num_face_cols = merged ? 1 : 2;
+            const uint32_t bytes = merged ? 2 * face_bytes : num_rows * row_bytes;
+            for (uint32_t face_col = 0; face_col < num_face_cols; ++face_col) {
+                const uint32_t src_off = g6c::face_row_offset(src_row, face_col, row_bytes);
+                const uint32_t dst_off = g6c::face_row_offset(dst_row, face_col, row_bytes);
+                const uint32_t shift = (src_off - dst_off) & (input_read_alignment - 1);
+                uint32_t dst = out_slot + dst_off;
+                if constexpr (has_staging) {
+                    if (shift != 0) {
+                        dst = staging_slot + dst_off + shift;
+                    }
+                } else {
+                    ASSERT(shift == 0);
+                }
+                for (uint32_t c = 0; c < num_cols; ++c) {
+                    noc_async_read<NOC_MAX_BURST_SIZE>(acc.get_noc_addr(first_page + c, src_off), dst, bytes);
+                    dst += page_bytes;
+                }
+            }
+        });
+}
+
+// Phase B for one output-row segment: self-aimed L1->L1 reads (16 B alignment, always legal) from
+// the staging mirror into the output slots, for exactly the pieces phase A staged.
+void gather_place_segment(
+    const GatherCursor& seg, uint32_t num_cols, const GatherGeometry& geo, uint32_t out_slot, uint32_t staging_slot) {
+    for_each_row_piece(
+        seg.tile_row, geo, [&](uint32_t, uint32_t, uint32_t src_row, uint32_t dst_row, uint32_t num_rows) {
+            if (whole_face_half(num_rows)) {
+                return;
+            }
+            const uint32_t bytes = num_rows * row_bytes;
+            for (uint32_t face_col = 0; face_col < 2; ++face_col) {
+                const uint32_t src_off = g6c::face_row_offset(src_row, face_col, row_bytes);
+                const uint32_t dst_off = g6c::face_row_offset(dst_row, face_col, row_bytes);
+                const uint32_t shift = (src_off - dst_off) & (input_read_alignment - 1);
+                if (shift == 0) {
+                    continue;
+                }
+                const auto self = dataflow_kernel_lib::local_addr(staging_slot + dst_off + shift, noc_index);
+                uint64_t src = get_noc_addr(self.noc_x, self.noc_y, self.addr, noc_index);
+                uint32_t dst = out_slot + dst_off;
+                for (uint32_t c = 0; c < num_cols; ++c) {
+                    noc_async_read<NOC_MAX_BURST_SIZE>(src, dst, bytes);
+                    src += page_bytes;
+                    dst += page_bytes;
+                }
+            }
+        });
+}
+
+// Walks the output-row segments of one block — `extent` pages starting at `cur` — calling
+// fn(segment, num_cols, slot_offset_bytes). Returns the cursor after the block.
+template <typename Fn>
+FORCE_INLINE GatherCursor for_each_segment(GatherCursor seg, uint32_t extent, const GatherGeometry& geo, Fn&& fn) {
+    uint32_t slot_offset = 0;
+    while (extent > 0) {
+        uint32_t num_cols = geo.tiles_per_row - seg.col;
+        if (num_cols > extent) {
+            num_cols = extent;
+        }
+        fn(seg, num_cols, slot_offset);
+        slot_offset += num_cols * page_bytes;
+        extent -= num_cols;
+        seg.col += num_cols;
+        if (seg.col == geo.tiles_per_row) {
+            seg.col = 0;
+            if (++seg.tile_row == geo.tile_rows) {
+                seg.tile_row = 0;
+                ++seg.image;
+            }
+        }
+    }
+    return seg;
+}
+
+FORCE_INLINE GatherCursor gather_fetch_block(
+    const GatherCursor& cur, uint32_t extent, const GatherGeometry& geo, uint32_t out_slot, uint32_t staging_slot) {
+    const GatherCursor next =
+        for_each_segment(cur, extent, geo, [&](const GatherCursor& seg, uint32_t num_cols, uint32_t slot_offset) {
+            gather_fetch_segment(seg, num_cols, geo, out_slot + slot_offset, staging_slot + slot_offset);
+        });
+    noc_async_read_barrier();
+    return next;
+}
+
+FORCE_INLINE void gather_place_block(
+    const GatherCursor& cur, uint32_t extent, const GatherGeometry& geo, uint32_t out_slot, uint32_t staging_slot) {
+    for_each_segment(cur, extent, geo, [&](const GatherCursor& seg, uint32_t num_cols, uint32_t slot_offset) {
+        gather_place_segment(seg, num_cols, geo, out_slot + slot_offset, staging_slot + slot_offset);
+    });
+    noc_async_read_barrier();
+}
+
+// ---------------------------------------------------------------------------------------------
 
 void kernel_main() {
-    constexpr uint32_t cb_moved_pages = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_parity_stage = get_compile_time_arg_val(1);
-    constexpr uint32_t block_pages = get_compile_time_arg_val(2);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t face_row_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t dram_read_align = get_compile_time_arg_val(5);
-    constexpr bool is_row_gather = get_compile_time_arg_val(6) != 0;
-    constexpr bool has_stage = get_compile_time_arg_val(7) != 0;
-    constexpr auto in_args = TensorAccessorArgs<8>();
+    const uint32_t num_inputs = get_common_arg_val<uint32_t>(CARG_NUM_INPUTS);
+    const uint32_t block_pages = get_common_arg_val<uint32_t>(CARG_BLOCK_PAGES);
+    const uint32_t out_Wt = get_common_arg_val<uint32_t>(CARG_OUT_WT);
+    const uint32_t out_Ht = get_common_arg_val<uint32_t>(CARG_OUT_HT);
+    const uint32_t last_valid_rows = get_common_arg_val<uint32_t>(CARG_LAST_VALID_ROWS);
 
-    static_assert(dram_read_align == NOC_DRAM_READ_ALIGNMENT_BYTES, "host and NoC disagree on DRAM-read alignment");
-    static_assert(page_bytes % dram_read_align == 0, "every slot and stage tile must share one parity class");
+    // Per-core runtime args: [pages, start tile_row, start col, regime cursor...]
+    const uint32_t pages_this_core = get_arg_val<uint32_t>(0);
+    const uint32_t start_tile_row = get_arg_val<uint32_t>(1);
+    const uint32_t start_col = get_arg_val<uint32_t>(2);
 
-    // row_gather: DRAM reads need (L1 dst % A) == (DRAM src % A). A run whose source and
-    // destination rows differ by an odd count is `stage_class` off; it lands in the stage at a
-    // base shifted by that class and reaches the slot by an L1->L1 copy (16 B congruence only).
-    constexpr uint32_t stage_class = face_row_bytes % dram_read_align;
-    static_assert(!is_row_gather || has_stage == (stage_class != 0), "host and kernel disagree on the parity stage");
-    static_assert(stage_class == 0 || 2 * stage_class == dram_read_align, "one parity stage covers one class only");
-    static_assert(stage_class % NOC_L1_READ_ALIGNMENT_BYTES == 0, "stage->slot copy needs L1 congruence");
-    static_assert((g6c::FACE_ROWS * face_row_bytes) % dram_read_align == 0, "both face halves of a run share a class");
+    ASSERT(get_write_ptr(cb_output_pages) % NOC_DRAM_READ_ALIGNMENT_BYTES == 0);
 
-    const uint32_t num_inputs = get_common_arg_val<uint32_t>(ARG_NUM_INPUTS);
-    const uint32_t pm_cols = get_common_arg_val<uint32_t>(ARG_PM_COLS);
-    const uint32_t out_tile_cols = get_common_arg_val<uint32_t>(ARG_OUT_TILE_COLS);
-    const uint32_t out_tile_rows_per_image = get_common_arg_val<uint32_t>(ARG_OUT_TILE_ROWS_PER_IMAGE);
-    const uint32_t out_rows_tail = get_common_arg_val<uint32_t>(ARG_OUT_ROWS_TAIL);
+    if constexpr (regime == REGIME_PAGE_COPY) {
+        PageCopyCursor cur{
+            .slice = get_arg_val<uint32_t>(3),
+            .input = get_arg_val<uint32_t>(4),
+            .page_in_slice = get_arg_val<uint32_t>(5),
+            .num_inputs = num_inputs};
+        g6c::OutputRowCursor rows{
+            .tile_row = start_tile_row,
+            .col = start_col,
+            .tiles_per_row = out_Wt,
+            .tile_rows = out_Ht,
+            .last_valid_rows = last_valid_rows};
 
-    const uint32_t first_page = get_arg_val<uint32_t>(0);
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);
-
-    g6c::OutPageCursor cursor(first_page, out_tile_cols, out_tile_rows_per_image, out_rows_tail);
-
-    if constexpr (!is_row_gather) {
-        SourceCursor source(first_page, pm_cols);
-        uint32_t pages_done = 0;
-        while (pages_done < num_pages) {
-            const uint32_t extent = g6c::block_extent<block_pages, false>(num_pages - pages_done, cursor);
+        uint32_t remaining = pages_this_core;
+        while (remaining > 0) {
+            const uint32_t extent = remaining < block_pages ? remaining : block_pages;
             {
-                DeviceZoneScopedN("g6c_r_reserve_back");
-                cb_reserve_back(cb_moved_pages, block_pages);
+                DeviceZoneScopedN("G6C-RESERVE");
+                cb_reserve_back(cb_output_pages, block_pages);
             }
             {
-                DeviceZoneScopedN("g6c_gather_pages_block");
-                uint32_t slot_addr = get_write_ptr(cb_moved_pages);
-                for (uint32_t i = 0; i < extent; ++i) {
-                    const auto src = TensorAccessor(in_args, input_addr(source.input), page_bytes);
-                    const uint32_t src_page = source.src_page;
-                    // Source and output page have the same valid rows: w and outer keep H, and
-                    // h page_copy has tile-aligned offsets, so only the last input's tail is partial.
-                    g6c::for_each_valid_row_piece<page_bytes, face_row_bytes>(
-                        cursor.valid_rows(), [&](uint32_t offset, uint32_t bytes) {
-                            noc_async_read<page_bytes>(src.get_noc_addr(src_page, offset), slot_addr + offset, bytes);
-                        });
-                    slot_addr += page_bytes;
-                    cursor.advance();
-                    source.advance();
-                }
+                DeviceZoneScopedN("G6C-FETCH");
+                page_fetch_block(extent, cur, rows, get_write_ptr(cb_output_pages));
             }
-            {
-                DeviceZoneScopedN("g6c_r_read_barrier");
-                noc_async_read_barrier();
-            }
-            // Nominal push: a ragged block narrows only the transfers, never the ring step.
-            cb_push_back(cb_moved_pages, block_pages);
-            pages_done += extent;
+            // Nominal count even on the ragged last block: keeps the ring in step with the writer.
+            cb_push_back(cb_output_pages, block_pages);
+            remaining -= extent;
         }
     } else {
-        using Piece = PieceLayout<face_row_bytes>;
+        const GatherGeometry geo{
+            .num_inputs = num_inputs, .tiles_per_row = out_Wt, .tile_rows = out_Ht, .last_valid_rows = last_valid_rows};
+        GatherCursor cur{.image = get_arg_val<uint32_t>(3), .tile_row = start_tile_row, .col = start_col};
+        uint32_t staging_slot = 0;
+        if constexpr (has_staging) {
+            staging_slot = get_write_ptr(cb_gather_staging);
+            ASSERT(staging_slot % NOC_DRAM_READ_ALIGNMENT_BYTES == 0);
+        }
 
-        auto parity_class = [](uint64_t src_noc_addr, uint32_t dst_l1_addr) -> uint32_t {
-            return (static_cast<uint32_t>(src_noc_addr) - dst_l1_addr) & (dram_read_align - 1);
-        };
-
-        uint32_t pages_done = 0;
-        while (pages_done < num_pages) {
-            const uint32_t extent = g6c::block_extent<block_pages, true>(num_pages - pages_done, cursor);
-            const uint32_t image = cursor.image;
-            const uint32_t row_lo = cursor.tile_row * g6c::TILE_ROWS;
-            const uint32_t valid_rows = cursor.valid_rows();
-            const uint32_t first_col = cursor.col;
+        uint32_t remaining = pages_this_core;
+        while (remaining > 0) {
+            const uint32_t extent = remaining < block_pages ? remaining : block_pages;
             {
-                DeviceZoneScopedN("g6c_r_reserve_back");
-                cb_reserve_back(cb_moved_pages, block_pages);
+                DeviceZoneScopedN("G6C-RESERVE");
+                cb_reserve_back(cb_output_pages, block_pages);
             }
-            const uint32_t slot_base = get_write_ptr(cb_moved_pages);
-
-            if constexpr (has_stage) {
-                const uint32_t stage_cb_addr = get_write_ptr(cb_parity_stage);
-                const uint32_t stage_base =
-                    stage_cb_addr + ((slot_base + stage_class - stage_cb_addr) & (dram_read_align - 1));
-                // In-tile byte range [span_lo, span_hi) holding every off-parity row of the tile row.
-                uint32_t span_lo = page_bytes;
-                uint32_t span_hi = 0;
-                {
-                    DeviceZoneScopedN("g6c_stage_offparity_rows_block");
-                    for_each_run_piece(
-                        num_inputs,
-                        image,
-                        row_lo,
-                        valid_rows,
-                        [&](uint32_t k, uint32_t src_tile_row, uint32_t src_row, uint32_t dst_row, uint32_t rows) {
-                            const auto src = TensorAccessor(in_args, input_addr(k), page_bytes);
-                            const uint32_t src_page = src_tile_row * out_tile_cols + first_col;
-                            const Piece piece(src_row, dst_row, rows);
-                            const uint32_t cls =
-                                parity_class(src.get_noc_addr(src_page, piece.src_off), slot_base + piece.dst_off);
-                            if (cls == 0) {
-                                return;
-                            }
-                            ASSERT(cls == stage_class);
-                            for (uint32_t i = 0; i < extent; ++i) {
-                                piece.template read<page_bytes>(src, src_page + i, stage_base + i * page_bytes);
-                            }
-                            span_lo = min_u32(span_lo, piece.dst_off);
-                            span_hi = max_u32(span_hi, piece.dst_end());
-                        });
-                }
-                if (span_hi != 0) {
-                    {
-                        DeviceZoneScopedN("g6c_r_stage_barrier");
-                        noc_async_read_barrier();
-                    }
-                    {
-                        DeviceZoneScopedN("g6c_merge_stage_spans_block");
-                        // Stage and slot tiles share the page stride, so one copy spans every column.
-                        noc_async_read(
-                            get_noc_addr(stage_base + span_lo),
-                            slot_base + span_lo,
-                            (extent - 1) * page_bytes + span_hi - span_lo);
-                    }
-                    {
-                        DeviceZoneScopedN("g6c_r_merge_barrier");
-                        noc_async_read_barrier();
-                    }
-                }
-            }
-
+            const uint32_t out_slot = get_write_ptr(cb_output_pages);
+            GatherCursor next;
             {
-                DeviceZoneScopedN("g6c_read_onparity_rows_block");
-                for_each_run_piece(
-                    num_inputs,
-                    image,
-                    row_lo,
-                    valid_rows,
-                    [&](uint32_t k, uint32_t src_tile_row, uint32_t src_row, uint32_t dst_row, uint32_t rows) {
-                        const auto src = TensorAccessor(in_args, input_addr(k), page_bytes);
-                        const uint32_t src_page = src_tile_row * out_tile_cols + first_col;
-                        const Piece piece(src_row, dst_row, rows);
-                        const uint32_t cls =
-                            parity_class(src.get_noc_addr(src_page, piece.src_off), slot_base + piece.dst_off);
-                        if constexpr (has_stage) {
-                            if (cls != 0) {
-                                return;
-                            }
-                        } else {
-                            ASSERT(cls == 0);
-                        }
-                        for (uint32_t i = 0; i < extent; ++i) {
-                            piece.template read<page_bytes>(src, src_page + i, slot_base + i * page_bytes);
-                        }
-                    });
+                DeviceZoneScopedN("G6C-FETCH");
+                next = gather_fetch_block(cur, extent, geo, out_slot, staging_slot);
             }
-            {
-                DeviceZoneScopedN("g6c_r_read_barrier");
-                noc_async_read_barrier();
+            if constexpr (has_staging) {
+                DeviceZoneScopedN("G6C-PLACE");
+                gather_place_block(cur, extent, geo, out_slot, staging_slot);
             }
-            cb_push_back(cb_moved_pages, block_pages);
-            for (uint32_t i = 0; i < extent; ++i) {
-                cursor.advance();
-            }
-            pages_done += extent;
+            cb_push_back(cb_output_pages, block_pages);
+            cur = next;
+            remaining -= extent;
         }
     }
 }

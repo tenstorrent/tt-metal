@@ -5,19 +5,10 @@
 from .g6_concat import (
     EXCLUSIONS,
     INPUT_TAGGERS,
-    PROPERTIES,
     SUPPORTED,
     g6_concat,
-    select_plan,
+    g6_concat_plan,
     validate,
 )
 
-__all__ = [
-    "g6_concat",
-    "select_plan",
-    "validate",
-    "INPUT_TAGGERS",
-    "SUPPORTED",
-    "EXCLUSIONS",
-    "PROPERTIES",
-]
+__all__ = ["g6_concat", "g6_concat_plan", "validate", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS"]

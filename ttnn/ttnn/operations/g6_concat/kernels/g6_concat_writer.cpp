@@ -2,66 +2,83 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_concat writer (BRISC, NoC1): store_pages_block.
-// Drains cb_moved_pages one block at a time and writes each output page's valid-row
-// prefix to the interleaved output. Raw NoC + TensorAccessor: no kernel_lib dataflow
-// helper copies whole or partial pages (op_design.md, Helpers considered and rejected).
+// g6_concat writer (BRISC, NOC1), shared by both regimes. Stores each block of `block_pages`
+// consecutive output pages from cb_output_pages: one whole-page write per page, or only the valid
+// rows when the page's tile row has v <= trim_rows_max rows (the output's padding rows may hold
+// anything). Raw dataflow API: no kernel_lib helper writes pages to an interleaved buffer.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
-#include "g6_concat_pages.hpp"
+#include "g6_concat_tile_rows.hpp"
+
+constexpr uint32_t cb_output_pages = get_compile_time_arg_val(0);
+constexpr uint32_t page_bytes = get_compile_time_arg_val(1);
+constexpr uint32_t row_bytes = get_compile_time_arg_val(2);
+constexpr uint32_t trim_rows_max = get_compile_time_arg_val(3);
+constexpr auto output_args = TensorAccessorArgs<4>();
+
+static_assert(page_bytes <= NOC_MAX_BURST_SIZE, "every transfer is issued as a single NoC packet");
+
+// Common runtime args: [out_addr, block_pages, out_Wt, out_Ht, v_last]
+constexpr uint32_t CARG_OUT_ADDR = 0;
+constexpr uint32_t CARG_BLOCK_PAGES = 1;
+constexpr uint32_t CARG_OUT_WT = 2;
+constexpr uint32_t CARG_OUT_HT = 3;
+constexpr uint32_t CARG_LAST_VALID_ROWS = 4;
+
+template <typename Accessor>
+void store_block(uint32_t extent, uint32_t page, g6c::OutputRowCursor& rows, uint32_t slot, const Accessor& acc) {
+    for (uint32_t i = 0; i < extent; ++i) {
+        const uint32_t valid_rows = rows.valid_rows();
+        if (g6c::trimmed<trim_rows_max>(valid_rows)) {
+            g6c::for_each_valid_row_span(valid_rows, row_bytes, [&](uint32_t offset, uint32_t bytes) {
+                noc_async_write<NOC_MAX_BURST_SIZE>(slot + offset, acc.get_noc_addr(page, offset), bytes);
+            });
+        } else {
+            noc_async_write<NOC_MAX_BURST_SIZE>(slot, acc.get_noc_addr(page), page_bytes);
+        }
+        rows.advance();
+        ++page;
+        slot += page_bytes;
+    }
+    // The slots may be refilled once the data has left L1; completion is awaited once at the end.
+    noc_async_writes_flushed();
+}
 
 void kernel_main() {
-    constexpr uint32_t cb_moved_pages = get_compile_time_arg_val(0);
-    constexpr uint32_t block_pages = get_compile_time_arg_val(1);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t face_row_bytes = get_compile_time_arg_val(3);
-    constexpr bool cut_at_tile_rows = get_compile_time_arg_val(4) != 0;
-    constexpr auto out_args = TensorAccessorArgs<5>();
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(CARG_OUT_ADDR);
+    const uint32_t block_pages = get_common_arg_val<uint32_t>(CARG_BLOCK_PAGES);
 
-    const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t out_tile_cols = get_common_arg_val<uint32_t>(1);
-    const uint32_t out_tile_rows_per_image = get_common_arg_val<uint32_t>(2);
-    const uint32_t out_rows_tail = get_common_arg_val<uint32_t>(3);
+    // Per-core runtime args: [pages, first output page, its tile_row, its col]
+    const uint32_t pages_this_core = get_arg_val<uint32_t>(0);
+    uint32_t page = get_arg_val<uint32_t>(1);
+    g6c::OutputRowCursor rows{
+        .tile_row = get_arg_val<uint32_t>(2),
+        .col = get_arg_val<uint32_t>(3),
+        .tiles_per_row = get_common_arg_val<uint32_t>(CARG_OUT_WT),
+        .tile_rows = get_common_arg_val<uint32_t>(CARG_OUT_HT),
+        .last_valid_rows = get_common_arg_val<uint32_t>(CARG_LAST_VALID_ROWS)};
 
-    const uint32_t first_page = get_arg_val<uint32_t>(0);
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);
+    const auto acc = TensorAccessor(output_args, out_addr, page_bytes);
 
-    const auto out = TensorAccessor(out_args, out_addr, page_bytes);
-    g6c::OutPageCursor cursor(first_page, out_tile_cols, out_tile_rows_per_image, out_rows_tail);
-
-    uint32_t pages_done = 0;
-    while (pages_done < num_pages) {
-        const uint32_t extent = g6c::block_extent<block_pages, cut_at_tile_rows>(num_pages - pages_done, cursor);
+    uint32_t remaining = pages_this_core;
+    while (remaining > 0) {
+        const uint32_t extent = remaining < block_pages ? remaining : block_pages;
         {
-            DeviceZoneScopedN("g6c_w_wait_front");
-            cb_wait_front(cb_moved_pages, block_pages);
+            DeviceZoneScopedN("G6C-WAIT");
+            cb_wait_front(cb_output_pages, block_pages);
         }
         {
-            DeviceZoneScopedN("g6c_store_pages_block");
-            uint32_t slot_addr = get_read_ptr(cb_moved_pages);
-            for (uint32_t i = 0; i < extent; ++i) {
-                const uint32_t page = cursor.page;
-                g6c::for_each_valid_row_piece<page_bytes, face_row_bytes>(
-                    cursor.valid_rows(), [&](uint32_t offset, uint32_t bytes) {
-                        noc_async_write<page_bytes>(slot_addr + offset, out.get_noc_addr(page, offset), bytes);
-                    });
-                slot_addr += page_bytes;
-                cursor.advance();
-            }
+            DeviceZoneScopedN("G6C-STORE");
+            store_block(extent, page, rows, get_read_ptr(cb_output_pages), acc);
         }
-        {
-            DeviceZoneScopedN("g6c_w_writes_flushed");
-            noc_async_writes_flushed();
-        }
-        // Nominal pop: a ragged block narrows only the transfers, never the ring step.
-        cb_pop_front(cb_moved_pages, block_pages);
-        pages_done += extent;
+        cb_pop_front(cb_output_pages, block_pages);
+        page += extent;
+        remaining -= extent;
     }
     {
-        DeviceZoneScopedN("g6c_w_write_barrier");
+        DeviceZoneScopedN("G6C-DRAIN");
         noc_async_write_barrier();
     }
 }
