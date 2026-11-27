@@ -727,8 +727,20 @@ FORCE_INLINE void visit_channel_with_work(
     keep_in_memory(state);
 }
 
-// An inter-domain router's VC1 channels (from another mesh, into the peer's VC2), one copy for all: their constants are
-// data. Inlined per channel, as the other channels are, they did not fit the router's kernel space.
+// An inter-domain router's forwarding channels, one copy for all: their constants are data. Inlined per channel, as
+// other routers' are, its VC0 and VC1 channels (out of the domain from this mesh and from another) did not fit its
+// kernel space. Not where a channel needs first-level acks or the bubble's free slots.
+template <uint32_t MASK>
+constexpr bool forwards_out_of_line = is_inter_domain_router && [] {
+    for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ch++) {
+        if (((MASK >> ch) & 1u) != 0 &&
+            (is_vc_first_level_ack_enabled[vc_of_sender_channel(ch)] ||
+             (enable_deadlock_avoidance && sender_channel_is_traffic_injection_channel_all_[ch]))) {
+            return false;
+        }
+    }
+    return true;
+}();
 struct ForwardingChannelConstants {
     uint32_t first_slot_addr;
     uint32_t last_slot_addr;
@@ -943,8 +955,13 @@ FORCE_INLINE void visit_channels(
     }
     if constexpr (SenderVc<VC>::forwarding_channels != 0) {
         if (((holding | channels_in_flight) & SenderVc<VC>::forwarding_channels) != 0) {
-            visit_forwarding_channels<SenderVc<VC>::forwarding_channels>(
-                states, holding, channels_in_flight, remote, send_yielded);
+            if constexpr (forwards_out_of_line<SenderVc<VC>::forwarding_channels>) {
+                visit_forwarding_channels_out_of_line<SenderVc<VC>::forwarding_channels>(
+                    states, holding, channels_in_flight, remote, send_yielded);
+            } else {
+                visit_forwarding_channels<SenderVc<VC>::forwarding_channels>(
+                    states, holding, channels_in_flight, remote, send_yielded);
+            }
         }
     }
 }
