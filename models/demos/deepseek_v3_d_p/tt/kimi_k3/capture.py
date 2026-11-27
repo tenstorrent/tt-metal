@@ -195,7 +195,7 @@ class TeacherCapture:
         self._y_own = None
         self._shared_w: dict = {}
         logger.warning(
-            f"K3_CAPTURE {VERSION}: {self.dir}, layers {sorted(self.layers)}, raw {self.raw} (eager prefill only)"
+            f"K3_CAPTURE {VERSION}: {self.dir}, layers {sorted(self.layers, key=str)}, raw {self.raw} (eager prefill only)"
         )
 
     # --- chunk bracket (TtKimiK3Runtime.prefill_chunk) ---
