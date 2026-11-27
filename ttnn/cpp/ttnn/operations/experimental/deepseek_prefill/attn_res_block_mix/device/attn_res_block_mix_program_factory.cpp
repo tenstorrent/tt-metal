@@ -8,6 +8,7 @@
 #include <bit>
 
 #include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/workload/legacy/circular_buffer_constants.h>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
@@ -107,9 +108,42 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     // a few dozen cores behind every write of the R partials; splitting each row into chunks
     // spreads them over the grid. Each core of a row scores that row itself, a few tiles of
     // arithmetic, rather than wait on another core for it.
+    //
+    // A run's candidate tiles stay resident for every site group, and a group's weights are
+    // double-buffered so the next group is built while this one is mixed, so a core's L1
+    // grows with its run. Where the rows alone fill the grid a row is still cut into as many
+    // runs as L1 needs; the cores then take the extra items round-robin.
+    const uint32_t weight_tiles = 2 * sites_per_group * num_candidates;
+    const auto l1_per_core = [&](uint32_t max_run) {
+        return num_candidates * num_partials * stats_tile_size      // gathered statistics
+               + 3 * num_candidates * stats_tile_size               // summed, rsqrt, scores
+               + 5 * stats_tile_size                                // shift, shift and mass out
+               + num_candidates * value_tile_size                   // packed exponentials
+               + max_run * num_candidates * value_tile_size         // the run's candidate tiles
+               + weight_tiles * value_tile_size                     // per-site weights
+               + 2 * sites_per_group * value_tile_size              // even groups' partials
+               + sites_per_group * max_run * value_tile_size        // an odd group's partials
+               + num_open_sites * stats_tile_size                   // scalar staging
+               + (num_closed_sites > 0 ? 3 * stats_tile_size : 0);  // normalizing closed sites
+    };
+    // An L1 bank spans the circular buffers' region: above the allocator base, below L1_SMALL.
+    const uint32_t l1_for_cbs = device->allocator()->get_bank_size(BufferType::L1);
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t grid_cores = grid.x * grid.y;
-    const uint32_t chunks_per_row = std::clamp(grid_cores / Ht, 1u, Wt);
+    uint32_t chunks_per_row = std::clamp(grid_cores / Ht, 1u, Wt);
+    while (chunks_per_row < Wt && l1_per_core((Wt + chunks_per_row - 1) / chunks_per_row) > l1_for_cbs) {
+        ++chunks_per_row;
+    }
+    const uint32_t max_run = (Wt + chunks_per_row - 1) / chunks_per_row;
+    const uint32_t value_tiles = max_run * num_candidates;
+    TT_FATAL(
+        l1_per_core(max_run) <= l1_for_cbs,
+        "AttnResBlockMix needs {} B of L1 per core for {} sites over {} candidates; the core has {} B for circular "
+        "buffers",
+        l1_per_core(max_run),
+        num_sites,
+        num_candidates,
+        l1_for_cbs);
     const uint32_t num_items = Ht * chunks_per_row;
     const uint32_t num_cores = std::min(num_items, grid_cores);
     const CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
@@ -117,29 +151,6 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    // A run's candidate tiles stay resident for every site group, and a group's weights are
-    // double-buffered so the next group is built while this one is mixed.
-    const uint32_t max_run = (Wt + chunks_per_row - 1) / chunks_per_row;
-    const uint32_t value_tiles = max_run * num_candidates;
-    const uint32_t weight_tiles = 2 * sites_per_group * num_candidates;
-    const uint32_t l1_per_core = num_candidates * num_partials * stats_tile_size      // gathered statistics
-                                 + 3 * num_candidates * stats_tile_size               // summed, rsqrt, scores
-                                 + 5 * stats_tile_size                                // shift, shift and mass out
-                                 + num_candidates * value_tile_size                   // packed exponentials
-                                 + value_tiles * value_tile_size                      // the run's candidate tiles
-                                 + weight_tiles * value_tile_size                     // per-site weights
-                                 + 2 * sites_per_group * value_tile_size              // even groups' partials
-                                 + sites_per_group * max_run * value_tile_size        // an odd group's partials
-                                 + num_open_sites * stats_tile_size                   // scalar staging
-                                 + (num_closed_sites > 0 ? 3 * stats_tile_size : 0);  // normalizing closed sites
-    TT_FATAL(
-        l1_per_core <= device->l1_size_per_core(),
-        "AttnResBlockMix needs {} B of L1 per core for {} sites over {} candidates; the core has {} B",
-        l1_per_core,
-        num_sites,
-        num_candidates,
-        device->l1_size_per_core());
-
     ProgramDescriptor desc;
     const auto cb = [&](CBIndex index, uint32_t tiles, uint32_t tile_size, DataFormat format) {
         desc.cbs.push_back(make_cb(index, all_cores, tiles, tile_size, format));
