@@ -54,7 +54,12 @@ void kernel_main() {
     constexpr uint32_t cb_image = get_compile_time_arg_val(14);
     constexpr uint32_t cb_plan = get_compile_time_arg_val(15);
     constexpr bool kLinearFold = get_compile_time_arg_val(16) != 0;
-    constexpr auto in_args = TensorAccessorArgs<17>();
+    // Shared read (linear fold, one block per mover): one mover per core issues the covering reads of the whole
+    // core's stream range into the shared staging CB (cb_stage is the same CB on both movers) and hands it to
+    // its partner through the local semaphore kSemId; the readers alternate by core between the two NoCs.
+    constexpr bool kSharedRead = get_compile_time_arg_val(17) != 0;
+    constexpr uint32_t kSemId = get_compile_time_arg_val(18);
+    constexpr auto in_args = TensorAccessorArgs<19>();
     constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t kNumBanks = NUM_DRAM_BANKS;
@@ -64,11 +69,20 @@ void kernel_main() {
     static_assert((kAlign & (kAlign - 1)) == 0, "DRAM alignment must be a power of two");
     static_assert(kAlign <= 0xFF, "plan entries hold a copy length in 8 bits");
     static_assert(kElem == 2 || kElem == 4, "rm_row_gather moves 2- or 4-byte elements");
+    static_assert(!kSharedRead || (kLinearFold && kStageDepth == 1), "the shared read stages one linear-fold block");
+    // Shared-read roles (RT arg 4).
+    constexpr uint32_t kWaiter = 0;      // waits for the partner's reads
+    constexpr uint32_t kReaderSolo = 1;  // reads; the partner owns no atoms
+    constexpr uint32_t kReaderPair = 2;  // reads, then signals the partner
 
     const uint32_t in_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t atom_begin = get_arg_val<uint32_t>(0);
     const uint32_t atom_count = get_arg_val<uint32_t>(1);
+    // Shared read: the core's atom range (both movers) and this mover's role.
+    const uint32_t core_begin = kSharedRead ? get_arg_val<uint32_t>(2) : atom_begin;
+    const uint32_t core_count = kSharedRead ? get_arg_val<uint32_t>(3) : atom_count;
+    const uint32_t role = kSharedRead ? get_arg_val<uint32_t>(4) : kReaderSolo;
     const uint8_t noc = noc_index;
 
     // Interleaved accessors align the page size to the DRAM alignment themselves (the slot pitch).
@@ -119,6 +133,54 @@ void kernel_main() {
         return true;
     };
 
+    // Linear fold: atoms [a, a + n) are the stream range [s0, s1) (chunks of consecutive output pages).
+    auto stream_range = [&](uint32_t a, uint32_t n, uint32_t& s0, uint32_t& s1) {
+        const uint32_t first_page = a / kAtomsPerPage;
+        const uint32_t last = a % kAtomsPerPage + n - 1;  // chunk index of the last atom, from first_page
+        s0 = first_page * kWOut + (a % kAtomsPerPage) * kAtomElems;
+        s1 = (first_page + last / kAtomsPerPage) * kWOut + min_u32(kWOut, (last % kAtomsPerPage + 1) * kAtomElems);
+    };
+    // Covering reads of the stream range [s0, s1): one A-aligned run per input row it crosses, staged back to
+    // back from `base`. Row r0 = s0 / W_in's run starts at byte lo0 = A-floor of s0's column, every later row's
+    // at byte 0, and every run but the last ends at the row pitch, so stream element (r, c) is staged at
+    // base - lo0 + (r - r0)·kInPitch + c·e (closed form: the copies need no plan). Returns the staging end.
+    constexpr uint32_t kInPitch = (kInPageBytes + kAlign - 1) & ~(kAlign - 1);
+    auto issue_range = [&](uint32_t s0, uint32_t s1, uint32_t base) -> uint32_t {
+        DeviceZoneScopedN("g6.issue");
+        const uint32_t r0 = s0 / kWIn;
+        uint32_t r = r0;
+        uint32_t c = s0 % kWIn;
+        uint32_t end = base;
+        for (uint32_t pos = s0; pos < s1;) {
+            const uint32_t len = min_u32(s1 - pos, kWIn - c);
+            const uint32_t lo = (c * kElem) & ~(kAlign - 1);
+            const uint32_t hi = ((c + len) * kElem + kAlign - 1) & ~(kAlign - 1);
+            ASSERT(r == r0 || end == base - ((s0 % kWIn) * kElem & ~(kAlign - 1)) + (r - r0) * kInPitch);
+            noc_async_read(in.get_noc_addr(r, lo, noc), end, hi - lo, noc);
+            end += hi - lo;
+            pos += len;
+            c = 0;
+            ++r;
+        }
+        ASSERT(end <= base + kStageSlotBytes);
+        return end;
+    };
+
+    // Shared read: the reader issues the whole core range up front (its latency overlaps both movers' setup).
+    uint32_t core_s0 = 0;
+    uint32_t core_stage_end = stage_cb_base + kStageSlotBytes;
+    if constexpr (kSharedRead) {
+        if (core_count > 0) {
+            uint32_t core_s1;
+            stream_range(core_begin, core_count, core_s0, core_s1);
+            if (role != kWaiter) {
+                core_stage_end = issue_range(core_s0, core_s1, stage_cb_base);
+            }
+        }
+    }
+    volatile tt_l1_ptr uint32_t* sem =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kSharedRead ? get_semaphore(kSemId) : 0);
+
     uint32_t stage_slot = 0;
     uint32_t image_slot = 0;
     const uint32_t atom_end = atom_begin + atom_count;
@@ -131,48 +193,45 @@ void kernel_main() {
         const uint32_t blk_chunk = chunk;
 
         if constexpr (kLinearFold) {
-            // The block: chunks blk_chunk .. last of pages blk_page .. blk_page + num_pages - 1, i.e. the stream
-            // range [s0, s1).
+            // The block: chunks blk_chunk .. last of pages blk_page .. blk_page + num_pages - 1.
             const uint32_t last = blk_chunk + n_atoms - 1;
             const uint32_t num_pages = last / kAtomsPerPage + 1;
             const uint32_t last_page_atoms = last % kAtomsPerPage + 1;
-            const uint32_t s0 = blk_page * kWOut + blk_chunk * kAtomElems;
-            const uint32_t s1 = (blk_page + num_pages - 1) * kWOut + min_u32(kWOut, last_page_atoms * kAtomElems);
-            const uint32_t r0 = s0 / kWIn;
-            const uint32_t lo0 = ((s0 % kWIn) * kElem) & ~(kAlign - 1);
-            // Covering reads: one A-aligned run per input row the range crosses, staged back to back. Row r0's run
-            // starts at byte lo0, every later row's at byte 0, and every run but the last ends at the row pitch,
-            // so stream element (r, c) is staged at stage_row0 + (r - r0)·kInPitch + c·e (closed form: the copies
-            // below need no plan).
-            constexpr uint32_t kInPitch = (kInPageBytes + kAlign - 1) & ~(kAlign - 1);
-            const uint32_t stage_row0 = stage_base - lo0;
+            // The staged range: the core's (shared read) or this block's, read now.
+            uint32_t range_s0 = core_s0;
+            uint32_t stage_end = core_stage_end;
+            if constexpr (!kSharedRead) {
+                uint32_t s1;
+                stream_range(a0, n_atoms, range_s0, s1);
+                stage_end = issue_range(range_s0, s1, stage_base);
+            }
+            const uint32_t r0 = range_s0 / kWIn;
+            const uint32_t stage_row0 = stage_base - (((range_s0 % kWIn) * kElem) & ~(kAlign - 1));
             // Fast-path predicate: one atom per output page, and output pages never straddle an input row.
             constexpr bool kPageAtoms = kAtomsPerPage == 1 && kWIn % kWOut == 0;
             constexpr uint32_t kPagesPerRow = kWIn / kWOut;
             // Word count of a whole-page copy when it is word-aligned on both sides (0: byte-length copy).
             constexpr uint32_t kPageWords = kOutPageBytes % 4 == 0 ? kOutPageBytes / 4 : 0;
-            uint32_t stage_end = stage_base;
-            {
-                DeviceZoneScopedN("g6.issue");
-                uint32_t r = r0;
-                uint32_t c = s0 % kWIn;
-                for (uint32_t pos = s0; pos < s1;) {
-                    const uint32_t len = min_u32(s1 - pos, kWIn - c);
-                    const uint32_t lo = (c * kElem) & ~(kAlign - 1);
-                    const uint32_t hi = ((c + len) * kElem + kAlign - 1) & ~(kAlign - 1);
-                    ASSERT(stage_end == stage_row0 + (r - r0) * kInPitch + lo);
-                    noc_async_read(in.get_noc_addr(r, lo, noc), stage_end, hi - lo, noc);
-                    stage_end += hi - lo;
-                    pos += len;
-                    c = 0;
-                    ++r;
-                }
-                ASSERT(stage_end <= stage_base + kStageSlotBytes);
+
+            // In the read latency's shadow: every group's output NoC address (group g starts at page blk_page + g,
+            // chunk blk_chunk for group 0), so the store below only issues.
+            const uint32_t num_groups = min_u32(kNumBanks, num_pages);
+            uint64_t group_dst[kNumBanks];
+            for (uint32_t g = 0; g < num_groups; ++g) {
+                group_dst[g] = out.get_noc_addr(blk_page + g, (g == 0 ? blk_chunk : 0) * kAlign, noc);
             }
 
             {
                 DeviceZoneScopedN("g6.await");
-                noc_async_read_barrier(noc);
+                if (role == kWaiter) {
+                    noc_semaphore_wait(sem, 1);
+                    noc_semaphore_set(sem, 0);
+                } else {
+                    noc_async_read_barrier(noc);
+                    if (kSharedRead && role == kReaderPair) {
+                        noc_semaphore_set(sem, 1);
+                    }
+                }
             }
 
             {
@@ -181,7 +240,6 @@ void kernel_main() {
                 // soon as its image bytes are fenced, overlapping the next group's copies.
                 DeviceZoneScopedN("g6.permute_store");
                 g6_reshape::begin_image(noc);
-                const uint32_t num_groups = min_u32(kNumBanks, num_pages);
                 uint32_t img = image_base;
                 for (uint32_t g = 0; g < num_groups; ++g) {
                     const uint32_t group_img = img;
@@ -240,11 +298,7 @@ void kernel_main() {
                         }
                     }
                     g6_reshape::fence_image(last_byte);
-                    noc_async_write(
-                        group_img,
-                        out.get_noc_addr(blk_page + g, (g == 0 ? blk_chunk : 0) * kAlign, noc),
-                        img - group_img,
-                        noc);
+                    noc_async_write(group_img, group_dst[g], img - group_img, noc);
                 }
                 ASSERT(img - image_base == n_atoms * kAlign);
                 ASSERT(img - image_base <= kImageSlotBytes);

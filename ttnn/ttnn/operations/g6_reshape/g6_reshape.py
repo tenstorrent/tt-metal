@@ -68,6 +68,12 @@ RM_READ_GAP_BYTES = None
 # single hot input bank serves no stride amplification) with a bank-grouped image (<= NB writes per block).
 # "bank": bank-affine fold (one write per (block, bank), but a mover's input elements are NB pages apart).
 RM_FOLD = "linear"
+# rm_row_gather shared read (Refinement 3): with the linear fold and one block per mover, one mover per core reads
+# the whole core's stream range into one staging CB and hands it to its partner through a local semaphore; the
+# reading mover alternates by core between the two NoCs. Halves the requests every NoC carries to the input's
+# (often single, hot) DRAM bank, whose per-NoC request queue sets the read-await tail. False: each mover reads its
+# own block (Refinement 2 behaviour).
+RM_SHARED_READ = True
 
 # BB-05: L1 the model leaves to the op on every core.
 L1_OP_BUDGET = 1347776
@@ -75,6 +81,7 @@ L1_OP_BUDGET = 1347776
 TILE = 32
 FACE = 16
 COPY_ENTRY_BYTES = 8
+SHARED_READ_SEM = 0  # semaphore id of the rm shared-read handoff
 TILE_ENTRY_BYTES = 16
 CB_ALIGN = 64
 
@@ -101,6 +108,7 @@ def _knobs():
         IMAGE_DEPTH,
         RM_READ_GAP_BYTES,
         RM_FOLD,
+        RM_SHARED_READ,
         MOVER_NOCS,
         L1_OP_BUDGET,
     )
@@ -365,6 +373,7 @@ class _RmPlan(_CoreRangesMixin):
     grid_x: int
     num_cores: int
     roles: tuple
+    shared_read: bool  # one covering read per core, shared by its movers (RM_SHARED_READ)
 
     regime = "rm_row_gather"
     atom_rows = 1
@@ -376,6 +385,24 @@ class _RmPlan(_CoreRangesMixin):
     @property
     def l1_bytes_per_core(self):
         return _core_bytes(self.stage_slot_bytes, self.image_slot_bytes, self.plan_bytes)
+
+    def mover_runtime_args(self, mover, core_index):
+        """[atom_begin, atom_count] (+ [core_begin, core_count, role] under the shared read). Role: 0 waits for
+        the partner's read, 1 reads alone (the partner owns no atoms), 2 reads and signals the partner. The
+        reader is the mover whose NoC matches the core's checkerboard parity, so readers split evenly over the
+        NoCs, unless that mover owns no atoms."""
+        (x, y), begin, count = self.roles[mover][core_index]
+        if not self.shared_read:
+            return [begin, count]
+        shares = [self.roles[m][core_index] for m in range(MOVERS_PER_CORE)]
+        core_begin = shares[0][1]
+        core_count = sum(share[2] for share in shares)
+        reader = (x + y) % MOVERS_PER_CORE
+        if shares[reader][2] == 0:
+            reader = 0
+        partner_waits = any(share[2] > 0 for m, share in enumerate(shares) if m != reader)
+        role = (2 if partner_waits else 1) if mover == reader else 0
+        return [begin, count, core_begin, core_count, role]
 
 
 def _rm_slot_bytes(atoms, s_bound, dram_align, read_gap, linear_fold):
@@ -410,6 +437,14 @@ def _make_rm_plan(in_shape, out_shape, elem, grid, dram_align):
     block_atoms, (stage_slot, image_slot, plan_bytes) = _fit_block_atoms(
         max_mover_atoms, lambda n: _rm_slot_bytes(n, s_bound, dram_align, read_gap, RM_FOLD == "linear")
     )
+    # The shared read stages the core's whole range (every mover's single block) in one CB.
+    shared_read = (
+        RM_SHARED_READ
+        and RM_FOLD == "linear"
+        and MOVERS_PER_CORE > 1
+        and STAGE_DEPTH == 1
+        and block_atoms >= max_mover_atoms
+    )
     return _RmPlan(
         elem=elem,
         w_in=w_in,
@@ -429,6 +464,7 @@ def _make_rm_plan(in_shape, out_shape, elem, grid, dram_align):
         grid_x=grid.x,
         num_cores=num_cores,
         roles=roles,
+        shared_read=shared_read,
     )
 
 
@@ -498,6 +534,8 @@ def _tile_compile_args(plan, cb_stage, cb_image, cb_plan):
 
 
 def _rm_compile_args(plan, cb_stage, cb_image, cb_plan):
+    # Under the shared read the staging slot is the core's: every mover's slot, pooled in one CB.
+    stage_slot_bytes = plan.stage_slot_bytes * (MOVERS_PER_CORE if plan.shared_read else 1)
     return [
         plan.elem,
         plan.w_in,
@@ -509,13 +547,15 @@ def _rm_compile_args(plan, cb_stage, cb_image, cb_plan):
         plan.read_gap,
         STAGE_DEPTH,
         IMAGE_DEPTH,
-        plan.stage_slot_bytes,
+        stage_slot_bytes,
         plan.image_slot_bytes,
         plan.max_copies,
         cb_stage,
         cb_image,
         cb_plan,
         int(RM_FOLD == "linear"),
+        int(plan.shared_read),
+        SHARED_READ_SEM,
     ]
 
 
@@ -528,15 +568,22 @@ def _build_descriptor(plan, input_tensor, output_tensor):
     kernel_source = RM_KERNEL if row_major else KERNEL
     compile_args_fn = _rm_compile_args if row_major else _tile_compile_args
 
+    # rm shared read: every mover stages into mover 0's staging CB, which pools all movers' slots.
+    shared_read = row_major and plan.shared_read
     kernels = []
     cbs = []
+    semaphores = []
+    if shared_read:
+        semaphores.append(ttnn.SemaphoreDescriptor(id=SHARED_READ_SEM, core_ranges=core_ranges, initial_value=0))
     for mover in range(MOVERS_PER_CORE):
         (cb_stage, cb_image, cb_plan), processor = MOVERS[mover]
         noc = MOVER_NOCS[mover]
-        compile_args = [*compile_args_fn(plan, cb_stage, cb_image, cb_plan), *in_accessor, *out_accessor]
+        stage_cb = MOVERS[0][0][0] if shared_read else cb_stage
+        stage_bytes = (MOVERS_PER_CORE * plan.stage_bytes if mover == 0 else 0) if shared_read else plan.stage_bytes
+        compile_args = [*compile_args_fn(plan, stage_cb, cb_image, cb_plan), *in_accessor, *out_accessor]
         runtime_args = ttnn.RuntimeArgs()
-        for (x, y), begin, count in plan.roles[mover]:
-            runtime_args[x][y] = [begin, count]
+        for i, ((x, y), begin, count) in enumerate(plan.roles[mover]):
+            runtime_args[x][y] = plan.mover_runtime_args(mover, i) if row_major else [begin, count]
         config = ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc)
         kernels.append(
             ttnn.KernelDescriptor(
@@ -549,11 +596,11 @@ def _build_descriptor(plan, input_tensor, output_tensor):
             )
         )
         for cb_id, size, fmt in (
-            (cb_stage, plan.stage_bytes, input_tensor.dtype),
+            (cb_stage, stage_bytes, input_tensor.dtype),
             (cb_image, plan.image_bytes, input_tensor.dtype),
             (cb_plan, plan.plan_bytes, ttnn.uint32),
         ):
-            if size == 0:  # no plan (rm linear fold): the kernel never touches the CB
+            if size == 0:  # no plan (rm linear fold) / pooled staging (shared read): the kernel never touches it
                 continue
             cbs.append(
                 ttnn.CBDescriptor(
@@ -562,7 +609,7 @@ def _build_descriptor(plan, input_tensor, output_tensor):
                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_id, data_format=fmt, page_size=size)],
                 )
             )
-    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)
 
 
 # BB-07: one descriptor per program-changing signature; a hit patches only the buffer addresses.
@@ -659,5 +706,6 @@ def describe_plan(input_tensor: ttnn.Tensor, shape) -> dict:
         "image_bytes": plan.image_bytes,
         "plan_bytes": plan.plan_bytes,
         "l1_bytes_per_core": plan.l1_bytes_per_core,
+        "shared_read": getattr(plan, "shared_read", False),
         "roles": roles,
     }
