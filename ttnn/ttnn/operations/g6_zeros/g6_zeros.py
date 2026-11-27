@@ -4,9 +4,10 @@
 """g6_zeros: a new DRAM-interleaved TILE tensor whose every element is +0.0.
 
 One device program per call (regime `bank_run_write`): the output's pages are
-split bank-major over the whole grid; each core makes its zero bytes once in
-its own L1 and writes its <= 2 DRAM bank runs from them. Nothing is read,
-nothing is made on the host.
+split bank-major into contiguous ranges, one writer core per DRAM bank by
+default, placed next to its bank; each writer makes its zero bytes once in its
+own L1 and writes its bank runs from them. Nothing is read, nothing is made on
+the host.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from .g6_zeros_program_descriptor import (
     create_program_descriptor,
     device_geometry,
     make_plan,
+    plan_knobs,
     set_output_address,
 )
 
@@ -119,15 +121,15 @@ def validate(shape, *, dtype, layout, device, memory_config):
 _DESCRIPTOR_CACHE = {}
 
 
-def _cache_key(shape, dtype, layout, memory_config, grid, num_dram_banks):
+def _cache_key(shape, dtype, layout, memory_config, geometry):
     return (
         tuple(int(d) for d in shape),
         dtype,
         layout,
         memory_config.buffer_type,
         memory_config.memory_layout,
-        grid,
-        num_dram_banks,
+        geometry,
+        plan_knobs(),
     )
 
 
@@ -136,8 +138,7 @@ def g6_zeros_plan(shape, *, dtype, device):
 
     Regime, grid, cores used, per-core role / position range / bank runs, zero source and packet size.
     """
-    grid, num_dram_banks = device_geometry(device)
-    return make_plan(tuple(int(d) for d in shape), dtype, grid, num_dram_banks)
+    return make_plan(tuple(int(d) for d in shape), dtype, device_geometry(device))
 
 
 # ---------------------------------------------------------------------------
@@ -150,11 +151,11 @@ def g6_zeros(shape, *, dtype, layout, device, memory_config):
 
     output = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), dtype, layout, device, memory_config)
 
-    grid, num_dram_banks = device_geometry(device)
-    key = _cache_key(shape, dtype, layout, memory_config, grid, num_dram_banks)
+    geometry = device_geometry(device)
+    key = _cache_key(shape, dtype, layout, memory_config, geometry)
     descriptor = _DESCRIPTOR_CACHE.get(key)
     if descriptor is None:
-        plan = make_plan(key[0], dtype, grid, num_dram_banks)
+        plan = make_plan(key[0], dtype, geometry)
         descriptor = create_program_descriptor(output, plan)
         _DESCRIPTOR_CACHE[key] = descriptor
     else:

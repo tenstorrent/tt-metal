@@ -26,7 +26,6 @@ KNOBS = [
     pytest.param({}, id="default"),
     pytest.param({"WRITER_CORES_PER_BANK": None}, id="L1-whole-grid"),
     pytest.param({"WRITER_CORES_PER_BANK": 4}, id="L1-4-per-bank"),
-    pytest.param({"BANKS_PER_CORE": 8}, id="L4-banks_per_core8"),
 ]
 
 
@@ -34,7 +33,7 @@ KNOBS = [
 def test_g6_zeros_perf_knobs(knobs, device, monkeypatch):
     for name, value in knobs.items():
         monkeypatch.setattr(descriptor_module, name, value)
-    # The host cache key holds no knob: a turned knob needs a fresh descriptor.
+    # A turned knob is in the host cache key; the fresh cache keeps each case's build independent.
     monkeypatch.setattr(op_module, "_DESCRIPTOR_CACHE", {})
     for shape in SHAPES:
         output = g6_zeros(

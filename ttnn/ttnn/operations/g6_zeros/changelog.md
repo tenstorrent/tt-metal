@@ -45,3 +45,67 @@ unchanged; only the host knob defaults moved.
 `test_g6_zeros_debug.py::test_dirty_destination_outside_phase0` runs p4 bfloat16 and p1 bfloat8_b
 through the same program past `validate()`, over a poisoned range: every element reads back +0.0.
 Adding those dtypes is a SUPPORTED-only change.
+
+## Rebuild from the full-grid bank-run design (implementer)
+
+Rebuilt against `op_design.md` (`bank_run_write`): bank-major position space, balanced contiguous
+ranges from `ttnn.split_work_to_cores(..., row_wise=True)`, per-core RT `(q_begin, q_count)`,
+common RT `(output address, P)`. One writer kernel (BRISC, NoC1) and one `cb_zero_src` on a single
+`CoreRange` over the whole grid; cores without positions return before any NoC call. Each writer
+zero-fills its source once (`Noc::async_write_zeros` loopback), maps its first run in the fill's
+shadow, then writes each run with `noc_async_write_one_packet_set_state` / `_with_state` from that
+constant source (a tail packet re-sets the length), and drains with one `noc_async_write_barrier`.
+The kernel takes the bank count from `NUM_DRAM_BANKS`; the host never sends one. No reader or
+compute kernel (the design's kernel set). SUPPORTED: `dtype` float32, `layout` TILE.
+
+The design's plan with its Phase 0 knob values is still built and tested. Two knobs were added
+next to the design's `grid` (`WRITER_GRID`), both RT-arg / core-order only, as the design's lamps
+describe:
+- `WRITER_CORES_PER_BANK`: how many cores of the rectangle take positions (`None` = all).
+- `CORE_ORDER`: `row_major` (design Phase 0) or `bank_affine` (each bank's ranges go to the cores
+  nearest its NoC1 endpoint, `get_optimal_dram_bank_to_logical_worker_assignment(NOC_1, (0,0))`).
+
+### Deviation from the design's Phase 0 knob values (measured)
+
+Device kernel duration, ns, Blackhole p150 (8 DRAM banks, 11x10 grid), one fresh run per variant.
+Every variant launches the same 110-core rectangle.
+
+| variant | p1 bf8b 285.8 MB | p2 fp32 12.6 MB | p3 fp32 6.3 MB | p4 bf16 0.26 MB |
+|---|---|---|---|---|
+| design Phase 0: row_major, all 110 cores, Z=16K | 1,330,776 (215 GB/s) | 58,357 | 30,456 | 1,806 |
+| row_major, 8 cores (rectangle 8x1), Z=16K | 902,833 | 40,824 | 20,959 | 1,965 |
+| bank_affine, all 110 cores, Z=16K | 896,684 | 40,739 | 21,141 | 1,567 |
+| bank_affine, 2 per bank (16), Z=16K | 1,106,341 | 52,964 | 26,793 | 2,342 |
+| bank_affine, 1 per bank (8), Z=16K | 559,660 | 25,807 | 13,656 | 1,824 |
+| bank_affine, 1 per bank (8), Z=8K | 559,700 | 25,661 | 13,412 | 1,622 |
+| **bank_affine, 1 per bank (8), Z=4K (default)** | **559,553 (510.7 GB/s)** | **25,599** | **13,316** | **1,527** |
+| bank_affine, all 110 cores, Z=4K | 858,562 | 39,037 | 20,595 | 1,505 |
+
+- Bound: the DRAM banks. p1 writes at 510.7 GB/s against Blackhole's 512 GB/s nominal peak, so
+  p1/p2/p3 have no data-movement headroom left. The p1 target (<= 837 us) is met only with the
+  bank-affine single writer per bank; the design's Phase 0 values give 1331 us.
+- Every extra writer per bank costs time: their NoC1 paths converge on one bank endpoint.
+- `ZERO_SRC_BYTES_MAX` does not move the DRAM-bound shapes; it is fixed cost before the first
+  write on p4, so the default is 4096.
+- Defaults: `CORE_ORDER = "bank_affine"`, `WRITER_CORES_PER_BANK = 1`, `ZERO_SRC_BYTES_MAX = 4096`.
+  The kernel rectangle stays one `CoreRange` over the grid (BB-17); with `P % NB == 0` each writer
+  holds exactly one run.
+- Mesh: one program runs on every chip, and the placement follows chip (0, 0)'s bank anchors. On a
+  chip with different harvesting the writers are still correct, only possibly farther from their
+  banks.
+
+Lamps not built: second NoC (`writer_riscs = 2`) — p1/p2/p3 are at the DRAM peak, nothing to gain;
+overlap of the fill with the first writes — the 4 KiB source already makes the fill 8 loopback reads.
+
+### Kernel reach outside Phase 0
+
+`test_g6_zeros_bank_run_debug.py` runs the program past `validate()` over a poisoned range: p4
+bfloat16, p1 bfloat8_b (1088 B pages straddle packets), rectangles below the bank count (up to 8
+runs per core), 13 and 1001 pages (unequal banks, ranges straddling banks), both core orders and
+1 / 2 / all writers per bank. Every element reads back +0.0. Adding bfloat16 and bfloat8_b is a
+SUPPORTED-only change.
+
+`test_g6_zeros_debug.py` targets the previous implementation's `Knobs` / `get_program` and no longer
+imports; it is kept as a record. `test_g6_zeros_perf_knobs.py` runs against the new knobs through
+the public entry point; its `BANKS_PER_CORE` case (every core walks every bank, the design's rejected
+`page_id_split_bank_coalesced`) was dropped.

@@ -9,3 +9,6 @@
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T05:54:09-05:00"}
 {"event":"start","phase":"rebuild_from_design","design_commit":"e78af71969f","plan":"full-grid bank-major split, one writer kernel, one zero source CB","ts":"2026-11-27T05:54:09-05:00"}
 {"event":"test_run","result":"pass","detail":"acceptance 19 passed 4 xfailed (--dev and plain); bank_run debug 7 passed (--dev): bf16 p4, bf8b p1, grid 1x1/3x1/8x1, P=13 unequal banks","ts":"2026-11-27T05:58:41-05:00"}
+{"event":"perf_measure","method":"device kernel duration, one fresh run each","design_phase0_ns":{"p1":1330776,"p2":58357,"p3":30456,"p4":1806},"bank_affine_1perbank_z4k_ns":{"p1":559553,"p2":25599,"p3":13316,"p4":1527},"p1_gbps":510.7,"bound":"DRAM (512 GB/s nominal)","ts":"2026-11-27T06:06:40-05:00"}
+{"event":"fix_applied","what":"defaults CORE_ORDER=bank_affine, WRITER_CORES_PER_BANK=1, ZERO_SRC_BYTES_MAX=4096 (design lamps); design Phase 0 values stay one knob away","ts":"2026-11-27T06:06:40-05:00"}
+{"event":"test_run","result":"pass","detail":"acceptance 19 passed 4 xfailed (--dev, plain); bank_run debug 14 passed (--dev, plain); golden 13 passed 6 xfailed; perf_knobs 3 passed","ts":"2026-11-27T06:06:40-05:00"}

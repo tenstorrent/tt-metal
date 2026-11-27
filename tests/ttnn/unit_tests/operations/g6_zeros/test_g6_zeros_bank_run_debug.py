@@ -7,7 +7,8 @@ Each case runs the op's own descriptor over a range poisoned with a loud pattern
 page shows. It covers what the acceptance suite cannot reach in Phase 0:
 - bfloat16 / bfloat8_b pages (2048 / 1088 B; 1088 does not divide the 16 KiB packet),
 - WRITER_GRID cut below the bank count (a core walks up to 8 runs),
-- a page count that is not a multiple of the bank count (banks of unequal slot counts).
+- a page count that is not a multiple of the bank count (banks of unequal slot counts),
+- CORE_ORDER="bank_affine" with several writer counts.
 """
 
 import pytest
@@ -38,10 +39,13 @@ def _poisoned_output(shape, dtype, device):
     return output
 
 
-def _run(shape, dtype, device, grid=None):
-    full_grid, num_dram_banks = pdm.device_geometry(device)
+def _run(shape, dtype, device, grid=None, monkeypatch=None, **knobs):
+    if monkeypatch is not None:
+        monkeypatch.setattr(pdm, "WRITER_GRID", grid)
+        for name, value in knobs.items():
+            monkeypatch.setattr(pdm, name, value)
     output = _poisoned_output(shape, dtype, device)
-    plan = pdm.make_plan(shape, dtype, grid or full_grid, num_dram_banks)
+    plan = pdm.make_plan(shape, dtype, pdm.device_geometry(device))
     ttnn.generic_op([output], pdm.create_program_descriptor(output, plan))
     readback = ttnn.to_torch(output)
     if dtype == ttnn.bfloat8_b:
@@ -59,18 +63,35 @@ def _run(shape, dtype, device, grid=None):
         pytest.param((32831, 1, 32, 256), ttnn.bfloat8_b, id="p1-bf8b"),
     ],
 )
-def test_dtypes_outside_phase0(shape, dtype, device):
-    _run(shape, dtype, device)
+@pytest.mark.parametrize("core_order", ["row_major", "bank_affine"])
+def test_dtypes_outside_phase0(shape, dtype, core_order, device, monkeypatch):
+    _run(shape, dtype, device, monkeypatch=monkeypatch, CORE_ORDER=core_order)
 
 
 @pytest.mark.parametrize("grid", [(1, 1), (3, 1), (8, 1)], ids=lambda g: f"grid{g[0]}x{g[1]}")
-def test_grid_below_bank_count(grid, device):
-    plan = _run((8, 12, 128, 128), ttnn.float32, device, grid=grid)
+def test_grid_below_bank_count(grid, device, monkeypatch):
+    plan = _run((8, 12, 128, 128), ttnn.float32, device, grid=grid, monkeypatch=monkeypatch)
     assert plan.cores_used == grid[0] * grid[1]
 
 
 @pytest.mark.parametrize("grid", [None, (2, 1)], ids=["full-grid", "grid2x1"])
-def test_unequal_banks(grid, device):
+@pytest.mark.parametrize("core_order", ["row_major", "bank_affine"])
+def test_unequal_banks(grid, core_order, device, monkeypatch):
     # 13 pages: banks 0..4 hold 2 slots, banks 5..7 hold 1.
-    plan = _run((1, 1, 32, 13 * 32), ttnn.float32, device, grid=grid)
+    plan = _run((1, 1, 32, 13 * 32), ttnn.float32, device, grid=grid, monkeypatch=monkeypatch, CORE_ORDER=core_order)
     assert plan.tensor_pages == 13
+
+
+@pytest.mark.parametrize("writer_cores_per_bank", [1, 2, None], ids=["w1", "w2", "wall"])
+def test_bank_affine_writer_counts(writer_cores_per_bank, device, monkeypatch):
+    # 1001 pages: unequal banks and ranges that straddle bank boundaries.
+    plan = _run(
+        (1, 7, 32, 143 * 32),
+        ttnn.float32,
+        device,
+        monkeypatch=monkeypatch,
+        CORE_ORDER="bank_affine",
+        WRITER_CORES_PER_BANK=writer_cores_per_bank,
+    )
+    writers = [work.core for work in plan.cores if work.q_count]
+    assert len(writers) == len(set(writers)) == plan.cores_used
