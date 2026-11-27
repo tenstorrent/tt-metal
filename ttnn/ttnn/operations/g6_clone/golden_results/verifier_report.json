@@ -1,0 +1,321 @@
+{
+  "summary": {
+    "total": 38,
+    "supported_pass": 7,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 28,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 3
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[16x12x128x128-dtype=FLOAT32-layout=TILE]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[8x12x128x128-dtype=FLOAT32-layout=TILE]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x12x128x128-dtype=FLOAT32-layout=TILE]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1-dtype=FLOAT32-layout=TILE]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p1-16x12x128x128-dtype=FLOAT32-layout=TILE]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p2-8x12x128x128-dtype=FLOAT32-layout=TILE]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[poisoned_padding_nan_f32-1x1-dtype=FLOAT32-layout=TILE]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x512x5120-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x32x62080-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x1x62080-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x5120-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x256x5120-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x256x3072-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x2048x128-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x8192x128-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x2048x128-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x256x128-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x2304x128-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x8192x128-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x8448x128-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[16x3x2560-dtype=BFLOAT16-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[8x3x2560-dtype=BFLOAT16-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x3x2560-dtype=BFLOAT16-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[16-dtype=UINT32-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[8-dtype=UINT32-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[32-dtype=UINT32-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1-dtype=UINT32-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x1x32-dtype=UINT32-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[16-dtype=INT32-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "INT32",
+          "layout": "ROW_MAJOR"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[8-dtype=INT32-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "INT32",
+          "layout": "ROW_MAJOR"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op[1-dtype=INT32-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "INT32",
+          "layout": "ROW_MAJOR"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p3-1x512x5120-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p4-1x1x32x62080-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[poisoned_padding_nan_bf16-1x1x1x62080-dtype=BFLOAT16-layout=TILE]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE"
+        },
+        "status": "xfail"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_regression.py::test_special_bit_patterns[1x12x128x128]",
+        "test_name": "test_special_bit_patterns[1x12x128x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_regression.py::test_new_storage[1x1]",
+        "test_name": "test_new_storage[1x1]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_clone/test_regression.py::test_repeat[16x12x128x128]",
+        "test_name": "test_repeat[16x12x128x128]",
+        "status": "passed"
+      }
+    ]
+  }
+}

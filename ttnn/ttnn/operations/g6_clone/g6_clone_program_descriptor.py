@@ -27,6 +27,11 @@ REGIME = "flat_page_range"
 # one block, so the reader fills block k+1 while the writer drains block k.
 CB_DEPTH_KNOB = 2
 
+# Block-size knob: how many blocks a core's assignment is cut into before the L1 cap applies.
+# 1 keeps the whole assignment in flight behind one barrier; on p1, 2-7 blocks with depth 2 measured
+# within noise of 1 (63.5-64.4 us) and 28 blocks (one page each) 10% slower (70.3 us).
+BLOCKS_PER_CORE_KNOB = 1
+
 # L1 the model environment leaves to the op on every core (BB-05).
 L1_BUDGET_BYTES = 1347776
 
@@ -53,7 +58,7 @@ def compute_plan(device, tensor_pages: int, aligned_page_bytes: int) -> dict:
     )
     core_pages_max = core_pages_g1
 
-    block_pages = min(core_pages_max, block_pages_l1_cap)
+    block_pages = min(-(-core_pages_max // BLOCKS_PER_CORE_KNOB), block_pages_l1_cap)
     num_blocks_max = -(-core_pages_max // block_pages)
     cb_depth_blocks = min(CB_DEPTH_KNOB, num_blocks_max)
 

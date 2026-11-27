@@ -1,0 +1,30 @@
+{
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p1-16x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "case": "p1",
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p2-8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "case": "p2",
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p3-1x512x5120-dtype=BFLOAT16-layout=TILE]": {
+    "case": "p3",
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p4-1x1x32x62080-dtype=BFLOAT16-layout=TILE]": {
+    "case": "p4",
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[poisoned_padding_nan_f32-1x1-dtype=FLOAT32-layout=TILE]": {
+    "case": "poisoned_padding_nan_f32",
+    "poison_padding": NaN
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[poisoned_padding_nan_bf16-1x1x1x62080-dtype=BFLOAT16-layout=TILE]": {
+    "case": "poisoned_padding_nan_bf16",
+    "poison_padding": NaN
+  }
+}

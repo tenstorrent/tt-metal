@@ -7,6 +7,8 @@ The op's TOLERANCES are ("exact", None) for every dtype, so every check compares
 patterns with torch.equal; no PCC or RMS limit applies.
 """
 
+import importlib
+
 import pytest
 import torch
 import ttnn
@@ -148,6 +150,33 @@ def test_g6_clone_repeat_other_address(device):
     _assert_clone(second_output, second_ttnn, second_input)
 
     assert torch.equal(_bits(ttnn.to_torch(first_output)), _bits(first_input)), "second call wrote into first output"
+
+
+def test_g6_clone_multi_block_ring(device, monkeypatch):
+    """Depth-2 staging ring with a ragged last block, the plan the L1 cap selects for large tensors.
+
+    No INPUTS shape reaches it (one block per core), so the knob forces it on p2: 14 / 13 pages per
+    core in blocks of 5, 5, 4 / 5, 5, 3, so the ring wraps once and every push and pop stays at the
+    nominal block_pages while the transfers narrow."""
+    # The package re-exports the g6_clone function under its module's name, so the module comes
+    # from sys.modules, not from attribute access.
+    op_module = importlib.import_module("ttnn.operations.g6_clone.g6_clone")
+    descriptor_module = importlib.import_module("ttnn.operations.g6_clone.g6_clone_program_descriptor")
+
+    monkeypatch.setattr(descriptor_module, "BLOCKS_PER_CORE_KNOB", 3)
+    # The knob is a process constant outside the cache key; isolate the cache so the forced plan is
+    # built here and never served to another test.
+    monkeypatch.setattr(op_module, "_DESCRIPTOR_CACHE", {})
+
+    shape = (8, 12, 128, 128)
+    torch.manual_seed(42)
+    torch_input = _with_special_bits(_random_bit_patterns(shape))
+    ttnn_input = _upload(torch_input, device)
+    plan = op_module.g6_clone_plan(ttnn_input)
+    assert (plan["block_pages"], plan["cb_depth_blocks"], plan["num_blocks_max"]) == (5, 2, 3), plan
+    assert (plan["core_pages_g1"], plan["core_pages_g2"]) == (14, 13), plan
+    ttnn_output = g6_clone(ttnn_input)
+    _assert_clone(ttnn_output, ttnn_input, torch_input)
 
 
 def test_g6_clone_rejects_host_tensor(expect_error):

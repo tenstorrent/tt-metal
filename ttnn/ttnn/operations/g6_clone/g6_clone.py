@@ -119,10 +119,16 @@ def _cache_key(input_tensor):
     )
 
 
+def _plan(input_tensor):
+    # The one place the plan's inputs are read off the tensor: the entry point and the plan report
+    # must agree on them (BB-08), and every input that changes the plan must also be in _cache_key.
+    return compute_plan(input_tensor.device(), input_tensor.buffer_num_pages(), input_tensor.buffer_aligned_page_size())
+
+
 def g6_clone_plan(input_tensor: ttnn.Tensor) -> dict:
     """The plan a call on `input_tensor` runs: regime, grid, work split, block knobs, per-core roles."""
     validate(input_tensor)
-    return compute_plan(input_tensor.device(), input_tensor.buffer_num_pages(), input_tensor.buffer_aligned_page_size())
+    return _plan(input_tensor)
 
 
 # ---------------------------------------------------------------------------
@@ -141,10 +147,7 @@ def g6_clone(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     key = _cache_key(input_tensor)
     descriptor = _DESCRIPTOR_CACHE.get(key)
     if descriptor is None:
-        plan = compute_plan(
-            input_tensor.device(), input_tensor.buffer_num_pages(), input_tensor.buffer_aligned_page_size()
-        )
-        descriptor = create_program_descriptor(input_tensor, output_tensor, plan)
+        descriptor = create_program_descriptor(input_tensor, output_tensor, _plan(input_tensor))
         _DESCRIPTOR_CACHE[key] = descriptor
     else:
         patch_addresses(descriptor, input_tensor, output_tensor)
