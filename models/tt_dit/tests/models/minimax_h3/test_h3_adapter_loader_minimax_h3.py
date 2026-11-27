@@ -9,8 +9,15 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from safetensors.torch import save_file
 
-from ....experimental.lora.h3_adapter_loader import _collect_pairs, _file_alpha, _register_fused, _scale_of
+from ....experimental.lora.h3_adapter_loader import (
+    _collect_pairs,
+    _file_alpha,
+    _register_fused,
+    _scale_of,
+    h3_host_deltas,
+)
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import _round_bf16_stochastic
 
 NUM_HEADS = 4
@@ -136,6 +143,29 @@ def test_collect_pairs_rejects_non_lora_key(expect_error):
 def test_collect_pairs_rejects_half_pair(expect_error):
     with expect_error(RuntimeError, "half pair"):
         _collect_pairs({"transformer_blocks.0.attn.to_q.lora_A.weight": torch.zeros(RANK, IN_DIM)})
+
+
+def test_host_deltas_add_fastvideo_exact_deltas(tmp_path):
+    """A FastVideo `fastvideo-lora-v2` file: `.diff` adds to the weight (on top of a LoRA pair when both
+    target it), `.diff_b` to the bias, each times the strength."""
+    a, b = torch.randn(RANK, IN_DIM), torch.randn(INNER_DIM, RANK)
+    diff, diff_b, norm = torch.randn(INNER_DIM, IN_DIM), torch.randn(INNER_DIM), torch.randn(IN_DIM)
+    path = tmp_path / "adapter_model.safetensors"
+    save_file(
+        {
+            "proj_in.lora_A.weight": a,
+            "proj_in.lora_B.weight": b,
+            "proj_in.diff": diff,
+            "proj_in.diff_b": diff_b,
+            "norm_out.norm.diff": norm,
+        },
+        str(path),
+    )
+    deltas = h3_host_deltas(str(path), ("",), scale=0.5)
+    assert set(deltas) == {"proj_in.weight", "proj_in.bias", "norm_out.norm.weight"}
+    torch.testing.assert_close(deltas["proj_in.weight"], 0.5 * (b @ a + diff))
+    torch.testing.assert_close(deltas["proj_in.bias"], 0.5 * diff_b)
+    torch.testing.assert_close(deltas["norm_out.norm.weight"], 0.5 * norm)
 
 
 @pytest.mark.parametrize("sign", [1.0, -1.0])

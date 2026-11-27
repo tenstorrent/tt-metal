@@ -9,8 +9,11 @@ The device weights are already permuted/fused, and ``register_lora`` does not tr
 ``to_qkv``) and ``prepare_for_fused_swiglu`` (``ff1``; mandatory, since the mixin's swiglu guard misses it).
 
 Scale is ``alpha / rank`` from a per-target ``.alpha`` tensor, else ``__metadata__`` (lightx2v Turbo),
-else 1 -- never assume ``alpha == rank``. Unmapped keys and ``.diff`` deltas raise.
+else 1 -- never assume ``alpha == rank``. Unmapped keys raise. FastVideo's exact deltas (``.diff`` on a
+weight, ``.diff_b`` on a bias) merge on the host path only (:func:`iter_h3_host_deltas`); the device path
+raises on them, and both raise on a VSA gate (``to_gate_compress.set_weight``), which this tree cannot run.
 """
+
 from __future__ import annotations
 
 import re
@@ -30,6 +33,9 @@ _STRIP_PREFIXES = ("model.diffusion_model.", "diffusion_model.", "transformer.",
 # PEFT (``.lora_A.default.weight``) and kohya (``lora_down``/``lora_up``) spellings.
 _LOW_RANK_RE = re.compile(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$")
 _SLOT_MAP = {"A": "A", "down": "A", "B": "B", "up": "B"}
+
+# FastVideo ``fastvideo-lora-v2`` exact deltas, and the parameter each one adds to.
+_EXACT_SUFFIXES = {".diff": ".weight", ".diff_b": ".bias"}
 
 _BLOCK_RE = re.compile(r"^(?P<stack>transformer_blocks|token_refiner\.refiner_blocks)\.(?P<idx>\d+)\.(?P<rest>.+)$")
 
@@ -139,7 +145,8 @@ def load_h3_adapter_into(
 def h3_host_deltas(path: str, prefixes: tuple[str, ...], *, scale: float = 1.0) -> dict[str, torch.Tensor]:
     """fp32 ``scale * alpha / rank * B @ A`` per target under ``prefixes``, keyed ``<module>.weight``.
 
-    For fp32 device weights, which ``register_lora``'s bf16 upload would round.
+    For fp32 device weights, which ``register_lora``'s bf16 upload would round. An exact delta adds
+    ``scale * diff`` to its ``<module>.weight`` or ``<module>.bias``.
     """
     return dict(iter_h3_host_deltas(path, prefixes, scale=scale))
 
@@ -147,14 +154,22 @@ def h3_host_deltas(path: str, prefixes: tuple[str, ...], *, scale: float = 1.0) 
 def iter_h3_host_deltas(
     path: str, prefixes: tuple[str, ...], *, scale: float = 1.0
 ) -> Iterator[tuple[str, torch.Tensor]]:
-    """`h3_host_deltas` one target at a time, so only one dense delta is alive."""
+    """`h3_host_deltas` one target at a time, so only one LoRA product is alive (exact deltas are held as read)."""
     with safe_open(path, framework="pt", device="cpu") as handle:
         metadata = dict(handle.metadata() or {})
         raw = {key: handle.get_tensor(key) for key in handle.keys() if _strip_prefixes(key).startswith(prefixes)}
+    exact: dict[str, torch.Tensor] = {}
+    for key in list(raw):
+        stripped = _strip_prefixes(key)
+        for suffix, parameter in _EXACT_SUFFIXES.items():
+            if stripped.endswith(suffix):
+                exact[stripped[: -len(suffix)] + parameter] = scale * raw.pop(key).float()
     pairs, alphas = _collect_pairs(raw)
     file_alpha = _file_alpha(metadata)
     for base, ab in sorted(pairs.items()):
-        yield f"{base}.weight", scale * _scale_of(base, ab, alphas, file_alpha) * (ab["B"].float() @ ab["A"].float())
+        delta = scale * _scale_of(base, ab, alphas, file_alpha) * (ab["B"].float() @ ab["A"].float())
+        yield f"{base}.weight", delta + exact.pop(f"{base}.weight", 0)
+    yield from sorted(exact.items())
 
 
 def _read(path: str) -> tuple[dict[str, torch.Tensor], dict[str, str]]:

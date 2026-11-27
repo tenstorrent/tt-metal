@@ -281,6 +281,7 @@ class MiniMaxH3Vae:
         readback_uint8: bool = False,
         waves_per_device: int = 1,
         stitch_exchange: str = "strips",
+        assemble_beside_decode: bool = True,
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -296,6 +297,8 @@ class MiniMaxH3Vae:
         self.dtype = dtype
         self.tile_size = tile_size
         self.tile_overlap = tile_overlap
+        # On (default), a yuv420 decode with no frame consumer assembles its clip while later chunks decode: same bytes.
+        self.assemble_beside_decode = assemble_beside_decode
         self._weight_loader = weight_loader
         self._stitcher = None
         self._yuv_pool = None
@@ -1672,6 +1675,8 @@ class MiniMaxH3Vae:
             for i in range(num_chunks)
         ]
         stream = None
+        if on_frames is None and self.assemble_beside_decode and output_type == "yuv420":
+            on_frames = lambda frames: None
         if on_frames is not None and chunk_latents:
             stream = StreamingClipAssembly(
                 num_chunks,

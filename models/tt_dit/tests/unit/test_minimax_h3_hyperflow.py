@@ -8,6 +8,7 @@ embedders. Every failure here is silent on device -- a wrong grid, endpoint or e
 produces video."""
 
 import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -16,7 +17,11 @@ from safetensors.torch import save_file
 from models.tt_dit.experimental.lora.h3_adapter_loader import h3_host_deltas
 from models.tt_dit.pipelines.minimax_h3.hyperflow_minimax_h3 import MARKER_KEY, MiniMaxH3HyperFlow, validate_sigmas
 from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 import AUDIO_SHIFT, VIDEO_SHIFT, MiniMaxH3Pipeline
-from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3_turbo import HYPERFLOW_HOST_PREFIXES, MiniMaxH3TurboPipeline
+from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3_turbo import (
+    HYPERFLOW_HOST_PREFIXES,
+    MiniMaxH3TurboPipeline,
+    bundle_base_timesteps,
+)
 from models.tt_dit.pipelines.minimax_h3.scheduler import shift_sigmas
 
 # The header of minimax_h3_hyperflow_8step_v1.0.safetensors as published.
@@ -107,10 +112,17 @@ def test_the_grid_is_shifted_with_the_schedulers_own_formula(shift):
 # ----------------------------------------------------- the pipeline's schedule hooks
 
 
-def _pipeline(*, warming: bool, contract: MiniMaxH3HyperFlow | None) -> MiniMaxH3TurboPipeline:
-    """The schedule hooks read four attributes; skip the mesh-bound constructor."""
+PLAIN_ADAPTER = Path("/nonexistent/turbo.safetensors")
+
+
+def _pipeline(
+    *, warming: bool, contract: MiniMaxH3HyperFlow | None, lora_path: Path = PLAIN_ADAPTER
+) -> MiniMaxH3TurboPipeline:
+    """The schedule hooks read five attributes; skip the mesh-bound constructor, as ltx-server's hot-swap
+    does when it turns a base pipeline into this class."""
     pipeline = object.__new__(MiniMaxH3TurboPipeline)
     pipeline.hyperflow = contract
+    pipeline.lora_path = lora_path
     pipeline._warming = warming
     pipeline.video_shift = VIDEO_SHIFT
     pipeline.audio_shift = AUDIO_SHIFT
@@ -150,22 +162,32 @@ def test_the_endpoint_of_a_step_is_the_next_steps_timestep(warming):
 
 
 @pytest.mark.parametrize(
-    ("contract", "passed", "forwarded"),
+    ("contract", "bundle", "passed", "forwarded"),
     [
-        (_contract(), None, len(GRID_8STEP)),
-        (_contract(), len(GRID_8STEP), len(GRID_8STEP)),
-        (_contract(), 50, 50),
-        (None, None, "default"),
-        (None, 5, 5),
+        (_contract(), False, None, len(GRID_8STEP)),
+        (_contract(), False, len(GRID_8STEP), len(GRID_8STEP)),
+        (_contract(), False, 50, 50),
+        (None, False, None, "default"),
+        (None, False, 5, 5),
+        (None, True, None, 5),
     ],
-    ids=["hyperflow-omitted", "hyperflow-own-grid", "hyperflow-other", "turbo-omitted", "turbo-explicit"],
+    ids=[
+        "hyperflow-omitted",
+        "hyperflow-own-grid",
+        "hyperflow-other",
+        "turbo-omitted",
+        "turbo-explicit",
+        "bundle-omitted",
+    ],
 )
-def test_an_omitted_step_count_defers_to_the_adapter(monkeypatch, contract, passed, forwarded):
-    """A HyperFlow request may leave the step count out; a mismatch still reaches `_build_schedulers`,
-    which refuses it."""
+def test_an_omitted_step_count_defers_to_the_adapter(monkeypatch, tmp_path, contract, bundle, passed, forwarded):
+    """A HyperFlow or FastH3 bundle request may leave the step count out; a mismatch still reaches
+    `_build_schedulers`, which refuses it."""
     seen = {}
     monkeypatch.setattr(MiniMaxH3Pipeline, "__call__", lambda self, prompt, **kwargs: seen.update(kwargs))
-    pipeline = _pipeline(warming=False, contract=contract)
+    pipeline = _pipeline(
+        warming=False, contract=contract, lora_path=_bundle_adapter(tmp_path) if bundle else PLAIN_ADAPTER
+    )
     pipeline("a prompt", num_inference_steps=passed, seed=3)
     assert seen.get("num_inference_steps", "default") == forwarded
     assert seen["seed"] == 3
@@ -176,6 +198,54 @@ def test_a_turbo_adapter_stays_single_time():
     video, audio = pipeline._build_schedulers(5)
     assert video.num_inference_steps == 4
     assert pipeline._step_endpoints(video, audio) is None
+
+
+# -------------------------------------------------- FastVideo FastH3 bundle schedule
+
+FASTH3_RUNGS = (999, 749, 500, 250)
+
+
+def _bundle_adapter(root: Path) -> Path:
+    """Writes a FastH3 bundle's manifest at `root`; returns the path of its dense adapter."""
+    manifest = {
+        "schema_version": "fasth3-lora-bundle-v1",
+        "sampling": {"base_timesteps": list(FASTH3_RUNGS)},
+        "variants": [{"adapter_path": "dense-datafree/adapter_model.safetensors"}],
+    }
+    (root / "adapter_manifest.json").write_text(json.dumps(manifest))
+    return root / "dense-datafree" / "adapter_model.safetensors"
+
+
+def test_a_fasth3_bundle_adapter_reads_its_rungs_from_the_manifest(tmp_path):
+    assert bundle_base_timesteps(tmp_path / "dense-datafree" / "adapter_model.safetensors") is None
+    adapter = _bundle_adapter(tmp_path)
+    assert bundle_base_timesteps(adapter) == FASTH3_RUNGS
+    assert bundle_base_timesteps(tmp_path / "other" / "adapter_model.safetensors") is None
+
+
+def test_a_fasth3_bundle_runs_its_trained_rungs_on_both_modalities(expect_error, tmp_path):
+    """FastVideo's `_set_shifted_schedule`: sigma = shift * t / (1 + (shift - 1) * t) at t = rung / 1000,
+    then 0. The default grid starts from 1, 0.75 instead: off by 0.001 at the first two rungs."""
+    pipeline = _pipeline(warming=False, contract=None, lora_path=_bundle_adapter(tmp_path))
+    video, audio = pipeline._build_schedulers(5)
+    for scheduler, shift in ((video, VIDEO_SHIFT), (audio, AUDIO_SHIFT)):
+        expected = [shift * t / (1 + (shift - 1) * t) for t in (0.999, 0.749, 0.5, 0.25)] + [0.0]
+        torch.testing.assert_close(scheduler.sigmas, torch.tensor(expected), rtol=0, atol=1e-6)
+    with expect_error(ValueError, "4 forwards"):
+        pipeline._build_schedulers(9)
+    warm, _ = _pipeline(warming=True, contract=None, lora_path=pipeline.lora_path)._build_schedulers(3)
+    assert warm.num_inference_steps == 2
+
+
+def test_a_hot_swapped_pipeline_takes_its_grid_from_the_adapter_it_holds(tmp_path):
+    """ltx-server makes this class from a base pipeline by class assignment and changes `lora_path` on a live
+    one; neither runs `__init__`."""
+    pipeline = _pipeline(warming=False, contract=None)
+    base, _ = MiniMaxH3Pipeline._build_schedulers(pipeline, 5)
+    torch.testing.assert_close(pipeline._build_schedulers(5)[0].sigmas, base.sigmas, rtol=0, atol=0)
+    pipeline.lora_path = _bundle_adapter(tmp_path)
+    swapped, _ = pipeline._build_schedulers(5)
+    assert float(swapped.sigmas[0]) == pytest.approx(VIDEO_SHIFT * 0.999 / (1 + (VIDEO_SHIFT - 1) * 0.999))
 
 
 # -------------------------------------------------- float32 time-embedder fusion

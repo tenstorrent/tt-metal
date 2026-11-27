@@ -49,6 +49,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, fields
+from fractions import Fraction
 from pathlib import Path
 from typing import NamedTuple
 
@@ -643,6 +644,55 @@ def draw_request_latents(
     return condition_noise, video_rows, audio_rows
 
 
+LOWRES_STEPS_ENV = "MINIMAX_H3_LOWRES_STEPS"
+LOWRES_SCALE_ENV = "MINIMAX_H3_LOWRES_SCALE"
+
+
+def lowres_noise_rows(
+    video_rows: torch.Tensor,
+    num_latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    channels: int,
+    patch_size,
+    lowres_height: int,
+    lowres_width: int,
+) -> torch.Tensor:
+    """The request's video noise at the low resolution (even sizes): its lowest spatial frequencies, which is white
+    unit-variance noise again."""
+    latents = unpatchify_video_tokens(video_rows, num_latent_frames, latent_height, latent_width, channels, patch_size)
+    spectrum = torch.fft.fftshift(torch.fft.fft2(latents, norm="ortho"), dim=(-2, -1))
+    top, left = (latent_height - lowres_height) // 2, (latent_width - lowres_width) // 2
+    spectrum = spectrum[..., top : top + lowres_height, left : left + lowres_width].clone()
+    # The crop keeps one of the two rows and one of the two columns at the highest frequency, so the real part
+    # below has half their power: double it first (once for the corner the row and the column share).
+    spectrum[..., 0, :] *= 2**0.5
+    spectrum[..., 1:, 0] *= 2**0.5
+    lowres = torch.fft.ifft2(torch.fft.ifftshift(spectrum, dim=(-2, -1)), norm="ortho").real
+    return patchify_video_latents(lowres, patch_size)
+
+
+def lowres_handoff_rows(
+    lowres_rows: torch.Tensor,
+    noise_rows: torch.Tensor,
+    sigma: float,
+    num_latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    channels: int,
+    patch_size,
+    lowres_height: int,
+    lowres_width: int,
+) -> torch.Tensor:
+    """Full-resolution rows at `sigma` from the clean low-resolution estimate: a trilinear upscale in space,
+    re-noised with the request's own noise (the noise the low-res stage started from, at full resolution)."""
+    latents = unpatchify_video_tokens(lowres_rows, num_latent_frames, lowres_height, lowres_width, channels, patch_size)
+    upscaled = torch.nn.functional.interpolate(
+        latents, size=(num_latent_frames, latent_height, latent_width), mode="trilinear"
+    )
+    return (1.0 - sigma) * patchify_video_latents(upscaled, patch_size) + sigma * noise_rows
+
+
 @dataclass
 class MiniMaxH3Output:
     """One generation. `audio` is `(1, 2, samples)`; `video` is `(1, 3, F, H, W)` float for `"rgb_float"`
@@ -1047,6 +1097,8 @@ class MiniMaxH3Pipeline:
             pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
             readback_uint8=self.vae_output_type == "uint8",
             waves_per_device=self.vae_waves_per_device,
+            # H3_VAE_ASSEMBLE_BESIDE_DECODE=0: assemble the clip after the decode, not beside it (default: beside).
+            assemble_beside_decode=os.environ.get("H3_VAE_ASSEMBLE_BESIDE_DECODE") != "0",
         )
         self._vae.load_state(self._read_safetensors("vae"))
 
@@ -1220,18 +1272,21 @@ class MiniMaxH3Pipeline:
         )
         return {"contract": contract, "heads": heads, "shifts": shifts, "device": {}}
 
-    def _pdd_device_heads(self, transformer, indices: list[int], weights: dict[str, torch.Tensor]) -> list[dict]:
+    def _pdd_device_heads(
+        self, transformer, indices: dict[str, list[int]], weights: dict[str, torch.Tensor]
+    ) -> list[dict]:
         """Per-step fused `(weight, bias)` device tensors for both output heads, built once per partition."""
-        key = (id(transformer), tuple(indices))
+        key = (id(transformer), *(tuple(indices[modality]) for modality in comfy_h3.PDD_HEADS))
         steps = self._pdd["device"].get(key)
         if steps is not None and all(t.is_allocated() for s in steps for pair in s.values() for t in pair):
             return steps
         steps = []
-        for i in range(len(indices) - 1):
+        for i in range(len(indices["video"]) - 1):
             entry = {}
             for modality, (_src, dst) in comfy_h3.PDD_HEADS.items():
                 linear = getattr(transformer, dst)
-                w, b = comfy_h3.pdd_fuse(*self._pdd["heads"][modality], weights[modality], indices[i], indices[i + 1])
+                start, end = indices[modality][i : i + 2]
+                w, b = comfy_h3.pdd_fuse(*self._pdd["heads"][modality], weights[modality], start, end)
                 linear.weight.load_torch_tensor(w.transpose(0, 1).contiguous())
                 linear.bias.load_torch_tensor(b.reshape(1, -1))
                 entry[dst] = (linear.weight.data, linear.bias.data)
@@ -2614,7 +2669,7 @@ class MiniMaxH3Pipeline:
             for modality, sched in (("video", scheduler), ("audio", audio_scheduler)):
                 nodes, weights[modality] = comfy_h3.pdd_plan(contract, indices, self._pdd["shifts"][modality])
                 sched.set_timesteps(sigmas=nodes.to(torch.float32))
-            self._pdd_active = (indices, weights)
+            self._pdd_active = ({"video": indices, "audio": indices}, weights)
             return scheduler, audio_scheduler
         scheduler.set_timesteps(num_inference_steps)
         audio_scheduler.set_timesteps(num_inference_steps)
@@ -2662,6 +2717,20 @@ class MiniMaxH3Pipeline:
                     module.deallocate_weights()
         dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
+            video_rows, audio_rows, scheduler, audio_scheduler = self._denoise_lowres(
+                transformer,
+                layout,
+                prompt_embeds,
+                video_rows,
+                audio_rows,
+                scheduler,
+                audio_scheduler,
+                num_latent_frames,
+                latent_height,
+                latent_width,
+                num_audio_latents,
+                on_event,
+            )
             video_rows, audio_rows = self._denoise(
                 transformer,
                 layout,
@@ -3426,18 +3495,27 @@ class MiniMaxH3Pipeline:
         """The Sol-Attn schedule the environment asks for; a dynamic-length pipeline stays dense."""
         return None if self.dynamic_length else sol_schedule(os.environ, self._sol_preset())
 
-    def _is_sol_dense_step(self, step: int) -> bool:
-        """Whether denoise step `step` runs dense under the Sol-Attn schedule in force. Warm-up keeps only its
-        first step dense, whatever the schedule's count, so that its second one is a sparse step."""
+    def _is_sol_dense_step(self, step: int, first_stage: bool = False) -> bool:
+        """Whether step `step` of a denoise stage runs dense under the Sol-Attn schedule in force: all of a low-res
+        first stage does. Warm-up keeps only its first step dense, whatever the schedule's count, so that its
+        second one is a sparse step."""
         schedule = self._sol_schedule
-        return schedule is not None and schedule.is_dense_step(step) and not (self._warming and step > 0)
+        if schedule is None:
+            return False
+        return first_stage or (schedule.is_dense_step(step) and not (self._warming and step > 0))
 
     def _sol_preset(self) -> str | None:
         """The `policy.SOL_PRESETS` entry this pipeline's files name, if any."""
         return None
 
     def _set_sol_attention(
-        self, transformer: MiniMaxH3Transformer3DModel, rung: int, logical_n: int, sink_tokens: int
+        self,
+        transformer: MiniMaxH3Transformer3DModel,
+        rung: int,
+        logical_n: int,
+        sink_tokens: int,
+        *,
+        first_stage: bool = False,
     ) -> None:
         """Switch the ring attention between dense and Sol-Attn for this request (`H3_SOL_ATTN=1`, default off).
 
@@ -3447,12 +3525,15 @@ class MiniMaxH3Pipeline:
         reach the Sol programs as data and each rung keeps its own Sol state, so a new prompt length costs an
         in-place update of the route constants: no compile, and the denoise traces stay. Only a change of schedule
         releases them and marks every bucket cold, so the gen runs eager and recaptures.
+
+        A low-res first stage always runs dense (`_is_sol_dense_step`) and takes only a change of schedule from
+        here: each rung's request stays for the full-resolution stage, whose steps the schedule counts.
         """
         schedule = self._requested_sol_schedule()
-        if schedule is None and self._sol_schedule is None:
+        if schedule == self._sol_schedule and (schedule is None or first_stage):
             return
         sol = None
-        if schedule is not None:
+        if schedule is not None and not first_stage:
             sol = (rung // self.sp_factor, logical_n, sink_tokens if schedule.sinks else 0)
         if schedule != self._sol_schedule:
             self._release_denoise_traces()
@@ -3471,6 +3552,86 @@ class MiniMaxH3Pipeline:
             )
         self._sol_key, self._sol_schedule = sol, schedule
 
+    def _denoise_lowres(
+        self,
+        transformer: MiniMaxH3Transformer3DModel,
+        layout: MiniMaxH3PackedSequence,
+        prompt_embeds: ttnn.Tensor,
+        video_rows: torch.Tensor,
+        audio_rows: torch.Tensor,
+        scheduler: MiniMaxH3Scheduler,
+        audio_scheduler: MiniMaxH3Scheduler,
+        num_latent_frames: int,
+        latent_height: int,
+        latent_width: int,
+        num_audio_latents: int,
+        on_event: PipelineEventCallback,
+    ) -> tuple[torch.Tensor, torch.Tensor, MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
+        """The first `MINIMAX_H3_LOWRES_STEPS` forwards (default 0: none) at `MINIMAX_H3_LOWRES_SCALE` (default
+        1/2) of the height and width, then the hand-off to full resolution. Returns the rows and the schedules for
+        the steps that are left.
+
+        The video's last low-res step lands on its clean estimate, which is upscaled and re-noised to the sigma of
+        the next step; the audio rows keep stepping through their own schedule, whatever the video's resolution.
+        A request with condition rows, with a latent the scale does not put on the patch grid, or with no
+        full-resolution forward left is returned as it came.
+        """
+        steps = int(os.environ.get(LOWRES_STEPS_ENV, "0"))
+        if steps <= 0:
+            return video_rows, audio_rows, scheduler, audio_scheduler
+        total = scheduler.num_inference_steps
+        patch_size = self.patch_size
+        scale = Fraction(os.environ.get(LOWRES_SCALE_ENV, "1/2"))
+        lowres_height, lowres_width = latent_height * scale, latent_width * scale
+        if (
+            steps >= total
+            or not 0 < scale < 1
+            or lowres_height % patch_size[1]
+            or lowres_width % patch_size[2]
+            or layout.num_condition_video_rows
+            or layout.num_condition_audio_rows
+        ):
+            self._log(f"{LOWRES_STEPS_ENV}={steps} does not apply to this request: all at full resolution")
+            return video_rows, audio_rows, scheduler, audio_scheduler
+        lowres_size = (int(lowres_height), int(lowres_width))
+        self._log(f"low-res first stage: {steps} of {total} forwards at latent {lowres_size[0]}x{lowres_size[1]}")
+        video_shape = (
+            num_latent_frames,
+            latent_height,
+            latent_width,
+            self.vae_config.latent_channels,
+            patch_size,
+            *lowres_size,
+        )
+        lowres_layout = build_packed_sequence(
+            layout.token_tags[layout.text_indices],
+            num_latent_frames,
+            *lowres_size,
+            num_audio_latents,
+            patch_size,
+        )
+        pdd = self._pdd_active
+        if pdd is not None:
+            # The video head of the last low-res step fuses every fine interval down to clean.
+            indices, weights = pdd
+            video = indices["video"][:steps] + indices["video"][-1:]
+            self._pdd_active = ({"video": video, "audio": indices["audio"][: steps + 1]}, weights)
+        lowres_rows, audio_rows = self._denoise(
+            transformer,
+            lowres_layout,
+            prompt_embeds,
+            lowres_noise_rows(video_rows, *video_shape),
+            audio_rows,
+            scheduler.window(0, steps, to_clean=True),
+            audio_scheduler.window(0, steps),
+            on_event=on_event,
+            first_stage=True,
+        )
+        if pdd is not None:
+            self._pdd_active = ({modality: nodes[steps:] for modality, nodes in indices.items()}, weights)
+        video_rows = lowres_handoff_rows(lowres_rows, video_rows, float(scheduler.sigmas[steps]), *video_shape)
+        return video_rows, audio_rows, scheduler.window(steps, total), audio_scheduler.window(steps, total)
+
     def _denoise(
         self,
         transformer: MiniMaxH3Transformer3DModel,
@@ -3482,6 +3643,7 @@ class MiniMaxH3Pipeline:
         audio_scheduler: MiniMaxH3Scheduler,
         condition_spec: Sequence[tuple[str, int]] | None = None,
         on_event: PipelineEventCallback = null_callback,
+        first_stage: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Denoise in place. `video_rows` is `[condition rows | target rows]`, cond first, as the
         reference's `latents` is; `num_condition_video_rows` is 0 for `t2va`. `audio_rows` is the same
@@ -3546,7 +3708,13 @@ class MiniMaxH3Pipeline:
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
         state = self._buckets.setdefault(rung, _BucketState()) if self.bucket_denoise else self._request_state
-        self._set_sol_attention(transformer, rung, layout.sequence_length, l_len + num_cond + num_cond_audio + a_target)
+        self._set_sol_attention(
+            transformer,
+            rung,
+            layout.sequence_length,
+            l_len + num_cond + num_cond_audio + a_target,
+            first_stage=first_stage,
+        )
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
             if os.environ.get(_RECAPTURE_KEEPS_AUDIO_ENV, "1") == "0":
@@ -3612,7 +3780,9 @@ class MiniMaxH3Pipeline:
         # The refiner has consumed the prompt (its rows now live in the source table); nothing reads
         # `prompt_embeds` after this point, but as a caller's local it would stay pinned in the middle of
         # the heap through the whole denoise and decode, where the DiT's pairs and activations need to fit.
-        ttnn.deallocate(prompt_device)
+        # A low-res first stage leaves it for the full-resolution stage to consume.
+        if not first_stage:
+            ttnn.deallocate(prompt_device)
         dram_probe.report(f"after prepare_static_sources, rung {rung}")
 
         if rebuild:
@@ -3782,7 +3952,7 @@ class MiniMaxH3Pipeline:
                         for dst, (weight, bias) in pdd_steps[i].items():
                             linear = getattr(transformer, dst)
                             linear.weight.data, linear.bias.data = weight, bias
-                    transformer.set_sol_dense_step(self._is_sol_dense_step(i))
+                    transformer.set_sol_dense_step(self._is_sol_dense_step(i, first_stage))
                     try:
                         video_velocity, audio_velocity = transformer(
                             video_1BVC=self._tt_video.value,

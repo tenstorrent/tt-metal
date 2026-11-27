@@ -53,6 +53,7 @@ def _fake_pipeline(*, trace_denoise):
         _log=lambda message: None,
         _padded_length=lambda seq_len: seq_len,
         _step_endpoints=lambda scheduler, audio_scheduler: None,
+        _set_sol_attention=lambda *args, **kwargs: None,
     )
 
     def device_metadata(layout, rung):
