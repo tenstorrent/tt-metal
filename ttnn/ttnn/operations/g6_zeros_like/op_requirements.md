@@ -101,7 +101,7 @@ Co-tune run length, core count (`NUM_CORES_CAP`) and placement (`ROW_WISE`). No 
 
 **Outcome**: `bank_run_coalesced` built and default (bank-affine in-bank runs, `segment_rows` placement giving each bank its own NOC_1 route, 80 cores on one rectangle). Float32 flagged shape: 3603 ns (same session: 3522–3643) → 2079–2096 ns median of 12, both call forms. That meets ≤ 2.31 µs. Unprofiled trace replay: 5.27 → 4.26 µs per call. bfloat8_b guard unchanged (816–821 vs 824–826 ns; it stays on the page split because P = C). Wider transfers (8 KiB chunks) lose to their larger fill, so `ZERO_SCRATCH_PAGES` stays 1. The write stream now runs at ≈ 437 GB/s from first write to last ack, near the ~460 GB/s DRAM roofline. What remains is fixed cost: ~450 ns first→last core start and ~195 ns of zero fill before every core's first write. Next: hide the fill (first chunk straight from `MEM_ZEROS`) and shrink the launch skew. Not tried here because they are Refinement 3's scope and do not change the write stream.
 
-### [ ] Refinement 3 — Per-core fixed cost of the perf-flagged profile
+### [x] Refinement 3 — Per-core fixed cost of the perf-flagged profile
 
 **Type**: perf
 
@@ -126,3 +126,14 @@ No SUPPORTED change.
 - Measured device-ns on the flagged shape improves on Refinement 2's result (same harness, ≥ 12 samples).
 - The exact gate holds and the golden suite, acceptance, precision baseline and trace tests are green.
 - No regression on the guard set: float32 (1,12,128,128) into_optional; bfloat8_b (5,1,32,256) new_output.
+
+**Outcome**: the fill is off the path to every core's first write. `MEM_ZEROS_HEAD_PAGES = 2` (CT arg `head_pages`, 0 = the old fill-first path) writes the first 2 pages of each core's range as stateful 512 B writes straight from `MEM_ZEROS`; a core fills its scratch only if pages remain. Each bank's first write moved from 244–328 ns to 33–127 ns after the first core starts. Per-bank drain is unchanged at 54–58 GB/s, so 512 B writes cost nothing at DRAM. Profiler device kernel time, median of 12:
+- float32 flagged shape: 2064–2116 ns (same session, head 0) → 1926 ns new_output, 1940 ns into_optional.
+- bfloat8_b guard: 813 → 690–691 ns.
+- Longer ranges: 10 pages per core 6760 → 6646 ns; 38 pages per core 28992 → 28614 ns. A whole-range head is 15 % slower at 38 pages per core because the 512 B writes become the bound, so the head stays at 2.
+
+Measured nulls: `NUM_CORES_CAP` below 80 leaves east banks coreless (3.4–4.3 µs), and 110 cores is 2056–2248 ns, so the cap stays at 80. The second writer RISC was not built: no core is issue-bound; the long issue windows are DRAM backpressure. Stateful writes are used for the head only.
+
+What binds now: the DRAM drain itself, from ~50 ns on. The no-payload ablation floor is 546 ns (457 ns launch skew), fully hidden under the drain. Bank 0 ends last in 8 of 12 calls (~1.90 vs ~1.78 µs for banks 1/6) because the profiler's end-of-kernel pushes from early-finishing low-id cores land in DRAM bank 0 (`finish_profiler`: bank = `core_flat_id / cores_per_dram`). That is a measurement artifact, not op cost. Unprofiled trace replay cannot confirm the delta: it is dispatch-bound at ~4.25 µs/call for the real kernel and the no-payload kernel alike.
+
+Next: the end-to-end lever is that 4.25 µs dispatch floor (e.g. per-core RT args as one multicast common-arg table), not device time. It was not tried because it is host dispatch, outside this refinement's device-ns scope. The remaining device gap to the 1.71 µs roofline is ~200 ns: per-bank launch skew plus the profiler's bank-0 interference.

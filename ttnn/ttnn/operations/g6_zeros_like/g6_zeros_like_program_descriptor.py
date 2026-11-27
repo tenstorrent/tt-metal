@@ -3,7 +3,8 @@
 
 """g6_zeros_like program descriptor.
 
-Each participating core zero-fills an L1 scratch and writes it to the output pages it owns. One writer
+Each participating core writes zeros to the output pages it owns: the first MEM_ZEROS_HEAD_PAGES straight
+from the firmware zero region, the rest from an L1 scratch it zero-fills after issuing them. One writer
 kernel per participating core; no reader, no compute kernel. The input tensor is never bound to the
 program. Two regimes decide what a core owns:
 
@@ -51,6 +52,13 @@ WRITER_NOC = ttnn.NOC.NOC_1
 # page split, the longest run in bank_run_coalesced). Sizes the CB, the fill and every bank-run chunk.
 ZERO_SCRATCH_PAGES = 1
 
+# Pages at the head of every core's range written straight from the firmware MEM_ZEROS region (512 B per
+# write) before the scratch is filled; None = the whole range (no core fills its scratch), 0 = fill first.
+# Clamped to the longest range. The head takes the fill off every core's path to its first DRAM write, and
+# a core whose range fits in the head never fills. Past the head the 4 KiB scratch writes win: 512 B writes
+# over a whole long range are 15% slower (float32, 38 pages per core).
+MEM_ZEROS_HEAD_PAGES = 2
+
 CB_ZERO_PAGE = 0
 
 # Output buffer address: the only per-call value, a common runtime arg patched on every call.
@@ -73,6 +81,7 @@ class Plan:
     num_pages: int
     page_size: int
     zero_scratch_bytes: int
+    head_pages: int  # kernel CT arg: MEM_ZEROS_HEAD_PAGES clamped to the longest range
     all_cores: ttnn.CoreRangeSet
     cores: tuple  # tuple[CorePlan, ...]
 
@@ -247,14 +256,15 @@ def plan(tensor) -> Plan:
     )
     assert covered == list(range(num_pages)), f"g6_zeros_like: {regime} does not cover [0, {num_pages}) exactly once"
 
-    scratch_pages = max(
-        1, min(ZERO_SCRATCH_PAGES, max(c.num_pages for c in cores) if regime == "bank_run_coalesced" else 1)
-    )
+    max_range_pages = max(c.num_pages for c in cores)
+    scratch_pages = max(1, min(ZERO_SCRATCH_PAGES, max_range_pages if regime == "bank_run_coalesced" else 1))
+    head_pages = max_range_pages if MEM_ZEROS_HEAD_PAGES is None else min(MEM_ZEROS_HEAD_PAGES, max_range_pages)
     return Plan(
         regime=regime,
         num_pages=num_pages,
         page_size=page_size,
         zero_scratch_bytes=scratch_pages * page_size,
+        head_pages=head_pages,
         all_cores=all_cores,
         cores=tuple(cores),
     )
@@ -278,6 +288,7 @@ def cache_key(tensor):
         WRITER_PROCESSOR,
         WRITER_NOC,
         ZERO_SCRATCH_PAGES,
+        MEM_ZEROS_HEAD_PAGES,
     )
 
 
@@ -312,7 +323,7 @@ def build(output_tensor) -> CachedProgram:
         ],
     )
 
-    writer_ct_args = [CB_ZERO_PAGE, p.page_size, zero_scratch_bytes, p.bank_run_stride]
+    writer_ct_args = [CB_ZERO_PAGE, p.page_size, zero_scratch_bytes, p.bank_run_stride, p.head_pages]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     writer_rt_args = ttnn.RuntimeArgs()

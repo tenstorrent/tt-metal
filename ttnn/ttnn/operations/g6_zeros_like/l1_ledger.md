@@ -9,7 +9,7 @@ Before any sizing: the op has one phase that needs storage (a zero source for No
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_zero_page` | `zero_scratch_pages = max(1, min(ZERO_SCRATCH_PAGES, pages one write may cover))` = 1 at the shipped knob (one zero page is the source of every write; in `bank_run_coalesced` it is also the chunk size of a run) | `zero_scratch_pages` pages, resident for the whole kernel | `{page: streams → every one of the core's num_pages_this_core writes reads the same 1 page; d_0, d_1, h_tiles, w_tiles: folded into page → streams}` | output dtype: `Float32` (4096 B page) / `Bfp8_b` (1088 B page). Never passes through DEST (dataflow-only payload: NoC loopback in, NoC write out), so audit 2's fp32-under-16-bit-DEST finding does not apply; there is no DEST in this op | writer (zero fill: `Noc::async_write_zeros` overload 1 over the whole capacity, `zero_scratch_bytes` = `zero_scratch_pages · page_size`, one CT arg) | writer (NoC write source, overload 2) | whole writer kernel: filled once, read by every page write, never popped | none: it is the only CB of the op. Alternatives considered: (1) pack into the destination — the destination is DRAM pages; the zero source must be L1 (NoC write source); (2) write from the firmware `MEM_ZEROS` region directly, using no CB — rejected in `op_design.md` (`sub_page_writes_from_mem_zeros`: 512 B region, 8× sub-page write commands); (3) alias — nothing to alias with |
+| `cb_zero_page` | `zero_scratch_pages = max(1, min(ZERO_SCRATCH_PAGES, pages one write may cover))` = 1 at the shipped knob (one zero page is the source of every write past the `MEM_ZEROS_HEAD_PAGES` head; in `bank_run_coalesced` it is also the chunk size of a run) | `zero_scratch_pages` pages, resident for the whole kernel | `{page: streams → every one of the core's num_pages_this_core writes reads the same 1 page; d_0, d_1, h_tiles, w_tiles: folded into page → streams}` | output dtype: `Float32` (4096 B page) / `Bfp8_b` (1088 B page). Never passes through DEST (dataflow-only payload: NoC loopback in, NoC write out), so audit 2's fp32-under-16-bit-DEST finding does not apply; there is no DEST in this op | writer (zero fill: `Noc::async_write_zeros` overload 1 over the whole capacity, `zero_scratch_bytes` = `zero_scratch_pages · page_size`, one CT arg), issued only by a core with pages left after its head | writer (NoC write source past the head: overload 2 / chunked `async_write`) | whole writer kernel: filled at most once, read by every write past the head, never popped | none: it is the only CB of the op. Alternatives considered: (1) pack into the destination — the destination is DRAM pages; the zero source must be L1 (NoC write source); (2) write from the firmware `MEM_ZEROS` region directly, using no CB — done for the first `MEM_ZEROS_HEAD_PAGES` (= 2) pages of every range (Refinement 3), rejected for whole ranges: 512 B writes go issue-bound on long ranges (15 % slower at 38 pages per core), so the scratch stays the source past the head. At the production shapes it is filled on 20 of 80 float32 cores (those with > 2 pages) and on no bfloat8_b core; it stays allocated on every core because the head split is per core at runtime; (3) alias — nothing to alias with |
 
 ## Symbol table
 
@@ -26,13 +26,13 @@ Total per core = `zero_scratch_pages · page_size` = `page_size` ≤ 4096 B (flo
 
 ## Data-movement budget
 
-Split: float32 `(1,12,128,128)` → `bank_run_coalesced`, 192 pages of 4096 B as in-bank runs (24 pages per bank) on 80 cores (`segment_rows`); bfloat8_b `(5,1,32,256)` → `page_split_local_zero`, 40 pages of 1088 B on 40 cores. One local zero page per core either way.
+Split: float32 `(1,12,128,128)` → `bank_run_coalesced`, 192 pages of 4096 B as in-bank runs (24 pages per bank) on 80 cores (`segment_rows`); bfloat8_b `(5,1,32,256)` → `page_split_local_zero`, 40 pages of 1088 B on 40 cores. The first `MEM_ZEROS_HEAD_PAGES` (= 2) pages of every range are written from the firmware zero region; one local zero page per core sources the rest.
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
 | `input_tensor` | 0 | not an operand: only its metadata (shape, dtype, layout, placement) is used; its buffer is not bound to the program | 0 |
-| output (new tensor or `optional_tensor`) | 1 (write) | every page written exactly once from the core-resident zero page; nothing is read back | 0 |
-| zero page (core-local, not a tensor) | 0 | made in each core's L1 by NoC loopback from the firmware zero region | 0 (core-local: `page_size` per participating core) |
+| output (new tensor or `optional_tensor`) | 1 (write) | every page written exactly once, its head pages from the firmware zero region and the rest from the core-resident zero page; nothing is read back | 0 |
+| zero page (core-local, not a tensor) | 0 | made by NoC loopback from the firmware zero region, only in the L1 of a core with pages left after its head | 0 (core-local: `page_size` per core that fills) |
 
 Total per tier:
 
@@ -41,6 +41,6 @@ Total per tier:
 | DRAM read | 0 B | 0 B |
 | DRAM write | 786432 B (192 × 4096) | 43520 B (40 × 1088) |
 | Cross-core NoC | 0 B | 0 B |
-| Core-local (loopback fill) | 327680 B (80 × 4096) | 43520 B (40 × 1088) |
+| Core-local (loopback fill) | 81920 B (20 cores with > 2 pages × 4096; 80 × 4096 before Refinement 3) | 0 B (1 page per core, inside the head; 43520 B before Refinement 3) |
 
 > Cheapest-traffic split considered: folded page split with a core-local zero page — 0 B read, one write of the output, 0 B cross-core; it ties at DRAM and cross-core with `bank_run_coalesced` (same bytes, fewer write commands; core-local fill `min(r·page, 16 KiB)` per core). Implemented: both. They tie on every tier (same DRAM bytes, 0 cross-core; core-local `C · zero_scratch_bytes`), so the choice is not about bytes: `bank_run_coalesced` wins on where the bytes go (each core streams to one bank, `segment_rows` keeps the banks' NoC routes disjoint), measured 3.59 → 2.08 µs on float32 production. It falls back to the page split when every run would be one page (bfloat8_b), where it measured ~4 % slower.

@@ -172,3 +172,27 @@ def test_profile_write_stream_bf8(device, monkeypatch, request, regime, assignme
     monkeypatch.setattr(pd, "NUM_CORES_CAP", num_cores_cap)
     monkeypatch.setattr(pd, "ROW_WISE", row_wise)
     _sweep(device, request, (5, 1, 32, 256), ttnn.bfloat8_b, torch.bfloat16)
+
+
+@pytest.mark.parametrize("num_cores_cap", [80, 64, 48, 32, 110], ids=lambda c: f"cap{c}")
+@pytest.mark.parametrize("head_pages", [0, 1, 2, None], ids=lambda h: f"head{h}")
+def test_profile_fixed_cost_fp32(device, monkeypatch, request, head_pages, num_cores_cap):
+    """Per-core fixed-cost lamps on the perf-flagged shape: MEM_ZEROS head size x core count."""
+    monkeypatch.setattr(pd, "MEM_ZEROS_HEAD_PAGES", head_pages)
+    monkeypatch.setattr(pd, "NUM_CORES_CAP", num_cores_cap)
+    _sweep(device, request, (1, 12, 128, 128), ttnn.float32, torch.float32)
+
+
+@pytest.mark.parametrize("head_pages", [0, None], ids=lambda h: f"head{h}")
+def test_profile_fixed_cost_bf8(device, monkeypatch, request, head_pages):
+    """Guard for the MEM_ZEROS head on the bfloat8_b production case (page split, 1 page per core)."""
+    monkeypatch.setattr(pd, "MEM_ZEROS_HEAD_PAGES", head_pages)
+    _sweep(device, request, (5, 1, 32, 256), ttnn.bfloat8_b, torch.bfloat16)
+
+
+@pytest.mark.parametrize("head_pages", [0, 2, None], ids=lambda h: f"head{h}")
+@pytest.mark.parametrize("shape", [(1, 48, 128, 128), (4, 48, 128, 128)], ids=["p768", "p3072"])
+def test_profile_head_long_runs_fp32(device, monkeypatch, request, shape, head_pages):
+    """MEM_ZEROS head on ranges longer than the production ones (10 and 38 pages per core)."""
+    monkeypatch.setattr(pd, "MEM_ZEROS_HEAD_PAGES", head_pages)
+    _sweep(device, request, shape, ttnn.float32, torch.float32)

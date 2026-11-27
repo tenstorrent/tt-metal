@@ -125,7 +125,8 @@ def describe_plan(input_tensor):
     """One entry per participating core; cores not listed carry no kernel.
 
     A core writes pages start_page + k * page_stride for k < num_pages; `bank` is the DRAM bank of all of
-    them in the bank_run_coalesced regime, None in the page split.
+    them in the bank_run_coalesced regime, None in the page split. The first `head_pages` of them are written
+    straight from the firmware zero region; the core fills its scratch only if pages remain after them.
     """
     _validate_structure(input_tensor)
     plan = _pd.plan(input_tensor)
@@ -138,6 +139,7 @@ def describe_plan(input_tensor):
             "num_pages": c.num_pages,
             "page_stride": c.page_stride,
             "bank": c.bank,
+            "head_pages": min(plan.head_pages, c.num_pages),
         }
         for c in plan.cores
     ]

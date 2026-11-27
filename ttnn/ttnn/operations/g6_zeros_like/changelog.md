@@ -53,3 +53,31 @@
 - Tests added:
   - `test_g6_zeros_like_perf.py`: `test_profile` now takes 12 samples and covers into_optional. New lamp drivers `test_profile_write_stream_fp32` (regime × assignment × cap × placement × scratch) and `test_profile_write_stream_bf8`, each writing a config→row map to `generated/g6_zeros_like_sweep_order.txt`.
   - `test_g6_zeros_like.py::test_plan_writes_every_page_once_on_many_cores` honors `page_stride`.
+
+## Refinement 3 — Per-core fixed cost of the perf-flagged profile
+- Date: 2026-11-27
+- What was done: took the zero fill off the path to every core's first DRAM write.
+  - Kernel: a compile-time `head_pages` (CT arg 4). The first `min(head_pages, num_pages)` pages of each core's range are written straight from the firmware `MEM_ZEROS` region. Each byte range gets one `set_async_write_state` and then one 512 B `async_write_with_state` per chunk; a ragged remainder (bfloat8_b's 64 B) is one plain write. The scratch fill runs only if pages remain, and the existing page-split / bank-run loops write the rest from the scratch. `head_pages = 0` keeps the old fill-first path with the setup in the fill's shadow. New zone `g6zl-zero-head`.
+  - Host: knob `MEM_ZEROS_HEAD_PAGES = 2` (`None` = whole range), clamped to the longest range in the plan, in `cache_key`, and reported per core by `describe_plan` (`head_pages`).
+  - Reused: both regimes, the scratch, the chunked bank-run and per-page write loops, the CB and its single-sourced size. Added: the head write, the knob, and a guard that skips the fill.
+- Measurements (profiler device kernel time, median of 12):
+  - Starting state, same session: float32 flagged shape 2116 ns.
+  - Zones: every bank drains at 54–58 GB/s (~452 GB/s total) once its first write lands. The first write lands 244–328 ns after the first core starts, 195 ns of that being the fill.
+  - Head sweep at 80 cores: 0 → 2064–2076, 1 → 1981–2002, 2 → 1929–1934, whole range → 1906–1920 ns. With the head, each bank's first write lands at 33–127 ns and the drain rate is unchanged.
+  - Longer ranges, float32, 80 cores:
+    - (1,48,128,128), 10 pages per core: 6760 / 6646 / 6687 ns for head 0 / 2 / whole.
+    - (4,48,128,128), 38 pages per core: 28992 / 28614 / 33190 ns. Whole-range 512 B writes go issue-bound, so the shipped head is 2.
+  - Shipped, `test_profile`: float32 new_output 1926 ns, into_optional 1940 ns; bfloat8_b new_output 691 ns, into_optional 690 ns (Refinement 1 baseline 813.5).
+  - Core count with the head: caps 64 / 48 / 32 fall back to `bank_major` (east banks get no core) at 3.4–4.3 µs; 110 cores 2056–2248 ns. `NUM_CORES_CAP` stays 80.
+  - No-payload ablation (same args, setup and barrier, no writes): 546 ns. Launch skew is 457 ns; per core ~88 ns.
+  - Unprofiled trace replay (200 calls): 4.25–4.27 µs/call for head 0, head 2, whole range and the no-payload kernel alike. Replay is dispatch-bound, so it can show no regression but cannot resolve kernel deltas.
+- What binds now: the per-bank DRAM drain, from ~50 ns after the first core starts. Bank 0 ends last in 8 of 12 profiled calls (~1.90 vs ~1.78 µs for banks 1 and 6). The profiler pushes each early-finishing core's buffer to DRAM bank `core_flat_id / cores_per_dram` (`kernel_profiler.hpp` `finish_profiler`), so low-id cores write into bank 0 during the drain: a profiler artifact. The remaining gap to the 1.71 µs roofline is ~200 ns (launch skew per bank plus that interference). The larger end-to-end term is the ~4.25 µs dispatch floor per traced call; it is host-side and outside this device-ns refinement.
+- Accuracy achieved: bit-exact. float32: 0 of 196608 elements ≠ +0.0 in both call forms (acceptance, precision baseline, trace). bfloat8_b: 0 of 40960. Every head setting (0, 1, 2, whole) is exact on bank runs, bank runs with 2-page scratch, the float32 page split and bfloat8_b, plain and `--dev` (the NoC sanitizer accepts `MEM_ZEROS` as a write source). PCC = 1.0; relative RMS is undefined against an all-zero reference.
+- Golden test progress: 14 / 14 (6 axis cells + 8 regression).
+- Issues encountered:
+  - The ablation kernel cannot call `Noc::write_zeros_dram_barrier()` without the zero-API include path that defines it (link error); it uses `async_write_barrier()`.
+  - The sweep order file is written twice per test under `--profile` (up-front collect); dedupe it before mapping rows.
+- Tests added:
+  - `test_g6_zeros_like.py::test_mem_zeros_head_knob`: 16 cases, head 0 / 1 / 2 / whole × (float32 bank run, bank run with 2-page scratch, float32 page split, bfloat8_b) into a NaN / ones-prefilled `optional_tensor`.
+  - `test_g6_zeros_like_perf.py`: lamp drivers `test_profile_fixed_cost_fp32` (head × cap), `test_profile_fixed_cost_bf8`, `test_profile_head_long_runs_fp32`.
+  - `test_g6_zeros_like_ablation.py` with `probes/ablate_no_writes_writer.cpp`: the no-payload floor (perf only; output wrong by design).

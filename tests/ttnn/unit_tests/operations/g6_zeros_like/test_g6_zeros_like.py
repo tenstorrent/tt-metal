@@ -17,6 +17,7 @@ import torch
 import ttnn
 
 from ttnn.operations.g6_zeros_like import SUPPORTED, describe_plan, g6_zeros_like
+from ttnn.operations.g6_zeros_like import g6_zeros_like_program_descriptor as pd
 
 FP32_SHAPE = (1, 12, 128, 128)
 BF8_SHAPE = (5, 1, 32, 256)
@@ -193,6 +194,33 @@ def test_plan_writes_every_page_once_on_many_cores(device, shape, dtype):
         )
     )
     assert pages == list(range(x.buffer_num_pages())), "pages not covered exactly once"
+
+
+@pytest.mark.parametrize("head_pages", [0, 1, 2, None], ids=lambda h: f"head{h}")
+@pytest.mark.parametrize(
+    "shape,dtype,regime,scratch_pages",
+    [
+        pytest.param(FP32_SHAPE, ttnn.float32, "bank_run_coalesced", 1, id="float32-bank_run"),
+        pytest.param(FP32_SHAPE, ttnn.float32, "bank_run_coalesced", 2, id="float32-bank_run-scratch2"),
+        pytest.param(FP32_SHAPE, ttnn.float32, "page_split_local_zero", 1, id="float32-page_split"),
+        pytest.param(BF8_SHAPE, ttnn.bfloat8_b, "bank_run_coalesced", 1, id="bfloat8_b"),
+    ],
+)
+def test_mem_zeros_head_knob(device, monkeypatch, shape, dtype, regime, scratch_pages, head_pages):
+    """Every split of a core's range between the MEM_ZEROS head and the scratch writes covers every byte."""
+    monkeypatch.setattr(pd, "REGIME", regime)
+    monkeypatch.setattr(pd, "ZERO_SCRATCH_PAGES", scratch_pages)
+    monkeypatch.setattr(pd, "MEM_ZEROS_HEAD_PAGES", head_pages)
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    x = _to_device(torch.zeros(shape, dtype=torch_dtype), device, dtype)
+    # NaN (float32) / ones (bfloat8_b) in the target: any byte left unwritten fails the exact grade.
+    fill = float("nan") if dtype == ttnn.float32 else 1.0
+    o = _to_device(torch.full(shape, fill, dtype=torch_dtype), device, dtype)
+
+    out = g6_zeros_like(x, optional_tensor=o)
+
+    assert out.buffer_address() == o.buffer_address(), "returned tensor is not optional_tensor"
+    _assert_zeros(o, x, torch.zeros(shape, dtype=torch_dtype), dtype)
 
 
 def _fp32(device, shape=FP32_SHAPE, **kwargs):
