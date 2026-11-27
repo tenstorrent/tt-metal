@@ -159,6 +159,32 @@ def call_tokens(waves: list[torch.Tensor]) -> torch.Tensor:
     return torch.stack(waves, dim=1).flatten(0, 1)
 
 
+def strip_waves(num_chunks: int, grid_cols: int, mesh_cols: int, pack_spare_columns: bool = False) -> list[dict]:
+    """Chunks per wave of the strip stitch.
+
+    `mains` fill whole grids side by side. With one chunk per wave, the mesh columns beside the grid
+    carry grid columns of an `extra` chunk, `(chunk, columns)`, read back at `flush`: a run of
+    `run_waves + 1` chunks in `run_waves` waves. A single spare column is always used, more only with
+    `pack_spare_columns`.
+    """
+    chunks_per_wave = mesh_cols // grid_cols
+    spare = mesh_cols - grid_cols if chunks_per_wave == 1 else 0
+    if spare > 1 and not pack_spare_columns:
+        spare = 0
+    waves: list[dict] = []
+    done = 0
+    if spare:
+        run_waves = -(-grid_cols // spare)
+        for first in range(0, num_chunks - run_waves, run_waves + 1):
+            for w in range(run_waves):
+                columns = range(w * spare, min((w + 1) * spare, grid_cols))
+                waves.append({"mains": [first + w], "extra": (first + run_waves, columns), "flush": w == run_waves - 1})
+            done = first + run_waves + 1
+    for i in range(done, num_chunks, chunks_per_wave):
+        waves.append({"mains": list(range(i, min(i + chunks_per_wave, num_chunks))), "extra": None, "flush": False})
+    return waves
+
+
 def stitch_tiles(
     tiles: list[list[torch.Tensor]], height_overlaps: list[int], width_overlaps: list[int]
 ) -> torch.Tensor:
@@ -299,6 +325,8 @@ class MiniMaxH3Vae:
         waves_per_device: int = 1,
         stitch_exchange: str = "strips",
         waves_per_call: int = 1,
+        decode_tile_overlap: int | None = None,
+        pack_spare_columns: bool = False,
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -314,6 +342,10 @@ class MiniMaxH3Vae:
         self.dtype = dtype
         self.tile_size = tile_size
         self.tile_overlap = tile_overlap
+        # The decode's own tile overlap (the encoder keeps `tile_overlap`) and whether the strip stitch
+        # packs an extra chunk onto more than one spare mesh column (`strip_waves`).
+        self.decode_tile_overlap = tile_overlap if decode_tile_overlap is None else decode_tile_overlap
+        self.pack_spare_columns = pack_spare_columns
         self._weight_loader = weight_loader
         self._stitcher = None
         self._yuv_pool = None
@@ -1102,7 +1134,6 @@ class MiniMaxH3Vae:
             f"the strip stitch needs the {grid_rows}x{grid_cols} grid to fit the "
             f"{mesh_rows}x{mesh_cols} mesh with rows and columns aligned"
         )
-        chunks_per_wave = mesh_cols // grid_cols
         canvas_h, canvas_w = y_starts[-1] + y_lengths[-1], x_starts[-1] + x_lengths[-1]
         assert canvas_h % mesh_rows == 0, f"canvas height {canvas_h} does not split over {mesh_rows} mesh rows"
         assert canvas_w % mesh_cols == 0, f"canvas width {canvas_w} does not split over {mesh_cols} mesh columns"
@@ -1118,27 +1149,7 @@ class MiniMaxH3Vae:
         decoder = self.decoder
         profile = self._profile
 
-        dense = chunks_per_wave == 1 and mesh_cols == grid_cols + 1
-        waves: list[dict] = []
-        if dense:
-            run = grid_cols + 1
-            full_runs = len(chunk_latents) // run
-            for g in range(full_runs):
-                for w in range(grid_cols):
-                    waves.append(
-                        {"mains": [g * run + w], "extra": (g * run + grid_cols, w), "flush": w == grid_cols - 1}
-                    )
-            for k in range(full_runs * run, len(chunk_latents)):
-                waves.append({"mains": [k], "extra": None, "flush": False})
-        else:
-            for i in range(0, len(chunk_latents), chunks_per_wave):
-                waves.append(
-                    {
-                        "mains": list(range(i, min(i + chunks_per_wave, len(chunk_latents)))),
-                        "extra": None,
-                        "flush": False,
-                    }
-                )
+        waves = strip_waves(len(chunk_latents), grid_cols, mesh_cols, self.pack_spare_columns)
         extra_tiles: dict[int, list[torch.Tensor]] = {}
 
         def prepare_host(wave):
@@ -1166,10 +1177,10 @@ class MiniMaxH3Vae:
                 for index, unit in enumerate(units):
                     r, c = divmod(index, grid_cols)
                     slots[r * mesh_cols + k * grid_cols + c] = unit
-            if extra_units is not None:
-                _, w = wave["extra"]
-                for r in range(grid_rows):
-                    slots[r * mesh_cols + grid_cols] = extra_units[r * grid_cols + w]
+            extra_columns = wave["extra"][1] if extra_units is not None else ()
+            for r in range(grid_rows):
+                for spare, c in enumerate(extra_columns):
+                    slots[r * mesh_cols + grid_cols + spare] = extra_units[r * grid_cols + c]
             filler = units_by_chunk[0][0]
             wave = [
                 (unit if unit is not None else filler)
@@ -1179,7 +1190,7 @@ class MiniMaxH3Vae:
             ]
             batch = torch.cat(wave, dim=0)
             profile["host_prep"] += time.perf_counter() - mark
-            n_units = sum(len(units) for units in units_by_chunk) + (grid_rows if extra_units is not None else 0)
+            n_units = sum(len(units) for units in units_by_chunk) + grid_rows * len(extra_columns)
             return n_units, (num_frames, height, width), batch
 
         def upload(batch):
@@ -1207,10 +1218,10 @@ class MiniMaxH3Vae:
         held_strips: list = []
         held_edges: list = []
 
-        def entry(stack, index):
+        def entry(stack, index, count=1):
             starts = [0] * len(stack.shape)
             stops = list(stack.shape)
-            starts[0], stops[0] = index, index + 1
+            starts[0], stops[0] = index, index + count
             return ttnn.slice(stack, starts, stops)
 
         def row_stage(strips_t, edges_t, first):
@@ -1290,9 +1301,10 @@ class MiniMaxH3Vae:
                 for k in range(len(wave["mains"])):
                     readback(row_stage(strips, edges, k * grid_cols), str(pixels.dtype))
                 if wave["extra"] is not None:
-                    held_strips.append(entry(strips, grid_cols))
+                    held = len(wave["extra"][1])
+                    held_strips.append(entry(strips, grid_cols, held))
                     if edges is not None:
-                        held_edges.append(entry(edges, grid_cols))
+                        held_edges.append(entry(edges, grid_cols, held))
                 ttnn.deallocate(strips)
                 if edges is not None:
                     ttnn.deallocate(edges)
@@ -1590,8 +1602,8 @@ class MiniMaxH3Vae:
         """Tiles are laid out in *pixel* space, then mapped back onto the latent grid."""
         ratio = self.config.spatial_compression_ratio
         return (
-            split_tiles(latent_height * ratio, self.tile_size, self.tile_overlap, ratio),
-            split_tiles(latent_width * ratio, self.tile_size, self.tile_overlap, ratio),
+            split_tiles(latent_height * ratio, self.tile_size, self.decode_tile_overlap, ratio),
+            split_tiles(latent_width * ratio, self.tile_size, self.decode_tile_overlap, ratio),
         )
 
     def _latent_tiles(self, z_BCTHW: torch.Tensor) -> list[torch.Tensor]:

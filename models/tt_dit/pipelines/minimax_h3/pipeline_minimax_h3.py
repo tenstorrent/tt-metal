@@ -1046,6 +1046,9 @@ class MiniMaxH3Pipeline:
             waves_per_device=self.vae_waves_per_device,
             # Waves per decoder call of the yuv420 strip stitch (default 1: one unit per device per call).
             waves_per_call=int(os.environ.get("H3_VAE_WAVES_PER_CALL", "1")),
+            # Decode tile overlap in px (default: the VAE's 64); set, the strip stitch also packs every spare column.
+            decode_tile_overlap=int(os.environ["H3_VAE_TILE_OVERLAP"]) if "H3_VAE_TILE_OVERLAP" in os.environ else None,
+            pack_spare_columns="H3_VAE_TILE_OVERLAP" in os.environ,
         )
         self._vae.load_state(self._read_safetensors("vae"))
 

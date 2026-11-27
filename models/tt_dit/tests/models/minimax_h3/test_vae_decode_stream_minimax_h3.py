@@ -181,3 +181,41 @@ def test_a_batched_call_hands_each_device_its_unit_of_every_wave():
     for device, shard in enumerate(call.chunk(devices, dim=0)):
         for index, wave in enumerate(waves):
             torch.testing.assert_close(shard[index], wave[device], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    ("grid_cols", "pack_spare_columns", "num_chunks", "num_waves"),
+    [
+        # 1344x768 on the 4x8 mesh: 7 columns at a 64 px overlap, 6 at 32 px.
+        (7, False, 14, 13),
+        (7, False, 9, 8),
+        (6, True, 14, 11),
+        (6, True, 9, 7),
+        (6, False, 14, 14),
+        (5, True, 9, 6),
+        (4, True, 9, 5),
+    ],
+)
+def test_strip_waves_decode_each_chunk_once_and_read_back_in_chunk_order(
+    grid_cols, pack_spare_columns, num_chunks, num_waves
+):
+    mesh_cols = 8
+    waves = vm.strip_waves(num_chunks, grid_cols, mesh_cols, pack_spare_columns)
+    assert len(waves) == num_waves
+    read_back, held = [], {}
+    for wave in waves:
+        used = len(wave["mains"]) * grid_cols
+        read_back += wave["mains"]
+        if wave["extra"] is not None:
+            chunk, columns = wave["extra"]
+            used += len(columns)
+            held.setdefault(chunk, []).extend(columns)
+        assert used <= mesh_cols
+        if wave["flush"]:
+            # The held strips of one extra chunk, every grid column once and in order.
+            ((chunk, columns),) = held.items()
+            assert columns == list(range(grid_cols))
+            read_back.append(chunk)
+            held.clear()
+    assert not held
+    assert read_back == list(range(num_chunks))
