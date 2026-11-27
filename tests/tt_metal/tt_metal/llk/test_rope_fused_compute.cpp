@@ -48,9 +48,8 @@ struct RopeCase {
     std::array<BlockLayout, blocks> layout;
 };
 
-// Fused cos/sin through rope_sfpu_inplace_fused / rope_sfpu_inplace_fused_rows.
-// Block 0: x in tiles 0,1 and cos/sin in tile 2. Block 1: cos/sin in tile 4 and x in tiles 5,6.
-// Tiles 3 and 7 are guards that must come back untouched.
+// Fused cos/sin: block 0 has x in tiles 0,1 and cos/sin in 2; block 1 has cos/sin in 4 and x in 5,6.
+// Tiles 3 and 7 are guards that must stay untouched.
 constexpr RopeCase fused_rope{
     "tests/tt_metal/tt_metal/test_kernels/compute/rope_fused_compute.cpp",
     true,
@@ -59,10 +58,8 @@ constexpr RopeCase fused_rope{
         {4, 4, 5, full_rows, block1_scale},
     }}};
 
-// Separate cos/sin tiles through rope_sfpu_inplace / rope_sfpu_inplace_rows. The separate path rotates the
-// first 4-row group of each top face, so tile rows 0..3 of every column; the rest of each x tile, and the
-// cos/sin tiles, must come back untouched.
-// Block 0: x in tiles 0,1, cos in 2, sin in 3. Block 1: cos in 4, sin in 5, x in 6,7.
+// Separate cos/sin: block 0 has x in tiles 0,1, cos in 2, sin in 3; block 1 has cos in 4, sin in 5, x in 6,7.
+// Only tile rows 0..3 of each x tile rotate; everything else must stay untouched.
 constexpr RopeCase separate_rope{
     "tests/tt_metal/tt_metal/test_kernels/compute/rope_separate_compute.cpp",
     false,
@@ -173,17 +170,19 @@ void run_rope(distributed::MeshDevice& device, const RopeCase& rope, bool fp32_d
 }  // namespace
 
 TEST_F(LLKBlackholeSingleCardFixture, FusedRopeBfloat16InputUsesFp32Dest) {
-    run_rope(*devices_.at(0), fused_rope, true);
+    run_rope(*devices_.at(0), fused_rope, true /*fp32_dest*/);
 }
 
-TEST_F(LLKBlackholeSingleCardFixture, FusedRopeBfloat16Compatibility) { run_rope(*devices_.at(0), fused_rope, false); }
+TEST_F(LLKBlackholeSingleCardFixture, FusedRopeBfloat16Compatibility) {
+    run_rope(*devices_.at(0), fused_rope, false /*fp32_dest*/);
+}
 
 TEST_F(LLKBlackholeSingleCardFixture, SeparateRopeBfloat16InputUsesFp32Dest) {
-    run_rope(*devices_.at(0), separate_rope, true);
+    run_rope(*devices_.at(0), separate_rope, true /*fp32_dest*/);
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, SeparateRopeBfloat16Compatibility) {
-    run_rope(*devices_.at(0), separate_rope, false);
+    run_rope(*devices_.at(0), separate_rope, false /*fp32_dest*/);
 }
 
 }  // namespace tt::tt_metal

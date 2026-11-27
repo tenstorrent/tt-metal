@@ -26,10 +26,19 @@ void kernel_main() {
         if (tile == 0) {
             // Two x tiles followed by the cos tile and the sin tile.
             // The public API must infer FP32 DEST even though the input CB is BF16.
-            rope_sfpu_inplace<2, 1>();
+            rope_sfpu_inplace<2 /*Ht*/, 1 /*Wt*/>();
         } else {
             // Move cos and sin before x and fold in a scale.
-            rope_sfpu_inplace_rows<2, 1, 128, 64, 0, 64, 64, true>(0xc0000000);  // -2.0f
+            constexpr std::uint32_t T = ROPE_SFPU_TILE_ROWS;
+            rope_sfpu_inplace_rows<
+                2 /*Ht*/,
+                1 /*Wt*/,
+                2 * T /*x_base*/,
+                T /*x_stride*/,
+                0 /*cos_base*/,
+                T /*sin_base*/,
+                T /*cs_stride*/,
+                true /*has_scale*/>(0xc0000000 /*scale_fp32*/);  // -2.0f
         }
         tile_regs_commit();
         tile_regs_wait();

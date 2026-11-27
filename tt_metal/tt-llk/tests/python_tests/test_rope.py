@@ -403,7 +403,7 @@ def _check_separate_cos_sin(ht, wt, stride, scale, operands_first, dest_acc):
 
 
 @parametrize(
-    # (heads, width tiles, x stride, scale, phases first); all fit the 4 slots of an fp32 half Dest
+    # (heads, width tiles, x stride, scale, operands first); all fit the 4 slots of an fp32 half Dest
     case=[
         (1, 1, TILE_SLOT_STRIDE, None, False),
         (2, 1, TILE_SLOT_STRIDE, -2.0, False),

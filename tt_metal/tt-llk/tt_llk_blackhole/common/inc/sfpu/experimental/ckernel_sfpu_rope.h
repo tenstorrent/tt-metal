@@ -41,21 +41,15 @@ constexpr std::uint32_t NEGATE_VA = 1;
 
 constexpr std::uint8_t ZERO_ADDR_MOD = ADDR_MOD_7;
 
-// DEST rows addressable by one half-DEST section in the given Dest mode (SFPLOAD/SFPSTORE
-// row addresses are relative to the section base).  FP32 Dest has half the rows.
+// DEST rows in one half-DEST section for the given Dest mode.
 template <bool is_fp32_dest_acc_en>
 constexpr std::uint32_t half_dest_rows()
 {
-    return is_fp32_dest_acc_en ? (DEST_REGISTER_HALF_SIZE >> 1) : DEST_REGISTER_HALF_SIZE;
+    return get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>() * TILE_ROWS;
 }
 
-// Returns one past the last DEST row an operand touches, for bounds checking.
-// The operand is ``num_tiles`` tiles; tile i starts at row ``base + i * stride``.
-// ``rows_spanned_per_tile`` is the span from a tile's first row to the last row the kernel reads
-// or writes. It includes untouched rows in between, but not the unused tail of the slot, so it
-// can be less than ``stride``.
-// Example: base 0, num_tiles 3, stride 64, rows_spanned_per_tile 20 -> the last tile spans rows 128..147,
-// so the result is 148.
+// One past the last DEST row of an operand: tile i starts at ``base + i * stride`` and the kernel
+// touches the first ``rows_spanned_per_tile`` rows of it (may be less than ``stride``).
 constexpr std::uint32_t operand_end_row_index(std::uint32_t base, std::uint32_t num_tiles, std::uint32_t stride, std::uint32_t rows_spanned_per_tile)
 {
     return base + (num_tiles - 1) * stride + rows_spanned_per_tile;
@@ -75,7 +69,7 @@ inline void sfpu_rope_dest_setup()
  * serves both x parities (see the layout note at the top).
  *
  * is_fp32_dest_acc_en is required, not defaulted: a 16-bit view of an FP32 DEST
- * reads the wrong rows and stores half datums, silently.
+ * loads the wrong rows, silently.
  */
 template <bool is_fp32_dest_acc_en>
 inline void sfpu_rope_load_cos_sin(const std::uint32_t cos_addr, const std::uint32_t sin_addr)
@@ -107,6 +101,9 @@ inline void sfpu_rope_scale_cos_sin(const std::uint32_t scale_fp32)
  * x_addr is the absolute DEST row of the face's first row, and must be 4-row aligned
  * (the caller's x_base/x_stride asserts guarantee it).  Only the address-bearing
  * instructions take the runtime TT_ form; the multiplies keep their inline encoding.
+ *
+ * is_fp32_dest_acc_en is required, not defaulted: a 16-bit view of an FP32 DEST
+ * stores half datums, silently.
  */
 template <bool is_fp32_dest_acc_en>
 inline void sfpu_rope_face(const std::uint32_t x_addr)
