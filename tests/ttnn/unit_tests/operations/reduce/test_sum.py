@@ -413,3 +413,43 @@ def test_sum_preallocated_output_shape_mismatch(device, expect_error):
     output = ttnn.from_torch(torch.zeros(1, 16, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "does not match the reduced shape"):
         ttnn.sum(input_tensor, dim=0, keepdim=True, output=output)
+
+
+@pytest.mark.parametrize(
+    "shape, dim",
+    [
+        ((1, 1, 1, 64), -1),
+        ((1, 2, 5, 128), -1),
+        ((1, 1, 64, 5), -2),
+        ((64,), 0),
+    ],
+)
+@pytest.mark.parametrize("reduce_name", ["sum", "mean", "max", "min"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_reduce_unreduced_axis_padding_ignored(device, shape, dim, reduce_name, dtype):
+    """Non-zero tile padding on an unreduced axis must not contaminate valid outputs when fill_pad is skipped."""
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    torch_input = (torch.randn(shape, dtype=torch.float32) * 2.0).to(torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # Poison implicit tile padding on the unreduced axis so any leakage into valid lanes fails immediately.
+    if len(shape) >= 2:
+        input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, 1e4)
+
+    ttnn_op = getattr(ttnn, reduce_name)
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim, keepdim=True))
+
+    ref_input = torch_input.float()
+    if reduce_name == "sum":
+        expected = torch.sum(ref_input, dim=dim, keepdim=True)
+    elif reduce_name == "mean":
+        expected = torch.mean(ref_input, dim=dim, keepdim=True)
+    elif reduce_name == "max":
+        expected = torch.amax(ref_input, dim=dim, keepdim=True)
+    else:
+        expected = torch.amin(ref_input, dim=dim, keepdim=True)
+
+    if dtype == ttnn.float32:
+        assert_allclose(expected, output_tensor.float(), rtol=1e-4, atol=1e-4)
+    else:
+        assert_allclose(expected, output_tensor.float(), rtol=2e-2, atol=2e-2)
