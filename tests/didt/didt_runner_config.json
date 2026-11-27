@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "hang_secs": 120,
+  "hang_secs": 30,
   "reset": {"cmd": "tt-smi -glx_reset_auto", "tries": 3, "timeout": 600},
   "smi": {"cmd": "tt-smi -s --snapshot_no_tty", "timeout": 120},
   "collect": {"cmd": "pytest --collect-only -q -p no:benchmark", "timeout": 600},
