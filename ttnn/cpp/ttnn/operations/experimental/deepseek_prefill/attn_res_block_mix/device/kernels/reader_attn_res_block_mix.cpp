@@ -87,8 +87,8 @@ void kernel_main() {
 
         // The run's candidate tiles, position-major, read once and held for every group.
         // They land while compute scores the row.
-        const uint32_t num_tiles = item.num_tiles() * num_candidates;
-        cb_values_obj.reserve_back(num_tiles);
+        constexpr uint32_t value_slots = attn_res_block_mix_run_slots() * num_candidates;
+        cb_values_obj.reserve_back(value_slots);
         uint32_t offset = 0;
         for (uint32_t i = 0; i < item.num_tiles(); ++i) {
             const uint32_t w = item.begin + i;
@@ -139,7 +139,7 @@ void kernel_main() {
             if (group == 0) {
                 // Compute takes the candidate tiles with the first group's weights.
                 noc.async_read_barrier();
-                cb_values_obj.push_back(num_tiles);
+                cb_values_obj.push_back(value_slots);
             }
             cb_weights_obj.push_back(sites_per_group * num_candidates);
             if (group > 0 && reader_writes_group(group - 1)) {

@@ -35,7 +35,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t INPUT_TILE_CNT  = params.INPUT_TILE_CNT;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
     const std::uint32_t num_faces       = params.num_faces;
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
     const Operand& buffer_A             = params.buffer_A;
@@ -68,9 +68,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 // Phase 1 datacopy consumes SrcA once per tile.
-                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(INPUT_TILE_CNT);
+                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(TILE_CNT);
                 // Phase 2 reuse-dest binary consumes both sources per face.
-                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(INPUT_TILE_CNT * num_faces);
+                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(TILE_CNT * num_faces);
             }
         }
         else
@@ -83,7 +83,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32B_DEST_EN>(
                     ckernel::trisc::BFD_ID_UNP0, tensor_shape, 1 /*num_tiles_per_unpack*/);
-                for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
                     _llk_unpack_unary_operand_<p_unpacr::UNP_A>(i, tensor_shape);
                 }
@@ -99,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32B_DEST_EN, REUSE_DEST_TYPE>(
                     bfd_phase2, tensor_shape, 1 /*num_tiles_per_unpack*/);
-                for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
                     _llk_unpack_unary_operand_<p_unpacr::UNP_A, REUSE_DEST_TYPE>(i, tensor_shape);
                 }
@@ -128,7 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
-    const std::uint32_t INPUT_TILE_CNT            = params.INPUT_TILE_CNT;
+    const std::uint32_t TILE_CNT                  = params.TILE_CNT;
     const std::uint32_t num_faces                 = params.num_faces;
     const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
     const std::uint32_t INPUT_NUM_TILES_IN_BLOCK  = params.INPUT_NUM_TILES_IN_BLOCK;
@@ -163,8 +163,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(INPUT_TILE_CNT);
-                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(INPUT_TILE_CNT * num_faces);
+                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(TILE_CNT);
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(TILE_CNT * num_faces);
             }
         }
         else

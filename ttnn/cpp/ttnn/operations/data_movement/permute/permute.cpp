@@ -13,6 +13,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -67,6 +68,30 @@ ttnn::Tensor permute_impl(
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
         return ttnn::prim::permute(input, dims, output_mem_config.value_or(a.memory_config()), std::nullopt, pad_value);
     };
+
+    // An MX tile (Quasar) is not a flat element array: only the 4D CN permute moves whole tiles. Every other MX
+    // permute, including rank > 4, runs in bfloat16 and is packed back to MX. The bfloat16 copy is 2x the MX size (more
+    // for a padded dim), so it is staged in DRAM rather than in the L1 the caller asked for. Sharded MX tensors are
+    // rejected for those permutes: the bfloat16 detour is interleaved, so a sharded input or output would silently
+    // change placement. Identity and CN permutes keep their native (sharded-capable) paths.
+    if (tt::tt_metal::is_mx(a.dtype())) {
+        bool identity = true;
+        for (uint32_t i = 0; i < dims.size(); ++i) {
+            identity = identity && dims[i] == i;
+        }
+        const bool is_cn_permute = rank == 4 && dims[0] == 1 && dims[1] == 0 && dims[2] == 2 && dims[3] == 3;
+        if (!(identity && rank == 4) && !is_cn_permute) {
+            TT_FATAL(
+                !a.is_sharded() && !(output_mem_config.has_value() && output_mem_config->is_sharded()),
+                "permute of an MX tensor ({}) supports interleaved input and output only; convert with "
+                "ttnn.to_memory_config first.",
+                a.dtype());
+            const auto dram = ttnn::DRAM_MEMORY_CONFIG;
+            auto as_bf16 = ttnn::typecast(a, DataType::BFLOAT16, dram);
+            auto permuted = permute_impl(as_bf16, dims, dram, pad_value);
+            return ttnn::typecast(permuted, a.dtype(), output_mem_config.value_or(a.memory_config()));
+        }
+    }
 
     if (rank > 4) {
         if (a.is_sharded()) {

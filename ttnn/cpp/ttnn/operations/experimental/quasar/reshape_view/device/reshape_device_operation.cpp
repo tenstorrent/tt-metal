@@ -36,6 +36,12 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input_tensor_a.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(
+        !tt::tt_metal::is_mx(input_tensor_a.dtype()),
+        "Quasar reshape_view cannot move data of MX tensors ({}): a tiled reshape that changes the tile "
+        "structure copies sub-tile face rows, which MX tiles (32-element blocks with a shared scale) cannot "
+        "take. Only metadata-only reshapes (same last dim, tile-aligned second-to-last dim) work on MX.",
+        input_tensor_a.dtype());
+    TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::UINT32 or
             input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::INT32,
         "Can only work with bfloat16/float32 or int32/uint32 tensors");

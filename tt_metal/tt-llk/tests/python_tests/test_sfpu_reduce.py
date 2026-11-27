@@ -17,7 +17,6 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    ApproximationMode,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -36,7 +35,6 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.sfpu_domains import generated_nan_sign_is_asserted, specials_safe
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    APPROX_MODE,
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_OP,
@@ -172,7 +170,6 @@ def _sfpu_reduce_config_kwargs(
         "formats": formats,
         "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
             # The kernel only syncs Dest in halves.
             DEST_SYNC(DestSync.Half),
             MATH_OP(mathop=mathop, pool_type=pool_type),

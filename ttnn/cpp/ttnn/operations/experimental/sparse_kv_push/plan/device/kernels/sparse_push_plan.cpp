@@ -17,10 +17,10 @@ using namespace sparse_push_plan;
 //   compact: every index rewritten to its compact-buffer page, compact_page(run base of its owner, rank), where rank is
 //            how many needed rows of the same owner come before it. Ranks need the whole bitmap, hence the steps below.
 //
-// Every core of the grid takes 1/cores of the indices, and its two data movement processors share the L1 work, half
-// each (loops in sparse_push_plan_work.hpp): BRISC (worker 0) drives the steps and does the NoC traffic, NCRISC (worker
-// 1, this file as the helper) shares the NoC pushes and the write-back. Within a core, BRISC posts each step and the
-// workers report on their
+// Every core of the grid takes 1/cores of the indices, and five workers share its L1 work (loops in
+// sparse_push_plan_work.hpp): BRISC (worker 0) drives the steps and does the NoC traffic, NCRISC (worker 1, this file
+// as the helper) shares the NoC pushes and the write-back, and the three TRISCs (workers 2-4,
+// sparse_push_plan_trisc.cpp) run only L1 loops. Within a core, BRISC posts each step and the workers report on their
 // done semaphores; across cores, exchange(k) gathers on core 0, which multicasts the result back to all.
 //
 //   0. Load:    read this core's indices; zero its private full-size bitmap and its dirty-chunk flags.
@@ -231,8 +231,8 @@ void kernel_main() {
         noc_async_write_barrier();
     };
 
-    // NCRISC (worker 1): follows BRISC's steps, does its half, and the second half of the NoC pushes and
-    // write-back.
+    // NCRISC (worker 1): follows BRISC's steps, does its share of the L1 loops, and the second half of the NoC pushes
+    // and write-back.
     auto run_helper = [&]() {
         constexpr uint32_t worker = 1;
 
@@ -261,7 +261,7 @@ void kernel_main() {
     // BRISC (worker 0): drives the steps, the NoC loads, the cross-core exchanges and the table writes.
     auto run_driver = [&]() {
         constexpr uint32_t worker = 0;
-        // BRISC waits for the helper to report `progress`.
+        // BRISC waits for every other worker (NCRISC and the TRISCs) to report `progress`.
         auto wait_workers = [&](uint32_t progress) {
             for (uint32_t w = 1; w < kWorkers; ++w) {
                 wait_at_least(sem_done(w), progress);
