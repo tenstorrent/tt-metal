@@ -722,12 +722,17 @@ Tensor reduce(
         }
         TT_FATAL(keepdim, "MX reductions need keepdim=True (the squeezing reshape is not wired for MX tiles)");
     }
-    // Tile padding only reaches valid outputs when H or W is reduced, or through a block-float shared exponent.
-    const bool reduces_h_or_w =
-        dim.empty() || std::any_of(dim.begin(), dim.end(), [&](int d) { return d >= rank - 2; });
-    if (is_tiled && (reduces_h_or_w || tt::tt_metal::is_block_float(input_tensor.dtype())) &&
-        (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
-         input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
+    // Tile padding only reaches valid outputs when a padded H or W axis is itself reduced,
+    // or through a block-float shared exponent.
+    const bool reduces_h =
+        dim.empty() || std::any_of(dim.begin(), dim.end(), [&](int d) { return d == rank - 2; });
+    const bool reduces_w =
+        dim.empty() || std::any_of(dim.begin(), dim.end(), [&](int d) { return d == rank - 1; });
+    const bool has_h_pad = rank >= 2 && input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0;
+    const bool has_w_pad = rank >= 1 && input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0;
+    const bool needs_fill_pad = (reduces_h && has_h_pad) || (reduces_w && has_w_pad) ||
+                                (tt::tt_metal::is_block_float(input_tensor.dtype()) && (has_h_pad || has_w_pad));
+    if (is_tiled && needs_fill_pad) {
         // fill_pad writes in place. A reduction must not rewrite its caller's tensor.
         // Both ops stay on sub_core_grids: on the full grid they can land in another sub-device,
         // where nothing orders them against the producer of the input or the reduce.
