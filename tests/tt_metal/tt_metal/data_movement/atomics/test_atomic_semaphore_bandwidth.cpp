@@ -6,8 +6,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "../dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 

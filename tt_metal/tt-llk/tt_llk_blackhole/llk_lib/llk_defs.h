@@ -64,6 +64,16 @@ enum class DstSync
     SyncFull = 1,
 };
 
+// Who programs and restores an execute's address mode.
+// PerCall: the execute sets it and restores the invariant on every call.
+// CallerScoped: the caller sets it once with the op's addrmod_set helper, runs any number of executes,
+// then restores it with the addrmod_restore helper; no other math-thread op may run in between.
+enum class AddrModScope : std::uint8_t
+{
+    PerCall      = 0,
+    CallerScoped = 1,
+};
+
 enum class BroadcastType : std::uint8_t
 {
     NONE   = 0x0, // A - None || B - None

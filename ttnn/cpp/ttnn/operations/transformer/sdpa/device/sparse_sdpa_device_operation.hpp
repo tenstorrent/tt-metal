@@ -10,8 +10,8 @@
 #include <optional>
 #include <variant>
 #include <vector>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/distributed/types.hpp"
 
@@ -68,6 +68,7 @@ Tensor sparse_sdpa(
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
     const std::optional<Tensor>& attention_sink = std::nullopt,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace ttnn::prim

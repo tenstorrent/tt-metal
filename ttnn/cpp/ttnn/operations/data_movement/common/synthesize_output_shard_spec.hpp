@@ -7,8 +7,8 @@
 #include <optional>
 #include <string_view>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

@@ -12,7 +12,7 @@
 #include "dataflow_buffer/dfb_test_common.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cache_common.h"
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {

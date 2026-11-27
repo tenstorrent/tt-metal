@@ -4,7 +4,7 @@
 
 #include "nlp_concat_heads_decode_device_operation.hpp"
 #include <algorithm>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"

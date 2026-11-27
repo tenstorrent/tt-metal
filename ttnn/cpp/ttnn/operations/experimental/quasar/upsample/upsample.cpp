@@ -4,16 +4,16 @@
 
 #include "upsample.hpp"
 #include <algorithm>
-#include "tt-metalium/shape.hpp"
+#include "tt-metalium/vocabulary/shape.hpp"
 #include "ttnn/operations/experimental/quasar/upsample/device/upsample_device_operation.hpp"
-#include "tt-metalium/buffer_types.hpp"
-#include "tt-metalium/work_split.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include "tt-metalium/utils/work_split.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/experimental/quasar/halo/halo.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::operations::experimental::quasar::upsample {
 
@@ -88,6 +88,13 @@ ttnn::Tensor upsample(
     const std::string& mode,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_FATAL(
+        !tt::tt_metal::is_mx(input_tensor.dtype()),
+        "Quasar upsample does not support MX tensors ({}): it replicates per-pixel channel sticks of a row-major "
+        "tensor, and an MX tile (32-element blocks with a shared scale) has no row-major layout. Typecast to "
+        "bfloat16 first.",
+        input_tensor.dtype());
+
     tt::tt_metal::MemoryConfig mem_config = output_mem_config.value_or(input_tensor.memory_config());
 
     // Parse scale factors from variant - extract as floats

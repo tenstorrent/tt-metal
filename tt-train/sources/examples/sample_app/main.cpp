@@ -4,8 +4,9 @@
 
 #include <iostream>
 
-#include "tt-metalium/bfloat16.hpp"
-#include "tt-metalium/host_api.hpp"
+#include "tt-metalium/data_formats/bfloat16.hpp"
+#include "tt-metalium/discovery/cluster.hpp"
+#include "tt-metalium/workload/legacy/host_api.hpp"
 #include "ttml.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"

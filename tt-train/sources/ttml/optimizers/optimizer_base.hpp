@@ -11,6 +11,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "serialization/serializable.hpp"
@@ -57,6 +58,7 @@ public:
 
     virtual void zero_grad() = 0;
 
+    // An optimizer whose kernels take bf16 gradients calls core::cast_fp32_gradients_to_bf16() first.
     virtual void step() = 0;
 
     [[nodiscard]] virtual serialization::StateDict get_state_dict() const = 0;
@@ -117,8 +119,22 @@ protected:
 
     serialization::NamedParameters m_parameters;
 
+    // What zero_grad() does in every optimizer: drops the gradient of each trainable parameter that has one, so the
+    // next backward's first add stores its gradient as it comes.
+    void clear_gradients();
+
+    // For optimizers that update a parameter that got no gradient (momentum, weight decay): their zero_grad() calls
+    // clear_gradients_to_restore(), which also remembers which parameters had a gradient, and their step() calls
+    // restore_cleared_gradients_as_zeros(), which gives a zero gradient to each of those that got none since and is
+    // still trainable. The names are kept until that step, so zero_grad() may run more than once between two steps.
+    void clear_gradients_to_restore();
+    void restore_cleared_gradients_as_zeros();
+
 private:
+    void drop_gradients(bool remember);
+
     std::optional<std::vector<float>> m_initial_lrs;
+    std::unordered_set<std::string> m_cleared_gradients;
 };
 
 // Puts `topology` back on the value of every tensor in `written`.

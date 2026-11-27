@@ -3551,6 +3551,15 @@ def test_untilize_dtype_uint8(device, tensor_shape):
     assert torch.equal(got, x)
 
 
+# INT8 regression: untilize moves the bytes as UInt8; the Int8 format turned -128 into 0.
+@pytest.mark.parametrize("tensor_shape", [[1, 1, 64, 64], [1, 2, 45, 70]], ids=["aligned", "padded"])
+def test_untilize_dtype_int8_min_value(device, tensor_shape):
+    x = torch.randint(-128, 128, tensor_shape, generator=torch.Generator().manual_seed(0), dtype=torch.int8)
+    x.view(-1)[::3] = -128
+    t = ttnn.from_torch(x, dtype=ttnn.int8, layout=ttnn.TILE_LAYOUT, device=device)
+    assert torch.equal(ttnn.to_torch(ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)), x)
+
+
 def _h3_untilize_rows():
     # Full packed sequence lengths of the MiniMax-H3 DiT on 4x8 (8 chips x 74..470 tile rows), 148 as the warm point.
     return [rows * 32 * 8 for rows in (148, 74, 287, 427, 470)]
