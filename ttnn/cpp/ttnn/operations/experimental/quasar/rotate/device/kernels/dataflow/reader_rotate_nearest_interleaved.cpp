@@ -7,35 +7,32 @@
 #include <api/dataflow/dataflow_api.h>
 #include <ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t input_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    uint32_t start_stick_id = get_arg_val<uint32_t>(2);
-    int32_t cos_angle = static_cast<int32_t>(get_arg_val<uint32_t>(3));
-    int32_t sin_angle = static_cast<int32_t>(get_arg_val<uint32_t>(4));
-    int32_t center_x = static_cast<int32_t>(get_arg_val<uint32_t>(5));
-    int32_t center_y = static_cast<int32_t>(get_arg_val<uint32_t>(6));
-    uint32_t fill_value_bits = get_arg_val<uint32_t>(7);
+    uint32_t num_sticks = get_arg(args::num_sticks);
+    uint32_t start_stick_id = get_arg(args::start_stick_id);
+    int32_t cos_angle = static_cast<int32_t>(get_arg(args::cos_angle));
+    int32_t sin_angle = static_cast<int32_t>(get_arg(args::sin_angle));
+    int32_t center_x = static_cast<int32_t>(get_arg(args::center_x));
+    int32_t center_y = static_cast<int32_t>(get_arg(args::center_y));
+    uint32_t fill_value_bits = get_arg(args::fill_value_bits);
 
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(1);
-    constexpr uint32_t input_batch = get_compile_time_arg_val(2);
-    constexpr uint32_t input_height = get_compile_time_arg_val(3);
-    constexpr uint32_t input_width = get_compile_time_arg_val(4);
-    constexpr uint32_t input_channels = get_compile_time_arg_val(5);
-    constexpr uint32_t num_cb_pages = get_compile_time_arg_val(6);
-    constexpr uint32_t fill_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t input_stick_nbytes_unaligned = get_compile_time_arg_val(8);
-    constexpr bool fill_is_zero = get_compile_time_arg_val(9) != 0;
-    constexpr uint32_t burst_size = get_compile_time_arg_val(10);
+    constexpr uint32_t input_stick_nbytes = get_arg(args::input_stick_nbytes);
+    constexpr uint32_t input_batch = get_arg(args::input_batch);
+    constexpr uint32_t input_height = get_arg(args::input_height);
+    constexpr uint32_t input_width = get_arg(args::input_width);
+    constexpr uint32_t input_channels = get_arg(args::input_channels);
+    constexpr uint32_t num_dfb_pages = get_arg(args::num_dfb_pages);
+    constexpr uint32_t input_stick_nbytes_unaligned = get_arg(args::input_stick_nbytes_unaligned);
+    constexpr bool fill_is_zero = get_arg(args::fill_is_zero) != 0;
+    constexpr uint32_t burst_size = get_arg(args::burst_size);
     constexpr uint32_t element_size = input_stick_nbytes_unaligned / input_channels;
 
-    constexpr auto src_args = TensorAccessorArgs<11>();
-    const auto input_tensor_accessor = TensorAccessor(src_args, input_addr);
+    const auto input_tensor_accessor = TensorAccessor(tensor::input);
 
-    DataflowBuffer output_dfb(output_cb_id);
-    DataflowBuffer fill_dfb(fill_cb_id);
+    DataflowBuffer output_dfb(dfb::out);
+    DataflowBuffer fill_dfb(dfb::fill);
     Noc noc;
     UnicastEndpoint self_ep;
 

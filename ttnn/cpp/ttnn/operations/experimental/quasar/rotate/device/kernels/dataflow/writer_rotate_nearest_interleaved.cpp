@@ -6,23 +6,21 @@
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Runtime arguments
-    uint32_t output_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    uint32_t start_stick_id = get_arg_val<uint32_t>(2);
+    uint32_t num_sticks = get_arg(args::num_sticks);
+    uint32_t start_stick_id = get_arg(args::start_stick_id);
 
     // Compile-time arguments
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t output_stick_nbytes = get_compile_time_arg_val(1);
-    constexpr uint32_t num_cb_pages = get_compile_time_arg_val(2);
-    constexpr uint32_t burst_size = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(4);  // stride between sticks in the CB
-    constexpr auto dst_args = TensorAccessorArgs<5>();
-    const auto output_tensor_accessor = TensorAccessor(dst_args, output_addr);
+    constexpr uint32_t output_stick_nbytes = get_arg(args::output_stick_nbytes);
+    constexpr uint32_t num_dfb_pages = get_arg(args::num_dfb_pages);
+    constexpr uint32_t burst_size = get_arg(args::burst_size);
+    constexpr uint32_t dfb_page_size = get_arg(args::dfb_page_size);  // stride between sticks in the DFB
+    const auto output_tensor_accessor = TensorAccessor(tensor::output);
 
-    DataflowBuffer output_dfb(output_cb_id);
+    DataflowBuffer output_dfb(dfb::out);
     Noc noc;
 
     for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks;) {
@@ -39,7 +37,7 @@ void kernel_main() {
                 output_stick_nbytes,
                 {.offset_bytes = read_offset},
                 {.page_id = global_stick_idx});
-            read_offset += cb_page_size;
+            read_offset += dfb_page_size;
         }
         noc.async_write_barrier();
         output_dfb.pop_front(sticks_this_burst);

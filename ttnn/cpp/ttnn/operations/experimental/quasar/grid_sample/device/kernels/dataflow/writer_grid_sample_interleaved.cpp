@@ -6,21 +6,18 @@
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks_to_write = get_arg_val<uint32_t>(1);
-    uint32_t start_stick_id = get_arg_val<uint32_t>(2);
+    uint32_t num_sticks_to_write = get_arg(args::num_sticks_to_write);
+    uint32_t start_stick_id = get_arg(args::start_stick_id);
 
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t output_stick_size = get_compile_time_arg_val(1);
-    constexpr uint32_t ntiles_c = get_compile_time_arg_val(2);
+    constexpr uint32_t output_stick_size = get_arg(args::output_stick_size);
+    constexpr uint32_t ntiles_c = get_arg(args::ntiles_c);
 
-    constexpr auto dst_args = TensorAccessorArgs<3>();
+    const auto s0 = TensorAccessor(tensor::output);
 
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
-
-    DataflowBuffer out_dfb(cb_id_out0);
+    DataflowBuffer out_dfb(dfb::out);
     Noc noc;
 
     uint32_t end_stick_id = start_stick_id + num_sticks_to_write;
@@ -29,7 +26,7 @@ void kernel_main() {
     // We wait for ntiles_c pages to accumulate one full output stick
     for (uint32_t stick_id = start_stick_id; stick_id < end_stick_id; stick_id++) {
         {
-            // Wait for ntiles_c pages in output CB (one full stick)
+            // Wait for ntiles_c pages in output DFB (one full stick)
             out_dfb.wait_front(ntiles_c);
 
             // Write the complete stick
