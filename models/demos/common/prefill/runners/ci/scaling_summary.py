@@ -62,6 +62,8 @@ def _ideal(family, label, base, ref):
 def _rows(base, ref, gain=True):
     rows = []
     for family, name, unit, lower_better, places in _FAMILIES:
+        if all(v is None for run in (base, ref) for v in run.get(family, {}).values()):  # e.g. stage acks batched
+            continue
         for label in _ordered(set(base.get(family, {})) | set(ref.get(family, {}))):
             b, r = base.get(family, {}).get(label), ref.get(family, {}).get(label)
             metric = f"{name} {label}"
@@ -79,8 +81,12 @@ def _rows(base, ref, gain=True):
 def _ref_rows(ref):
     rows = []
     for family, name, unit, _, places in _FAMILIES:
-        for label in _ordered(ref.get(family, {})):
-            rows.append([f"{name} {label}", f"{ref[family][label]:,.{places}f} {unit}"])
+        values = ref.get(family, {})
+        if all(v is None for v in values.values()):
+            continue
+        for label in _ordered(values):
+            v = values[label]
+            rows.append([f"{name} {label}", "-" if v is None else f"{v:,.{places}f} {unit}"])
     return rows
 
 
@@ -192,7 +198,7 @@ def main():
         if not note:
             rb, rr = base.get("pipeline_ranks"), ref.get("pipeline_ranks")
             lines.append(f"ideal = a perfect {rb}-rank -> {rr}-rank pipeline, C chunks deep:")
-            lines.append("        chunk_time x1 (latency is work, not width), ttft xC*R/(C+R-1), throughput xR")
+            lines.append("        chunk_time x1 (summed stage work), ttft xC*R/(C+R-1), throughput xR")
         lines += _table(
             ["metric", base_cfg, ref_cfg, f"{ref_cfg} gain", "ideal", "of ideal"], _rows(base, ref, gain=not note)
         )
