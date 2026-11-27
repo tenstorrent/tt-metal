@@ -52,6 +52,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
     SFPU_BINARY_OP,
+    SFPU_COMPUTE_API_KERNELS,
     SFPU_DST_ROUNDING_MODE,
     SFPU_TILE_INDICES,
     SIGN_MAGNITUDE_FORMAT,
@@ -169,6 +170,7 @@ def _run_sfpu_binary_llk_golden(
     sign_magnitude=False,
     broadcast_type=BroadcastType.None_,
     num_blocks=1,
+    compute_api_kernels=False,
 ):
     """Shared driver for the LLK-golden binary SFPU ops.
 
@@ -177,7 +179,8 @@ def _run_sfpu_binary_llk_golden(
     tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
     extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
     broadcasts the ``src1_idx`` tile in the golden. ``num_blocks`` runs that many independent
-    operand sets, each in its own Dest section with its own result tile.
+    operand sets, each in its own Dest section with its own result tile. ``compute_api_kernels``
+    runs float ADD through ``calculate_sfpu_binary`` instead of the op type.
     """
     src0_idx, src1_idx, dst_idx = tile_indices
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
@@ -253,6 +256,10 @@ def _run_sfpu_binary_llk_golden(
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
     }
+    if compute_api_kernels:
+        # Appended, not listed above: a functional-only switch that adds no perf column, and the perf
+        # column gate (test_perf_header_gate.py) cannot read a conditional entry in that list.
+        test_config_kwargs["templates"].append(SFPU_COMPUTE_API_KERNELS(True))
 
     configuration = create_test_or_perf_config(
         is_perf=is_perf,
@@ -571,6 +578,46 @@ def test_eltwise_binary_sfpu_float_quasar(
         perf_report=perf_report,
         format_variant=format_variant,
         max_ulp=max_ulp,
+    )
+
+
+# add_binary_tile reaches the kernel through calculate_sfpu_binary, which takes the HW-implied Dest format.
+# The float sweep above runs ADD through the AddDest op type with an explicit layout, so this keeps that
+# entry covered.
+_ADD_COMPUTE_API_FORMATS = [
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+]
+
+
+def _add_compute_api_dest_acc(formats):
+    """A 16-bit Dest for Float16_b, a 32-bit Dest for Float32."""
+    if formats.output_format == DataFormat.Float32:
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No]
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=[MathOperation.SfpuElwadd],
+    formats=_ADD_COMPUTE_API_FORMATS,
+    dest_acc=_add_compute_api_dest_acc,
+)
+def test_add_compute_api_kernel_quasar(mathop, formats, dest_acc):
+    """Float ADD through calculate_sfpu_binary, the kernel add_binary_tile calls, on a 16-bit and a 32-bit Dest."""
+    format_variant = resolve_quasar_sfpu_variant(mathop, formats, dest_acc)
+    assert (
+        format_variant is not None
+    ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
+    _run_sfpu_binary_llk_golden(
+        formats,
+        dest_acc,
+        DEFAULT_SFPU_BINARY_TILE_INDICES,
+        mathop,
+        mathop.cpp_enum_value,
+        prepare_stimuli=_prepare_float_stimuli,
+        format_variant=format_variant,
+        compute_api_kernels=True,
     )
 
 
