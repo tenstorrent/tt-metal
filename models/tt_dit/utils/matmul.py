@@ -771,18 +771,27 @@ def swiglu_safe_config(config: ttnn.MinimalMatmulConfig) -> ttnn.MinimalMatmulCo
     """Round an odd `N_block_size` down to even, as minimal_matmul's fused SwiGLU requires.
 
     The tables are keyed by (M, K, N) only, so a matmul with fused SwiGLU can match an entry swept for
-    another layer of the same shape without SwiGLU, whose N block may be odd. The subblock width drops
-    to 1 if it no longer divides the new N block.
+    another layer of the same shape without SwiGLU, whose N block may be odd.
+
+    The subblock width becomes 2, since the faster SwiGLU kernel, which applies SwiGLU inside the K
+    loop, needs an even one. The subblock height becomes the largest divisor of `M_block_size` that
+    keeps the subblock within the original's tiles, so it needs no more destination registers.
     """
     if config.N_block_size % 2 == 0:
         return config
     n_block = max(2, config.N_block_size - 1)
-    subblock_w = config.subblock_w if n_block % config.subblock_w == 0 else 1
+    subblock_w = 2
+    subblock_tiles = max(config.subblock_h * config.subblock_w, subblock_w)
+    subblock_h = max(
+        h
+        for h in range(1, config.M_block_size + 1)
+        if config.M_block_size % h == 0 and h * subblock_w <= subblock_tiles
+    )
     return ttnn.MinimalMatmulConfig(
         M_block_size=config.M_block_size,
         K_block_size=config.K_block_size,
         N_block_size=n_block,
-        subblock_h=config.subblock_h,
+        subblock_h=subblock_h,
         subblock_w=subblock_w,
         compute_with_storage_grid_size=config.compute_with_storage_grid_size,
     )
