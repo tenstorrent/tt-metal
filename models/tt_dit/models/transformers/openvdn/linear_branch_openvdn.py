@@ -23,6 +23,7 @@ layout changes go through row-major reshapes and permutes.
 from __future__ import annotations
 
 import dataclasses
+import os
 from collections.abc import Sequence
 
 import torch
@@ -265,9 +266,17 @@ class OpenVDNLinearBranch(Module):
             else (getattr(self, f"{proj}_sp").data, getattr(self, f"{proj}_tm").data)
         )
         weight = sp_weight
+        # The frames folded into the rows make each shift one 2D matmul `[F*C, S] x [S, S]` (stage 4: 33 ms faster
+        # per block than the batched form; OPENVDN_CONV_FLAT=0 keeps the batch). Same products, each output one exact
+        # copy. bf16 outputs and lower fidelity were slower or not exact.
+        flat = os.environ.get("OPENVDN_CONV_FLAT", "1") == "1" and channels % ttnn.TILE_SIZE == 0
+        frames_here = x_t.shape[1]
+        lhs = ttnn.reshape(x_t, [1, 1, frames_here * channels, per_frame]) if flat else x_t
         acc = None
         for t, shift in enumerate(self._shift_matrices(frame_size)):
-            moved = ttnn.matmul(x_t, shift, dtype=ttnn.float32, compute_kernel_config=self.config)
+            moved = ttnn.matmul(lhs, shift, dtype=ttnn.float32, compute_kernel_config=self.config)
+            if flat:
+                moved = ttnn.reshape(moved, [1, frames_here, channels, per_frame])
             tap = ttnn.slice(weight, [t, 0, 0, 0], [t + 1, 1, channels, 1])
             moved = ttnn.multiply(moved, tap)
             acc = moved if acc is None else ttnn.add(acc, moved)
