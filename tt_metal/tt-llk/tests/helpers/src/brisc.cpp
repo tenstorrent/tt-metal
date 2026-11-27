@@ -43,6 +43,9 @@ static const mailbox_t gpr_dump         = mailboxes_arr - GPR_DUMP_WORDS;
 int main()
 {
     disable_branch_prediction();
+#ifdef ARCH_WORMHOLE
+    ckernel::get_cfg_pointer()[RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32] = 0x8F;
+#endif
 
     commit_store(mailbox_math, ckernel::RESET_VAL);
     commit_store(mailbox_unpack, ckernel::RESET_VAL);
