@@ -53,6 +53,7 @@ FORCE_INLINE void fabric_sender_side_handshake(
             SenderLinkTransport::send_with_context_switch(
                 scratch_addr, local_val_addr, tt::tt_fabric::PACKET_WORD_SIZE_BYTES);
         }
+        ::internal_::service_ptp_clock_sync();
         invalidate_l1_cache();
     }
 }
@@ -85,6 +86,7 @@ FORCE_INLINE void fabric_receiver_side_handshake(
         } else {
             count++;
         }
+        ::internal_::service_ptp_clock_sync();
         invalidate_l1_cache();
     }
 #ifndef ARCH_WORMHOLE

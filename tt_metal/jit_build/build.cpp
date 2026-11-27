@@ -301,8 +301,24 @@ void JitBuildEnv::init(
         // Streaming profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
         // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
         // DeviceZoneScopedN / DeviceTimestampedData event compiled; PROFILE_STREAMING makes
+        // api/debug/kernel_profiler.hpp select tt-insight's markers (kernel_profiler_streaming.hpp) instead of
+        // the DRAM profiler's. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
         TT_FATAL(
             this->arch_ != tt::ARCH::QUASAR,
+            "TT_METAL_STREAMING_PROFILER is not supported on Quasar: it runs on Blackhole only. Use "
+            "TT_METAL_DEVICE_PROFILER instead.");
+        // On any other chip the markers are compiled out and nothing is captured (capture.cpp says so).
+        if (this->arch_ == tt::ARCH::BLACKHOLE) {
+            this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
+            if (rtoptions.get_streaming_profiler_sync_events_enabled()) {
+                // Enable synchronization-event instrumentation
+                // (internal/profiler/synchronization_event_profiler.hpp)
+                // Note: only enabled with streaming profiler.
+                this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+            }
+            if (!rtoptions.get_streaming_profiler_inline_enabled()) {
+                this->defines_ += "-DTT_INSIGHT_PUBLISH_NO_INLINE ";
+            }
         }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
@@ -449,6 +465,10 @@ void JitBuildEnv::init(
         root_ + "tt_metal/tt-llk/tools/include",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/api/"};
+
+    if (rtoptions.get_streaming_profiler_enabled()) {
+        includeDirs.push_back(root_ + "tt_metal/third_party/tt-insight/include");
+    }
 
     std::ostringstream oss;
     for (const auto& includeDir : includeDirs) {

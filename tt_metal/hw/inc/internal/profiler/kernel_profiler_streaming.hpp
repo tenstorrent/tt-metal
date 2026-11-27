@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
+// The device macros are tt-insight's profiler markers (tt/insight/tools/profiler/device/markers.hpp) and Context
+// (tt/insight/device/context.hpp). Each launch a processor runs is a Context whose id is its runtime id.
 //
 // SELECTION: this header is reached ONLY through api/debug/kernel_profiler.hpp, which includes it when
 // the JIT build defines PROFILE_STREAMING (TT_METAL_STREAMING_PROFILER=1, jit_build/build.cpp). Without that
@@ -33,6 +35,18 @@
 
 #include "internal/ethernet/erisc.h"
 
+// PROFILE_KERNEL is a global JIT define, so dispatch kernels get it too. They publish nothing: a dispatch kernel runs
+// for the life of the device and its markers would only add to its loop. Nor do programs for idle Ethernet and DRAM
+// tiles, which lend tt-insight no L1: an image that publishes is loaded only where the device's lease has publishers.
+#if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && !defined(COMPILE_FOR_IDLE_ERISC) && \
+    !defined(COMPILE_FOR_DRISC)
+
+// BRISC's firmware learns whether a launch has work after the launch's first records, which wait until then.
+#if defined(COMPILE_FOR_BRISC)
+#define TT_INSIGHT_SPECULATIVE_CONTEXT_RECORDS
+#endif
+#include "tt/insight/device/context.hpp"
+#include "tt/insight/tools/profiler/device/markers.hpp"
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_ERISC)
 // Global scope: a block-scope extern inside the namespace would look for kernel_profiler::__stack_base and
@@ -42,10 +56,16 @@ extern uint32_t __stack_base[];
 
 namespace kernel_profiler {
 
+// The runtime id of the launch the go signal started, from the launch message the firmware reads at that point.
+FORCE_INLINE uint32_t launch_host_assigned_id() {
+    volatile tt_l1_ptr uint32_t* rd_ptr = GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+    volatile tt_l1_ptr launch_msg_t* launch = GET_MAILBOX_ADDRESS_DEV(launch[0]);
+    return launch[*rd_ptr].kernel_config.host_assigned_id;
 }
 
 // Watcher-off net for a globals-heavy kernel whose loader-guaranteed stack floor is only MEM_*_STACK_MIN_SIZE
 // (192-256 B): plant one word at __stack_base when the kernel zone opens, check it at close, emit a named
+// STACK-OVERFLOW event if frame data overwrote it. The pattern is the watcher's stack_usage_pattern on purpose, so an
 // intact canary reads as painted-and-unused to measure_stack_usage(). Compiled out for firmware
 // (__stack_base is a kernel-link symbol) and active ERISC (stack guarded by -Werror=stack-usage).
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_ERISC)
@@ -54,6 +74,7 @@ struct stackCanaryScope {
     FORCE_INLINE stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
     FORCE_INLINE ~stackCanaryScope() {
         if (__builtin_expect(::__stack_base[0] != STACK_CANARY_PATTERN, 0)) {
+            DeviceRecordEvent("STACK-OVERFLOW");
         }
     }
 };
@@ -67,9 +88,27 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #include "perf_counters.hpp"
 #include "internal/profiler/synchronization_event_profiler.hpp"
 
+// A launch's Context. NCRISC and the TRISCs take its id from the launch message, BRISC and the Ethernet firmware set it
+// with DeviceZoneSetCounter. Both macros below act on the processor's live Context, so a kernel can use them too.
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC)
+#define DeviceZoneScopedMainN(name)                   \
+    ::tt::insight::Context tt_insight_launch_context; \
+    ::tt::insight::Context::set_id(kernel_profiler::launch_host_assigned_id());
+#else
+#define DeviceZoneScopedMainN(name) ::tt::insight::Context tt_insight_launch_context;
+#endif
 
+#define DeviceZoneSetCounter(counter) ::tt::insight::Context::set_id(counter);
 
+#if defined(TT_INSIGHT_SPECULATIVE_CONTEXT_RECORDS)
+#define DeviceValidateProfiler(condition) ::tt::insight::Context::keep_records_if(condition);
+#else
+#define DeviceValidateProfiler(condition) (void(sizeof(condition)));
+#endif
 
+// A firmware starts with an empty publish state: ERISC0, which runs beside the base firmware, is not reset when a
+// program is loaded.
+#define DeviceProfilerInit() ::tt::insight::clear_publish_state();
 
 // The canary is declared second so its check runs first at scope exit, inside the still-open kernel zone.
 #define DeviceZoneScopedMainChildN(name) \

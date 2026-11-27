@@ -8,6 +8,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
 #include <cctype>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -64,6 +65,8 @@ BinaryCache& binary_cache() {
     return cache;
 }
 
+std::atomic<ImagePatcher> image_patcher{nullptr};
+
 // Common lookup-or-load: return the cached binary for PATH, reading + parsing + caching it on first use.
 // Both get_risc_binary and get_binary_metadata build on this and just return their own slice, so the two
 // share one cache and one read path. `loading` / `update_callback` are consulted only on first load.
@@ -83,6 +86,9 @@ const CachedBinary& get_cached_binary(
         // place for XIP), then pack the device image.
         ll_api::ElfFile elf;
         elf.ReadImage(path);
+        if (const ImagePatcher patcher = image_patcher.load()) {
+            patcher(path, elf.GetContents());
+        }
         ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
         ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
         if (update_callback) {
@@ -117,6 +123,8 @@ const ll_api::memory& get_risc_binary(
     const std::function<void(ll_api::memory&)>& update_callback) {
     return get_cached_binary(path, loading, update_callback).image;
 }
+
+void set_image_patcher(ImagePatcher patcher) { image_patcher = patcher; }
 
 const ll_api::BinaryMetadata& get_binary_metadata(
     const std::string& path,

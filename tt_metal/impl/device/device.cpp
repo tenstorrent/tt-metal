@@ -4,6 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include "impl/streaming_profiler/capture.hpp"
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device_impl.hpp"
@@ -454,6 +455,9 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
     }
     for (const auto& logical_core : this->get_inactive_ethernet_cores()) {
         if (!has_flag(env_impl.get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
+        if (streaming_profiler::is_lent_tile(id_, this->virtual_core_from_logical_core(logical_core, CoreType::ETH))) {
             continue;
         }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);

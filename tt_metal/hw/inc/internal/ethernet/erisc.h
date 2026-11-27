@@ -7,6 +7,10 @@
 #include "noc_nonblocking_api.h"
 
 #include "eth_fw_api.h"
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_AERISC) && \
+    (PHYSICAL_AERISC_ID == 0 || !defined(ENABLE_2_ERISC_MODE))
+#include "tt/insight/device/ptp_clock_sync.hpp"
+#endif
 
 inline void (*rtos_context_switch_ptr)();
 inline void (*toggle_macpcs_ptr)(uint32_t);
@@ -17,6 +21,16 @@ volatile inline uint32_t* flag_disable = (uint32_t*)(uintptr_t)(eth_l1_mem::addr
 #endif
 
 namespace internal_ {
+// The streaming profiler's clock sync on an active Ethernet tile, served by the main Ethernet program: ERISC0's in
+// 2-ERISC mode, ERISC1's in single-ERISC mode. Every wait of a program there calls it, through risc_context_switch
+// or directly.
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_AERISC) && \
+    (PHYSICAL_AERISC_ID == 0 || !defined(ENABLE_2_ERISC_MODE))
+[[gnu::noinline]] inline void service_ptp_clock_sync() { tt::insight::service_ptp_clock_sync(); }
+#else
+inline void service_ptp_clock_sync() {}
+#endif
+
 inline __attribute__((always_inline)) void risc_context_switch([[maybe_unused]] bool skip_sync = false) {
 #if defined(COMPILE_FOR_ERISC)
 #if defined(COOPERATIVE_ERISC)
@@ -30,6 +44,7 @@ inline __attribute__((always_inline)) void risc_context_switch([[maybe_unused]] 
     if (!skip_sync) {
         ncrisc_noc_full_sync<1>();
     }
+    service_ptp_clock_sync();
     aerisc_context_switch();
 
     // Not harmful to initialize the counters again
@@ -42,6 +57,9 @@ inline __attribute__((always_inline)) void risc_context_switch([[maybe_unused]] 
     // to reinit them using dynamic_noc_local_state_init()
 #endif  // NOC_MODE == DM_DYNAMIC_NOC
 
+#elif defined(COMPILE_FOR_AERISC) && !defined(ENABLE_2_ERISC_MODE)
+    // Single-ERISC mode: the base firmware has ERISC0 to itself, so there is nothing to hand over.
+    service_ptp_clock_sync();
 #endif  // (COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
 
 #endif  // COMPILE_FOR_ERISC

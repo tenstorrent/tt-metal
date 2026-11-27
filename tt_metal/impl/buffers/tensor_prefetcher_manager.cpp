@@ -2063,6 +2063,9 @@ namespace tt::tt_metal::experimental {
 
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device) {
     auto& env = mesh_device.impl().metal_env();
+    // The streaming profiler takes the same DRISCs: each bank's free (non-endpoint) core is lent to tt-insight,
+    // whose drainers run there, and Metal runs no DRAM core firmware of its own while the profiler is on. So the
+    // profiler wins and the prefetcher reports unsupported rather than racing it for the core.
     if (env.get_rtoptions().get_streaming_profiler_enabled()) {
         return false;
     }

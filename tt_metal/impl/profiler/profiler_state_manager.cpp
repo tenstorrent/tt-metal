@@ -105,7 +105,9 @@ uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rt
     if (!rtoptions.get_streaming_profiler_enabled()) {
         return device_profiler_bytes;
     }
+    // The streaming profiler's DRAM buffers take over the device profiler's DRAM slot (the two are mutually
     // exclusive). The Blackhole HAL sizes that slot as this per-RISC value x 5 RISCs x 20 cores per DRAM channel,
+    // so it is handed the buffer's per-RISC share.
     constexpr uint32_t kBlackholeRiscsPerDramChannel = 5 * 20;
     return div_up(rtoptions.get_streaming_profiler_spool_mb() << 20, kBlackholeRiscsPerDramChannel);
 }

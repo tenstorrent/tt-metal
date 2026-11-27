@@ -138,6 +138,8 @@ __attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_atte
     if ((++counters.heartbeat & (HEARTBEAT_INTERVAL - 1)) == 0) {
         *reinterpret_cast<volatile uint32_t*>(heartbeat_addr) = HEARTBEAT_SIGNATURE | counters.heartbeat;
     }
+    // The streaming profiler's clock sync on this link, which ERISC 0 serves (internal/ethernet/erisc.h).
+    internal_::service_ptp_clock_sync();
     if constexpr (is_context_switch_master) {
         if (IDLE_CONTEXT_SWITCHING && send_attempted) {
             counters.idle_rounds = 0;

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -44,6 +45,13 @@ const ll_api::BinaryMetadata& get_binary_metadata(
     const std::string& path,
     ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
     const std::function<void(ll_api::memory&)>& update_callback = nullptr);
+
+// Rewrites a program's ELF, as read from `elf_path`, before its image is made of it. It must not throw.
+using ImagePatcher = void (*)(const std::string& elf_path, std::span<std::byte> elf);
+
+// Every ELF get_risc_binary() reads from now on passes through the patcher once, before its image is cached; with
+// nullptr, through none.
+void set_image_patcher(ImagePatcher patcher);
 
 tt::tt_metal::CoreCoord logical_core_from_ethernet_core(
     tt::tt_metal::MetalEnvImpl& env, ChipId chip_id, const tt::tt_metal::CoreCoord& ethernet_core);

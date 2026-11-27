@@ -33,6 +33,9 @@
 #include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_device_config.hpp"
 #include "llrt/llrt.hpp"
+#include "impl/streaming_profiler/capture.hpp"
+#include <tt-umd-workload/cluster.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 #include "common/executor.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -257,6 +260,13 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             // 2. With every core held in reset, point those interrupts at code that returns from the handler.
             reset_cores(device_id);
             internal::release_latched_briscs(descriptor_->metal_context(), device_id, released_briscs);
+            // 3. Load firmware and release the cores. A latched BRISC returns from the handler first, then boots.
+            try {
+                initialize_and_launch_firmware(device_id);
+            } catch (const std::exception&) {
+                // A BRISC that stayed in its interrupt handler is the likelier cause of a firmware init timeout.
+                internal::check_briscs_released(descriptor_->metal_context(), device_id, released_briscs);
+                throw;
             }
         }
     }
@@ -264,6 +274,108 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
 }
 
 void RiscFirmwareInitializer::configure() {}
+
+tt::insight::DeviceLease::Terms RiscFirmwareInitializer::streaming_profiler_terms(tt::ChipId device_id) {
+    // A PCIe device's id is its number under /dev/tenstorrent.
+    const tt::umd::TTDevice* tt_device = cluster_.get_driver()->get_tt_device(device_id);
+    TT_FATAL(
+        tt_device->get_communication_device_type() == tt::umd::IODeviceType::PCIe,
+        "The streaming profiler needs a PCIe device, which device {} is not",
+        device_id);
+    const tt::insight::DeviceRef device = tt::insight::DeviceRef::open(tt_device->get_communication_device_id());
+    const tt::insight::ExclusiveTileCandidates candidates = tt::insight::exclusive_tile_candidates(device);
+    const std::vector<tt::insight::TranslatedCoordinate>& tensix = candidates.tensix_tiles;
+    // Metal's Ethernet programs run on its active Ethernet tiles: in 2-ERISC mode on both ERISCs, ERISC0's beside the
+    // base firmware; in single-ERISC mode on ERISC1 alone. They publish, and the main one (ERISC0's, or ERISC1's in
+    // single-ERISC mode) serves the clock sync of the tile's link, so the tiles are lent shared.
+    std::vector<tt::insight::TranslatedCoordinate> eth;
+    for (const CoreCoord& core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
+        const CoreCoord xy = cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, core, CoreType::ETH);
+        eth.emplace_back(xy.x, xy.y);
+    }
+    // The main Ethernet program is linked above the base firmware's part of the local data RAM, on either ERISC
+    // (main.ld), and keeps its publish state there.
+    const bool two_eriscs = rtoptions_.get_enable_2_erisc_mode();
+    std::vector<tt::insight::TilePublishers> publishers{
+        {.tiles = tensix},
+        {.tiles = eth,
+         .processors = {two_eriscs ? tt::insight::Processor::ERISC0 : tt::insight::Processor::ERISC1},
+         .publish_state_address = tt::insight::kLowestEthernetPublishStateAddress}};
+    if (two_eriscs) {
+        publishers.push_back({.tiles = eth, .processors = {tt::insight::Processor::ERISC1}});
+    }
+    // The traffic whose speed matters is Metal's kernels' and firmware's, on both NoCs. They write unicast on static
+    // channel 1, multicast on 4 and dispatch multicast on 5, fabric routers on 2 and 3, read on 1, and reach DRAM
+    // through its endpoints on each NoC. The host's occasional writes through its windows are left out.
+    const metal_SocDescriptor& soc = cluster_.get_soc_desc(device_id);
+    const auto traffic = [&](uint8_t noc) {
+        tt::insight::NocTraffic statement{
+            .writes =
+                {.static_channels = descriptor_->fabric_config() != tt_fabric::FabricConfig::DISABLED
+                                        ? std::vector<uint8_t>{1, 2, 3, 4, 5}
+                                        : std::vector<uint8_t>{1, 4, 5}},
+            .reads = {.static_channels = {1}}};
+        for (const tt::umd::CoreCoord& core : soc.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+            statement.reads_dram |= ((soc.get_dram_endpoint_noc_mask(CoreCoord(core.x, core.y)) >> noc) & 1u) != 0;
+        }
+        return statement;
+    };
+    // The profiler area of a Tensix tile's mailbox, and of an active Ethernet tile's.
+    const tt::insight::L1Range tensix_profiler_area{
+        .address = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER),
+        .size_bytes = hal_.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER)};
+    const tt::insight::L1Range eth_profiler_area{
+        .address = hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER),
+        .size_bytes = hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER)};
+    // The drainers run on the DRAM cores: of each DRAM channel, the tile Metal reaches DRAM through on neither NoC,
+    // with the channel's profiler slot to keep frames in while the link to the host is busy. Metal runs no firmware
+    // of its own on DRAM cores under the profiler (should_enable_blackhole_dram_programmable_cores).
+    std::vector<tt::insight::TranslatedCoordinate> lent_tiles;
+    std::vector<tt::insight::DramRange> dram_ranges;
+    if (rtoptions_.get_blackhole_dram_programmable_cores_override().value_or(true)) {
+        const uint64_t buffer_bytes = std::min(
+            uint64_t{rtoptions_.get_streaming_profiler_spool_mb()} << 20,
+            uint64_t{hal_.get_dev_size(HalDramMemAddrType::PROFILER)});
+        for (const tt::insight::TranslatedCoordinate& tile : candidates.dram_tiles) {
+            const CoreCoord xy(tile.x, tile.y);
+            if (soc.get_dram_endpoint_noc_mask(xy) != 0) {
+                continue;
+            }
+            lent_tiles.push_back(tile);
+            if (buffer_bytes != 0) {
+                const int view = static_cast<int>(soc.get_logical_dram_core_from_translated(xy).x);
+                dram_ranges.push_back(
+                    {.tile = tile,
+                     .offset = soc.get_address_offset(view) + hal_.get_dev_addr(HalDramMemAddrType::PROFILER),
+                     .size_bytes = buffer_bytes});
+            }
+        }
+    }
+    // One idle Ethernet tile keeps the device's time, a second serves the sync check, and Metal keeps the others.
+    // Where a device has no DRAM core to lend (an older firmware bundle, or programmable DRAM cores switched off),
+    // it lends them all: the first keeps time, the others drain.
+    const std::vector<tt::insight::TranslatedCoordinate>& idle = candidates.idle_eth_tiles;
+    size_t idle_tiles_to_lend = idle.size();
+    if (!lent_tiles.empty()) {
+        const size_t time_tiles = rtoptions_.get_streaming_profiler_sync_check_enabled() ? 2 : 1;
+        idle_tiles_to_lend = std::min(time_tiles, idle.size());
+    }
+    for (size_t i = 0; i < idle_tiles_to_lend; i++) {
+        lent_tiles.push_back(idle[i]);
+    }
+    return tt::insight::DeviceLease::Terms{
+        .device = device,
+        .exclusive_tiles = lent_tiles,
+        .l1 = {{.tiles = tensix, .range = tensix_profiler_area}, {.tiles = eth, .range = eth_profiler_area}},
+        .publishers = publishers,
+        .shared_ptp_eth_tiles = eth,
+        // A device with no idle Ethernet tile has none to keep its time: tt-insight takes it only when told so.
+        .accept_severely_degraded_clock_sync = idle.empty(),
+        .dram_ranges = dram_ranges,
+        .host_memory_bytes = size_t{rtoptions_.get_streaming_profiler_fifo_mb()} << 20,
+        .runtime_noc_traffic = tt::insight::RuntimeNocTraffic{.noc0 = traffic(0), .noc1 = traffic(1)},
+        .runtime_device_id = static_cast<uint64_t>(device_id)};
+}
 
 void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
     // If simulator is enabled, force a teardown of active ethernet cores for WH
@@ -287,6 +399,8 @@ void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
 
 void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*init_done*/) {
     auto all_devices = cluster_.all_chip_ids();
+    // The streaming profiler's leases end while the devices' firmware still runs.
+    streaming_profiler::end_leases({all_devices.begin(), all_devices.end()});
 
     if (!cluster_.is_mock_or_emulated()) {
         // Teardown runs from ~MetalContext and from the atexit handler, both of which cannot let an
@@ -1497,6 +1611,12 @@ void RiscFirmwareInitializer::initialize_firmware(
 void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_id) {
     ZoneScoped;
 
+    // The streaming profiler is lent its tiles before any firmware is loaded.
+    if (rtoptions_.get_streaming_profiler_enabled() && hal_.get_arch() == tt::ARCH::BLACKHOLE) {
+        streaming_profiler::lease_device(
+            device_id, streaming_profiler_terms(device_id), rtoptions_.get_enable_2_erisc_mode());
+    }
+
     log_debug(tt::LogMetal, "Initializing worker cores");
     std::unordered_set<CoreCoord> not_done_cores;
     CoreCoord logical_grid_size = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
@@ -1613,6 +1733,9 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+        if (streaming_profiler::is_lent_tile(device_id, virtual_core)) {
+            continue;
+        }
         core_info.view().absolute_logical_x() = eth_core.x;
         core_info.view().absolute_logical_y() = eth_core.y;
         cluster_.write_core_immediate(

@@ -12,6 +12,7 @@
 
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "firmware_initializer.hpp"
+#include <tt/insight/host/device_lease.hpp>
 #include "llrt/hal/generated/dev_msgs.hpp"
 
 namespace tt::tt_fabric {
@@ -48,6 +49,9 @@ private:
     void clear_launch_messages_on_eth_cores(tt::ChipId device_id);
     // Take the cores out of reset state. This should be called after setting the correct program counter for execution.
     void reset_cores(tt::ChipId device_id);
+    // What the device lends the streaming profiler, from run_launch_phase() to teardown(): its free DRAM cores with
+    // their DRAM buffers, or its idle Ethernet tiles where it has none; an idle Ethernet tile for its time; and L1.
+    tt::insight::DeviceLease::Terms streaming_profiler_terms(tt::ChipId device_id);
 
     void terminate_active_ethernet_cores_on_all_chips();
     void assert_active_ethernet_cores_to_reset(tt::ChipId device_id);

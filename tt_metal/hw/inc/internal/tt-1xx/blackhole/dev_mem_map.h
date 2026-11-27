@@ -234,6 +234,7 @@
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
+// Must fit the largest erisc kernel config: a multi-mesh 2D-torus fabric_erisc_router, 24656 B, and more with the
 // streaming profiler on (TT_METAL_STREAMING_PROFILER=1). test_streaming_profiler_torus_routers_fit checks it.
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (29 * 1024)
 #define MEM_ERISC_BASE 0

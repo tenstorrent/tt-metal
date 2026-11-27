@@ -67,6 +67,8 @@ struct TensorPrefetcherConfig {
 // Returns true if the Tensor prefetcher is supported on `mesh_device`. Both must hold:
 //   - the device can run DRAM-sender endpoints: Blackhole with firmware >= 19.12.0.0, or
 //     Quasar running fast dispatch with one command queue, and
+//   - the streaming profiler is off. TT_METAL_STREAMING_PROFILER=1 lends tt-insight the free
+//     DRAM subchannel a bank's first prefetch sender uses, so the two cannot coexist.
 // When this returns false, StartTensorPrefetcher TT_FATALs, so callers (e.g. tests) can
 // use this to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);

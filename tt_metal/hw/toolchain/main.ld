@@ -15,6 +15,16 @@ OUTPUT_ARCH(riscv)
 
 #include "dev_mem_map.h"
 
+/* The bottom of the local data RAM that a Blackhole Tensix or active Ethernet processor's programs use holds the
+   streaming profiler's publish state (tt-insight's TilePublishers::publish_state_address). Firmware data starts above
+   it. */
+#if defined(ARCH_BLACKHOLE) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC) || \
+                                defined(COMPILE_FOR_MAIN_AERISC) || defined(COMPILE_FOR_SUBORDINATE_AERISC) || \
+                                defined(COMPILE_FOR_AERISC))
+#define PUBLISH_STATE_BYTES 32
+#else
+#define PUBLISH_STATE_BYTES 0
+#endif
 
 #if defined(COMPILE_FOR_BRISC)
 #define DATA_START MEM_LOCAL_BASE
@@ -200,6 +210,7 @@ SECTIONS
 /* Begin the data area.  */
 #if defined(TYPE_FIRMWARE)
   PROVIDE(__global_pointer$ = DATA_START + 0x7f0);
+  .data DATA_START + PUBLISH_STATE_BYTES :
 #define SECTION(NEW, PREV) NEW :
 #else
   /* Where firmware ended. */
@@ -281,6 +292,8 @@ SECTIONS
    LONG(ADDR(.data)) LONG(ADDR(.data)) LONG(DATA_SIZE - STACK_MIN_SIZE
 #if defined(TYPE_KERNEL)
          - (__fw_export_ldm_end - DATA_START)
+#else
+         - PUBLISH_STATE_BYTES
 #endif
          )
   }

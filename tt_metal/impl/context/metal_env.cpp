@@ -126,6 +126,11 @@ namespace {
 // check_firmware_capabilities). DRAM harvesting no longer disables the core type: DRAM programs and
 // GCB credit targets resolve sender coordinates from each device's SOC descriptor.
 bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, const llrt::RunTimeOptions& rtoptions) {
+    // Under the streaming profiler the DRAM cores are lent to tt-insight, whose drainers run on them, and a lent core
+    // runs nothing of Metal's: Metal's own DRAM core firmware stays off (RiscFirmwareInitializer lends the cores).
+    if (rtoptions.get_streaming_profiler_enabled()) {
+        return false;
+    }
     const auto override = rtoptions.get_blackhole_dram_programmable_cores_override();
     if (override.has_value()) {
         log_info(

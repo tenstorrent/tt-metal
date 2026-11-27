@@ -6,7 +6,6 @@
 #include "llrt/hal.hpp"  // Hal — needed for ParseAllFeatureEnv, ParseFeatureEnv, ParseFeatureRiscvMask
 
 #include <algorithm>
-#include <bit>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -144,6 +143,8 @@ enum class EnvVarID {
     TT_METAL_STREAMING_PROFILER_SYNC_EVENTS,       // Enable sync events profiling
     TT_METAL_STREAMING_PROFILER_SYNC_CHECK,        // Measure the clock sync's chip-to-chip accuracy
     TT_METAL_STREAMING_PROFILER_INLINE_ENABLED,    // Enable zone markers inlining
+    TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler device DRAM buffer per drainer, MiB
+    TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host memory per device, MiB
     TT_METAL_STREAMING_PROFILER_OPS_CSV,           // Streaming profiler ops CSV path
     TT_METAL_STREAMING_PROFILER_ZONE_CSV,          // Streaming profiler zone CSV path
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
@@ -1091,6 +1092,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER
+        // Runs the streaming profiler from the devices' firmware launch to their teardown. Records go to
+        // registered callbacks (RegisterCallback and the TT_METAL_STREAMING_PROFILER_*_CSV writers); add
         // TT_METAL_STREAMING_PROFILER_TRACY=1 for the Tracy sink. Needs a Tracy-enabled build and
         // TT_METAL_DEVICE_PROFILER off.
 
@@ -1116,6 +1119,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER_SYNC_CHECK
+        // Checks a setup once: logs tt-insight's report of what a capture does with what Metal lends, and measures
+        // how closely the devices' clocks line up, logged when the devices close. It takes one more idle Ethernet
+        // core per chip and triples the clock sync's traffic on the links, so leave it off in the runs you measure.
+        // Requires TT_METAL_STREAMING_PROFILER.
         // Default: false
         // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_CHECK=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_CHECK:
@@ -1142,6 +1149,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER_DRAM_MB
+        // Device DRAM buffer per drainer on a DRAM core, in MiB. A drainer keeps its frames there while the link
+        // to the host is busy; a size absorbs that on the device, 0 gives a drainer no DRAM buffer.
+        // Capped at STREAMING_PROFILER_SPOOL_MB_MAX.
         // Default: STREAMING_PROFILER_SPOOL_MB_DEFAULT
         // Usage: export TT_METAL_STREAMING_PROFILER_DRAM_MB=256
         case EnvVarID::TT_METAL_STREAMING_PROFILER_DRAM_MB:
@@ -1150,15 +1160,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER_FIFO_MB
-        // STREAMING_PROFILER_FIFO_MB_MAX.
+        // Host memory for each device's profiling data, in MiB, pinned while the device is open and shared equally
+        // by the device's drainers. Raise it to let a slow callback fall further behind before it loses profiling
+        // data. At most STREAMING_PROFILER_FIFO_MB_MAX.
         // Default: STREAMING_PROFILER_FIFO_MB_DEFAULT
-        // Usage: export TT_METAL_STREAMING_PROFILER_FIFO_MB=1024
-        case EnvVarID::TT_METAL_STREAMING_PROFILER_FIFO_MB: {
-            const unsigned long mb = std::clamp<unsigned long>(std::stoul(value), 1, STREAMING_PROFILER_FIFO_MB_MAX);
-            TT_FATAL(std::has_single_bit(mb), "TT_METAL_STREAMING_PROFILER_FIFO_MB='{}' is not a power of two", value);
-            this->streaming_profiler_fifo_mb = mb;
+        // Usage: export TT_METAL_STREAMING_PROFILER_FIFO_MB=4096
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_FIFO_MB:
+            this->streaming_profiler_fifo_mb =
+                std::clamp<unsigned long>(std::stoul(value), 1, STREAMING_PROFILER_FIFO_MB_MAX);
             break;
-        }
 
         // TT_METAL_STREAMING_PROFILER_OPS_CSV
         // Path for the per-op CSV consumer; empty leaves it unregistered.

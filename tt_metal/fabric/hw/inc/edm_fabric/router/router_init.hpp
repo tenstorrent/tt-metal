@@ -60,11 +60,13 @@ __attribute__((noinline)) void sync_erisc(Phase phase) {
             write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(start);
             while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) != answer) {
                 router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+                internal_::service_ptp_clock_sync();
             }
             write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
         } else {
             while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) != start) {
                 router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+                internal_::service_ptp_clock_sync();
             }
             write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(answer);
         }

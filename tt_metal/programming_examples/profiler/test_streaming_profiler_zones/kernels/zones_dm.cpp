@@ -62,6 +62,7 @@ static constexpr int kWallClockLowIdx = 0;
 
 // Marker-cost microbench (--bench): bursts of one marker kind, each burst timed against the wall clock, the totals
 // left in L1 at BENCH_ADDR (slot per RISC; DPRINT and the profiler are mutually exclusive). A burst stays under the
+// 512-word ring so it never blocks, and BENCH_DELAY paces it so the drainer keeps up: with a stall anywhere the
 // number is the stall, not the marker.
 #if ZONE_MODE == 2
 void kernel_main() {

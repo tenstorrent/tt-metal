@@ -71,6 +71,11 @@ inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
     extern uint32_t __ldm_data_start[];
     extern uint32_t __ldm_data_end[];
     if (__ldm_data_start != data_image) {
+#if defined(FW_BUILD)
+        // The loader puts firmware data at its offset from MEM_LOCAL_BASE, above the streaming profiler's publish
+        // state (hw/toolchain/main.ld); a kernel's image starts with its data.
+        data_image += (reinterpret_cast<uintptr_t>(__ldm_data_start) - MEM_LOCAL_BASE) / sizeof(uint32_t);
+#endif
         l1_to_local_mem_copy(__ldm_data_start, data_image, l1_word_count_from_range(__ldm_data_start, __ldm_data_end));
     }
 }

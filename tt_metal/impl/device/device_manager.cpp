@@ -21,6 +21,7 @@
 #include "firmware/profiler_initializer.hpp"
 #include "firmware/fabric_firmware_initializer.hpp"
 #include "firmware/dispatch_kernel_initializer.hpp"
+#include "impl/streaming_profiler/capture.hpp"
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -462,7 +463,14 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
 
     auto active_devices = this->get_all_active_devices();
 
+    // The streaming profiler's capture of the devices starts before their fabric routers and dispatch kernels do, and
+    // stops in close_devices().
     if (env_impl_.get_rtoptions().get_streaming_profiler_enabled()) {
+        std::vector<ChipId> chip_ids;
+        for (const Device* device : active_devices) {
+            chip_ids.push_back(device->id());
+        }
+        streaming_profiler::start_capture(chip_ids, env_impl_.get_cluster(), env_impl_.get_rtoptions());
     }
 
     initializers_[FabricFirmwareInitializer::key] =
@@ -714,6 +722,9 @@ bool DeviceManager::close_devices(const std::vector<Device*>& devices, bool /*sk
     if (initializers_.contains(CommandQueueInitializer::key)) {
         initializers_[CommandQueueInitializer::key]->post_teardown();
     }
+
+    // The fabric routers have exited, so their last records reach the streaming profiler's capture.
+    streaming_profiler::stop_captures(devices_to_close);
 
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {
