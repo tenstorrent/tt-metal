@@ -3,9 +3,11 @@
 
 // g6_fill writer (BRISC / NoC1), regime R1: tile row-0 segment scatter.
 //
-// The only kernel of the op. It builds one face row of e in cb_fill_row and writes that run
-// to the row-0 segment of face 0 and face 1 of every tile this core owns. Rows 1-31 and
-// faces 2-3 are padding of the rank-1 tile plane [1, N] and are not written.
+// The only kernel of the op. It writes one face row of e to the row-0 segment of face 0 and
+// face 1 of every tile this core owns. Rows 1-31 and faces 2-3 are padding of the rank-1
+// tile plane [1, N] and are not written. The source row is either built in cb_fill_row or,
+// with fill_row_in_common_args, read in place from the common runtime args, where the host
+// put one copy of e per segment word.
 //
 // Raw dataflow API, no kernel_lib helper: no helper writes one constant L1 run to a set of
 // (page, in-page offset) destinations of an interleaved tensor (op_design.md, API Mapping).
@@ -46,23 +48,31 @@ void kernel_main() {
     constexpr uint32_t segment_stride_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t block_w_tiles = get_compile_time_arg_val(5);
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr bool fill_row_in_common_args = get_compile_time_arg_val(6) != 0;
+    constexpr auto dst_args = TensorAccessorArgs<7>();
+
+    constexpr uint32_t segment_words = segment_bytes / sizeof(uint32_t);
+    constexpr uint32_t fill_words = fill_row_in_common_args ? segment_words : 1;
 
     static_assert(segment_bytes % sizeof(uint32_t) == 0, "segment must hold whole 32-bit elements");
     static_assert(segment_bytes <= NOC_MAX_BURST_SIZE, "a one-packet write cannot exceed one burst");
     static_assert(block_w_tiles > 0, "block_w_tiles must be positive");
 
-    // fill_bits is a common runtime arg, never a CT arg: the cached program must take a new
-    // value on every call.
-    const uint32_t dst_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t fill_bits = get_common_arg_val<uint32_t>(1);
+    // e is a common runtime arg, never a CT arg: the cached program must take a new value on
+    // every call. Layout: fill_words copies of e, then dst_addr.
+    const uint32_t dst_addr = get_common_arg_val<uint32_t>(fill_words);
     const uint32_t start_tile = get_arg_val<uint32_t>(0);
     const uint32_t core_w_tiles = get_arg_val<uint32_t>(1);
 
     uint32_t row_addr;
-    {
+    if constexpr (fill_row_in_common_args) {
+        // Blackhole DRAM writes need source and destination congruent mod 16; every segment
+        // starts 16-B aligned in its page, and the common-arg base is L1-aligned.
+        row_addr = get_common_arg_addr(0);
+        ASSERT((row_addr & 0xF) == 0);
+    } else {
         DeviceZoneScopedN("G6FILL-BUILD-ROW");
-        row_addr = build_fill_row(cb_fill_row, segment_bytes / sizeof(uint32_t), fill_bits);
+        row_addr = build_fill_row(cb_fill_row, segment_words, get_common_arg_val<uint32_t>(0));
     }
 
     {

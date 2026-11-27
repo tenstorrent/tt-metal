@@ -218,7 +218,12 @@ def fill_bits(dtype, fill_value) -> int:
 
 
 def _plan(tensor):
-    return _pd.make_plan(tensor, max_fill_cores=_pd.MAX_FILL_CORES, block_w_tiles=_pd.BLOCK_W_TILES)
+    return _pd.make_plan(
+        tensor,
+        max_fill_cores=_pd.MAX_FILL_CORES,
+        block_w_tiles=_pd.BLOCK_W_TILES,
+        fill_row_source=_pd.FILL_ROW_SOURCE,
+    )
 
 
 def g6_fill_plan(input_tensor) -> dict:
@@ -231,6 +236,7 @@ def g6_fill_plan(input_tensor) -> dict:
         "core_ranges": [((r.start.x, r.start.y), (r.end.x, r.end.y)) for r in plan.all_cores.ranges()],
         "tiles_per_core": {(core.x, core.y): n for core, _, n in assignment},
         "block_w_tiles": plan.block_w_tiles,
+        "fill_row_source": plan.fill_row_source,
         "segment_bytes": plan.segment_bytes,
         "segments_per_tile": plan.segments_per_tile,
         "roles": {(core.x, core.y): "fill_writer" for core, _, _ in assignment},
@@ -249,6 +255,7 @@ def _cache_key(tensor):
         str(tensor.memory_config()),
         _pd.MAX_FILL_CORES,
         _pd.BLOCK_W_TILES,
+        _pd.FILL_ROW_SOURCE,
     )
 
 
@@ -256,7 +263,8 @@ def _cached_descriptor(output_tensor):
     key = _cache_key(output_tensor)
     entry = _DESCRIPTOR_CACHE.get(key)
     if entry is None:
-        entry = _pd.create_program_descriptor(output_tensor, _plan(output_tensor))
+        plan = _plan(output_tensor)
+        entry = (*_pd.create_program_descriptor(output_tensor, plan), plan)
         _DESCRIPTOR_CACHE[key] = entry
     return entry
 
@@ -268,7 +276,9 @@ def _cached_descriptor(output_tensor):
 
 def g6_fill(input_tensor, fill_value, *, output_tensor):
     validate(input_tensor, fill_value, output_tensor)
-    descriptor, writer = _cached_descriptor(output_tensor)
-    _pd.set_call_args(descriptor, writer, output_tensor.buffer_address(), fill_bits(output_tensor.dtype, fill_value))
+    descriptor, writer, plan = _cached_descriptor(output_tensor)
+    _pd.set_call_args(
+        descriptor, writer, plan, output_tensor.buffer_address(), fill_bits(output_tensor.dtype, fill_value)
+    )
     ttnn.generic_op([output_tensor], descriptor)
     return output_tensor

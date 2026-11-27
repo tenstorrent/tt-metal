@@ -11,3 +11,5 @@
 {"event":"fix_applied","detail":"fresh R1 implementation: op file + descriptor + single writer kernel (BRISC/NoC1), common RT args [dst_addr, fill_bits], w_tiles split over min(W, MAX_FILL_CORES) cores","ts":"2026-11-27T12:40:41-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T12:55:58-05:00"}
 {"event":"test_run","result":"pass","test":"test_g6_fill.py (--dev and plain) + eval/golden_tests/g6_fill","details":"12 passed / 2 xfailed (int32 RM, not in SUPPORTED); golden 16 passed / 3 xfailed","ts":"2026-11-27T12:59:32-05:00"}
+{"event":"perf_measurement","lamp":"grid_sync MAX_FILL_CORES","result":"full grid fastest: [512] 16c 560ns, 8c 586, 4c 670, 2c 881, 1c 1327; [207] 7c 500, 4c 560, 2c 660, 1c 823 (device kernel ns)","ts":"2026-11-27T13:04:42-05:00"}
+{"event":"perf_measurement","lamp":"fill_row_source","result":"common_args vs cb median kernel ns: 512 475/576, 256 442/524, 207 407/504, 196 403/526, 185 400/515; default switched to common_args, cb kept as live knob","ts":"2026-11-27T13:04:42-05:00"}

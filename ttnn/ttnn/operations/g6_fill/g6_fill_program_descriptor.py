@@ -25,14 +25,19 @@ MAX_FILL_CORES = None
 # BLOCK_W_TILES caps the tiles of one scatter block; None makes the block the core's whole
 # assignment, so every core runs exactly one block.
 BLOCK_W_TILES = None
+# Where the NoC source run of e lives. "common_args": e repeated once per segment word in the
+# common runtime args, which the dispatcher already writes to every core, so the program has
+# no CB and no build stage (about 100 ns less device kernel time on every production shape).
+# "cb": built by the writer in cb_fill_row.
+FILL_ROW_SOURCE = "common_args"
+FILL_ROW_SOURCES = ("cb", "common_args")
 # cb_fill_row holds a constant read by every write: one page is the whole live set.
 FILL_ROW_DEPTH = 1
 
 CB_FILL_ROW = 0
 
-# Common runtime-arg slots of the writer, patched on every call.
-COMMON_ARG_DST_ADDR = 0
-COMMON_ARG_FILL_BITS = 1
+# Common runtime args of the writer, patched on every call: fill_words copies of e from
+# index 0, whose address is L1-aligned, then dst_addr.
 
 _TILE_SHAPE = (32, 32)
 _FACE_SHAPE = (16, 16)
@@ -47,6 +52,8 @@ class FillPlan:
     all_cores: ttnn.CoreRangeSet
     core_groups: tuple  # ((CoreRangeSet, tiles_per_core), ...) in start-tile order
     block_w_tiles: int
+    fill_row_source: str
+    fill_words: int
     segment_bytes: int
     segments_per_tile: int
     segment_stride_bytes: int
@@ -57,11 +64,12 @@ def regime_of(tensor) -> str:
     return REGIME_TILE_ROW0 if tensor.layout == ttnn.TILE_LAYOUT else REGIME_RM_CHUNKS
 
 
-def make_plan(output_tensor, *, max_fill_cores=None, block_w_tiles=None) -> FillPlan:
+def make_plan(output_tensor, *, max_fill_cores=None, block_w_tiles=None, fill_row_source="common_args") -> FillPlan:
     """The core plan of one call; the descriptor build and g6_fill_plan both read it."""
     regime = regime_of(output_tensor)
     if regime != REGIME_TILE_ROW0:
         raise NotImplementedError(f"g6_fill: regime {regime} is not built")
+    assert fill_row_source in FILL_ROW_SOURCES, f"g6_fill: fill_row_source {fill_row_source!r}"
 
     tile_shape = tuple(output_tensor.tile.tile_shape)
     face_shape = tuple(output_tensor.tile.face_shape)
@@ -102,6 +110,8 @@ def make_plan(output_tensor, *, max_fill_cores=None, block_w_tiles=None) -> Fill
         all_cores=all_cores,
         core_groups=core_groups,
         block_w_tiles=block,
+        fill_row_source=fill_row_source,
+        fill_words=segment_bytes // element_bytes if fill_row_source == "common_args" else 1,
         segment_bytes=segment_bytes,
         segments_per_tile=segments_per_tile,
         segment_stride_bytes=segment_stride_bytes,
@@ -121,19 +131,28 @@ def core_assignment(plan: FillPlan):
     return assignment
 
 
+def common_args(plan: FillPlan, dst_addr: int, fill_bits: int) -> list:
+    return [fill_bits] * plan.fill_words + [dst_addr]
+
+
 def create_program_descriptor(output_tensor, plan: FillPlan):
     """Returns (ProgramDescriptor, writer KernelDescriptor); the caller patches the common args."""
-    cb_fill_row = ttnn.CBDescriptor(
-        total_size=FILL_ROW_DEPTH * plan.segment_bytes,
-        core_ranges=plan.all_cores,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(
-                buffer_index=CB_FILL_ROW,
-                data_format=output_tensor.dtype,
-                page_size=plan.segment_bytes,
+    fill_row_in_common_args = plan.fill_row_source == "common_args"
+    cbs = []
+    if not fill_row_in_common_args:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=FILL_ROW_DEPTH * plan.segment_bytes,
+                core_ranges=plan.all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_FILL_ROW,
+                        data_format=output_tensor.dtype,
+                        page_size=plan.segment_bytes,
+                    )
+                ],
             )
-        ],
-    )
+        )
 
     writer_ct_args = [
         CB_FILL_ROW,
@@ -142,6 +161,7 @@ def create_program_descriptor(output_tensor, plan: FillPlan):
         plan.segment_stride_bytes,
         plan.page_bytes,
         plan.block_w_tiles,
+        int(fill_row_in_common_args),
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
@@ -149,30 +169,24 @@ def create_program_descriptor(output_tensor, plan: FillPlan):
     for core, start_tile, core_w_tiles in core_assignment(plan):
         writer_rt_args[core.x][core.y] = [start_tile, core_w_tiles]
 
-    common_args = [0, 0]
-    common_args[COMMON_ARG_DST_ADDR] = output_tensor.buffer_address()
-
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_fill_writer.cpp"),
         core_ranges=plan.all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
-        common_runtime_args=common_args,
+        common_runtime_args=common_args(plan, output_tensor.buffer_address(), 0),
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    descriptor = ttnn.ProgramDescriptor(kernels=[writer], semaphores=[], cbs=[cb_fill_row])
+    descriptor = ttnn.ProgramDescriptor(kernels=[writer], semaphores=[], cbs=cbs)
     return descriptor, writer
 
 
-def set_call_args(descriptor, writer, dst_addr: int, fill_bits: int) -> None:
+def set_call_args(descriptor, writer, plan: FillPlan, dst_addr: int, fill_bits: int) -> None:
     """Patch the per-call values into the cached descriptor.
 
     ProgramDescriptor.kernels is a by-value property, so the patched KernelDescriptor has to be
     assigned back; mutating descriptor.kernels[0] would edit a temporary copy.
     """
-    args = [0, 0]
-    args[COMMON_ARG_DST_ADDR] = dst_addr
-    args[COMMON_ARG_FILL_BITS] = fill_bits
-    writer.common_runtime_args = args
+    writer.common_runtime_args = common_args(plan, dst_addr, fill_bits)
     descriptor.kernels = [writer]
