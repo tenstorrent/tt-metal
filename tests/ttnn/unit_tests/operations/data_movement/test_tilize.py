@@ -1436,6 +1436,38 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
     device.disable_and_clear_program_cache()
 
 
+def test_tilize_host_tensor_raises(expect_error):
+    torch_input_tensor = torch.ones((2, 3, 4, 4), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    with expect_error(RuntimeError, "tilize: input tensor must be on device"):
+        ttnn.tilize(input_tensor)
+
+
+_ARCH_RULE = re.compile(
+    r"On (Blackhole|Quasar), an? ``(\w+)`` input (must be in DRAM and )?needs a tile height of (\d+)( or more)?\."
+)
+
+
+def _docstring_arch_rule(dtype):
+    """The ttnn.tilize docstring's rule for ``dtype`` on this architecture, as (DRAM only, allowed tile height check).
+
+    The rules are sentences such as "On Blackhole, a ``UINT8`` input must be in DRAM and needs a tile height of 2 or
+    more." A dtype without a rule for this architecture gets (False, any height). A sentence for an architecture that
+    mentions tiles but doesn't match this form fails the test, so a reworded rule is caught here and not on the device.
+    """
+    doc = " ".join(ttnn.tilize.__doc__.split())
+    sentences = re.findall(r"On (?:Blackhole|Quasar), [^.]*\btile[^.]*\.", doc)
+    unreadable = [sentence for sentence in sentences if not _ARCH_RULE.fullmatch(sentence)]
+    assert not unreadable, f"the test can't read these architecture rules in the ttnn.tilize docstring: {unreadable}"
+    arch = "Blackhole" if is_blackhole() else "Quasar" if is_quasar() else None
+    for rule_arch, name, dram, height, or_more in _ARCH_RULE.findall(doc):
+        if rule_arch == arch and getattr(ttnn.DataType, name) == dtype:
+            height = int(height)
+            return bool(dram), (lambda h: h >= height) if or_more else (lambda h: h == height)
+    return False, lambda h: True
+
+
 def _docstring_tile_heights():
     """The tile heights the ``tile`` line of the ttnn.tilize docstring lists."""
     line = next(line for line in ttnn.tilize.__doc__.splitlines() if line.strip().startswith("tile ("))
