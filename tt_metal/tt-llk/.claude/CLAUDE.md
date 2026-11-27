@@ -81,7 +81,8 @@ We use lightweight Doxygen docstrings — high-signal, low-noise (`@brief`, `@pa
 2. **Compile-consumer**: `pytest --compile-consumer -x ./test_name.py` — runs compiled variants on hardware
 
 ### Key Concepts
-- `CHIP_ARCH` env var selects the target architecture (`blackhole`, `wormhole`, `quasar`)
+- Target architecture, first match: `CHIP_ARCH` if set; else the simulator's `soc_descriptor.yaml` when `--run-simulator` is on the command line or in `PYTEST_ADDOPTS` (this includes a `--compile-producer` step); else the card the harness runs on (UMD logical device 0); else that descriptor on a host with no card. The card wins over `TT_METAL_SIMULATOR` / `TT_UMD_SIMULATOR_PATH` unless `--run-simulator` is passed, so a producer on a card host still needs `CHIP_ARCH` or `--run-simulator` to target the simulator
+- `CHIP_ARCH` is not a way to retarget a run. A session that will touch a device fails at `pytest_configure` if `CHIP_ARCH` disagrees with the card (or, under `--run-simulator`, the descriptor) it is about to run on. Set it where nothing is there to answer: hardware-free runs, the cross-arch host tools, and `--compile-producer` for a simulator on a card host
 - Tests run from the `tests/` directory
 - Test isolation: tests can affect each other via HW state leaking between kernel reconfigurations (reconfig escapes)
 - Key files: `tests/python_tests/conftest.py`, `tests/python_tests/helpers/test_config.py`

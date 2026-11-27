@@ -448,12 +448,12 @@ fi
 #
 # We avoid --run-simulator here (it would load+init the ttsim .so just to
 # enumerate). Instead:
-#   * CHIP_ARCH=<arch> lets conftest import without probing for a real device
-#     (helpers.device runs get_all_cores() at import → get_chip_architecture(),
-#     which short-circuits on CHIP_ARCH instead of calling check_context()).
-#   * --compile-producer puts conftest in BuildMode.PRODUCE, which is the only
-#     mode that skips *both* check_context() calls in pytest_configure
-#     (override_gprs_used_by_tensix_dump and the device/simulator init block).
+#   * CHIP_ARCH=<arch> lets collection resolve the architecture without probing a
+#     card or a simulator descriptor (get_chip_architecture() returns CHIP_ARCH
+#     directly).
+#   * --compile-producer puts the plugin in BuildMode.PRODUCE, which skips device
+#     and simulator init in pytest_configure, including the check_context() call
+#     in override_gprs_used_by_tensix_dump.
 # --collect-only never executes a test, so producer mode compiles nothing. Note
 # that producer mode collapses runtime-only axes, so this is a stable compile
 # denominator, not necessarily the full runtime test count.
