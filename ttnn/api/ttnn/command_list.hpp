@@ -5,10 +5,12 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/experimental/command_list.hpp>
@@ -44,6 +46,10 @@ struct CmdListParamLayout {
 };
 
 using CmdListLayout = std::unordered_map<std::string, CmdListParamLayout>;
+
+// What the recorded ops' factories allocated for themselves (tensors, GlobalSemaphores), shared with their program
+// cache entries.
+using CmdListOpOwnedResources = std::vector<std::shared_ptr<const void>>;
 
 }  // namespace detail
 
@@ -85,11 +91,13 @@ public:
 
     // Adds one workload to the recording. binary_upload_cq_id is the command queue that writes its kernel binaries to
     // the device. Also records as TTNN command-list parameters the pushed binds that match `programs`: the
-    // workload's programs with their stored CmdListBindings. Commits nothing if the workload cannot be recorded.
+    // workload's programs with their stored CmdListBindings. Built lists keep `op_owned_resources` alive. Commits
+    // nothing if the workload cannot be recorded.
     void record(
         QueueId binary_upload_cq_id,
         tt::tt_metal::distributed::MeshWorkload& workload,
-        std::span<const device_operation::detail::CmdListProgramBindings> programs);
+        std::span<const device_operation::detail::CmdListProgramBindings> programs,
+        std::span<const std::shared_ptr<const void>> op_owned_resources);
 
     // The TTNN command-list parameter binds of the op calls in progress while recording, for push_cmd_list_binds and
     // pop_cmd_list_binds. Scopes nest; pop_binds(true) warns if a bind of the popped scope reached no recorded
@@ -114,17 +122,23 @@ private:
     std::vector<BindScope> bind_scopes_;
     std::vector<ActiveBind> binds_;  // the binds of every scope in bind_scopes_, in push order
     detail::CmdListLayout layout_;
+    // A set, so an op recorded many times on cache hits is held once.
+    std::unordered_set<std::shared_ptr<const void>> op_owned_resources_;
     // Numbers each recorded program in its Metal names, so two programs never share an encoding.
     std::size_t recorded_programs_ = 0;
 };
 
 // A replayable command list in device DRAM, bound to the command queue it was built for.
-// Lists record raw device addresses, not tensors. Replay reads and writes those addresses whether or not the tensors
-// are still allocated; what lives there is the caller's responsibility.
+// Lists record raw device addresses, not tensors. Until it is deallocated or destroyed, the list keeps alive only the
+// tensors and GlobalSemaphores an op's program factory allocated and cached with its program. Replay reads and writes
+// the addresses of every other tensor the recorded ops used whether or not it is still allocated; what lives there is
+// the caller's responsibility. That includes intermediates an op frees while recording, such as the tensor between the
+// two pads ttnn::pad records for a height-sharded input padded in both width and height.
 class CommandList {
 public:
     CommandList(CommandList&&) noexcept = default;
     CommandList& operator=(CommandList&&) noexcept = default;
+    ~CommandList();
 
     // Replays on the bound command queue.
     void enqueue(bool blocking = true, bool check_dram_overlap = false);
@@ -141,10 +155,15 @@ public:
 
 private:
     friend class CommandListBuilder;
-    CommandList(tt::tt_metal::experimental::CommandList metal_list, detail::CmdListLayout layout);
+    CommandList(
+        tt::tt_metal::experimental::CommandList metal_list,
+        detail::CmdListLayout layout,
+        detail::CmdListOpOwnedResources op_owned_resources);
 
     tt::tt_metal::experimental::CommandList metal_list_;
     detail::CmdListLayout layout_;
+    // Declared after metal_list_ so move-assignment drains the old list's replays before releasing its tensors.
+    detail::CmdListOpOwnedResources op_owned_resources_;
 };
 
 }  // namespace ttnn::command_list

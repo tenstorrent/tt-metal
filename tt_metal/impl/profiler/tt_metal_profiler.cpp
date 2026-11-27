@@ -2,15 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <core_descriptor.hpp>
-#include <device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include <host_api.hpp>
-#include <profiler.hpp>
-#include <mesh_workload.hpp>
-#include <mesh_command_queue.hpp>
-#include <tt_metal.hpp>
-#include "tt_metal_profiler.hpp"
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include "impl/profiler/profiler.hpp"
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -33,26 +34,26 @@
 #include <queue>
 
 #include <tt_stl/assert.hpp>
-#include "buffer.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "hostdev/profiler_common.h"
 #include "context/context_types.hpp"
 #include "context/metal_context.hpp"
 #include "context/metal_env_accessor.hpp"
-#include "kernel_types.hpp"
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "mesh_device.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
-#include "profiler_optional_metadata.hpp"
+#include "tt-metalium/observability/profiler/profiler_optional_metadata.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
-#include "profiler_types.hpp"
+#include "impl/profiler/profiler_types.hpp"
 #include "profiler_state_manager.hpp"
-#include "program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include "program/program_impl.hpp"
 #include "program/slow_dispatch.hpp"
 #include "kernels/kernel.hpp"
@@ -60,7 +61,7 @@
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
-#include <distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>

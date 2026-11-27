@@ -50,21 +50,21 @@ def manage_config(name: str, value):
     global CONFIG
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)
-    logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
+    logger.trace(f"Set ttnn.CONFIG.{name} to {value}")
     try:
         yield
     finally:
         # Restore even when the block raises, or the value leaks into everything that runs afterwards.
         try:
             setattr(CONFIG, name, original_value)
-            logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+            logger.trace(f"Restored ttnn.CONFIG.{name} to {original_value}")
         except Exception as e:
             # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
             # afuller
             if original_value is None:
                 try:
                     setattr(CONFIG, name, "")
-                    logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
+                    logger.trace(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
                 except Exception as e2:
                     logger.error(
                         f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)"
@@ -499,8 +499,8 @@ ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwar
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: ttnn.subtract(self, *args, **kwargs)
 # Routed through subtract's scalar-first overload rather than ttnn.rsub: same op, one device
-# path shared with subtract(scalar, tensor), and RSUB additionally has no SFPU kernel on Quasar
-# and rejects a non-bfloat16 output under fast_and_approximate_mode=false.
+# path shared with subtract(scalar, tensor), and RSUB additionally rejects a non-bfloat16 output
+# under fast_and_approximate_mode=false.
 ttnn.Tensor.__rsub__ = lambda self, other, *args, **kwargs: ttnn.subtract(other, self, *args, **kwargs)
 ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
 ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
@@ -634,6 +634,12 @@ from ttnn._ttnn.operations.experimental import SparseKvPushPart, SPARSE_KV_PUSH_
 experimental.SparseKvPushPart = SparseKvPushPart
 experimental.SPARSE_KV_PUSH_CORES_PER_LINK = SPARSE_KV_PUSH_CORES_PER_LINK
 
+# A generic op compiled outside the program cache (compile_generic_op), and the kernel config buffer it can run from
+from ttnn._ttnn.operations.experimental import CompiledProgram, KernelConfigBuffer
+
+experimental.CompiledProgram = CompiledProgram
+experimental.KernelConfigBuffer = KernelConfigBuffer
+
 # PrefetcherPipe (Metal 2.0 durable cross-program remote DFB). Experimental-only surface.
 from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe
 
@@ -725,6 +731,11 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
         root_dir = this_dir
 
     SetRootDir(str(root_dir))
+
+# The matmul config model's default path, and its download when ttnn.CONFIG.matmul_model_config is on
+from ttnn import matmul_model as _matmul_model
+
+_matmul_model.on_import(os.environ.get("TT_METAL_RUNTIME_ROOT") or root_dir)
 
 import atexit as _atexit
 

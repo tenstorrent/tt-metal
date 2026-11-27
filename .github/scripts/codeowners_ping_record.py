@@ -40,6 +40,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 BOT_MARKER = "CodeOwners-Workflow-Bot"
+BOT_LOGINS = ("github-actions[bot]", "tenstorrent-github-bot")
 BLOCK_OPEN = "<!-- codeowners-ping-record"
 BLOCK_CLOSE = "-->"
 BLOCK_RE = re.compile(re.escape(BLOCK_OPEN) + r"\n(.*?)\n" + re.escape(BLOCK_CLOSE), re.DOTALL)
@@ -130,7 +131,7 @@ def github(method: str, url: str, token: str, payload: dict | None = None):
 
 
 def newest_bot_comment(repo: str, pr_number: str, token: str) -> dict | None:
-    """Same pick as the summary step: newest comment containing the marker."""
+    """Same pick as the summary step: newest comment with the marker, posted by the workflow or the old PAT user."""
     comments: list[dict] = []
     for page in range(1, 11):
         batch = github(
@@ -141,7 +142,9 @@ def newest_bot_comment(repo: str, pr_number: str, token: str) -> dict | None:
         comments.extend(batch)
         if len(batch) < 100:
             break
-    ours = [c for c in comments if BOT_MARKER in (c.get("body") or "")]
+    ours = [
+        c for c in comments if BOT_MARKER in (c.get("body") or "") and (c.get("user") or {}).get("login") in BOT_LOGINS
+    ]
     return max(ours, key=lambda c: c.get("created_at") or "") if ours else None
 
 

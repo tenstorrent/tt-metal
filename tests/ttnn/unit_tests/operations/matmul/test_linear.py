@@ -1254,6 +1254,32 @@ def test_linear_broadcast_bias_ranks(device, m, k, n, bias_rank):
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
+@pytest.mark.parametrize("preallocated", [False, True])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("bias_shape", [[1, 1], [1, 64], [64], [1], [1, 1, 64]])
+@pytest.mark.parametrize("a_shape", [[3, 2, 2, 2, 2, 64, 64], [2, 3, 2, 2, 2, 2, 64, 64]])
+def test_linear_unbatched_bias_rank_above_6(device, a_shape, bias_shape, memory_config, preallocated):
+    """An unbatched bias on a rank 7-8 output; the bias add broadcasts only up to rank 6 unless batch dims fold."""
+    torch.manual_seed(0)
+    torch_input = torch.randn(a_shape, dtype=torch.bfloat16)
+    torch_weight = torch.randn((64, 64), dtype=torch.bfloat16)
+    torch_bias = torch.randn(bias_shape, dtype=torch.bfloat16)
+    torch_output = torch_input @ torch_weight + torch_bias
+
+    def to_device(tensor):
+        return ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+
+    output_tensor = to_device(torch.zeros(torch_output.shape, dtype=torch.bfloat16)) if preallocated else None
+    result = ttnn.linear(
+        to_device(torch_input),
+        to_device(torch_weight),
+        bias=to_device(torch_bias),
+        memory_config=memory_config,
+        optional_output_tensor=output_tensor,
+    )
+    assert_with_pcc(torch_output, ttnn.to_torch(output_tensor if preallocated else result), pcc=0.999)
+
+
 def _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_h):
     if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, True) and is_llk_assert_enabled():
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")

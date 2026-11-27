@@ -139,15 +139,18 @@ struct KernelCrtaLayout {
 };
 
 // Metal 2.0: layout of each node's runtime-args (RTA) buffer, the per-node counterpart of KernelCrtaLayout:
-//   [ user-named RTAs | per-node TensorBinding section | vararg RTAs ]
+//   [ user-named RTAs | per-node TensorBinding section | fabric connection section | vararg RTAs ]
 // Section 2 holds one base-address word per per-node tensor binding.
+// Section 3 holds the words of each fabric connection binding (see FabricConnectionBindingHandle).
 struct KernelRtaLayout {
     // Section 1 size, in words. The user-named RTAs: one word per scalar, then the RTA arrays
     // (see KernelArrayArgs), in declaration order.
     uint32_t num_named_words = 0;
     // Section 2 size, in words. Equals the number of per-node tensor bindings.
     uint32_t binding_section_words = 0;
-    // Start offset of section 3 (varargs), in words.
+    // Section 3 size, in words. Equals the sum over fabric connection bindings of their words.
+    uint32_t fabric_connection_section_words = 0;
+    // Start offset of section 4 (varargs), in words.
     uint32_t vararg_section_offset = 0;
 };
 
@@ -297,6 +300,14 @@ public:
     virtual void process_global_semaphore_binding_handles(
         // NOLINTNEXTLINE(performance-unnecessary-value-param)
         std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)>) const {}
+
+    // Fabric connection binding callback (Metal 2.0):
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `fabric::` namespace
+    //  - rta_word: word index, within each node's RTA buffer, of the binding's first word
+    //  - num_targets: the number of targets (connection slots) of the bound FabricConnectionsSpec
+    virtual void process_fabric_connection_binding_handles(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param)
+        std::function<void(const std::string& accessor_name, uint32_t rta_word, uint32_t num_targets)>) const {}
 
     // PrefetcherPipe binding callback (Metal 2.0):
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
