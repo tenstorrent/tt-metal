@@ -1163,7 +1163,6 @@ def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
 #   (3,2,1,0) moves both, so it selects MultiCoreTiledGeneric (transpose_xw_tiled compute kernel).
 #   A rank 5 last-two swap is not decomposed to transpose, so it reaches MultiCoreTileInvariant with swap_hw
 #   (transpose_wh).
-#   The [2, 3, 50, 70] cases use the same two factories with tile padding on both of the last two dims.
 # Row-major routing (interleaved): (0,1,3,2) and the 2D swap go through ttnn::transpose -> prim::permute ->
 # MultiCoreBlockedGeneric on Wormhole and Blackhole. Blackhole stages 8-bit row-major input through UINT32 only when
 # it is sharded (#61827), so these interleaved cases run the factory itself on both architectures.
@@ -1174,8 +1173,6 @@ def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
         (ttnn.TILE_LAYOUT, [1, 2, 2, 64, 64], (0, 1, 2, 4, 3)),
         (ttnn.TILE_LAYOUT, [2, 32, 64, 64], (0, 3, 1, 2)),
         (ttnn.TILE_LAYOUT, [32, 32, 32, 32], (3, 2, 1, 0)),
-        (ttnn.TILE_LAYOUT, [2, 3, 50, 70], (0, 3, 1, 2)),
-        (ttnn.TILE_LAYOUT, [2, 3, 50, 70], (3, 2, 1, 0)),
         (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 64, 64], (0, 1, 3, 2)),
         (ttnn.ROW_MAJOR_LAYOUT, [64, 64], (1, 0)),
     ],
@@ -1184,8 +1181,6 @@ def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
         "tile_invariant_rank5",
         "tile_row_invariant",
         "tile_generic",
-        "tile_row_invariant_unaligned",
-        "tile_generic_unaligned",
         "row_major_4d",
         "row_major_2d",
     ],

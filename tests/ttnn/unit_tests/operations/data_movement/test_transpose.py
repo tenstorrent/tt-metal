@@ -51,12 +51,11 @@ def test_transpose_block_float_tile(device, shape, dims, dtype):
 #   tile_interleaved, tile_interleaved_unaligned: TransposeWHProgramFactory (Wormhole and Blackhole).
 #   tile_height_sharded: TransposeWHShardedProgramFactory (Wormhole and Blackhole).
 #   row_major_interleaved: ttnn::transpose -> prim::permute -> MultiCoreBlockedGeneric (Wormhole and Blackhole).
-#   row_major_height_sharded: TransposeWHShardedRMProgramFactory writing the output shard directly on Wormhole.
-#   row_major_height_sharded_staged: the same factory with its output-staging path on Wormhole; 288 rows are 9 tile
-#     rows, and the factory stages its output only when it has more than 8.
-# On Blackhole, sharded 8-bit row-major input is moved to interleaved L1 first (pack_untilize_dest truncation in the
-# sharded RM factory), so the two sharded row-major cases reach MultiCoreBlockedGeneric there, and only Wormhole
-# exercises TransposeWHShardedRMProgramFactory.
+#   row_major_height_sharded, row_major_height_sharded_staged: Wormhole reaches TransposeWHShardedRMProgramFactory;
+#     288 rows are 9 tile rows, and the factory stages its output only when it has more than 8, so the staged case
+#     covers that path. Blackhole moves sharded 8-bit row-major input to interleaved L1 first (pack_untilize_dest
+#     truncation in the sharded RM factory) and reaches prim::permute MultiCoreBlockedGeneric. Both architectures
+#     therefore run a factory that needed the fix.
 @pytest.mark.parametrize(
     "shape, layout, num_shard_cores",
     [
