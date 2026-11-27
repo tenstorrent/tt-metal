@@ -105,9 +105,7 @@ inline void wait_subordinate_eriscs() {
 #endif
 }
 
-// Copy from init scratch space to local memory
 inline void initialize_local_memory() {
-    uint32_t* data_image = (uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
     extern uint32_t __ldm_data_start[];
     extern uint32_t __ldm_data_end[];
     l1_to_local_mem_copy(__ldm_data_start, data_image, l1_word_count_from_range(__ldm_data_start, __ldm_data_end));

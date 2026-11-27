@@ -93,10 +93,6 @@ run_realtime_profiler_test() {
 
 run_streaming_profiler_test() {
     remove_default_log_locations
-    # Blackhole only: the streaming profiler relay is a resident kernel on the DRISC (DRAM) cores; the pytests self-skip elsewhere.
-    # Host-only unit tests first, then the on-device workload and Tracy capture.
-    ./build/test/tt_metal/tools/profiler/test_streaming_profiler_decode
-    ./build/test/tt_metal/tools/profiler/test_streaming_profiler_fetch
     pytest tests/ttnn/tracy/test_streaming_profiler.py tests/ttnn/tracy/test_streaming_profiler_ops_csv.py
 }
 

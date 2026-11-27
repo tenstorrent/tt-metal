@@ -83,8 +83,6 @@ KernelHandle CreateKernelFromString(
 struct DramConfig {
     // The kernel can only initiate NOC transactions on a NIU firmware left in stream mode. NOC0
     // qualifies on every DRAM core; NOC1 only on cores that are no DRAM view's NOC1 endpoint. A
-    // kernel that drives both NOCs regardless of this field (the streaming profiler's relay reads on
-    // the one it does not write on) has to pick its core off
     // metal_SocDescriptor::get_dram_endpoint_noc_mask. See tt_metal/hw/inc/experimental/drisc_mode.h.
     NOC noc = NOC::NOC_0;
     std::vector<uint32_t> compile_args;
@@ -373,9 +371,6 @@ public:
     uint64_t compute_hash() const;
 
     const std::string& get_full_kernel_name() const override;
-    std::string get_observability_event_src_id() const override {
-        return this->kernel_src_.observability_event_src_id();
-    }
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(

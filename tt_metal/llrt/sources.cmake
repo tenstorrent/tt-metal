@@ -8,7 +8,6 @@ set(LLRT_SRC
     tt_cluster.cpp
     tt_elffile.cpp
     tt_memory.cpp
-    observability_event_meta.cpp
     hal.cpp
     tunnels_from_mmio_device.cpp
     metal_soc_descriptor.cpp

@@ -144,8 +144,6 @@ enum class EnvVarID {
     TT_METAL_STREAMING_PROFILER_SYNC_EVENTS,       // Enable sync events profiling
     TT_METAL_STREAMING_PROFILER_SYNC_CHECK,        // Measure the clock sync's chip-to-chip accuracy
     TT_METAL_STREAMING_PROFILER_INLINE_ENABLED,    // Enable zone markers inlining
-    TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
-    TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
     TT_METAL_STREAMING_PROFILER_OPS_CSV,           // Streaming profiler ops CSV path
     TT_METAL_STREAMING_PROFILER_ZONE_CSV,          // Streaming profiler zone CSV path
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
@@ -1093,8 +1091,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER
-        // Boots the streaming profiler at MeshDevice bring-up. Records go to registered callbacks
-        // (RegisterCallback and the TT_METAL_STREAMING_PROFILER_*_CSV writers); add
         // TT_METAL_STREAMING_PROFILER_TRACY=1 for the Tracy sink. Needs a Tracy-enabled build and
         // TT_METAL_DEVICE_PROFILER off.
 
@@ -1120,9 +1116,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER_SYNC_CHECK
-        // Measures the chip-to-chip accuracy of the clock sync, logs it each time a profiled mesh device closes and
-        // plots it in Tracy. Uses one more idle Ethernet core per chip on top of the two the streaming profiler always
-        // uses, and costs fabric bandwidth. Requires TT_METAL_STREAMING_PROFILER.
         // Default: false
         // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_CHECK=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_CHECK:
@@ -1149,8 +1142,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER_DRAM_MB
-        // Per-relay device DRAM buffer, in MiB. Raise it to absorb more host-side backpressure on the device;
-        // 0 sends profiling data straight to the host. Capped at STREAMING_PROFILER_SPOOL_MB_MAX.
         // Default: STREAMING_PROFILER_SPOOL_MB_DEFAULT
         // Usage: export TT_METAL_STREAMING_PROFILER_DRAM_MB=256
         case EnvVarID::TT_METAL_STREAMING_PROFILER_DRAM_MB:
@@ -1159,8 +1150,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER_FIFO_MB
-        // Host FIFO per D2H socket, in MiB. Raise it to let a slow callback fall further behind before it loses
-        // profiling data; it costs this much pinned host memory per relay. A power of two, at most
         // STREAMING_PROFILER_FIFO_MB_MAX.
         // Default: STREAMING_PROFILER_FIFO_MB_DEFAULT
         // Usage: export TT_METAL_STREAMING_PROFILER_FIFO_MB=1024

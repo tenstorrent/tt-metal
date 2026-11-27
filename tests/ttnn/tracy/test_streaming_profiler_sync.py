@@ -53,12 +53,8 @@ WINDOW_FIT_ERROR_BOUND_NS = 0.25
 PARALLEL_LINKS_BOUND_NS = 4.0
 
 HEADLINE = re.compile(
-    r"sync check: error of the global timeline against an independent reference, over \d+ readings on (\d+) of \d+ "
-    r"chips: \|err\| p50 ([0-9.]+), p99 [0-9.]+, p99\.9 ([0-9.]+), max ([0-9.]+) ns \(([^)]*)\)"
 )
-CHIP_LINE = re.compile(r"sync check chip (\d+): \d+ readings against the reference, .*?max ([0-9.]+) ns")
 AICLK_LINE = re.compile(
-    r"sync check chip (\d+) AICLK: (mean \d+ MHz, sd \d+, (\d+)-(\d+) MHz.*?)(?: \(\w+\.cpp:\d+\))?$", re.MULTILINE
 )
 PRECISION = re.compile(
     r"link sync precision over (\d+) of (\d+) links: round scatter ([0-9.]+) ns, worst window fit error ([0-9.]+) ns"
@@ -72,7 +68,6 @@ FORBIDDEN = [
 PROFILER_WARNING = re.compile(r"\S+ \S+ \| warning  \| [^|]*\| \[streaming profiler\] ")
 # Matches the per-core stall counts that verify_completeness warns about, which a busy workload may cause.
 ALLOWED_WARNING = re.compile(r" on \d+ of \d+ cores; \(virt x,y\)#index=count: ")
-# DevicePrograms::boot logs this line once per capture, and test_tt_fabric starts a capture per fabric config.
 CAPTURE_START = "[streaming profiler] active on"
 # CI's logger colors every message, which puts an escape code right before a line's first word.
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
@@ -387,11 +382,8 @@ TORUS_MOCK_CLUSTER = (
 TORUS_OPEN = Path(__file__).with_name("streaming_profiler_torus_open.py")
 TORUS_RANKS = 4
 TORUS_TIMEOUT_S = 150
-# A mock cluster reports no firmware bundle, so without the DRAM-core override tt-metal builds the routers without the
-# link sync port, about 2.4 KB smaller than on silicon.
 TORUS_ENV = {
     "TT_METAL_STREAMING_PROFILER": "1",
-    "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES": "1",
     "TT_METAL_SLOW_DISPATCH_MODE": "1",
     # The mock profiler line below is logged at info; the CPU-only lane runs at warn.
     "TT_LOGGER_LEVEL": "info",

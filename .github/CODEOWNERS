@@ -156,7 +156,6 @@ tt_metal/hal.cpp @ruizhangTT
 tt_metal/hostdevcommon/ @tenstorrent/metalium-runtime # this should go away
 tt_metal/hostdevcommon/**/CMakeLists.txt @tenstorrent/metalium-runtime @tenstorrent/metalium-developers-infra # this should go away
 tt_metal/hostdevcommon/api/hostdevcommon/dispatch_telemetry_types.hpp @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance @tenstorrent/metalium-runtime
-tt_metal/hw/inc/hostdev/observability_event_descriptor.h @mo-tenstorrent @yusufbashiTT
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT
 tt_metal/hw/ckernels/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT
 tt_metal/hw/ckernels/*/metal/llk_api/experimental/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT @atatuzunerTT
@@ -173,7 +172,6 @@ tt_metal/hw/inc/internal/profiler/noc_event_profiler.hpp @sohaibnadeemTT
 tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
 tt_metal/hw/inc/hostdev/fabric_routing_path_interface.h @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
 tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h @mo-tenstorrent @yusufbashiTT @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT
-tt_metal/hw/inc/hostdev/streaming_profiler_common.h @mo-tenstorrent @yusufbashiTT
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/internal/ethernet/eth_ptp.hpp @mo-tenstorrent @yusufbashiTT @aliuTT @ubcheema
 tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
@@ -230,7 +228,6 @@ tt_metal/impl/trace/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runt
 tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @ruizhangTT
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhangTT @tenstorrent/metalium-developers-infra
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho
-tt_metal/llrt/observability_event_meta.* @mo-tenstorrent @yusufbashiTT
 tt_metal/llrt/**/CMakeLists.txt @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho @tenstorrent/metalium-developers-infra
 tt_metal/llrt/rtoptions.cpp @msudumbrekar-TT @jbaumanTT @abhullar-tt
 tt_metal/llrt/rtoptions.hpp @msudumbrekar-TT @jbaumanTT @abhullar-tt

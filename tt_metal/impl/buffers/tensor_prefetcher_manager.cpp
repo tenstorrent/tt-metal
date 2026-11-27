@@ -2063,11 +2063,6 @@ namespace tt::tt_metal::experimental {
 
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device) {
     auto& env = mesh_device.impl().metal_env();
-    // The streaming profiler owns the same DRISCs. A bank's senders are its free (non-endpoint)
-    // subchannel and its NOC1 worker endpoint (dram_sender_logical_cores), and a streaming-profiler
-    // relay takes that same free subchannel with BOTH of its NIUs in stream mode
-    // (set_drisc_niu_stream_mode). Two resident kernels cannot share one DRISC L1, so the profiler
-    // wins and the prefetcher reports unsupported rather than racing it for the core.
     if (env.get_rtoptions().get_streaming_profiler_enabled()) {
         return false;
     }
