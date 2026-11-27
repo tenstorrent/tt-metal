@@ -1,14 +1,15 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_reshard.
+"""Acceptance test for g6_reshard (immutable spec for the implementer).
 
-g6_reshard(x, memory_config) returns a new BLOCK_SHARDED L1 tensor in the placement memory_config
-names whose every tile is x's tile at the same tile index, moved as stored. The production shape
-is the only shape (BB-22); the cases vary placements instead: P is the production pair, I0 / I3 /
-I5 vary the input placement (identity, orientation, grid off the origin), O1 the output placement
-(off the origin, COL_MAJOR, cut-short last block column). Graded bit-exactly: a PCC stays near 1.0
-when a few blocks land on the wrong core.
+The production shape is the only shape (BB-22). What varies is the pair of
+placements: the production pair and the cases the spec's placement rule
+requires (identity, transposed orientation, input grid off the origin,
+another output placement with a COL_MAJOR grid off the origin and a cut-short
+last block column). Grading is bit equality: the op moves stored tiles and
+computes nothing, so helpers.TOLERANCES for this op is ("exact", None).
 """
 
 import pytest
@@ -17,79 +18,90 @@ import ttnn
 
 from ttnn.operations.g6_reshard import g6_reshard
 
-SHAPE = (1, 1, 2048, 1024)
-DTYPE = ttnn.bfloat8_b
-LAYOUT = ttnn.TILE_LAYOUT
-ROW_MAJOR = ttnn.ShardOrientation.ROW_MAJOR
-COL_MAJOR = ttnn.ShardOrientation.COL_MAJOR
 
-# name: (input grid, input shard, input orientation, output grid, output shard, output orientation)
+SHAPE = (1, 1, 2048, 1024)
+SEED = 42
+
+_ORIENTATION = {
+    "row_major": ttnn.ShardOrientation.ROW_MAJOR,
+    "col_major": ttnn.ShardOrientation.COL_MAJOR,
+}
+
+# name: (in grid, in shard, in orientation, out grid, out shard, out orientation)
 PLACEMENTS = {
-    "P": (((0, 0), (10, 9)), (224, 96), ROW_MAJOR, ((0, 0), (7, 7)), (256, 128), ROW_MAJOR),
-    "I0": (((0, 0), (7, 7)), (256, 128), ROW_MAJOR, ((0, 0), (7, 7)), (256, 128), ROW_MAJOR),
-    "I3": (((0, 0), (7, 7)), (256, 128), COL_MAJOR, ((0, 0), (7, 7)), (256, 128), ROW_MAJOR),
-    "I5": (((2, 1), (9, 8)), (256, 128), ROW_MAJOR, ((0, 0), (7, 7)), (256, 128), ROW_MAJOR),
-    "O1": (((0, 0), (10, 9)), (224, 96), ROW_MAJOR, ((1, 0), (8, 6)), (256, 160), COL_MAJOR),
+    # Production pair: input last block row 32 high, last block column 64 wide.
+    "P": (((0, 0), (10, 9)), (224, 96), "row_major", ((0, 0), (7, 7)), (256, 128), "row_major"),
+    # Same placement on both sides: out must still be a new tensor.
+    "I0": (((0, 0), (7, 7)), (256, 128), "row_major", ((0, 0), (7, 7)), (256, 128), "row_major"),
+    # Differs from I0 only in the input orientation.
+    "I3": (((0, 0), (7, 7)), (256, 128), "col_major", ((0, 0), (7, 7)), (256, 128), "row_major"),
+    # Input grid off core (0, 0): no tile stays on its core.
+    "I5": (((2, 1), (9, 8)), (256, 128), "row_major", ((0, 0), (7, 7)), (256, 128), "row_major"),
+    # Input as P; out COL_MAJOR off the origin, last block column 64 wide.
+    "O1": (((0, 0), (10, 9)), (224, 96), "row_major", ((1, 0), (8, 6)), (256, 160), "col_major"),
 }
 
 
-def pytorch_g6_reshard(x):
-    """Reference: the values of x, bit for bit. The placement decides where they live, not what they are."""
-    return x.clone(memory_format=torch.contiguous_format)
+def pytorch_reference(input_tensor):
+    """out holds input_tensor's values bit for bit; the placement never enters the values."""
+    return input_tensor.clone(memory_format=torch.contiguous_format)
 
 
-def _core_range_set(*grids):
-    return ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for (x0, y0), (x1, y1) in grids}
-    )
+def _core_range_set(grid):
+    (x0, y0), (x1, y1) = grid
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))})
 
 
-def _sharded(grid, shard, orientation, *, layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer=ttnn.BufferType.L1):
-    spec = ttnn.ShardSpec(_core_range_set(grid), list(shard), orientation)
-    return ttnn.MemoryConfig(layout, buffer, spec)
+def _block_sharded(grid, shard, orientation, buffer_type=ttnn.BufferType.L1):
+    spec = ttnn.ShardSpec(_core_range_set(grid), [int(shard[0]), int(shard[1])], _ORIENTATION[orientation])
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type, spec)
 
 
 def _require_grid(device, *grids):
-    # A rectangle beyond the worker grid fails instead of skipping: the production case must not
-    # pass vacuously on a smaller part.
+    # Fail rather than skip: the production pair must not pass vacuously on a smaller part.
     size = device.compute_with_storage_grid_size()
-    for _, (x1, y1) in grids:
+    for (_, _), (x1, y1) in grids:
         assert x1 < size.x and y1 < size.y, (
             f"core rectangle ending at ({x1}, {y1}) needs a worker grid of at least "
             f"{x1 + 1}x{y1 + 1}; this device has {size.x}x{size.y}"
         )
 
 
-def _random_input(shape=SHAPE, seed=42):
-    torch.manual_seed(seed)
-    return torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
-
-
-def _place_input(device, name):
-    """x in the input placement of `name`, x read back (the reference values), and out's config."""
-    in_grid, in_shard, in_orientation, out_grid, out_shard, out_orientation = PLACEMENTS[name]
+def _place_input(device, case, *, shape=SHAPE):
+    in_grid, in_shard, in_orientation, out_grid, out_shard, out_orientation = PLACEMENTS[case]
     _require_grid(device, in_grid, out_grid)
+    torch.manual_seed(SEED)
+    torch_input = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
     x = ttnn.from_torch(
-        _random_input(),
-        dtype=DTYPE,
-        layout=LAYOUT,
+        torch_input,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=_sharded(in_grid, in_shard, in_orientation),
+        memory_config=_block_sharded(in_grid, in_shard, in_orientation),
     )
-    return x, ttnn.to_torch(x), _sharded(out_grid, out_shard, out_orientation)
+    # x read back is the reference input: bfloat8_b quantization happened on the way in.
+    return x, ttnn.to_torch(x), _block_sharded(out_grid, out_shard, out_orientation)
 
 
-def _assert_bit_exact(actual, expected, what):
-    # Integer views keep -0.0 apart from +0.0 and NaN payloads apart.
+# Integer views compare stored bits, so -0.0 and +0.0 (or two NaN payloads) never pass for each other.
+_BITS = {torch.bfloat16: torch.int16, torch.float16: torch.int16, torch.float32: torch.int32}
+
+
+def _assert_bits_equal(actual, expected, what):
     assert actual.dtype == expected.dtype, f"{what}: readback dtype {actual.dtype}, expected {expected.dtype}"
-    assert list(actual.shape) == list(expected.shape), f"{what}: shape {list(actual.shape)}"
-    differ = actual.contiguous().view(torch.int16) != expected.contiguous().view(torch.int16)
+    assert list(actual.shape) == list(
+        expected.shape
+    ), f"{what}: shape {list(actual.shape)}, expected {list(expected.shape)}"
+    bits = _BITS[expected.dtype]
+    differ = actual.contiguous().view(bits) != expected.contiguous().view(bits)
     if bool(differ.any()):
         width = expected.shape[-1]
-        tiles = differ.reshape(-1, 32, width // 32, 32).any(dim=3).any(dim=1).nonzero().tolist()
-        raise AssertionError(
+        flat = differ.reshape(-1, width)
+        tiles = flat.reshape(flat.shape[0] // 32, 32, width // 32, 32).any(dim=3).any(dim=1)
+        bad = [tuple(t) for t in tiles.nonzero().tolist()[:8]]
+        pytest.fail(
             f"{what}: {int(differ.sum())} of {differ.numel()} elements differ; "
-            f"{len(tiles)} tiles, first (tile row, tile col): {[tuple(t) for t in tiles[:8]]}"
+            f"{int(tiles.sum())} tiles, first (tile row, tile col): {bad}"
         )
 
 
@@ -97,135 +109,158 @@ def _rectangles(core_range_set):
     return sorted(((r.start.x, r.start.y), (r.end.x, r.end.y)) for r in core_range_set.ranges())
 
 
-def _assert_placement(out, out_cfg):
-    assert list(out.shape) == list(SHAPE)
-    assert out.dtype == DTYPE
-    assert out.layout == LAYOUT
+def _cores(core_range_set):
+    return {
+        (x, y)
+        for (x0, y0), (x1, y1) in _rectangles(core_range_set)
+        for x in range(x0, x1 + 1)
+        for y in range(y0, y1 + 1)
+    }
+
+
+def _assert_placement(out, out_cfg, x):
+    assert list(out.shape) == list(x.shape)
+    assert out.dtype == x.dtype
+    assert out.layout == x.layout
     got = out.memory_config()
     assert got.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
     assert got.buffer_type == ttnn.BufferType.L1
-    spec, want = got.shard_spec, out_cfg.shard_spec
-    assert spec is not None
-    assert _rectangles(spec.grid) == _rectangles(want.grid)
-    assert list(spec.shape) == list(want.shape)
-    assert spec.orientation == want.orientation
+    assert got.shard_spec is not None
+    want = out_cfg.shard_spec
+    assert _rectangles(got.shard_spec.grid) == _rectangles(want.grid)
+    assert list(got.shard_spec.shape) == list(want.shape)
+    assert got.shard_spec.orientation == want.orientation
 
 
-def _run_and_check(device, name):
-    x, x_host, out_cfg = _place_input(device, name)
-    expected = pytorch_g6_reshard(x_host)
+def _assert_not_aliased(out, x):
+    assert out is not x, "out is input_tensor itself"
+    try:
+        out_address, x_address = out.buffer_address(), x.buffer_address()
+    except RuntimeError:
+        return
+    shared = _cores(out.memory_config().shard_spec.grid) & _cores(x.memory_config().shard_spec.grid)
+    assert not (shared and out_address == x_address), "out shares input_tensor's L1 buffer"
+
+
+def _call_and_check(x, x_host, out_cfg):
+    expected = pytorch_reference(x_host)
     out = g6_reshard(x, out_cfg)
-    _assert_placement(out, out_cfg)
-    out_host = ttnn.to_torch(out)
-    _assert_bit_exact(out_host, x_host, f"{name}: out against x read back")
-    _assert_bit_exact(out_host, expected, f"{name}: out against the reference")
-    return x, x_host, out
+    _assert_placement(out, out_cfg, x)
+    _assert_not_aliased(out, x)
+    _assert_bits_equal(ttnn.to_torch(out), expected, "out against the reference")
+    _assert_bits_equal(ttnn.to_torch(x), x_host, "input_tensor after the call")
+    return out
 
 
-@pytest.mark.parametrize("name", list(PLACEMENTS))
-def test_g6_reshard(device, name):
-    x, x_host, out = _run_and_check(device, name)
-    assert out is not x
-    _assert_bit_exact(ttnn.to_torch(x), x_host, f"{name}: input_tensor after the call")
+@pytest.mark.parametrize("case", list(PLACEMENTS))
+def test_g6_reshard(device, case):
+    x, x_host, out_cfg = _place_input(device, case)
+    _call_and_check(x, x_host, out_cfg)
 
 
-def test_g6_reshard_new_tensor_on_identity_placement(device):
-    """Same placement on both sides: out is still a new buffer and x is unchanged."""
-    x, x_host, out = _run_and_check(device, "I0")
-    assert out.buffer_address() != x.buffer_address(), "out shares input_tensor's L1 buffer"
-    _assert_bit_exact(ttnn.to_torch(x), x_host, "I0: input_tensor after the call")
-
-
-def test_g6_reshard_program_cache_placements(device):
-    """I0 and I3 differ only in the input orientation, P and O1 only in memory_config: a cache key
-    missing either replays a wrong program."""
+def test_g6_reshard_placements_one_process(device):
+    """Placements that differ only in input orientation (I0, I3) or only in out's
+    placement (P, O1) run back to back with the program cache on: a cache key
+    missing any placement field replays the wrong program."""
     if hasattr(device, "enable_program_cache"):
         device.enable_program_cache()
-    for name in ("I0", "I3", "P", "O1", "P", "I5"):
-        _run_and_check(device, name)
+    for case in ("I0", "I3", "P", "O1", "P", "I5"):
+        x, x_host, out_cfg = _place_input(device, case)
+        _call_and_check(x, x_host, out_cfg)
 
 
 def test_g6_reshard_repeat_determinism(device):
-    """Three calls on one x, every output kept alive and bit-identical to x."""
+    """Three calls on one input, every output kept alive and bit-identical."""
     x, x_host, out_cfg = _place_input(device, "P")
-    outs = [g6_reshard(x, out_cfg) for _ in range(3)]
-    for i, out in enumerate(outs):
-        _assert_placement(out, out_cfg)
-        _assert_bit_exact(ttnn.to_torch(out), x_host, f"P: call {i}")
-    _assert_bit_exact(ttnn.to_torch(x), x_host, "P: input_tensor after three calls")
+    outs = [_call_and_check(x, x_host, out_cfg) for _ in range(3)]
+    first = ttnn.to_torch(outs[0])
+    for out in outs[1:]:
+        _assert_bits_equal(ttnn.to_torch(out), first, "repeat call against the first call")
 
 
-# --- Validation: ValueError or RuntimeError, never a support refusal --------------------------
-# The message is left free (empty pattern): the spec names the error types, not their text.
-
-_P_IN = PLACEMENTS["P"][:3]
-_P_OUT = PLACEMENTS["P"][3:]
+# --- Validation: ValueError or RuntimeError before any dispatch -------------------------
 
 
-def _input_on_host(device):
-    return ttnn.from_torch(_random_input(), dtype=DTYPE, layout=LAYOUT)
+def _config_or_skip(build):
+    # A config ttnn itself refuses to construct never reaches the op, so there is nothing to test.
+    try:
+        return build()
+    except (RuntimeError, ValueError, TypeError) as exc:
+        pytest.skip(f"ttnn refuses to construct this memory_config: {exc}")
 
 
-def _input_interleaved_l1(device):
-    return ttnn.from_torch(
-        _random_input(), dtype=DTYPE, layout=LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+def _expect_refusal(expect_error, x, memory_config):
+    # Every validation error is raised by the op's host code, named after the op.
+    with expect_error((ValueError, RuntimeError), "g6_reshard"):
+        g6_reshard(x, memory_config)
+
+
+def test_g6_reshard_rejects_interleaved_input(device, expect_error):
+    torch.manual_seed(SEED)
+    x = ttnn.from_torch(
+        torch.randn(SHAPE, dtype=torch.float32).to(torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    _, _, _, out_grid, out_shard, out_orientation = PLACEMENTS["I0"]
+    _expect_refusal(expect_error, x, _block_sharded(out_grid, out_shard, out_orientation))
 
 
-def _input_interleaved_dram(device):
-    return ttnn.from_torch(
-        _random_input(), dtype=DTYPE, layout=LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+def test_g6_reshard_rejects_rank_3(device, expect_error):
+    x, _, out_cfg = _place_input(device, "I0", shape=SHAPE[1:])
+    _expect_refusal(expect_error, x, out_cfg)
 
 
-def _input_rank_2(device):
-    return ttnn.from_torch(
-        _random_input(shape=SHAPE[-2:]), dtype=DTYPE, layout=LAYOUT, device=device, memory_config=_sharded(*_P_IN)
-    )
+def test_g6_reshard_rejects_interleaved_memory_config(device, expect_error):
+    x, _, _ = _place_input(device, "I0")
+    _expect_refusal(expect_error, x, ttnn.L1_MEMORY_CONFIG)
 
 
-BAD_INPUTS = {
-    "on_host": _input_on_host,
-    "interleaved_l1": _input_interleaved_l1,
-    "interleaved_dram": _input_interleaved_dram,
-    "rank_2": _input_rank_2,
-}
+def test_g6_reshard_rejects_dram_memory_config(device, expect_error):
+    x, _, _ = _place_input(device, "I0")
+    cfg = _config_or_skip(lambda: _block_sharded(((0, 0), (7, 7)), (256, 128), "row_major", ttnn.BufferType.DRAM))
+    _expect_refusal(expect_error, x, cfg)
 
 
-@pytest.mark.parametrize("case", list(BAD_INPUTS))
-def test_g6_reshard_rejects_input(device, expect_error, case):
-    _require_grid(device, _P_IN[0], _P_OUT[0])
-    x = BAD_INPUTS[case](device)
-    with expect_error((ValueError, RuntimeError), ""):
-        g6_reshard(x, _sharded(*_P_OUT))
+def test_g6_reshard_rejects_missing_shard_spec(device, expect_error):
+    x, _, _ = _place_input(device, "I0")
+    cfg = _config_or_skip(lambda: ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1))
+    _expect_refusal(expect_error, x, cfg)
 
 
-def _outside_worker_grid(device):
+def test_g6_reshard_rejects_shard_not_multiple_of_32(device, expect_error):
+    x, _, _ = _place_input(device, "I0")
+    cfg = _config_or_skip(lambda: _block_sharded(((0, 0), (7, 9)), (240, 128), "row_major"))
+    _expect_refusal(expect_error, x, cfg)
+
+
+def test_g6_reshard_rejects_grid_too_small(device, expect_error):
+    # (256, 128) shards make 8 block columns; the grid has 7 core columns.
+    x, _, _ = _place_input(device, "I0")
+    cfg = _config_or_skip(lambda: _block_sharded(((0, 0), (6, 7)), (256, 128), "row_major"))
+    _expect_refusal(expect_error, x, cfg)
+
+
+def test_g6_reshard_rejects_grid_not_one_rectangle(device, expect_error):
+    x, _, _ = _place_input(device, "I0")
+
+    def build():
+        grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(8, 7)),
+            }
+        )
+        spec = ttnn.ShardSpec(grid, [256, 128], ttnn.ShardOrientation.ROW_MAJOR)
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+    _expect_refusal(expect_error, x, _config_or_skip(build))
+
+
+def test_g6_reshard_rejects_grid_outside_worker_grid(device, expect_error):
+    x, _, _ = _place_input(device, "I0")
     size = device.compute_with_storage_grid_size()
-    return _sharded(((size.x - 4, 0), (size.x + 3, 7)), (256, 128), ROW_MAJOR)
-
-
-BAD_MEMORY_CONFIGS = {
-    "interleaved": lambda device: ttnn.L1_MEMORY_CONFIG,
-    "height_sharded": lambda device: _sharded(
-        ((0, 0), (7, 7)), (32, 1024), ROW_MAJOR, layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    ),
-    "dram": lambda device: _sharded(((0, 0), (7, 7)), (256, 128), ROW_MAJOR, buffer=ttnn.BufferType.DRAM),
-    "no_shard_spec": lambda device: ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1),
-    "shard_not_tile_multiple": lambda device: _sharded(((0, 0), (7, 8)), (250, 128), ROW_MAJOR),
-    "too_few_core_rows": lambda device: _sharded(((0, 0), (7, 6)), (256, 128), ROW_MAJOR),
-    "too_few_core_columns_col_major": lambda device: _sharded(((0, 0), (6, 7)), (256, 128), COL_MAJOR),
-    "not_one_rectangle": lambda device: ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(_core_range_set(((0, 0), (3, 7)), ((5, 0), (8, 7))), [256, 128], ROW_MAJOR),
-    ),
-    "outside_worker_grid": _outside_worker_grid,
-}
-
-
-@pytest.mark.parametrize("case", list(BAD_MEMORY_CONFIGS))
-def test_g6_reshard_rejects_memory_config(device, expect_error, case):
-    x, _, _ = _place_input(device, "P")
-    with expect_error((ValueError, RuntimeError), ""):
-        g6_reshard(x, BAD_MEMORY_CONFIGS[case](device))
+    cfg = _config_or_skip(lambda: _block_sharded(((0, 0), (size.x, 7)), (256, 128), "row_major"))
+    _expect_refusal(expect_error, x, cfg)
