@@ -767,6 +767,27 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
 _logged_ring_safe_k_block_signatures = set()
 
 
+def swiglu_safe_config(config: ttnn.MinimalMatmulConfig) -> ttnn.MinimalMatmulConfig:
+    """Round an odd `N_block_size` down to even, as minimal_matmul's fused SwiGLU requires.
+
+    The tables are keyed by (M, K, N) only, so a matmul with fused SwiGLU can match an entry swept for
+    another layer of the same shape without SwiGLU, whose N block may be odd. The subblock width drops
+    to 1 if it no longer divides the new N block.
+    """
+    if config.N_block_size % 2 == 0:
+        return config
+    n_block = max(2, config.N_block_size - 1)
+    subblock_w = config.subblock_w if n_block % config.subblock_w == 0 else 1
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=config.M_block_size,
+        K_block_size=config.K_block_size,
+        N_block_size=n_block,
+        subblock_h=config.subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=config.compute_with_storage_grid_size,
+    )
+
+
 def _ring_safe_k_block(config, M, K, N, cluster_size):
     """Shrink `K_block_size` to the largest divisor of the per-device K tiles when it does not divide them.
 
