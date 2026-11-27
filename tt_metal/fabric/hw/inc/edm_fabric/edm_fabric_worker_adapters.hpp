@@ -18,11 +18,28 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "api/alignment.h"
 #include "api/debug/assert.h"
+#include "api/dataflow/fabric_connection_binding_token.h"
 
 #include <cstdint>
 #include <array>
 
 namespace tt::tt_fabric {
+
+// Metal 2.0 fabric connection bindings (KernelAdvancedOptions::FabricConnectionBinding): each target of a binding owns
+// a block of runtime args, [router ethernet channel, teardown semaphore id, buffer index semaphore id], followed on a
+// 2D fabric by [destination chip id, destination mesh id].
+namespace fabric_connection_binding {
+#if defined(FABRIC_2D)
+inline constexpr uint32_t kWordsPerTarget = 5;
+#else
+inline constexpr uint32_t kWordsPerTarget = 3;
+#endif
+
+// The index of the first runtime arg of target `target_index` of `token`.
+constexpr uint32_t target_rta_word(FabricConnectionBindingToken token, uint32_t target_index) {
+    return token.rta_word() + (target_index * kWordsPerTarget);
+}
+}  // namespace fabric_connection_binding
 
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0, uint8_t VC_ID = 0>
 struct WorkerToFabricEdmSenderBase;
@@ -88,7 +105,20 @@ struct WorkerToFabricEdmSenderBase {
 
     WorkerToFabricEdmSenderBase() = default;
 
-    template <ProgrammableCoreType my_core_type>
+    // Builds the sender of the only target of a Metal 2.0 fabric connection binding.
+    // precondition: the binding has exactly one target.
+    static WorkerToFabricEdmSenderBase build_from_binding(FabricConnectionBindingToken token) {
+        static_assert(VC_ID == 0, "A fabric connection binding holds a VC0 worker connection");
+        ASSERT(token.num_targets() == 1);
+        std::size_t arg_idx = fabric_connection_binding::target_rta_word(token, 0);
+        return build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+    }
+
+    // my_core_type identifies the programmable core executing this adapter and selects
+    // the core-specific address space used while resolving runtime arguments.
+    // sem_args_are_l1_addresses selects whether the teardown and producer-cursor arguments
+    // are program-semaphore IDs (default) or L1 addresses supplied directly.
+    template <ProgrammableCoreType my_core_type, bool sem_args_are_l1_addresses = false>
     static WorkerToFabricEdmSenderBase build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
         uint8_t direction;
@@ -153,9 +183,17 @@ struct WorkerToFabricEdmSenderBase {
         // codepaths are split
         const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
-        auto worker_teardown_sem_addr =
-            reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
-        const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+        const auto resolve_sem_arg = [](uint32_t arg) -> uintptr_t {
+            if constexpr (sem_args_are_l1_addresses) {
+                return static_cast<uintptr_t>(arg);
+            } else {
+                return get_semaphore<my_core_type>(arg);
+            }
+        };
+        const uintptr_t teardown_address = resolve_sem_arg(get_arg_val<uint32_t>(arg_idx++));
+        const uintptr_t buffer_index_address = resolve_sem_arg(get_arg_val<uint32_t>(arg_idx++));
+        auto worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t* const>(teardown_address);
+        const auto worker_buffer_index_semaphore_addr = buffer_index_address;
         return WorkerToFabricEdmSenderBase(
             is_persistent_fabric,
             edm_worker_x,
@@ -225,8 +263,8 @@ struct WorkerToFabricEdmSenderBase {
         this->worker_teardown_addr = worker_teardown_addr;
         ASSERT(is_l1_address(reinterpret_cast<size_t>(worker_teardown_addr)));  // must be a L1 address
         // Local landing zone for the SenderChannelProducerCursor block read back in open_start().
-        // Semaphores are strided by L1_ALIGNMENT (16B), so this address both is 16B aligned and owns
-        // a full 16B slot -- a whole-block read here cannot disturb a neighbouring semaphore.
+        // Must be 16B aligned and own a full 16B slot, so that block read cannot disturb a
+        // neighbouring semaphore.
         this->local_producer_cursor_addr = local_buffer_index_addr;
         ASSERT(is_l1_address(local_producer_cursor_addr));  // must be a L1 address
         this->edm_buffer_base_addr = edm_buffer_base_addr;

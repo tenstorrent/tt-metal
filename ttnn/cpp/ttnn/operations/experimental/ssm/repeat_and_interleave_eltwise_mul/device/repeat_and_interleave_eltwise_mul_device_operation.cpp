@@ -4,7 +4,7 @@
 
 #include "repeat_and_interleave_eltwise_mul_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -35,7 +35,7 @@ void RepeatAndInterleaveEltwiseMulDeviceOperation::validate_on_program_cache_mis
         input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
         "Operands to ssm_eltwise_mul need to be on device!");
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        input_tensor_a.is_allocated() and input_tensor_b.is_allocated(),
         "Operands to ssm_eltwise_mul need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor_a.device() == input_tensor_b.device(),

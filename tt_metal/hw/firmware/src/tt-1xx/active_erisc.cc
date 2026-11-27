@@ -22,6 +22,7 @@
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "internal/ethernet/erisc.h"
+#include "internal/ethernet/eth_fw_stage.h"
 
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
@@ -197,8 +198,12 @@ extern "C" __attribute__((naked)) void enter_reset(void) {
     );
 }
 
+// Called by active_erisc-crt0 when erisc_exit() longjmps back to base FW, bypassing the return from main().
+void __attribute__((noinline)) on_erisc_exit() { set_eth_fw_stage(ETH_FW_STAGE_BASE_FW); }
+
 int __attribute__((noinline)) main(void) {
     WAYPOINT("I");
+    set_eth_fw_stage(ETH_FW_STAGE_FW_INIT);
     configure_csr();
     initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
@@ -254,25 +259,27 @@ int __attribute__((noinline)) main(void) {
     DEVICE_PRINT_INITIALIZE_LOCK();
     wait_subordinate_eriscs();
     flag_disable[0] = 1;
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
-    // Add an invalidate before the first read of mailboxes->go_messages[0].signal
+    // Add an invalidate before the first read of mailboxes->go_messages[0].slot[0].signal
     invalidate_l1_cache();
 
     DeviceProfilerInit();
     while (1) {
         // Wait...
         WAYPOINT("GW");
+        set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
 
         uint8_t go_message_signal = RUN_MSG_DONE;
-        while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
+        while ((go_message_signal = mailboxes->go_messages[0].slot[0].signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
 
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (flag_disable[0] != 1) {
                 aerisc_ptp_trace_exit();
+                set_eth_fw_stage(ETH_FW_STAGE_BASE_FW);
                 return 0;
             } else if (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
                 // Host-driven (slow dispatch) read-pointer reset. The dispatcher-driven resets
@@ -292,6 +299,10 @@ int __attribute__((noinline)) main(void) {
             DeviceZoneScopedMainN("ERISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+#if defined(PROFILE_STREAMING)
+            // The streaming profiler publishes this launch's zones only after this call validates the launch.
+            DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
+#endif
 
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
@@ -325,6 +336,7 @@ int __attribute__((noinline)) main(void) {
             constexpr int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             if (enables & (1u << index)) {
                 WAYPOINT("R");
+                set_eth_fw_stage(ETH_FW_STAGE_KERNEL);
 
                 manually_flush_icache();
                 uint32_t kernel_config_base =
@@ -333,14 +345,15 @@ int __attribute__((noinline)) main(void) {
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
                 reinterpret_cast<void (*)()>(kernel_lma)();
+                set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
                 WAYPOINT("D");
             }
 
             wait_subordinate_eriscs();
-            mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
             DEVICE_PRINT_KERNEL_FINISHED();
             // Fast dispatch to ethernet is removed: no dispatcher done-notify / launch-ring advance.
-            // Slow (host) dispatch polls go_messages[0].signal and manages the read pointer itself.
+            // Slow (host) dispatch polls go_messages[0].slot[0].signal and manages the read pointer itself.
         }
     }
 

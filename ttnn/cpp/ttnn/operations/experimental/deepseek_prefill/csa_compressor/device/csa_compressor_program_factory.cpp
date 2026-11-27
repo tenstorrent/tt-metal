@@ -7,10 +7,10 @@
 #include <initializer_list>
 #include <utility>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include "kernels/csa_compressor_runtime_args.hpp"
 
@@ -265,13 +265,13 @@ void patch_state_args(
     patch_runtime_args(
         program,
         kernel_idx,
-        {{rt::index(rt::State::KvAddress), args.kv.buffer()->address()},
-         {rt::index(rt::State::GateAddress), args.gate.buffer()->address()},
-         {rt::index(rt::State::BiasAddress), args.position_bias.buffer()->address()},
-         {rt::index(rt::State::BaseKvAddress), args.base_kv_state.buffer()->address()},
-         {rt::index(rt::State::BaseScoreAddress), args.base_score_state.buffer()->address()},
-         {rt::index(rt::State::OutputKvAddress), output_kv.buffer()->address()},
-         {rt::index(rt::State::OutputScoreAddress), output_score.buffer()->address()},
+        {{rt::index(rt::State::KvAddress), args.kv.mesh_buffer().address()},
+         {rt::index(rt::State::GateAddress), args.gate.mesh_buffer().address()},
+         {rt::index(rt::State::BiasAddress), args.position_bias.mesh_buffer().address()},
+         {rt::index(rt::State::BaseKvAddress), args.base_kv_state.mesh_buffer().address()},
+         {rt::index(rt::State::BaseScoreAddress), args.base_score_state.mesh_buffer().address()},
+         {rt::index(rt::State::OutputKvAddress), output_kv.mesh_buffer().address()},
+         {rt::index(rt::State::OutputScoreAddress), output_score.mesh_buffer().address()},
          {rt::index(rt::State::LocalValid), local_valid},
          {rt::index(rt::State::AbsoluteStart), absolute_start}});
 }
@@ -375,7 +375,11 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = compression_cores;
     compute.compile_time_args = {kCandidateKvCb, kCandidateScoreCb, kPooledCb, kCaBiasCb, kCbBiasCb};
-    compute.config = ComputeConfigDescriptor{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = true};
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 with fp32_dest_acc_en on Wormhole (less likely to give bad results).
+    const auto math_fidelity = args.kv.device()->arch() == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3
+                                                                                 : tt::tt_metal::MathFidelity::HiFi4;
+    compute.config = ComputeConfigDescriptor{.math_fidelity = math_fidelity, .fp32_dest_acc_en = true};
 
     std::vector<uint32_t> writer_compile_args = {kPooledCb};
     TensorAccessorArgs(outputs[0].buffer()).append_to(writer_compile_args);
@@ -448,14 +452,15 @@ void CsaCompressionProgramFactory::override_runtime_arguments(
     patch_runtime_args(
         program,
         kReaderIdx,
-        {{rt::index(rt::Reader::KvAddress), args.kv.buffer()->address()},
-         {rt::index(rt::Reader::GateAddress), args.gate.buffer()->address()},
-         {rt::index(rt::Reader::BiasAddress), args.position_bias.buffer()->address()},
-         {rt::index(rt::Reader::PredecessorKvAddress), args.predecessor_kv_state.buffer()->address()},
-         {rt::index(rt::Reader::PredecessorScoreAddress), args.predecessor_score_state.buffer()->address()},
+        {{rt::index(rt::Reader::KvAddress), args.kv.mesh_buffer().address()},
+         {rt::index(rt::Reader::GateAddress), args.gate.mesh_buffer().address()},
+         {rt::index(rt::Reader::BiasAddress), args.position_bias.mesh_buffer().address()},
+         {rt::index(rt::Reader::PredecessorKvAddress), args.predecessor_kv_state.mesh_buffer().address()},
+         {rt::index(rt::Reader::PredecessorScoreAddress), args.predecessor_score_state.mesh_buffer().address()},
          {rt::index(rt::Reader::CompleteWindows), local_valid / 4},
          {rt::index(rt::Reader::AbsoluteStart), absolute_start}});
-    patch_runtime_args(program, kWriterIdx, {{rt::index(rt::Writer::OutputAddress), outputs[0].buffer()->address()}});
+    patch_runtime_args(
+        program, kWriterIdx, {{rt::index(rt::Writer::OutputAddress), outputs[0].mesh_buffer().address()}});
     const CsaStateInputs state_args{
         args.kv, args.gate, args.position_bias, args.predecessor_kv_state, args.predecessor_score_state};
     patch_state_args(program, kCompressionStateIdx, state_args, outputs[1], outputs[2], local_valid, absolute_start);

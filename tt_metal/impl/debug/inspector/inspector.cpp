@@ -14,16 +14,17 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "distributed/mesh_socket_utils.hpp"
-#include "program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include <map>
 #include <memory>
 #include <optional>
 #include <tuple>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <internal/mesh_device.hpp>
 #include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
@@ -385,7 +386,7 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
             if (!mesh_device->is_local(local_core.device_coord)) {
                 continue;  // Another rank owns this core and reports it itself.
             }
-            auto* local_device = mesh_device->get_device(local_core.device_coord);
+            auto* local_device = internal::get_device(*mesh_device, local_core.device_coord);
             if (local_device == nullptr) {
                 continue;
             }
@@ -440,6 +441,55 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
     }
 }
 
+void Inspector::host_socket_created(
+    const distributed::MeshBuffer* config_buffer,
+    const distributed::MeshCoreCoord& core,
+    bool is_sender,
+    uint32_t fifo_size,
+    uint64_t data_buffer_address) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        auto* mesh_device = config_buffer->device();
+        auto* device = internal::get_device(*mesh_device, core.device_coord);
+        if (device == nullptr) {
+            return;
+        }
+        const distributed::SocketSenderSize sender_size(
+            mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
+        const auto node = mesh_device->get_fabric_node_id(core.device_coord);
+
+        // The peer is the host, so there are no peer cores and no peer mesh id.
+        inspector::MeshSocketData socket_data;
+        socket_data.is_sender = is_sender;
+        socket_data.peer_is_host = true;
+        socket_data.config_buffer_address = config_buffer->address();
+        socket_data.data_buffer_address = data_buffer_address;
+        socket_data.fifo_size = fifo_size;
+        socket_data.bytes_acked_offset_bytes = sender_size.md_size_bytes;
+        socket_data.bytes_acked_stride_bytes = sender_size.ack_size_bytes;
+        socket_data.local_mesh_id = *node.mesh_id;
+        auto& core_data = socket_data.local_cores.emplace_back();
+        core_data.chip_id = device->id();
+        core_data.core.core_x = core.core_coord.x;
+        core_data.core.core_y = core.core_coord.y;
+        core_data.core.fabric_chip_id = node.chip_id;
+
+        if (data->mesh_socket_logging_enabled) {
+            data->logger.log_mesh_socket_created(config_buffer, socket_data);
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_sockets_data.insert_or_assign(config_buffer, std::move(socket_data));
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log host socket created: {}", e.what());
+    }
+}
+
 void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept {
     if (!is_enabled()) {
         return;
@@ -452,7 +502,7 @@ void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, 
         inspector::GlobalSemaphoreData semaphore_data;
         semaphore_data.address = buffer->address();
         semaphore_data.cores = cores;
-        for (const auto* device : buffer->device()->get_devices()) {
+        for (const auto* device : buffer->device()->impl().get_devices()) {
             semaphore_data.chip_ids.push_back(device->id());
         }
         std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
@@ -477,86 +527,6 @@ void Inspector::global_semaphore_reset(const distributed::MeshBuffer* buffer, ui
         }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log global semaphore reset: {}", e.what());
-    }
-}
-
-void Inspector::mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
-        return;
-    }
-    try {
-        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
-        mesh_workload_data.mesh_workload = mesh_workload;
-        mesh_workload_data.mesh_workload_id = mesh_workload->get_id();
-        data->logger.log_mesh_workload_created(mesh_workload_data);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh workload created: {}", e.what());
-    }
-}
-
-void Inspector::mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
-        return;
-    }
-    try {
-        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
-        data->logger.log_mesh_workload_destroyed(mesh_workload_data);
-        data->mesh_workloads_data.erase(mesh_workload->get_id());
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh workload destroyed: {}", e.what());
-    }
-}
-
-void Inspector::mesh_workload_add_program(
-    const distributed::MeshWorkloadImpl* mesh_workload,
-    const distributed::MeshCoordinateRange& device_range,
-    std::size_t program_id) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
-        return;
-    }
-    try {
-        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
-        data->logger.log_mesh_workload_add_program(mesh_workload_data, device_range, program_id);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh workload add program: {}", e.what());
-    }
-}
-
-void Inspector::mesh_workload_set_program_binary_status(
-    const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
-        return;
-    }
-    try {
-        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
-        mesh_workload_data.binary_status_per_device[mesh_id] = status;
-        data->logger.log_mesh_workload_set_program_binary_status(mesh_workload_data, mesh_id, status);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh workload set program binary status: {}", e.what());
     }
 }
 
@@ -801,12 +771,21 @@ bool ShouldCaptureTensorSpecs() {
 }
 
 std::optional<tt::tt_metal::distributed::MeshTraceId> GetCurrentMeshTraceId(
-    tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    // mesh_command_queue().trace_id() is only supported in fast dispatch and would throw otherwise.
+    tt::tt_metal::distributed::MeshCommandQueue& mesh_cq) {
+    // MeshCommandQueue::trace_id() is only supported in fast dispatch and would throw otherwise.
+    if (!mesh_cq.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
+        return std::nullopt;
+    }
+    return mesh_cq.trace_id();
+}
+
+std::optional<tt::tt_metal::distributed::MeshTraceId> GetCurrentMeshTraceId(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint8_t cq_id) {
+    // The queue is only looked up with fast dispatch (trace_id() is not supported otherwise).
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return std::nullopt;
     }
-    return mesh_device->mesh_command_queue().trace_id();
+    return GetCurrentMeshTraceId(mesh_device->mesh_command_queue(cq_id));
 }
 
 void EmitMeshWorkloadDebugEntry(

@@ -25,6 +25,9 @@ namespace sfpu {
 // before power-of-two scaling. Intended for BF16 Dest; this preserves the normal
 // reciprocal ±2^-126 at input ±2^126 instead of flushing an intermediate result.
 // normalized=true requires a finite input with magnitude in [1, 2) and skips scaling.
+// _softsign_x2_ in ckernel_sfpu_softsign.h carries a two-row interleaved copy of this
+// algorithm (seed, scale, Newton-Raphson steps) on values scaled by -1/2; keep it in sync
+// with changes here.
 template <int max_iter = 2, bool round_to_bf16 = false, bool normalized = false>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // Combines the sign and exponent of -1.0 with the mantissa of `in`.
@@ -128,6 +131,12 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
     return sfpu_reciprocal_iter<APPROXIMATE ? 0 : 2>(in);
 }
 
+// Shared minimax seed y = k2 - k1*x + k0*x**2 for unrounded one- and two-step reciprocals
+// of x in [1, 2); init_softsign programs a power-of-two rescaling of it.
+static constexpr float RECIPROCAL_SEED_K0 = 0.3232325017452239990234375f;
+static constexpr float RECIPROCAL_SEED_K1 = 1.4545459747314453125f;
+static constexpr float RECIPROCAL_SEED_K2 = 2.121212482452392578125f;
+
 template <bool APPROXIMATE = false, bool round_to_bf16 = false>
 sfpi_inline void sfpu_reciprocal_init() {
     if constexpr (round_to_bf16) {
@@ -145,9 +154,9 @@ sfpi_inline void sfpu_reciprocal_init() {
     } else {
         // Shared minimax seed for unrounded one- and two-step reciprocals,
         // including intermediate reciprocals in compound BF16 operations.
-        sfpi::vConstFloatPrgm0 = 0.3232325017452239990234375f;
-        sfpi::vConstFloatPrgm1 = 1.4545459747314453125f;
-        sfpi::vConstFloatPrgm2 = 2.121212482452392578125f;
+        sfpi::vConstFloatPrgm0 = RECIPROCAL_SEED_K0;
+        sfpi::vConstFloatPrgm1 = RECIPROCAL_SEED_K1;
+        sfpi::vConstFloatPrgm2 = RECIPROCAL_SEED_K2;
     }
 }
 
@@ -160,12 +169,11 @@ inline void calculate_reciprocal() {
 // is_fp32_dest_acc_en even when their reciprocal intermediate is FP32.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /*maybe_unused*/, bool round_to_bf16 = false>
 void recip_init() {
-    // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
+    // Common SFPU init (SFPU config register + counter reset), then the op-specific
     // reciprocal setup below -- one self-contained init, matching exp_init. SDPA runs reciprocal in its
     // softmax after matmul/exp, so the general SFPU state is re-established here, not just reset.
-    // Reciprocal uses only ADDR_MOD_7 on Wormhole (no op-specific ADDR_MOD_6).
+    // Reciprocal uses ADDR_MOD_7 on Wormhole at its zero-advance invariant.
     sfpu::_init_sfpu_config_reg();
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE, round_to_bf16>();
 }

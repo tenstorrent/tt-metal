@@ -16,7 +16,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
-#include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -34,17 +34,13 @@ void kernel_main() {
         return;  // idle core
     }
 
-    // Get the input storage core coordinates and L1 address (where in0 shard is located)
-    const uint32_t input_storage_noc_x = get_arg(args::input_storage_noc_x);
-    const uint32_t input_storage_noc_y = get_arg(args::input_storage_noc_y);
-    // in0's shard base address. The storage core and this worker are the same core,
-    // and an L1 shard sits at the same offset on every core holding one.
-    const uint32_t input_shard_l1_addr = TensorAccessor(tensor::in0).get_bank_base_address();
+    // in0's L1 shard. The factory requires the input storage core to be this worker core, so the
+    // shard is this core's own L1 and is read as a loopback NoC source (input_storage_noc_x/y name
+    // this core and are not needed).
+    const LocalTensorAccessor<uint32_t> in0_shard(tensor::in0);
 
-    // Build NOC address for the remote input storage core
     const Noc noc;
     DataflowBuffer dfb_in0(dfb::in0);
-    const UnicastEndpoint src_core;
 
     // Process each batch
     for (uint32_t batch = 0; batch < num_batches_per_core; ++batch) {
@@ -54,14 +50,10 @@ void kernel_main() {
         for (uint32_t block = 0; block < num_blocks; ++block) {
             dfb_in0.reserve_back(in0_block_num_tiles);
 
-            // NOC read block from REMOTE input storage core to the local dataflow buffer
+            // NOC read block from the input storage core (this core) to the local dataflow buffer
             const uint32_t read_offset = batch_offset + (block * in0_block_size_bytes);
             noc.async_read(
-                src_core,
-                dfb_in0,
-                in0_block_size_bytes,
-                {.noc_x = input_storage_noc_x, .noc_y = input_storage_noc_y, .addr = input_shard_l1_addr + read_offset},
-                {.offset_bytes = 0});
+                in0_shard, dfb_in0, in0_block_size_bytes, {.offset_bytes = read_offset}, {.offset_bytes = 0});
             noc.async_read_barrier();
 
             dfb_in0.push_back(in0_block_num_tiles);

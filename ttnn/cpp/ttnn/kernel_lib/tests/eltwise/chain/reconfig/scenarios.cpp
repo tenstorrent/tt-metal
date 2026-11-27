@@ -27,14 +27,20 @@ void kernel_main() {
     constexpr uint32_t mode = get_compile_time_arg_val(1);
     static_assert(mode < 6);
 
+    DataflowBuffer cb_a_obj(cb_a);
+    DataflowBuffer cb_b_obj(cb_b);
+    DataflowBuffer cb_c_obj(cb_c);
+    DataflowBuffer cb_d_obj(cb_d);
+    DataflowBuffer cb_out_obj(cb_out);
+
     using namespace compute_kernel_lib;
     if constexpr (mode == 0) {
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
         eltwise_chain(
             IterationShape::tiles(num_tiles),
-            BinaryFpu<BinaryFpuOp::Add, input(cb_a), input(cb_b)>{},
-            BinaryFpu<BinaryFpuOp::Add, input(cb_c), input(cb_d)>{},
-            PackTile<output(cb_out)>{});
+            BinaryFpu<BinaryFpuOp::Add, input(cb_a), input(cb_b)>{cb_a_obj, cb_b_obj},
+            BinaryFpu<BinaryFpuOp::Add, input(cb_c), input(cb_d)>{cb_c_obj, cb_d_obj},
+            PackTile<output(cb_out)>{cb_out_obj});
     } else if constexpr (mode == 1) {
         constexpr InputSpec default_input = input(cb_a);
         constexpr OutputSpec default_output = output(cb_out);
@@ -67,38 +73,39 @@ void kernel_main() {
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
         eltwise_chain(
             IterationShape::tiles(num_tiles),
-            BinaryFpu<BinaryFpuOp::Add, input(cb_a), input(cb_b)>{},
-            PackTile<output(cb_out)>{});
+            BinaryFpu<BinaryFpuOp::Add, input(cb_a), input(cb_b)>{cb_a_obj, cb_b_obj},
+            PackTile<output(cb_out)>{cb_out_obj});
     } else if constexpr (mode == 2) {
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
         eltwise_chain(
             IterationShape::tiles(num_tiles),
-            CopyTile<input(cb_a)>{},
-            BinaryFpu<BinaryFpuOp::Add, input(cb_b), input(cb_c), Dst::D1>{},
+            CopyTile<input(cb_a)>{cb_a_obj},
+            BinaryFpu<BinaryFpuOp::Add, input(cb_b), input(cb_c), Dst::D1>{cb_b_obj, cb_c_obj},
             AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-            PackTile<output(cb_out)>{});
+            PackTile<output(cb_out)>{cb_out_obj});
     } else if constexpr (mode == 3) {
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
         eltwise_chain(
             IterationShape::tiles(num_tiles),
-            CopyTile<input(cb_a)>{},
-            CopyTile<input(cb_b)>{},
-            PackTile<output(cb_out)>{});
+            CopyTile<input(cb_a)>{cb_a_obj},
+            CopyTile<input(cb_b)>{cb_b_obj},
+            PackTile<output(cb_out)>{cb_out_obj});
     } else if constexpr (mode == 4) {
         constexpr uint32_t cb_out_2 = tt::CBIndex::c_17;
+        DataflowBuffer cb_out_2_obj(cb_out_2);
         compute_kernel_hw_startup(cb_a, cb_a, cb_out);
         eltwise_chain(
             IterationShape::tiles(num_tiles),
-            CopyTile<input(cb_a)>{},
-            PackTile<output(cb_out)>{},
-            PackTile<output(cb_out_2)>{});
+            CopyTile<input(cb_a)>{cb_a_obj},
+            PackTile<output(cb_out)>{cb_out_obj},
+            PackTile<output(cb_out_2)>{cb_out_2_obj});
     } else {
         compute_kernel_hw_startup(cb_a, cb_a, cb_out);
         eltwise_chain(
             IterationShape::tiles(num_tiles),
-            CopyTile<input(cb_a)>{},
-            CopyTile<input(cb_a)>{},
-            CopyTile<input(cb_a)>{},
-            PackTile<output(cb_out)>{});
+            CopyTile<input(cb_a)>{cb_a_obj},
+            CopyTile<input(cb_a)>{cb_a_obj},
+            CopyTile<input(cb_a)>{cb_a_obj},
+            PackTile<output(cb_out)>{cb_out_obj});
     }
 }

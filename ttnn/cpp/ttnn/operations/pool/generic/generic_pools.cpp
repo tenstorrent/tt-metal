@@ -4,11 +4,11 @@
 
 #include "generic_pools.hpp"
 
-#include "tt-metalium/constants.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
 #include "ttnn/operations/pool/generic/device/pool_op.hpp"
 #include <cmath>
 #include <optional>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
@@ -22,9 +22,9 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::operations::pool {
 
@@ -332,7 +332,7 @@ static std::vector<Tensor> pool2d_L1(
 
     // call the halo uop
     const auto resolved_compute_kernel_config = init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        input_tensor.device()->arch(),
         compute_kernel_config,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
@@ -1028,6 +1028,26 @@ static std::vector<Tensor> pool2d(
         TT_FATAL(false, "Pool2D: Input tensor must be rank 2, 3, or 4, got rank {}", rank);
     }
     // For rank-4, input_tensor_4d is already the input_tensor, no copy needed
+
+    // The global pool gate and the DRAM slicing path divide by batch and stride before pool2d_L1 validates.
+    {
+        std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
+        validate_input_params(
+            input_tensor_4d,
+            batch_size,
+            input_h,
+            input_w,
+            channels,
+            kernel_size,
+            stride,
+            padding_4d[0],
+            padding_4d[1],
+            padding_4d[2],
+            padding_4d[3],
+            dilation.has_value() ? dilation.value()[0] : 1,
+            dilation.has_value() ? dilation.value()[1] : 1,
+            input_tensor_4d.layout() == ttnn::TILE_LAYOUT);
+    }
 
     // Global average pool fast path: kernel exactly covers spatial input with no padding/dilation.
     // pool_sum reduction is much cheaper than the sliding-window pool kernels for this case

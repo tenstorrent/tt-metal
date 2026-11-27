@@ -7,11 +7,11 @@
 #include <map>
 #include <string>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -21,7 +21,7 @@
 
 using namespace tt;
 using namespace tt::constants;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 
@@ -63,6 +63,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     TT_FATAL(operation_attributes.output_dtype.has_value(), "Output dtype should have been provided");
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Bcast batch should have been provided");
+    TT_FATAL(
+        tensor_args.optional_input_tensors.empty() || !tensor_args.optional_input_tensors.at(0).has_value(),
+        "MatmulMultiCoreReuseProgramConfig has no fused bias; linear adds the bias after the matmul for this config");
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
@@ -130,11 +133,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     uint32_t batch_scale_factor = per_core_M > M ? per_core_M / M : 1;
     uint32_t per_core_M_per_batch = per_core_M > M ? M : per_core_M;
     uint32_t num_blocks = (K / in0_block_w);
-    bool packer_l1_acc_en = packer_l1_acc && (num_blocks > 2);
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
+        packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
 
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
@@ -149,16 +153,16 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     bool in1_is_sharded = in1_buffer.is_sharded();
     bool output_is_sharded = output.is_sharded();
 
-    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on Blackhole's
-    // 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at that padded
-    // stride, so the in0/in1 DFBs must hold pages at the aligned stride and the reader/unpacker walk
-    // tiles at the same stride. This is a no-op when the tile is already aligned. Sharded DFBs are
-    // backed by the tensor buffer and keep their natural page size.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    uint32_t in0_aligned_tile_size =
-        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size =
-        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        in0_is_sharded
+            ? in0_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        in1_is_sharded
+            ? in1_single_tile_size
+            : operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
 
     // DFB sizes
     uint32_t in0_block_num_tiles = per_core_M_per_batch * in0_block_w;
@@ -376,6 +380,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
     KernelSpec::CompilerOptions::Defines compute_defines(mm_kernel_defines);
 
+    // A core's consecutive output blocks walk the M blocks of a batch, then move to the next batch
+    // (per_core_N == N, so a batch has no N blocks to walk).
+    const uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
+    const uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
+    const uint32_t out_m_block_stride = per_core_M_per_batch * N;
+
     // ---- Reader kernel (reads in0) ----
     // RTA carries the per-core in0 start tile id; the legacy 3rd RTA (per-core block count) is named
     // "batch" kernel-side (preserved verbatim from the legacy kernel).
@@ -406,10 +416,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"num_blocks", num_blocks},
                 {"bcast_B", (uint32_t)bcast_batch},
                 {"MtKt", M * K},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"in0_m_block_stride", in0_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch"},
+                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch", "start_m_block"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -453,16 +465,24 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"out_num_subblocks_w", out_num_subblocks_w},
                 {"out_num_subblocks_h", out_num_subblocks_h},
                 {"MtNt", M * N},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"out_m_block_stride", out_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id"},
+                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id", "start_m_block"},
             },
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     ComputeHardwareConfig compute_hw_config =
         ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
+    // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode, and cb_intermed0 holds 32-bit
+    // partials under fp32 accumulation. UnpackToSrc, as in the 1D/2D factories: on Quasar UnpackToDest deadlocks
+    // (#62102). The reload between K blocks rounds the partials through SrcA (TF32).
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        compute_hw_config.unpack_modes.emplace(RO_INTERM0_DFB, UnpackMode::UnpackToSrc);
+    }
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group block-count CTA ----
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_blocks_per_core_group) {
@@ -555,12 +575,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
     const auto cores = corerange_to_cores(all_cores, num_cores, row_major);
 
-    uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
     uint32_t n_blocks_per_batch = N / per_core_N;
     uint32_t blocks_per_batch = m_blocks_per_batch * n_blocks_per_batch;
     uint32_t in0_batch_stride = M * K;
     uint32_t in1_batch_stride = K * N;
-    uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
     uint32_t in1_n_block_stride = per_core_N * (transpose_b ? K : 1);
 
     ProgramRunArgs::KernelRunArgs reader_run_args{.kernel = RO_READER_KERNEL};
@@ -590,6 +608,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             {
                 {"in0_tensor_start_tile_id", in0_start_tile_id},
                 {"batch", num_output_blocks_per_core},
+                {"start_m_block", start_m_block},
             });
         AddRuntimeArgsForNode(
             reader_writer_rtas,
@@ -598,6 +617,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"in1_tensor_start_tile_id", in1_start_tile_id},
                 {"batch", num_output_blocks_per_core},
                 {"out_tensor_start_tile_id", out_start_tile_id},
+                {"start_m_block", start_m_block},
             });
 
         num_blocks_written += num_output_blocks_per_core;

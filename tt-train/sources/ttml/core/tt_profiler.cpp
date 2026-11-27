@@ -8,7 +8,8 @@
 
 #include <chrono>
 #include <cstdlib>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
 
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
@@ -82,14 +83,6 @@ TTProfiler::TTProfiler() : m_enabled(false) {
     bool runtime_profiler_enabled = env_value != nullptr && std::string(env_value) == "1";
     if (is_tracy_enabled && runtime_profiler_enabled) {
         enable();
-
-        tt::tt_metal::detail::ProfilerSync(tt::tt_metal::ProfilerSyncState::INIT);
-    }
-}
-
-TTProfiler::~TTProfiler() {
-    if (is_enabled()) {
-        tt::tt_metal::detail::ProfilerSync(tt::tt_metal::ProfilerSyncState::CLOSE_DEVICE);
     }
 }
 

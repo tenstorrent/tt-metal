@@ -36,11 +36,10 @@ expectations (NaN and +inf respectively) rather than tolerance comparisons, sinc
 neither is a value passed_test can meaningfully bound.
 """
 
-import struct
 
-import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import round_to_dest_width
 from helpers.llk_params import (
@@ -50,16 +49,19 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    LOOP_FACTOR,
     SFPU_FAST_APPROX,
     SFPU_INPUT_SCALE,
     SFPU_TYPED_BF16_STORE,
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
+    fp32_bits,
 )
 from helpers.utils import passed_test
 
@@ -121,15 +123,6 @@ _RTOL = {
 }
 
 
-def _bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
-
-def _skip_unsupported(formats, dest_acc):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
-
-
 def _build_add_rsqrt(
     formats,
     dest_acc,
@@ -156,18 +149,18 @@ def _build_add_rsqrt(
         spec_A=spec_a,
     )
 
-    configuration = TestConfig(
-        "sources/sfpu_add_rsqrt_test.cpp",
-        formats,
+    kwargs = dict(
+        test_name="sources/sfpu_add_rsqrt_test.cpp",
+        formats=formats,
         templates=[
             APPROX_MODE(approx),
             SFPU_FAST_APPROX(fast_approx),
             SFPU_TYPED_BF16_STORE(typed_bf16_store),
-            SFPU_INPUT_SCALE(_bits(input_scale)),
-            SFPU_UNARY_SCALAR(_bits(addend)),
+            SFPU_INPUT_SCALE(fp32_bits(input_scale)),
+            SFPU_UNARY_SCALAR(fp32_bits(addend)),
             VECTOR_MODE(VectorMode.RC),
         ],
-        runtimes=[],
+        runtimes=[LOOP_FACTOR(1)],
         variant_stimuli=StimuliConfig(
             src_A.flatten(),
             formats.input_format,
@@ -183,16 +176,40 @@ def _build_add_rsqrt(
         compile_time_formats=True,
     )
 
-    return configuration, src_A
+    return kwargs, src_A
 
 
-def _finish_add_rsqrt(configuration, src_A, formats, dest_acc):
+def _finish_add_rsqrt(
+    configuration,
+    src_A,
+    formats,
+    dest_acc,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """Run a prepared variant, returning (device_tensor, input_tensor) as fp32.
 
     Deliberately returns raw tensors instead of asserting: the negative/zero-argument
     tests need exact NaN/inf predicates rather than a tolerance comparison.
     """
-    res_from_L1 = configuration.run().result[:ELEMENTS_PER_TILE]
+    if isinstance(configuration, dict):
+        outcome = execute_llk(
+            is_perf=is_perf,
+            perf_report=perf_report,
+            run_types=run_types,
+            loop_factor=loop_factor,
+            test_config_kwargs=configuration,
+        )
+        if is_perf:
+            return None, None
+        res_from_L1 = outcome.result[:ELEMENTS_PER_TILE]
+    else:
+        if is_perf:
+            raise ValueError("prepared TestConfig instances are functional-only")
+        res_from_L1 = configuration.run().result[:ELEMENTS_PER_TILE]
     torch_format = format_dict[formats.output_format]
     device = torch.tensor(res_from_L1, dtype=torch_format).flatten().to(torch.float32)
     # The input as the device saw it: quantised to the input format, then to the dest
@@ -212,6 +229,11 @@ def _run_add_rsqrt(
     spec_A=None,
     typed_bf16_store=False,
     input_scale=1.0,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     """Compile+run one variant, returning (device_tensor, input_tensor) as fp32."""
     configuration, src_A = _build_add_rsqrt(
@@ -224,7 +246,16 @@ def _run_add_rsqrt(
         typed_bf16_store=typed_bf16_store,
         input_scale=input_scale,
     )
-    return _finish_add_rsqrt(configuration, src_A, formats, dest_acc)
+    return _finish_add_rsqrt(
+        configuration,
+        src_A,
+        formats,
+        dest_acc,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
 
 
 @parametrize(
@@ -234,13 +265,36 @@ def _run_add_rsqrt(
     approx=[ApproximationMode.No, ApproximationMode.Yes],
     typed_bf16_store=[False, True],
 )
-def test_sfpu_add_rsqrt(formats, dest_acc, addend, approx, typed_bf16_store):
+def test_sfpu_add_rsqrt(
+    formats,
+    dest_acc,
+    addend,
+    approx,
+    typed_bf16_store,
+    *,
+    fast_approx=False,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """rsqrt(x + addend) over a strictly positive domain."""
-    _skip_unsupported(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     device, seen = _run_add_rsqrt(
-        formats, dest_acc, addend, approx=approx, typed_bf16_store=typed_bf16_store
+        formats,
+        dest_acc,
+        addend,
+        approx=approx,
+        fast_approx=fast_approx,
+        typed_bf16_store=typed_bf16_store,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
+    if is_perf:
+        return
 
     # Golden mirrors the functor: add in fp32, rsqrt, then the functor's own
     # convert<vFloat16b>(Nearest) when the dest is 16-bit.
@@ -272,7 +326,17 @@ INPUT_SCALES = (1.0 / 7168, 1.0 / 1536, 2.5)
     input_scale=list(INPUT_SCALES),
     approx=[ApproximationMode.No, ApproximationMode.Yes],
 )
-def test_sfpu_add_rsqrt_input_scale(formats, dest_acc, input_scale, approx):
+def test_sfpu_add_rsqrt_input_scale(
+    formats,
+    dest_acc,
+    input_scale,
+    approx,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """rsqrt(x * input_scale + addend), with the scale applied at fp32.
 
     x spans uniform(0.1, 4.0) / input_scale, so x * input_scale covers the main sweep's
@@ -280,7 +344,7 @@ def test_sfpu_add_rsqrt_input_scale(formats, dest_acc, input_scale, approx):
     that separates an fp32 scale from a bf16 one: rounding 1/7168 to bf16 moves the result
     by about 1e-3 relative, three orders over that cell's rtol.
     """
-    _skip_unsupported(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     addend = 1e-6
 
     device, seen = _run_add_rsqrt(
@@ -290,7 +354,13 @@ def test_sfpu_add_rsqrt_input_scale(formats, dest_acc, input_scale, approx):
         approx=approx,
         input_scale=input_scale,
         spec_A=StimuliSpec.uniform(low=0.1 / input_scale, high=4.0 / input_scale),
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
+    if is_perf:
+        return
 
     scale = torch.tensor(input_scale, dtype=torch.float32)
     golden = round_to_dest_width(torch.rsqrt(seen * scale + addend), dest_acc)
@@ -348,7 +418,7 @@ def test_sfpu_add_rsqrt_fast_approx_negative_guard(formats, dest_acc, approx):
     defect. Comparing the two builds pins the same intent without depending on a value
     the implementation does not define.
     """
-    _skip_unsupported(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     # Strictly negative even after the addend is applied. Both builds seed the same, so
     # the two runs see identical stimuli and can be compared lane by lane.
@@ -366,6 +436,8 @@ def test_sfpu_add_rsqrt_fast_approx_negative_guard(formats, dest_acc, approx):
     # Build both before running either: `prepare()` is the build half of `run()`, and
     # under --compile-producer `run()` skips as soon as the first variant is built, so
     # the second would otherwise never emit its ELF.
+    guarded_cfg = TestConfig(**with_functional_defaults(guarded_cfg))
+    unguarded_cfg = TestConfig(**with_functional_defaults(unguarded_cfg))
     guarded_cfg.prepare()
     unguarded_cfg.prepare()
     guarded, _ = _finish_add_rsqrt(guarded_cfg, guarded_src, formats, dest_acc)
@@ -402,7 +474,7 @@ def test_sfpu_add_rsqrt_zero_argument(formats, dest_acc, approx):
     than an undefined-domain hole -- worth pinning, since the default positive sweep
     never reaches it and RMSNorm with eps=0 on an all-zero row does.
     """
-    _skip_unsupported(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     device, _ = _run_add_rsqrt(
         formats,

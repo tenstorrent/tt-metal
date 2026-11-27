@@ -7,8 +7,8 @@
 #include <climits>
 #include <cstdint>
 #include <cstdlib>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <algorithm>
 #include <cstring>
 #include <exception>
@@ -20,19 +20,20 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
+#include "single_node_dfb_program.hpp"
+#include <tt-metalium/execution/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 namespace tt::tt_metal {
 
@@ -53,15 +54,24 @@ struct DropoutConfig {
     float fill_constant;
     uint32_t seed_0;
     uint32_t seed_1;
+    // Produce the tile dropout works on with an FPU add (c_0 + c_0) instead of a datacopy, so that an FPU
+    // binary init is the last ADDR_MOD_3 programmer before dropout_tile (dropout_kernel_init still runs after
+    // it and programs ADDR_MOD_7). The input is doubled, so kept = 2 * fill * scale.
+    // Defaulted: TensixComputeDropout leaves it unset.
+    bool fpu_add_input = false;
 };
 
 bool check_dropout(
-    std::vector<bfloat16>& src_vec, std::vector<bfloat16>& result_vec, float probability, float scale_factor) {
+    std::vector<bfloat16>& src_vec,
+    std::vector<bfloat16>& result_vec,
+    float probability,
+    float scale_factor,
+    float input_gain) {
     bool pass = true;
     int vec_size = src_vec.size();
     int zero_count = 0;
     for (int i = 0; i < vec_size; i++) {
-        auto srcf = static_cast<float>(src_vec[i]);
+        auto srcf = static_cast<float>(src_vec[i]) * input_gain;
         auto resf = static_cast<float>(result_vec[i]);
         if (resf == 0.0f) {
             zero_count++;
@@ -88,12 +98,73 @@ bool check_dropout(
     return pass;
 }
 
+// Unpacks the source and result tiles and checks the dropout rate and the scaling of the kept elements.
+bool check_result(
+    const std::vector<uint32_t>& src0_vec,
+    const std::vector<uint32_t>& result_vec,
+    float probability,
+    float scale_factor,
+    bool fpu_add_input,
+    std::vector<bfloat16>& res_vec) {
+    auto transform_identity = [](const bfloat16& a) { return a; };
+    std::vector<bfloat16> src0_vec_bfloat16 = unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_identity);
+    res_vec = unpack_uint32_vec_into_bfloat16_vec(result_vec, transform_identity);
+    // The kernel's add_tiles(in, in) feeds dropout twice the source value.
+    constexpr float fpu_add_input_gain = 2.0f;
+    const float input_gain = fpu_add_input ? fpu_add_input_gain : 1.0f;
+    return check_dropout(src0_vec_bfloat16, res_vec, probability, scale_factor, input_gain);
+}
+
+// Quasar: the same dropout program over the 2.0 host API.
+bool test_dropout_standalone_quasar(
+    distributed::MeshDevice& mesh_device,
+    float probability,
+    uint32_t seed,
+    float const_bias,
+    std::vector<bfloat16>& res_vec,
+    bool fpu_add_input) {
+    const uint32_t int_probability = probability * (double)INT_MAX;
+    const float scale_factor_f = 1.0f / (1.0f - probability);
+    uint32_t scale_factor;
+    std::memcpy(&scale_factor, &scale_factor_f, sizeof(uint32_t));
+
+    constexpr uint32_t single_tile_size = 2 * 1024;
+    constexpr uint32_t num_tiles = 128;
+    const std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(single_tile_size * num_tiles, const_bias);
+
+    namespace sn = unit_tests::llk::single_node_dfb;
+    const std::vector<uint32_t> result_vec = sn::run(
+        mesh_device,
+        {.name = "dropout",
+         .inputs =
+             {{.data = src0_vec,
+               .format = tt::DataFormat::Float16_b,
+               .num_tiles = num_tiles,
+               .accessor = "in",
+               .num_entries = 2}},
+         .output = {.format = tt::DataFormat::Float16_b, .num_tiles = num_tiles, .accessor = "out", .num_entries = 2},
+         .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/dropout_sfpu_2_0.cpp",
+         .compile_time_args =
+             {{"num_tiles", num_tiles},
+              {"seed", seed},
+              {"int_probability", int_probability},
+              {"int_scale_factor", scale_factor},
+              {"fpu_add_input", fpu_add_input ? 1u : 0u}},
+         .hw_config = ComputeHardwareConfig{}});
+
+    return check_result(src0_vec, result_vec, probability, scale_factor_f, fpu_add_input, res_vec);
+}
+
 bool test_dropout_standalone(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     float probability,
     uint32_t seed,
     float const_bias,
-    std::vector<bfloat16>& res_vec) {
+    std::vector<bfloat16>& res_vec,
+    bool fpu_add_input) {
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        return test_dropout_standalone_quasar(*mesh_device, probability, seed, const_bias, res_vec, fpu_add_input);
+    }
     bool pass = true;
     uint32_t int_probability = probability * (double)INT_MAX;
     float scale_factor_f = 1.0f / (1.0f - probability);
@@ -108,7 +179,7 @@ bool test_dropout_standalone(
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -163,9 +234,12 @@ bool test_dropout_standalone(
         vector<uint32_t> compute_kernel_args = {num_tiles, 1, seed, int_probability, scale_factor};
 
         constexpr bool math_approx_mode = false;
-        const std::map<std::string, std::string> sfpu_defines = {
+        std::map<std::string, std::string> sfpu_defines = {
             {"SFPU_OP_DROPOUT_INCLUDE", "1"},
         };
+        if (fpu_add_input) {
+            sfpu_defines["DROPOUT_INPUT_FPU_ADD"] = "1";
+        }
 
         CreateKernel(
             program_,
@@ -215,13 +289,7 @@ bool test_dropout_standalone(
         std::vector<uint32_t> result_vec;
         distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
-        auto transform_identity = [](const bfloat16& a) { return a; };
-
-        // Unpack source and result vectors.
-        std::vector<bfloat16> src0_vec_bfloat16 = unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_identity);
-        std::vector<bfloat16> result_vec_bfloat16 = unpack_uint32_vec_into_bfloat16_vec(result_vec, transform_identity);
-        res_vec = result_vec_bfloat16;
-        pass &= check_dropout(src0_vec_bfloat16, result_vec_bfloat16, probability, scale_factor_f);
+        pass &= check_result(src0_vec, result_vec, probability, scale_factor_f, fpu_add_input, res_vec);
     } catch (const std::exception& e) {
         log_error(tt::LogTest, "Test failed with exception!");
         log_error(tt::LogTest, "{}", e.what());
@@ -239,8 +307,8 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
     uint32_t seed_1 = test_config.seed_1;
 
     std::vector<bfloat16> res_0, res_1, res_2;
-    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, res_0);
-    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, res_1);
+    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, res_0, test_config.fpu_add_input);
+    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, res_1, test_config.fpu_add_input);
     bool repeatable = std::equal(res_0.begin(), res_0.end(), res_1.begin());
     if (!repeatable) {
         log_error(tt::LogTest, "Same parameters gave different results probability={}, seed={}", probability, seed_0);
@@ -250,7 +318,8 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
     pass &= repeatable;
 
     if (probability != 0.0 && probability != 1.0) {
-        pass &= test_dropout_standalone(mesh_device, probability, seed_1, fill_constant, res_2);
+        pass &=
+            test_dropout_standalone(mesh_device, probability, seed_1, fill_constant, res_2, test_config.fpu_add_input);
         bool unique = !std::equal(res_0.begin(), res_0.end(), res_2.begin());
         if (!unique) {
             log_error(
@@ -281,6 +350,25 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeDropout) {
             .fill_constant = fill_constant,
             .seed_0 = static_cast<uint32_t>(rand()),
             .seed_1 = static_cast<uint32_t>(rand())};
+        unit_tests::compute::sfpu::dropout::test_dropout(this->devices_.at(0), test_config);
+    }
+}
+
+// Dropout on a tile the FPU produced (add_tiles) rather than a datacopy. The FPU binary init programs
+// ADDR_MOD_3 with a Dest increment; dropout's SFPLOAD/SFPSTORE must step Dest only through dst_reg++
+// (no-increment addressing), so every kept element must still read back as 2 * fill * scale.
+TEST_F(LLKMeshDeviceFixture, TensixComputeDropoutAfterFpuAdd) {
+    srand(0);
+    int num_tests = 5;
+    float fill_constant = 9.0;
+    for (int i = 0; i <= num_tests; i++) {
+        float probability = (float)i / (float)num_tests;
+        unit_tests::compute::sfpu::dropout::DropoutConfig test_config = {
+            .probability = probability,
+            .fill_constant = fill_constant,
+            .seed_0 = static_cast<uint32_t>(rand()),
+            .seed_1 = static_cast<uint32_t>(rand()),
+            .fpu_add_input = true};
         unit_tests::compute::sfpu::dropout::test_dropout(this->devices_.at(0), test_config);
     }
 }

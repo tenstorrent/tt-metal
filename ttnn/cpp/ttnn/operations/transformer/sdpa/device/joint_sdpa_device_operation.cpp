@@ -8,7 +8,7 @@
 
 #include <cmath>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
@@ -55,13 +55,13 @@ void JointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate storage types and buffers
     for (const auto& tensor : input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
-        TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.is_allocated(), "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B,
             "Inputs to Joint SDPA must be BF16 or BF8");
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
     }
 
@@ -243,6 +243,7 @@ JointSDPAResult joint_scaled_dot_product_attention(
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::prim::JointSDPADeviceOperation;
 
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 

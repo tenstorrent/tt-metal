@@ -312,37 +312,83 @@ def begin_graph_capture(run_mode=None, *, _internal=False):
     return _cpp_begin_graph_capture(run_mode)
 
 
+def _end_python_session_if_outermost() -> bool:
+    """After a C++ capture has ended, successfully or not: when no capture is left active, stop Python I/O recording
+    and turn off the stack traces this session's begin turned on. Returns whether that was the outermost capture."""
+    global _python_io_recording_enabled, _python_stack_traces_auto_for_session
+    if is_graph_capture_active():
+        return False
+    _python_io_recording_enabled = False
+    if _python_stack_traces_auto_for_session:
+        disable_python_stack_traces()
+        _python_stack_traces_auto_for_session = False
+    return True
+
+
 def end_graph_capture():
     """End graph capture and return the captured graph.
 
     Automatically disables Python I/O recording when the outermost
     capture session ends.  If Python stack traces were enabled by auto-capture they are disabled again.
     """
-    global _python_io_recording_enabled, _python_stack_traces_auto_for_session
-    result = _cpp_end_graph_capture()
-    if not is_graph_capture_active():
-        _python_io_recording_enabled = False
-        if _python_stack_traces_auto_for_session:
-            disable_python_stack_traces()
-            _python_stack_traces_auto_for_session = False
+    try:
+        result = _cpp_end_graph_capture()
+    finally:
+        # The C++ capture ends even when finalizing it throws, so end the Python side on that path too.
+        _end_python_session_if_outermost()
     return result
 
 
 def end_graph_capture_to_file(report_path):
-    """Wrapper that appends Python I/O data to the JSON report."""
-    global _python_io_recording_enabled, _python_stack_traces_auto_for_session
-    result_str = _cpp_end_graph_capture_to_file(report_path)
-    if _python_io_data:
-        _write_python_io_sidecar(report_path)
-    if has_comparison_records():
-        _write_comparison_records_sidecar(report_path)
-        reset_comparison_records_data()
-    if not is_graph_capture_active():
-        _python_io_recording_enabled = False
-        if _python_stack_traces_auto_for_session:
-            disable_python_stack_traces()
-            _python_stack_traces_auto_for_session = False
+    """End graph capture, write the C++ report to *report_path* and the Python I/O and comparison records to sidecars
+    beside it, and return the captured graph.
+
+    The capture ends even when a write fails. When it was the outermost capture, the Python side ends with it: I/O
+    recording stops, the stack traces this capture turned on are turned off, and its I/O and comparison records are
+    dropped, whether they were written or not. A failed nested write leaves the records to the outer capture, which can
+    still write them.
+    """
+    global _python_io_data
+    try:
+        result_str = _cpp_end_graph_capture_to_file(report_path)
+        if _python_io_data:
+            _write_python_io_sidecar(report_path)
+        if has_comparison_records():
+            _write_comparison_records_sidecar(report_path)
+            if is_graph_capture_active():
+                # Written to this nested capture's sidecar; the outer capture's starts from what comes after.
+                reset_comparison_records_data()
+    finally:
+        if _end_python_session_if_outermost():
+            # Kept, the records of a report that may not exist would wait for the next capture, and the comparison
+            # records be stored by a later flush_comparison_records_to_db with another session's.
+            reset_comparison_records_data()
+            _python_io_data = []
     return json.loads(result_str)
+
+
+# Mesh coordinates listed one by one in a tensor summary before the rest are counted instead. Every tensor argument of
+# every operation carries the summary, in the Python I/O sidecar and the report DB, so a tensor spread over a
+# 16x8 multi-host mesh would otherwise add 128 coordinates to each.
+_MAX_MESH_COORDS_LISTED = 8
+# The two shortened forms, kept fixed so a tool can parse the count back out: the whole mesh, and the last entry after
+# the first few coordinates. The marker counts every coordinate, where _safe_arg_str's "... +N more" counts the sequence
+# elements it dropped: a different thing, and a different spelling, so a tool that treats "+N more" as a cut operand
+# list (the Quasar graph-ops generator does) doesn't skip every argument of a tensor spread over a large mesh.
+_MESH_COORDS_WHOLE_MESH_FORMAT = "all {count}"
+_MESH_COORDS_COUNT_MARKER_FORMAT = "... {count} in all"
+
+
+def _mesh_coords_summary(mesh_coords, device) -> list[str] | str:
+    """The tensor's mesh coordinates: a list of each one for a few; for more, the string ``all <n>`` when a device
+    tensor spans its whole mesh, else a list of the first few and a ``... <n> in all`` count. A host tensor has no mesh
+    to compare with, so it always gets the list form."""
+    listed = [str(c) for c in mesh_coords[:_MAX_MESH_COORDS_LISTED]]
+    if len(mesh_coords) <= _MAX_MESH_COORDS_LISTED:
+        return listed
+    if device is not None and len(mesh_coords) == device.get_num_devices():
+        return _MESH_COORDS_WHOLE_MESH_FORMAT.format(count=len(mesh_coords))
+    return listed + [_MESH_COORDS_COUNT_MARKER_FORMAT.format(count=len(mesh_coords))]
 
 
 def _ttnn_tensor_summary(t) -> str:
@@ -374,7 +420,7 @@ def _ttnn_tensor_summary(t) -> str:
     topology = t.tensor_topology()
     mesh_coords = topology.mesh_coords()
     if mesh_coords:
-        info["mesh_coords"] = [str(c) for c in mesh_coords]
+        info["mesh_coords"] = _mesh_coords_summary(mesh_coords, device)
     dist_shape = topology.distribution_shape()
     if dist_shape is not None:
         info["distribution_shape"] = str(dist_shape)
@@ -687,16 +733,23 @@ def full_graph_capture(report_path: str, *, run_mode=None, slow_dispatch: bool =
     if slow_dispatch:
         ttnn.CONFIG.enable_fast_runtime_mode = False
 
+    capture_open = False
     try:
         begin_graph_capture(run_mode if run_mode is not None else RunMode.NORMAL)
+        capture_open = True
         yield
+        # Ends this context's capture whether or not the report is written.
+        capture_open = False
         end_graph_capture_to_file(report_path)
     finally:
-        if is_graph_capture_active():
+        # Only when the body raised. Ending whatever capture is active instead would end an enclosing one (the graph
+        # report fixture's, say) after this context's own capture had already ended.
+        if capture_open:
             try:
-                _cpp_end_graph_capture()
-            except Exception:
-                pass
+                end_graph_capture()
+            except Exception as exception:
+                # Finalizing the capture threw. It has still ended; the body's own error is the one to raise.
+                logger.warning(f"full_graph_capture could not end its graph capture: {exception}")
         if not prev_buffer_tracing:
             disable_detailed_buffer_tracing()
         if not prev_stack_traces:

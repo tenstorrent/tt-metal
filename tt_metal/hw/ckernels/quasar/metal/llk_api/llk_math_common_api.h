@@ -13,6 +13,7 @@
 #include "llk_math_common.h"
 #include "llk_operands.h"
 #include "llk_sync.h"
+#include "api/debug/waypoint.h"
 
 namespace llk_math_detail {
 template <auto...>
@@ -28,12 +29,9 @@ inline constexpr bool always_false_v = false;
  * @brief Configures math hardware.
  * Sets up ALU formats for math destination register and source registers.
  *
- * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
  * @tparam EN_32BIT_DEST_FORMAT: Set to true to use 32bit math dest in Float32 or Int32 format
- * @param srca_operand: The srcA input operand circular buffer, used to infer srcA data_format if not implied math
- * format
- * @param srcb_operand: The srcB input operand circular buffer, used to infer srcB data_format if not implied math
- * format
+ * @param srca_operand: The srcA input operand circular buffer, used to infer the srcA data_format
+ * @param srcb_operand: The srcB input operand circular buffer, used to infer the srcB data_format
  */
 template <bool EN_32BIT_DEST_FORMAT>
 inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
@@ -43,7 +41,7 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     const DataFormat srca_format = static_cast<DataFormat>(unpack_dst_format[srca_operand_id]);
     const DataFormat srcb_format = static_cast<DataFormat>(unpack_dst_format[srcb_operand_id]);
 
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, EN_32BIT_DEST_FORMAT>(srca_format, srcb_format);
+    _llk_math_srcAB_hw_configure_<EN_32BIT_DEST_FORMAT>(srca_format, srcb_format);
 }
 
 inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
@@ -97,20 +95,12 @@ inline void llk_math_set_dvalid() {
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
  * compute APIs.
  */
-inline void llk_math_wait_for_dest_available() {
-    _llk_math_wait_for_dest_available_();
-
-    if constexpr (UnpackToDestEn) {
-        _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
-            semaphore::UNPACK_MATH);
-        // The UNPACK_MATH get is in llk_math_dest_section_done: the tile stays counted until MATH_PACK holds it.
-    }
-}
+inline void llk_math_wait_for_dest_available() { _llk_math_wait_for_dest_available_(); }
 
 /**
- * @brief Signals that the current destination section is done.
- * After math is done, posts to the MATH_PACK semaphore so the packer can proceed;
- * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ * @brief Signals that the current Dest section is done.
+ * Posts MATH_PACK so the packer can proceed. In SyncHalf mode, it also switches this thread to the other section.
+ * @tparam EN_32BIT_DEST: Set to true for Dest values with 32 bits in Float32 or Int32 format.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
@@ -118,60 +108,43 @@ inline void llk_math_wait_for_dest_available() {
  */
 template <bool EN_32BIT_DEST>
 inline void llk_math_dest_section_done() {
-    // Always post MATH_PACK, the math thread is in the chain for every op, including the
-    // no-real-work unpack-to-dest forwarder.
-    _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
-    if constexpr (UnpackToDestEn) {
-        // Release the unpacked tile only now, after MATH_PACK counts it: getting it at acquire left both
-        // semaphores at zero while SFPU still worked on Dest, and unpack overwrote the tile.
-        _llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);
-    }
-    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
-        _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
-    }
+    _llk_math_dest_section_done_<DST_SYNC_MODE, EN_32BIT_DEST>();
 }
 
 /**
- * @brief Initializes math–pack synchronization for the destination register.
- * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore
+ * @brief Initializes synchronization between math and pack for Dest.
+ * Waits for previous packs to finish, resets the destination base, and initializes MATH_PACK and the loan semaphores.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
  * compute APIs.
  */
-inline void llk_math_pack_sync_init() {
-    _llk_math_pack_sync_init_<DST_SYNC_MODE>();
-
-    if constexpr (UnpackToDestEn) {
-        constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
-        _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
-    }
-}
+inline void llk_math_pack_sync_init() { _llk_math_pack_sync_init_<DST_SYNC_MODE>(); }
 
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
 // The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h
 // can issue MATH((...)) uniformly across arches.
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t /*srca_new_operand*/) {}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srcb(const std::uint32_t /*srcb_new_operand*/) {}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format(
     const std::uint32_t /*srca_new_operand*/, const std::uint32_t /*srcb_new_operand*/) {}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format(
     const std::uint32_t /*srca_old_operand*/,
     const std::uint32_t /*srca_new_operand*/,
     const std::uint32_t /*srcb_old_operand*/,
     const std::uint32_t /*srcb_new_operand*/) {}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srca(
     const std::uint32_t /*srca_old_operand*/, const std::uint32_t /*srca_new_operand*/) {}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srcb(
     const std::uint32_t /*srcb_old_operand*/, const std::uint32_t /*srcb_new_operand*/) {}

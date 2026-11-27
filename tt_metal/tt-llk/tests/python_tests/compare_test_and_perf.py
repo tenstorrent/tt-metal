@@ -9,12 +9,12 @@ Wormhole and Blackhole share files and are imported twice. Quasar files live in
 ``quasar/`` and drop a trailing ``_quasar``. ``CHIP_ARCH`` selects the architecture
 unless ``--arch`` is passed. Comparison is the union of values on each axis.
 
-``math_op`` joins ``mathop`` only when the sides disagree. A tuple axis whose name
+Axes join by name; ``AXIS_ALIASES`` renames one side's axis when the sides disagree. A tuple axis whose name
 is the other side's axes (``dest_sync_dest_acc``) splits when slot types match.
 ``CROSS_ARCH_FUNCTION_EXCEPTIONS`` pairs a function that lives in another module.
 Format lists print shared values first, then side-only values, each alphabetical.
-``iterations``, ``loop_factor``, ``run_types``, ``is_perf``, and
-``implied_math_format`` are shown and ignored. Composite axes are repeated one
+``iterations``, ``loop_factor``, ``run_types``, and ``is_perf`` are shown and
+ignored. Composite axes are repeated one
 field at a time. ``--csv DIR`` writes that table.
 
     python compare_test_and_perf.py
@@ -84,12 +84,90 @@ def _reload_local_dependencies(module: ModuleType, root: Path) -> None:
         importlib.reload(value)
 
 
+# Fused cases come from YAML; the comparer expands it without building a FuserConfig.
+FUSER_MODULES = frozenset(
+    {"test_fused", "perf_fused", "test_fused_quasar", "perf_fused_quasar"}
+)
+
+
+def _import_fresh_fuser(root: Path, arch: str) -> ModuleType:
+    """Import ``fuser.sweep`` for ``arch``; its parsers bind the architecture at import."""
+    os.environ["CHIP_ARCH"] = arch
+    _clear_chip_arch_cache()
+    for name in [n for n in sys.modules if n == "fuser" or n.startswith("fuser.")]:
+        del sys.modules[name]
+    return importlib.import_module("fuser.sweep")
+
+
+def _fuser_case_fields(case_name: str, definition: dict) -> tuple:
+    """One row per expanded case: the YAML fields that identify its sweep point."""
+
+    def collect(nodes: list, key: str) -> str:
+        return "+".join(sorted({str(node[key]) for node in nodes if key in node}))
+
+    stages = definition.get("operations", [])
+    math_nodes = [node for stage in stages for node in stage.get("math", [])]
+    pack_nodes = [node for stage in stages for node in stage.get("pack", [])]
+    yaml_name, _, case = case_name.partition("__")
+    return (
+        yaml_name,
+        case,
+        bool(definition.get("dest_acc", False)),
+        collect(definition.get("operands", []), "format"),
+        collect(math_nodes + pack_nodes, "operation"),
+        collect(math_nodes, "unpack_to_dest"),
+    )
+
+
+_FUSER_AXES = "yaml,case,dest_acc,formats,operations,unpack_to_dest"
+
+
+def fuser_module(path: Path, root: Path, arch: str) -> ModuleType:
+    """Stand in for a fused test module: ``test_fuser`` carries one row per YAML case."""
+    sweep = _import_fresh_fuser(root, arch)
+    config_dir = sweep.FUSER_CONFIG_DIR
+    yaml_files = sorted(config_dir.glob("*.yaml"))
+    if path.stem.endswith("_quasar"):
+        yaml_files += sorted((config_dir / "quasar").glob("*.yaml"))
+
+    rows = []
+    for yaml_path in yaml_files:
+        test_name = str(yaml_path.relative_to(config_dir).with_suffix(""))
+        definition = sweep.FuserConfigSchema.load_definition(test_name)
+        supported = definition.get("supported_archs")
+        if supported is not None and arch not in supported:
+            continue
+        for case_name, case in sweep.expand_fuser_configs(test_name, definition):
+            rows.append(_fuser_case_fields(case_name, case))
+
+    def test_fuser():
+        raise NotImplementedError("comparer adapter, not a runnable test")
+
+    module = ModuleType(
+        ".".join(path.resolve().relative_to(root).with_suffix("").parts)
+    )
+    test_fuser.__module__ = module.__name__
+    marks = [pytest.mark.parametrize(_FUSER_AXES, rows)]
+    if path.stem.startswith("perf_"):
+        from helpers.llk_params import PERF_RUN_TYPES_QUASAR
+
+        marks.append(pytest.mark.parametrize("run_type", PERF_RUN_TYPES_QUASAR[0]))
+    test_fuser.pytestmark = marks
+    module.test_fuser = test_fuser
+    return module
+
+
 def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    # tt_llk_perf lives outside the test tree; the pytest plugin adds it, this script must too.
+    tools_python = str(root.parent.parent / "tools" / "python")
+    for import_root in (tools_python, str(root)):
+        if import_root not in sys.path:
+            sys.path.insert(0, import_root)
     os.environ.setdefault("LLK_HOME", str(root.parent.parent))
     os.environ["CHIP_ARCH"] = arch
     _clear_chip_arch_cache()
+    if path.stem in FUSER_MODULES:
+        return fuser_module(path, root, arch)
     dotted = ".".join(path.resolve().relative_to(root).with_suffix("").parts)
     loaded = sys.modules.get(dotted)
     if loaded is not None:
@@ -98,39 +176,6 @@ def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
         _clear_chip_arch_cache()
         return importlib.reload(loaded)
     return importlib.import_module(dotted)
-
-
-_IGNORED_LEAF_NAMES = frozenset({"implied_math_format", "ImpliedMathFormat"})
-
-
-def _is_ignored_leaf(name: str, leaf: Any) -> bool:
-    tail = name.rsplit(".", 1)[-1].split("#", 1)[0]
-    if tail in _IGNORED_LEAF_NAMES:
-        return True
-    return isinstance(leaf, enum.Enum) and type(leaf).__name__ == "ImpliedMathFormat"
-
-
-def coverage_canon(value: Any) -> str | None:
-    """Canon used for coverage. Drops packed implied_math_format fields."""
-    if isinstance(value, enum.Enum) and type(value).__name__ == "ImpliedMathFormat":
-        return None
-    if is_dataclass(value) and not isinstance(value, type):
-        members = []
-        for field in fields(value):
-            if field.name in _IGNORED_LEAF_NAMES:
-                continue
-            piece = coverage_canon(getattr(value, field.name))
-            if piece is not None:
-                members.append(f"{field.name}={piece}")
-        return f"{type(value).__name__}({', '.join(members)})"
-    if (
-        isinstance(value, (list, tuple))
-        and value
-        and not all(isinstance(item, _SCALAR_TYPES) for item in value)
-    ):
-        parts = [coverage_canon(item) for item in value]
-        return "[" + ", ".join(part for part in parts if part is not None) + "]"
-    return canon(value)
 
 
 def canon(value: Any) -> str:
@@ -210,7 +255,7 @@ def axis_value_sets(pmarks: list) -> Sweep:
         canonical_row = {}
         raw_row = {}
         for name, val in zip(axis_names, row):
-            key = coverage_canon(val) or canon(val)
+            key = canon(val)
             canonical_row[name] = key
             raw_row[name] = val
             if key not in seen[name]:
@@ -225,7 +270,7 @@ def axis_value_sets(pmarks: list) -> Sweep:
 
 
 # Applied only when the two sides use different names.
-AXIS_ALIASES = {"math_op": "mathop"}
+AXIS_ALIASES: dict[str, str] = {}
 
 
 def _rename_key(mapping: dict, old: str, new: str) -> dict:
@@ -414,8 +459,6 @@ def parameter_values(sweep: Sweep, ignored_axes: frozenset[str]) -> Parameters:
         for value in values:
             leaves = flatten_axis_value(value, axis)
             for name, leaf in leaves:
-                if _is_ignored_leaf(name, leaf):
-                    continue
                 kept_names.append(name)
                 axis_params.add(name)
                 key = canon(leaf)
@@ -447,12 +490,7 @@ def normalize(name: str) -> str:
 
 
 # (left stem, left function) -> (right stem, right function), both normalized.
-CROSS_ARCH_FUNCTION_EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {
-    ("eltwise_binary", "eltwise_binary_dest_reuse"): (
-        "eltwise_binary_reuse_dest",
-        "eltwise_binary_reuse_dest",
-    ),
-}
+CROSS_ARCH_FUNCTION_EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {}
 
 
 def module_key(path: Path) -> str:
@@ -528,8 +566,10 @@ def pair_functions(
     return pairs
 
 
-MEASUREMENT_AXES = frozenset({"iterations", "loop_factor", "run_types", "is_perf"})
-IGNORED_AXES = MEASUREMENT_AXES | frozenset({"implied_math_format"})
+MEASUREMENT_AXES = frozenset(
+    {"iterations", "loop_factor", "run_types", "run_type", "is_perf"}
+)
+IGNORED_AXES = MEASUREMENT_AXES
 
 
 @dataclass(frozen=True)

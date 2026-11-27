@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
-#include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 
@@ -21,7 +20,9 @@ namespace ckernel::sfpu {
  * @tparam format The data format that determines which implementation to use.
  *                Supported formats:
  *                - DataFormat::Int32: Use integer implementation with INT32 instruction mode
- *                - DataFormat::UInt32: Use integer implementation with INT32_2S_COMP instruction mode
+ *                  (a native Int32 tile is a two's-complement word in Dest; loaded and stored as is)
+ *                - DataFormat::UInt32: Use integer implementation with INT32 instruction mode
+ *                  (UInt32 is stored as raw unsigned bits; loaded and stored as is)
  *                - DataFormat::Float32: Uses floating-point implementation with FP32 instruction mode
  * @param tile_idx_0 The index of the first tile in the Dest register to operate on.
  * @param tile_idx_1 The index of the second tile in the Dest register to operate on.
@@ -33,13 +34,16 @@ inline void calculate_add_top_row(const uint tile_idx_0 = 0, const uint tile_idx
         format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::Float32,
         "Unsupported data format. Supported formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::Float32");
 
-    // Determine instruction mode and replay buffer parameters based on format.
-    // Int32 is packed as sign+magnitude in L1/dest; use INT32_2S_COMP so SFPLOAD/SFPSTORE
-    // auto-converts sign+magnitude <-> two's complement (SFPIADD operates in two's complement).
-    // UInt32 is packed as raw unsigned bits; use INT32 (no conversion) for correct unsigned arithmetic.
-    constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Int32)    ? InstrModLoadStore::INT32_2S_COMP
-                                                   : (format == DataFormat::UInt32) ? InstrModLoadStore::INT32
-                                                                                    : InstrModLoadStore::FP32;
+    // Instruction mode and replay buffer parameters follow the format. The SFPLOAD/SFPSTORE mode comes
+    // from the shared format mapping, as in ckernel_sfpu_reduce.h: Float32 -> FP32, Int32/UInt32 -> INT32.
+    // Int32 and UInt32 tiles hold raw two's-complement / unsigned words in Dest (a native 32-bit tile
+    // is moved L1 -> Dest unchanged), which is what SFPIADD consumes, so INT32 leaves the bits alone. INT32_2S_COMP
+    // would apply the sign-magnitude <-> two's-complement conversion on both the load and the store and corrupt the sum
+    // whenever an operand is negative and neither is zero (the two conversions are inverses, so a negative paired with
+    // a zero round-trips intact). This assumes native Int32 via unpack-to-dest. A sign-magnitude Dest (an Int8 tile
+    // promoted through the FPU by copy_tile with a 32-bit Dest) is only correct here for non-negative values;
+    // supporting its negatives would need a SIGN_MAGNITUDE_FORMAT flag like _add_int_ has.
+    constexpr InstrModLoadStore INSTRUCTION_MODE = GetSfpLoadStoreInstrMod<format>();
 
     constexpr std::uint32_t REPLAY_BUFFER_INDEX = (format == DataFormat::Float32) ? 4 : 0;
     constexpr std::uint32_t REPLAY_BUFFER_COUNT = 4;
@@ -63,7 +67,7 @@ inline void calculate_add_top_row(const uint tile_idx_0 = 0, const uint tile_idx
     TT_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_1 + 16 + 2);  // face 3, rows 0-3, odd columns
 
     // Call replay buffer (integer: index 0, 4 instructions; float: index 4, 8 instructions)
-    lltt::replay(REPLAY_BUFFER_INDEX, REPLAY_BUFFER_COUNT);
+    TTI_REPLAY(REPLAY_BUFFER_INDEX, REPLAY_BUFFER_COUNT, 0, 0);
 
     TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_dst);
     TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_dst + 2);
@@ -82,7 +86,7 @@ inline void init_add_top_row() {
 
     // Set up integer replay buffer (index 0, 4 instructions)
     // Contains: 4 TTI_SFPIADD operations for adding top rows
-    lltt::record(0, 4);
+    TTI_REPLAY(0, 4, 0, 1);
     TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, 4);
     TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG1, 4);
     TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG2, 4);
@@ -90,7 +94,7 @@ inline void init_add_top_row() {
 
     // Set up floating-point replay buffer (index 4, 8 instructions)
     // Contains: 4 TT_SFPADD + 4 TTI_SFPNOP operations for adding top rows
-    lltt::record(4, 4);
+    TTI_REPLAY(4, 4, 0, 1);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0);
     TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG1, 0);
     TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG2, 0);

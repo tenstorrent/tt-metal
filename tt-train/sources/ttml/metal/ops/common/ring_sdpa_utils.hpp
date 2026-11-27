@@ -4,15 +4,15 @@
 
 #pragma once
 
-#include <enchantum/enchantum.hpp>
-
 #include <cstdint>
+#include <optional>
 #include <string_view>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/constants.hpp>
 #include <utility>
 
 #include "metal/common/const_utils.hpp"
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::metal::ops {
@@ -60,6 +60,16 @@ inline std::pair<bool, AttentionMaskType> get_device_execution_info(
     }
 }
 
+// The mask the device at `mesh_coordinate` uses at this ring step, or nullopt when it sits the step out. The ring SDPA
+// program factories build one program per device from it, and an empty one for a device that sits the step out.
+template <typename RingAttrs>
+inline std::optional<AttentionMaskType> mask_for_device_at_step(
+    const RingAttrs& attrs, const ttnn::MeshCoordinate& mesh_coordinate) {
+    const auto [should_execute, mask_type] = get_device_execution_info(
+        mesh_coordinate[attrs.ring_axis], attrs.step, attrs.ring_size, attrs.mask_type, attrs.ring_direction);
+    return should_execute ? std::optional<AttentionMaskType>(mask_type) : std::nullopt;
+}
+
 // Common attribute validation for the ring SDPA device operations. The ring factories
 // dispatch straight to the SDPA program factories, so the SDPA device operations'
 // validation never runs for the ring path — these checks are its replacement.
@@ -95,34 +105,13 @@ inline void validate_sdpa_tensor(
     std::string_view name,
     const ttnn::Tensor& query,
     ttnn::DataType required_dtype = ttnn::DataType::BFLOAT16) {
-    TT_FATAL(
-        tensor.storage_type() == ttnn::StorageType::DEVICE,
-        "Ring SDPA requires '{}' to be on DEVICE, got storage type '{}'",
-        name,
-        enchantum::to_string(tensor.storage_type()));
-    TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null)", name);
+    check_device_tensor(tensor, "RingSDPA", name, {.dtypes = {required_dtype}});
     TT_FATAL(tensor.device() == query.device(), "Tensor '{}' must be on the same mesh device as the query", name);
     TT_FATAL(
         tensor.logical_shape().rank() == 4U,
         "Tensor '{}' must have rank 4, got rank {}",
         name,
         tensor.logical_shape().rank());
-    TT_FATAL(
-        tensor.layout() == ttnn::Layout::TILE,
-        "Tensor '{}' must have TILE layout, got '{}'",
-        name,
-        enchantum::to_string(tensor.layout()));
-    TT_FATAL(
-        tensor.dtype() == required_dtype,
-        "Tensor '{}' must have data type '{}', got '{}'",
-        name,
-        enchantum::to_string(required_dtype),
-        enchantum::to_string(tensor.dtype()));
-    TT_FATAL(
-        tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        "Tensor '{}' must use INTERLEAVED memory layout, got '{}'",
-        name,
-        enchantum::to_string(tensor.memory_config().memory_layout()));
 }
 
 // Q/K/V contract shared by the ring forward and backward operations: the per-tensor

@@ -9,13 +9,12 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -64,9 +63,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
     constexpr const char* COMPUTE_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh_metal2.cpp";
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_data_format = cb_dataformat_for(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_data_format);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_data_format = cb_dataformat_for(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     const auto& input_shape = a.padded_shape();
@@ -94,7 +93,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         plan.split;
 
     // Same grid `make_block_plan` split over -- the runtime-arg loop below walks it in core order.
-    IDevice* device = a.device();
+    auto* device = a.device();
     const CoreCoord grid_size = device->compute_with_storage_grid_size();
 
     if (single_sub_block_size > 0 && single_block_size % single_sub_block_size) {
@@ -106,14 +105,14 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
     uint32_t row_size_bytes;
 
     uint32_t el_size = a.element_size();
-    if (a.dtype() == DataType::BFLOAT8_B) {
+    if (a.dtype() == DataType::BFLOAT8_B || tt::tt_metal::is_mx(a.dtype())) {
         row_size_bytes = input_shape[-1] * output.element_size();
         el_size = output.element_size();
     } else {
         row_size_bytes = input_shape[-1] * a.element_size();
     }
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     ProgramSpec spec{.name = "untilize_multi_core_block"};
 
@@ -191,6 +190,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
                     {"num_tiles_per_2d", num_tiles_2d},
                     {"third_dim", third_dim},
                     {"total_tiles_per_row", total_tiles_per_row},
+                    {"out_dim_c", 1u},
+                    {"in_dim_c", 1u},
                 },
             .runtime_arg_schema =
                 {
@@ -251,10 +252,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         single_block_size_cliff_col * single_block_size / single_sub_block_size;
 
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (input_data_format == tt::DataFormat::Int32 || input_data_format == tt::DataFormat::UInt32 ||
-        input_data_format == tt::DataFormat::Float32) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
 
     // The compute kernel stays split per region -- each region has its own block *count* -- but each
     // instance binds the buffer set matching its cores' block *width*. The region's block-width CTA
@@ -277,7 +274,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         // would name `cliffrow_set`'s input even when that set is empty -- an operand with no buffer
         // on any core -- and would do so in the full-set kernels too.
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        if (fp32_dest_acc_en) {
+        if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
             compute_cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
         }
 

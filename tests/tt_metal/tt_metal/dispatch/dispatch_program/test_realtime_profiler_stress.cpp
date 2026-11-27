@@ -24,20 +24,22 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 
+#include "common/tt_backend_api_types.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include "tt_metal/distributed/realtime_profiler_manager.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -101,7 +103,7 @@ constexpr uint64_t kStartupRaceSlackCycles = 100'000;
 constexpr double kMaxBadTimestampFraction = 0.01;
 
 distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     // Blank kernels on BRISC + NCRISC + TRISC on a single core. Single-core
     // minimizes dispatch payload (one launch_msg per RISC, one core's worth
@@ -138,6 +140,9 @@ std::shared_ptr<distributed::MeshDevice> open_full_mesh() {
 }
 
 TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
+    if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar reserves no core for the real-time profiler";
+    }
     auto mesh_device = open_full_mesh();
     ASSERT_NE(mesh_device, nullptr);
 
@@ -296,6 +301,9 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
 // queued, so the host FIFO, the BRISC ring and the record ring fill (~49k records) until dispatch_s waits; after
 // unpausing, every record must arrive and the host's stall count and length must match what the device saw.
 TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
+    if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar reserves no core for the real-time profiler";
+    }
     // ~98k records: twice what the host FIFO, BRISC ring and record ring hold together.
     constexpr uint32_t kNumReplays = 24;
     constexpr auto kStallDeadline = std::chrono::seconds(10);
@@ -390,6 +398,9 @@ TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
 }
 
 TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
+    if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar reserves no core for the real-time profiler";
+    }
     const std::chrono::seconds run_window(
         tt::parse_env<std::uint32_t>("TT_RT_PROFILER_DROP_ACCOUNTING", kDefaultDropAccountingSeconds));
 

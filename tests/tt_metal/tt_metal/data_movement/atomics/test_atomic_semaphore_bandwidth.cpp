@@ -6,8 +6,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "../dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -41,7 +41,7 @@ bool run_atomic_semaphore_test(distributed::MeshDevice& mesh_device, const Atomi
     /* ================ SETUP ================ */
 
     // Program
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     // Buffer Parameters
     const size_t total_data_size = test_config.semaphore_addr_offset + sizeof(uint32_t);

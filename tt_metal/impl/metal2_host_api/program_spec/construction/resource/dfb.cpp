@@ -4,39 +4,23 @@
 
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <map>
-#include <memory>
-#include <numeric>
 #include <optional>
-#include <set>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
-#include <hostdevcommon/tensor_accessor/arg_config.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
-#include "impl/context/metal_context.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -50,6 +34,34 @@ std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
     }
     const Tile tile = spec.tile_format_metadata.value_or(Tile{});
     return LLKMetadata{.format = *spec.data_format_metadata, .tile = tile};
+}
+
+uint8_t DFBAccessPatternCode(DFBAccessPattern pattern) {
+    switch (pattern) {
+        case DFBAccessPattern::STRIDED: return 0;
+        case DFBAccessPattern::ALL: return 1;
+        case DFBAccessPattern::BLOCKED: return 2;
+    }
+    TT_THROW("Unknown DFBAccessPattern {}", static_cast<int>(pattern));
+}
+
+// Build a map of DFB name: (producer access pattern, consumer access pattern) for all DFBs
+// in the program. This is used to bake the access patterns into each binding's DFBBindingToken
+// at compile time.
+DFBNameToPatternsMap MakeDFBNameToPatterns(const CollectedSpecData& collected) {
+    DFBNameToPatternsMap out;
+    out.reserve(collected.dfb_endpoints.size());
+    for (const auto& [dfb_name, endpoints] : collected.dfb_endpoints) {
+        DFBSidePatterns patterns;
+        if (!endpoints.producers.empty()) {
+            patterns.pap = DFBAccessPatternCode(endpoints.producers.front().binding->access_pattern);
+        }
+        if (!endpoints.consumers.empty()) {
+            patterns.cap = DFBAccessPatternCode(endpoints.consumers.front().binding->access_pattern);
+        }
+        out.emplace(dfb_name, patterns);
+    }
+    return out;
 }
 
 }  // namespace
@@ -66,7 +78,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
     const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
     const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name,
-    const DFBNameToIdMap& dfb_name_to_id) {
+    const DFBNameToIdMap& dfb_name_to_id,
+    const DFBNameToPatternsMap& dfb_name_to_patterns) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -81,6 +94,9 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         handle.logical_dfb_id = static_cast<uint16_t>(slot);
         handle.is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
         handle.prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
+        const DFBSidePatterns& patterns = dfb_name_to_patterns.at(dfb_binding.dfb_spec_name);
+        handle.pap = patterns.pap;
+        handle.cap = patterns.cap;
         if (!handle.is_relay) {
             handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
         }
@@ -108,11 +124,12 @@ namespace {
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
-    const KernelRiscMaskMap& kernel_to_risc_mask) {
+    const KernelRiscMaskMap& kernel_to_risc_mask,
+    tt::ARCH arch) {
     // With multi-binding, all same-role KernelSpecs share kind (DM/compute), access_pattern,
     // num_threads, and risc_mask. The first three are enforced in ValidateProgramSpec; the
     // fourth is solver-guaranteed on Gen2 (the coupling-group equivalence-class constraint)
-    // and user-validated on Gen1 (see Step 2b in MakeProgramFromSpec). So any
+    // and user-validated on Gen1 (see Step 2b in the Program constructor). So any
     // representative producer/consumer gives the correct DFB config — we take the first.
     const KernelSpec* producer = dfb_endpoint_info.producers.front().kernel;
     const KernelSpec* consumer = dfb_endpoint_info.consumers.front().kernel;
@@ -128,7 +145,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         switch (pattern) {
             case DFBAccessPattern::STRIDED: return experimental::dfb::AccessPattern::STRIDED;
             case DFBAccessPattern::ALL: return experimental::dfb::AccessPattern::ALL;
-            case DFBAccessPattern::BLOCKED: TT_FATAL(false, "BLOCKED access pattern is not yet supported");
+            case DFBAccessPattern::BLOCKED: return experimental::dfb::AccessPattern::BLOCKED;
         }
         TT_FATAL(false, "Unknown DFBAccessPattern");
     };
@@ -178,27 +195,38 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         }
         return any_dm && !disabled;
     };
+    const bool is_relay = !dfb_spec->advanced_options.prefetcher_pipe_relays.empty();
+    const bool blocked_relay_producer =
+        is_relay && producer_access_pattern == experimental::dfb::AccessPattern::BLOCKED;
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
         .producer_risc_mask = producer_risc_mask,
         .num_producers = static_cast<uint8_t>(producer->num_threads),
         .pap = producer_access_pattern,
+        .producer_block_size = producer_binding->block_size,
         .consumer_risc_mask = consumer_risc_mask,
         .num_consumers = static_cast<uint8_t>(consumer->num_threads),
         .cap = consumer_access_pattern,
-        .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
+        .consumer_block_size = consumer_binding->block_size,
+        .enable_producer_implicit_sync =
+            !blocked_relay_producer && side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
         .tensix_scope = tensix_scope,
-        // DFB borrowed memory mode is declared at program creation time.
+        .unpack_on_trisc3 = is_gen2_arch(arch) &&
+                            ComputeKernelUsesSfpuPipeline(*consumer, dfb_spec->unique_id, DFBEndpointType::CONSUMER),
+        .pack_on_trisc3 = is_gen2_arch(arch) &&
+                          ComputeKernelUsesSfpuPipeline(*producer, dfb_spec->unique_id, DFBEndpointType::PRODUCER),
+        // DFB externally placed storage is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime: from the borrowed
-        // TensorParameter's MeshTensor, or (relay) from the PrefetcherPipe ring the relay aliases.
-        .borrows_memory =
-            dfb_spec->borrowed_from.has_value() || !dfb_spec->advanced_options.prefetcher_pipe_relays.empty(),
+        // TensorParameter's MeshTensor, an SRAMArenaParameter's allocation, or (relay) from the
+        // PrefetcherPipe ring the relay aliases.
+        .borrows_memory = dfb_spec->borrowed_from.has_value() ||
+                          dfb_spec->advanced_options.allocation_override.has_value() || is_relay,
         // A PrefetcherPipe relay is lane-interleaved (producer h owns entries h, h+P, ...).
-        .is_relay = !dfb_spec->advanced_options.prefetcher_pipe_relays.empty()};
+        .is_relay = is_relay};
 }
 
 }  // namespace
@@ -207,6 +235,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     const KernelRiscMaskMap& kernel_to_risc_mask,
+    tt::ARCH arch,
     detail::ProgramImpl& program_impl) {
     // Create DataflowBuffers and build name -> ID map.
     // NOTE: Iterate over spec.dataflow_buffers (not collected.dfb_endpoints) to ensure
@@ -218,31 +247,34 @@ DataflowBufferHandles RegisterDataflowBuffers(
         const DFBSpecName& dfb_name = dfb_spec.unique_id;
         const auto& dfb_endpoint_info = collected.dfb_endpoints.at(dfb_name);
         const experimental::dfb::DataflowBufferConfig config =
-            MakeDataflowBufferConfig(&dfb_spec, dfb_endpoint_info, kernel_to_risc_mask);
+            MakeDataflowBufferConfig(&dfb_spec, dfb_endpoint_info, kernel_to_risc_mask, arch);
 
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping.
-        // Allocation nodes are derived from binding kernels' WorkUnitSpec membership.
-        // (For borrowed-memory DFBs, config.borrows_memory was set in MakeDataflowBufferConfig;
+        // Allocation nodes use the DFB's effective placement.
+        // (For externally placed DFB storage, config.borrows_memory was set in MakeDataflowBufferConfig;
         // the device-side runtime uses that to skip regular L1 allocation.)
-        uint32_t dfb_id = program_impl.add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
+        const auto& placement = collected.dfb_placements.at(dfb_name);
+        uint32_t dfb_id = program_impl.add_dataflow_buffer(placement.configuration, config, placement.allocation);
         program_impl.register_dfb_spec_name(dfb_name.get(), dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
         const auto& created_config = program_impl.get_dataflow_buffer(dfb_id)->config;
         dfb_name_to_slot[dfb_name] = program_impl.get_dataflow_buffer(dfb_id)->device_slot;
         dfb_name_to_is_relay[dfb_name] = created_config.is_relay;
 
-        // Borrowed-memory DFB: record the dfb_id ↔ TensorParamName binding so that
-        // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
-        // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
-        if (dfb_spec.borrowed_from.has_value()) {
-            program_impl.register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
+        if (const auto& tensor = dfb_spec.borrowed_from) {
+            program_impl.register_dfb_storage_binding({.dfb_id = dfb_id, .source = *tensor});
+        } else if (const auto& allocation = dfb_spec.advanced_options.allocation_override) {
+            program_impl.register_dfb_storage_binding(
+                {.dfb_id = dfb_id,
+                 .source = SRAMArenaSource{.arena = allocation->arena, .offset = allocation->offset}});
         }
     }
     return DataflowBufferHandles{
         .id = std::move(dfb_name_to_id),
         .slot = std::move(dfb_name_to_slot),
         .is_relay = std::move(dfb_name_to_is_relay),
-        .relay_pipe_id = {}};
+        .relay_pipe_id = {},
+        .patterns = MakeDFBNameToPatterns(collected)};
 }
 
 void WireDFBAliases(const ProgramSpec& spec, const DFBNameToIdMap& dfb_name_to_id, detail::ProgramImpl& program_impl) {
@@ -274,4 +306,4 @@ void WireDFBAliases(const ProgramSpec& spec, const DFBNameToIdMap& dfb_name_to_i
     }
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

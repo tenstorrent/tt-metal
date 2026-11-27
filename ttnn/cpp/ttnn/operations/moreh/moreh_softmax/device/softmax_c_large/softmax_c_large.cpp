@@ -9,14 +9,14 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <ttnn/metal_v2_artifacts.hpp>
 #include <cstdint>
 
 namespace ttnn::operations::moreh::moreh_softmax {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
@@ -62,7 +62,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxCLar
 
     // create circular buffers
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    auto intermed_data_format = get_intermed_data_format(data_format, fp32_dest_acc_en);
     const std::uint32_t tile_size_data = tile_size(data_format);
     const std::uint32_t tile_size_intermed = tile_size(intermed_data_format);
 
@@ -151,7 +151,8 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxCLar
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["LOG"] = "1";
     }
-    if (fp32_dest_acc_en) {
+    // Bfp8_b input needs the format reconfig this define enables.
+    if (fp32_dest_acc_en || data_format == tt::DataFormat::Bfp8_b) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 

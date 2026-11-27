@@ -16,9 +16,8 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/experimental/quasar/halo/halo.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/experimental/quasar/reshard/reshard.hpp"
 #include "ttnn/operations/experimental/quasar/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/sharded_to_interleaved.hpp"
@@ -334,8 +333,9 @@ static Tensor apply_halo_padding(
     ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     auto reshaped_tensor = ttnn::operations::experimental::quasar::reshape(input_tensor, new_shape);
 
+    const auto arch = input_tensor.device()->arch();
     const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        arch,
         std::nullopt,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
@@ -346,7 +346,7 @@ static Tensor apply_halo_padding(
     // halo op there, matching the standard call's flags (pad_val=0, remote_read=false,
     // transpose_mcast=false, is_out_tiled=false). WH/BH keep the standard halo (unchanged).
     Tensor halo_output;
-    if (tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR) {
+    if (arch == tt::ARCH::QUASAR) {
         halo_output = ttnn::operations::experimental::quasar::halo(
             reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
     } else {
@@ -412,6 +412,15 @@ Tensor fold(
     const std::optional<CoreRangeSet>& core_grid,
     const std::optional<MemoryConfig>& override_memory_config,
     bool input_is_nhwc) {
+    // Fold moves per-pixel channel rows (sticks) and pads with a fill value, and a TILE input is untilized to
+    // row-major first. An MX tile (32-element blocks with a shared scale in face order) has no row-major
+    // layout and cannot be addressed per row, so MX is not supported.
+    TT_FATAL(
+        !tt::tt_metal::is_mx(input_tensor_.dtype()),
+        "Quasar fold does not support MX tensors ({}): it moves sub-tile rows and pads with fill values, which MX "
+        "tiles cannot take. Typecast to bfloat16 first.",
+        input_tensor_.dtype());
+
     // Extract padding values
     const std::array<uint32_t, 6> padding_values = operations::experimental::quasar::extract_padding_values(padding);
     const uint32_t pad_top = padding_values[0];

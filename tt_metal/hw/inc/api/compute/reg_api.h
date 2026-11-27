@@ -4,7 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "api/compute/common_globals.h"
+#ifdef ARCH_QUASAR
+#include "llk_dest_borrow.h"
+#endif
 #ifdef TRISC_PACK
 #include "llk_pack_common_api.h"
 #endif
@@ -41,10 +46,11 @@ ALWI void acquire_dst() {
  * Acquire an exclusive lock on the DST register for the MATH thread.
  * This register is an array of 16 tiles of 32x32 elements each.
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
+ *
+ * NOTE: On Quasar, unpack-to-dest copies need a loan from MATH: wrap them in tile_regs_borrow and
+ * tile_regs_return.
  */
-ALWI void tile_regs_acquire() {
-    MATH((llk_math_wait_for_dest_available()));
-}
+ALWI void tile_regs_acquire() { MATH((llk_math_wait_for_dest_available())); }
 
 /**
  * Acquire an exclusive lock on the DST register for the PACK thread.
@@ -79,16 +85,65 @@ ALWI void release_dst() {
 
 /**
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
+ *
+ * NOTE: On Quasar, call tile_regs_return for any loan of this section first.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>())); }
+ALWI void tile_regs_commit() {
+    MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+}
 
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
+ *
+ * NOTE: On Quasar, call tile_regs_return for any loan of this section first.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_release() {
     PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
+}
+
+#ifndef ARCH_QUASAR
+enum class DstClient : std::uint8_t {
+    UNPACK = 0,
+    MATH = 1,
+    PACK = 2,
+    SFPU = 3,
+};
+#endif
+
+/**
+ * Lends the current Dest section from its owner FROM to TO (Quasar only). FROM is MATH between
+ * tile_regs_acquire and tile_regs_commit, or PACK between tile_regs_wait and tile_regs_release.
+ * TO is UNPACK, for unpack-to-dest copies, or SFPU. Call it on every thread, like the other
+ * tile_regs_* calls; only FROM and TO do any work.
+ *
+ * NOTE: Until tile_regs_return, FROM must not touch Dest, and no thread can start a second loan.
+ *
+ * NOTE: Nothing checks these rules at runtime. Without a borrow, the unpacker writes Dest with no
+ * sync and can land in the wrong section. Without a return, the threads lose sync and can hang.
+ */
+template <DstClient FROM, DstClient TO>
+ALWI void tile_regs_borrow() {
+#ifdef ARCH_QUASAR
+    if constexpr (TO != DstClient::UNPACK || UnpackToDestEn) {
+        _llk_tile_regs_borrow_<FROM, TO>();
+    }
+#endif
+}
+
+/**
+ * Ends a Dest loan started by tile_regs_borrow with the same FROM and TO (Quasar only). TO waits
+ * for its Dest writes to finish, and FROM waits for TO. After this call FROM owns the section
+ * again and can use it, commit it, or release it.
+ */
+template <DstClient FROM, DstClient TO>
+ALWI void tile_regs_return() {
+#ifdef ARCH_QUASAR
+    if constexpr (TO != DstClient::UNPACK || UnpackToDestEn) {
+        _llk_tile_regs_return_<FROM, TO>();
+    }
+#endif
 }
 
 }  // namespace ckernel

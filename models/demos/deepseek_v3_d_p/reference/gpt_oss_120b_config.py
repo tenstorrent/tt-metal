@@ -15,7 +15,9 @@ class GptOss120BConfig:
 
     # Core dimensions
     EMB_SIZE = 2880  # embedding dimension
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    # Max fabric packet payload: eight 1088 B bfp8 tiles. Raising it from EMB_SIZE (2880) measured 11.5%
+    # faster 64K-token prefill.
+    FABRIC_PAYLOAD_SIZE = 8704
     MOE_INTERMEDIATE_SIZE = 2880  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. Measured under SwiGLU-OAI WITH the
@@ -39,6 +41,9 @@ class GptOss120BConfig:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 128
     NUM_EXPERTS_PER_TOKEN = 4
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
+    MOE_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 0
     # GPT-OSS routes with no expert groups; selection is a plain top-k over all experts.
     NUM_EXPERT_GROUPS = 1

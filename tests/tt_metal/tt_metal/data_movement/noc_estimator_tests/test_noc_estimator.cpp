@@ -8,10 +8,11 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <algorithm>
 
 namespace tt::tt_metal {
@@ -183,7 +184,7 @@ static vector<uint32_t> make_test_data(size_t bytes) {
 
 // Handles ONE_TO_ONE (write) and ONE_FROM_ONE (read)
 static bool run_single_core(distributed::MeshDevice& mesh_device, const NocEstimatorConfig& cfg) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
 
@@ -263,7 +264,7 @@ static bool run_single_core(distributed::MeshDevice& mesh_device, const NocEstim
 
 // Handles ONE_TO_ALL (write, unicast/multicast) and ONE_FROM_ALL (read)
 static bool run_one_to_many(distributed::MeshDevice& mesh_device, const NocEstimatorConfig& cfg) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
     bool is_write = is_write_pattern(cfg.pattern);
@@ -416,7 +417,7 @@ static bool run_one_to_many(distributed::MeshDevice& mesh_device, const NocEstim
 
 // Handles ALL_TO_ALL (write) and ALL_FROM_ALL (read)
 static bool run_all_pattern(distributed::MeshDevice& mesh_device, const NocEstimatorConfig& cfg) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
     bool is_write = is_write_pattern(cfg.pattern);
@@ -528,7 +529,7 @@ static bool run_all_pattern(distributed::MeshDevice& mesh_device, const NocEstim
 // All masters in the row/column multicast to the same rectangle (the row/column).
 // Masters and subordinates overlap; loopback should be true (INCLUDE_SRC).
 static bool run_many_to_many_multicast(distributed::MeshDevice& mesh_device, const NocEstimatorConfig& cfg) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
 
@@ -619,7 +620,7 @@ static bool run_dram_accessor(
     const vector<CoreCoord>& cores,
     const vector<uint32_t>& bank_assignments,
     DramDirection direction) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
     uint32_t num_dram_banks = (uint32_t)mesh_device.num_dram_channels();

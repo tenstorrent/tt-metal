@@ -5,11 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -18,9 +19,8 @@
 #include "impl/metal2_host_api/program_spec/construction/processor_assignment/processor_assignment.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_settings.hpp"
-#include "llrt/hal.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Break down of program & kernel construction by resource type.
 // For each resource, there are always two sides:
@@ -59,6 +59,9 @@ struct ResolvedTensorParameter {
     // distinguish them with a boolean.
     bool runtime_field_is_page_size = false;
 
+    // Per-node allocated tensor (see TensorBindingHandle::is_per_node).
+    bool is_per_node = false;
+
     // Compile-time LLK metadata derived from the TensorParameter's spec, baked onto the binding token.
     // Always present: a tensor has a dtype and a tile.
     LLKMetadata llk_metadata;
@@ -75,17 +78,20 @@ std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParam
 //  - The full CRTA buffer layout (named CRTAs + binding section + vararg-section start),
 //    precomputed here so consumers (headergen, runtime) don't have to re-derive section
 //    boundaries by walking handles. See KernelCrtaLayout in jit_build_settings.hpp.
+//  - The per-node RTA buffer layout (named RTAs + per-node binding section + vararg-section start).
 struct TensorBindingsForKernel {
     std::vector<TensorBindingHandle> handles;
     // Binding-only CTA payload; appended after the user CTA-vararg positional prefix.
     std::vector<uint32_t> cta_words;
     KernelCrtaLayout crta_layout;
+    KernelRtaLayout rta_layout;
 };
 
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
-    size_t base_named_crta_count,
+    size_t base_named_crta_words,
+    size_t base_named_rta_words,
     uint32_t base_cta_offset);
 
 // ----------------------------------------------------------------------------
@@ -97,6 +103,13 @@ using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
 // DFB name -> device slot map. The slot is what a kernel sees (the dfb::<name> accessor value) and
 // what indexes the per-core config table, so it is what device-facing lowering must use.
 using DFBNameToSlotMap = std::unordered_map<DFBSpecName, uint32_t>;
+// Both sides' access patterns for one DFB, in the device's dfb::AccessPattern numbering
+// (STRIDED 0, ALL 1, BLOCKED 2). Baked into each binding's DFBBindingToken at compile time.
+struct DFBSidePatterns {
+    uint8_t pap = 0;
+    uint8_t cap = 0;
+};
+using DFBNameToPatternsMap = std::unordered_map<DFBSpecName, DFBSidePatterns>;
 
 // Per-DFB handles produced by RegisterDataflowBuffers (relay_pipe_id is filled by RecordRelayPipeIds).
 struct DataflowBufferHandles {
@@ -104,6 +117,7 @@ struct DataflowBufferHandles {
     DFBNameToSlotMap slot;
     std::unordered_map<DFBSpecName, bool> is_relay;
     std::unordered_map<DFBSpecName, uint8_t> relay_pipe_id;
+    DFBNameToPatternsMap patterns;
 };
 
 // Register DFBs with the Program
@@ -111,6 +125,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     const KernelRiscMaskMap& kernel_to_risc_mask,
+    tt::ARCH arch,
     detail::ProgramImpl& program_impl);
 
 void WireDFBAliases(const ProgramSpec& spec, const DFBNameToIdMap& dfb_name_to_id, detail::ProgramImpl& program_impl);
@@ -122,7 +137,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
     const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
     const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name,
-    const DFBNameToIdMap& dfb_name_to_id);
+    const DFBNameToIdMap& dfb_name_to_id,
+    const DFBNameToPatternsMap& dfb_name_to_patterns);
 
 // ----------------------------------------------------------------------------
 // PrefetcherPipes (prefetcher_pipe.cpp)
@@ -192,20 +208,64 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
 //  - the scratchpad section sits immediately after the TensorBinding section and before varargs, so
 //    each binding's absolute CRTA word index (and thus addr_crta_word) is fixed at codegen time
 //    (varargs are open-ended / runtime-counted, so a section placed after them would not be).
-// The allocated_address is left 0 here; allocate_scratchpads fills it once L1 is allocated.
+// The address stays 0 until local allocation or SRAMArena argument binding.
 struct ScratchpadBindingsForKernel {
     std::vector<ScratchpadBindingHandle> handles;
     uint32_t section_words = 0;  // == number of scratchpad bindings
 };
 
+// Resolves scratchpad metadata and placement for each binding of a kernel.
 ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     const KernelSpec& kernel,
+    const CoreRangeSet& kernel_nodes,
     const std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*>& scratchpad_by_name,
     size_t scratchpad_base_crta_word);
 
 // ----------------------------------------------------------------------------
+// Fabric connections (fabric_connection.cpp)
+// ----------------------------------------------------------------------------
+
+// One FabricConnectionsSpec resolved on each device that the Program runs on.
+struct ResolvedFabricConnection {
+    uint32_t num_targets = 0;
+    uint32_t words_per_target = 0;
+    // For each device that the Program runs on, in range order, and each node in the spec's links: words_per_target
+    // words per target, in target order.
+    FabricConnectionWordsByDevice words_by_device;
+};
+using FabricConnectionsBySpec = std::unordered_map<experimental::FabricConnectionsSpecName, ResolvedFabricConnection>;
+
+// Resolve each fabric connection of `spec` on each device of `devices`, check its links, and allocate the two
+// semaphores of each (node, target).
+// precondition: the spec passed ValidateProgramSpec, and `devices` is in the shape of `mesh_device`.
+// side-effect: adds the connection semaphores to `program_impl`.
+FabricConnectionsBySpec RegisterFabricConnections(
+    distributed::MeshDevice& mesh_device,
+    const distributed::MeshCoordinateRange& devices,
+    const ProgramSpec& spec,
+    detail::ProgramImpl& program_impl);
+
+// Per-kernel resolved fabric connection bindings: one section of per-node RTA words, one block per binding in
+// declaration order, starting at fabric_connection_base_rta_word.
+struct FabricConnectionBindingsForKernel {
+    std::vector<FabricConnectionBindingHandle> handles;
+    uint32_t section_words = 0;
+};
+
+FabricConnectionBindingsForKernel ResolveFabricConnectionBindingsForKernel(
+    const KernelSpec& kernel, const FabricConnectionsBySpec& connections, uint32_t fabric_connection_base_rta_word);
+
+// ----------------------------------------------------------------------------
 // Drivers (resource.cpp)
 // ----------------------------------------------------------------------------
+
+// Watcher: the nodes each DFB's and semaphore's address is reserved on, as rectangles in NoC coordinates, so kernels
+// can check multicasts into them. A borrowed-memory DFB gets its backing tensor's nodes. Filled only with Watcher NoC
+// sanitizing, so kernels are unchanged without it.
+struct WatcherNodeRanges {
+    std::unordered_map<DFBSpecName, std::vector<NodeRange>> dfbs;
+    std::unordered_map<SemaphoreSpecName, std::vector<NodeRange>> semaphores;
+};
 
 // Everything kernel lowering reads that resource registration creates.
 // Used by kernel lowering.
@@ -214,11 +274,15 @@ struct ProgramResources {
     DataflowBufferHandles dfbs;
     PrefetcherPipeHandlesByKernel prefetcher_pipes;
     SemaphoreHandles semaphores;
+    FabricConnectionsBySpec fabric_connections;
+    WatcherNodeRanges watcher_node_ranges;
 };
 
-// Register every resource with the Program (resource.cpp fixes the order).
+// Register every resource with the Program (resource.cpp fixes the order). The Program runs on `devices` of
+// `mesh_device`.
 ProgramResources RegisterResources(
     distributed::MeshDevice& mesh_device,
+    const distributed::MeshCoordinateRange& devices,
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     const KernelRiscMaskMap& risc_masks,
@@ -236,4 +300,4 @@ struct KernelResourceBindings {
 KernelResourceBindings ResolveKernelResourceBindings(
     const KernelSpec& kernel_spec, const CollectedSpecData& collected, const ProgramResources& resources);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

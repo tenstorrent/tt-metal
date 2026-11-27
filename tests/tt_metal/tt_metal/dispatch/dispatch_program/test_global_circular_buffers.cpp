@@ -4,25 +4,25 @@
 
 #include <gtest/gtest.h>
 #include <cstdint>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <map>
 #include <utility>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -31,6 +31,10 @@
 namespace tt::tt_metal {
 
 TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "legacy circular buffers are not usable on Quasar: legacy kernels are rejected and Metal 2.0 "
+                        "programs take DFBs";
+    }
     CoreCoord sender_core = CoreCoord(0, 0);
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     CoreRangeSet receiver_cores(CoreRange({1, 1}, {2, 2}));
@@ -45,7 +49,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt::tt_metal::Program program = CreateProgram();
+    tt::tt_metal::Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -144,6 +148,10 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
 }
 
 TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "legacy circular buffers are not usable on Quasar: legacy kernels are rejected and Metal 2.0 "
+                        "programs take DFBs";
+    }
     const CoreCoord sender_core(0, 0);
     const CoreCoord receiver_core(1, 0);
     const CoreCoord idle_core(1, 1);
@@ -169,7 +177,7 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sparse_mapping = {{sender_core, receiver_cores}};
     auto sparse_global_cb = experimental::GlobalCircularBuffer(*mesh_device, sparse_mapping, 3200, BufferType::L1);
     distributed::MeshWorkload sparse_workload;
-    Program sparse_program = CreateProgram();
+    Program sparse_program = CreateProgram(*mesh_device);
     experimental::CreateCircularBuffer(sparse_program, receiver_cores, make_cb_config(), sparse_global_cb);
     CreateKernel(
         sparse_program,

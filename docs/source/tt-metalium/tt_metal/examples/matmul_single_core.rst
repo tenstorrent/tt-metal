@@ -41,7 +41,7 @@ After standard device and command queue initialization, the matrix dimensions M,
     uint32_t Nt = N / TILE_WIDTH;
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    Program program{};
+    Program program = CreateProgram(*mesh_device);
     CoreCoord core({0, 0});  // Single core at position {0, 0}
 
 
@@ -151,8 +151,8 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
 
     // Reader kernel - reads tiles from DRAM into circular buffers
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_args);
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
@@ -161,7 +161,7 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
 
     // Writer kernel - writes result tiles from circular buffer to DRAM
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         "matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",

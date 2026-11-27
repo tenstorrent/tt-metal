@@ -38,6 +38,7 @@ from models.tt_dit.parallel.config import AudioTCParallelConfig, DiTParallelConf
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.ltx import skip_without_checkpoint
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
 from models.tt_dit.utils.video import Audio
 
@@ -112,6 +113,8 @@ def _build_pipeline(
         dit_parallel_config=pipeline.parallel_config,
         traced=pipeline._traced,
     )
+    pipeline.residency.register(pipeline.tt_mel_decoder, pipeline._audio_adapter.mel_decoder_spec)
+    pipeline.residency.register(pipeline.tt_vocoder_with_bwe, pipeline._audio_adapter.vocoder_spec)
     return pipeline, parallel_config
 
 
@@ -160,7 +163,7 @@ def test_audio_decode_perf(
         (_DEV_CHECKPOINT,),
     )
     if ckpt is None:
-        pytest.skip("checkpoint not found (set LTX_CHECKPOINT)")
+        skip_without_checkpoint("checkpoint not found (set LTX_CHECKPOINT)")
 
     skip_if_unsupported_num_links(mesh_device, num_links)
     _ = (dynamic_load, is_fsdp)  # parity with fast_av config schema
@@ -230,7 +233,7 @@ def test_audio_decode_e2e_psnr(
         (_DISTILLED_CHECKPOINT,),
     )
     if ckpt is None:
-        pytest.skip("distilled checkpoint not found (set LTX_CHECKPOINT)")
+        skip_without_checkpoint("distilled checkpoint not found (set LTX_CHECKPOINT)")
 
     skip_if_unsupported_num_links(mesh_device, num_links)
     _ = (dynamic_load, is_fsdp)  # parity with fast_av config schema
@@ -1076,7 +1079,7 @@ def test_audio_decode_profile(mesh_device, device_params):
         (_DISTILLED_CHECKPOINT,),
     )
     if ckpt is None:
-        pytest.skip("distilled checkpoint not found (set LTX_CHECKPOINT)")
+        skip_without_checkpoint("distilled checkpoint not found (set LTX_CHECKPOINT)")
 
     from tracy import signpost
 

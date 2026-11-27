@@ -9,7 +9,7 @@
 #include "llrt/rtoptions.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::tt_sim {

@@ -6,8 +6,8 @@
 
 // DataflowBuffer (DFB) port of kernels/compute/eltwise_utils_sfpu.hpp (SFPU preprocess).
 //
-// The same SrcA switch/restore contract as the descriptor helper, using named DFB bindings.
-// LLK operand ids come from DFBBindingToken's `operator uint32_t()`.
+// The same SrcA switch/restore contract as the descriptor helper. The helper takes the kernel's DataflowBuffer
+// objects and reads each operand id with get_id().
 
 #include "api/compute/common.h"
 #include "api/compute/pack.h"
@@ -15,17 +15,19 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "eltwise_format_reference_dfb.hpp"
 
-template <typename ActivationFn>
+template <typename ActivationFn, typename DFBPre, typename DFBPost>
 ALWI void preprocess_sfpu_impl_dfb(
-    uint32_t dfb_pre_id,
-    uint32_t dfb_post_id,
+    DFBPre& dfb_pre,
+    DFBPost& dfb_post,
     uint32_t dfb_out_id,
     uint32_t per_core_block_size,
     ActivationFn&& process_activations) {
     using namespace ckernel;
 
-    DataflowBuffer dfb_pre(dfb_pre_id);
-    DataflowBuffer dfb_post(dfb_post_id);
+    // dfb_pre and dfb_post are the kernel's own objects. An object built here would drain when it returns and
+    // wait for tiles that only this thread pops later.
+    const uint32_t dfb_pre_id = dfb_pre.get_id();
+    const uint32_t dfb_post_id = dfb_post.get_id();
 
     reconfig_data_format_srca(/*old*/ QSR_BINARY_SRCA_FORMAT_DFB, /*new*/ dfb_pre_id);
     pack_reconfig_data_format(/*old*/ dfb_out_id, /*new*/ dfb_post_id);
@@ -42,7 +44,10 @@ ALWI void preprocess_sfpu_impl_dfb(
     tile_regs_acquire();
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
         copy_init(dfb_pre_id);
+        // One loan per tile: the activation works on Dest from MATH, so it cannot run under the loan.
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(dfb_pre_id, i, i);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         process_activations(i);
     }
     tile_regs_commit();

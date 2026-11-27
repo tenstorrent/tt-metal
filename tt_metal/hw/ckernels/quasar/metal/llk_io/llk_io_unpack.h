@@ -12,17 +12,52 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 #include "llk_io.h"
 
+// Unpackers that must finish before POP_TILES releases the credit: unpackers 0 and 1 on the unpack thread,
+// unpacker 2 (UNPACR2, L1 -> SrcS) on trisc3, where the wait is already satisfied while no such op is in flight.
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+constexpr std::uint8_t DFB_UNPACK_DONE_WAIT_MASK = 0x4;
+#else
+constexpr std::uint8_t DFB_UNPACK_DONE_WAIT_MASK = 0x3;
+#endif
+
+// Wait for num_tiles on counter tc_id: WAIT_TILES when an unpacker follows, a RISC poll when none does (the
+// caller has already let this thread's earlier POP_TILES finish).
+inline void dfb_trisc_wait_tiles(const std::uint32_t num_tiles, const std::uint32_t tc_id) {
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+    while ((ckernel::trisc::tile_counters[tc_id].f.posted & DFB_TILE_COUNTER_COUNT_MASK) < num_tiles) {
+    }
+#else
+    TT_WAIT_TILES(ckernel::p_stall::STALL_UNPACK, num_tiles, tc_id);
+#endif
+}
+
 /**
  * @brief  Wait for num_tiles available in the incoming dataflow buffer
  * @param dfb_id: Dataflow Buffer ID, values = [0-31]
  * @param num_tiles: Number of tiles to wait for in dataflow buffer
  */
+template <dfb::AccessPattern Pap = dfb::AccessPattern::UNKNOWN, dfb::AccessPattern Cap = dfb::AccessPattern::UNKNOWN>
 inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_tiles) {
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(dfb_id);
-    std::uint32_t tc_id =
-        dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
-
-    TT_WAIT_TILES(ckernel::p_stall::STALL_UNPACK, num_tiles, tc_id);
+    LLK_ASSERT(
+        dfb_op_is_whole_share(local_dfb_interface, num_tiles),
+        "llk_wait_tiles: an op on a BLOCKED ring must move this hart's whole share");
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+    ckernel::tensix_sync();  // let this thread's earlier POP_TILES finish before polling any counter
+#endif
+    if (dfb_op_is_split<Pap, Cap, false>(local_dfb_interface)) {
+        // Split: the block belongs to every counter, wait for each one's share.
+        const std::uint32_t per_tc = num_tiles / local_dfb_interface.num_tcs_to_rr;
+        for (std::uint8_t i = 0; i < local_dfb_interface.num_tcs_to_rr; i++) {
+            dfb_trisc_wait_tiles(per_tc, dfb::get_counter_id(local_dfb_interface.tc_slots[i].packed_tile_counter));
+        }
+    } else {
+        std::uint32_t tc_id =
+            dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
+        dfb_trisc_wait_tiles(num_tiles, tc_id);
+    }
+    // The RISC poll issues no WAIT_TILES, so there is no guard to arm, and it already blocks the RISC.
+#if !defined(UCK_CHLKC_ISOLATE_SFPU)
     // TEN-4746: arm this dfb; a real unpack (UNPACR) on it must clear this before the matching pop.
     LLK_TDMA_GUARD_NOTE_WAIT(dfb_id);
 
@@ -31,6 +66,9 @@ inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_ti
     // when it returns, a RISC-side L1 read of the waited entries is safe. Poll this thread's SYNC busy bit in the
     // tensix_busy_status CSR.
     ckernel::wait_sync_idle();
+#else
+    ckernel::invalidate_data_cache();
+#endif
 }
 
 /**
@@ -38,18 +76,33 @@ inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_ti
  * @param dfb_id: Dataflow Buffer ID, values = [0-31]
  * @param num_tiles: Number of tiles to wait for in dataflow buffer
  */
-template <std::uint8_t UNPACK_SEL = 0x3>
+template <
+    std::uint8_t UNPACK_SEL = 0x3,
+    dfb::AccessPattern Pap = dfb::AccessPattern::UNKNOWN,
+    dfb::AccessPattern Cap = dfb::AccessPattern::UNKNOWN>
 inline void llk_pop_tiles(const std::int32_t dfb_id, const std::int32_t num_tiles) {
     // TEN-4746: popping a dfb that was waited but never unpacked (no UNPACR since wait_tiles) is a HW
     // hazard -- the wait can resolve before tiles are available.
     LLK_TDMA_GUARD_ASSERT_DISARMED(
         dfb_id, "TEN-4746: llk_pop_tiles on a dfb with no unpack (UNPACR) since llk_wait_tiles");
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(dfb_id);
+    LLK_ASSERT(
+        dfb_op_is_whole_share(local_dfb_interface, num_tiles),
+        "llk_pop_tiles: an op on a BLOCKED ring must move this hart's whole share");
+    if (dfb_op_is_split<Pap, Cap, false>(local_dfb_interface)) {
+        // Split: ack each counter its share of the block and step every bookmark past it.
+        const std::uint32_t per_tc = num_tiles / local_dfb_interface.num_tcs_to_rr;
+        for (std::uint8_t i = 0; i < local_dfb_interface.num_tcs_to_rr; i++) {
+            TT_POP_TILES(UNPACK_SEL, per_tc, dfb::get_counter_id(local_dfb_interface.tc_slots[i].packed_tile_counter));
+        }
+        dfb_advance_all_slots<false /*IsProducer*/>(local_dfb_interface, per_tc);
+        return;
+    }
     auto& slot = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx];
     std::uint32_t tc_id = dfb::get_counter_id(slot.packed_tile_counter);
 
     // Wait until selected unpackers are reading from L1
     TT_POP_TILES(UNPACK_SEL, num_tiles, tc_id);
 
-    dfb_advance_slot(local_dfb_interface, slot, num_tiles);
+    dfb_advance_slot<false /*IsProducer*/>(local_dfb_interface, slot, num_tiles);
 }

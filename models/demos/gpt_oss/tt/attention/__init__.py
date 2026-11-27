@@ -36,6 +36,7 @@ class Attention:
         weight_dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
         create_kv_cache=True,
+        fused_decode=False,
     ):
         """
         Initialize attention layer.
@@ -53,6 +54,8 @@ class Attention:
             weight_dtype: Data type for weights (default: bfloat8_b)
             tensor_cache_path: Optional path for weight caching
             create_kv_cache: Whether to create KV cache (default: True)
+            fused_decode: Fused decode path (fused_decode/): QKV + fused QK RoPE + fused K/V cache update, and
+                o_proj written into the fused all-reduce that returns the width-sharded residual layout
         """
         self.config = config
         self.mesh_config = mesh_config
@@ -62,6 +65,7 @@ class Attention:
         self.layer_idx = layer_idx
         self.transformation_mats = transformation_mats
         self.paged_attention_config = paged_attention_config
+        self.fused_decode = fused_decode
 
         # Determine sliding window based on layer index
         self.use_sliding_window = self.layer_idx % 2 == 0
@@ -76,6 +80,8 @@ class Attention:
             mesh_config=mesh_config,
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
+            fused_decode=fused_decode,
+            unpadded_o_proj_prefill=program_config.prefill_unpadded_o_proj,
         )
 
         # Initialize KV cache
@@ -117,6 +123,7 @@ class Attention:
         is_decode=True,
         user_id=0,
         batch_size=1,
+        sequence_parallel=False,
     ):
         """
         Forward pass - automatically dispatches to decode or prefill.
@@ -129,6 +136,7 @@ class Attention:
             kv_cache: External KV cache (optional, uses internal if not provided)
             is_decode: Whether this is decode mode (default: True)
             user_id: User/batch index for KV cache fill in prefill mode (default: 0)
+            sequence_parallel: prefill only: return the output reduce-scattered over the sequence (prefill_forward)
 
         Returns:
             Attention output [batch, seq_len, hidden_size]
@@ -161,6 +169,10 @@ class Attention:
                 position_idx=position_idx,
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
+                fused=self.fused_decode,
+                return_partial=getattr(self, "decode_returns_partial", False),
+                batched_qkv=getattr(self, "batched_qkv", None),
+                batched_oproj=getattr(self, "batched_oproj", None),
             )
         else:
             return prefill_forward(
@@ -178,4 +190,6 @@ class Attention:
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
                 batch_size=batch_size,
+                sequence_parallel=sequence_parallel,
+                fused_decode=self.fused_decode,
             )

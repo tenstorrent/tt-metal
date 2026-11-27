@@ -8,12 +8,12 @@
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
-#include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -69,6 +69,30 @@ ttnn::Tensor permute_impl(
         return ttnn::prim::permute(input, dims, output_mem_config.value_or(a.memory_config()), std::nullopt, pad_value);
     };
 
+    // An MX tile (Quasar) is not a flat element array: only the 4D CN permute moves whole tiles. Every other MX
+    // permute, including rank > 4, runs in bfloat16 and is packed back to MX. The bfloat16 copy is 2x the MX size (more
+    // for a padded dim), so it is staged in DRAM rather than in the L1 the caller asked for. Sharded MX tensors are
+    // rejected for those permutes: the bfloat16 detour is interleaved, so a sharded input or output would silently
+    // change placement. Identity and CN permutes keep their native (sharded-capable) paths.
+    if (tt::tt_metal::is_mx(a.dtype())) {
+        bool identity = true;
+        for (uint32_t i = 0; i < dims.size(); ++i) {
+            identity = identity && dims[i] == i;
+        }
+        const bool is_cn_permute = rank == 4 && dims[0] == 1 && dims[1] == 0 && dims[2] == 2 && dims[3] == 3;
+        if (!(identity && rank == 4) && !is_cn_permute) {
+            TT_FATAL(
+                !a.is_sharded() && !(output_mem_config.has_value() && output_mem_config->is_sharded()),
+                "permute of an MX tensor ({}) supports interleaved input and output only; convert with "
+                "ttnn.to_memory_config first.",
+                a.dtype());
+            const auto dram = ttnn::DRAM_MEMORY_CONFIG;
+            auto as_bf16 = ttnn::typecast(a, DataType::BFLOAT16, dram);
+            auto permuted = permute_impl(as_bf16, dims, dram, pad_value);
+            return ttnn::typecast(permuted, a.dtype(), output_mem_config.value_or(a.memory_config()));
+        }
+    }
+
     if (rank > 4) {
         if (a.is_sharded()) {
             // Preserve input's shard layout; compute_output_specs derives a valid spec.
@@ -91,7 +115,11 @@ ttnn::Tensor permute_impl(
     bool cn = N == 1 && C == 0 && H == 2 && W == 3;
     bool cnwh = N == 1 && C == 0 && H == 3 && W == 2;
     bool bfloat8_supported = wh || cn || cnwh;
-    bool typecast = formatted_input_tensor.dtype() == DataType::BFLOAT8_B and !bfloat8_supported && !a.is_sharded();
+    // Only the WH and CN kernels handle block-float tiles, so bfloat8_b and bfloat4_b go through bfloat16 elsewhere.
+    const DataType input_dtype = formatted_input_tensor.dtype();
+    bool typecast =
+        (input_dtype == DataType::BFLOAT8_B || input_dtype == DataType::BFLOAT4_B) and !bfloat8_supported &&
+        !a.is_sharded();
     formatted_input_tensor =
         typecast ? ttnn::typecast(formatted_input_tensor, DataType::BFLOAT16) : formatted_input_tensor;
 
@@ -149,16 +177,8 @@ ttnn::Tensor permute_impl(
         }
     }
     // Convert back to original dtype if typecast was performed.
-    output = typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
+    output = typecast ? ttnn::typecast(output, input_dtype) : output;
     return output;
-}
-
-ttnn::Tensor permute_launch(
-    const ttnn::Tensor& a,
-    const ttsl::SmallVector<uint32_t>& dims,
-    const std::optional<MemoryConfig>& output_mem_config,
-    float pad_value = 0.0f) {
-    return permute_impl(a, dims, output_mem_config, pad_value);
 }
 
 bool is_permute_nop(const ttnn::Tensor& a, const ttsl::SmallVector<uint32_t>& dims) {
@@ -243,15 +263,8 @@ ttnn::Tensor permute(
 
     const auto input_layout = input_tensor.layout();
 
-    if (input_layout == Layout::ROW_MAJOR && memory_config.has_value() && memory_config->is_sharded() &&
-        memory_config->shard_spec().has_value()) {
-        uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-        TT_FATAL(
-            memory_config->shard_spec()->shape[1] * input_tensor.element_size() % (l1_alignment) == 0,
-            "Shard page size must be aligned to {}B for L1 Tensor",
-            l1_alignment);
-    }
-    auto output_tensor = operations::data_movement::detail::permute_launch(itensor, iorder, memory_config, pad_value);
+    // prim::permute stages a row-major output whose sharded rows are not aligned, so any shard width works here.
+    auto output_tensor = operations::data_movement::detail::permute_impl(itensor, iorder, memory_config, pad_value);
     output_tensor = ttnn::to_layout(output_tensor, input_layout);
 
     if (input_rank < 4) {

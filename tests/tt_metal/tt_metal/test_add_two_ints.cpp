@@ -8,10 +8,10 @@
 #include <array>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -27,7 +27,7 @@ TEST_F(UnitMeshFixture, AddTwoInts) {
 
     auto device_range = distributed::MeshCoordinateRange(this->device().shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, CreateProgram());
+    workload.add_program(device_range, CreateProgram(this->device()));
     Program& program = workload.get_programs().at(device_range);
 
     CoreCoord core = {0, 0};

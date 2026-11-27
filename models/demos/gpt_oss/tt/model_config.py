@@ -13,17 +13,21 @@ from pathlib import Path
 
 import torch
 from loguru import logger
-from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.demos.gpt_oss.utils.lazy_state_dict import GptOssLazyStateDict
 from models.tt_transformers.tt.common import (
     calculate_prefill_warmup_seq_lens,
     cap_seq_lens_to_max_prefill_chunk_size,
     get_base_model_name,
 )
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+
+# Batched prefill in groups (generator hook batched_prefill_group_size): padded length -> users per forward, for
+# lengths where all 32 users exceed the generator's token budget (B x S < 128K). Measured on BH 1x4 (keep 05).
+BATCHED_PREFILL_GROUPS = {4096: 16, 8192: 8}
 
 
 class ModelArgs:
@@ -113,9 +117,27 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
-        self.disable_batched_prefill = True
+        # Batched prefill (several users flattened into one [1, 1, B*S, H] forward, attention per user) is validated
+        # for gpt-oss-20b on the Blackhole 1x4 mesh only (the routed-MoE prefill placement,
+        # experts/prefill_routed_placement.py, and the per-user exact reductions of batched_prefill.py); other models
+        # and meshes keep the sequential per-user prefill.
+        mesh_shape = tuple(mesh_device.shape) if mesh_device is not None else ()
+        self.disable_batched_prefill = not (
+            self.model_name == "gpt-oss-20b" and mesh_shape == (1, 4) and is_blackhole()
+        )
+        # Padded length -> users per batched forward where all users do not fit the generator's token budget
+        # (batched_prefill_group_size).
+        self.batched_prefill_groups = dict(BATCHED_PREFILL_GROUPS)
         self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def batched_prefill_group_size(self, padded_len, batch_size):
+        """Users per batched prefill forward for batch_size users of padded_len (generator opt-in hook), or None
+        (the generator default: all users in one forward if they fit its token budget, else sequential)."""
+        if self.disable_batched_prefill:
+            return None
+        group = self.batched_prefill_groups.get(padded_len)
+        return group if group is not None and 1 < group < batch_size else None
 
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
@@ -131,6 +153,14 @@ class ModelArgs:
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
             max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
+        # calculate_prefill_warmup_seq_lens lists the shared buckets (128, 1024, 2048, ...). Add every bucket that
+        # self.get_padded_prefill_len can produce up to the cap (256 and 512), so those compile during warmup too.
+        bucket = 128
+        while bucket <= max_seq_len_to_warmup:
+            if bucket not in to_warmup_seq_lens:
+                to_warmup_seq_lens.append(bucket)
+            bucket = self.get_padded_prefill_len(bucket + 1)
+        to_warmup_seq_lens.sort()
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
 
@@ -154,6 +184,16 @@ class ModelArgs:
     @property
     def base_model_name(self):
         return get_base_model_name(self.model_name)
+
+    def get_padded_prefill_len(self, seq_len):
+        """Prefill bucket, read by the generator in place of common.get_padded_prefill_len (opt-in hook).
+
+        The next power of two, at least 128. It differs from the shared rule only for 129-512 tokens, which pad to
+        256 or 512 instead of 1024. Every bucket is a multiple of 64 and at least 128, as the routed MoE needs.
+        """
+        if seq_len <= 128:
+            return 128
+        return 1 << (int(seq_len) - 1).bit_length()
 
     def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
         """
@@ -185,7 +225,7 @@ class ModelArgs:
             "gpt-oss-20b": {
                 "T3K": [128],
                 "TG": [128],
-            }
+            },
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
 
@@ -260,41 +300,33 @@ class ModelArgs:
         if dummy_weights:
             # Return dummy state dict for testing
             return {}
-        else:
-            # Load actual GPT-OSS weights directly from safetensors files.
-            #
-            # GPT-OSS ships MXFP4-quantized weights (see configs/*/config.json). On a CPU host
-            # (CI loads weights on host before pushing them to the Tenstorrent device) transformers
-            # dequantizes the MXFP4 experts during from_pretrained. With torch_dtype="auto" that
-            # dequant intermediate lands in fp32, ~doubling the resident host footprint AND forcing
-            # the bf16 conversion pass below to allocate a second full copy of the state dict --
-            # enough to OOM / hang the host for the 20B & 120B demos (#48509, #48508). Loading
-            # straight to bf16 makes dequant target bf16 and turns that pass into a no-op (the dict
-            # comprehension then rebinds references rather than copying tensors).
-            model = AutoModelForCausalLM.from_pretrained(
-                weights_path,
-                torch_dtype=torch.bfloat16,
-                low_cpu_mem_usage=True,
-            )
-            head_dim = model.config.head_dim
-            state_dict = model.state_dict()
-            # Drop the HF module graph/buffers now that we hold the weight tensors. state_dict shares
-            # storage with the params, so after this the peak host footprint is bounded by the bf16
-            # weights themselves rather than weights + a live HF model object.
-            del model
-            gc.collect()
-            # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
-            if convert_to_meta_format:
-                logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
-                state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
-            # Safety net: ensure bf16. With the bf16 load above this is a no-op for every tensor
-            # (references are reused); it only casts genuine fp32 stragglers.
-            if state_dict["model.norm.weight"].dtype != torch.bfloat16:
-                state_dict = {
-                    k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
-                    for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
-                }
-            return state_dict
+        if convert_to_meta_format and os.getenv("GPT_OSS_EAGER_HF_LOAD") != "1":
+            # Lazy view over the safetensors files: each tensor is read (and its MXFP4 experts
+            # dequantized to bf16) only when a layer is built, and is not kept afterwards. The eager
+            # from_pretrained path below holds the whole bf16 model on the host first (~234 GB for
+            # 120B), which OOMs a QuietBox 2 on a cold cache (#60193). Same keys and values as the
+            # eager path; set GPT_OSS_EAGER_HF_LOAD=1 to use the eager path instead.
+            head_dim = AutoConfig.from_pretrained(weights_path, trust_remote_code=True).head_dim
+            logger.info("Loading GPT-OSS weights lazily from safetensors (per-layer MXFP4 dequant)")
+            return GptOssLazyStateDict(weights_path, head_dim, convert_to_meta_format=True)
+
+        # Eager load: HF reference models (convert_to_meta_format=False) and GPT_OSS_EAGER_HF_LOAD=1.
+        # from_pretrained dequantizes the MXFP4 experts to bf16 (torch_dtype=bfloat16 makes every
+        # other float tensor bf16 too), so the state dict needs no further dtype pass.
+        model = AutoModelForCausalLM.from_pretrained(
+            weights_path,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+        )
+        head_dim = model.config.head_dim
+        state_dict = model.state_dict()
+        del model
+        gc.collect()
+        # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
+        if convert_to_meta_format:
+            logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
+            state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+        return state_dict
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
@@ -320,8 +352,12 @@ class ModelArgs:
     # skipping the load and hard-failing in ttnn.as_tensor(None, ...) on a missing .tensorbin.
     # (Mirrors DeepSeek's WEIGHT_CACHE_FORMAT_VERSION in deepseek_v3/utils/weight_config.py.)
     WEIGHT_CACHE_FORMAT_VERSION = 1
+    # Layout version of the fused decode (DRAM-streaming) weights; a marker from an older fused build is rejected.
+    FUSED_DECODE_WEIGHTS_VERSION = 4  # 4: QKV stream in K/V-first slot order (wqkv_kvfirst)
+    # Layout version of the batched dense decode MoE weights (experts dense_decode_*).
+    DENSE_MOE_DECODE_WEIGHTS_VERSION = 1
 
-    def weight_cache_is_complete(self, dtype):
+    def weight_cache_is_complete(self, dtype, fused_decode=False, dense_moe=False):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was
         fully built by a previous run.
 
@@ -329,7 +365,11 @@ class ModelArgs:
         state_dict is never read, so the caller can skip the expensive from_pretrained host
         load entirely (the load that OOMs/hangs during prefill, #48509) without needing the
         manual --skip-model-load flag. Set GPT_OSS_FORCE_MODEL_LOAD=1 to force a fresh load
-        (e.g. to regenerate the cache)."""
+        (e.g. to regenerate the cache).
+
+        fused_decode: the model about to be built uses the fused decode layers (fused_decode/), whose
+        decode-only weights are only written by a fused build; a marker from a non-fused build of the same
+        model (e.g. batch > 1 on the same mesh) does not cover them."""
         if os.getenv("GPT_OSS_FORCE_MODEL_LOAD") == "1":
             return False
         cache_path = self.weight_cache_path(dtype)
@@ -348,14 +388,74 @@ class ModelArgs:
             return False
         if meta.get("model_name") != self.model_name or meta.get("n_layers") != self.n_layers:
             return False
+        if fused_decode and meta.get("fused_decode_weights") != self.FUSED_DECODE_WEIGHTS_VERSION:
+            return False
+        if dense_moe and meta.get("dense_moe_decode_weights") != self.DENSE_MOE_DECODE_WEIGHTS_VERSION:
+            return False
+        if dense_moe and not self._dense_moe_weights_cached(cache_path):
+            # A marker can vouch for weights the cache does not hold: it keeps the optional weight sets an earlier
+            # build of the same directory recorded, and a shared cache can be built by other code. Seen on CI's
+            # read-only QuietBox 2 cache (2026-11-24): the marker had the dense MoE set, the dense_decode_* files were
+            # missing, and the batched model failed in ttnn.as_tensor(None, ...). Without the files, load the HF
+            # weights so the build writes them.
+            return False
+        routed_version = self._routed_prefill_weights_version()
+        if routed_version and meta.get("routed_prefill_weights") != routed_version:
+            # The routed prefill experts (experts/prefill_routed.py) cache their own weight layout; a cache built
+            # without them must cold-load once so they get written.
+            return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
 
-    def mark_weight_cache_complete(self, dtype):
+    DENSE_MOE_CACHED_WEIGHTS = ("dense_decode_gate", "dense_decode_up", "dense_decode_down")
+
+    def _dense_moe_weights_cached(self, cache_path):
+        """Whether every layer's batched dense MoE weights (experts/weights.py load_dense_decode_expert_weights) have a
+        cache file: model.layers.<i>/mlp/experts/<name>_dtype_..._layout_TILE.tensorbin."""
+        for i in range(self.n_layers):
+            experts = cache_path / f"model.layers.{i}" / "mlp" / "experts"
+            for name in self.DENSE_MOE_CACHED_WEIGHTS:
+                if not any(experts.glob(f"{name}_dtype_*.tensorbin")):
+                    return False
+        return True
+
+    def _routed_prefill_weights_version(self):
+        """Routed prefill expert weight-cache version when this model builds them (env flag + mesh), else None."""
+        from models.demos.gpt_oss.tt.experts.prefill_routed import (
+            ROUTED_PREFILL_NUM_EXPERTS,
+            ROUTED_PREFILL_WEIGHTS_VERSION,
+            routed_prefill_bf8_layers,
+            routed_prefill_enabled,
+            routed_prefill_mesh_supported,
+        )
+
+        num_experts = getattr(getattr(self, "hf_config", None), "num_local_experts", None)
+        if (
+            routed_prefill_enabled()
+            and num_experts == ROUTED_PREFILL_NUM_EXPERTS
+            and routed_prefill_mesh_supported(self.mesh_device, num_experts)
+        ):
+            bf8 = routed_prefill_bf8_layers()
+            # The bf8 layer set changes which routed caches must exist, so it is part of the marker.
+            return f"{ROUTED_PREFILL_WEIGHTS_VERSION}:bf8={bf8}" if bf8 else ROUTED_PREFILL_WEIGHTS_VERSION
+        return None
+
+    def mark_weight_cache_complete(self, dtype, fused_decode=False, dense_moe=False):
         """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
-        built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete)."""
+        built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete).
+        The optional decode weight sets a previous build of the same cache recorded stay recorded."""
         cache_path = self.weight_cache_path(dtype)
         marker = cache_path / self.WEIGHT_CACHE_MARKER
+        previous = {}
+        try:
+            previous = json.loads(marker.read_text()) if marker.is_file() else {}
+        except (ValueError, OSError):
+            previous = {}
+        if (
+            previous.get("format_version") != self.WEIGHT_CACHE_FORMAT_VERSION
+            or previous.get("model_name") != self.model_name
+        ):
+            previous = {}
         try:
             marker.write_text(
                 json.dumps(
@@ -364,6 +464,19 @@ class ModelArgs:
                         "model_name": self.model_name,
                         "n_layers": self.n_layers,
                         "dtype": str(dtype),
+                        "fused_decode_weights": (
+                            self.FUSED_DECODE_WEIGHTS_VERSION
+                            if fused_decode
+                            else previous.get("fused_decode_weights", False)
+                        ),
+                        "dense_moe_decode_weights": (
+                            self.DENSE_MOE_DECODE_WEIGHTS_VERSION
+                            if dense_moe
+                            else previous.get("dense_moe_decode_weights", False)
+                        ),
+                        "routed_prefill_weights": (
+                            self._routed_prefill_weights_version() or previous.get("routed_prefill_weights", False)
+                        ),
                     }
                 )
             )

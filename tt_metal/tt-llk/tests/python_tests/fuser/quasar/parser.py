@@ -35,6 +35,7 @@ from fuser.validator import (
     REDUCE_PARAMS_REQUIRED,
     SRC_A_DIMS,
     SUB_BCAST_COL_REQUIRED,
+    TRANSPOSE_NEEDS_FULL_TILE,
     TRANSPOSE_WITHIN_FACE_REQUIRED,
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
@@ -91,7 +92,7 @@ from .unpacker.unpack_ab import UnpackerAB
 
 
 def _validate_math_fidelities(operation, config):
-    wide_formats = {DataFormat.Float16, DataFormat.Tf32}
+    wide_formats = {DataFormat.Float16, DataFormat.Tf32, DataFormat.Float32}
     config.sentinel.prepare_operation(config, operation)
     output_format = operation._get_pack_nodes()[0].output.data_format
     errors = []
@@ -109,8 +110,10 @@ def _validate_math_fidelities(operation, config):
         allowed = [MathFidelity.LoFi]
         if src_a in wide_formats:
             allowed.append(MathFidelity.HiFi2)
+        if src_b in wide_formats:
+            allowed.append(MathFidelity.HiFi3)
         if src_a in wide_formats and src_b in wide_formats:
-            allowed.extend((MathFidelity.HiFi3, MathFidelity.HiFi4))
+            allowed.append(MathFidelity.HiFi4)
         if node.math_fidelity not in allowed:
             errors.append(
                 f"Math node {index} (Fpu)\n    Quasar "
@@ -132,9 +135,9 @@ _no_transpose_mismatch = reject(
     "requires both transpose_faces and transpose_within_face to have the same value",
 )
 
-_block_full_width = reject(
-    lambda s, a, b: s.block_size[1] != a.dimensions[1],
-    "block width must be same as operand width",
+_block_divides_width = reject(
+    lambda s, a, b: a.dimensions[1] % s.block_size[1] != 0,
+    "operand width must be a multiple of the block width",
 )
 
 _reduce_col_only = reject(
@@ -147,12 +150,12 @@ _eltwise_checks = [
     _no_transpose_mismatch,
     *eltwise_unpacker_rules,
     NO_BROADCAST_REUSE_DEST,
-    NO_BROADCAST_ACC_TO_DEST,
 ]
 
 _eltwise_lofi_checks = [*_eltwise_checks, LOFI_ONLY]
 
 _matmul_checks = [
+    NO_UNPACK_TO_DEST,
     NO_REUSE_DEST,
     NO_BROADCAST,
     MATMUL_OPERAND_DIMS,
@@ -179,6 +182,7 @@ UNPACKER_MAP = {
             INT32_NEEDS_UNPACK_TO_DEST,
             NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
+            TRANSPOSE_NEEDS_FULL_TILE,
             reject(
                 lambda s, a, b: s.unpack_to_dest.value
                 and a.tile_shape.tile_dims != (32, 32),
@@ -192,9 +196,8 @@ UNPACKER_MAP = {
             IN0_REQUIRED,
             NO_BROADCAST,
             NO_TRANSPOSE,
-            _block_full_width,
+            _block_divides_width,
             NO_UNPACK_TO_DEST,
-            require_src_a_tiles((32, 32)),
         ],
     ),
     "UnpackerAB": (
@@ -248,7 +251,6 @@ UNPACKER_MAP = {
             NO_TRANSPOSE,
             NO_UNPACK_TO_DEST,
             _reduce_col_only,
-            require_src_a_tiles((32, 32)),
         ],
     ),
 }
@@ -274,6 +276,7 @@ FPU_MAP = {
             NO_BROADCAST,
             NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
+            TRANSPOSE_NEEDS_FULL_TILE,
         ],
     ),
     "Matmul": (
@@ -315,6 +318,7 @@ FPU_MAP = {
     "Reduce": (
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),
         [
+            NO_UNPACK_TO_DEST,
             IN0_REQUIRED,
             IN1_REQUIRED,
             NO_REUSE_DEST,
@@ -325,11 +329,6 @@ FPU_MAP = {
                 lambda s, a, b: s.reduce_pool == ReducePool.Max
                 and s.math_fidelity != MathFidelity.LoFi,
                 "Quasar MAX Reduce requires LoFi fidelity",
-            ),
-            reject(
-                lambda s, a, b: a.data_format.is_integer()
-                and a.tile_shape.tile_dims != (32, 32),
-                "Quasar integer Reduce requires 32x32 tiles",
             ),
             reject(
                 lambda s, a, b: a.data_format.is_integer()
@@ -367,17 +366,10 @@ FPU_MAP = {
     ),
 }
 
-# Quasar has no strided pack path for tiny tiles, so the shared full-tile rule carries
-# an arch-specific hint here.
-_untilize_full_tile = reject(
-    lambda s, output: output.tile_shape.total_num_faces() != 4,
-    "PackUntilize supports only 32x32 output tiles, tiny tiles need strided pack",
-)
-
 PACKER_MAP = {
     "Packer": (Packer, [L1_ACC_FORMAT_SUPPORTED]),
     "MatmulPacker": (MatmulPacker, [L1_ACC_FORMAT_SUPPORTED]),
-    "PackUntilize": (PackUntilize, [_untilize_full_tile, PACK_NO_L1_ACC]),
+    "PackUntilize": (PackUntilize, [PACK_NO_L1_ACC]),
 }
 
 OUTPUT_DIMS = {
@@ -434,6 +426,7 @@ UNARY_SFPU_OPS = {
     MathOperation.Tanhshrink,
     MathOperation.Xielu,
     MathOperation.Neg,
+    MathOperation.Dropout,
     MathOperation.Add1,
     MathOperation.Cbrt,
     MathOperation.Exp2,
@@ -463,6 +456,10 @@ UNARY_SFPU_OPS = {
     MathOperation.UnaryLe,
     MathOperation.UnaryEq,
     MathOperation.UnaryNe,
+    MathOperation.UnaryMax,
+    MathOperation.UnaryMin,
+    MathOperation.UnaryMaxInt32,
+    MathOperation.UnaryMinInt32,
     MathOperation.BitwiseNot,
     MathOperation.LeftShift,
     MathOperation.RightShift,
@@ -527,9 +524,12 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuSituGlu,
     MathOperation.SfpuLogaddexp,
     MathOperation.SfpuLogaddexp2,
+    MathOperation.SfpuGcd,
+    MathOperation.SfpuLcm,
     MathOperation.SfpuElwRightShift,
     MathOperation.SfpuElwLeftShift,
     MathOperation.SfpuElwLogicalRightShift,
+    MathOperation.SfpuReshuffleRows,
 }
 
 
@@ -547,11 +547,22 @@ class FpuMathSchema(FpuMathSchemaBase):
 class QuasarUnarySfpuMathSchema(UnarySfpuMathSchema):
     _sfpu_cls: ClassVar = UnarySfpu
     _sfpu_ops: ClassVar = UNARY_SFPU_OPS
+    _dropout_ops: ClassVar = {"Dropout"}
 
 
 class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_cls: ClassVar = BinarySfpu
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
+    _sign_magnitude_ops: ClassVar = {
+        "SfpuElwadd",
+        "SfpuElwmul",
+        "SfpuElwGt",
+        "SfpuElwLt",
+        "SfpuElwLe",
+        "SfpuElwGe",
+        "SfpuGcd",
+        "SfpuLcm",
+    }
 
 
 class QuasarTernarySfpuMathSchema(TernarySfpuMathSchema):
@@ -590,6 +601,29 @@ PackEntrySchema = Union[
 
 class OperationSchema(OperationSchemaBase):
     dest_consuming_operations: ClassVar = frozenset({"TransposeDest"})
+
+    def _validate_sfpu_tile_shape(self, tile_shape, schemas):
+        for schema in schemas:
+            if not isinstance(schema, (UnarySfpuMathSchema, BinarySfpuMathSchema)):
+                continue
+            if tile_shape.face_r_dim != 16:
+                raise ValueError("Quasar SFPU requires 16-row faces")
+            if tile_shape.tile_dims == (32, 32):
+                continue
+            if isinstance(schema, UnarySfpuMathSchema):
+                allowed_iterations = ("tile", tile_shape.total_tile_size() // 32)
+                recommended = "tile"
+            elif isinstance(schema, TernarySfpuMathSchema):
+                continue  # Ternary iterations are already per face and fixed at eight.
+            else:
+                # Binary iterations: 32 supplies eight row-pair iterations to each selected face.
+                allowed_iterations = (32,)
+                recommended = 32
+            if schema.iterations not in allowed_iterations:
+                raise ValueError(
+                    f"Quasar {schema.type} on tiny tiles requires whole-tile iterations; "
+                    f"use iterations: {recommended}"
+                )
 
     math: List[MathSchema] = Field(..., min_length=1)
     pack: List[PackEntrySchema] = Field(..., min_length=1)

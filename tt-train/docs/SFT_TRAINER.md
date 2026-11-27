@@ -52,7 +52,7 @@ from ttml.trainers import SFTConfig
 | `checkpoint_dir` | `str` | `"checkpoints"` | Directory for checkpoint files. |
 | `seed` | `int \| None` | `None` | RNG seed for reproducibility. |
 | `max_seq_len` | `int` | `1024` | Maximum sequence length (used for the causal mask). |
-| `learning_rate` | `float` | `2e-5` | Peak learning rate; also used for the default AdamW optimizer. |
+| `learning_rate` | `float` | `2e-5` | Used only when `optimizer=None`: the `lr` of the default AdamW. With an explicit optimizer, its own `lr` (per param group) is the peak LR and this field is ignored, because the schedule multiplies the optimizer's initial LRs. |
 | `warmup_steps` | `int` | `0` | Linear warmup steps for the default schedule. |
 | `max_grad_norm` | `float` | `0.0` | Maximum gradient L2 norm for clipping (0 to disable). |
 | `log_interval` | `int` | `1` | Progress-bar update and `on_step_end` callback frequency. |
@@ -76,11 +76,14 @@ SFTTrainer(
     config,
     optimizer=None,
     peft_config=None,
-    lr_schedule=None,
+    lr_schedule=None,  # deprecated, use lr_lambda
     callbacks=None,
     compute_loss_func=None,
     loss_composer=None,
     attention_mask=None,
+    *,
+    lr_lambda=None,
+    precision=None,
 )
 ```
 
@@ -92,11 +95,13 @@ SFTTrainer(
 | `config` | `SFTConfig` | Trainer configuration. |
 | `optimizer` | `OptimizerBase \| dict \| None` | Optimizer instance, config dict (see [Optimizer](#optimizer)), or `None` for default AdamW. |
 | `peft_config` | `LoraConfig \| None` | When provided, wraps the model with `LoraModel` automatically (see [LoRA / PEFT](#lora--peft)). |
-| `lr_schedule` | `Callable[[int], float] \| None` | Custom `step -> lr` schedule. Overrides the default linear-warmup-then-constant. |
+| `lr_schedule` | `Callable[[int], float] \| None` | Deprecated, use `lr_lambda`. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 | `compute_loss_func` | `Callable \| None` | Custom `(logits, batch) -> loss` replacing the default masked cross-entropy. |
 | `loss_composer` | `Any \| None` | Mesh composer for multi-device loss aggregation. Defaults to `concat_mesh_to_tensor_composer(device, 0)` which works for both single-device and DDP. Pass a custom composer to override. |
 | `attention_mask` | `Any \| None` | Attention mask passed as the second argument to `model(input_ids, mask)`. `None` (default) lets the model generate a causal mask on the fly. |
+| `lr_lambda` | `Callable[[int], float] \| None` | Keyword argument. Custom `step -> factor` schedule: every step, each param group's LR is set to `factor` times its initial LR, so param groups keep their ratios. Overrides the default linear-warmup-then-constant. |
+| `precision` | `dict \| None` | Keyword argument. The YAML's `training_config.precision` block as a dict (`master_dtype`, `reduce_dtype`; see [Precision](#precision)). Applied after the LoRA wrapping and before the optimizer is built from a dict or the default. `None` (default) means no block. Raises `ValueError` together with a ready optimizer instance, whose state is already sized. |
 
 ### Methods
 
@@ -124,6 +129,36 @@ SFTTrainer(..., optimizer=None)
 
 Any optimizer registered with `ttml.optimizers.register_optimizer` can be used via the dict form.
 See [TTML Onboarding — Optimizers](TTML_ONBOARDING.md) for the full list of built-in optimizers.
+
+### Precision
+
+Pass the config's precision block as `precision=` for fp32 master weights or fp32 gradient sums (see
+[Mixed Precision](MIXED_PRECISION.md)):
+
+```python
+training_config = TrainingConfig(yaml_config)  # checks the precision block: a typo fails here
+SFTTrainer(
+    ...,
+    optimizer={"type": "AdamW", "lr": 1e-4},
+    precision=training_config.precision,  # e.g. {"master_dtype": "float32", "reduce_dtype": "float32"}
+)
+```
+
+The trainer applies it before it builds the optimizer, so the optimizer state follows the stored dtype. With LoRA,
+only the trainable adapters are converted; the frozen base keeps its dtype. `None` means no block, as for
+`create_optimizer`: the parameters keep their dtype and no reduce dtype is stored. With a ready optimizer instance the
+trainer applies nothing: apply the block when you create it, as `ttml.common.utils.create_optimizer` does when it is
+given the whole config (`train.py`).
+
+Weights loaded before the trainer is built went into the model's dtype, so fp32 master weights get them rounded to bf16
+first; that changes nothing for bf16 files. For full fine-tuning from an fp32 file, build the trainer first and load the
+weights after it, as `load_checkpoint` does on a resume: the block is applied once, by the trainer, and a loader that
+writes into the dtype a parameter is stored in keeps the fp32 values. Checkpoints, the Python Llama and Qwen3 loaders
+and the C++ safetensors loaders all do (see [fp32 master weights](MIXED_PRECISION.md#fp32-master-weights)). With LoRA
+the order doesn't matter: the frozen base stays in bf16, so load it before the trainer as usual. Don't apply the block
+yourself before the trainer wraps the model: `LoraModel` keeps the base's tensors, so the frozen base would stay in
+fp32, 6 bytes per parameter (fp32 plus its bf16 view) instead of 2. The trainer warns when a frozen parameter is
+stored in fp32.
 
 ---
 
@@ -261,8 +296,10 @@ from ttml.datasets import sft_collate_fn
 collate = partial(sft_collate_fn, max_seq_len=1024, pad_token_id=tokenizer.pad_token_id)
 ```
 
-Expects each example to be a dict with `"input_ids"` and `"labels"` (prompt positions
-set to `-100`). Handles padding, truncation, and loss mask normalization.
+Expects each example to be a dict with `"input_ids"` and `"labels"` (`-100` at the positions
+whose target is a prompt token, `t < prompt_len - 1`). Handles padding, truncation, and loss mask normalization.
+`labels[t]` is scored against the logits at position `t` with no shift, so it must already
+be the next-token target of `input_ids[t]` (not a copy of `input_ids`).
 
 ---
 

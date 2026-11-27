@@ -32,7 +32,7 @@
  * Input:  8 sorted top-8 sequences across DST tiles 0-4 (8 FP16B values + 8 indices
  *         per core per lane). Each tile holds 2 cores (face 0 and face 1).
  * Output: Two uint16 bitmasks per lane written to face 1 of tile 0 (rows 0-3 at
- *         offset 32, LO16 mode), indicating which of 32 experts in the column are
+ *         offset 32, UINT16 mode), indicating which of 32 experts in the column are
  *         selected. The merged top-8 values+indices remain in tile 0, face 0.
  */
 
@@ -41,14 +41,13 @@ namespace ckernel {
 #ifdef TRISC_MATH
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace sfpu {
 
 inline void _top8_merge_configure_addrmod_() {
     // SFPU configuration shifts to use ADDRMOD4-7.
-    constexpr uint32_t ADDRMOD_OFFSET = 4;
+    constexpr std::uint32_t ADDRMOD_OFFSET = 4;
 
     addr_mod_t{
         .dest = {.incr = 32, .clr = 0, .cr = 0, .c_to_cr = 0},
@@ -56,119 +55,109 @@ inline void _top8_merge_configure_addrmod_() {
         .set(ADDRMOD_OFFSET + ADDR_MOD_0);
 
     addr_mod_t{
-        .dest = {.incr = 2, .clr = 0, .cr = 0, .c_to_cr = 0},
-    }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_1);
-
-    addr_mod_t{
         .dest = {.incr = 14, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_2);
-
-    addr_mod_t{
-        .dest = {.incr = -18, .clr = 0, .cr = 0, .c_to_cr = 0},
-    }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_3);
+        .set(ADDRMOD_OFFSET + ADDR_MOD_1);
 }
 
-template <uint32_t tile_index, uint32_t face_offset, uint32_t row_offset>
+template <std::uint32_t tile_index, std::uint32_t face_offset, std::uint32_t row_offset>
 inline void _top8_merge_set_d_rwc_() {
-    constexpr uint32_t total_offset = tile_index * 64 + face_offset * 32 + row_offset;
+    constexpr std::uint32_t total_offset = tile_index * 64 + face_offset * 32 + row_offset;
 
     // Set base position to 0
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, row_offset, 0, 0, p_setrwc::SET_D);
 
     // Increment by 32 using SFPLOAD with ADDR_MOD_0
-    constexpr uint32_t num_increments = tile_index * 2 + face_offset;
+    constexpr std::uint32_t num_increments = tile_index * 2 + face_offset;
 
     // This loads to a read-only register, acting as a NOP while applying the address increment
-    for (uint32_t i = 0; i < num_increments; ++i) {
+    for (std::uint32_t i = 0; i < num_increments; ++i) {
         TTI_SFPLOAD(p_sfpu::LCONST_0, InstrModLoadStore::FP16B, ADDR_MOD_0, 0);
     }
 }
 
 // Load sorted group from tile layout
-template <uint32_t tile_index, uint32_t face_offset, bool replay>
+template <std::uint32_t tile_index, std::uint32_t face_offset, bool replay>
 inline void _top8_merge_load_rows_0_3_() {
     _top8_merge_set_d_rwc_<tile_index, face_offset, /*row_offset*/ 0>();
 
     if constexpr (replay) {
-        lltt::replay(0, 8);
+        TTI_REPLAY(0, 8, 0, 0);
         return;
     }
 
-    lltt::record<lltt::Exec>(0, 8);
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 0
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 2
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 16
+    TTI_REPLAY(0, 8, 1, 1);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 0
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 2
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 16
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 18
 
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 0
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 2
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 16
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 0
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 2
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 16
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 8);  // offset 18
 }
 
-template <uint32_t tile_index, uint32_t face_offset, bool replay>
+template <std::uint32_t tile_index, std::uint32_t face_offset, bool replay>
 inline void _top8_merge_load_rows_4_7_() {
     _top8_merge_set_d_rwc_<tile_index, face_offset, /*row_offset*/ 4>();
 
     if constexpr (replay) {
-        lltt::replay(8, 8);
+        TTI_REPLAY(8, 8, 0, 0);
         return;
     }
 
-    lltt::record<lltt::Exec>(8, 8);
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 4
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 6
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 20
+    TTI_REPLAY(8, 8, 1, 1);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 4
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 6
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 20
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 22
 
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 4
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 6
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 20
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 4
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 6
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 20
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 8);  // offset 22
 }
 
-template <uint32_t tile_index, uint32_t face_offset, bool replay>
+template <std::uint32_t tile_index, std::uint32_t face_offset, bool replay>
 inline void _top8_merge_store_rows_0_3_() {
     _top8_merge_set_d_rwc_<tile_index, face_offset, /*row_offset*/ 0>();
 
     if constexpr (replay) {
-        lltt::replay(16, 8);
+        TTI_REPLAY(16, 8, 0, 0);
         return;
     }
 
-    lltt::record<lltt::Exec>(16, 8);
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 0
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 2
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 16
+    TTI_REPLAY(16, 8, 1, 1);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 0
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 2
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 16
     TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 18
 
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 0
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 2
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 16
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 0
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 2
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 16
     TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 8);  // offset 18
 }
 
-template <uint32_t tile_index, uint32_t face_offset, bool replay>
+template <std::uint32_t tile_index, std::uint32_t face_offset, bool replay>
 inline void _top8_merge_store_rows_4_7_() {
     _top8_merge_set_d_rwc_<tile_index, face_offset, /*row_offset*/ 4>();
 
     if constexpr (replay) {
-        lltt::replay(24, 8);
+        TTI_REPLAY(24, 8, 0, 0);
         return;
     }
 
-    lltt::record<lltt::Exec>(24, 8);
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 4
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 6
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 20
+    TTI_REPLAY(24, 8, 1, 1);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 4
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 6
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 20
     TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 22
 
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 4
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 6
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 20
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 4
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 8);  // offset 6
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 8);  // offset 20
     TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 8);  // offset 22
 }
 
@@ -196,7 +185,7 @@ inline void _top8_merge_bitonic_merge_8_rows_() {
 // Assumes LREG0-7 contains sorted sequence A (descending, untransposed)
 // Loads sequence B from specified location and merges
 // Result is left in LREG0-7 (untransposed, sorted descending)
-template <uint32_t tile_index, uint32_t face_offset, bool replay>
+template <std::uint32_t tile_index, std::uint32_t face_offset, bool replay>
 inline void _top8_merge_two_sorted_8_() {
     //-------------------------------------------------------------------------
     // PHASE 1: Compare and store each halves
@@ -269,8 +258,15 @@ inline void _top8_merge_two_sorted_8_() {
 }
 
 // Main entry point for cross-core merge
-template <uint32_t column_idx>
+template <std::uint32_t column_idx>
 inline void _top8_merge_() {
+    // ADDR_MOD_3 is slot 7 under the SFPU addr-mod base. This op steps dest by -18 through it; restore zero
+    // advance before returning.
+    addr_mod_t{
+        .dest = {.incr = -18, .clr = 0, .cr = 0, .c_to_cr = 0},
+    }
+        .set(ADDR_MOD_7);
+
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     // Sequentially merge core 0 data with that in cores 1-7
@@ -304,10 +300,10 @@ inline void _top8_merge_() {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     // Load just the top 4 indices
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_1, 8);  // offset 0
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_2, 8);  // offset 2
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::LO16, ADDR_MOD_1, 8);  // offset 16
-    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_3, 8);  // offset 18
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::UINT16, ADDR_MOD_2, 8);  // offset 0
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::UINT16, ADDR_MOD_1, 8);  // offset 2
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::UINT16, ADDR_MOD_2, 8);  // offset 16
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::UINT16, ADDR_MOD_3, 8);  // offset 18
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 
@@ -315,7 +311,7 @@ inline void _top8_merge_() {
     TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);  // Initialize accumulator to 0 (Higher 16 experts)
 
     // Main loop: 4 iterations, one per index slot
-    for (uint32_t lreg = 0; lreg < 4; lreg++) {
+    for (std::uint32_t lreg = 0; lreg < 4; lreg++) {
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
         // If value is less than "column_idx" in any lane, disable that lane
         TTI_SFPIADD((-int(column_idx << 5)) & 0xfff, lreg, lreg, SFPIADD_MOD1_ARG_IMM | SFPIADD_MOD1_CC_GTE0);
@@ -339,7 +335,7 @@ inline void _top8_merge_() {
 
     // Main loop: 4 iterations, one per index slot
 
-    for (uint32_t lreg = 0; lreg < 4; lreg++) {
+    for (std::uint32_t lreg = 0; lreg < 4; lreg++) {
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
         // If value is less than "column_idx + 16" in any lane, disable that lane
         TTI_SFPIADD((-int(16)) & 0xfff, lreg, lreg, SFPIADD_MOD1_ARG_IMM | SFPIADD_MOD1_CC_GTE0);
@@ -365,15 +361,15 @@ inline void _top8_merge_() {
 
     // Load next 4 indices (rows 4-7). DST is at 0 after previous group, need 4.
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 4, 0, 0, p_setrwc::SET_D);
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_1, 8);  // row 12
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_2, 8);  // row 14
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::LO16, ADDR_MOD_1, 8);  // row 28
-    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_3, 8);  // row 30
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::UINT16, ADDR_MOD_2, 8);  // row 12
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::UINT16, ADDR_MOD_1, 8);  // row 14
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::UINT16, ADDR_MOD_2, 8);  // row 28
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::UINT16, ADDR_MOD_3, 8);  // row 30
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     // Main loop: 4 iterations, one per index slot
-    for (uint32_t lreg = 0; lreg < 4; lreg++) {
+    for (std::uint32_t lreg = 0; lreg < 4; lreg++) {
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
         // If value is less than "column_idx" in any lane, disable that lane
         TTI_SFPIADD((-int(column_idx << 5)) & 0xfff, lreg, lreg, SFPIADD_MOD1_ARG_IMM | SFPIADD_MOD1_CC_GTE0);
@@ -397,7 +393,7 @@ inline void _top8_merge_() {
 
     // Main loop: 4 iterations, one per index slot
 
-    for (uint32_t lreg = 0; lreg < 4; lreg++) {
+    for (std::uint32_t lreg = 0; lreg < 4; lreg++) {
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
         // If value is less than "column_idx + 16" in any lane, disable that lane
         TTI_SFPIADD((-int(16)) & 0xfff, lreg, lreg, SFPIADD_MOD1_ARG_IMM | SFPIADD_MOD1_CC_GTE0);
@@ -424,10 +420,13 @@ inline void _top8_merge_() {
     // Store result
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16, ADDR_MOD_1, 32);
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16, ADDR_MOD_2, 32);
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16, ADDR_MOD_1, 32);
-    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::LO16, ADDR_MOD_3, 32);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::UINT16, ADDR_MOD_2, 32);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::UINT16, ADDR_MOD_1, 32);
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::UINT16, ADDR_MOD_2, 32);
+    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::UINT16, ADDR_MOD_3, 32);
+
+    // Restore the ADDR_MOD_7 invariant (zero advance) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
 }
 
 }  // namespace sfpu
@@ -436,7 +435,7 @@ inline void _llk_math_top8_merge_init_() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_top8_merge_configure_addrmod_);
 }
 
-template <uint32_t column_idx>
+template <std::uint32_t column_idx>
 inline void _llk_math_top8_merge_() {
     SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _top8_merge_, (column_idx), 0 /*DST_IDX*/, VectorMode::RC_custom);
 }
@@ -448,7 +447,7 @@ inline void _llk_math_top8_merge_() {
  */
 inline void top8_merge_init() { MATH((_llk_math_top8_merge_init_())); }
 
-template <uint32_t column_idx>
+template <std::uint32_t column_idx>
 ALWI void top8_merge() {
     MATH((_llk_math_top8_merge_<column_idx>()));
 }

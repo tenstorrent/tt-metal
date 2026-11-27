@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import functools
 from typing import Optional, List
 
 import ttnn
@@ -41,7 +42,13 @@ class DispatchCoreConfig(_DispatchCoreConfig):
         super().__init__(resolved_config.type, resolved_config.axis)
 
 
-open_device = ttnn._ttnn.device.open_device
+@functools.wraps(ttnn._ttnn.device.open_device)
+def open_device(*args, **kwargs):
+    # Fetch the matmul config model if it was turned on but isn't there yet (ttnn/ttnn/matmul_model/__init__.py)
+    ttnn.matmul_model.download_if_enabled()
+    return ttnn._ttnn.device.open_device(*args, **kwargs)
+
+
 init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config
 
 
@@ -144,6 +151,8 @@ def ReadDeviceProfiler(device):
 
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices
 ClearKernelCache = ttnn._ttnn.device.ClearKernelCache
+GetOperationTimeoutSeconds = ttnn._ttnn.device.GetOperationTimeoutSeconds
+SetOperationTimeoutSeconds = ttnn._ttnn.device.SetOperationTimeoutSeconds
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
@@ -239,6 +248,16 @@ def get_allocator_base_address(device, buffer_type):
     the absolute L1 top address used by the device-side allocator.
     """
     return ttnn._ttnn.device.GetAllocatorBaseAddress(device, buffer_type)
+
+
+def experimental_get_l1_occupied_ranges(mesh_device, device_coord, core=None):
+    """Occupied L1 ``(start, end)`` ranges on ``core`` of one mesh device, or a dict over every L1-bank core.
+
+    Covers lockstep, per-core and persistent L1; requires the HYBRID allocator.
+    """
+    if core is None:
+        return ttnn._ttnn.device.ExperimentalGetL1OccupiedRanges(mesh_device, device_coord)
+    return ttnn._ttnn.device.ExperimentalGetL1OccupiedRanges(mesh_device, device_coord, core)
 
 
 SubDevice = ttnn._ttnn.device.SubDevice

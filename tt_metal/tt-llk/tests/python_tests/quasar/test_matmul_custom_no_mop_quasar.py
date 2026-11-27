@@ -39,7 +39,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
+    MathFidelity,
     Transpose,
     format_dict,
 )
@@ -48,8 +48,9 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
 )
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
+    DEST_DEPTH_BLOCK_COUNTS,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
     runtime,
 )
@@ -60,14 +61,13 @@ from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
     ENABLE_2X_FORMAT,
-    IMPLIED_MATH_FORMAT,
     MATH_FIDELITY,
     NUM_FACES,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # The no-MOP LLK replays a four-face MVMUL walk, so it is full-32x32-tile only (the same
 # restriction the regular Quasar matmul carries, tt-metal #45208).
@@ -83,23 +83,10 @@ DEST_SYNC_MODE = DestSync.Half
 MATMUL_FORMATS = input_output_formats([DataFormat.Float16, DataFormat.Float16_b])
 
 
-def _dest_bank_max_tiles(formats, dest_acc):
-    """Max result-tile count for a (format, dest_acc) pair on DestSync.Half.
-
-    A 32-bit destination register (dest_acc=Yes, or a format the harness forces onto 32-bit dest)
-    holds half as many tiles as the 16-bit one. Mirrors test_matmul_custom._dest_bank_max_tiles.
-    """
-    capacity_divisor = (
-        2 if (is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes) else 1
-    )
-    return DEST_SYNC_TILE_LIMITS[DEST_SYNC_MODE] // capacity_divisor
-
-
 def _run_matmul_custom_no_mop(
     math_fidelity,
     formats,
     dest_acc,
-    implied_math_format,
     input_A_dimensions,
     input_B_dimensions,
     enable_2x_format: bool,
@@ -149,12 +136,6 @@ def _run_matmul_custom_no_mop(
             dimensions=input_B_dimensions,
         )
 
-    # 2x register-format opt-in has to flow through inference; only disable inference for plain MX
-    # formats, where there is nothing to infer.
-    disable_format_inference = (
-        formats.input_format.is_mx_format() and formats.register_format_hint is None
-    )
-
     formats_config = data_formats(
         input_format=formats.input_format,
         input_format_B=formats.input_format_B,
@@ -162,7 +143,6 @@ def _run_matmul_custom_no_mop(
         is_fp32_dest_acc_en=dest_acc,
         num_iterations=1,
         unpacking_to_dest=False,
-        disable_format_inference=disable_format_inference,
         register_format_hint=formats.register_format_hint,
     )[0]
     pack_src_format = formats_config.pack_src
@@ -189,7 +169,6 @@ def _run_matmul_custom_no_mop(
         formats=formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             ENABLE_2X_FORMAT(enable_2x_format),
             DEST_SYNC(DEST_SYNC_MODE),
             UNPACK_TRANS_FACES(Transpose.No),
@@ -212,17 +191,12 @@ def _run_matmul_custom_no_mop(
         ),
         unpack_to_dest=False,
         dest_acc=dest_acc,
-        disable_format_inference=disable_format_inference,
         boot_mode=boot_mode,
     )
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # For MX outputs, model the packer: quantize the golden onto the MX lattice (from the math /
     # pack_src format the result was produced in) so the comparison validates the device's MX output
@@ -244,7 +218,10 @@ def _run_matmul_custom_no_mop(
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     dimensions=runtime(
         lambda formats, dest_acc: generate_matmul_dimension_combinations(
-            _dest_bank_max_tiles(formats, dest_acc)
+            max_dest_tiles(
+                is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes,
+                DEST_SYNC_MODE,
+            )
         )
     ),
 )
@@ -260,9 +237,6 @@ def test_matmul_custom_no_mop_quasar(
         math_fidelity,
         formats,
         dest_acc,
-        # The metal llk_api wrapper configures the ALU format state with IMPLIED_MATH_FORMAT off,
-        # so the non-MX path is tested in that mode.
-        ImpliedMathFormat.No,
         input_A_dimensions,
         input_B_dimensions,
         enable_2x_format=False,
@@ -312,10 +286,84 @@ def test_matmul_custom_no_mop_quasar_mxfp4_2x(
         math_fidelity,
         formats,
         dest_acc,
-        # MX formats carry their exponent in the data, so the math format has to be implied.
-        ImpliedMathFormat.Yes,
         input_A_dimensions,
         input_B_dimensions,
         enable_2x_format=True,
+        boot_mode=boot_mode,
+    )
+
+
+def _dest_depth_dimensions(dest_acc):
+    """A x B spanning 4 and 8 full Dest sections; the kernel runs it as (ct=2, rt=max/2, kt=2) blocks."""
+    rt_per_block = max_dest_tiles(dest_acc, DEST_SYNC_MODE) // 2
+    return [
+        ([32 * blocks * rt_per_block, 64], [64, 64])
+        for blocks in DEST_DEPTH_BLOCK_COUNTS
+    ]
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dimensions=runtime(_dest_depth_dimensions),
+)
+def test_matmul_custom_no_mop_quasar_dest_depth(
+    formats,
+    dest_acc,
+    dimensions,
+    boot_mode=BootMode.DEFAULT,
+):
+    """Output larger than Dest: the replayed MVMUL walk runs once per stacked Dest section."""
+    input_A_dimensions, input_B_dimensions = dimensions
+    _run_matmul_custom_no_mop(
+        MathFidelity.LoFi,
+        formats,
+        dest_acc,
+        input_A_dimensions,
+        input_B_dimensions,
+        enable_2x_format=False,
+        boot_mode=boot_mode,
+    )
+
+
+# Float32 L1 operands reach SrcA/SrcB as Tf32 (32-bit Dest) or Float16_b (16-bit Dest).
+MATMUL_FLOAT32_FORMATS = [
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+]
+
+
+@pytest.mark.quasar
+@parametrize(
+    math_fidelity=lambda formats: [
+        fidelity
+        for fidelity in get_valid_math_fidelities(formats)
+        if fidelity in (MathFidelity.LoFi, MathFidelity.HiFi4)
+    ],
+    formats=MATMUL_FLOAT32_FORMATS,
+    # A Float32 output needs a 32-bit Dest; the packer cannot upcast.
+    dest_acc=lambda formats: (
+        [DestAccumulation.Yes]
+        if formats.output_format.is_32_bit()
+        else [DestAccumulation.Yes, DestAccumulation.No]
+    ),
+    dimensions=runtime(MATMUL_2X_DIMENSIONS),
+)
+def test_matmul_custom_no_mop_quasar_float32(
+    math_fidelity,
+    formats,
+    dest_acc,
+    dimensions,
+    boot_mode=BootMode.DEFAULT,
+):
+    input_A_dimensions, input_B_dimensions = dimensions
+    _run_matmul_custom_no_mop(
+        math_fidelity,
+        formats,
+        dest_acc,
+        input_A_dimensions,
+        input_B_dimensions,
+        enable_2x_format=False,
         boot_mode=boot_mode,
     )

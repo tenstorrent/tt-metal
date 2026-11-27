@@ -9,6 +9,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 namespace tt::tt_fabric {
 
@@ -57,31 +58,21 @@ public:
 
     template <
         BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY,
-        uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
+        uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc(),
+        bool sem_args_are_l1_addresses = false>
     static RoutingPlaneConnectionManager build_from_args(std::size_t& arg_idx, uint32_t num_connections_to_build) {
-        constexpr bool connect = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||
-                                 build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY;
-        constexpr bool wait_for_connection_open_finish = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION;
-
         RoutingPlaneConnectionManager mgr;
         ASSERT(num_connections_to_build <= MaxConnections);
 
         for (uint32_t i = 0; i < num_connections_to_build; ++i) {
             auto& conn = mgr.slots_[i];
             conn.tag = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
-            conn.sender =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-            if constexpr (connect) {
-                conn.sender.open_start<false, false, WORKER_HANDSHAKE_NOC>();
-            }
+            conn.sender = tt::tt_fabric::WorkerToFabricEdmSender::
+                build_from_args<ProgrammableCoreType::TENSIX, sem_args_are_l1_addresses>(arg_idx);
+            start_open<build_mode, WORKER_HANDSHAKE_NOC>(conn.sender);
         }
         mgr.num_active_ = num_connections_to_build;
-
-        if constexpr (connect && wait_for_connection_open_finish) {
-            for (uint32_t i = 0; i < mgr.num_active_; ++i) {
-                mgr.slots_[i].sender.open_finish<false, WORKER_HANDSHAKE_NOC>();
-            }
-        }
+        mgr.finish_open<build_mode, WORKER_HANDSHAKE_NOC>();
 
 #if defined(FABRIC_2D)
         mgr.my_chip_id = get_arg_val<uint32_t>(arg_idx++);
@@ -93,6 +84,39 @@ public:
         }
 #endif
 
+        return mgr;
+    }
+
+    // Builds a manager from a Metal 2.0 fabric connection binding: one slot for each target, in target order. A slot's
+    // tag is the direction of its router; on a 2D fabric, its destination is the binding's destination for that
+    // target.
+    // precondition: the binding has at most MaxConnections targets, and they resolve to different directions.
+    template <
+        BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY,
+        uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
+    static RoutingPlaneConnectionManager build_from_binding(FabricConnectionBindingToken token) {
+        ASSERT(token.num_targets() <= MaxConnections);
+        RoutingPlaneConnectionManager mgr;
+        for (uint32_t i = 0; i < token.num_targets(); ++i) {
+            const uint32_t target_word = fabric_connection_binding::target_rta_word(token, i);
+            auto& conn = mgr.slots_[mgr.num_active_++];
+            conn.tag = get_router_direction(get_arg_val<uint32_t>(target_word));
+            std::size_t arg_idx = target_word;
+            conn.sender =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            start_open<build_mode, WORKER_HANDSHAKE_NOC>(conn.sender);
+#if defined(FABRIC_2D)
+            conn.dst_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(target_word + 3));
+            conn.dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(target_word + 4));
+#endif
+        }
+        mgr.finish_open<build_mode, WORKER_HANDSHAKE_NOC>();
+
+#if defined(FABRIC_2D)
+        const auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        mgr.my_chip_id = routing_table->my_device_id;
+        mgr.my_mesh_id = routing_table->my_mesh_id;
+#endif
         return mgr;
     }
 
@@ -152,6 +176,24 @@ public:
     inline uint32_t active_count() const { return num_active_; }
 
 private:
+    // Sends the open request of a just-built connection if `build_mode` opens connections.
+    template <BuildFromArgsMode build_mode, uint8_t WORKER_HANDSHAKE_NOC>
+    static void start_open(Sender& sender) {
+        if constexpr (
+            build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||
+            build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY) {
+            sender.template open_start<false, false, WORKER_HANDSHAKE_NOC>();
+        }
+    }
+
+    // Waits for the open requests of the active connections if `build_mode` waits for them.
+    template <BuildFromArgsMode build_mode, uint8_t WORKER_HANDSHAKE_NOC>
+    void finish_open() {
+        if constexpr (build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION) {
+            open_finish<WORKER_HANDSHAKE_NOC>();
+        }
+    }
+
     std::array<ConnectionSlot, MaxConnections> slots_{};
     uint32_t num_active_;
 };

@@ -4,7 +4,7 @@
 
 import ttnn
 from models.experimental.vovnet.runner.performant_runner_infra import VovnetPerformanceRunnerInfra
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 class VovnetPerformantRunner:

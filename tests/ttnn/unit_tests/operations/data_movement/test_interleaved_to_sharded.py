@@ -343,3 +343,121 @@ def test_interleaved_to_sharded_rejects_pure_nd_with_preallocated_output(
 
     with expect_error(RuntimeError, r"interleaved_to_sharded does not support ND sharding"):
         ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config, preallocated_output=preallocated_output)
+
+
+def _single_core_l1(layout, shard_shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    return ttnn.MemoryConfig(
+        layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+def _zero_width_tile(device):
+    return ttnn.from_torch(torch.zeros(1, 1, 32, 0).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+
+
+# Each of these used to reach an integer division by the input width (or a truncated num_slices) on the host.
+@pytest.mark.parametrize(
+    "run, message",
+    [
+        (
+            lambda device: ttnn.interleaved_to_sharded(
+                _zero_width_tile(device),
+                ttnn.CoreCoord(1, 1),
+                [32, 32],
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+            "Input tensor width must be greater than 0",
+        ),
+        (
+            lambda device: ttnn.interleaved_to_sharded(
+                _zero_width_tile(device), _single_core_l1(ttnn.TensorMemoryLayout.WIDTH_SHARDED, (32, 32))
+            ),
+            "Input tensor width must be greater than 0",
+        ),
+        (
+            lambda device: ttnn.interleaved_to_sharded_partial(
+                _zero_width_tile(device),
+                ttnn.CoreCoord(1, 1),
+                [32, 32],
+                1,
+                0,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+            "Input tensor width must be greater than 0",
+        ),
+        (
+            lambda device: ttnn.interleaved_to_sharded_partial(
+                ttnn.from_torch(torch.randn(1, 1, 64, 64).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device),
+                ttnn.CoreCoord(1, 1),
+                [32, 64],
+                2**32,
+                0,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+            "num_slices must be at most UINT32_MAX",
+        ),
+        (
+            lambda device: ttnn.sharded_to_interleaved_partial(
+                ttnn.from_torch(
+                    torch.randn(1, 1, 32, 32).bfloat16(),
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=_single_core_l1(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (32, 32)),
+                ),
+                _zero_width_tile(device),
+                1,
+                0,
+            ),
+            "Cache tensor width must be greater than 0",
+        ),
+    ],
+    ids=[
+        "i2s_zero_width",
+        "i2s_memory_config_zero_width",
+        "i2s_partial_zero_width",
+        "i2s_partial_num_slices_wraps",
+        "s2i_partial_zero_width_cache",
+    ],
+)
+def test_sharding_rejects_zero_width_and_wrapping_slices(device, expect_error, run, message):
+    with expect_error(RuntimeError, message):
+        run(device)
+
+
+@pytest.mark.parametrize(
+    "shape, grid, shard_shape, num_slices, shard_scheme",
+    [
+        # Unaligned widths: the output used to report the padded width (128 / 96) as its logical width.
+        ((1, 1, 64, 100), (1, 1), (64, 128), 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ((1, 1, 64, 100), (1, 1), (32, 128), 2, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ((1, 1, 128, 70), (2, 1), (32, 96), 2, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ((1, 1, 64, 100), (2, 1), (32, 64), 2, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # Control: aligned width.
+        ((1, 1, 64, 96), (1, 1), (32, 96), 2, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+    ],
+    ids=["w100_one_slice", "w100_two_slices", "w70_two_cores", "w100_width_sharded", "w96_aligned"],
+)
+def test_interleaved_to_sharded_partial_keeps_logical_width(device, shape, grid, shard_shape, num_slices, shard_scheme):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape).bfloat16()
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    rows = shape[-2] // num_slices
+    for slice_index in range(num_slices):
+        output = ttnn.interleaved_to_sharded_partial(
+            input_tensor,
+            ttnn.CoreCoord(*grid),
+            list(shard_shape),
+            num_slices,
+            slice_index,
+            shard_scheme,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        assert list(output.shape) == [1, 1, rows, shape[-1]]
+        expected = torch_input[:, :, slice_index * rows : (slice_index + 1) * rows, :]
+        assert_equal(expected, ttnn.to_torch(output))

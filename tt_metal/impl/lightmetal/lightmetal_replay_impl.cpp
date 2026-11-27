@@ -12,11 +12,11 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/fmt.hpp>
 
-#include <host_api.hpp>
-#include "env_lib.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include "common/env_lib.hpp"
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "trace/trace_buffer.hpp"
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 
@@ -459,7 +459,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDealloc
         cmd->global_id());
 
     log_debug(tt::LogMetalTrace, "LightMetalReplay(BufferDeallocate) global_id: {}", cmd->global_id());
-    DeallocateBuffer(*buffer);  // Buffer& expected.
+    buffer->impl().deallocate(*buffer);
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* cmd) {

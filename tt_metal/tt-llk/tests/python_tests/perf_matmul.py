@@ -7,10 +7,9 @@ import pytest
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     DestAccumulation,
     DestSync,
-    MathFidelity,
-    PerfRunType,
     Transpose,
 )
 from helpers.matmul_sweep import (
@@ -21,11 +20,12 @@ from helpers.matmul_sweep import (
     unpack_matmul_fits_perf_ring,
 )
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
+    flat_axes,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -73,16 +73,13 @@ def matmul_combos(
     def _acc_modes(fmt: FormatConfig) -> List[DestAccumulation]:
         return dest_acc(fmt) if callable(dest_acc) else dest_acc
 
-    def _dest_bank_max_tiles(
-        format: FormatConfig, dest_acc: DestAccumulation, dest_sync: DestSync
-    ):
-        capacity_divisor = (
-            2 if is_dest_acc_needed(format) or dest_acc == DestAccumulation.Yes else 1
+    def _max_tiles(fmt: FormatConfig, acc: DestAccumulation, sync: DestSync) -> int:
+        return max_dest_tiles(
+            is_dest_acc_needed(fmt) or acc == DestAccumulation.Yes, sync
         )
-        return DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
 
     unique_max_tiles = set(
-        _dest_bank_max_tiles(fmt, acc, sync)
+        _max_tiles(fmt, acc, sync)
         for fmt in formats
         for acc in _acc_modes(fmt)
         for sync in DEST_SYNC_MODES
@@ -93,56 +90,64 @@ def matmul_combos(
     }
 
     return [
-        (format, accumulation, dest_sync, dims)
+        (
+            format,
+            accumulation,
+            dest_sync,
+            matrix_b[1] // TILE_DIM,
+            matrix_a[0] // TILE_DIM,
+            matrix_a[1] // TILE_DIM,
+        )
         for format in formats
         for accumulation in _acc_modes(format)
         for dest_sync in DEST_SYNC_MODES
-        for dims in dimensions[_dest_bank_max_tiles(format, accumulation, dest_sync)]
+        for matrix_a, matrix_b in dimensions[
+            _max_tiles(format, accumulation, dest_sync)
+        ]
     ]
+
+
+MATMUL_AXIS_NAMES = ("formats", "dest_acc", "dest_sync", "ct_dim", "rt_dim", "kt_dim")
 
 
 @pytest.mark.perf
 @parametrize(
-    combos=matmul_combos(
-        formats=input_output_formats(
-            [
-                DataFormat.Float16_b,
-                DataFormat.Float16,
-                DataFormat.Float32,
-                DataFormat.Bfp8_b,
-            ]
-        ),
-        dest_acc=lambda formats: (
-            [DestAccumulation.Yes]
-            if is_dest_acc_needed(formats)
-            else [DestAccumulation.No, DestAccumulation.Yes]
+    **flat_axes(
+        MATMUL_AXIS_NAMES,
+        matmul_combos(
+            formats=input_output_formats(
+                [
+                    DataFormat.Float16_b,
+                    DataFormat.Float32,
+                    DataFormat.Bfp8_b,
+                ]
+            ),
+            dest_acc=lambda formats: (
+                [DestAccumulation.Yes]
+                if is_dest_acc_needed(formats)
+                else [DestAccumulation.No, DestAccumulation.Yes]
+            ),
         ),
     ),
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_perf_matmul(
     perf_report,
-    combos,
+    formats,
+    dest_acc,
+    dest_sync,
+    ct_dim,
+    rt_dim,
+    kt_dim,
     math_fidelity,
 ):
-
-    formats, dest_acc, dest_sync, (matrix_a, matrix_b) = combos
-
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    ]
-
     # Calculate all matmul dimensions using helper function
-    dims = generate_tile_dims((matrix_a, matrix_b))
+    dims = generate_tile_dims(
+        (
+            [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
+            [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
+        )
+    )
 
     variant_tile_count = dims.rt_dim * dims.ct_dim * dims.kt_dim
     # PERF_ADDRESS rings are PERF_RING_TILES (tests/helpers/include/perf.h).
@@ -153,7 +158,7 @@ def test_perf_matmul(
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
         formats,
-        run_types,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync),

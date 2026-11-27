@@ -4,20 +4,16 @@
 
 #include "no_op.hpp"
 
-#include "core/tt_tensor_utils.hpp"
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
 
 NoOp::NoOp(ttml::serialization::NamedParameters parameters) : OptimizerBase(std::move(parameters)) {
+    init_param_groups({{"lr", 0.0F}}, {});
 }
 
 void NoOp::zero_grad() {
-    for (auto& [name, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-            tensor_ptr->set_grad(core::zeros_like(tensor_ptr->get_value()));
-        }
-    }
+    clear_gradients();
 }
 
 void NoOp::step() {
@@ -27,13 +23,13 @@ void NoOp::step() {
 serialization::StateDict NoOp::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
-    save_initial_lr(dict);
+    save_param_groups(dict);
     return dict;
 }
 
 void NoOp::set_state_dict(const serialization::StateDict& dict) {
+    restore_param_groups(dict);
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
-    restore_initial_lr(dict);
 }
 
 size_t NoOp::get_steps() const {
@@ -43,12 +39,4 @@ size_t NoOp::get_steps() const {
 void NoOp::set_steps(size_t steps) {
     this->m_steps = steps;
 }
-
-float NoOp::get_lr() const {
-    return 0.0f;
-}
-
-void NoOp::set_lr(float lr) {
-}
-
 }  // namespace ttml::optimizers

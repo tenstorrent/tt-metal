@@ -4,10 +4,8 @@
 
 #pragma once
 
-#include <device.hpp>
-#include <host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <fstream>
-#include <string>
 
 namespace tt::tt_metal {
 class IDevice;

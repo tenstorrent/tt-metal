@@ -14,7 +14,7 @@ import ttnn
 from ttnn.tools import trace_allocation_tracker
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_slow_dispatch
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 
 @skip_for_slow_dispatch()

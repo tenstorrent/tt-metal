@@ -4,23 +4,25 @@
 
 #pragma once
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <cstdint>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "gtest/gtest.h"
 #include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/device.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
+#include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 
 namespace tt::tt_metal {
 // #22835: These Fixtures will be removed once tests are fully migrated, and replaced by UnitMeshCQFixtures
@@ -79,7 +81,6 @@ protected:
 
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
 };
 
 class UnitMeshCQEventFixture : public UnitMeshCQFixture {};
@@ -181,7 +182,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     std::map<int, std::shared_ptr<distributed::MeshDevice>> reserved_devices_;
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
@@ -196,7 +196,20 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->create_devices(90000000);
+        const tt::tt_metal::MetalContext& metal_context = tt::tt_metal::MetalContext::instance();
+        const tt::Cluster& cluster = metal_context.get_cluster();
+        const metal_SocDescriptor& soc_descriptor = cluster.get_soc_desc(*cluster.mmio_chip_ids().begin());
+        uint64_t dram_bank_size = soc_descriptor.dram_view_size;
+        if (const std::optional<std::string_view> att_map = metal_context.rtoptions().get_noc_att_map();
+            this->arch_ == tt::ARCH::QUASAR && att_map.has_value()) {
+            if (const quasar_att::MapInfo* map_info = quasar_att::find_map(*att_map)) {
+                dram_bank_size = std::min(dram_bank_size, quasar_att::dram_window_local_address_limit(*map_info));
+            }
+        }
+        const uint64_t allocatable_dram_bank_size =
+            dram_bank_size - metal_context.hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+        const uint64_t allocatable_dram_size = allocatable_dram_bank_size * soc_descriptor.get_num_dram_views();
+        this->create_devices(std::min<uint64_t>(90000000, allocatable_dram_size / 4));
         init_max_dfbs();
     }
 };
@@ -247,7 +260,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 
@@ -360,7 +372,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     size_t num_devices_{};
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);

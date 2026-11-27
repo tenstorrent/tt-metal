@@ -5,6 +5,8 @@
 
 import os
 import shlex
+import shutil
+import sys
 import yaml
 import importlib
 from pathlib import Path
@@ -108,13 +110,13 @@ class TestCommandLineArguments:
             ],
         )
         assert result.exit_code != 0
-        assert "mutually exclusive" in result.output.lower()
+        assert "do not combine mesh graph options" in result.output.lower()
 
     def test_no_mode_specified(self, runner):
         """Test that at least one mode must be specified."""
         result = runner.invoke(main, ["echo", "test"])
         assert result.exit_code != 0
-        assert "must be specified" in result.output.lower()
+        assert "specify exactly one of" in result.output.lower()
 
     def test_new_mode_not_implemented(self, runner, sample_mesh_graph_descriptor):
         """Test that new mode requires --hosts or --mock-cluster-rank-binding."""
@@ -129,6 +131,30 @@ class TestCommandLineArguments:
         )
         assert result.exit_code != 0
         assert "--hosts is required" in result.output.lower()
+
+    @pytest.mark.parametrize(
+        "extra_args, message",
+        [
+            ([], "--offline requires --factory-system-descriptor"),
+            (["--factory-system-descriptor", "FSD", "--hosts", "node1"], "do not combine it with --hosts"),
+        ],
+    )
+    def test_offline_argument_validation(self, runner, sample_mesh_graph_descriptor, temp_dir, extra_args, message):
+        fsd_path = temp_dir / "fsd.textproto"
+        fsd_path.touch()
+        result = runner.invoke(
+            main,
+            [
+                "--mesh-graph-descriptor",
+                str(sample_mesh_graph_descriptor),
+                "--offline",
+                *[str(fsd_path) if arg == "FSD" else arg for arg in extra_args],
+                "echo",
+                "test",
+            ],
+        )
+        assert result.exit_code != 0
+        assert message in result.output
 
     def test_hosts_rejects_duplicates(self, runner, sample_mesh_graph_descriptor):
         """Duplicate hostnames in --hosts are rejected."""
@@ -448,6 +474,26 @@ class TestEnvironmentVariables:
         assert env["TT_MESH_HOST_RANK"] == "0"
         assert env["TEST_VAR"] == "value0"  # From env_overrides
         assert env["GLOBAL_VAR"] == "global_value"  # From global_env
+
+    def test_cluster_id_comes_from_rank_binding_env_override(self, sample_rank_binding_yaml, monkeypatch):
+        """Phase 2 stamps TT_METAL_CLUSTER_ID from the binding env override and drops a parent export."""
+        monkeypatch.setenv("TT_METAL_CLUSTER_ID", "from-the-parent")
+        config = parse_binding_config(sample_rank_binding_yaml)
+        binding = config.rank_bindings[0]
+        binding.env_overrides["TT_METAL_CLUSTER_ID"] = "bh-glx-110-c01u02"
+
+        env = get_rank_environment(binding, config)
+
+        assert env["TT_METAL_CLUSTER_ID"] == "bh-glx-110-c01u02"
+
+    def test_cluster_id_not_taken_from_parent_without_override(self, sample_rank_binding_yaml, monkeypatch):
+        """Without a rank-binding override, a parent TT_METAL_CLUSTER_ID is not forwarded."""
+        monkeypatch.setenv("TT_METAL_CLUSTER_ID", "from-the-parent")
+        config = parse_binding_config(sample_rank_binding_yaml)
+
+        env = get_rank_environment(config.rank_bindings[0], config)
+
+        assert "TT_METAL_CLUSTER_ID" not in env
 
     def test_get_rank_environment_fsd(self, sample_rank_binding_yaml, temp_dir):
         """FSD path on the config is exported to every rank via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH."""
@@ -886,7 +932,13 @@ class TestPhase1CacheArtifacts:
         rb.write_text("x")
         rf.write_text("y")
         assert not phase1_outputs_ready(run_dir, mock_mode=True)
-        (run_dir / PHASE2_MOCK_MAPPING_FILENAME).write_text("m: 1\n")
+        desc = run_dir / "mock_cluster_desc" / "host0.yaml"
+        (run_dir / PHASE2_MOCK_MAPPING_FILENAME).write_text(f"rank_to_cluster_mock_cluster_desc:\n  0: {desc}\n")
+        assert not phase1_outputs_ready(run_dir, mock_mode=True)
+        desc.parent.mkdir()
+        desc.write_text("")
+        assert not phase1_outputs_ready(run_dir, mock_mode=True)
+        desc.write_text("chips: {}\n")
         assert phase1_outputs_ready(run_dir, mock_mode=True)
 
     def test_phase1_cache_hit_valid_requires_key_file(self, temp_dir):
@@ -985,6 +1037,51 @@ class TestRunPhase1GenerateRankBindings:
 
         with expect_error(RuntimeError, "generate_rank_bindings failed"):
             run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=mock_run)
+
+    def test_run_phase1_generate_rank_bindings_offline(self, temp_dir, monkeypatch):
+        """offline runs generate_rank_bindings --offline on the FSD directly, without mpirun."""
+        from unittest.mock import MagicMock
+
+        executable = temp_dir / "generate_rank_bindings"
+        executable.touch()
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.write_text("mesh")
+        fsd_path = temp_dir / "fsd.textproto"
+        fsd_path.touch()
+        output_dir = temp_dir / "run"
+        monkeypatch.setattr(ttrun_module, "find_generate_rank_bindings_executable", lambda: executable)
+        monkeypatch.setenv("TT_METAL_HOME", str(temp_dir))
+        monkeypatch.delenv("TT_METAL_RUNTIME_ROOT", raising=False)
+
+        def mock_run(cmd, cwd=None, env=None, **kwargs):
+            assert env["TT_METAL_HOME"] == str(temp_dir)
+            assert env["TT_METAL_RUNTIME_ROOT"] == str(temp_dir)
+            assert cmd == [
+                str(executable.resolve()),
+                "--offline",
+                "--factory-system-descriptor",
+                str(fsd_path.resolve()),
+                "--mesh-graph-descriptor",
+                str(mgd_path.resolve()),
+                "--output-dir",
+                str(output_dir.resolve()),
+            ]
+            output_dir.mkdir(parents=True)
+            (output_dir / "rank_bindings.yaml").write_text("rank_bindings: []\n")
+            (output_dir / "rankfile").write_text("rank 0=localhost slot=0\n")
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            return mock_result
+
+        result = run_phase1_generate_rank_bindings(
+            mgd_path,
+            None,
+            output_dir,
+            subprocess_run=mock_run,
+            factory_system_descriptor=fsd_path,
+            offline=True,
+        )
+        assert result == (output_dir / "rank_bindings.yaml", output_dir / "rankfile")
 
 
 class TestNewModeFlow:
@@ -1186,3 +1283,165 @@ class TestNewModeFlow:
             call_args = mock_phase1.call_args
             assert call_args.kwargs["mock_rank_to_desc"] is not None
             assert len(call_args.kwargs["mock_rank_to_desc"]) == 2
+
+    def test_new_mode_flow_offline(self, runner, temp_dir, monkeypatch):
+        """--offline runs Phase 1 offline on the FSD into the Phase 1 run dir, without hosts or a mock mapping."""
+        from unittest.mock import patch
+
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.write_text("mesh")
+        fsd_path = temp_dir / "fsd.textproto"
+        fsd_path.write_text("fsd")
+        rank_bindings_path = temp_dir / "rank_bindings.yaml"
+        rankfile_path = temp_dir / "rankfile"
+        rank_bindings_path.write_text("rank_bindings:\n  - rank: 0\n")
+        rankfile_path.write_text("rank 0=localhost slot=0\n")
+
+        with patch.object(
+            ttrun_module, "run_phase1_generate_rank_bindings", return_value=(rank_bindings_path, rankfile_path)
+        ) as mock_phase1, patch.object(ttrun_module, "legacy_flow"):
+            result = runner.invoke(
+                main,
+                [
+                    "--mesh-graph-descriptor",
+                    str(mgd_path),
+                    "--factory-system-descriptor",
+                    str(fsd_path),
+                    "--offline",
+                    "echo",
+                    "test",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_phase1.call_args.args[1] is None
+        assert mock_phase1.call_args.args[2].parent == temp_dir / "generated" / "ttrun"
+        assert mock_phase1.call_args.kwargs["mock_rank_to_desc"] is None
+        assert mock_phase1.call_args.kwargs["factory_system_descriptor"] == fsd_path.resolve()
+        assert mock_phase1.call_args.kwargs["offline"] is True
+
+
+class TestLauncherSelection:
+    """tt-run must launch with the plain ``mpirun`` of the ULFM-capable install, never a ``--with-ft ulfm`` wrapper.
+
+    Regression tests for #57698: under ``--with-ft ulfm`` a rank
+    killed by a signal is "recoverable" and mpirun can exit 0 although every rank aborted.
+    """
+
+    @staticmethod
+    def _make_executable(path: Path, content: str = "#!/bin/bash\nexit 0\n") -> Path:
+        path.write_text(content)
+        path.chmod(0o755)
+        return path
+
+    def test_wrapper_script_resolves_to_sibling_mpirun(self, temp_dir, monkeypatch):
+        """Docker image layout: mpirun-ulfm is a bash wrapper beside mpirun that injects --with-ft ulfm."""
+        bin_dir = temp_dir / "openmpi" / "bin"
+        bin_dir.mkdir(parents=True)
+        plain = self._make_executable(bin_dir / "mpirun")
+        wrapper = self._make_executable(
+            bin_dir / "mpirun-ulfm", '#!/bin/bash\nexec "$(dirname "$0")/mpirun" --with-ft ulfm "$@"\n'
+        )
+        monkeypatch.setattr(ttrun_module.shutil, "which", lambda name: str(wrapper) if name == "mpirun-ulfm" else None)
+
+        assert get_mpi_launcher() == str(plain.resolve())
+
+    def test_symlink_resolves_to_target_mpirun(self, temp_dir, monkeypatch):
+        """Debian package layout: /usr/local/bin/mpirun-ulfm is a symlink to <prefix>/bin/mpirun."""
+        bin_dir = temp_dir / "openmpi" / "bin"
+        bin_dir.mkdir(parents=True)
+        plain = self._make_executable(bin_dir / "mpirun")
+        link_dir = temp_dir / "usr_local_bin"
+        link_dir.mkdir()
+        link = link_dir / "mpirun-ulfm"
+        link.symlink_to(plain)
+        monkeypatch.setattr(ttrun_module.shutil, "which", lambda name: str(link) if name == "mpirun-ulfm" else None)
+
+        assert get_mpi_launcher() == str(plain.resolve())
+
+    def test_wrapper_without_sibling_is_used_directly(self, temp_dir, monkeypatch):
+        """No plain mpirun next to the wrapper: keep working, but with the wrapper itself."""
+        wrapper = self._make_executable(temp_dir / "mpirun-ulfm")
+        monkeypatch.setattr(ttrun_module.shutil, "which", lambda name: str(wrapper) if name == "mpirun-ulfm" else None)
+
+        assert get_mpi_launcher() == str(wrapper)
+
+    def test_falls_back_to_mpirun_when_ulfm_launcher_missing(self, monkeypatch):
+        monkeypatch.setattr(ttrun_module.shutil, "which", lambda name: None)
+
+        assert get_mpi_launcher() == "mpirun"
+
+    def test_dangling_symlink_falls_back_to_launcher_name(self, temp_dir, monkeypatch):
+        link = temp_dir / "mpirun-ulfm"
+        link.symlink_to(temp_dir / "missing-mpirun")
+        monkeypatch.setattr(ttrun_module.shutil, "which", lambda name: str(link) if name == "mpirun-ulfm" else None)
+
+        assert get_mpi_launcher() == str(link)
+
+    def test_user_with_ft_in_mpi_args_is_forwarded(self, runner, sample_rank_binding_yaml):
+        """Opting into ULFM stays possible through --mpi-args."""
+        import subprocess
+
+        with patch.object(subprocess, "run") as mock_subprocess:
+            mock_subprocess.return_value.returncode = 0
+            result = runner.invoke(
+                main,
+                [
+                    "--rank-binding",
+                    str(sample_rank_binding_yaml),
+                    "--bare",
+                    "--mpi-args",
+                    "--with-ft ulfm",
+                    "echo",
+                    "x",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            launched = mock_subprocess.call_args[0][0]
+            assert Path(launched[0]).name != "mpirun-ulfm"
+            assert launched[launched.index("--with-ft") + 1] == "ulfm"
+
+
+@pytest.mark.timeout(60)  # under the regression a surviving rank waits forever; each case normally takes ~1s
+@pytest.mark.skipif(
+    shutil.which("mpirun-ulfm") is None and shutil.which("mpirun") is None,
+    reason="requires an MPI launcher on PATH",
+)
+class TestRankFailurePropagation:
+    """CPU-only end-to-end check: crashed ranks must surface as a non-zero tt-run exit code (#57698)."""
+
+    @staticmethod
+    def _mpi_args() -> str:
+        args = ["--oversubscribe"]
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            args.append("--allow-run-as-root")
+        return " ".join(args)
+
+    def _run(self, runner, rank_binding_yaml, python_code):
+        return runner.invoke(
+            main,
+            [
+                "--rank-binding",
+                str(rank_binding_yaml),
+                "--bare",
+                "--mpi-args",
+                self._mpi_args(),
+                sys.executable,
+                "-c",
+                python_code,
+            ],
+        )
+
+    def test_all_ranks_aborted_by_signal_fails(self, runner, sample_rank_binding_yaml):
+        result = self._run(runner, sample_rank_binding_yaml, "import os; os.abort()")
+        assert result.exit_code != 0, "tt-run reported success although every rank was killed by SIGABRT"
+
+    def test_one_rank_nonzero_exit_fails(self, runner, sample_rank_binding_yaml):
+        code = "import os, sys; sys.exit(7 if os.environ.get('OMPI_COMM_WORLD_RANK') == '1' else 0)"
+        result = self._run(runner, sample_rank_binding_yaml, code)
+        assert result.exit_code != 0
+
+    def test_all_ranks_succeed_passes(self, runner, sample_rank_binding_yaml):
+        result = self._run(runner, sample_rank_binding_yaml, "pass")
+        assert result.exit_code == 0, result.output

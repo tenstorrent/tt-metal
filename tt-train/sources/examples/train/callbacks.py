@@ -11,6 +11,7 @@ from typing import Any
 
 import ttml
 from ttml.datasets import Batch
+from ttml.models.deepseek.moe import update_expert_biases
 from ttml.trainers import SFTTrainer, TrainerCallback
 
 import moe_activation_logger
@@ -117,12 +118,11 @@ class MoECallback(TrainerCallback):
         if not hasattr(trainer.model, "get_moe_layers"):
             return
         moe_layers = trainer.model.get_moe_layers()
-        # Log BEFORE update_expert_bias: update resets the underlying _token_counts buffer,
+        # Log BEFORE update_expert_biases: the update resets the underlying _token_counts buffer,
         # which the logger reads to compute activation probabilities.
         if self._log_path and moe_activation_logger.should_log_step(step):
             moe_activation_logger.log_step_expert_balance(self._log_path, step, moe_layers)
-        for layer in moe_layers:
-            layer.update_expert_bias()
+        update_expert_biases(moe_layers)
 
 
 class AverageLossCallback(TrainerCallback):

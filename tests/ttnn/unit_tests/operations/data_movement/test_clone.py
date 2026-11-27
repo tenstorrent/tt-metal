@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
@@ -375,6 +375,19 @@ def test_clone_sharded_tilized_non_rectangular_grid(device):
     )
 
 
+@pytest.mark.parametrize("tile_shape", [(16, 32), (8, 32), (4, 32)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_clone_rejects_non_default_tile(device, expect_error, tile_shape):
+    tensor = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.clone(tensor, dtype=ttnn.bfloat8_b)
+
+
 @pytest.mark.parametrize(
     "shape",
     [
@@ -483,3 +496,126 @@ def test_clone_sharded_dtype_conversion(
         compute_kernel_options=None,
         device=device,
     )
+
+
+@pytest.mark.parametrize(
+    "layout, dtype",
+    [(ttnn.TILE_LAYOUT, None), (ttnn.TILE_LAYOUT, ttnn.float32), (ttnn.ROW_MAJOR_LAYOUT, None)],
+)
+def test_clone_sub_core_grids(device, layout, dtype):
+    """
+    Clone restricted to two core ranges away from core (0, 0), like a sub-device partition.
+    8 cores give an uneven work split, so both core groups run.
+    """
+    torch.manual_seed(2024)
+    torch_input = torch.randn((3, 97, 160), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device)
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 3)),
+            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 1)),
+        ]
+    )
+    output = ttnn.clone(input_tensor, dtype=dtype, sub_core_grids=sub_core_grids)
+    assert torch.equal(ttnn.to_torch(output).to(torch.bfloat16), torch_input)
+
+
+def _two_shard_memory_config(shard_layout, buffer_type, shard_shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    return ttnn.MemoryConfig(
+        shard_layout, buffer_type, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+@pytest.mark.parametrize(
+    "tilized, input_dtype, output_dtype",
+    [
+        (True, "bfloat16", None),
+        (True, "float32", None),
+        (True, "bfloat16", "float32"),
+        (True, "uint32", None),
+        (True, "bfloat8_b", None),
+        (False, "bfloat16", None),
+        (False, "float32", None),
+        (False, "uint32", None),
+    ],
+)
+@pytest.mark.parametrize(
+    "shape, shard_layout, shard_shape",
+    [
+        ([1, 1, 256, 512], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [128, 512]),
+        ([2, 2, 64, 256], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [128, 256]),
+        ([1, 1, 128, 256], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [128, 128]),
+        ([1, 1, 128, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED, [128, 128]),
+        ([1, 1, 96, 96], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [64, 96]),
+        ([1, 1, 64, 96], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [64, 64]),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_buffer_type, output_buffer_type",
+    [
+        (ttnn.BufferType.DRAM, ttnn.BufferType.DRAM),
+        (ttnn.BufferType.DRAM, ttnn.BufferType.L1),
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM),
+    ],
+)
+def test_clone_dram_sharded(
+    tilized,
+    shape,
+    shard_layout,
+    shard_shape,
+    input_buffer_type,
+    output_buffer_type,
+    input_dtype,
+    output_dtype,
+    device,
+):
+    """
+    Clone with the input and/or output sharded in DRAM (same shard spec on both sides),
+    including uneven last shards.
+    """
+    torch.manual_seed(0)
+    out_memory_config = _two_shard_memory_config(shard_layout, output_buffer_type, shard_shape)
+
+    def run_once():
+        if input_dtype == "uint32":
+            # torch has no uint32; non-negative int32 values are the same bits.
+            torch_input = torch.randint(0, 2**31 - 1, shape, dtype=torch.int32)
+            ttnn_in_dtype = ttnn.uint32
+        elif input_dtype == "bfloat8_b":
+            torch_input = torch.randn(shape, dtype=torch.float32)
+            ttnn_in_dtype = ttnn.bfloat8_b
+        else:
+            torch_input = torch.randn(shape, dtype=get_lib_dtype(torch, input_dtype))
+            ttnn_in_dtype = get_lib_dtype(ttnn, input_dtype)
+        ttnn_input = ttnn.from_torch(
+            torch_input,
+            device=device,
+            dtype=ttnn_in_dtype,
+            layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=_two_shard_memory_config(shard_layout, input_buffer_type, shard_shape),
+        )
+        with device.cache_entries_counter.measure():
+            ttnn_output = ttnn.clone(
+                ttnn_input, dtype=get_lib_dtype(ttnn, output_dtype), memory_config=out_memory_config
+            )
+        if input_dtype == "bfloat8_b":
+            # Block-float quantizes on upload, so compare against what the input tensor holds.
+            expected = ttnn.to_torch(ttnn_input)
+        elif input_dtype == "uint32":
+            expected = torch_input
+        else:
+            expected = torch_input.to(get_lib_dtype(torch, output_dtype or input_dtype))
+        assert torch.equal(ttnn.to_torch(ttnn_output).to(expected.dtype), expected)
+
+    for i in range(2):
+        run_once()
+        # Allocate a dummy tensor so the second iteration's buffers land at different addresses.
+        torch_dummy = torch.randn([32, 32])
+        ttnn_dummy = ttnn.from_torch(torch_dummy, device=device)
+        if i == 0:
+            first_count = device.cache_entries_counter.total
+        else:
+            assert device.cache_entries_counter.total == first_count
+    logger.info(f"cache_entries_counter.total={device.cache_entries_counter.total}")
+    assert device.cache_entries_counter.total > 0

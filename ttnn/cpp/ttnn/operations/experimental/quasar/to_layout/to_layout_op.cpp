@@ -44,13 +44,15 @@ bool is_allowed_row_major_dtype(ttnn::DataType tensor_dtype, std::optional<ttnn:
     if (!requested_dtype.has_value() || requested_dtype.value() == tensor_dtype) {
         return true;
     }
-    // untilize / untilize_with_unpadding convert BFLOAT8_B -> BFLOAT16 natively as part of de-tiling.
-    return tensor_dtype == ttnn::DataType::BFLOAT8_B && requested_dtype.value() == ttnn::DataType::BFLOAT16;
+    // untilize / untilize_with_unpadding convert BFLOAT8_B -> BFLOAT16 natively as part of de-tiling. An MX tile
+    // is expanded to Float16_b by the unpacker, so MX -> BFLOAT16 goes the same way.
+    return (tensor_dtype == ttnn::DataType::BFLOAT8_B || tt::tt_metal::is_mx(tensor_dtype)) &&
+           requested_dtype.value() == ttnn::DataType::BFLOAT16;
 }
 
 constexpr std::string_view kRowMajorDtypeErrorMessage =
     "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device "
-    "(allowed exception: BFLOAT8_B -> BFLOAT16, which untilize handles natively)!";
+    "(allowed exception: BFLOAT8_B / MX -> BFLOAT16, which untilize handles natively)!";
 
 Tensor to_layout_impl(
     const ttnn::Tensor& tensor_arg,
@@ -67,7 +69,10 @@ Tensor to_layout_impl(
                 "dtype "
                 "won't be changed!");
         }
-        if (memory_config.has_value() and memory_config.value() != get_memory_config(tensor_arg).value()) {
+        // Host and deallocated tensors have no memory config.
+        const auto current_mem_config = get_memory_config(tensor_arg);
+        if (memory_config.has_value() and current_mem_config.has_value() and
+            memory_config.value() != current_mem_config.value()) {
             log_warning(
                 tt::LogOp,
                 "ttnn::to_layout: memory_config is specified but the tensor is already in the requested layout! "

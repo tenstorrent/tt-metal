@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from typing import Any
 
 import pytest
@@ -88,6 +89,39 @@ DTYPE = {
 }
 
 LAYOUT = {"TILE": ttnn.TILE_LAYOUT, "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT}
+
+
+# Quasar has no block-float formats (``is_supported_quasar`` in tt_backend_api_types.cpp), so a
+# captured bfloat8_b / bfloat4_b case is rejected before the op runs. Three env switches pick what
+# those tensors are materialized and checked as instead (at most one may be set):
+#
+#   * ``TTNN_GRAPH_OPS_BF8_AS_BF16=1``   bfloat8_b and bfloat4_b -> bfloat16
+#   * ``TTNN_GRAPH_OPS_BF8_AS_MXFP8R=1`` bfloat8_b -> MXFP8R (``ttnn.mxfp8_e5m2``, 5-bit exponent)
+#   * ``TTNN_GRAPH_OPS_BF8_AS_MXFP8P=1`` bfloat8_b -> MXFP8P (``ttnn.mxfp8_e4m3``, 4-bit exponent)
+#
+# The MX switches leave bfloat4_b as bfloat16 (there is no MX stand-in for it) so those cases still
+# run. MX is TILE-only, which every captured bfloat8_b tensor already is. A bfloat8_b case keeps its
+# block-float PCC floor under the MX switches (the values really are quantized); the bfloat16
+# switch drops it (see ``_PCC_BY_DTYPE`` below).
+def _env_flag(name):
+    return os.environ.get(name, "") not in ("", "0", "false", "False")
+
+
+BF8_AS_BF16 = _env_flag("TTNN_GRAPH_OPS_BF8_AS_BF16")
+BF8_AS_MXFP8R = _env_flag("TTNN_GRAPH_OPS_BF8_AS_MXFP8R")
+BF8_AS_MXFP8P = _env_flag("TTNN_GRAPH_OPS_BF8_AS_MXFP8P")
+if BF8_AS_BF16 + BF8_AS_MXFP8R + BF8_AS_MXFP8P > 1:
+    raise ValueError(
+        "set at most one of TTNN_GRAPH_OPS_BF8_AS_BF16, TTNN_GRAPH_OPS_BF8_AS_MXFP8R, TTNN_GRAPH_OPS_BF8_AS_MXFP8P"
+    )
+BF8_AS_MX = BF8_AS_MXFP8R or BF8_AS_MXFP8P
+if BF8_AS_BF16:
+    DTYPE["BFLOAT8_B"] = ttnn.bfloat16
+    DTYPE["BFLOAT4_B"] = ttnn.bfloat16
+elif BF8_AS_MX:
+    DTYPE["BFLOAT8_B"] = ttnn.mxfp8_e5m2 if BF8_AS_MXFP8R else ttnn.mxfp8_e4m3
+    DTYPE["BFLOAT4_B"] = ttnn.bfloat16
+
 
 MEM_LAYOUT = {
     "INTERLEAVED": ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -127,6 +161,13 @@ _INT_DTYPES = {"UINT32", "INT32", "UINT16", "UINT8"}
 # reduction-heavy ops listed here.
 _DEFAULT_PCC = 0.999
 _PCC_BY_DTYPE = {"BFLOAT8_B": 0.97, "BFLOAT4_B": 0.90}
+# Under ``TTNN_GRAPH_OPS_BF8_AS_BF16`` the block-float cases run and are checked as bfloat16, so no
+# per-face quantization happens and the block-float floors would only hide real errors: judge those
+# cases on the dtype that actually ran (the 0.999 bar, or the op's own floor).
+if BF8_AS_BF16:
+    _PCC_BY_DTYPE = {}
+elif BF8_AS_MX:
+    _PCC_BY_DTYPE = {"BFLOAT8_B": _PCC_BY_DTYPE["BFLOAT8_B"]}  # bfloat4_b runs as bfloat16
 _PCC_BY_OP = {
     "ttnn.linear": 0.99,
     "ttnn.experimental.minimal_matmul": 0.99,
@@ -308,11 +349,25 @@ _BOOL_FIELDS = frozenset(
 )
 
 
-def build_program_config(spec):
-    """Rebuild a captured program config (e.g. SDPAProgramConfig(...))."""
+def build_program_config(spec, mesh_device):
+    """Rebuild a captured program config (e.g. SDPAProgramConfig(...)).
+
+    A captured compute grid larger than the device grid includes cores that the device
+    does not have, so the op cannot run the call as captured. The case is SKIPPED, in
+    the same way as a case whose captured shard grid does not fit the device (see
+    ``_shard_grid_fits``).
+    """
     if spec is None:
         return None
     kind = spec["kind"]
+    captured_grid = spec["fields"].get("compute_with_storage_grid_size")
+    if captured_grid is not None:
+        grid = mesh_device.compute_with_storage_grid_size()
+        if captured_grid[0] > grid.x or captured_grid[1] > grid.y:
+            pytest.skip(
+                f"captured {kind} compute grid is {captured_grid[0]}x{captured_grid[1]}; "
+                f"device compute grid is {grid.x}x{grid.y}"
+            )
     cls = getattr(ttnn, kind, None)
     if cls is None:
         pytest.skip(f"{kind} is not exposed on this ttnn build")
@@ -497,7 +552,7 @@ def _build_value(spec, mesh_device, case, op_name, key, torch_sink):
     if kind == "mem":
         return build_memory_config(spec, mesh_device)
     if kind == "cfg":
-        return build_program_config(spec)
+        return build_program_config(spec, mesh_device)
     if kind == "tile":
         # gpt-oss's sparse_matmul passes an explicit output_tile; the capture records its repr.
         return ttnn.Tile(spec["shape"])
@@ -1276,13 +1331,57 @@ def _aliased_arg(name, spec, case, args):
     return args[0] if case["args"][0] == spec else None
 
 
-def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
+# Ops that need a minimum number of compute cores for a call, as a function of the case. The op itself
+# rejects a call that needs more cores than the device has, so the op cannot run the call as captured on
+# such a device. The case is SKIPPED, in the same way as a case whose captured shard grid does not fit the
+# device (see ``_shard_grid_fits``). Each entry holds the op function, not the captured op name, so a test
+# that passes a captured case to a different function (for example a manual small-grid replacement) is
+# not skipped.
+_MIN_CORES = (
+    # One core per head ("Target number of cores ... is greater than total number of available cores").
+    (ttnn.experimental.nlp_concat_heads_decode, lambda case: case["kwargs"]["num_heads"]["v"]),
+)
+
+
+# Base ops with no MX support on Quasar: the MX work (d2d7db4) went into their ``ttnn.experimental.quasar``
+# copies. Under an MX switch the base op's tests skip the cases that would build an MX tensor; a ``*_quasar``
+# companion test runs the same cases through the copy.
+_NO_MX_OPS = (ttnn.matmul,)
+
+
+def _case_uses_mx(case):
+    """Whether building ``case`` makes an MX tensor or asks the op for an MX output dtype."""
+
+    def is_mx(capture_dtype):
+        return ttnn.is_mx_dtype(DTYPE[capture_dtype])
+
+    specs = list(case["args"]) + list(case["kwargs"].values())
+    for spec in specs:
+        kind = spec.get("k")
+        if kind == "t" and is_mx(spec["dtype"]):
+            return True
+        if kind == "tlist" and any(is_mx(t["dtype"]) for t in spec["tensors"]):
+            return True
+        if kind == "dtype" and is_mx(spec["v"]):
+            return True
+    return False
+
+
+def _run_case_impl(op, case, mesh_device, *, op_name=None, pcc=None):
     """Materialize one captured call, run it, and check the result.
 
     ``op`` is the callable (``ttnn.linear``, or a small lambda for operators like
     ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
     """
     op_name = op_name or case["op"]
+    if BF8_AS_MX and any(op is no_mx for no_mx in _NO_MX_OPS) and _case_uses_mx(case):
+        pytest.skip(f"{op_name} (the base op) has no MX support on Quasar; the *_quasar test runs this case")
+    for min_cores_op, min_cores_fn in _MIN_CORES:
+        if op is min_cores_op:
+            grid = mesh_device.compute_with_storage_grid_size()
+            min_cores = min_cores_fn(case)
+            if min_cores > grid.x * grid.y:
+                pytest.skip(f"{op_name} needs {min_cores} cores for this call; device has {grid.x * grid.y}")
     torch_inputs: dict[str, torch.Tensor] = {}
 
     args = [_build_value(spec, mesh_device, case, op_name, str(i), torch_inputs) for i, spec in enumerate(case["args"])]
@@ -1315,3 +1414,41 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
                     U.assert_pcc(one, tensors[i], pcc=floor, mesh_device=mesh_device)
 
     return out
+
+
+_L1_NEVER_FITS = re.compile(r"each bank needs to store (\d+) B, but bank size is (\d+) B")
+# The hybrid allocator words the same capacity failure differently (bank_manager.cpp, "after considering dependencies").
+_L1_NEVER_FITS_HYBRID = re.compile(r"\bL1 across \d+ banks \((\d+) B per bank\), bank size is (\d+) B")
+
+
+def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
+    """Run one captured call; skip it when a tensor cannot fit this part's L1 at all.
+
+    The captures come from parts with a larger L1 than some Quasar variants (3 MB per
+    compute node instead of 4 MB). An L1 allocation whose per-bank share exceeds the
+    whole bank can never succeed, so that is a capacity limit of the device, not an op
+    failure: SKIP. An L1 OOM that would fit an empty bank still fails.
+    """
+    try:
+        return _run_case_impl(op, case, mesh_device, op_name=op_name, pcc=pcc)
+    except RuntimeError as e:
+        msg = str(e)
+        if _mx_binary_unsupported(e):
+            pytest.skip("binary_ng refuses MX with a subtile broadcast / scalar / activation (not validated yet)")
+        m = _L1_NEVER_FITS.search(msg) if "L1 buffer across " in msg else None
+        if m is None:
+            m = _L1_NEVER_FITS_HYBRID.search(msg)
+        if "Out of Memory" in msg and m is not None and int(m.group(1)) > int(m.group(2)):
+            pytest.skip(f"needs {m.group(1)} B per L1 bank; this device's bank is {m.group(2)} B")
+        raise
+
+
+# binary_ng's Quasar-native slice admits MX tensor-tensor ops but refuses a subtile broadcast
+# (ROW/COL/SCALAR), a scalar and an activation beside MX (QUASAR_NATIVE_DESIGN.md, F6): those paths are
+# not validated with MX. A captured bias-add (ROW_B broadcast) therefore cannot run as MX yet; skip
+# rather than fail, only under the MX switches, so the case runs once the kernel gains support.
+_MX_BINARY_UNSUPPORTED = re.compile(r"binary op \w+ is not supported for a DataType::MX\w+ ", re.DOTALL)
+
+
+def _mx_binary_unsupported(exc):
+    return BF8_AS_MX and _MX_BINARY_UNSUPPORTED.search(str(exc)) is not None

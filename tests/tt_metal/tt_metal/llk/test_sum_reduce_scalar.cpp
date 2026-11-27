@@ -10,18 +10,18 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/program/program_impl.hpp"
 #include <tt-logger/tt-logger.hpp>
 
@@ -57,7 +57,7 @@ struct SumReduceScalarConfig {
 };
 
 bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumReduceScalarConfig& config) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(mesh_device);
     CoreCoord core = {0, 0};
 
     // bfloat16: 2 bytes per element; a 16x32 tiny tile is half a full tile.
@@ -206,8 +206,8 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
 
 using namespace tt::tt_metal::unit_tests::compute::sum_reduce_scalar;
 
-// Runs on any single card (Wormhole or Blackhole): sum_reduce_scalar builds on
-// mul_reduce_scalar's reduce tail, which is supported on both architectures.
+// Wormhole and Blackhole. Quasar skips: the reader and writer are still
+// DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923).
 //
 // Match Blaze LayerNorm's interpreted-tile selection exactly. It picks the tallest
 // legal height in {32, 16, 8, 4, 2, 1} that covers the width with at most eight
@@ -216,6 +216,9 @@ class SumReduceScalarBlazeShapeTest : public LLKMeshDeviceSingleCardFixture,
                                       public testing::WithParamInterface<SumReduceScalarConfig> {};
 
 TEST_P(SumReduceScalarBlazeShapeTest, SumReduceScalarBlazeShape) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
     ASSERT_TRUE(run_sum_reduce_scalar_test(this->device(), GetParam()));
 }
 
@@ -256,6 +259,9 @@ INSTANTIATE_TEST_SUITE_P(
 class SumReduceScalarFp32DestTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
 
 TEST_P(SumReduceScalarFp32DestTest, SumReduceScalarFp32Dest) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
     int num_tiles = GetParam();
     ASSERT_TRUE(run_sum_reduce_scalar_test(
         this->device(), {.num_tiles = num_tiles, .tile_height = 32, .fp32_dest_acc = true, .dst_full_sync = true}));
@@ -275,6 +281,9 @@ INSTANTIATE_TEST_SUITE_P(
 class SumReduceScalarLoFiTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<bool> {};
 
 TEST_P(SumReduceScalarLoFiTest, SumReduceScalarLoFi) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
     bool fp32_dest_acc = GetParam();
     ASSERT_TRUE(run_sum_reduce_scalar_test(
         this->device(),
@@ -297,6 +306,9 @@ INSTANTIATE_TEST_SUITE_P(
 class SumReduceScalarScalerTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<bool> {};
 
 TEST_P(SumReduceScalarScalerTest, SumReduceScalarScaler) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
     bool doubling = GetParam();
     ASSERT_TRUE(run_sum_reduce_scalar_test(
         this->device(),
@@ -318,6 +330,9 @@ INSTANTIATE_TEST_SUITE_P(
 class SumReduceScalarZeroFlagTest : public LLKMeshDeviceSingleCardFixture {};
 
 TEST_F(SumReduceScalarZeroFlagTest, RestoresDefaultAfterCopyBeforeDenormalScaler) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+    }
     constexpr uint16_t largest_finite_bfloat16 = 0x7f7f;
     const float denormal_scaler = static_cast<float>(std::bit_cast<bfloat16>(uint16_t{1}));
 

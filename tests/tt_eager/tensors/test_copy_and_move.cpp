@@ -2,22 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdint>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <cstring>
 #include <exception>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -160,7 +159,7 @@ void test_tensor_move_semantics(distributed::MeshDevice* device) {
     // dev tensor updated with dev tensor copy assignment
     auto random_tensor_five = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
     auto bfloat_data_five = host_buffer::get_as<bfloat16>(random_tensor_five);
-    Tensor dev_b = random_tensor_four.to_device(device);
+    Tensor dev_b = random_tensor_five.to_device(device);
     Tensor dev_b_copy = dev_e_copy.to_device(device);
     dev_b_copy = std::move(dev_b);
     TT_FATAL(dev_b_copy.storage_type() == StorageType::DEVICE, "Test Failed");

@@ -6,8 +6,9 @@
 #include <fmt/base.h>
 #include <cstdint>
 #include <cstdlib>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
 #include <array>
 #include <exception>
 #include <map>
@@ -16,17 +17,17 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 
 /*
  * Similar to loopback programming example, except run on al devices and skip device teardown to check if we can
@@ -88,14 +89,14 @@ int main(int argc, char** /*argv*/) {
             auto output_dram_buffer =
                 distributed::MeshBuffer::create(global_buffer_config, local_dram_config, device.get());
 
-            Program program = CreateProgram();
+            Program program = CreateProgram(*device);
             auto mesh_workload = distributed::MeshWorkload();
 
             constexpr CoreCoord core = {0, 0};
 
             std::vector<uint32_t> compile_time_args;
-            TensorAccessorArgs(*(input_dram_buffer->get_backing_buffer())).append_to(compile_time_args);
-            TensorAccessorArgs(*(output_dram_buffer->get_backing_buffer())).append_to(compile_time_args);
+            TensorAccessorArgs(*input_dram_buffer).append_to(compile_time_args);
+            TensorAccessorArgs(*output_dram_buffer).append_to(compile_time_args);
             KernelHandle dram_copy_kernel_id = CreateKernel(
                 program,
                 "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",

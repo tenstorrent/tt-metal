@@ -4,12 +4,13 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
 
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
@@ -49,6 +50,8 @@ public:
 
     SubDeviceManager* find_sub_device_manager(SubDeviceManagerId sub_device_manager_id) const;
 
+    // Counts traces across every manager, including inactive ones whose traces are still alive.
+    std::size_t num_traces() const;
     DeviceAddr get_max_trace_high_water_mark() const;
 
     // Used for caching program state by manager and buffers to check that the required manager is still active

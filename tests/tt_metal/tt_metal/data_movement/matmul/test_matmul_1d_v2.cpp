@@ -8,10 +8,10 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
@@ -44,7 +44,7 @@ bool run_dm_1d_matmul_v2(distributed::MeshDevice& mesh_device, const MatmulTestC
         return true;
     }
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     uint32_t grid_cols = test_config.end_logical_core.x - test_config.start_logical_core.x + 1;
     uint32_t grid_rows = test_config.end_logical_core.y - test_config.start_logical_core.y + 1;

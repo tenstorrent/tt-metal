@@ -4,13 +4,18 @@
 
 #pragma once
 
+#include "metal/ops/common/rmsnorm_common.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::rmsnorm_bw::device {
 
-// Attributes for the backward operation (add more if needed)
+// Attributes for the backward operation (add more if needed). The backward reads rms from the forward, so it takes
+// no epsilon.
 struct RMSNormBackwardParams {
-    float epsilon = 1e-6F;
+    // Without it no dL_dgamma_components are computed or written, e.g. for a frozen gamma.
+    bool compute_dgamma = true;
+    // Caps the column slices a tile-row is split into; 1 keeps whole rows, e.g. to test the paths that stream a row.
+    uint32_t max_row_slices = rmsnorm::kMaxRowSlices;
 };
 
 // Tensors required for backward
@@ -19,15 +24,19 @@ struct RMSNormBackwardInputs {
     ttnn::Tensor gamma;
     ttnn::Tensor rms;
     ttnn::Tensor dL_dout;
+    // Gated mode (see rmsnorm_fw): dL_dout and dL_dgate are head-merged like the gate, dL_da is head-major.
+    std::optional<ttnn::Tensor> gate = std::nullopt;
     std::optional<ttnn::Tensor> preallocated_da = std::nullopt;
     std::optional<ttnn::Tensor> preallocated_dgamma_components = std::nullopt;
+    std::optional<ttnn::Tensor> preallocated_dgate = std::nullopt;
 };
 
 using operation_attributes_t = RMSNormBackwardParams;
 using tensor_args_t = RMSNormBackwardInputs;
 
-// Output tensor specs and tensors
-using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
-using tensor_return_value_t = std::vector<ttnn::Tensor>;
+// {dL_da, dL_dgamma_components, dL_dgate}; dL_dgamma_components is nullopt without compute_dgamma and dL_dgate
+// without a gate.
+using spec_return_value_t = std::vector<std::optional<tt::tt_metal::TensorSpec>>;
+using tensor_return_value_t = std::vector<std::optional<ttnn::Tensor>>;
 
 }  // namespace ttml::metal::ops::rmsnorm_bw::device

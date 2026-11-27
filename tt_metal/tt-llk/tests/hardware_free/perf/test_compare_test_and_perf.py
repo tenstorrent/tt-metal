@@ -1,0 +1,440 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""Pairing and ignore-set checks for compare_test_and_perf.
+
+These do not import SFPU test modules. The comparer itself loads those, and
+that import needs a device stack this host does not have.
+"""
+
+import sys
+from pathlib import Path
+
+import compare_test_and_perf as cmp
+import pytest
+
+
+def test_normalize_strips_prefix_and_quasar_suffix():
+    assert (
+        cmp.normalize("test_perf_eltwise_binary_sfpu_float_quasar")
+        == "eltwise_binary_sfpu_float"
+    )
+    assert cmp.normalize("test_perf_eltwise_binary_sfpu_float") == (
+        "eltwise_binary_sfpu_float"
+    )
+    assert cmp.normalize("test_eltwise_binary_sfpu_float") == (
+        "eltwise_binary_sfpu_float"
+    )
+
+
+def test_ignore_set_is_the_measurement_axes():
+    assert cmp.IGNORED_AXES == cmp.MEASUREMENT_AXES
+    for axis in ("iterations", "loop_factor", "run_types", "is_perf"):
+        assert axis in cmp.IGNORED_AXES
+    assert cmp.ignored_reason("loop_factor") == "ignored measurement axis"
+
+
+def test_cross_arch_pairs_quasar_suffix(tmp_path: Path):
+    (tmp_path / "perf_matmul.py").write_text("x = 1\n")
+    (tmp_path / "perf_only_bh.py").write_text("x = 1\n")
+    quasar = tmp_path / "quasar"
+    quasar.mkdir()
+    (quasar / "perf_matmul_quasar.py").write_text("x = 1\n")
+    (quasar / "perf_only_qsr_quasar.py").write_text("x = 1\n")
+
+    matched, left_only, right_only = cmp.discover_cross_arch(
+        tmp_path, "blackhole", "quasar", "perf"
+    )
+
+    assert [(key, left.name, right.name) for key, left, right in matched] == [
+        ("matmul", "perf_matmul.py", "perf_matmul_quasar.py")
+    ]
+    assert [path.name for path in left_only] == ["perf_only_bh.py"]
+    assert [path.name for path in right_only] == ["perf_only_qsr_quasar.py"]
+
+
+def test_cross_arch_same_tree_pairs_a_file_with_itself(tmp_path: Path):
+    (tmp_path / "test_matmul.py").write_text("x = 1\n")
+    (tmp_path / "perf_matmul.py").write_text("x = 1\n")
+
+    matched, left_only, right_only = cmp.discover_cross_arch(
+        tmp_path, "wormhole", "blackhole", "func"
+    )
+
+    assert len(matched) == 1
+    assert matched[0][0] == "matmul"
+    assert matched[0][1] == matched[0][2]
+    assert left_only == []
+    assert right_only == []
+
+
+def test_cross_arch_verdict_uses_architecture_names():
+    bucket, headline = cmp.verdict(
+        "mathop",
+        ["add", "mul"],
+        ["add"],
+        in_t=True,
+        in_p=True,
+        kind="axis",
+        sides=cmp.arch_sides("blackhole", "quasar"),
+    )
+    assert bucket == "diff"
+    assert headline.startswith("[~] mathop: Q subset of B")
+
+    _bucket, only = cmp.verdict(
+        "bcast_dim",
+        ["none"],
+        [],
+        in_t=True,
+        in_p=False,
+        kind="axis",
+        sides=cmp.arch_sides("blackhole", "quasar"),
+    )
+    assert only == "[B] bcast_dim: B-only axis"
+
+
+def test_dest_sync_dest_acc_splits_onto_the_other_sides_axes():
+    import enum
+
+    class DestSync(enum.Enum):
+        Half = 1
+
+    class DestAcc(enum.Enum):
+        No = 0
+        Yes = 1
+
+    left = cmp.Sweep(
+        axes={
+            "dest_sync": ["DestSync.Half"],
+            "dest_acc": ["DestAcc.No", "DestAcc.Yes"],
+        },
+        rows=[{"dest_sync": "DestSync.Half", "dest_acc": "DestAcc.No"}],
+        raw={"dest_sync": [DestSync.Half], "dest_acc": [DestAcc.No, DestAcc.Yes]},
+        raw_rows=[{"dest_sync": DestSync.Half, "dest_acc": DestAcc.No}],
+    )
+    right = cmp.Sweep(
+        axes={"dest_sync_dest_acc": ["packed"], "enable_direct_indexing": ["False"]},
+        rows=[
+            {
+                "dest_sync_dest_acc": "packed",
+                "enable_direct_indexing": "False",
+            }
+        ],
+        raw={
+            "dest_sync_dest_acc": [
+                (DestSync.Half, DestAcc.No),
+                (DestSync.Half, DestAcc.Yes),
+            ],
+            "enable_direct_indexing": [False],
+        },
+        raw_rows=[
+            {
+                "dest_sync_dest_acc": (DestSync.Half, DestAcc.No),
+                "enable_direct_indexing": False,
+            }
+        ],
+    )
+
+    cmp.align_sweeps(left, right)
+
+    assert list(right.axes) == ["dest_sync", "dest_acc", "enable_direct_indexing"]
+    assert right.axes["dest_acc"] == ["DestAcc.No", "DestAcc.Yes"]
+    assert right.rows[0]["dest_sync"] == "DestSync.Half"
+    assert "dest_sync_dest_acc" not in right.axes
+    assert list(left.axes) == ["dest_sync", "dest_acc"]
+
+
+def test_bundle_stays_packed_when_the_other_side_lacks_those_axes():
+    import enum
+
+    class DestSync(enum.Enum):
+        Half = 1
+
+    class DestAcc(enum.Enum):
+        No = 0
+
+    sweep = cmp.Sweep(
+        axes={"dest_sync_dest_acc": ["packed"]},
+        rows=[{"dest_sync_dest_acc": "packed"}],
+        raw={"dest_sync_dest_acc": [(DestSync.Half, DestAcc.No)]},
+        raw_rows=[{"dest_sync_dest_acc": (DestSync.Half, DestAcc.No)}],
+    )
+    other = cmp.Sweep(
+        axes={"formats": ["Float16"]},
+        rows=[{"formats": "Float16"}],
+        raw={"formats": ["Float16"]},
+        raw_rows=[{"formats": "Float16"}],
+    )
+
+    cmp.align_sweeps(sweep, other)
+
+    assert list(sweep.axes) == ["dest_sync_dest_acc"]
+
+
+_REUSE_EXCEPTION = {
+    ("eltwise_binary", "eltwise_binary_dest_reuse"): (
+        "eltwise_binary_reuse_dest",
+        "eltwise_binary_reuse_dest",
+    )
+}
+
+
+@pytest.fixture
+def reuse_exception(monkeypatch):
+    """Pair eltwise_binary_dest_reuse with the separate reuse-dest module, as an exception would."""
+    monkeypatch.setattr(cmp, "CROSS_ARCH_FUNCTION_EXCEPTIONS", _REUSE_EXCEPTION)
+
+
+def test_no_function_exceptions_are_registered():
+    assert cmp.CROSS_ARCH_FUNCTION_EXCEPTIONS == {}
+
+
+def test_dest_reuse_exception_uses_the_separate_quasar_module(reuse_exception):
+    left = {"eltwise_binary": Path("perf_eltwise_binary.py")}
+    right = {
+        "eltwise_binary": Path("quasar/perf_eltwise_binary_quasar.py"),
+        "eltwise_binary_reuse_dest": Path(
+            "quasar/perf_eltwise_binary_reuse_dest_quasar.py"
+        ),
+    }
+
+    extras, consumed = cmp.apply_cross_arch_exceptions(left, right)
+
+    assert consumed == {"eltwise_binary_reuse_dest"}
+    path, left_function, right_function, extra_on_right = extras["eltwise_binary"][0]
+    assert path == right["eltwise_binary_reuse_dest"]
+    assert left_function == "eltwise_binary_dest_reuse"
+    assert right_function == "eltwise_binary_reuse_dest"
+    assert extra_on_right is True
+
+
+def test_format_values_list_shared_entries_before_side_only_entries():
+    left, right = cmp.order_format_values(
+        [
+            "DataFormat.Bfp4_b",
+            "DataFormat.Float16",
+            "DataFormat.Int8",
+            "DataFormat.Bfp8_b",
+            "DataFormat.Float16_b",
+        ],
+        [
+            "DataFormat.MxFp4",
+            "DataFormat.Int8",
+            "DataFormat.Float16_b",
+            "DataFormat.Float16",
+        ],
+    )
+    assert left == [
+        "DataFormat.Float16",
+        "DataFormat.Float16_b",
+        "DataFormat.Int8",
+        "DataFormat.Bfp4_b",
+        "DataFormat.Bfp8_b",
+    ]
+    assert right == [
+        "DataFormat.Float16",
+        "DataFormat.Float16_b",
+        "DataFormat.Int8",
+        "DataFormat.MxFp4",
+    ]
+    assert cmp._is_format_name("formats.input")
+    assert cmp._is_format_name("format.output")
+    assert cmp._is_format_name("InputOutputFormat.input_B")
+    assert not cmp._is_format_name("mathop")
+
+
+def test_same_arch_verdict_keeps_functional_perf_labels():
+    _bucket, headline = cmp.verdict(
+        "approx_mode",
+        [],
+        ["No"],
+        in_t=False,
+        in_p=True,
+        kind="axis",
+        sides=cmp.FUNCTIONAL_PERF,
+    )
+    assert headline == "[P] approx_mode: PERF-ONLY axis"
+
+
+def _python_tests_root(tmp_path: Path) -> Path:
+    (tmp_path / "helpers").mkdir()
+    (tmp_path / "pytest.ini").write_text("[pytest]\n")
+    return tmp_path
+
+
+def _forget_module(root: Path, dotted: str) -> None:
+    sys.modules.pop(dotted, None)
+    while str(root) in sys.path:
+        sys.path.remove(str(root))
+
+
+def test_left_parametrize_survives_the_right_arch_reload(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    root = _python_tests_root(tmp_path)
+    (root / "test_probe.py").write_text(
+        "import os\n"
+        "import pytest\n"
+        "\n"
+        "@pytest.mark.parametrize('arch', [os.environ['CHIP_ARCH']])\n"
+        "def test_probe(arch):\n"
+        "    pass\n"
+    )
+    try:
+        left = cmp.import_test_module(root / "test_probe.py", root, "wormhole")
+        held = cmp.parametrized_functions(left)
+        cmp.import_test_module(root / "test_probe.py", root, "blackhole")
+        reloaded = cmp.parametrized_functions(left)
+        assert held["test_probe"][0].args[1] == ["wormhole"]
+        assert reloaded["test_probe"][0].args[1] == ["blackhole"]
+    finally:
+        _forget_module(root, "test_probe")
+
+
+def test_pair_with_no_parametrized_functions_is_skipped(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    root = _python_tests_root(tmp_path)
+    (root / "test_host.py").write_text("def test_host():\n    pass\n")
+    quasar = root / "quasar"
+    quasar.mkdir()
+    (quasar / "test_host_quasar.py").write_text("def test_host():\n    pass\n")
+    try:
+        ok = cmp.compare_pair(
+            root / "test_host.py",
+            quasar / "test_host_quasar.py",
+            root,
+            "blackhole",
+            False,
+            right_arch="quasar",
+            sides=cmp.arch_sides("blackhole", "quasar"),
+        )
+        assert ok is True
+    finally:
+        _forget_module(root, "test_host")
+        _forget_module(root, "quasar.test_host_quasar")
+
+
+def test_one_sided_parametrize_is_still_a_miss(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    root = _python_tests_root(tmp_path)
+    (root / "test_left.py").write_text(
+        "import pytest\n"
+        "\n"
+        "@pytest.mark.parametrize('n', [1])\n"
+        "def test_left(n):\n"
+        "    pass\n"
+    )
+    (root / "test_right.py").write_text("def test_right():\n    pass\n")
+    try:
+        ok = cmp.compare_pair(
+            root / "test_left.py",
+            root / "test_right.py",
+            root,
+            "blackhole",
+            False,
+        )
+        assert ok is False
+    finally:
+        _forget_module(root, "test_left")
+        _forget_module(root, "test_right")
+
+
+def test_exception_is_not_consumed_when_the_home_stem_is_unmatched(reuse_exception):
+    left = {"eltwise_binary": Path("perf_eltwise_binary.py")}
+    right = {"eltwise_binary_reuse_dest": Path("quasar/reuse.py")}
+
+    extras, consumed = cmp.apply_cross_arch_exceptions(left, right)
+
+    assert extras == {}
+    assert consumed == set()
+
+
+def test_dest_reuse_exception_follows_either_arch_order(reuse_exception):
+    quasar_pair = Path("quasar/perf_eltwise_binary_quasar.py")
+    quasar_extra = Path("quasar/perf_eltwise_binary_reuse_dest_quasar.py")
+    blackhole = Path("perf_eltwise_binary.py")
+    left = {
+        "eltwise_binary": quasar_pair,
+        "eltwise_binary_reuse_dest": quasar_extra,
+    }
+    right = {"eltwise_binary": blackhole}
+
+    extras, consumed = cmp.apply_cross_arch_exceptions(left, right)
+
+    assert consumed == {"eltwise_binary_reuse_dest"}
+    path, home, extra, extra_on_right = extras["eltwise_binary"][0]
+    assert path == quasar_extra
+    assert home == "eltwise_binary_dest_reuse"
+    assert extra == "eltwise_binary_reuse_dest"
+    assert extra_on_right is False
+
+
+def test_single_pair_lookup_finds_dest_reuse_either_order(
+    tmp_path: Path, reuse_exception
+):
+    root = _python_tests_root(tmp_path)
+    blackhole = root / "perf_eltwise_binary.py"
+    blackhole.write_text("x = 1\n")
+    quasar = root / "quasar"
+    quasar.mkdir()
+    paired = quasar / "perf_eltwise_binary_quasar.py"
+    paired.write_text("x = 1\n")
+    extra = quasar / "perf_eltwise_binary_reuse_dest_quasar.py"
+    extra.write_text("x = 1\n")
+
+    forward = cmp.extras_for_paths(blackhole, paired, "blackhole", "quasar")
+    backward = cmp.extras_for_paths(paired, blackhole, "quasar", "blackhole")
+
+    assert forward[0][0] == extra
+    assert forward[0][3] is True
+    assert backward[0][0] == extra
+    assert backward[0][3] is False
+
+
+@pytest.mark.parametrize(
+    ("arch", "path", "perf"),
+    [
+        ("blackhole", "test_fused.py", False),
+        ("blackhole", "perf_fused.py", True),
+        ("quasar", "quasar/test_fused_quasar.py", False),
+    ],
+)
+def test_fused_family_enumerates_yaml_cases_without_a_fuser_config(
+    arch: str, path: str, perf: bool
+):
+    root = Path(cmp.__file__).resolve().parent
+    module = cmp.import_test_module(root / path, root, arch)
+
+    functions = cmp.parametrized_functions(module)
+    sweep = cmp.axis_value_sets(functions["test_fuser"])
+
+    assert {
+        "yaml",
+        "case",
+        "dest_acc",
+        "formats",
+        "operations",
+        "unpack_to_dest",
+    } <= set(sweep.axes)
+    assert ("run_type" in sweep.axes) == perf
+    yamls = set(sweep.axes["yaml"])
+    assert "'fpu_elwadd'" in yamls
+    # supported_archs drops the wormhole-only file; the Quasar directory joins only the Quasar module.
+    assert "'hifi_elwmul_overwrite'" not in yamls
+    assert ("'quasar/hifi_elwmul_overwrite'" in yamls) == (arch == "quasar")
+
+
+def test_fused_family_lists_pack_thread_operations_and_keeps_case_identity():
+    root = Path(cmp.__file__).resolve().parent
+    module = cmp.import_test_module(root / "test_fused.py", root, "blackhole")
+    mark = next(m for m in module.test_fuser.pytestmark if m.name == "parametrize")
+    names = mark.args[0].split(",")
+    rows = [dict(zip(names, row)) for row in mark.args[1]]
+
+    pack_sfpu = [r for r in rows if r["yaml"] == "pack_sfpu"]
+    assert pack_sfpu and all("Exp" in r["operations"] for r in pack_sfpu)
+    sfpu_unary = [r for r in rows if r["yaml"] == "sfpu_unary"]
+    assert len({r["case"] for r in sfpu_unary}) == len(sfpu_unary)
+
+
+def test_run_type_is_a_measurement_axis():
+    assert "run_type" in cmp.MEASUREMENT_AXES

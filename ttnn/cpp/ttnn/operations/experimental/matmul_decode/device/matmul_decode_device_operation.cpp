@@ -4,10 +4,10 @@
 
 #include "matmul_decode_device_operation.hpp"
 
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include "tt-metalium/work_split.hpp"
+#include "tt-metalium/utils/work_split.hpp"
 
 namespace ttnn::operations::experimental::matmul_decode {
 

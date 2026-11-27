@@ -14,7 +14,7 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "impl/context/context_types.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
@@ -61,6 +61,7 @@ struct DfbGroup {
     std::vector<std::pair<CoreCoord, uint32_t>> l1_by_core; // (core, alloc_addr)
 };
 
+// Host configuration and backing-memory state for a DFB.
 struct DataflowBufferImpl {
     // Unique, program-wide handle
     uint32_t id{};
@@ -70,12 +71,14 @@ struct DataflowBufferImpl {
     // used as the config-table index in the dispatch payload.
     uint32_t device_slot{};
     CoreRangeSet core_ranges;
+    // Unset uses core_ranges for backing-memory allocation.
+    std::optional<CoreRangeSet> allocation_placement;
     DataflowBufferConfig config;
 
     ContextId get_context_id() const { return context_id_; }
 
     uint16_t risc_mask = 0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
-    uint8_t tensix_trisc_mask = 0;  // bits 0-3: which TRISC(s) use DFB (producer=bit2, consumer=bit0 or bit3)
+    uint8_t tensix_trisc_mask = 0;  // DFB_TRISC_ROLE_* bits: which TRISC produces / consumes this DFB (Quasar)
     uint16_t capacity = 0;
 
     // Per-CoreRangeSet groups of cores sharing identical HW config (TC/remapper).
@@ -99,6 +102,11 @@ struct DataflowBufferImpl {
     // Set by set_borrowed_memory_base_addr()
     uint32_t borrowed_addr_ = 0;
 
+    // Bumped whenever a size or address that the serialized config depends on changes, so cached
+    // dispatch commands re-serialize only DFBs that changed.
+    uint64_t config_generation_ = 0;
+    uint64_t config_generation() const { return config_generation_; }
+
     // Aliased DFBs share the same L1 data-buffer
     // alias_primary_id: set on secondaries; holds the primary's DFB id.
     // alias_secondary_ids: set on the primary; lists all secondary DFB ids.
@@ -108,8 +116,21 @@ struct DataflowBufferImpl {
 
     bool borrows_memory() const { return config.borrows_memory; }
 
+    // Return the nodes on which backing memory is reserved.
+    const CoreRangeSet& allocation_core_ranges() const {
+        return allocation_placement ? *allocation_placement : core_ranges;
+    }
+
+    // Apply a backing-memory address to every configured node.
+    // precondition: The DFB's device configuration is finalized.
+    // side-effect: Marks device configuration for refresh when the address is first set or changes.
+    void set_configured_address(uint32_t alloc_addr);
+
     void set_borrowed_memory_base_addr(uint32_t new_addr) {
         TT_FATAL(borrows_memory(), "Cannot set borrowed address on DFB {} that does not borrow memory", id);
+        if (new_addr != borrowed_addr_) {
+            ++config_generation_;
+        }
         borrowed_addr_ = new_addr;
         // If allocate_dataflow_buffers() has already run, update the live tables so that
         // a subsequent run picks up the new address.

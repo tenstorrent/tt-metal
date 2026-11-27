@@ -7,11 +7,11 @@
 #include <string>
 
 #include "bernoulli_device_operation.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::bernoulli {
@@ -237,8 +237,8 @@ void BernoulliDeviceOperation::BernoulliProgramFactory::override_runtime_argumen
     constexpr uint32_t compute_kernel_idx = 2;
 
     const auto ws = bernoulli_work_split(output);
-    const uint32_t in_addr = tensor_args.input.buffer()->address();
-    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t in_addr = tensor_args.input.mesh_buffer().address();
+    const uint32_t out_addr = output.mesh_buffer().address();
 
     const auto layout = bernoulli_core_layout(ws);
     for (uint32_t i = 0; i < layout.size(); ++i) {

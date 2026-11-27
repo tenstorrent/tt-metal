@@ -4,8 +4,8 @@
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
@@ -420,6 +420,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     };
     KernelDescriptor::Defines reader_local_defines(
         reader_specialization_defines_map.begin(), reader_specialization_defines_map.end());
+    for (const auto& define : topk_width_padding_defines(tensor_args.input, args.largest)) {
+        reader_local_defines.push_back(define);
+    }
 
     KernelDescriptor reader_local_desc;
     reader_local_desc.kernel_source =

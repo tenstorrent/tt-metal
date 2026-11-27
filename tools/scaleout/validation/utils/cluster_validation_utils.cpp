@@ -23,18 +23,18 @@
 #include "tools/scaleout/validation/utils/ethernet_link_api.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <enchantum/enchantum.hpp>
 #include <cabling_generator/cabling_generator.hpp>
 #include <google/protobuf/text_format.h>
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
 #include <llrt/tt_cluster.hpp>
-#include "umd/device/utils/semver.hpp"
+#include <tt-umd/utils/semver.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -167,6 +167,16 @@ void execute_parallel_batches(
 // Traffic Configuration Functions
 // ============================================================================
 
+// A Program is bound to the MeshDevice it will run on, so it is created on first use for each chip.
+tt::tt_metal::Program& get_or_create_program(
+    ClusterContext& ctx, std::unordered_map<ChipId, tt::tt_metal::Program>& programs, ChipId chip_id) {
+    auto it = programs.find(chip_id);
+    if (it == programs.end()) {
+        it = programs.emplace(chip_id, tt::tt_metal::CreateProgram(*ctx.devices.at(chip_id))).first;
+    }
+    return it->second;
+}
+
 void configure_local_kernels(
     ClusterContext& ctx,
     const std::vector<uint32_t>& inputs,
@@ -214,7 +224,8 @@ void configure_local_kernels(
         auto curr_chip = ctx.devices[curr_chip_id];
 
         for (const auto& [neighbor_asic_id, eth_connections] : asic_connections) {
-            if (ctx.physical_system_descriptor.get_host_name_for_asic(neighbor_asic_id) != host_name) {
+            if (ctx.physical_system_descriptor.get_mpi_rank_for_asic(neighbor_asic_id) !=
+                ctx.physical_system_descriptor.get_local_mpi_rank()) {
                 continue;
             }
             auto neighbor_chip_id = ctx.asic_id_to_chip_id[*neighbor_asic_id];
@@ -283,8 +294,8 @@ void configure_local_kernels(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
 
     for (const auto& [curr_chip_id, curr_coord, neighbor_chip_id, neighbor_coord] : kernel_infos) {
-        auto& curr_program = programs[curr_chip_id];
-        auto& neighbor_program = programs[neighbor_chip_id];
+        auto& curr_program = get_or_create_program(ctx, programs, curr_chip_id);
+        auto& neighbor_program = get_or_create_program(ctx, programs, neighbor_chip_id);
 
         auto curr_kernel = tt::tt_metal::CreateKernel(
             curr_program,
@@ -400,7 +411,7 @@ void configure_cross_host_kernels(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
 
     for (const auto& [my_chip, my_coord, sender] : kernel_infos) {
-        auto& my_program = programs[my_chip];
+        auto& my_program = get_or_create_program(ctx, programs, my_chip);
 
         if (sender) {
             auto sender_kernel = tt::tt_metal::CreateKernel(
@@ -1520,13 +1531,14 @@ bool reset_local_ethernet_links(
 
     // Collect all links to reset
     for (const auto& [asic_id, asic_connections] : asic_topology) {
-        if (physical_system_descriptor.get_host_name_for_asic(asic_id) != physical_system_descriptor.my_host_name()) {
+        if (physical_system_descriptor.get_mpi_rank_for_asic(asic_id) !=
+            physical_system_descriptor.get_local_mpi_rank()) {
             continue;
         }
         auto src_chip_id = asic_id_to_chip_id[*asic_id];
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
-            if (physical_system_descriptor.get_host_name_for_asic(dst_asic_id) !=
-                physical_system_descriptor.my_host_name()) {
+            if (physical_system_descriptor.get_mpi_rank_for_asic(dst_asic_id) !=
+                physical_system_descriptor.get_local_mpi_rank()) {
                 continue;
             }
             auto dst_chip_id = asic_id_to_chip_id[*dst_asic_id];
@@ -1577,15 +1589,15 @@ void get_cross_node_ethernet_links_to_reset(
     std::unordered_map<uint32_t, std::vector<EthChannelIdentifier>> ordered_exit_nodes;
     std::unordered_map<uint64_t, std::unordered_set<uint64_t>> paired_asic_ids;
 
-    for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
-        ordered_exit_nodes[physical_system_descriptor.get_rank_for_hostname(host)] =
-            std::vector<EthChannelIdentifier>();
+    for (const auto& [asic_id, descriptor] : physical_system_descriptor.get_asic_descriptors()) {
+        (void)descriptor;
+        ordered_exit_nodes.emplace(
+            physical_system_descriptor.get_mpi_rank_for_asic(asic_id), std::vector<EthChannelIdentifier>{});
     }
 
     if (*distributed_context.rank() == CONTROLLER_RANK) {
         for (const auto& [asic_id, asic_connections] : asic_topology) {
-            auto src_host_rank = physical_system_descriptor.get_rank_for_hostname(
-                physical_system_descriptor.get_host_name_for_asic(asic_id));
+            auto src_host_rank = physical_system_descriptor.get_mpi_rank_for_asic(asic_id);
             for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
                 // These links are being retrained for the second time if the current dst_asic was paired with the
                 // current src_asic in a previous iteration.
@@ -1594,8 +1606,7 @@ void get_cross_node_ethernet_links_to_reset(
                     continue;
                 }
                 paired_asic_ids[*asic_id].insert(*dst_asic_id);
-                auto dst_host_rank = physical_system_descriptor.get_rank_for_hostname(
-                    physical_system_descriptor.get_host_name_for_asic(dst_asic_id));
+                auto dst_host_rank = physical_system_descriptor.get_mpi_rank_for_asic(dst_asic_id);
                 if (src_host_rank == dst_host_rank) {
                     continue;
                 }

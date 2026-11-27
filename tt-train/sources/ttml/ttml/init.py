@@ -42,7 +42,6 @@ import ttnn
 import ttml
 from .lazy import is_lazy_init_enabled
 
-
 _NonlinearityType = Literal[
     "linear",
     "conv1d",
@@ -60,8 +59,6 @@ _NonlinearityType = Literal[
 
 _FanMode = Literal["fan_in", "fan_out"]
 
-_FULL_PRECISION = ttml.autograd.PreferredPrecision.FULL
-
 # Module-private RNG so weight initialization never touches np.random's global
 # state. Callers that want reproducible init must use manual_seed() below;
 # seeding np.random alone has no effect, mirroring how torch.manual_seed is
@@ -75,8 +72,22 @@ def manual_seed(seed: int) -> None:
     _rng = np.random.default_rng(seed)
 
 
-def _get_device():
-    return ttml.autograd.AutoContext.get_instance().get_device()
+def get_rng_state() -> dict:
+    """The state of ttml.init's RNG, as its numpy bit generator's ``state`` dict (a PCG64's after ``manual_seed``), for
+    ``set_rng_state`` to put back, e.g. after restoring a checkpoint."""
+    return _rng.bit_generator.state
+
+
+def set_rng_state(state: dict) -> None:
+    """Continue ttml.init's RNG from ``state``, a dict ``get_rng_state`` returned. Like ``manual_seed`` this makes a new
+    generator; a state its bit generator refuses raises and leaves the current generator in place."""
+    global _rng
+    kind = getattr(np.random, str(state.get("bit_generator")), None)
+    if not (isinstance(kind, type) and issubclass(kind, np.random.BitGenerator)):
+        raise ValueError(f"not a numpy bit generator's state: bit_generator={state.get('bit_generator')!r}")
+    bit_generator = kind()
+    bit_generator.state = state
+    _rng = np.random.Generator(bit_generator)
 
 
 def _calculate_fan_in_and_fan_out(shape) -> tuple[int, int]:
@@ -207,18 +218,8 @@ def normal(mean: float = 0.0, std: float = 1.0):
 
 
 def _constant_materialize(shape, val, mapper=None):
-    if mapper is not None:
-        data = np.full(shape, val, dtype=np.float32)
-        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-    device = _get_device()
-    t = ttnn.full(
-        shape,
-        fill_value=val,
-        device=device,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.Layout.TILE,
-    )
-    return ttml.autograd.create_tensor(t)
+    data = np.full(shape, val, dtype=np.float32)
+    return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
 def constant(val: float):
@@ -234,17 +235,8 @@ def constant(val: float):
 
 
 def _zeros_materialize(shape, mapper=None):
-    if mapper is not None:
-        data = np.zeros(shape, dtype=np.float32)
-        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-    device = _get_device()
-    t = ttnn.zeros(
-        shape,
-        device=device,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.Layout.TILE,
-    )
-    return ttml.autograd.create_tensor(t)
+    data = np.zeros(shape, dtype=np.float32)
+    return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
 def zeros():
@@ -260,17 +252,8 @@ def zeros():
 
 
 def _ones_materialize(shape, mapper=None):
-    if mapper is not None:
-        data = np.ones(shape, dtype=np.float32)
-        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-    device = _get_device()
-    t = ttnn.ones(
-        shape,
-        device=device,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.Layout.TILE,
-    )
-    return ttml.autograd.create_tensor(t)
+    data = np.ones(shape, dtype=np.float32)
+    return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
 def ones():
@@ -402,7 +385,8 @@ def kaiming_normal(
 #
 # NOTE: Not truly in-place - each function allocates a new temporary tensor
 # via the corresponding factory variant and copies the values into the
-# existing tensor with set_value(). The temporary is freed after the call.
+# existing tensor with assign(), which keeps the tensor's storage dtype. The
+# temporary is freed after the call.
 # ---------------------------------------------------------------------------
 
 
@@ -422,44 +406,36 @@ def _unwrap_tensor(tensor_or_param):
     return tensor_or_param
 
 
+def _fill_(tensor, init_fn):
+    """Fill tensor with values from init_fn, in the dtype the tensor is stored in, and return tensor."""
+    inner = _unwrap_tensor(tensor)
+    inner.assign(init_fn(inner.shape()))
+    return tensor
+
+
 def uniform_(tensor, a: float = 0.0, b: float = 1.0):
     """Fill tensor in-place with values from uniform distribution [a, b)."""
-    inner = _unwrap_tensor(tensor)
-    reinit_val = uniform(a, b)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
+    return _fill_(tensor, uniform(a, b))
 
 
 def normal_(tensor, mean: float = 0.0, std: float = 1.0):
     """Fill tensor in-place with values from normal (Gaussian) distribution."""
-    inner = _unwrap_tensor(tensor)
-    reinit_val = normal(mean, std)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
+    return _fill_(tensor, normal(mean, std))
 
 
 def constant_(tensor, val: float):
     """Fill tensor in-place with a constant value."""
-    inner = _unwrap_tensor(tensor)
-    reinit_val = constant(val)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
+    return _fill_(tensor, constant(val))
 
 
 def zeros_(tensor):
     """Fill tensor in-place with zeros."""
-    inner = _unwrap_tensor(tensor)
-    reinit_val = zeros()(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
+    return _fill_(tensor, zeros())
 
 
 def ones_(tensor):
     """Fill tensor in-place with ones."""
-    inner = _unwrap_tensor(tensor)
-    reinit_val = ones()(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
+    return _fill_(tensor, ones())
 
 
 def xavier_uniform_(tensor, gain: float = 1.0):
@@ -467,10 +443,7 @@ def xavier_uniform_(tensor, gain: float = 1.0):
 
     See ``xavier_uniform`` for details.
     """
-    inner = _unwrap_tensor(tensor)
-    reinit_val = xavier_uniform(gain)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
+    return _fill_(tensor, xavier_uniform(gain))
 
 
 def xavier_normal_(tensor, gain: float = 1.0):
@@ -478,10 +451,7 @@ def xavier_normal_(tensor, gain: float = 1.0):
 
     See ``xavier_normal`` for details.
     """
-    inner = _unwrap_tensor(tensor)
-    reinit_val = xavier_normal(gain)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
+    return _fill_(tensor, xavier_normal(gain))
 
 
 def kaiming_uniform_(
@@ -494,10 +464,7 @@ def kaiming_uniform_(
 
     See ``kaiming_uniform`` for details.
     """
-    inner = _unwrap_tensor(tensor)
-    reinit_val = kaiming_uniform(a, mode, nonlinearity)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
+    return _fill_(tensor, kaiming_uniform(a, mode, nonlinearity))
 
 
 def kaiming_normal_(
@@ -510,16 +477,14 @@ def kaiming_normal_(
 
     See ``kaiming_normal`` for details.
     """
-    inner = _unwrap_tensor(tensor)
-    reinit_val = kaiming_normal(a, mode, nonlinearity)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
+    return _fill_(tensor, kaiming_normal(a, mode, nonlinearity))
 
 
 __all__ = [
     "calculate_gain",
     "constant",
     "constant_",
+    "get_rng_state",
     "kaiming_normal",
     "kaiming_normal_",
     "kaiming_uniform",
@@ -529,6 +494,7 @@ __all__ = [
     "normal_",
     "ones",
     "ones_",
+    "set_rng_state",
     "uniform",
     "uniform_",
     "xavier_normal",

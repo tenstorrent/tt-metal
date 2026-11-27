@@ -12,6 +12,8 @@ arm instead, which is an asymptotic expansion for large z.
 The assertion is scale-free on purpose: a boundary input must be no worse than the input one
 step inside the bridge it belongs to. Absolute bounds would have to be re-tuned every time the
 bridge coefficients move, and the property being tested is the branch selection, not the fit.
+Errors within 1 float32 ULP always pass: below that, comparing two neighbors measures rounding
+noise, and a correctly rounded lgamma would fail 0.75 and 1.25.
 """
 
 import pytest
@@ -24,7 +26,7 @@ _BOUNDARIES = [
     (0.75, 0.7500001),
     (1.25, 1.2499999),
     (1.75, 1.7500001),
-    (2.25, 2.2499999),
+    (2.25, 2.2499998),
 ]
 
 
@@ -40,8 +42,9 @@ def test_lgamma_bridge_boundary_is_no_worse_than_the_bridge(device, z, inside):
 
     err_boundary = abs(got[0] - ref[0]).item()
     err_inside = abs(got[1] - ref[1]).item()
+    ulp = (torch.nextafter(ref[0].float(), torch.tensor(float("inf"))) - ref[0].float()).item()
 
-    assert err_boundary <= 2.0 * err_inside, (
+    assert err_boundary <= max(2.0 * err_inside, ulp), (
         f"lgamma({z}) is off by {err_boundary:.4e} while lgamma({inside}) is off by "
         f"{err_inside:.4e} ({err_boundary / err_inside:.1f}x). The boundary is being sent to "
         f"the Stirling arm instead of the bridge it belongs to."

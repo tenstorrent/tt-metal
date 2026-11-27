@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/OpenMOSS/MOSS-Image",
+  "revision": "c1355e6b1986dfe8fba3c0455783a05899212342",
+  "file": "pipeline_moss_image.py",
+  "upstream_sha256": "1dac1aca9feb1bfdfc727a401e4b67d61a505d3190706d1b7d2d784f88678b31",
+  "vendored_sha256": "edd48ba53f0c11fd6382f08b80cbeeea5189015bccb234587570a0d282ee9324",
+  "modifications": [
+    "Black 23.10.1 formatting and SPDX attribution header only; AST matches pinned upstream."
+  ],
+  "license": "Apache-2.0"
+}

@@ -168,12 +168,28 @@ constexpr std::uint32_t WELFORD_INSTR_PER_ROW = WELFORD_SFPU_INSTR_PER_ROW;
  */
 sfpi_inline void _program_welfords_replay_buffer_()
 {
-    lltt::record(0, WELFORD_INSTR_PER_ROW * 4);
+#if defined(ARCH_BLACKHOLE)
+    // Blackhole records through ckernel::load_replay_buf, which brackets the record window with
+    // disable_gathering()/enable_gathering() when the kernel is built with instruction gathering on
+    // (ENABLE_GATHERING). Wormhole has no gathering and records directly.
+    ckernel::load_replay_buf(
+        0 /*start*/,
+        WELFORD_INSTR_PER_ROW * 4,
+        []
+        {
+            _compute_welfords_row_<ckernel::p_sfpu::LREG0>();
+            _compute_welfords_row_<ckernel::p_sfpu::LREG1>();
+            _compute_welfords_row_<ckernel::p_sfpu::LREG2>();
+            _compute_welfords_row_<ckernel::p_sfpu::LREG3>();
+        });
+#else
+    TTI_REPLAY(0, WELFORD_INSTR_PER_ROW * 4, 0, 1);
 
     _compute_welfords_row_<ckernel::p_sfpu::LREG0>();
     _compute_welfords_row_<ckernel::p_sfpu::LREG1>();
     _compute_welfords_row_<ckernel::p_sfpu::LREG2>();
     _compute_welfords_row_<ckernel::p_sfpu::LREG3>();
+#endif
 }
 
 /**
@@ -186,7 +202,7 @@ sfpi_inline void _program_welfords_replay_buffer_()
 template <std::uint32_t input_lreg>
 sfpi_inline void _execute_welfords_row_replay_buffer_()
 {
-    lltt::replay(WELFORD_INSTR_PER_ROW * input_lreg, WELFORD_INSTR_PER_ROW);
+    TTI_REPLAY(WELFORD_INSTR_PER_ROW * input_lreg, WELFORD_INSTR_PER_ROW, 0, 0);
 }
 
 /**

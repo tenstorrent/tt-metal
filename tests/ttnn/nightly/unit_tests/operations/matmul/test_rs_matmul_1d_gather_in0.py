@@ -5,13 +5,13 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 import torch
 import itertools
 import os
 
 from conftest import is_6u
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -19,6 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+import hashlib
 import random
 import math
 from tracy import signpost
@@ -71,6 +72,15 @@ def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_
 
 
 random.seed(10)
+
+
+def deterministic_shuffle(items: list, seed: str) -> None:
+    """In-place reproducible shuffle ordered by a SHA-256 hash of seed + index.
+
+    Used for test core-placement permutations (not security sensitive).
+    """
+    indexed = sorted(enumerate(items), key=lambda p: hashlib.sha256(f"{seed}:{p[0]}".encode()).digest())
+    items[:] = [item for _, item in indexed]
 
 
 def num_cores_to_rectangle_grid(num_cores, mesh_device):
@@ -313,7 +323,7 @@ def run_multi_core_matmul_1d(
         # x, y
         if isinstance(grid, tuple):  # Generate random grid
             CORE_RANGE = [(x, y) for y in range(storage_grid[1]) for x in range(storage_grid[0])]
-            random.shuffle(CORE_RANGE)
+            deterministic_shuffle(CORE_RANGE, "rs_matmul_core_range")
         else:  # Use custom grid
             if use_physical_to_logical_mapping:
                 mapping = get_physical_to_logical_core_mapping(mesh_device)
@@ -442,7 +452,7 @@ def run_multi_core_matmul_1d(
     )
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
+        mesh_device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=fp32_acc_mode,
@@ -529,6 +539,16 @@ def run_multi_core_matmul_1d(
         memory_config_rs=model_configuration["REDUCE_SCATTER_OUT_MEMCFG"],
         topology=ttnn.Topology.Ring if is_6u_device else ttnn.Topology.Linear,
     )
+    # Output TensorTopologies. The reduce_scatter input (rs_tensor) is ShardTensor2dMesh dims=(0, 1); summing along
+    # the columns and keeping each device's `dim` slice gives Shard(0) on the rows and Shard(dim) on the columns --
+    # the layout the golden's chunk-and-concat along `dim` assumes. The matmul operands are replicated (no mesh
+    # mapper), so the matmul output is fully replicated too.
+    assert [repr(p) for p in rs_out_val.tensor_topology().placements()] == [
+        "PlacementShard(0)",
+        f"PlacementShard({dim})",
+    ]
+    assert tuple(int(d) for d in rs_out_val.tensor_topology().distribution_shape()) == cluster_shape
+    assert all(repr(p) == "PlacementReplicate()" for p in matmul_out_val.tensor_topology().placements())
     ttnn.synchronize_device(mesh_device)
     logger.info("Capturing trace")
     trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)

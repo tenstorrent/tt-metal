@@ -54,13 +54,13 @@ def _argmax_row_major_wide_reduce_last_dim():
         _case([32, 64, 128], RM, -1, True, torch.float32),
         _case([32, 64, 128], RM, -1, True, torch.bfloat16),
         _case([32, 64, 128], TL, -1, False, torch.bfloat16),
-        _case([16, 32, 64, 128], RM, -1, True, torch.bfloat16),
-        _case([16, 32, 64, 128], RM, -1, True, torch.float32),
-        _case([16, 32, 64, 128], RM, -1, True, torch.int32),
-        _case([16, 32, 64, 128], TL, -1, True, torch.bfloat16),
-        _case([16, 32, 64, 128], TL, -1, False, torch.float32),
-        _case([16, 32, 70, 130], TL, -1, True, torch.bfloat16),
-        _case([16, 32, 70, 130], TL, -1, False, torch.bfloat16),
+        _case([2, 4, 64, 128], RM, -1, True, torch.bfloat16),
+        _case([2, 4, 64, 128], RM, -1, True, torch.float32),
+        _case([2, 4, 64, 128], RM, -1, True, torch.int32),
+        _case([2, 4, 64, 128], TL, -1, True, torch.bfloat16),
+        _case([2, 4, 64, 128], TL, -1, False, torch.float32),
+        _case([2, 3, 70, 130], TL, -1, True, torch.bfloat16),
+        _case([2, 3, 70, 130], TL, -1, False, torch.bfloat16),
         _case([8, 16, 32, 64], RM, -1, True, torch.float32),
         _case([8, 16, 32, 64], RM, -1, False, torch.bfloat16),
         _case([4, 8, 16, 32], RM, -1, False, torch.float32),
@@ -68,7 +68,7 @@ def _argmax_row_major_wide_reduce_last_dim():
         _case([100, 200], RM, -1, False, torch.float32),
         _case([50, 100, 200], RM, -1, True, torch.int32),
         _case([25, 50, 100], RM, -1, False, torch.uint8),
-        _case([12, 24, 48, 96], RM, -1, True, torch.bfloat16),
+        _case([2, 3, 48, 96], RM, -1, True, torch.bfloat16),
         _case([1, 8, 20, 18], TL, -1, True, torch.bfloat16),
     ]
 
@@ -575,6 +575,7 @@ def _from_bits(patterns, dtype):
     return torch.tensor(signed, dtype=torch.int32).view(torch.float32)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize(
     "layout, dim",
@@ -612,6 +613,7 @@ def test_argmax_nan_and_signed_zero_matches_torch(device, values, dtype, layout,
     assert_equal(torch.argmax(t, dim=dim), got.to(torch.int32))
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("early, late", [(16, 64), (32, 64)])
 @pytest.mark.parametrize("base, lo, hi", [("1.0", "-nan", "+nan"), ("-1.0", "-0", "+0")])

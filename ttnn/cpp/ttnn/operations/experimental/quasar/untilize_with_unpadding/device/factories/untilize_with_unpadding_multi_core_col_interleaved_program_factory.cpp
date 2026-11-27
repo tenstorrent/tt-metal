@@ -8,8 +8,8 @@
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -17,7 +17,6 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
@@ -56,7 +55,7 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
     uint32_t unpadded_row_size_bytes;
 
     uint32_t el_size;
-    if (a.dtype() == DataType::BFLOAT8_B) {
+    if (a.dtype() == DataType::BFLOAT8_B || is_mx(a.dtype())) {  // BFP / MX untilize to bf16
         unpadded_row_size_bytes = output_shape[-1] * output.element_size();
         el_size = output.element_size();
     } else {
@@ -143,10 +142,6 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
 
     // ---- Compute kernel (full + cliff) ----
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
-        input_cb_data_format == tt::DataFormat::Float32) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
         ttnn::ComputeKernelConfig cfg{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};

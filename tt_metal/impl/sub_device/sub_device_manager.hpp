@@ -4,25 +4,24 @@
 
 #pragma once
 
-#include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
-#include "allocator.hpp"
+#include "tt-metalium/mesh/allocator.hpp"
 #include "impl/allocator/persistent_l1_arena.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "llrt/hal_types.hpp"
-#include "sub_device.hpp"
-#include "sub_device_types.hpp"
+#include "tt-metalium/mesh/sub_device.hpp"
+#include "tt-metalium/mesh/sub_device_types.hpp"
 #include <impl/context/context_types.hpp>
-#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
 
 namespace tt::tt_metal::distributed {
 struct MeshTraceBuffer;
@@ -63,6 +62,7 @@ public:
     std::shared_ptr<distributed::MeshTraceBuffer>& create_trace(const distributed::MeshTraceId& trace_id);
     void release_trace(const distributed::MeshTraceId& trace_id);
     std::shared_ptr<distributed::MeshTraceBuffer> get_trace(const distributed::MeshTraceId& trace_id);
+    std::size_t num_traces() const { return trace_buffer_pool_.size(); }
     DeviceAddr get_max_trace_high_water_mark() const;
 
     uint8_t num_sub_devices() const;

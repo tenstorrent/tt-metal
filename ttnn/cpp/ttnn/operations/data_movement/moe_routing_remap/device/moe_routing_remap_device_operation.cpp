@@ -9,12 +9,18 @@
 #include "moe_routing_remap_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::data_movement {
 
 void MoeRoutingRemapDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_routing_weights = tensor_args.input_routing_weights;
+    TT_FATAL(
+        input_routing_weights.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            input_routing_weights.dtype() == tt::tt_metal::DataType::FLOAT32,
+        "input tensor expected to be bfloat16 or float32, got {}",
+        input_routing_weights.dtype());
     TT_FATAL(
         input_routing_weights.layout() == tt::tt_metal::Layout::ROW_MAJOR, "input tensor expected to be row major");
 
@@ -75,7 +81,7 @@ MoeRoutingRemapDeviceOperation::spec_return_value_t MoeRoutingRemapDeviceOperati
     const auto& old_spec = routing_weights.tensor_spec();
     return tt::tt_metal::TensorSpec(
         old_spec.logical_shape(),
-        TensorLayout(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             old_spec.tensor_layout().get_data_type(),
             old_spec.tensor_layout().get_page_config(),
             mem_config,

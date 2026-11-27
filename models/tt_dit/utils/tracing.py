@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 _OMITTED = object()
 
+_live: weakref.WeakSet[Tracer] = weakref.WeakSet()
+
 
 class StateTensor:
     """A persistent device buffer refreshed in place under tracing.
@@ -157,6 +159,18 @@ class Tracer:
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
         self._trace_ids: tuple[ttnn.MeshTraceId, ...] | None = None
+        _live.add(self)
+
+    @staticmethod
+    def release_all() -> None:
+        """Release the captured trace of every live tracer."""
+        for tracer in list(_live):
+            try:
+                tracer.release_trace()
+            except RuntimeError as e:
+                # e.g. the tracer's mesh was closed; release_trace cleared its state before throwing
+                _live.discard(tracer)
+                logger.warning(f"could not release a trace: {e}")
 
     def __call__(
         self,
@@ -241,6 +255,8 @@ class Tracer:
         kwargs = _tree_map(_verify_value, kwargs, path_label="kwargs")
         self._args = _tree_map(self._tensor_to_device, args, path_label="args")
         self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
+        _tree_map(_force_copy_compile, self._args, path_label="args")
+        _tree_map(_force_copy_compile, self._kwargs, path_label="kwargs")
 
         if self._prep_run:
             if self._clone_prep_inputs:
@@ -337,6 +353,19 @@ class Tracer:
             Tracer._traces_live[d.id()] -= 1
             ttnn.release_trace(d, trace_id)
 
+    def release_inputs(self) -> None:
+        """Drop the references to the last call's inputs, freeing the device memory they hold.
+
+        Only meaningful before a trace has been captured: afterwards the stored inputs are the
+        trace's own input buffers, which every execution writes through.
+        """
+        if self._trace_ids is not None:
+            msg = "inputs cannot be released once the trace has been captured"
+            raise RuntimeError(msg)
+
+        self._args = ()
+        self._kwargs = {}
+
     def release_function(self) -> None:
         """Drop the reference to the wrapped function.
 
@@ -420,6 +449,13 @@ def _is_tracer_valid_value(value: Any) -> bool:
     return False
 
 
+def _force_copy_compile(value: Any, *, path_label: str) -> None:
+    """Compile the copy that replay uses to refresh a device input; capture itself never runs it."""
+    del path_label
+    if isinstance(value, ttnn.Tensor):
+        ttnn.copy(value, value)
+
+
 def _clone_tensor(value: Any, *, path_label: str) -> Any:
     """Clone a tensor, passing through non-tensor values unchanged."""
     del path_label
@@ -429,7 +465,7 @@ def _clone_tensor(value: Any, *, path_label: str) -> Any:
 def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> Any:
     """Apply a function to leaves of nested data structures.
 
-    Recursively traverses nested structures (tuples, lists, dicts) and applies
+    Recursively traverses nested structures (tuples, named ones included, lists, dicts) and applies
     the given function to corresponding leaf elements across all input structures.
 
     Args:
@@ -461,9 +497,10 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
                 msg = f"tuple lengths of '{path_label}' should be the same: {len(x)} != {len(y)}"
                 raise ValueError(msg)
 
-        return tuple(
+        items = [
             _tree_map(f, *elts, path_label=f"{path_label}[{i}]") for i, elts in enumerate(zip(x, *xs, strict=True))
-        )
+        ]
+        return type(x)(*items) if hasattr(type(x), "_fields") else tuple(items)
 
     if isinstance(x, list) and all(isinstance(y, list) for y in xs):
         for y in xs:

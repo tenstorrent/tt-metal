@@ -9,6 +9,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "reshard_writer.hpp"
+#include "interleaved_block_io.hpp"
 #include "api/tensor/noc_traits.h"
 #ifdef DO_COL_MASK
 #include "col_mask_dataflow.h"
@@ -36,18 +37,31 @@ void kernel_main() {
 
     const uint32_t num_segments_to_write_back = get_arg(args::num_segments_to_write_back);
     const uint32_t storage_core_start_offset = get_arg(args::storage_core_start_offset);
-    // One segment per storage core this block spans, three values each: the byte count and the
-    // destination node's coordinates. The count varies per core, so the block is positional and the
+    // One segment per storage core this block spans, two values each: the byte count and the
+    // destination output shard id. The count varies per core, so the block is positional and the
     // local copy is sized by the longest block any core was given.
     constexpr auto max_write_back_segments = get_arg(args::max_write_back_segments);
-    uint32_t segment_values[3 * max_write_back_segments];
-    for (uint32_t i = 0; i < 3 * num_segments_to_write_back; ++i) {
+    uint32_t segment_values[2 * max_write_back_segments];
+    for (uint32_t i = 0; i < 2 * num_segments_to_write_back; ++i) {
         segment_values[i] = get_vararg(i);
     }
     tt_l1_ptr uint32_t* segment_args = reinterpret_cast<tt_l1_ptr uint32_t*>(segment_values);
 #endif
 
     const Noc noc;
+
+    // Interleaved input/output (sharded program config over interleaved tensors): this core's block starts at tile row
+    // tile_row_start and tile column width_shard_tile_start_id of the [Mt, Kt] tile grid.
+    constexpr bool in0_interleaved = get_arg(args::in0_interleaved) == 1;
+    constexpr bool out_interleaved = get_arg(args::out_interleaved) == 1;
+    constexpr auto io_Kt = get_arg(args::io_Kt);
+    constexpr auto io_block_ht = get_arg(args::io_block_ht);
+    const uint32_t io_first_tile_id = (get_arg(args::tile_row_start) * io_Kt) + width_shard_tile_start_id;
+    if constexpr (in0_interleaved) {
+        // The input is not resident in this core's L1: read the block into in0, which compute waits on.
+        read_interleaved_block<io_block_ht, block_w, io_Kt>(
+            noc, *dfb::get_token_if_present<"in0">(), *tensor::get_token_if_present<"src">(), io_first_tile_id);
+    }
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma_obj(dfb::gamma);
 #endif
@@ -59,18 +73,32 @@ void kernel_main() {
 #endif
 
 #ifndef USE_WELFORD
+    // One DataflowBuffer per constant tile, for the whole kernel: on Quasar a DataflowBuffer drains when it goes
+    // out of scope (#60848), and the compute kernel pops these only at its end, after it has consumed the gamma
+    // and beta this kernel pushes below. Scoping them to the block below would block it there.
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
+    DataflowBuffer dfb_eps_obj(dfb::eps);
+    DataflowBuffer dfb_scaler_global_obj(dfb::scaler_global);
+#ifdef DO_COL_MASK
+    DataflowBuffer dfb_col_mask_obj(dfb::col_mask);
+#endif
     {
         const uint32_t scalar_w_bits = get_arg(args::scalar_w);
         const float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
         dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-            scalar_w_f);
+            dfb_scaler_obj, scalar_w_f);
+#ifdef SCALER_SELF_LOOP
+        // After the all-gather nothing consumes the per-core scaler: this kernel holds both ends of it.
+        // Pop the tile it just pushed so the buffer is left balanced.
+        dfb_scaler_obj.wait_front(1);
+        dfb_scaler_obj.pop_front(1);
+#endif
 
         const uint32_t eps = get_arg(args::eps);
-        DataflowBuffer dfb_eps_obj(dfb::eps);
         generate_bcast_col_scalar(dfb_eps_obj, eps);
 
 #ifdef DO_COL_MASK
-        generate_col_mask(dfb::col_mask, block_w, get_arg(args::logical_K), width_shard_tile_start_id);
+        generate_col_mask(dfb_col_mask_obj, block_w, get_arg(args::logical_K), width_shard_tile_start_id);
 #endif
 
         if constexpr (is_all_to_all_worker) {
@@ -78,7 +106,7 @@ void kernel_main() {
             const float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
             dataflow_kernel_lib::
                 prepare_reduce_scaler<dfb::scaler_global, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
-                    scalar_c_f);
+                    dfb_scaler_global_obj, scalar_c_f);
         }
     }
 #endif
@@ -116,14 +144,14 @@ void kernel_main() {
 #endif
 
 #ifndef SKIP_WRITE_BACK
-    // The output tensor's shard sits at the same address on every core it is sharded across, so its
-    // base address doubles as the destination address on each storage core. No data moves through a
-    // buffer here: the writes go straight from this core's output buffer to the storage cores.
-    const uint32_t output_base_addr = TensorAccessor(tensor::dst).get_bank_base_address();
+    // The output tensor addressed by shard: each segment names the storage core's shard it lands in.
+    // No data moves through a buffer here: the writes go straight from this core's output buffer to the
+    // storage cores.
+    const auto output = TensorAccessor(tensor::dst);
     write_resharded_data(
         noc,
         dfb_out_obj,
-        output_base_addr,
+        output,
         num_segments_to_write_back,
         storage_core_start_offset,
         segment_args,
@@ -131,6 +159,11 @@ void kernel_main() {
         storage_core_stride_w_bytes,
         block_ht);
 #endif
+
+    if constexpr (out_interleaved) {
+        write_interleaved_block<io_block_ht, block_w, io_Kt>(
+            noc, *dfb::get_token_if_present<"out">(), *tensor::get_token_if_present<"dst">(), io_first_tile_id);
+    }
 
 #endif  // IDLE_CORE
 }

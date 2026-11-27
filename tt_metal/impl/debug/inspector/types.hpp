@@ -14,8 +14,8 @@
 
 #include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
 
 namespace tt::tt_metal {
     class Inspector;
@@ -23,7 +23,6 @@ namespace tt::tt_metal {
 
     namespace distributed {
     class MeshDeviceImpl;
-    class MeshWorkloadImpl;
     class MeshBuffer;
     }
 }
@@ -82,6 +81,7 @@ struct MeshSocketLocalCoreData {
 
 struct MeshSocketData {
     bool is_sender{};
+    bool peer_is_host{};
     uint64_t config_buffer_address{};
     uint64_t data_buffer_address{};
     uint64_t fifo_size{};
@@ -101,12 +101,6 @@ struct MeshWorkloadRuntimeEntry {
 };
 
 std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs);
-
-struct MeshWorkloadData {
-    const distributed::MeshWorkloadImpl* mesh_workload = nullptr;
-    uint64_t mesh_workload_id{};
-    std::unordered_map<int, ProgramBinaryStatus> binary_status_per_device;
-};
 
 struct CoreInfo {
     tt::tt_metal::DispatchWorkerType worker_type;

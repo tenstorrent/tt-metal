@@ -4,7 +4,7 @@
 
 #include "interleaved_to_sharded_op.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <ttnn/operation.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -19,15 +19,17 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return {false, "Operands to shard need to be on device!"};
     }
-    if (input_tensor.buffer() == nullptr) {
+    if (!input_tensor.is_allocated()) {
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
 
     // Reject dtype/layout combinations that would hard-fail during tt::tt_metal::TensorSpec construction in
     // compute_output_specs(). These low-precision packed formats require tiled layout.
-    const bool output_dtype_requires_tile = output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B;
+    const bool output_dtype_requires_tile =
+        output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B || tt::tt_metal::is_mx(output_dtype);
     if (output_dtype_requires_tile && input_tensor.layout() == Layout::ROW_MAJOR) {
-        return {false, "Output dtype BFLOAT8_B/BFLOAT4_B requires TILE layout, but input tensor layout is ROW_MAJOR"};
+        return {
+            false, "Output dtype BFLOAT8_B/BFLOAT4_B/MX requires TILE layout, but input tensor layout is ROW_MAJOR"};
     }
 
     // tt::tt_metal::TensorSpec construction normalizes ND shard specs to equivalent 2D layouts when possible.
@@ -60,7 +62,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
         if (output_tensor.storage_type() != StorageType::DEVICE) {
             return {false, "Operands to shard need to be on device!"};
         }
-        if (output_tensor.buffer() == nullptr) {
+        if (!output_tensor.is_allocated()) {
             return {false, "Operands to shard need to be allocated in buffers on device!"};
         }
         if (output_tensor.device() != input_tensor.device()) {

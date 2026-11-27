@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 
 import torch
 from loguru import logger
@@ -14,9 +15,21 @@ from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
+from .batched_prefill import gather_users, last_token_rows, partition_users
+from .fused_decode.config import fused_decode_supported
+from .fused_decode.inputs import DecodeInputs
+from .fused_decode.terminal import DecodeTerminal, FusedSamplingGenerator
 from .host_readback import DecodeHostReadback, DecodeHostRows
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
+
+# Sequence-parallel prefill (Model._forward_layers_and_head, DecoderLayer._prefill_forward_sp): on by default
+# where every layer supports it; GPT_OSS_PREFILL_SP=0 keeps the residual stream replicated.
+PREFILL_SP_ENV = "GPT_OSS_PREFILL_SP"
+# Shortest prefill (tokens) that runs sequence-parallel. Measured vs replicated (TTFT ms, BH 1x4, L11):
+# 128 45.2 -> 45.8, 1K 66.0 -> 65.7, 8K 281.6 -> 270.2, 32K 1247.6 -> 1203.0, 64K 2891.3 -> 2800.2; below 1K the
+# extra partition / gather ops cost more than the S / TP-row norms and adds save.
+PREFILL_SP_MIN_SEQ = 1024
 
 
 def compute_per_device_vocab(vocab_size, num_tp):
@@ -39,6 +52,7 @@ def create_rope_setup(
     users_row_sharded=False,
     datatype=ttnn.bfloat16,
     shard_batch_to_mesh_dim=0,
+    use_qk_fused=False,
 ):
     """
     Create and return a RotarySetup instance for the GPT-OSS model.
@@ -70,6 +84,7 @@ def create_rope_setup(
         rope_scaling=rope_scaling,
         datatype=datatype,
         shard_batch_to_mesh_dim=shard_batch_to_mesh_dim,
+        use_qk_fused=use_qk_fused,
     )
 
     return rope_setup
@@ -88,6 +103,12 @@ class Model:
     - Paged attention support for memory efficiency
     - Compatible with tt_transformers generator interface
     """
+
+    # Generator opt-in (models/tt_transformers/tt/generator.py prefill_forward_text): a batched prefill passes the
+    # per-user last-token indices as get_last_token, the forward runs the final norm and LM head on those rows only,
+    # and process_output_prefill_rows reads the logits back once for all users. With on-device sampling the generator
+    # batches through extract_last_tokens_batched_prefill and _apply_norm_and_lm_head instead.
+    batched_prefill_last_token_rows = True
 
     def __init__(
         self,
@@ -146,6 +167,13 @@ class Model:
             mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1)
         )
 
+        # Fused decode layers (fused_decode/): decode carries the flat replicated residual of
+        # fused_decode/boundary.py through the layers (each layer boundary all-reduces + adds + applies the next norm,
+        # the last one the final norm) and rotates Q and K in one op.
+        self.fused_decode = fused_decode_supported(
+            mesh_device, self.mesh_config, hf_config, use_throughput_experts, max_local_batch_size
+        )
+
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
         self.rope_setup = create_rope_setup(
@@ -155,6 +183,9 @@ class Model:
             users_row_sharded=users_row_sharded,
             datatype=ttnn.bfloat16,
             shard_batch_to_mesh_dim=0,
+            # Fused decode layers rotate Q and K in one op (rotary_embedding_llama_fused_qk): cos/sin and the
+            # decode transformation matrix are laid out for 2 x batch cores (Q users, then K users).
+            use_qk_fused=self.fused_decode,
         )
 
         # Keep references for compatibility
@@ -179,6 +210,12 @@ class Model:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Fused decode: the token's embedding row and the Q/K RoPE rows come from one op (fused_decode/inputs.py).
+        self.decode_inputs = (
+            DecodeInputs(mesh_device, self.embedding_weight, self.rope_setup, hf_config.hidden_size)
+            if self.fused_decode
+            else None
         )
         self.layers = [
             DecoderLayer(
@@ -207,6 +244,22 @@ class Model:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "norm"),
             mesh_config=self.mesh_config,
         )
+        if self.fused_decode:
+            for i, layer in enumerate(self.layers):
+                last = i + 1 == len(self.layers)
+                layer.set_decode_next_norm(
+                    self.norm if last else self.layers[i + 1].input_layernorm, last, lm_head_fused=last
+                )
+            # Decode terminal path (fused_decode/terminal.py): the last layer's boundary (+ final norm) runs inside the
+            # streamed LM head, which writes folded logits for the split sampler. Prefill keeps the LM head below.
+            self.decode_terminal = DecodeTerminal(
+                mesh_device,
+                hf_config,
+                substate(state_dict, "lm_head")["weight"] if state_dict else None,
+                tensor_cache_path,
+            )
+        else:
+            self.decode_terminal = None
         # Pad lm_head vocab dimension to padded_vocab_size BEFORE column-parallel sharding.
         # TTSampling._create_indices_tensors uses padded_per_device as the stride for device
         # offset calculation: global_idx = device_id * padded_per_device + local_idx.
@@ -243,11 +296,13 @@ class Model:
         self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
         if self._supports_on_device_sampling:
             # tt_ccl=None makes TTSampling fall back to ttnn.all_gather() which works on [4,8] meshes
-            self.sampling = SamplingGenerator(
-                args=self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device),
-                mesh_device=mesh_device,
-                tt_ccl=None,
-            )
+            sampling_args = self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device)
+            if self.decode_terminal is not None:
+                self.sampling = FusedSamplingGenerator(
+                    args=sampling_args, mesh_device=mesh_device, tt_ccl=None, terminal=self.decode_terminal
+                )
+            else:
+                self.sampling = SamplingGenerator(args=sampling_args, mesh_device=mesh_device, tt_ccl=None)
             # Hook reset_sampling_params to set prefill flag — Generator calls this
             # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
             _orig_reset = self.sampling.reset_sampling_params
@@ -270,6 +325,9 @@ class Model:
             per_device_padded,
             mesh_device.get_num_devices() // decode_tp if users_row_sharded else 1,
         )
+        # The model's own resident L1 (its persistent decode buffers) starts here: the prefill L1 budgets (the routed
+        # experts' L1 transient caps) are sized with this much L1 held (see set_prefill_l1_end).
+        self._resident_l1_low = mesh_device.lowest_occupied_compute_l1_address() or 0
 
     def _make_sampling_args(self, hf_config, mesh_device):
         """Create a minimal args object for SamplingGenerator/TTSampling."""
@@ -394,6 +452,25 @@ class Model:
                 f"but model has {len(self.layers)} layers"
             )
 
+        # Sequence-parallel prefill (DecoderLayer._prefill_forward_sp): the residual stream stays split over the mesh
+        # row by sequence rows, so the residual adds and RMSNorms run on S / TP rows per device instead of all S rows.
+        # A batched prefill (batch_size > 1: B users' rows stacked by user, batched_prefill.py) gates on the per-user
+        # length, so that every user runs the same path as its batch-1 prefill.
+        batched_last_tokens = isinstance(get_last_token, (list, tuple))
+        user_seq_len = hidden_states.shape[-2] // batch_size
+        sequence_parallel = (
+            not is_decode
+            and os.getenv(PREFILL_SP_ENV, "1") == "1"
+            and user_seq_len >= PREFILL_SP_MIN_SEQ
+            and len(self.layers) > 0
+            and all(layer.prefill_sequence_parallel_supported(hidden_states, batch_size) for layer in self.layers)
+        )
+        if sequence_parallel:
+            sp_axis = self.layers[0].self_attn.mesh_config.tp_axis
+            full = hidden_states
+            hidden_states = partition_users(full, batch_size, sp_axis)
+            full.deallocate(True)
+
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -407,7 +484,31 @@ class Model:
                 is_decode=is_decode,
                 user_id=user_id,
                 batch_size=batch_size,
+                sequence_parallel=sequence_parallel,
             )
+        if batched_last_tokens:
+            # Batched prefill, get_last_token = each user's last token index: the head runs on those B rows only
+            # ([1, 1, B padded to 32, H]; row b = user b).
+            rows = hidden_states
+            hidden_states = last_token_rows(
+                rows,
+                get_last_token,
+                user_seq_len,
+                self.mesh_device,
+                cluster_axis=sp_axis if sequence_parallel else None,
+            )
+            rows.deallocate(True)
+            get_last_token = -1
+        elif sequence_parallel:
+            if batch_size > 1:
+                assert get_last_token == -1, "a batched sequence-parallel prefill selects rows via a per-user list"
+                rows = hidden_states
+                hidden_states = gather_users(rows, batch_size, sp_axis)
+                rows.deallocate(True)
+            else:
+                hidden_states = self._gather_prefill_rows(hidden_states, get_last_token, sp_axis)
+            if get_last_token != -1:
+                get_last_token = -1  # already the [1, 1, 32, H] tile of the last token
         logits = hidden_states
 
         if get_last_token != -1:
@@ -436,16 +537,110 @@ class Model:
         if skip_lm_head:
             return hidden_states
 
+        if self.fused_decode and mode == Mode.DECODE:
+            # The last fused decode layer returns its pending boundary (MoE all-reduce + residual + final norm); the
+            # streamed LM head runs it and writes the folded logits of the split sampler (fused_decode/terminal.py).
+            pending = hidden_states
+            logits = self.decode_terminal.lm_head(
+                pending, sampling=self._decode_sampling, current_pos=current_pos, rot_idxs=self._decode_rot_idxs
+            )
+            pending.x.deallocate(True)
+            pending.residual.deallocate(True)
+            pending.residual_out.deallocate(True)
+            self._prefill_sampling_active = False
+            return logits
+
         # Final norm and lm_head
-        hidden_states = self.norm(hidden_states)
-        logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
-        hidden_states.deallocate(True)
-        self._prefill_sampling_active = False
+        if mode == Mode.DECODE and getattr(self.layers[-1], "batched_decode", False):
+            # Batched decode: the residual is width-sharded (batched_decode.py); norm on its shards. The LM head reads
+            # a BF8 DRAM-interleaved input, as the unsharded path hands it over: the auto-configured LM head matmul
+            # takes ~1.2 ms from an L1 input and ~0.52 ms from DRAM.
+            normed = self.norm.forward_sharded(hidden_states)
+            hidden_states.deallocate(True)
+            hidden_states = ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+            normed.deallocate(True)
+            logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+            hidden_states.deallocate(True)
+            self._prefill_sampling_active = False
+        else:
+            logits = self._apply_norm_and_lm_head(hidden_states)
         # TP all-gather is deferred to process_output_prefill / process_output_decode
         # (outside trace capture) since all_gather_async writes to device,
         # which is forbidden during trace capture.
 
         return logits
+
+    def set_prefill_l1_end(self, l1_end):
+        """Prefill ops whose circular buffers would otherwise claim nearly all of L1 (the routed-expert MoE, the 2D
+        QKV / o_proj configs) fit them below l1_end instead (0: the whole L1). Called by a caller that keeps buffers
+        resident in L1 across prefills (DFlash: dflash/runner.py) with the lowest resident address."""
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        # L1 the caller holds below the model's own resident buffers, over all L1 banks of a device: the routed
+        # experts' interleaved L1 transients get that much less room
+        held = max(0, self._resident_l1_low - l1_end) * grid.x * grid.y if l1_end and self._resident_l1_low else 0
+        for layer in self.layers:
+            layer.self_attn.program_config.prefill_l1_end = l1_end
+            if layer.mlp.routed_prefill is not None:
+                layer.mlp.routed_prefill.l1_end = l1_end
+                layer.mlp.routed_prefill.l1_held = held
+
+    def _apply_norm_and_lm_head(self, x):
+        """Final norm + vocab-sharded LM head (logits [..., vocab / TP] per device, bf8). x: replicated [..., H].
+        Also the generator's batched on-device sampling hook (after extract_last_tokens_batched_prefill)."""
+        normed = self.norm(x)
+        logits = ttnn.matmul(normed, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        normed.deallocate(True)
+        self._prefill_sampling_active = False
+        return logits
+
+    def extract_last_tokens_batched_prefill(
+        self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len, target_batch=None
+    ):
+        """Generator hook (batched prefill with on-device sampling): hidden_states = the final residual of the batched
+        forward ([padded_batch, 1, S, H] view of the [1, 1, B*S, H] rows, replicated, see ttnn_prefill_forward) ->
+        [1, 1, target_batch, H], row b = user b's last token, zero rows after padded_batch. On device: the same
+        one-hot selection (last_token_rows, exact) as the non-sampling batched path, so _apply_norm_and_lm_head gives
+        the same logits."""
+        target_batch = padded_batch if target_batch is None else target_batch
+        assert hidden_states.shape[-1] == self.hf_config.hidden_size, (
+            f"extract_last_tokens_batched_prefill needs the final residual (width {self.hf_config.hidden_size}), got "
+            f"width {hidden_states.shape[-1]}: the batched forward ran the LM head (skip_lm_head not passed; traced "
+            f"batched prefill with on-device sampling is not supported)"
+        )
+        assert len(last_token_idx_list) == padded_batch <= target_batch, (len(last_token_idx_list), target_batch)
+        rows = ttnn.reshape(hidden_states, [1, 1, padded_batch * prefill_seq_len, hidden_states.shape[-1]])
+        picked = last_token_rows(rows, last_token_idx_list, prefill_seq_len, self.mesh_device)
+        hidden_states.deallocate(True)
+        if picked.shape[-2] < target_batch:
+            padded = ttnn.pad(picked, padding=[(0, 0), (0, 0), (0, target_batch - picked.shape[-2]), (0, 0)], value=0.0)
+            picked.deallocate(True)
+            picked = padded
+        assert picked.shape[-2] == target_batch, (tuple(picked.shape), target_batch)
+        return picked
+
+    @staticmethod
+    def _gather_prefill_rows(rows, get_last_token, cluster_axis):
+        """End of a sequence-parallel prefill: rows is this device's [1, 1, S / N, H] share of the final residual
+        (device d: rows d * S / N onward). get_last_token == -1: all-gather all S rows. Otherwise return the 32-row tile
+        at get_last_token (tile-aligned): every device slices its local rows at get_last_token % (S / N), an all-gather
+        of those tiles gives [1, 1, 32 N, H], and the tile of device get_last_token // (S / N) is the one."""
+        if get_last_token == -1:
+            full = ttnn.all_gather(rows, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            rows.deallocate(True)
+            return full
+        local = rows.shape[-2]
+        assert get_last_token % 32 == 0 and local % 32 == 0, f"get_last_token {get_last_token}, rows {local}"
+        off = get_last_token % local
+        # A slice covering the whole tensor (one tile of rows per device) aliases its input: no slice then.
+        tile = rows if local == 32 else ttnn.slice(rows, (0, 0, off, 0), (1, 1, off + 32, rows.shape[-1]))
+        tiles = ttnn.all_gather(tile, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if tile is not rows:
+            tile.deallocate(True)
+        rows.deallocate(True)
+        d = get_last_token // local
+        out = ttnn.slice(tiles, (0, 0, 32 * d, 0), (1, 1, 32 * d + 32, tiles.shape[-1]))
+        tiles.deallocate(True)
+        return out
 
     def _page_table_mesh_mapper(self, B):
         """Mesh mapper for per-layer page tables, matching the layout that
@@ -537,19 +732,28 @@ class Model:
         Decode forward pass - processes single tokens.
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
         """
-        # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
-        actual_batch = current_pos.shape[-1]
-        if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
-            tokens_for_embed = tokens[:, :, :, :actual_batch]
+        if self.decode_inputs is not None:
+            # Fused decode (one user): the embedding row (BF16 row-major, which the first layer boundary copies in) and
+            # the Q/K RoPE rows in one op.
+            input_embeds, rope_mats = self.decode_inputs(tokens, self.get_tt_pos_idx(rot_mat_idxs))
         else:
-            tokens_for_embed = tokens
-        input_embeds = ttnn.embedding(
-            tokens_for_embed, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
-        )
-        input_embeds = ttnn.unsqueeze(input_embeds, 0)
-        # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
-        rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
+            # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
+            actual_batch = current_pos.shape[-1]
+            if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
+                tokens_for_embed = tokens[:, :, :, :actual_batch]
+            else:
+                tokens_for_embed = tokens
+            input_embeds = ttnn.embedding(
+                tokens_for_embed, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+            )
+            input_embeds = ttnn.unsqueeze(input_embeds, 0)
+            # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
+            rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
 
+        # The fused decode LM head also produces the sampler candidates and advances the positions when sampling on
+        # device (fused_decode/terminal.py).
+        self._decode_sampling = on_device_logits
+        self._decode_rot_idxs = rot_mat_idxs
         # Forward through layers and head (shared with prefill)
         out = self._forward_layers_and_head(
             hidden_states=input_embeds,
@@ -560,6 +764,8 @@ class Model:
             is_decode=True,
             page_tables_per_layer=page_tables_per_layer,
         )
+        # Drop the per-call stash (an eager call's input tensors must not outlive the call).
+        self._decode_rot_idxs = None
 
         if on_device_logits:
             assert self.sampling is not None, (
@@ -570,7 +776,8 @@ class Model:
             batch_dim = out.shape[-2]
             if batch_dim < 32:
                 out = ttnn.pad(out, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            if not (self.decode_terminal is not None and self.decode_terminal.advances_positions):
+                self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             return out
 
         # Host sampling consumes row-major logits. Untilize in the decode
@@ -610,6 +817,11 @@ class Model:
                 self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
                 self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
             ]
+
+        # The generator's batched prefill with on-device sampling passes skip_lm_head explicitly
+        # (prefill_forward_single_user_text batched_skip_lm_head): the forward returns the final residual of all B*S
+        # rows, and extract_last_tokens_batched_prefill + _apply_norm_and_lm_head run the head on one row per user.
+        # Every other batched call with get_last_token == -1 (e.g. traced batched prefill) gets logits of all rows.
 
         # Forward through layers and head (shared with decode)
         logits = self._forward_layers_and_head(
@@ -1040,9 +1252,13 @@ class Model:
             rot_current_pos = torch.maximum(current_pos, torch.tensor(0, dtype=torch.int64))
             rot_current_pos = rot_current_pos.reshape(1, B)  # [1, batch]
             assert rot_current_pos.shape == (1, B), "rot_current_pos must be a [1, batch] tensor"
+            if self.rope_setup.use_qk_fused:
+                # One cos/sin row per Q user followed by one per K user (fused QK RoPE).
+                rot_current_pos = rot_current_pos.repeat(1, 2)
             assert torch.min(rot_current_pos) >= 0, "rot_current_pos must be non-negative"
             # Add padding if needed
-            pad_size = nearest_32(B) - B
+            n = rot_current_pos.shape[-1]
+            pad_size = nearest_32(n) - n
             rot_current_pos = torch.nn.functional.pad(rot_current_pos, (0, pad_size), "constant", 0)
             mesh_mapper = (
                 ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.mesh_device.shape)
@@ -1181,7 +1397,8 @@ class Model:
         # Cached per sequence length: the slice runs on device, so recomputing it allocates. On a traced
         # prefill that allocation happens with the trace live -- and is then discarded, since the replay
         # uses the matrices that were bound when the trace was captured.
-        seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
+        # A batched prefill (batch_size users flattened into one row) rotates every user from position 0.
+        seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2] // batch_size
         rot_mats_global = self._prefill_rope_slices.get(seq_len)
         if rot_mats_global is None:
             rot_mats_global = [
@@ -1265,6 +1482,13 @@ class Model:
 
     def read_output_decode(self, tt_out, sample_rows, blocking=True):
         """Read a prepared slot range without compiling or allocating device buffers."""
+        terminal = getattr(self, "decode_terminal", None)  # absent on host-only stand-ins of the model
+        if terminal is not None and terminal.is_folded(tt_out):
+            # Folded logits of the fused decode terminal path hold one user (row 0) spread over all 32 rows, so
+            # there is no per-user row to select: read the whole tensor; process_output_decode unfolds it.
+            if list(sample_rows) != [0]:
+                raise ValueError(f"Fused decode serves one user (row 0); got sample rows {sample_rows}")
+            return tt_out.cpu(blocking=blocking, cq_id=0)
         return self._host_readback.read(tt_out, sample_rows, blocking=blocking)
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False, sample_rows=None):
@@ -1277,6 +1501,15 @@ class Model:
             concat_out = self.concat_device_output(tt_out)
             # Token IDs or log probs: shape [1, 1, B] or [1, 1, 1, B] -> [B]
             return concat_out.reshape(-1)[:B]
+
+        terminal = getattr(self, "decode_terminal", None)  # absent on host-only stand-ins of the model
+        if terminal is not None and list(tt_out.shape) == [1, 1, ttnn.TILE_SIZE, terminal.width]:
+            # Folded logits of the fused decode terminal path (one user).
+            if sample_rows is not None and list(sample_rows) != [0]:
+                raise ValueError(f"Fused decode serves one user (row 0); got sample rows {sample_rows}")
+            device_tensors = ttnn.get_device_tensors(tt_out)[: terminal.tp]
+            logits = terminal.unfold_host([ttnn.to_torch(t) for t in device_tensors])
+            return logits.reshape(1, S, -1)[:B]
 
         # Host-side TP gather: concatenate TP shards per row, then DP rows.
         config = self.mesh_config.get_config(Mode.DECODE)
@@ -1393,13 +1626,25 @@ class Model:
         """
         config = self.mesh_config.get_config(Mode.PREFILL)
         if config.tp > 1:
+            # Select the rows on each vocab shard first, then concatenate only those: the same values as indexing the
+            # concatenated [..., 32, vocab] tile. Row-major host shards are borrowed (_decode_host_shard), and the
+            # concat copies the selected rows out of them. Measured on host, 4 x [1, 1, 32, 65536] bf16, one row:
+            # 2.10 -> 0.02 ms (ttnn.to_torch of every shard + concat of all 32 rows).
             device_tensors = ttnn.get_device_tensors(tt_out)
-            tp = config.tp
-            torch_output = torch.cat([ttnn.to_torch(device_tensors[i]) for i in range(tp)], dim=-1)
-        else:
-            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            rows = [self._decode_host_shard(device_tensors[i])[..., last_token_idx, :] for i in range(config.tp)]
+            return torch.cat(rows, dim=-1)[..., : self.vocab_size]
+        torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         result = torch_output[..., last_token_idx, : self.vocab_size]
         return result
+
+    def process_output_prefill_rows(self, tt_out, rows):
+        """Logits of a batched prefill whose forward ran the head on one row per slot ([1, 1, B padded to 32,
+        vocab / TP] per device, row b = slot b): one untilize and readback, then [1, 1, vocab] for each slot in rows
+        (the per-user value process_output_prefill returns)."""
+        host = ttnn.untilize(tt_out, use_multicore=True).cpu()
+        tt_out.deallocate(True)
+        out = self.process_output_prefill(host, last_token_idx=slice(None))  # [1, 1, B, vocab]
+        return [out[..., int(r) : int(r) + 1, :].reshape(1, 1, -1) for r in rows]
 
     def process_output_prefill_batched(self, tt_out, last_token_idxs, users_per_row=1, seq_len_per_user=None):
         """Process row-parallel batched prefill output.

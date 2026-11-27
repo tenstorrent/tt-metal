@@ -3,13 +3,9 @@
 
 #include "tt_metal/distributed/host_rdma_window.hpp"
 
-#include <vector>
-
 #include <mpi.h>
 
 #include <fmt/format.h>
-
-#include "hostdevcommon/uva_layout.h"
 
 namespace tt::tt_metal::experimental {
 
@@ -26,6 +22,21 @@ std::string mpi_error_text(const char* what, int rc) {
     return std::string(what) + " failed: " + std::string(buf, static_cast<size_t>(len));
 }
 
+// Any MPI call before MPI_Init or after MPI_Finalize aborts the process. MPI is up on every rank of a job or on
+// none, so every rank returns from here together and none is left alone in a collective.
+bool mpi_ready(std::string& err) {
+    int initialized = 0;
+    int finalized = 0;
+    if (MPI_Initialized(&initialized) == MPI_SUCCESS && initialized != 0 && MPI_Finalized(&finalized) == MPI_SUCCESS &&
+        finalized == 0) {
+        return true;
+    }
+    err =
+        "MPI is not initialized. Host-to-host sockets need an MPI job: launch with tt-run or mpirun, or set "
+        "TT_METAL_MPI_INIT=always";
+    return false;
+}
+
 }  // namespace
 
 struct RdmaWindow::Impl {
@@ -37,31 +48,17 @@ struct RdmaWindow::Impl {
     uint8_t* base = nullptr;
     uint64_t bytes = 0;
 
-    // Slot 0 is reserved so Op::id == 0 can mean "none".
-    std::vector<MPI_Request> reqs{MPI_REQUEST_NULL};
-    std::vector<uint32_t> free_slots;
-
     uint64_t words[kWordSlots] = {};
     uint32_t next_word = 0;
 
-    uint32_t acquire() {
-        if (!free_slots.empty()) {
-            const uint32_t s = free_slots.back();
-            free_slots.pop_back();
-            return s;
-        }
-        reqs.push_back(MPI_REQUEST_NULL);
-        return static_cast<uint32_t>(reqs.size() - 1);
-    }
-    void release(uint32_t slot) {
-        reqs[slot] = MPI_REQUEST_NULL;
-        free_slots.push_back(slot);
-    }
 };
 
 RdmaWindow::RdmaWindow() : impl_(std::make_unique<Impl>()) {}
 
 bool RdmaWindow::agree_value(uint64_t local, std::string& err) {
+    if (!mpi_ready(err)) {
+        return false;
+    }
     uint64_t lo = 0;
     uint64_t hi = 0;
     if (const int rc = MPI_Allreduce(&local, &lo, 1, MPI_UINT64_T, MPI_MIN, MPI_COMM_WORLD); rc != MPI_SUCCESS) {
@@ -76,6 +73,9 @@ bool RdmaWindow::agree_value(uint64_t local, std::string& err) {
 }
 
 bool RdmaWindow::agree(bool local_ok, std::string& err) {
+    if (!mpi_ready(err)) {
+        return false;
+    }
     const uint8_t mine = local_ok ? 1 : 0;
     uint8_t all = 0;
     if (const int rc = MPI_Allreduce(&mine, &all, 1, MPI_UINT8_T, MPI_MIN, MPI_COMM_WORLD); rc != MPI_SUCCESS) {
@@ -91,6 +91,10 @@ bool RdmaWindow::agree(bool local_ok, std::string& err) {
 std::unique_ptr<RdmaWindow> RdmaWindow::create(
     uint8_t* region_base, uint64_t region_bytes, uint32_t expect_rank, uint32_t expect_size, std::string& err) {
     err.clear();
+    if (!mpi_ready(err)) {
+        err = "RdmaWindow::create: " + err;
+        return nullptr;
+    }
     std::unique_ptr<RdmaWindow> w(new RdmaWindow());
     Impl& im = *w->impl_;
     im.comm = MPI_COMM_WORLD;
@@ -177,10 +181,16 @@ RdmaWindow::~RdmaWindow() {
     MPI_Win_free(&im.win);
 }
 
+// MPI_Put, not MPI_Rput. osc/ucx backs an Rput's request with a ucp_worker_flush that takes
+// a reference on the endpoint, and that refcount is a uint8_t: past 255 outstanding, UCX
+// aborts the process outright (flush.c:614, `refcount < UINT8_MAX`). Batching is the whole
+// strategy here, so that ceiling is not one to live under.
+//
+// Nothing is lost. The request only ever told the caller a put had completed LOCALLY; what
+// licenses reuse is the flush epoch, which proves REMOTE completion and therefore implies it.
 std::string RdmaWindow::put(const void* src, uint64_t bytes, uint32_t peer_rank, uint64_t target_offset, Op& op) {
-    Impl& im = *impl_;
-    const uint32_t slot = im.acquire();
-    const int rc = MPI_Rput(
+    op = Op{};
+    const int rc = MPI_Put(
         src,
         static_cast<int>(bytes),
         MPI_BYTE,
@@ -188,15 +198,8 @@ std::string RdmaWindow::put(const void* src, uint64_t bytes, uint32_t peer_rank,
         static_cast<MPI_Aint>(target_offset),
         static_cast<int>(bytes),
         MPI_BYTE,
-        im.win,
-        &im.reqs[slot]);
-    if (rc != MPI_SUCCESS) {
-        im.release(slot);
-        op = Op{};
-        return mpi_error_text("MPI_Rput", rc);
-    }
-    op.id = slot;
-    return {};
+        impl_->win);
+    return rc == MPI_SUCCESS ? std::string{} : mpi_error_text("MPI_Put", rc);
 }
 
 // Fire and forget: a credit is an absolute count, so a lost or duplicated one is a no-op
@@ -219,27 +222,20 @@ std::string RdmaWindow::put_word(uint64_t value, uint32_t peer_rank, uint64_t ta
     if (rc != MPI_SUCCESS) {
         return mpi_error_text("MPI_Put(credit)", rc);
     }
-    // Local completion only: the staging slot has to be free before it wraps round.
-    if (const int frc = MPI_Win_flush_local(static_cast<int>(peer_rank), im.win); frc != MPI_SUCCESS) {
-        return mpi_error_text("MPI_Win_flush_local(credit)", frc);
+    // Once per lap, not once per credit: a slot needs local completion only before it is
+    // REUSED, and a flush_local is a ~7 us round trip that would otherwise gate every frame.
+    // _all, not (peer): one staging ring serves every peer, so one peer's flush frees nothing.
+    if (im.next_word == 0) {
+        if (const int frc = MPI_Win_flush_local_all(im.win); frc != MPI_SUCCESS) {
+            return mpi_error_text("MPI_Win_flush_local_all(credit)", frc);
+        }
     }
     return {};
 }
 
-bool RdmaWindow::test(Op& op) {
-    Impl& im = *impl_;
-    if (!op.valid() || op.id >= im.reqs.size()) {
-        return true;
-    }
-    int done = 0;
-    MPI_Test(&im.reqs[op.id], &done, MPI_STATUS_IGNORE);
-    if (done != 0) {
-        im.release(op.id);
-        op = Op{};
-        return true;
-    }
-    return false;
-}
+// Always complete: with MPI_Put there is no request to poll, and the caller gates on the
+// flush epoch instead. Kept so call sites need not change shape.
+bool RdmaWindow::test(Op&) { return true; }
 
 std::string RdmaWindow::flush(uint32_t peer_rank) {
     const int rc = MPI_Win_flush(static_cast<int>(peer_rank), impl_->win);

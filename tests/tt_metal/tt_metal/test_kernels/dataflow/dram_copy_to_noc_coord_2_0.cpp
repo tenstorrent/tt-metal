@@ -80,12 +80,13 @@ void kernel_main() {
     bool use_inline_dw_write_from_state = static_cast<bool>(get_arg(args::use_inline_dw_write_from_state));
     bool use_inline_dw_write_with_state = static_cast<bool>(get_arg(args::use_inline_dw_write_with_state));
     std::uint32_t invalid_txn_id = get_arg(args::invalid_txn_id);
+    bool raw_local_noc_read = static_cast<bool>(get_arg(args::raw_local_noc_read));
 
     // We will assert later. This kernel will hang.
     // Need to signal completion to dispatcher before hanging so that
     // Dispatcher Kernel is able to finish.
     // Device::close() requires fast-dispatch kernels to finish.
-    volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
+    volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0].slot[0]);
     // SD enabled on all archs: notify completion via RUN_MSG_DONE to mailbox. FD notify path
     // posts to a dispatcher absent under SD and wedges the NOC.
 #if defined(WATCHER_KERNEL_SLOW_DISPATCH)
@@ -118,6 +119,14 @@ void kernel_main() {
             get_noc_multicast_addr(dst_noc_x, dst_noc_y, mcast_dst_end_x, mcast_dst_end_y, buffer_dst_addr);
         noc_semaphore_inc_multicast(dst_multicast_noc_addr, 1, 1);
         noc_async_atomic_barrier();
+        return;
+    }
+
+    if (raw_local_noc_read) {
+        // The legacy API passes the local address to the NoC as is; Noc::async_read maps the uncached alias
+        // to the cached view.
+        noc_async_read(get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr), local_buffer_addr, buffer_size);
+        noc_async_read_barrier();
         return;
     }
 

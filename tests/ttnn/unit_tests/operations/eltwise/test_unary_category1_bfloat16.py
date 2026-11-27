@@ -138,12 +138,12 @@ def test_spl_value_check_ops(device, ttnn_op):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Logical NOT (-0.0) returns False while golden returns True
+# Logical NOT
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_logical_not_ops(device):
-    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=True)
     ttnn_op = ttnn.logical_not
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -578,6 +578,35 @@ def test_exp2_allclose(device):
     assert_allclose(actual_result=result, expected_result=golden, atol=8.5e-39, rtol=0)
 
 
+def test_exp2_special_values(device):
+    """exp2 saturation and infinity handling, which the bfloat16 sweeps replace with 0 (see #44507).
+
+    | Input                    | Expected                                   |
+    |--------------------------|--------------------------------------------|
+    | -inf                     | 0                                          |
+    | -127                     | 0 (golden 2^-127 is subnormal; device FTZ) |
+    | -126                     | 2^-126, smallest normal (ULP ≤ 1)          |
+    | 0, ±1, ±10, 127          | ULP ≤ 1                                    |
+    | 128, +inf                | +inf                                       |
+
+    NaN is excluded: ttnn.bfloat16 host-side packing turns NaN into +inf before
+    the tensor reaches the device, so NaN propagation can't be tested at this dtype.
+    """
+    input_tensor = torch.tensor(
+        [0.0, 1.0, -1.0, 10.0, -10.0, 127.0, -126.0, float("inf"), -float("inf"), 128.0, -127.0],
+        dtype=torch.bfloat16,
+    )
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = flush_subnormal_values_to_zero(golden_function(input_tensor, device=device))
+
+    result = ttnn.to_torch(ttnn.exp2(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
 @pytest.mark.parametrize(
     "low, high, expected_atol, expected_rtol",
     [
@@ -689,6 +718,39 @@ def test_lgamma(device):
     result = ttnn.to_torch(tt_result)
 
     assert_with_pcc(golden, result, 0.999)
+
+
+def test_lgamma_inf(device):
+    """+inf and -inf both return +inf, matching torch.lgamma.
+
+    Stirling's (z - 0.5) * log(z) - z is inf - inf = NaN for an infinite z, so the
+    kernel must override the result for infinite inputs in bf16 Dest mode as well
+    as in fp32 Dest mode.
+    """
+    xs = torch.tensor([[float("inf"), float("-inf")]], dtype=torch.bfloat16)
+    golden = ttnn.get_golden_function(ttnn.lgamma)(xs, device=device)
+    result = ttnn.to_torch(ttnn.lgamma(to_tt_tensor(xs, device)))
+
+    assert torch.all(torch.isposinf(golden))
+    assert torch.all(torch.isposinf(result)), result
+
+
+def test_lgamma_large_negative(device):
+    """Negative inputs of magnitude >= ~4e36 return +inf, matching torch.
+
+    Every bfloat16 of that magnitude is an integer, so these are poles. Above ~4e36 the
+    reflection's Stirling term (z - 0.5) * log(z) also overflows to +inf, and the
+    kernel must let the pole win instead of producing inf - inf.
+    """
+    # -1e30 is a finite-Stirling control: (z - 0.5) * log(z) = 6.9e31 stays finite, so the
+    # old kernel already returned inf - finite = +inf there. The Stirling term overflows from
+    # about 4.04e36 onwards; -1e37 and -3e38 are the lanes that need the pole override.
+    xs = torch.tensor([[-1e30, -1e37, -3e38]], dtype=torch.bfloat16)
+    golden = ttnn.get_golden_function(ttnn.lgamma)(xs, device=device)
+    result = ttnn.to_torch(ttnn.lgamma(to_tt_tensor(xs, device)))
+
+    assert torch.all(torch.isposinf(golden))
+    assert torch.all(torch.isposinf(result)), result
 
 
 # ─────────────────────────────────────────────────────────────────────────────

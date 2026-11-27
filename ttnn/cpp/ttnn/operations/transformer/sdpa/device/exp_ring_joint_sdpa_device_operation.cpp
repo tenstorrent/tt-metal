@@ -6,7 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
@@ -63,14 +63,14 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate storage types and buffers
     for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
-        TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.is_allocated(), "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
                 tensor.dtype() == DataType::BFLOAT4_B,
             "Inputs to Joint SDPA must be BF16 or BF8 or BF4");
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
     }
 
@@ -172,7 +172,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "logical_n tensor must be UINT32 or INT32 (the kernels read element 0 as a raw 32-bit word). Got {}",
             t.dtype());
         TT_FATAL(t.storage_type() == StorageType::DEVICE, "logical_n tensor must be on device");
-        TT_FATAL(t.buffer() != nullptr, "logical_n tensor must be allocated on device");
+        TT_FATAL(t.is_allocated(), "logical_n tensor must be allocated on device");
         TT_FATAL(
             t.logical_volume() == 1,
             "logical_n tensor must hold exactly one value (the kernels read page 0, element 0). Got volume {}",
@@ -269,9 +269,9 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
             user_grid.y);
     } else {
         TT_FATAL(
-            user_grid.x >= 2,
-            "Program config grid ({}x{}) too narrow: needs at least 2 columns (the last column is "
-            "reserved for the fabric MUX kernels).",
+            user_grid.x >= 2 && user_grid.y >= 1,
+            "Program config grid ({}x{}) too small: needs at least 1 row and 2 columns (the last column "
+            "is reserved for the fabric MUX kernels).",
             user_grid.x,
             user_grid.y);
     }
@@ -474,6 +474,7 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& logical_n_tensor) {
     using OperationType = ttnn::prim::ExpRingJointSDPADeviceOperation;
 
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 

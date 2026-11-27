@@ -5,8 +5,11 @@
 # Test for eltwise binary operations with reuse_dest on Quasar.
 import pytest
 import torch
-from helpers.constraints import get_perf_math_operations, get_valid_math_fidelities
-from helpers.format_config import DataFormat
+from helpers.constraints import (
+    REUSE_DEST_MATH_OPS,
+    get_valid_math_fidelities,
+)
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
     _flush_product_underflow,
@@ -16,7 +19,6 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     EltwiseBinaryReuseDestType,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -27,6 +29,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
 )
@@ -36,8 +39,6 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
-    INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -47,18 +48,12 @@ from helpers.test_variant_parameters import (
     OUTPUT_TILE_CNT,
     REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
+    TILE_COUNT,
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
-
-INPUT_DIMENSIONS = [
-    [512, 32],
-]
-OUTPUT_DIMENSIONS = [
-    [128, 32],
-]
+from helpers.utils import passed_test, result_tensor
 
 REUSE_DEST_FORMATS = input_output_formats(
     [
@@ -67,86 +62,73 @@ REUSE_DEST_FORMATS = input_output_formats(
     ],
 ) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
-TILE_DIMENSIONS = [32, 32]
+# 32x32 is the pre-existing shape and the no-regression guard.
+BASELINE_TILE_DIMENSIONS = (32, 32)
+TILE_DIMENSIONS = [
+    BASELINE_TILE_DIMENSIONS,
+    (16, 32),
+    (32, 16),
+    (16, 16),
+    (8, 32),
+    (4, 32),
+]
+HIFI_TILE_DIMENSIONS = [(32, 16), (4, 32)]
+
+INPUT_TILE_COUNT = 16
+OUTPUT_TILE_COUNT = 4
+assert (
+    INPUT_TILE_COUNT % OUTPUT_TILE_COUNT == 0
+    and INPUT_TILE_COUNT // OUTPUT_TILE_COUNT > 1
+), "reuse_dest needs each output tile to accumulate more than one input tile"
 
 
-def reuse_dest_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
+def reuse_dest_tile_dimensions(formats, math_fidelity, dest_sync):
+    if formats.input_format != formats.output_format or dest_sync != DestSync.Half:
+        return [BASELINE_TILE_DIMENSIONS]
+    if math_fidelity == MathFidelity.LoFi:
+        return TILE_DIMENSIONS
+    if math_fidelity == MathFidelity.HiFi4:
+        return [BASELINE_TILE_DIMENSIONS, *HIFI_TILE_DIMENSIONS]
+    return [BASELINE_TILE_DIMENSIONS]
 
 
-def reuse_dest_mathops(formats, *, is_perf=False):
-    supported_mathops = [
-        MathOperation.Elwadd,
-        MathOperation.Elwsub,
-        MathOperation.Elwmul,
-    ]
-    if is_perf:
-        return [
-            mathop
-            for mathop in get_perf_math_operations()
-            if mathop in supported_mathops
-        ]
-    return supported_mathops
+def reuse_dest_input_dimensions(tile_dimensions) -> list:
+    tile_rows, tile_cols = tile_dimensions
+    return [[INPUT_TILE_COUNT * tile_rows, tile_cols]]
 
 
-def reuse_dest_implied_math_format(formats, *, is_perf=False):
-    use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
-    if is_perf or use_mx:
-        return ImpliedMathFormat.Yes
-    return ImpliedMathFormat.No
-
-
-def _reuse_dest_tile_count(dimensions) -> int:
-    tile_rows, tile_cols = TILE_DIMENSIONS
-    return (dimensions[0] // tile_rows) * (dimensions[1] // tile_cols)
-
-
-def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
-    """Output dims compatible with reuse_dest for a given input size, format and dest_sync.
-
-    Three constraints, all decidable at collection time so incompatible combinations are
-    never generated (instead of generated then skipped):
-      - input tile count must be an exact multiple of the output tile count, and
-      - that multiple (`inner_dim`) must be > 1 (reuse_dest needs accumulation), and
-      - the output must fit in a single block (the Quasar reuse_dest kernel uses
-        block-relative indexing; multi-block accumulates wrongly).
-    """
-    tile_cnt_input = _reuse_dest_tile_count(input_dimensions)
-    valid = []
-    for out_dims in OUTPUT_DIMENSIONS:
-        tile_cnt_output = _reuse_dest_tile_count(out_dims)
-        if tile_cnt_output == 0 or tile_cnt_input % tile_cnt_output != 0:
-            continue
-        if tile_cnt_input // tile_cnt_output <= 1:
-            continue
-        try:
-            num_blocks, _ = get_num_blocks_and_num_tiles_in_block(
-                dest_sync_mode,
-                DestAccumulation.No,
-                formats,
-                out_dims,
-                (TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]),
-                BlocksCalculationAlgorithm.Standard,
-            )
-        except ValueError:
-            continue  # tiles don't divide evenly into blocks for this combination
-        if num_blocks > 1:
-            continue
-        valid.append(out_dims)
-    return valid
+def valid_output_dimensions(formats, dest_sync, tile_dimensions) -> list:
+    # Multi-block output accumulates wrongly: the kernel uses block-relative indexing.
+    tile_rows, tile_cols = tile_dimensions
+    out_dims = [OUTPUT_TILE_COUNT * tile_rows, tile_cols]
+    try:
+        num_blocks, _ = get_num_blocks_and_num_tiles_in_block(
+            dest_sync,
+            DestAccumulation.No,
+            formats,
+            out_dims,
+            (tile_rows, tile_cols),
+            BlocksCalculationAlgorithm.Standard,
+        )
+    except ValueError:
+        return []  # tiles don't divide evenly into blocks for this combination
+    if num_blocks > 1:
+        return []
+    return [out_dims]
 
 
 @pytest.mark.quasar
 @parametrize(
     formats=REUSE_DEST_FORMATS,
-    mathop=lambda formats: reuse_dest_mathops(formats, is_perf=False),
+    mathop=REUSE_DEST_MATH_OPS,
     math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
-    dest_sync_mode=lambda: reuse_dest_dest_sync_modes(is_perf=False),
-    input_dimensions=runtime(INPUT_DIMENSIONS),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
+    tile_dimensions=runtime(reuse_dest_tile_dimensions),
+    input_dimensions=runtime(reuse_dest_input_dimensions),
     output_dimensions=runtime(valid_output_dimensions),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -156,7 +138,8 @@ def test_eltwise_binary_reuse_dest_quasar(
     mathop,
     reuse_dest_type,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
+    tile_dimensions,
     input_dimensions,
     output_dimensions,
     run_types,
@@ -167,11 +150,9 @@ def test_eltwise_binary_reuse_dest_quasar(
     perf_report=None,
 ):
 
-    implied_math_format = reuse_dest_implied_math_format(formats, is_perf=is_perf)
     use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
-    disable_format_inference = use_mx
 
-    tile_rows, tile_cols = TILE_DIMENSIONS
+    tile_rows, tile_cols = tile_dimensions
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
         [tile_rows, tile_cols]
     )
@@ -188,7 +169,7 @@ def test_eltwise_binary_reuse_dest_quasar(
 
     tile_dimensions_tuple = (tile_rows, tile_cols)
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         DestAccumulation.No,
         formats,
         output_dimensions,
@@ -235,8 +216,8 @@ def test_eltwise_binary_reuse_dest_quasar(
         )
 
     if not is_perf:
-        # On Quasar with IMPLIED_MATH_FORMAT=Yes the HW dest accumulator's physical
-        # storage is implied from the SrcA tag: Float16 input → FP16A (S1E5M10);
+        # On Quasar the HW dest accumulator's physical storage follows the SrcA
+        # format: Float16 input → FP16A (S1E5M10);
         # Float16_b and plain MX inputs → BF16 (S1E8M7). Match that here so the
         # golden's multi-tile accumulation rounds the same way as HW. The pack
         # stage widens dest to (sign, 8-bit exp, 23-bit mantissa) without a bf16
@@ -347,13 +328,16 @@ def test_eltwise_binary_reuse_dest_quasar(
         "templates": [
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             REUSE_DEST_TYPE(reuse_dest_type),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
-            generate_input_dim(input_dimensions, input_dimensions),
-            INPUT_TILE_CNT(tile_cnt_input),
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+                tile_dimensions=tile_dimensions_tuple,
+            ),
+            TILE_COUNT(tile_cnt_input),
             OUTPUT_TILE_CNT(tile_cnt_output),
             NUM_TILES_IN_BLOCK(
                 output_tiles_in_block,
@@ -385,7 +369,6 @@ def test_eltwise_binary_reuse_dest_quasar(
         ),
         "unpack_to_dest": False,
         "dest_acc": DestAccumulation.No,
-        "disable_format_inference": disable_format_inference,
     }
 
     configuration = create_test_or_perf_config(
@@ -401,13 +384,57 @@ def test_eltwise_binary_reuse_dest_quasar(
     res_from_L1 = configuration.run().result
 
     # Verify results match golden
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+# Float32 L1 input on this kernel's 16-bit Dest unpacks to Float16_b. Float32 -> Float32 needs a
+# 32-bit Dest, which the reuse_dest block sizing here does not run (dest_acc is fixed to No).
+REUSE_DEST_FLOAT32_FORMATS = [
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+]
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=REUSE_DEST_FLOAT32_FORMATS,
+    mathop=REUSE_DEST_MATH_OPS,
+    math_fidelity=lambda formats, mathop: [
+        fidelity
+        for fidelity in get_valid_math_fidelities(formats, mathop)
+        if fidelity in (MathFidelity.LoFi, MathFidelity.HiFi4)
+    ],
+    reuse_dest_type=[
+        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+    ],
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
+    tile_dimensions=runtime(lambda: [BASELINE_TILE_DIMENSIONS]),
+    input_dimensions=runtime(reuse_dest_input_dimensions),
+    output_dimensions=runtime(valid_output_dimensions),
+)
+def test_eltwise_binary_reuse_dest_float32_quasar(
+    formats,
+    mathop,
+    reuse_dest_type,
+    math_fidelity,
+    dest_sync,
+    tile_dimensions,
+    input_dimensions,
+    output_dimensions,
+):
+    test_eltwise_binary_reuse_dest_quasar(
+        formats,
+        mathop,
+        reuse_dest_type,
+        math_fidelity,
+        dest_sync,
+        tile_dimensions,
+        input_dimensions,
+        output_dimensions,
+        [PerfRunType.L1_TO_L1],
+        1,
+    )

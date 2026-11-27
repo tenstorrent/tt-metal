@@ -83,6 +83,7 @@ def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1):
 
     lang_tokens = torch.randint(0, 256000, (batch_size, 32))
     lang_masks = torch.ones(batch_size, 32, dtype=torch.bool)
+    lang_masks[:, 20:] = False
 
     state = torch.randn(batch_size, config.state_dim, dtype=torch.float32)
 

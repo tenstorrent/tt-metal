@@ -11,7 +11,7 @@
 #include <iomanip>
 #include <numeric>
 #include <sstream>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.hpp"
@@ -30,10 +30,7 @@ void PostComparisonAnalyzer::organize_speedups_by_topology() {
         const double result_speedup = result.speedup();
         speedups_per_topology_[result_topology.value()].speedups_by_packet_size[result.packet_size].push_back(
             result_speedup);
-        std::optional<NocSendType> result_ntype = enchantum::cast<NocSendType>(result.ntype);
-        TT_FATAL(result_ntype.has_value(), "Invalid ntype in comparison result: {}", result.ntype);
-        speedups_per_topology_[result_topology.value()].speedups_by_ntype[result_ntype.value()].push_back(
-            result_speedup);
+        speedups_per_topology_[result_topology.value()].speedups_by_ntype[result.ntype].push_back(result_speedup);
     }
 }
 
@@ -142,9 +139,7 @@ void PostComparisonAnalyzer::generate_comparison_statistics_csv(const std::files
                                              << "\n";
         }
         for (const auto& [ntype, speedup] : topology_speedups.geomean_speedup_by_ntype) {
-            std::string ntype_str = std::string(enchantum::to_string(ntype));
-            comparison_statistics_csv_stream << topology_str << "," << "ALL" << "," << ntype_str << "," << speedup
-                                             << "\n";
+            comparison_statistics_csv_stream << topology_str << "," << "ALL" << "," << ntype << "," << speedup << "\n";
         }
         comparison_statistics_csv_stream << topology_str << "," << "ALL" << "," << "ALL" << ","
                                          << topology_speedups.topology_geomean_speedup << "\n";

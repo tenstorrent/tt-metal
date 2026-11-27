@@ -98,8 +98,8 @@ inline void init_signbit() {
  *
  * A bit test, not a compare: the result is bit 31 of the element's LREG image, so @c -0.0 and a
  * negative NaN yield 1 where an IEEE @c <0 compare would yield 0. (Quasar's less_than_zero, see
- * @ref _zero_comp_pred_, is itself a bit-31 test guarded by @c mag!=0, so on hardware signbit differs
- * from it only at @c -0.0.) Load, store and result encoding come
+ * @ref _zero_comp_pred_, is a sign test that excludes -0 via @c v>neg_zero, so on hardware signbit
+ * differs from it only at @c -0.0.) Load, store and result encoding come
  * from @ref zero_comp_traits; the store rides @c ADDR_MOD_6 (dest.incr=2) to advance the dest
  * counter, so the loop needs no dst_reg++.
  *
@@ -161,6 +161,23 @@ inline void calculate_signbit() {
         }
     }
 #endif
+}
+
+// Compute API entry points (signbit_tile*, as named on Blackhole / Wormhole). The format is a
+// template argument of the kernel above; any float width in Dest is passed as Float32.
+
+inline void signbit_init() { init_signbit(); }
+
+inline void signbit_int32_init() { init_signbit(); }
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_signbit() {
+    calculate_signbit<APPROXIMATION_MODE, DataFormat::Float32, ITERATIONS>();
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_signbit_int32() {
+    calculate_signbit<APPROXIMATION_MODE, DataFormat::Int32, ITERATIONS>();
 }
 
 }  // namespace sfpu

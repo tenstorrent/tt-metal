@@ -18,25 +18,30 @@ inline void logical_not_unary_init() { math::_reset_counters_<p_setrwc::SET_ABD_
 template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
 inline void calculate_logical_not() {
     static_assert(
-        INSTRUCTION_MODE == InstrModLoadStore::DEFAULT || INSTRUCTION_MODE == InstrModLoadStore::LO16 ||
+        INSTRUCTION_MODE == InstrModLoadStore::DEFAULT || INSTRUCTION_MODE == InstrModLoadStore::UINT16 ||
             INSTRUCTION_MODE == InstrModLoadStore::INT32,
-        "INSTRUCTION_MODE must be one of: DEFAULT, LO16, INT32.");
+        "INSTRUCTION_MODE must be one of: DEFAULT, UINT16, INT32.");
 
-    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::LO16)    ? sfpi::DataLayout::U16
+    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::UINT16)  ? sfpi::DataLayout::U16
                                         : (INSTRUCTION_MODE == InstrModLoadStore::INT32) ? sfpi::DataLayout::I32
                                                                                          : sfpi::DataLayout::Default;
     using vType = std::conditional_t<
-        INSTRUCTION_MODE == InstrModLoadStore::LO16,
+        INSTRUCTION_MODE == InstrModLoadStore::UINT16,
         sfpi::vUInt,
         std::conditional_t<INSTRUCTION_MODE == InstrModLoadStore::INT32, sfpi::vInt, sfpi::vFloat>>;
 
+    const vType zero = 0;
+    const vType one = 1;
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vType v = sfpi::dst_reg[0].mode<layout>();
-        vType r = 0;
-        v_if(v == 0) { r = 1; }
+        if constexpr (std::is_same_v<vType, sfpi::vFloat>) {
+            // v == 0 tests all 32 bits, so -0.0 (0x80000000) needs its sign cleared to count as zero.
+            v = sfpi::setsgn(v, 0 /* sgn */);
+        }
+        sfpi::dst_reg[0].mode<layout>() = zero;
+        v_if(v == 0) { sfpi::dst_reg[0].mode<layout>() = one; }
         v_endif;
-        sfpi::dst_reg[0].mode<layout>() = r;
         sfpi::dst_reg++;
     }
 }

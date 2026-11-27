@@ -404,17 +404,45 @@ ttnn::Tensor invoke_tile(
         return input_tensor.pad(requested_padded_shape, zeros, value);
     }
 
-    const bool pad_upper_dims = !std::equal(
-        requested_logical_shape.view().rbegin() + 2,
-        requested_logical_shape.view().rend(),
-        input_logical_shape.view().rbegin() + 2,
-        input_logical_shape.view().rend());
+    const bool pad_upper_dims = requested_rank > 2 && !std::equal(
+                                                          requested_logical_shape.view().rbegin() + 2,
+                                                          requested_logical_shape.view().rend(),
+                                                          input_logical_shape.view().rbegin() + 2,
+                                                          input_logical_shape.view().rend());
 
     auto pad_current_tile_dim = [&requested_padded_shape, &input_padded_shape](const int i) {
         return requested_padded_shape[i] == input_padded_shape[i];
     };
 
-    ttnn::Tensor output_tensor = ttnn::fill_implicit_tile_padding(input_tensor, value, memory_config_arg);
+    const bool is_mx_input = tt::tt_metal::is_mx(input_tensor.dtype());
+    if (is_mx_input) {
+        // Only whole zero tiles are MX-correct: fill_implicit_tile_padding and the partial-tile pad write
+        // per-element values, which an MX tile (32-element blocks with a shared scale) cannot take.
+        const auto tile_aligned = [](const ttnn::Shape& shape) {
+            return shape[-1] % tt::constants::TILE_WIDTH == 0 &&
+                   (shape.rank() < 2 || shape[-2] % tt::constants::TILE_HEIGHT == 0);
+        };
+        TT_FATAL(
+            !input_tensor.is_sharded() && !(memory_config_arg.has_value() && memory_config_arg->is_sharded()),
+            "ttnn.pad on MX tensors supports only interleaved input and output.");
+        TT_FATAL(
+            value == 0.0f && tile_aligned(input_logical_shape) && tile_aligned(requested_logical_shape),
+            "ttnn.pad on MX tensors ({}) supports only pad_value 0 with a tile-aligned input and tile-multiple "
+            "padding on the last two dims (whole zero tiles); fill values and sub-tile padding need an MX-aware "
+            "kernel. Got value {}, input shape {}, padded shape {}.",
+            input_tensor.dtype(),
+            value,
+            input_logical_shape,
+            requested_logical_shape);
+    }
+
+    ttnn::Tensor output_tensor = input_tensor;
+    if (!is_mx_input) {
+        output_tensor = ttnn::fill_implicit_tile_padding(input_tensor, value, memory_config_arg);
+    } else if (memory_config_arg.has_value() && memory_config_arg.value() != input_tensor.memory_config()) {
+        output_tensor = ttnn::operations::experimental::quasar::to_memory_config(
+            input_tensor, memory_config_arg.value(), std::nullopt);
+    }
     if (requested_rank == 1 || (!pad_upper_dims && pad_current_tile_dim(-1) && pad_current_tile_dim(-2))) {
         output_tensor = ttnn::experimental::view(output_tensor, requested_logical_shape, requested_padded_shape);
 
@@ -490,6 +518,11 @@ ttnn::Tensor pad(
         })) {
         return input_tensor;
     }
+
+    TT_FATAL(
+        !(original_rank > 4 && tt::tt_metal::is_mx(input_tensor.dtype())),
+        "ttnn.pad on MX tensors supports rank <= 4 only: the leading-dimension padding of higher ranks goes "
+        "through reshape / concat paths that do not take MX tiles.");
 
     ttnn::Tensor working_tensor = input_tensor;
     if (original_rank > 4) {

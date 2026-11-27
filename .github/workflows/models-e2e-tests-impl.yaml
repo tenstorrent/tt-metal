@@ -67,8 +67,8 @@ on:
         description: "Filtered matrix of exabox multihost legs that ran."
         value: ${{ jobs.load-test-matrix.outputs.matrix_multihost }}
 
-# Default to read-only. Only the multihost job needs id-token (multihost-ci runner chart), which it
-# grants on the job itself. Single-host legs pull the dev container image, so packages: read is the default.
+# Default to read-only. The jobs that need id-token (Hugging Face OIDC token, multihost-ci runner
+# chart) grant it on the job itself. Single-host legs pull the dev container image, so packages: read is the default.
 permissions:
   contents: read
   packages: read
@@ -84,7 +84,7 @@ jobs:
     steps:
       - name: Checkout the repository
         if: ${{ inputs.matrix == '' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -94,10 +94,25 @@ jobs:
       - name: Install dependencies
         if: ${{ inputs.matrix == '' }}
         run: pip3 install PyYAML
+      # Matrix script from upstream main, not this branch (#57555, #57579);
+      # keep after the checkout above, whose clean would delete this.
+      - name: Checkout CI actions from main
+        if: ${{ inputs.matrix == '' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/tt-metal  # github.repository would be the fork
+          ref: main
+          path: ci-main
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+          sparse-checkout-cone-mode: true
+
       - name: Build unified test matrix based on enabled SKUs
         if: ${{ inputs.matrix == '' }}
         id: build-matrix
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        uses: ./ci-main/.github/actions/prepare-test-matrix
         with:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: "${{ inputs.enabled-skus }}"
@@ -154,6 +169,12 @@ jobs:
   models-e2e-tests:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    # id-token: write is for the Hugging Face OIDC exchange (hf-oidc-token). The caller must
+    # grant it too. A job-level block replaces the workflow default, so restate the reads.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -182,7 +203,6 @@ jobs:
         # crashing with `OSError [Errno 30] Read-only file system`.
         HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '0' || '1' }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
-        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
@@ -210,7 +230,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
         timeout-minutes: 20
         with:
           # With an image the source is already at /work; the workspace copy only
@@ -236,12 +256,28 @@ jobs:
             # dependencies could install a different TTNN release from PyPI.
             uv pip install --no-deps tt-check==0.1.2
             tt-check --json
+      # Short-lived HF read token from GitHub OIDC (no stored secret). Directly before the
+      # test step so the 60-minute token lifetime starts late.
+      # Only schedule and workflow_dispatch runs on main get a token; other runs warn and
+      # continue without one.
+      - name: 🤗 Get Hugging Face token (OIDC)
+        id: hf-oidc
+        timeout-minutes: 5
+        uses: tenstorrent/.github/actions/hf-oidc-token@hf-oidc-token-v1.0.0 # immutable release, commit d31c308a8c85847acb5c6f5f0a48d58ecf962d33
+        with:
+          resource: ${{ vars.HF_OIDC_RESOURCE }}
+          if-no-token: warn
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-with-log
+        env:
+          HF_TOKEN: ${{ steps.hf-oidc.outputs.token }}
         with:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
+            # Best effort: tests do not inherit the OIDC request variables. The wrapper shell
+            # (run-with-log) keeps them in its own environment.
+            unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
             mkdir -p generated/test_reports
             # Perf/accuracy are enforced by the "Report and Validate Perf and Accuracy targets"
             # step below; the in-test checks are warning-only, so the tests write

@@ -11,7 +11,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include "all_to_all_async_device_operation_types.hpp"
 #include "all_to_all_async_program_factory.hpp"
 
@@ -29,6 +29,8 @@ struct AllToAllAsyncDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 

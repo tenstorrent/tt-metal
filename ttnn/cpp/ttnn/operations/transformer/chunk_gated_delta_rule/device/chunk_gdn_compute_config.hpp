@@ -3,10 +3,10 @@
 
 #pragma once
 
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -34,6 +34,15 @@ inline tt::tt_metal::ComputeConfigDescriptor gdn_compute_config(const DeviceComp
         .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
         .dst_full_sync_en = cfg.dst_full_sync_en,
         .math_approx_mode = cfg.math_approx_mode};
+}
+
+// The chunk sizes every chunk_gated_delta_rule program (mono, phased, fused) accepts: one or two tile rows per
+// chunk, the only ones the kernels are validated at (the prep kernel's C > 64 fallback is not).
+inline void validate_gdn_chunk_size(uint32_t chunk_size) {
+    TT_FATAL(
+        chunk_size == tt::constants::TILE_HEIGHT || chunk_size == 2 * tt::constants::TILE_HEIGHT,
+        "chunk_gdn: chunk_size must be 32 or 64 (got {})",
+        chunk_size);
 }
 
 // WY-inverse method of the prep compute (the `tinv` attribute of the prep and fused prims): the op's

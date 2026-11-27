@@ -6,10 +6,11 @@
 # You also need to install everything needed to run tt-triage.py in that environment
 # Run manually ./tools/tt-triage.py --help to see if it works and install requirements
 
-from collections import deque
+from collections import Counter, deque
 from dataclasses import fields
 from datetime import timedelta
 import os
+import re
 import signal
 import struct
 import subprocess
@@ -32,9 +33,11 @@ sys.path.insert(0, triage_home)
 import triage
 from triage import CheckType, run_script, ScriptArguments
 from triage_hw_utils import device_has_firmware
+from serializers import strip_rich_markup
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.tt_exalens_lib import parse_elf
 
 
 triage.progress_disabled = True  # Disable progress bars for tests
@@ -47,12 +50,13 @@ def logged_errors() -> list[str]:
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
+HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT = f"{HANG_APP_ADD_2_INTEGERS} with lightweight asserts"
 HANG_APP_TTNN_ADD_INTEGERS = (
     "tools/tests/triage/hang_apps/ttnn_add_integers_hang/triage_hang_app_ttnn_add_integers_hang"
 )
 HANG_APP_MESH_SOCKET = "tools/tests/triage/hang_apps/mesh_socket_hang/mesh_socket_hang.py"
 
-MESH_SOCKET_FIFO_SIZE = 8192
+MESH_SOCKET_FIFO_SIZE = 1024
 
 SIMULATOR_HANG_DEADLINE_SECONDS = int(os.environ.get("TT_TRIAGE_SIMULATOR_HANG_DEADLINE_SECONDS", "900"))
 SIMULATOR_POLL_INTERVAL_SECONDS = 2
@@ -64,7 +68,7 @@ HANG_APP_EXPECTED_RESULTS = {
             "kernel_name": "add_2_tiles_hang",
             "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
-            "first_callstack_line": 40,
+            "first_callstack_line": 46,
         },
         "callstacks": {
             "device_to_check": 0,
@@ -72,15 +76,15 @@ HANG_APP_EXPECTED_RESULTS = {
             "cores_to_check": {
                 "trisc0": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc1": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc2": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
             },
         },
@@ -90,7 +94,7 @@ HANG_APP_EXPECTED_RESULTS = {
             "kernel_name": "add_2_tiles_hang",
             "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
-            "first_callstack_line": 40,
+            "first_callstack_line": 46,
         },
         "callstacks": {
             "device_to_check": 0,
@@ -98,15 +102,15 @@ HANG_APP_EXPECTED_RESULTS = {
             "cores_to_check": {
                 "trisc0": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc1": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc2": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
             },
         },
@@ -115,25 +119,65 @@ HANG_APP_EXPECTED_RESULTS = {
             "assert_no_na": True,
         },
     },
+    HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT: {
+        "lightweight_asserts": {
+            "kernel_name": "add_2_tiles_hang",
+            "compute_cores_hang": True,
+            "assert_code": "ASSERT(magic == n)",
+        },
+        "callstacks": {
+            "device_to_check": 0,
+            "location_to_check": "0,0",
+            "cores_to_check": {
+                "trisc0": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+                "trisc1": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+                "trisc2": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+            },
+        },
+    },
 }
 
 
 class AppOutput:
     RETAINED_LINES = 20000
 
-    def __init__(self, proc: subprocess.Popen):
+    def __init__(self, proc: subprocess.Popen, ready_line: str | None = None):
         self._lock = threading.Lock()
         self._chunks: deque[str] = deque(maxlen=self.RETAINED_LINES)
-        for stream in (proc.stdout, proc.stderr):
+        self._ready_line = ready_line
+        self.ready_line_seen = False
+        # Set when ready_line arrives or both streams close (the app exited), so the fixture can sleep on it.
+        self.stop_waiting = threading.Event()
+        streams = (proc.stdout, proc.stderr)
+        self._open_streams = len(streams)
+        for stream in streams:
             threading.Thread(target=self._drain, args=(stream,), daemon=True).start()
 
     def _drain(self, stream) -> None:
         try:
             for line in iter(stream.readline, b""):
+                text = line.decode("utf-8", errors="replace")
                 with self._lock:
-                    self._chunks.append(line.decode("utf-8", errors="replace"))
+                    self._chunks.append(text)
+                if self._ready_line is not None and self._ready_line in text:
+                    self.ready_line_seen = True
+                    self.stop_waiting.set()
         except (ValueError, OSError):
             pass  # the pipe was closed under us while the app was being torn down
+        finally:
+            with self._lock:
+                self._open_streams -= 1
+                if self._open_streams == 0:
+                    self.stop_waiting.set()
 
     def text(self) -> str:
         with self._lock:
@@ -201,6 +245,10 @@ def wait_for_simulated_hang(proc: subprocess.Popen, output: AppOutput, app: str,
 
 @pytest.fixture(scope="class")
 def cause_hang_with_app(request):
+    # Reset the device state after the hang if set in environment
+    if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
+        subprocess.run(["tt-smi", "-r"], check=True)
+
     global metal_home
 
     app, args, app_configuration, timeout = request.param
@@ -224,23 +272,34 @@ def cause_hang_with_app(request):
         cmd = [sys.executable, os.path.join(metal_home, app)]
     else:
         cmd = [os.path.join(metal_home, "build", app)]
+    # Pull TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS out of the outside env, so only configurations that set it get it.
+    env = {key: value for key, value in os.environ.items() if key != "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS"}
     proc = subprocess.Popen(
         cmd + args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, **app_configuration.get("env", {})},
+        env={**env, **app_configuration.get("env", {})},
     )
 
-    output = AppOutput(proc)
+    output = AppOutput(proc, "Device timeout detected as expected.")
     try:
         expected_results = app_configuration.get("expected_results", {})
         if on_simulator:
             request.cls.exalens_context = wait_for_simulated_hang(proc, output, app, expected_results)
         else:
             auto_timeout = app_configuration.get("auto_timeout", False)
-            # auto_timeout apps exit 0 once they detect their own hang; expect_running ones stay wedged.
+            # auto_timeout apps print a line once they detect their own hang and then stay alive; expect_running ones
+            # stay wedged.
             expect_running = app_configuration.get("expect_running", False)
-            if auto_timeout or expect_running:
+            if auto_timeout:
+                # Sleep until the application reports its own hang, exits, or the timeout runs out
+                output.stop_waiting.wait(timeout)
+                if not output.ready_line_seen:
+                    # Print process output for debugging
+                    print("The application did not hang as expected.")
+                    output.print()
+                    raise RuntimeError("The application did not hang as expected.")
+            elif expect_running:
                 # Wait for the application to hang itself
                 try:
                     proc.wait(timeout=timeout)
@@ -248,7 +307,7 @@ def cause_hang_with_app(request):
                     pass
 
                 # Check if the process has exited
-                if proc.returncode != (None if expect_running else 0):
+                if proc.returncode is not None:
                     # Print process output for debugging
                     print("The application did not hang as expected.")
                     output.print()
@@ -258,9 +317,6 @@ def cause_hang_with_app(request):
 
         request.cls.app_configuration = app_configuration
         request.cls.expected_results = expected_results
-        if app_configuration.get("env", {}).get("TT_METAL_LOGS_PATH"):
-            metal_logs_path = app_configuration["env"]["TT_METAL_LOGS_PATH"]
-            os.environ["TT_METAL_LOGS_PATH"] = metal_logs_path
 
         yield
     finally:
@@ -273,46 +329,36 @@ def cause_hang_with_app(request):
             proc.wait()
         output.print()
 
-        # Reset the device state after the hang if set in environment
-        if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
-            subprocess.run(["tt-smi", "-r"], check=True)
-
 
 @pytest.mark.parametrize(
     "cause_hang_with_app",
     [
         (
-            # Manual hang detection with timeout from outside
-            HANG_APP_ADD_2_INTEGERS,
-            [],
-            {
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
-            },
-            10,
-        ),
-        (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, fast dispatch
+            # Automatic hang detection with timeout inside the app, fast dispatch
+            # with lightweight asserts on
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
+                    "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS": "1",
+                    "TT_METAL_WATCHER_DISABLE_ASSERT": "1",
                 },
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT],
             },
             60,
         ),
         (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, slow dispatch
+            # Automatic hang detection with timeout inside the app, slow dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
@@ -327,7 +373,7 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test-ttnn",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
             },
@@ -341,7 +387,7 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector-ttnn",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
@@ -485,7 +531,31 @@ class TestTriage:
         self.assert_no_errors_or_none_in_result(result)
 
     def test_check_binary_integrity(self):
-        self.run_triage_script("check_binary_integrity.py")
+        self.run_triage_script("check_binary_integrity.py", argv=["--dump-mismatch"])
+
+    def test_check_binary_integrity_reports_mismatch(self):
+        # Corrupt 4 bytes of the first RISC's firmware in L1 and check that the report shows them
+        location = OnChipCoordinate.create("0,0", self.exalens_context.devices[0])
+        risc_location = location.noc_block.all_riscs[0].risc_location
+        dispatcher_data = self.run_triage_script("dispatcher_data.py", assert_failure_checks=False)
+        core_data = dispatcher_data.get_cached_core_data(risc_location)
+        text = parse_elf(core_data.firmware_path, self.exalens_context).get_section_by_name(".text")
+        address = text.address + 16
+        expected = bytes(text.data[16:20])
+        corrupted = bytes(b ^ 0xFF for b in expected)
+        l1 = dispatcher_data.l1_memory_access(location)
+        try:
+            l1.write(address, corrupted)
+            self.run_triage_script("check_binary_integrity.py", argv=["--dump-mismatch"], assert_failure_checks=False)
+        finally:
+            l1.write(address, expected)
+
+        errors = [check for check in triage.CHECKS if check.type is CheckType.ERROR]
+        assert len(errors) == 1, logged_errors()
+        assert errors[0].location == location and errors[0].risc_name == risc_location.risc_name
+        message = "".join(errors[0].message.split())
+        for info in (f"4/{len(text.data)}", f"{address:08x}", f"expected:{expected.hex()}", f"found:{corrupted.hex()}"):
+            assert info in message, errors[0].message
 
     def test_check_cb_inactive(self):
         self.run_triage_script("check_cb_inactive.py")
@@ -524,7 +594,7 @@ class TestTriage:
         assert counts == {0: (1, 0), 1: (1, 0), 2: (0, 0)}, f"Unexpected CB state on (0,0): {counts}"
 
     def test_dump_circular_buffers_content(self):
-        result = self.run_triage_script("dump_circular_buffers.py", argv=["--dump-cb-content"])
+        result = self.run_triage_script("dump_circular_buffers.py", argv=["--include-cb-content"])
         self.skip_unless_circular_buffers(result)
         assert result is not None, "Expected CB rows for the hung core"
         location = OnChipCoordinate.create("0,0", result[0].device_description.device)
@@ -596,6 +666,14 @@ class TestTriage:
                     first_entry.file_info.line == expected_line
                 ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.file_info.line}"
 
+            # Verify the quoted ASSERT if specified
+            expected_assert_code = expected.get("assert_code")
+            if expected_assert_code:
+                code = strip_rich_markup(check.result.kernel_callstack_with_message.code_line)
+                assert (
+                    code == expected_assert_code
+                ), f"{check.risc_name}: Expected {expected_assert_code!r}, got {code!r}"
+
     def test_dump_configuration(self):
         result = self.run_triage_script("dump_configuration.py")
         assert result is not None, "Expected non-None result from dump_configuration.py"
@@ -636,6 +714,15 @@ class TestTriage:
                 f"No running op with name containing '{expected_name}'. "
                 f"Got: {[op.operation_name for op in live_ops]}"
             )
+            assert any(
+                "writer_1_tile: tensor::out[0]=0x2, tensor::out[1]=0x800, ct_marker=0x5678" in op.compile_time_args
+                for op in matching
+            ), f"Writer compile-time args missing. Got: {[op.compile_time_args for op in matching]}"
+            assert any(
+                re.fullmatch(r"writer_1_tile: incremented_semaphore=0x[0-9a-f]+, tensor::out=0x[0-9a-f]+", line)
+                for op in matching
+                for line in op.common_runtime_args
+            ), f"Writer common runtime args missing. Got: {[op.common_runtime_args for op in matching]}"
 
     def test_dump_semaphores(self):
         result = self.run_triage_script("dump_semaphores.py")
@@ -703,6 +790,7 @@ class TestTriage:
     # Running dump_callstacks with --full-callstack or --gdb-callstack breaks brisc so that it cannot be halted
     # and it affects other tests in the same test class, so we move it to be run last.
     def test_dump_callstacks(self):
+        semaphores = self.run_triage_script("dump_semaphores.py")
         result = self.run_triage_script("dump_callstacks.py", argv=["--full-callstack"])
 
         assert result is not None, "Expected non-None result from dump_callstacks.py"
@@ -736,6 +824,7 @@ class TestTriage:
 
             check = results_by_risc[risc_name]
             assert check.result is not None, f"Expected non-None result for {risc_name}"
+            assert hasattr(check.result, "frame_locals"), f"{risc_name}: Expected a Locals column with --full-callstack"
 
             # Verify core is halted (stuck on ebreak)
             risc_debug = check.location.noc_block.get_risc_debug(risc_name, check.neo_id)
@@ -745,6 +834,17 @@ class TestTriage:
             callstack_with_message = check.result.kernel_callstack_with_message
             callstack = callstack_with_message.callstack
             assert len(callstack) > 0, f"{risc_name}: Callstack is empty"
+
+            # Every local the debugger returned a value for must appear in the Locals column, once per frame it is in
+            frame_locals = check.result.frame_locals or ""
+            expected_locals = Counter(
+                var.name for frame in callstack for var in frame.locals if var.value is not None and var.name
+            )
+            for name, count in expected_locals.items():
+                shown = len(re.findall(rf"\b{re.escape(name)}\b", frame_locals))
+                assert (
+                    shown >= count
+                ), f"{risc_name}: local '{name}' has a value in {count} frame(s) but is shown {shown} time(s)"
 
             # Verify callstack contains expected file and line
             expected_file = expected_data.get("file")
@@ -768,6 +868,32 @@ class TestTriage:
                         f"{risc_name}: Expected file '{expected_file}' at line {expected_line} not found. "
                         f"Found {expected_file} at lines: {[entry.file_info.line for entry in matching_entries]}"
                     )
+
+        def names_and_values(kernel_args):
+            return [(arg.name, arg.value) for arg in kernel_args]
+
+        incremented_semaphore = next(
+            row.result.address for row in semaphores if row.result.kind == "global" and row.result.initial == 5
+        )
+        args = {check.result.dispatcher_core_data.kernel_name: check.result.kernel_args for check in filtered_results}
+        writer, reader, compute = args["writer_1_tile"], args["reader_binary_1_tile"], args["add_2_tiles_hang"]
+        assert names_and_values(writer.compile_time_args) == [
+            ("tensor::out[0]", 2),
+            ("tensor::out[1]", 2048),
+            ("ct_marker", 0x5678),
+        ]
+        assert names_and_values(writer.runtime_args) == [("rt_marker", 0x9ABC), (None, 0x1234)]
+        assert [arg.name for arg in writer.common_runtime_args] == ["incremented_semaphore", "tensor::out"]
+        assert writer.common_runtime_args[0].value == incremented_semaphore
+        assert names_and_values(reader.compile_time_args) == [
+            ("tensor::in0[0]", 2),
+            ("tensor::in0[1]", 2048),
+            ("tensor::in1[0]", 2),
+            ("tensor::in1[1]", 2048),
+        ]
+        assert reader.runtime_args == []
+        assert [arg.name for arg in reader.common_runtime_args] == ["tensor::in0", "tensor::in1"]
+        assert (compute.compile_time_args, compute.runtime_args, compute.common_runtime_args) == ([], [], [])
 
     def skip_unless_circular_buffers(self, result) -> None:
         """Skip where dump_circular_buffers has nothing to read: it covers Gen1 circular buffers only.
@@ -828,77 +954,92 @@ class TestTriage:
         (
             HANG_APP_MESH_SOCKET,
             [str(MESH_SOCKET_FIFO_SIZE)],
-            {"min_devices": 2, "expect_running": True},
+            {"expect_running": True},
             15,
         ),
     ],
     indirect=True,
 )
+@pytest.mark.skipif(bool(os.environ.get("TT_METAL_SIMULATOR")), reason="Not supported on a simulator yet")
 @pytest.mark.usefixtures("cause_hang_with_app")
 class TestMeshSocketTriage:
     exalens_context: Context
 
-    def test_dump_mesh_sockets(self):
+    def test_dump_sockets(self):
         global triage_home
 
-        triage.CHECKS.clear()
-        result = run_script(
-            script_path=os.path.join(triage_home, "dump_mesh_sockets.py"),
-            context=self.exalens_context,
-            argv=[],
-            return_result=True,
-        )
-        failures = logged_errors()
-        assert not failures, f"dump_mesh_sockets.py failed with: {failures}"
-        assert result is not None, "Expected socket rows while MeshSockets are wedged"
+        def dump(script):
+            triage.CHECKS.clear()
+            result = run_script(
+                script_path=os.path.join(triage_home, script),
+                context=self.exalens_context,
+                argv=[],
+                return_result=True,
+            )
+            failures = logged_errors()
+            assert not failures, f"{script} failed with: {failures}"
+            assert result is not None, f"Expected {script} rows while the sockets are wedged"
+            return result
 
-        rows = [check.result for check in result]
-        device_of = {id(check.result): check.device_description.device.id for check in result}
-        senders = [row for row in rows if row.role == "sender"]
-        receivers = [row for row in rows if row.role == "receiver"]
+        sender_checks = dump("dump_sender_sockets.py")
+        receiver_checks = dump("dump_receiver_sockets.py")
+        sender_rows = [check.result for check in sender_checks]
+        receiver_rows = [check.result for check in receiver_checks]
+        checks = sender_checks + receiver_checks
+        device_of = {id(check.result): check.device_description.device.id for check in checks}
+        location_of = {id(check.result): check.location for check in checks}
 
-        # One 1:1 socket pair each way, plus a fan-out sender feeding two receiver cores. The fan-out
-        # sender is a single core, so it contributes one row per downstream.
-        pair_senders = [row for row in senders if row.num_downstreams == 1]
-        fanout_senders = [row for row in senders if row.num_downstreams == 2]
-        assert len(pair_senders) == 2, f"Expected 2 paired sender rows, got {len(pair_senders)}"
-        assert len(fanout_senders) == 2, f"Expected 2 fan-out sender rows, got {len(fanout_senders)}"
-        assert len(receivers) == 4, f"Expected 4 receiver rows, got {len(receivers)}"
-        assert len({device_of[id(r)] for r in pair_senders}) == 2, "Expected the paired senders on different devices"
+        def core_label(row):
+            return f"dev{device_of[id(row)]} ({location_of[id(row)]})"
 
-        for row in rows:
-            # A row only carries the columns that live in its own config buffer.
-            if row.role == "sender":
-                assert (row.sent_at_receiver, row.acked_at_receiver, row.read_ptr) == (None, None, None)
-            else:
-                assert (row.sent_at_sender, row.acked_at_sender, row.write_ptr) == (None, None, None)
-                assert (row.downstream_config_addr, row.downstream, row.num_downstreams) == (None, None, None)
+        for row in sender_rows + receiver_rows:
             assert row.fifo_size == MESH_SOCKET_FIFO_SIZE
-            # Every core is on this host, so each names its peer by device id.
-            assert row.peer.startswith("dev"), f"Expected a device id for a local peer, got {row.peer}"
             # Node is the core's own fabric node, so it agrees with the device the row came from.
             assert row.node == f"chip{device_of[id(row)]}/mesh0"
+
+        # The host sockets: the host wrote half the H2D fifo, and the D2H kernel wedged on its full fifo
+        # because the host never reads it.
+        h2d = [row for row in receiver_rows if row.peer == "host"]
+        d2h = [row for row in sender_rows if row.peer == "host"]
+        assert len(h2d) == 1, f"Expected 1 H2D receiver row, got {len(h2d)}"
+        assert len(d2h) == 1, f"Expected 1 D2H sender row, got {len(d2h)}"
+        assert h2d[0].sent == MESH_SOCKET_FIFO_SIZE // 2, "Expected the host to write half the H2D fifo"
+        assert h2d[0].acked == 0, "Expected no acks, since nothing on the chip reads the H2D fifo"
+        # A D2H downstream is a host address, so Downstream Addr reads N/A. wr_off comes from the kernel's
+        # locals, which triage cannot read for this kernel, so it is not checked.
+        assert (d2h[0].downstream_config_addr, d2h[0].num_downstreams, d2h[0].downstream) == (None, 1, 0)
+        assert d2h[0].sent == MESH_SOCKET_FIFO_SIZE, "Expected the D2H kernel to have filled the fifo"
+        assert d2h[0].acked == 0, "Expected no acks, since the host never reads"
+
+        # The D2D sockets, all on one chip: a 1:1 pair, plus a fan-out sender feeding two receiver cores.
+        # The fan-out sender is a single core, so it contributes one row per downstream. No op runs on
+        # these sockets, so nothing reaches their receivers.
+        senders = [row for row in sender_rows if row.peer != "host"]
+        receivers = [row for row in receiver_rows if row.peer != "host"]
+        pair_senders = [row for row in senders if row.num_downstreams == 1]
+        fanout_senders = [row for row in senders if row.num_downstreams == 2]
+        assert len(pair_senders) == 1, f"Expected 1 paired sender row, got {len(pair_senders)}"
+        assert len(fanout_senders) == 2, f"Expected 2 fan-out sender rows, got {len(fanout_senders)}"
+        assert len(receivers) == 3, f"Expected 3 receiver rows, got {len(receivers)}"
+        assert all(row.sent == 0 for row in receivers), "Expected nothing sent to the D2D receivers"
 
         # The fan-out rows come from one core, so they share its config buffer and differ
         # only in which downstream they describe.
         assert len({r.config_addr for r in fanout_senders}) == 1, "Fan-out rows should share one config buffer"
-        assert len({str(r.location) for r in fanout_senders}) == 1, "Fan-out rows should share one core"
+        assert len({str(location_of[id(r)]) for r in fanout_senders}) == 1, "Fan-out rows should share one core"
         assert sorted(r.downstream for r in fanout_senders) == [0, 1]
         assert len({r.peer for r in fanout_senders}) == 2, "Each downstream should name its own receiver core"
 
-        # Downstream Addr is the documented join key: it names the peer receiver's config buffer. The
-        # fan-out receivers are pages of one buffer, so they share an address and both match.
+        # Downstream Addr is the documented join key between the two dumps: it names the peer receiver's
+        # config buffer. The fan-out receivers are pages of one buffer, so they share an address and both
+        # match. Peer names the core at the other end, so each side names the other's Dev and Loc.
         receivers_by_config_addr: dict[int, list] = {}
         for row in receivers:
             receivers_by_config_addr.setdefault(row.config_addr, []).append(row)
         for snd in senders:
             matched = receivers_by_config_addr.get(snd.downstream_config_addr)
             assert matched, f"Sender at {snd.config_addr:#x} points at no receiver row"
+            assert snd.peer in {core_label(rcv) for rcv in matched}, f"Sender peer {snd.peer} is not its receiver"
             for rcv in matched:
-                assert device_of[id(rcv)] != device_of[id(snd)], "Each socket should cross to the other device"
+                assert rcv.peer == core_label(snd), f"Receiver peer {rcv.peer} is not its sender"
         assert len(receivers_by_config_addr[fanout_senders[0].downstream_config_addr]) == 2
-
-        # Of the two 1:1 sockets, one is wedged with a full fifo and one never saw a byte.
-        paired_receivers = [rcv for snd in pair_senders for rcv in receivers_by_config_addr[snd.downstream_config_addr]]
-        sent = sorted(rcv.sent_at_receiver for rcv in paired_receivers)
-        assert sent == [0, MESH_SOCKET_FIFO_SIZE], f"Expected a starved and a backpressured receiver, got {sent}"

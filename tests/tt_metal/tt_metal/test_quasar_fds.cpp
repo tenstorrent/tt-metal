@@ -11,8 +11,8 @@
 
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "llrt/rtoptions.hpp"
 
 #include <algorithm>
@@ -85,10 +85,8 @@ std::string fds_tests_skip_reason(const distributed::MeshDevice& mesh_device) {
 }
 
 bool are_group_status_registers_sticky() {
-    // TODO: Use UMD supplied variant instead of env var
-    const char* quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
-    return quasar_variant != nullptr && std::string(quasar_variant) != "quasar" &&
-           std::string(quasar_variant) != "2.0.0";
+    const auto ip_variant = MetalContext::instance().get_cluster().get_quasar_ip_variant();
+    return ip_variant != IpVariant::GRENDEL;
 }
 
 std::string fds_kernel_path(const std::string& kernel_name) {
@@ -180,7 +178,7 @@ FdsProgramResult run_fds_program(distributed::MeshDevice& mesh_device, FdsProgra
     std::vector<uint32_t> cleared_dispatch(spec.num_dispatch_slots, 0);
     std::vector<uint32_t> cleared_worker(spec.num_worker_slots, 0);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
     for (const CoreCoord& core : spec.dispatch_cores) {
         slow_dispatch::WriteToL1(mesh_device, core, dispatch_l1, cleared_dispatch, CoreType::DISPATCH);
         detail::CreateDispatchEngineKernel(
@@ -1072,5 +1070,134 @@ TEST_F(QuasarFdsFixture, DispatchEngineInterruptEnableIsPerGroup) {
             EXPECT_EQ(worker.status[kSlotResult], kComplete)
                 << "worker on core " << worker.core.str() << " result=" << worker.status[kSlotResult];
         }
+    }
+}
+
+// The three tests below run the firmware's machine-external interrupt dispatcher
+// (internal/tt-2xx/machine_external_interrupts.h) from a dispatch engine kernel. The kernels raise
+// their own PLIC sources through FDS groups left at the reset threshold, so no worker kernel runs.
+
+// Two PLIC sources with a handler each share the machine-external interrupt: every claim reaches the
+// handler registered for its source, the claim is completed so the source can fire again, an
+// unregistered source goes quiet, and the mie helpers gate delivery.
+TEST_F(QuasarFdsFixture, DispatchEngineExternalInterruptRoutesBySource) {
+    // Slots of quasar_external_interrupt_routing_dispatch.cpp.
+    constexpr uint32_t kSecondGroupId = 2;
+    constexpr uint32_t kSlotFirstCount = 1;
+    constexpr uint32_t kSlotFirstSource = 2;
+    constexpr uint32_t kSlotSecondCount = 3;
+    constexpr uint32_t kSlotSecondSource = 4;
+    constexpr uint32_t kNumDispatchSlots = 5;
+    // Deliveries the kernel provokes on each source when every step passes.
+    constexpr uint32_t kFirstDeliveries = 4;
+    constexpr uint32_t kSecondDeliveries = 2;
+
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
+        SCOPED_TRACE("dispatch engine " + dispatch_core.str());
+        const FdsProgramResult result = run_fds_program(
+            this->device(),
+            FdsProgram{
+                .dispatch_cores = {dispatch_core},
+                .dispatch_kernel = fds_kernel_path("quasar_external_interrupt_routing_dispatch.cpp"),
+                .dispatch_args =
+                    {{"group_id", kGroupId},
+                     {"second_group_id", kSecondGroupId},
+                     {"silence_iterations", kSilenceIterations},
+                     {"poll_iterations", kPollIterations}},
+                .num_dispatch_slots = kNumDispatchSlots,
+                .worker_kernel = "",
+                .worker_groups = {}});
+        log_fds_program(result);
+
+        const std::vector<uint32_t>& dispatch_status = result.dispatch[0].status;
+        EXPECT_EQ(dispatch_status[kSlotResult], kComplete)
+            << "result=" << std::hex << dispatch_status[kSlotResult] << std::dec
+            << " first source: count=" << dispatch_status[kSlotFirstCount]
+            << " handed=" << dispatch_status[kSlotFirstSource]
+            << " second source: count=" << dispatch_status[kSlotSecondCount]
+            << " handed=" << dispatch_status[kSlotSecondSource];
+        EXPECT_EQ(dispatch_status[kSlotFirstCount], kFirstDeliveries);
+        EXPECT_EQ(dispatch_status[kSlotFirstSource], 16u + kGroupId);
+        EXPECT_EQ(dispatch_status[kSlotSecondCount], kSecondDeliveries);
+        EXPECT_EQ(dispatch_status[kSlotSecondSource], 16u + kSecondGroupId);
+    }
+}
+
+// A source that is enabled at the PLIC with no handler registered: the dispatcher completes the
+// claim and disables that source alone, and the registered source is still delivered.
+TEST_F(QuasarFdsFixture, DispatchEngineExternalInterruptDisablesUnregisteredSource) {
+    // Slots and skip code of quasar_external_interrupt_unregistered_dispatch.cpp.
+    constexpr uint32_t kUnregisteredGroupId = 2;
+    constexpr uint32_t kSlotRegisteredCount = 1;
+    constexpr uint32_t kSlotRegisteredSource = 2;
+    constexpr uint32_t kNumDispatchSlots = 3;
+    constexpr uint32_t kAssertsEnabled = 0x5A5A0090;
+
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
+        SCOPED_TRACE("dispatch engine " + dispatch_core.str());
+        const FdsProgramResult result = run_fds_program(
+            this->device(),
+            FdsProgram{
+                .dispatch_cores = {dispatch_core},
+                .dispatch_kernel = fds_kernel_path("quasar_external_interrupt_unregistered_dispatch.cpp"),
+                .dispatch_args =
+                    {{"group_id", kGroupId},
+                     {"second_group_id", kUnregisteredGroupId},
+                     {"poll_iterations", kPollIterations}},
+                .num_dispatch_slots = kNumDispatchSlots,
+                .worker_kernel = "",
+                .worker_groups = {}});
+        log_fds_program(result);
+
+        const std::vector<uint32_t>& dispatch_status = result.dispatch[0].status;
+        if (dispatch_status[kSlotResult] == kAssertsEnabled) {
+            GTEST_SKIP() << "The dispatcher asserts on an unregistered source, which hangs the core when kernel "
+                            "asserts are compiled in. Run without the watcher and without lightweight asserts.";
+        }
+        EXPECT_EQ(dispatch_status[kSlotResult], kComplete)
+            << "result=" << std::hex << dispatch_status[kSlotResult] << std::dec
+            << " registered source: count=" << dispatch_status[kSlotRegisteredCount]
+            << " handed=" << dispatch_status[kSlotRegisteredSource];
+        EXPECT_EQ(dispatch_status[kSlotRegisteredCount], 1u);
+        EXPECT_EQ(dispatch_status[kSlotRegisteredSource], 16u + kGroupId);
+    }
+}
+
+// A claim left open by an earlier program holds its source back at the PLIC. Registering a handler
+// for the source has to release it, or the source never reaches the handler.
+TEST_F(QuasarFdsFixture, DispatchEngineExternalInterruptRegisterReleasesStaleClaim) {
+    // Slots and skip code of quasar_external_interrupt_stale_claim_dispatch.cpp.
+    constexpr uint32_t kSlotInterruptCount = 1;
+    constexpr uint32_t kSlotClaimedSource = 2;
+    constexpr uint32_t kNumDispatchSlots = 3;
+    constexpr uint32_t kClaimDoesNotBlock = 0x5A5A00A1;
+
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
+        SCOPED_TRACE("dispatch engine " + dispatch_core.str());
+        const FdsProgramResult result = run_fds_program(
+            this->device(),
+            FdsProgram{
+                .dispatch_cores = {dispatch_core},
+                .dispatch_kernel = fds_kernel_path("quasar_external_interrupt_stale_claim_dispatch.cpp"),
+                .dispatch_args =
+                    {{"group_id", kGroupId},
+                     {"silence_iterations", kSilenceIterations},
+                     {"poll_iterations", kPollIterations}},
+                .num_dispatch_slots = kNumDispatchSlots,
+                .worker_kernel = "",
+                .worker_groups = {}});
+        log_fds_program(result);
+
+        const std::vector<uint32_t>& dispatch_status = result.dispatch[0].status;
+        if (dispatch_status[kSlotResult] == kClaimDoesNotBlock) {
+            GTEST_SKIP() << "This PLIC delivered a source again while its claim was still open, so there is no "
+                            "stale claim for a registration to release.";
+        }
+        EXPECT_EQ(dispatch_status[kSlotResult], kComplete)
+            << "result=" << std::hex << dispatch_status[kSlotResult] << std::dec
+            << " interrupt count=" << dispatch_status[kSlotInterruptCount]
+            << " claimed source=" << dispatch_status[kSlotClaimedSource];
+        EXPECT_EQ(dispatch_status[kSlotInterruptCount], 1u);
+        EXPECT_EQ(dispatch_status[kSlotClaimedSource], 16u + kGroupId);
     }
 }

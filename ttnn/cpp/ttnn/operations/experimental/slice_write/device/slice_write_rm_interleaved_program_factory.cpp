@@ -6,15 +6,15 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "slice_write_device_operation_types.hpp"
 #include "ttnn/operations/experimental/padded_slice/device/slice_cb_descriptor.hpp"
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -23,24 +23,9 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-constexpr uint32_t kSliceWriteInterleavedAddressArgIdx = 0;
 constexpr uint32_t kSliceWriteInterleavedReaderKernelIdx = 0;
 constexpr uint32_t kSliceWriteInterleavedWriterKernelIdx = 1;
 constexpr uint32_t kSliceWriteInterleavedMaxReadSize = 4096;
-
-void emplace_slice_write_interleaved_args(
-    KernelDescriptor& kernel, const CoreCoord& core, const std::vector<uint32_t>& args, Buffer* buffer) {
-    KernelDescriptor::RTArgList runtime_args;
-    runtime_args.reserve(args.size());
-    for (uint32_t arg_idx = 0; arg_idx < args.size(); ++arg_idx) {
-        if (arg_idx == kSliceWriteInterleavedAddressArgIdx) {
-            runtime_args.push_back(buffer);
-        } else {
-            runtime_args.push_back(args[arg_idx]);
-        }
-    }
-    kernel.emplace_runtime_args(core, runtime_args);
-}
 
 SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     const Tensor& input_tensor,
@@ -204,7 +189,7 @@ ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
     const auto& stride = operation_attributes.step;
 
     ProgramDescriptor desc;
-    tt::tt_metal::IDevice* device = input.device();
+    auto* device = input.device();
     const auto& input_padded_shape = input.padded_shape();
 
     uint32_t num_unpadded_sticks = input.physical_volume() / input.padded_shape()[-1];
@@ -266,7 +251,7 @@ ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
     KernelDescriptor::Defines writer_defines;
     if (stride[-1] != 1) {
         writer_defines.emplace_back("LAST_DIM_STRIDED", "1");
-        uint32_t output_row_size_bytes = input_padded_shape[-1] * input.element_size();
+        uint32_t output_row_size_bytes = output.padded_shape()[-1] * output.element_size();
         cb_page_size = tt::round_up(output_row_size_bytes, alignment);
         // input/output data_formats should be the same
         desc.cbs.push_back(make_slice_cb_descriptor(
@@ -318,8 +303,8 @@ ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
 
     for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        emplace_slice_write_interleaved_args(reader_kernel, core, all_runtime_args[i].first, src0_buffer);
-        emplace_slice_write_interleaved_args(writer_kernel, core, all_runtime_args[i].second, dst_buffer);
+        emplace_slice_write_runtime_args(reader_kernel, core, all_runtime_args[i].first, src0_buffer);
+        emplace_slice_write_runtime_args(writer_kernel, core, all_runtime_args[i].second, dst_buffer);
     }
 
     // The kernel indices are the GetRuntimeArgs handles in override_runtime_arguments. Capture them
@@ -384,7 +369,7 @@ void SliceWriteRMInterleavedProgramFactory::override_runtime_arguments(
                 core.str(),
                 expected.size());
             for (uint32_t arg_idx = 0; arg_idx < expected.size(); ++arg_idx) {
-                args[arg_idx] = arg_idx == kSliceWriteInterleavedAddressArgIdx ? address : expected[arg_idx];
+                args[arg_idx] = arg_idx == kSliceWriteAddressArgIdx ? address : expected[arg_idx];
             }
         };
     for (uint32_t i = 0; i < num_cores_total; i++) {

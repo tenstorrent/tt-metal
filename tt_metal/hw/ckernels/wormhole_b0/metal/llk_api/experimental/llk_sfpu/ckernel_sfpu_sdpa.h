@@ -16,12 +16,7 @@
 
 namespace ckernel::sfpu {
 
-constexpr auto sdpa_bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
-constexpr auto sdpa_lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(sdpa_bits(x) & 0xFFFFu); };
-constexpr auto sdpa_hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(sdpa_bits(x) >> 16); };
-
 constexpr auto sdpa_addr_mod_x_instr = ADDR_MOD_3;
-constexpr auto sdpa_addr_mod_x_config = ADDR_MOD_7;
 
 ALWI void sdpa_insert_sfpnop() { TTI_SFPNOP; }
 
@@ -58,13 +53,6 @@ template <
     bool IS_FP32_DEST_ACC_EN,
     std::uint16_t SCALE_BF16>
 inline void calculate_exponential_polynomial() {
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(sdpa_addr_mod_x_config);
-
     constexpr float LN2_RECIP = 1.44269504088896340736f;
     constexpr float M_LN2 = -0.69314718055994530942f;
 
@@ -87,30 +75,30 @@ inline void calculate_exponential_polynomial() {
         constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
 
         if constexpr (POLY_DEGREE >= 4) {
-            TTI_SFPLOADI(p_sfpu::LREG3, 0xA, sdpa_lo16(c4));
-            TTI_SFPLOADI(p_sfpu::LREG3, 0x8, sdpa_hi16(c4));
+            TTI_SFPLOADI(p_sfpu::LREG3, 0xA, Converter::lo16(c4));
+            TTI_SFPLOADI(p_sfpu::LREG3, 0x8, Converter::hi16(c4));
         }
         if constexpr (POLY_DEGREE >= 3) {
-            TTI_SFPLOADI(p_sfpu::LREG4, 0xA, sdpa_lo16(c3));
-            TTI_SFPLOADI(p_sfpu::LREG4, 0x8, sdpa_hi16(c3));
+            TTI_SFPLOADI(p_sfpu::LREG4, 0xA, Converter::lo16(c3));
+            TTI_SFPLOADI(p_sfpu::LREG4, 0x8, Converter::hi16(c3));
         }
         if constexpr (POLY_DEGREE >= 2) {
-            TTI_SFPLOADI(p_sfpu::LREG5, 0xA, sdpa_lo16(c2));
-            TTI_SFPLOADI(p_sfpu::LREG5, 0x8, sdpa_hi16(c2));
+            TTI_SFPLOADI(p_sfpu::LREG5, 0xA, Converter::lo16(c2));
+            TTI_SFPLOADI(p_sfpu::LREG5, 0x8, Converter::hi16(c2));
         }
         if constexpr (POLY_DEGREE >= 1) {
-            TTI_SFPLOADI(p_sfpu::LREG6, 0xA, sdpa_lo16(c1));
-            TTI_SFPLOADI(p_sfpu::LREG6, 0x8, sdpa_hi16(c1));
-            TTI_SFPLOADI(p_sfpu::LREG7, 0xA, sdpa_lo16(c0));
-            TTI_SFPLOADI(p_sfpu::LREG7, 0x8, sdpa_hi16(c0));
+            TTI_SFPLOADI(p_sfpu::LREG6, 0xA, Converter::lo16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG6, 0x8, Converter::hi16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0xA, Converter::lo16(c0));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0x8, Converter::hi16(c0));
         }
     }
 
     if constexpr (sdpa_can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
-        TTI_SFPLOADI(p_sfpu::LREG3, 0xA, sdpa_lo16(LN2_RECIP));
-        TTI_SFPLOADI(p_sfpu::LREG3, 0x8, sdpa_hi16(LN2_RECIP));
-        TTI_SFPLOADI(p_sfpu::LREG4, 0xA, sdpa_lo16(M_LN2));
-        TTI_SFPLOADI(p_sfpu::LREG4, 0x8, sdpa_hi16(M_LN2));
+        TTI_SFPLOADI(p_sfpu::LREG3, 0xA, Converter::lo16(LN2_RECIP));
+        TTI_SFPLOADI(p_sfpu::LREG3, 0x8, Converter::hi16(LN2_RECIP));
+        TTI_SFPLOADI(p_sfpu::LREG4, 0xA, Converter::lo16(M_LN2));
+        TTI_SFPLOADI(p_sfpu::LREG4, 0x8, Converter::hi16(M_LN2));
     }
 
     for (int d = 0; d < ITERATIONS; d++) {
@@ -127,12 +115,12 @@ inline void calculate_exponential_polynomial() {
         if constexpr (sdpa_can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
             TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         } else {
-            TTI_SFPLOADI(p_sfpu::LREG1, 0xA, sdpa_lo16(LN2_RECIP));
-            TTI_SFPLOADI(p_sfpu::LREG1, 0x8, sdpa_hi16(LN2_RECIP));
+            TTI_SFPLOADI(p_sfpu::LREG1, 0xA, Converter::lo16(LN2_RECIP));
+            TTI_SFPLOADI(p_sfpu::LREG1, 0x8, Converter::hi16(LN2_RECIP));
             TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         }
         sdpa_insert_sfpnop();
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
         if constexpr (USE_SFPARECIP_INSTR) {
@@ -141,8 +129,8 @@ inline void calculate_exponential_polynomial() {
             if constexpr (sdpa_can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
                 TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
             } else {
-                TTI_SFPLOADI(p_sfpu::LREG0, 0xA, sdpa_lo16(M_LN2));
-                TTI_SFPLOADI(p_sfpu::LREG0, 0x8, sdpa_hi16(M_LN2));
+                TTI_SFPLOADI(p_sfpu::LREG0, 0xA, Converter::lo16(M_LN2));
+                TTI_SFPLOADI(p_sfpu::LREG0, 0x8, Converter::hi16(M_LN2));
                 TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
             }
             sdpa_insert_sfpnop();
@@ -173,7 +161,7 @@ inline void calculate_exponential_polynomial() {
 
         TT_SFPADDI(0x42fe, p_sfpu::LREG1, 0);
         sdpa_insert_sfpnop();
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
         TTI_SFPSETEXP(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
         sdpa_insert_sfpnop();
@@ -183,14 +171,15 @@ inline void calculate_exponential_polynomial() {
         TTI_SFPENCC(0, 0, 0, 0);
 
         if constexpr (!IS_FP32_DEST_ACC_EN) {
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         }
         TTI_SFPSTORE(p_sfpu::LREG2, input_type, sdpa_addr_mod_x_instr, 0);
         TTI_INCRWC(0, 4, 0, 0);
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en>
+template <bool SDPA_EXP_APPROX_MODE, std::uint16_t scale_bf16, bool is_fp32_dest_acc_en>
 inline void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (SDPA_EXP_APPROX_MODE) {
@@ -262,7 +251,7 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
+inline void calculate_softplus_first_column(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     float beta = ckernel::sfpu::Converter::as_float(param0);
     float beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);

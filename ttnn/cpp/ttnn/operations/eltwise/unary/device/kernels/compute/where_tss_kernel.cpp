@@ -23,13 +23,20 @@ constexpr auto kWhereDF = DataFormat::Float32;
 constexpr auto kWhereDF = DataFormat::Float16_b;
 #endif
 
+#if defined(INP_UINT32)
 constexpr bool kIsInt = kWhereDF == DataFormat::Int32 || kWhereDF == DataFormat::UInt32;
+#else
+// No UInt32 reference here: Quasar's DataFormat has no UInt32, and kWhereDF is never UInt32 unless INP_UINT32.
+constexpr bool kIsInt = kWhereDF == DataFormat::Int32;
+#endif
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
     const uint32_t packed_scalar1 = get_arg(args::packed_scalar1);
     const uint32_t packed_scalar2 = get_arg(args::packed_scalar2);
 
+    DataflowBuffer dfb_in_obj(dfb::in);
+    DataflowBuffer dfb_out_obj(dfb::out);
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
     ckl::eltwise_chain(
@@ -37,7 +44,7 @@ void kernel_main() {
         // cond -> D0. Single DFB read: Streaming (wait 1 / pop 1 per iter), Scalar index.
         ckl::CopyTile<
             ckl::input(dfb::in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_in_obj},
         // true_value -> D1 (inactive flavor folds to a FillTileTag no-op).
         // kWhereDF carries main's #48602 fix: Int32 for int32 inputs, UInt32 for uint32 inputs.
         ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, ckl::Dst::D1>>{packed_scalar1},
@@ -48,5 +55,6 @@ void kernel_main() {
         // where(D0, D1, D2) -> D0.
         ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_out_obj});
 }

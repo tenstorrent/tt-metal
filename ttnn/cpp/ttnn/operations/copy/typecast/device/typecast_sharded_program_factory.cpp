@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast_sharded_program_factory.hpp"
+#include "typecast_kernel_format.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -15,7 +17,6 @@ namespace ttnn::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_program_artifacts(
     const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
@@ -91,7 +92,7 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
     // Input DFB: built on the input shard's own L1 memory (borrowed), so the data is already resident.
     uint32_t buffering_factor = 1;  // data is already fully buffered in the DFBs since its sharded
     uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
     const DataflowBufferSpec in_dfb{
@@ -104,7 +105,7 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
 
     // output sharded DFB: borrowed from the output shard buffer — the result is left resident there
     uint32_t aligned_output_tile_nbytes =
-        round_up_to_mul32(output_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(output_tile_size, 32u);  // will have issue if the page is not multiple of 32
     uint32_t out_cb_pagesize = aligned_output_tile_nbytes;
     uint32_t out_cb_npages = num_tile_per_core * buffering_factor;
     const DataflowBufferSpec out_dfb{
@@ -136,13 +137,13 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         args.preserve_fp32_precision,
         args.fp32_dest_acc_en);
 
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool src_is_dram = src_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
     const TensorParameter input_param{.unique_id = INPUT, .spec = input.tensor_spec()};
@@ -190,8 +191,12 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         .compile_time_args =
             {{"per_core_block_cnt", 1u},
              {"per_core_block_dim", num_tile_per_core},
-             {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
-             {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
+             {"in_data_format",
+              typecast_kernel_data_format(
+                  datatype_to_dataformat_converter(input.dtype()), input.device()->arch() == tt::ARCH::QUASAR)},
+             {"out_data_format",
+              typecast_kernel_data_format(
+                  datatype_to_dataformat_converter(output.dtype()), input.device()->arch() == tt::ARCH::QUASAR)}},
         // No bfp_pack_precision_mode on Quasar (TT-2.x.x; MXFP replaces BFP). WH/BH keep the
         // byte-identical legacy config, with the BFP pack knob in config_1xx.
         .hw_config = [&]() -> ComputeHardwareConfig {

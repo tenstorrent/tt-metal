@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -20,7 +21,7 @@ uint32_t num_pages(const ttnn::Tensor& input_tensor) {
 }
 
 uint32_t page_size(const ttnn::Tensor& input_tensor) {
-    auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto BUFFER_ALIGNMENT = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                 ? tt::tt_metal::hal::get_dram_alignment()
                                 : tt::tt_metal::hal::get_l1_alignment();
     const auto& shape = input_tensor.logical_shape();  // in anticipation of RM padding
@@ -45,14 +46,13 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreRowInv
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     uint32_t input_rm_page_size = detail::page_size(input_tensor);
     uint32_t output_rm_page_size = detail::page_size(tensor_return_value);
 
@@ -168,22 +168,34 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     uint32_t w_block_size = constants::TILE_WIDTH;
     uint32_t input_cb_page_size = w_block_size * input_tensor.element_size();
 
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    tt::DataFormat cb_data_format_output = tt::tt_metal::cb_dataformat_for(output_tensor.dtype());
     uint32_t x_block_size = constants::TILE_HEIGHT;
     uint32_t output_cb_page_size = x_block_size * input_tensor.element_size();
 
     uint32_t num_input_pages_to_read = 2;
+    const uint32_t fast_path = input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0 && !input_tensor.is_sharded() &&
+                                       !output_tensor.is_sharded()
+                                   ? 1u
+                                   : 0u;
+
+    // cb_in packs input rows back to back, as tilize requires. When a row is not a multiple of the input's NoC read
+    // alignment (e.g. 32 B UINT8 rows vs 64 B BH DRAM), a row's L1 slot can sit at a different offset within an
+    // alignment block than its source, so the reader bounces such rows through aligned scratchpad slots.
+    const uint32_t read_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
+                                        ? tt::tt_metal::hal::get_dram_alignment()
+                                        : tt::tt_metal::hal::get_l1_alignment();
+    const bool bounce_misaligned_rows = !input_tensor.is_sharded() && (input_cb_page_size % read_alignment != 0);
+    const ScratchpadSpecName BOUNCE_SP{"bounce"};
 
     // we are focused on reading one row at a time, in a pattern that allows us to write an entire output row at a time
     // if W is being swapped with another dim X (e.g. H), then we need to read X rows at a time (X is the new row
@@ -255,10 +267,16 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
             "reader_permute_interleaved_rm_blocked_generic.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = SRC_CB, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .scratchpad_bindings = bounce_misaligned_rows
+                                   ? Group<KernelSpec::ScratchpadBinding>{KernelSpec::ScratchpadBinding{
+                                         .scratchpad_spec_name = BOUNCE_SP, .accessor_name = "bounce"}}
+                                   : Group<KernelSpec::ScratchpadBinding>{},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args =
             {{"N", N},
              {"page_size", input_cb_page_size},
+             {"read_alignment", read_alignment},
+             {"bounce_misaligned_rows", bounce_misaligned_rows},
              {"num_rows", num_rows},
              {"x_dim", x_dim},
              {"num_blocks_total", num_blocks_total},
@@ -266,7 +284,8 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
              {"w_blocks", w_blocks},
              {"x_block_size", x_block_size},
              {"w_block_size", w_block_size},
-             {"element_size", input_tensor.element_size()}},
+             {"element_size", input_tensor.element_size()},
+             {"fast_path", fast_path}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * N},
@@ -295,25 +314,19 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
              {"w_blocks", w_blocks},
              {"x_block_size", x_block_size},
              {"w_block_size", w_block_size},
-             {"W", W}},
+             {"W", W},
+             {"fast_path", fast_path}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 3 * N},
     };
 
-    bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32 ||
-                            cb_data_format_output == tt::DataFormat::Int32 ||
-                            cb_data_format_output == tt::DataFormat::UInt32;
-    // Style B compute config: build ComputeHardwareConfig directly, matching the legacy
-    // ComputeConfigDescriptor{.fp32_dest_acc_en=...} (all other fields at legacy defaults).
+    // 8-bit ints go through 32-bit Dest; BH sharded RM 8-bit ints are staged via UInt32 in prim::permute.
+    bool fp32_dest_acc_en = requires_32bit_dest(cb_data_format_output);
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-    // Metal 2.0 requires an explicit unpack_modes entry for every Float32 DFB the compute
-    // kernel consumes when enable_32_bit_dest = true. The compute kernel consumes SRC_CB
-    // (via tilize) and TILIZE_CB (self-loop). UnpackToDest, not UnpackToSrc: SrcA/SrcB are
-    // only 19 bits wide, so unpacking Float32 there truncates it to tf32. MultiCoreTiledGeneric
-    // already sets UnpackToDest on the same two CBs.
-    // (Float32-only; Int32/UInt32 not required yet — issue #49936.)
-    if (cb_data_format == tt::DataFormat::Float32) {
+    // UnpackToDest lowers to UnpackToDestFp32; only safe for 32-bit formats. 8-bit ints must
+    // stay on SrcA/int-FPU, otherwise BuildUnpackToDestModeVector corrupts the integer unpack.
+    if (requires_unpack_to_dest(cb_data_format_output)) {
         compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
     }
 
@@ -384,6 +397,12 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     // ---- Assemble ----
     ProgramSpec spec;
     spec.name = "permute_rm_blocked_generic";
+    if (bounce_misaligned_rows) {
+        // read_alignment bytes to align the base, then one slot per X-block row (see the reader's bounce_slot_bytes).
+        const uint32_t bounce_slot_bytes = tt::round_up(input_cb_page_size + read_alignment - 1, read_alignment);
+        spec.scratchpads = {
+            ScratchpadSpec{.unique_id = BOUNCE_SP, .size_per_node = read_alignment + x_block_size * bounce_slot_bytes}};
+    }
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     spec.dataflow_buffers = {std::move(src_cb), std::move(out_cb), std::move(tilize_cb)};
     spec.tensor_parameters = {std::move(input_param), std::move(output_param)};

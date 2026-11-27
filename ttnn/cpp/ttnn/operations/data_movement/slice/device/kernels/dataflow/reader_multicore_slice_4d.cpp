@@ -48,6 +48,35 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+// Compacts the selected columns of one row to the start of the same buffer. The output index never
+// exceeds the input index, so a forward copy is safe in place.
+template <typename Row>
+FORCE_INLINE void compact_strided_columns(Row row, uint32_t start, uint32_t end, uint32_t step, uint32_t output_w) {
+    uint32_t out_col = 0;
+    for (uint32_t input_col = start; input_col < end && out_col < output_w; input_col += step) {
+        row[out_col++] = row[input_col];
+    }
+}
+
+template <typename Lock>
+FORCE_INLINE void compact_strided_columns_by_size(
+    Lock& lock, uint32_t element_size, uint32_t start, uint32_t end, uint32_t step, uint32_t output_w) {
+    if (element_size == 2) {
+        compact_strided_columns(lock.template get_ptr<volatile uint16_t>(), start, end, step, output_w);
+    } else if (element_size == 4) {
+        compact_strided_columns(lock.template get_ptr<volatile uint32_t>(), start, end, step, output_w);
+    } else {
+        auto row = lock.template get_ptr<volatile uint8_t>();
+        uint32_t out_col = 0;
+        for (uint32_t input_col = start; input_col < end && out_col < output_w; input_col += step) {
+            for (uint32_t byte_idx = 0; byte_idx < element_size; ++byte_idx) {
+                row[out_col * element_size + byte_idx] = row[input_col * element_size + byte_idx];
+            }
+            out_col++;
+        }
+    }
+}
+
 void kernel_main() {
     // Runtime arguments for 4D slice support with multi-core work distribution
     uint32_t tensor_rank = get_arg(args::tensor_rank);
@@ -158,19 +187,14 @@ void kernel_main() {
                 // Now slice the row according to width slice parameters
                 // Copy sliced elements to the beginning of the buffer
                 if (slice_start_w != 0 || slice_step_w != 1 || slice_end_w != input_w) {
-                    // Need to reorganize the data in the buffer
-                    volatile tt_l1_ptr uint8_t* src_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_addr);
-                    volatile tt_l1_ptr uint8_t* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_addr);
-
-                    uint32_t out_col = 0;
-                    for (uint32_t input_col = slice_start_w; input_col < slice_end_w && out_col < output_w;
-                         input_col += slice_step_w) {
-                        // Copy element by element for the slice
-                        for (uint32_t byte_idx = 0; byte_idx < element_size; ++byte_idx) {
-                            dst_ptr[out_col * element_size + byte_idx] = src_ptr[input_col * element_size + byte_idx];
-                        }
-                        out_col++;
-                    }
+                    // Need to reorganize the data in the buffer: move the selected columns to the start of
+                    // the entry. On Quasar, this core has a data cache. Taking the lock discards any cached
+                    // copy of the entry, so the reads below see the row the NoC just wrote to SRAM. Releasing
+                    // the lock, at the end of this block and so before push_back, writes the reorganized row
+                    // back to SRAM, where the writer kernel reads it.
+                    auto lock = dfb_out.scoped_write_lock(1);
+                    compact_strided_columns_by_size(
+                        lock, element_size, slice_start_w, slice_end_w, slice_step_w, output_w);
                 }
 
                 dfb_out.push_back(1);

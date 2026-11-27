@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
@@ -26,6 +27,9 @@ public:
     void register_optimizer(const std::string& type, OptimizerCreator creator);
 
     std::unique_ptr<OptimizerBase> create(const YAML::Node& config, serialization::NamedParameters params) const;
+
+    // The registered optimizer types, sorted.
+    [[nodiscard]] std::vector<std::string> types() const;
 
 private:
     OptimizerRegistry();

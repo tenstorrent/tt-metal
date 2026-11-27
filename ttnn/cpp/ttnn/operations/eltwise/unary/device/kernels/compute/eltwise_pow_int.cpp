@@ -64,11 +64,16 @@ ALWI auto append_pow_bit(Tuple bits) {
     }
 }
 
-template <class... BitOps, std::size_t... BitIndex>
-ALWI void run_pow(uint32_t num_tiles, std::tuple<BitOps...> bit_ops, std::index_sequence<BitIndex...>) {
+template <class... BitOps, std::size_t... BitIndex, typename DFB0, typename DFB1>
+ALWI void run_pow(
+    uint32_t num_tiles,
+    DFB0& dfb_in_obj,
+    DFB1& dfb_out_obj,
+    std::tuple<BitOps...> bit_ops,
+    std::index_sequence<BitIndex...>) {
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_tiles),
-        ckl::CopyTile<kInput, ckl::Dst::D0>{},
+        ckl::CopyTile<kInput, ckl::Dst::D0>{dfb_in_obj},
         // x^0 ignores the copied tile. The copy still pops the input buffer.
         ckl::Optional<kFillOnes, ckl::FillInt<kMathFormat, ckl::Dst::D0>>{1u},
         ckl::Optional<kWidenBase, ckl::Typecast<kUint16Format, kUint32Format, ckl::Dst::D0>>{},
@@ -81,14 +86,17 @@ ALWI void run_pow(uint32_t num_tiles, std::tuple<BitOps...> bit_ops, std::index_
             ckl::BitwiseAndBinary<DataFormat::UInt32, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>>{},
         ckl::Optional<kMaskBase, ckl::Typecast<kUint32Format, kUint16Format, ckl::Dst::D0>>{},
         ckl::Optional<kMaskProduct, ckl::Typecast<kUint32Format, kUint16Format, ckl::Dst::D1>>{},
-        ckl::Optional<kResultInBase, ckl::PackTile<kOutput, ckl::Dst::D0>>{},
-        ckl::Optional<kPackProduct, ckl::PackTile<kOutput, ckl::Dst::D1>>{});
+        ckl::Optional<kResultInBase, ckl::PackTile<kOutput, ckl::Dst::D0>>{dfb_out_obj},
+        ckl::Optional<kPackProduct, ckl::PackTile<kOutput, ckl::Dst::D1>>{dfb_out_obj});
 }
 
 void kernel_main() {
     const uint32_t num_tiles = get_arg(args::num_tiles);
 
+    DataflowBuffer dfb_in_obj(dfb::in);
+    DataflowBuffer dfb_out_obj(dfb::out);
     compute_kernel_hw_startup(dfb::in, dfb::out);
     const auto bit_ops = append_pow_bit<30>(std::tuple<>{});
-    run_pow(num_tiles, bit_ops, std::make_index_sequence<std::tuple_size_v<decltype(bit_ops)>>{});
+    run_pow(
+        num_tiles, dfb_in_obj, dfb_out_obj, bit_ops, std::make_index_sequence<std::tuple_size_v<decltype(bit_ops)>>{});
 }

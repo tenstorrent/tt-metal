@@ -8,9 +8,9 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 namespace tt::tt_metal {
 
@@ -45,7 +45,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const MultiInterleavedConfig& 
         test_config.page_size_bytes);
 
     // Program
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     const uint32_t num_cores = test_config.cores.num_cores();
     const size_t per_core_size_bytes = test_config.num_pages * test_config.page_size_bytes;

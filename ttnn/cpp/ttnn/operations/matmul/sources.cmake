@@ -4,6 +4,12 @@
 set(TTNN_OP_MATMUL_SRCS
     matmul.cpp
     device/config/matmul_program_config.cpp
+    device/config/model/gbdt_model.cpp
+    device/config/model/matmul_candidates.cpp
+    device/config/model/matmul_model_hook.cpp
+    device/config/model/matmul_model_selector.cpp
+    device/config/model/matmul_model_device_params.cpp
+    device/config/model/matmul_model_features.cpp
     device/matmul_device_operation.cpp
     device/utilities/matmul_utilities.cpp
     device/factory/matmul_multicore_program_factory.cpp
@@ -13,6 +19,7 @@ set(TTNN_OP_MATMUL_SRCS
     device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.cpp
     device/factory/matmul_multicore_reuse_optimized_program_factory.cpp
     device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp
+    device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_spec_factory.cpp
     device/sparse/sparse_matmul_device_operation.cpp
 )
 

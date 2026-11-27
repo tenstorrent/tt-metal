@@ -24,7 +24,6 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel
@@ -42,16 +41,6 @@ constexpr std::uint32_t NEGATE_VA = 1;
 
 constexpr std::uint8_t ZERO_ADDR_MOD = ADDR_MOD_7;
 } // namespace rope
-
-inline void sfpu_rope_configure_addrmod()
-{
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(rope::ZERO_ADDR_MOD);
-}
 
 inline void sfpu_rope_dest_setup()
 {
@@ -126,7 +115,7 @@ inline void sfpu_rope_face(const std::uint32_t x_addr)
  * cos/sin pair is loaded once rather than per tile.
  *
  * x_stride is 64 when x came from copy_tile (Tile32x32 slots) and 32 when it is
- * a custom_mm<dense_packing> result still sitting in DEST.
+ * a Dense-layout custom_mm result still sitting in DEST.
  *
  * scale_fp32 is required rather than defaulted: under has_scale a missing value
  * would scale cos/sin by zero and silently zero every output. Callers with
@@ -189,7 +178,7 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
  * x and fused phases, independently of their original input memory format.
  *
  * x_stride is 64 when x came from copy_tile (Tile32x32 slots) and 32 when it is
- * a custom_mm<dense_packing> result still sitting in DEST.
+ * a Dense-layout custom_mm result still sitting in DEST.
  */
 template <
     std::uint32_t Ht,

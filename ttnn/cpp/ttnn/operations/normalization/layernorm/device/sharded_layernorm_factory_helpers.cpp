@@ -4,10 +4,10 @@
 
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 #include <algorithm>
@@ -47,6 +47,7 @@ const m2::DFBSpecName EX{"ex"};
 const m2::DFBSpecName EX_EXTERNAL{"ex_external"};
 const m2::DFBSpecName EX_PARTIAL2{"ex_partial2"};
 const m2::DFBSpecName EX2{"ex2"};
+const m2::DFBSpecName EX2_LOCAL{"ex2_local"};
 const m2::DFBSpecName EX_EXTERNAL2{"ex_external2"};
 const m2::DFBSpecName MASK_SCRATCH{"mask_scratch"};
 const m2::DFBSpecName EX_GLOBAL{"ex_global"};
@@ -167,7 +168,12 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 //////////////////////////////////////////////////////////////////////////////
 
 GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
-    auto spec = input.shard_spec().value();
+    return compute(input, input.shard_spec().value(), block_ht, compute_with_storage_grid_size);
+}
+
+GridParams GridParams::compute(
+    const Tensor& input, const ShardSpec& shard_spec, uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
+    const auto& spec = shard_spec;
     const uint32_t tile_height = input.tensor_spec().tile().get_height();
     uint32_t M = input.physical_volume() / input.padded_shape()[-1];
     uint32_t block_h = block_ht * tile_height;
@@ -258,7 +264,6 @@ CoreRanges compute_core_ranges_mcast_1d_row_wise(
     cr.all_cores = grid.shard_spec.grid.merge_ranges();
     cr.sender_cores = {start_core, start_core};
 
-    auto bbox = grid.shard_spec.grid.bounding_box();
     CoreCoord all_core_grid_size;
     CoreCoord none_core_grid_size;
     if (grid.use_two_stage_reduce) {
@@ -281,7 +286,7 @@ CoreRanges compute_core_ranges_mcast_1d_row_wise(
                 all_start_core = {end_core.x + 1, end_core.y};
             }
         } else {
-            if (end_core.x == bbox.end_coord.x) {
+            if (end_core.x == grid.grid_size.x - 1) {
                 all_start_core = {0, end_core.y + 1};
             } else {
                 all_start_core = {end_core.x + 1, end_core.y};
@@ -299,7 +304,7 @@ CoreRanges compute_core_ranges_mcast_1d_row_wise(
         } else {
             CoreCoord none_start_core;
             CoreCoord end_core = (*cr.all_to_all_cores.ranges().rbegin()).end_coord;
-            if (end_core.x == bbox.end_coord.x) {
+            if (end_core.x == grid.grid_size.x - 1) {
                 none_start_core = {0, end_core.y + 1};
             } else {
                 none_start_core = {end_core.x + 1, end_core.y};
@@ -321,7 +326,6 @@ CoreRanges compute_core_ranges_mcast_1d_col_wise(
     cr.all_cores = grid.shard_spec.grid.merge_ranges();
     cr.sender_cores = {start_core, start_core};
 
-    auto bbox = grid.shard_spec.grid.bounding_box();
     CoreCoord all_core_grid_size;
     CoreCoord none_core_grid_size;
     if (grid.use_two_stage_reduce) {
@@ -345,14 +349,14 @@ CoreRanges compute_core_ranges_mcast_1d_col_wise(
                 all_start_core = {end_core.x, end_core.y + 1};
             }
         } else {
-            if (end_core.y == bbox.end_coord.y) {
+            if (end_core.y == grid.grid_size.y - 1) {
                 all_start_core = {end_core.x + 1, 0};
             } else {
                 all_start_core = {end_core.x, end_core.y + 1};
             }
         }
-        cr.all_to_all_workers_except_sender = num_cores_to_corerangeset(
-            CoreCoord{start_core.x, start_core.y + 1}, workers.num_cores_all_to_all - 1, all_core_grid_size, false);
+        cr.all_to_all_workers_except_sender =
+            num_cores_to_corerangeset(all_start_core, workers.num_cores_all_to_all - 1, all_core_grid_size, false);
     }
 
     if (workers.num_none_all_to_all_workers > 0) {
@@ -363,7 +367,7 @@ CoreRanges compute_core_ranges_mcast_1d_col_wise(
         } else {
             CoreCoord none_start_core;
             CoreCoord end_core = (*cr.all_to_all_cores.ranges().rbegin()).end_coord;
-            if (end_core.y == bbox.end_coord.y) {
+            if (end_core.y == grid.grid_size.y - 1) {
                 none_start_core = {end_core.x + 1, 0};
             } else {
                 none_start_core = {end_core.x, end_core.y + 1};
@@ -628,8 +632,15 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
     const bool nd = !c.is_pre_all_gather && !c.is_post_all_gather;
     const auto& sizes = c.sizes;
 
-    // Input shard. The compute kernel reads it in place; nothing streams into it.
-    add_dfb(spec, IN0, sizes.in0_dfb_size, c.in_single_tile_size, c.in_data_format, INPUT);
+    // Input shard. The compute kernel reads it in place; nothing streams into it. An interleaved input has no shard
+    // to borrow: the writer reads this core's block into it.
+    add_dfb(
+        spec,
+        IN0,
+        sizes.in0_dfb_size,
+        c.in_single_tile_size,
+        c.in_data_format,
+        c.interleaved_input ? std::nullopt : std::optional<m2::TensorParamName>(INPUT));
 
     // Residual shard for the fused pre-add. The post-all-gather compute kernel has no pre-add, so it
     // never reads a residual even when one is supplied.
@@ -678,9 +689,14 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
             add_dfb(spec, EX_PARTIAL2, sizes.ex_partial_dfb_size, c.single_tile_size, c.dfb_data_format);
             add_dfb(spec, EX_EXTERNAL2, sizes.ex_external_dfb_size, c.single_tile_size, c.dfb_data_format);
         }
-        add_dfb(spec, EX2, sizes.ex_dfb_size, c.single_tile_size, c.dfb_data_format);
+        // The non-distributed stage keeps Var[x] in ex2_local wherever compute reads it back; ex2 only carries
+        // a first-stage result to the reader, so it exists only with a two-stage reduce.
+        if (!nd || c.use_two_stage_reduce) {
+            add_dfb(spec, EX2, sizes.ex_dfb_size, c.single_tile_size, c.dfb_data_format);
+        }
         if (nd) {
             add_dfb(spec, EX2PE, sizes.ex2pe_dfb_size, c.single_tile_size, c.dfb_data_format);
+            add_dfb(spec, EX2_LOCAL, sizes.ex_dfb_size, c.single_tile_size, c.dfb_data_format);
         }
     }
 
@@ -727,15 +743,15 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
             RECIP);
     }
 
-    // Output. When the writer reshards, this buffer is a plain intermediate and the output tensor is
-    // reached through its own binding instead.
+    // Output. When the writer reshards or writes an interleaved output, this buffer is a plain intermediate and the
+    // output tensor is reached through its own binding instead.
     add_dfb(
         spec,
         OUT,
         sizes.out_dfb_size,
         c.out_single_tile_size,
         c.out_data_format,
-        c.writes_back ? std::nullopt : std::optional<m2::TensorParamName>(OUTPUT));
+        c.writes_back || c.interleaved_output ? std::nullopt : std::optional<m2::TensorParamName>(OUTPUT));
 
     // Welford-fp32 alias: a second index over the primary buffer's SRAM, same total size. Alias group
     // members must agree on whether they borrow their memory, so the non-fused alias borrows the input
@@ -927,7 +943,9 @@ void bind_reader_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is_
         bind_dfb(kernel, EX_PARTIAL2, "ex_partial2", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, EX_EXTERNAL2, "ex_external2", m2::DFBEndpointType::PRODUCER);
         bind_dfb(kernel, EX2PE, "ex2pe", m2::DFBEndpointType::CONSUMER);
-        bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::CONSUMER);
+        if (c.use_two_stage_reduce) {
+            bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::CONSUMER);
+        }
     }
     bind_dfb(kernel, EX_GLOBAL, "ex_global", m2::DFBEndpointType::PRODUCER);
 }
@@ -941,6 +959,10 @@ void add_reader_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
     }
     if (c.use_welford) {
         kernel.compiler_options.defines.emplace("USE_WELFORD", "1");
+    }
+    // Gates the ex2 binding token, which exists only with a two-stage reduce.
+    if (c.use_two_stage_reduce) {
+        kernel.compiler_options.defines.emplace("TWO_STAGE_REDUCE", "1");
     }
 }
 
@@ -961,6 +983,11 @@ m2::KernelSpec::CompileTimeArgs writer_compile_time_args(
         args.emplace("gamma_is_float32", static_cast<uint32_t>(c.gamma_dfb_data_format == tt::DataFormat::Float32));
         args.emplace("beta_is_float32", static_cast<uint32_t>(c.beta_dfb_data_format == tt::DataFormat::Float32));
     }
+    // Interleaved input/output blocks (unused, but declared, otherwise).
+    args.emplace("in0_interleaved", static_cast<uint32_t>(c.interleaved_input));
+    args.emplace("out_interleaved", static_cast<uint32_t>(c.interleaved_output));
+    args.emplace("io_Kt", c.K / c.tile_width);
+    args.emplace("io_block_ht", c.block_ht);
     if (c.writes_back) {
         args.emplace("worker_core_stride_w_bytes", c.block_wt * c.out_single_tile_size);
         args.emplace("storage_core_stride_w_bytes", c.block_wt_resharded * c.out_single_tile_size);
@@ -973,7 +1000,7 @@ m2::KernelSpec::CompileTimeArgs writer_compile_time_args(
             writer_num_varargs > 0,
             "Writer write-back segment block length is 0, but this configuration writes back. The "
             "length is measured by build_run_args, which must run before the kernel specs are built.");
-        args.emplace("max_write_back_segments", writer_num_varargs / 3);
+        args.emplace("max_write_back_segments", writer_num_varargs / 2);
     }
     return args;
 }
@@ -1010,11 +1037,15 @@ void bind_writer_resources(m2::KernelSpec& kernel, const SpecConfig& c) {
         bind_dfb(kernel, BETA, "beta", m2::DFBEndpointType::PRODUCER);
         bind_tensor(kernel, BETA_T, "beta");
     }
-    if (c.writes_back) {
+    if (c.writes_back || c.interleaved_output) {
         bind_dfb(kernel, OUT, "out", m2::DFBEndpointType::CONSUMER);
-        // The write-back moves nothing through a buffer: it reads this binding's base address and
-        // issues its own remote writes to the storage cores.
+        // The write-back moves nothing through a buffer: it addresses this binding by shard (or, interleaved, by
+        // tile id) and issues its own writes.
         bind_tensor(kernel, OUTPUT, "dst");
+    }
+    if (c.interleaved_input) {
+        bind_dfb(kernel, IN0, "in0", m2::DFBEndpointType::PRODUCER);
+        bind_tensor(kernel, INPUT, "src");
     }
 }
 
@@ -1030,6 +1061,10 @@ void add_writer_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
     // that compiles it is the build where those arguments exist.
     if (!c.writes_back) {
         kernel.compiler_options.defines.emplace("SKIP_WRITE_BACK", "1");
+    }
+    // Matches bind_writer_resources: after the all-gather the writer holds both ends of the scaler DFB.
+    if (c.is_post_all_gather && !c.use_welford) {
+        kernel.compiler_options.defines.emplace("SCALER_SELF_LOOP", "1");
     }
     if (c.do_col_mask) {
         kernel.compiler_options.defines.emplace("DO_COL_MASK", "1");
@@ -1047,6 +1082,7 @@ m2::KernelSpec::CompileTimeArgs compute_compile_time_args(
         {"block_h", c.block_ht},
         {"block_w", c.block_wt},
         {"subblock_w", c.subblock_wt},
+        {"in0_streamed", static_cast<uint32_t>(c.interleaved_input)},
         {"num_subblocks_w", c.block_wt / c.subblock_wt},
         {"num_tiles_per_block", c.block_ht * c.block_wt},
         {"float32_dtype", static_cast<uint32_t>(c.fp32_dest_acc_en)},
@@ -1087,8 +1123,13 @@ m2::KernelSpec::CompileTimeArgs compute_compile_time_args(
 }
 
 void bind_compute_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is_all_to_all_worker) {
-    // Every stage reads its input shard in place, so compute owns both ends of it.
-    bind_self_loop(kernel, IN0, "in0");
+    // Every stage reads its input shard in place, so compute owns both ends of it; an interleaved input is
+    // streamed in by the writer.
+    if (c.interleaved_input) {
+        bind_dfb(kernel, IN0, "in0", m2::DFBEndpointType::CONSUMER);
+    } else {
+        bind_self_loop(kernel, IN0, "in0");
+    }
     if (c.has_b && !c.is_post_all_gather) {
         bind_self_loop(kernel, IN1, "in1");
     }
@@ -1123,9 +1164,9 @@ void bind_compute_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is
 
     bind_self_loop(kernel, XMM, "xmm");
     bind_dfb(kernel, EX_GLOBAL, "ex_global", m2::DFBEndpointType::CONSUMER);
-    // Where the writer reshards, it drains this buffer; compute is then the producer alone. Otherwise
-    // compute is its only toucher.
-    if (c.writes_back) {
+    // Where the writer reshards or writes an interleaved output, it drains this buffer; compute is then the
+    // producer alone. Otherwise compute is its only toucher.
+    if (c.writes_back || c.interleaved_output) {
         bind_dfb(kernel, OUT, "out", m2::DFBEndpointType::PRODUCER);
     } else {
         bind_self_loop(kernel, OUT, "out");
@@ -1165,9 +1206,14 @@ void bind_compute_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is
         bind_dfb(kernel, EPS, "eps", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, SCALER_GLOBAL, "scaler_global", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, EX_PARTIAL2, "ex_partial2", m2::DFBEndpointType::PRODUCER);
-        bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::PRODUCER);
+        if (c.use_two_stage_reduce) {
+            bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::PRODUCER);
+        }
         bind_dfb(kernel, EX_EXTERNAL2, "ex_external2", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, EX2PE, "ex2pe", m2::DFBEndpointType::PRODUCER);
+        // On the cores that turn Var[x] into 1/sqrt(Var[x] + eps), the combined Var[x] never leaves
+        // compute, so it goes into this buffer rather than ex2, whose consumer is the reader.
+        bind_self_loop(kernel, EX2_LOCAL, "ex2_local");
         if (c.do_legacy_layernorm_col_mask) {
             bind_self_loop(kernel, MASK_SCRATCH, "mask_scratch");
         }
@@ -1188,10 +1234,19 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
     if (c.welford_fp32_alias) {
         kernel.compiler_options.defines.emplace("WELFORD_FP32_ALIAS", "1");
     }
+    // Only the two-stage reduce has cores that hand Var[x] to the reader through ex2 instead of keeping it,
+    // so only then does ex2 exist and the kernel pick its Var[x] buffer per core at run time.
+    if (c.use_two_stage_reduce) {
+        kernel.compiler_options.defines.emplace("TWO_STAGE_REDUCE", "1");
+    }
     // The all-to-all workers read three extra runtime arguments and touch three extra buffers, so the
     // distinction has to be visible to the preprocessor rather than to `if constexpr` alone.
     if (is_all_to_all_worker) {
         kernel.compiler_options.defines.emplace("IS_ALLGATHER_WORKER", "1");
+    }
+    // Without a write-back, compute holds both ends of the output buffer (bind_self_loop) and must pop it.
+    if (!c.writes_back && !c.interleaved_output && !c.is_pre_all_gather) {
+        kernel.compiler_options.defines.emplace("OUT_SELF_LOOP", "1");
     }
     for (const auto& [key, value] : c.activation_defines) {
         kernel.compiler_options.defines.emplace(key, value);
@@ -1344,6 +1399,9 @@ void add_kernel_and_work_unit_specs(
         if (c.writes_back) {
             schema.runtime_arg_names.push_back("num_segments_to_write_back");
             schema.runtime_arg_names.push_back("storage_core_start_offset");
+        }
+        if (!c.is_pre_all_gather) {
+            schema.runtime_arg_names.push_back("tile_row_start");  // interleaved input/output blocks only
         }
         return schema;
     }();
@@ -1638,9 +1696,9 @@ std::vector<uint32_t> sender_coord_varargs(const CoreIndices& idx, const Runtime
     return {ctx.mcast_noc_x[idx.height_index], ctx.mcast_noc_y[0]};
 }
 
-// Which storage-core segments this worker's output block spans, three values each: the byte count and
-// the destination node's coordinates. Advances the shared storage-core cursor, so it must be called
-// once per core in shard order.
+// Which storage-core segments this worker's output block spans, two values each: the byte count and
+// the destination output shard id (storage core i holds output shard i). Advances the shared
+// storage-core cursor, so it must be called once per core in shard order.
 std::vector<uint32_t> write_back_varargs(
     const RuntimeArgsContext& ctx,
     uint32_t& current_storage_core,
@@ -1659,8 +1717,7 @@ std::vector<uint32_t> write_back_varargs(
 
         num_segments_out += 1;
         args.push_back(tiles_to_write * ctx.out_single_tile_size);
-        args.push_back(ctx.storage_core_noc_x[current_storage_core]);
-        args.push_back(ctx.storage_core_noc_y[current_storage_core]);
+        args.push_back(current_storage_core);
 
         worker_offset += tiles_to_write;
         current_storage_core_offset += tiles_to_write;
@@ -1857,6 +1914,12 @@ RunArgsAndWriterVarargs build_run_args(
         if (!config.is_pre_all_gather || config.do_col_mask) {
             m2::AddRuntimeArgsForNode(
                 writer.runtime_arg_values, core, {{"width_shard_tile_start_id", idx.width_shard_tile_start_id}});
+        }
+        if (!config.is_pre_all_gather) {
+            m2::AddRuntimeArgsForNode(
+                writer.runtime_arg_values,
+                core,
+                {{"tile_row_start", ctx.interleaved_io ? idx.height_index * ctx.block_ht : 0}});
         }
         if (ctx.writes_back) {
             uint32_t num_segments = 0;

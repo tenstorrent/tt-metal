@@ -10,6 +10,8 @@ from mpmath import cosh as mp_cosh
 from mpmath import mp
 
 from tests.ttnn.utils_for_testing import (
+    assert_equal,
+    assert_with_ulp,
     flush_subnormal_values_to_zero,
     generate_all_bfloat16_bitpatterns,
 )
@@ -58,6 +60,68 @@ def flush_to_zero(tensor):
     """Flush values at or below the smallest normal bfloat16 to zero. |x| ≤ 2^{-126}"""
     tensor[torch.abs(tensor) <= SMALLEST_NORMAL_BF16] = 0.0
     return tensor
+
+
+def assert_ftz_band(result, band_mask, band_desc):
+    """Assert a known flush-to-zero band is non-empty and device-flushed to 0.
+
+    The band is a deterministic slice of the exhaustive sweep, so the
+    non-emptiness assertion guards against a future golden/kernel change that
+    shifts a boundary and silently empties the band (which would otherwise let
+    the test pass without ever checking the documented FTZ behavior).
+    """
+    assert band_mask.any(), f"expected {band_desc} to be non-empty for this exhaustive sweep"
+    assert_equal(torch.zeros_like(result[band_mask]), result[band_mask])
+
+
+def assert_ftz_then_ulp(golden, result, ulp_threshold, reference=None, allow_nonfinite=False):
+    """Exactly 0 where |reference| < SNB, within ulp_threshold of golden elsewhere.
+
+    reference defaults to golden. Pass a float64 reference when float32
+    rounding of the golden can lift a truly subnormal result to SNB itself.
+    Unlike assert_ftz_band, the FTZ region may be empty.
+    """
+    if reference is None:
+        reference = golden
+    ftz = reference.abs() < SMALLEST_NORMAL_BF16
+    assert_equal(torch.zeros_like(result[ftz]), result[ftz])
+    assert_with_ulp(
+        expected_result=golden[~ftz],
+        actual_result=result[~ftz],
+        ulp_threshold=ulp_threshold,
+        allow_nonfinite=allow_nonfinite,
+    )
+
+
+def assert_all_nonfinite(result, desc):
+    """Every element must be non-finite. NaN or ±inf both pass, since bfloat16 packing can turn NaN into inf."""
+    nonfinite = ~torch.isfinite(result)
+    assert nonfinite.all(), f"expected all {desc} outputs to be non-finite; {int((~nonfinite).sum())} were finite"
+
+
+def assert_finite_matches_golden(golden, result, desc):
+    """Wherever the golden is finite, the device output must be finite too.
+
+    PCC zeroes non-finite values on both sides, so on its own it can hide a stray NaN or inf.
+    """
+    unexpected_nonfinite = torch.isfinite(golden) & ~torch.isfinite(result)
+    assert (
+        not unexpected_nonfinite.any()
+    ), f"{desc}: {int(unexpected_nonfinite.sum())} finite-input elements produced a non-finite device output"
+
+
+def bf16_binade_samples(min_magnitude):
+    """Positive magnitudes from min_magnitude to MAX_BF16, as float32.
+
+    Takes the first, middle and last bfloat16 mantissa of every binade (power-of-two
+    interval) from 2^6 up, plus min_magnitude and MAX_BF16 themselves. Binades below
+    2^6 are not sampled, so min_magnitude should be at least 64.
+    """
+    exponent_fields = torch.arange(127 + 6, 255, dtype=torch.int32)
+    mantissas = torch.tensor([0x00, 0x40, 0x7F], dtype=torch.int32)
+    bits = ((exponent_fields[:, None] << 7) | mantissas).flatten().to(torch.int16)
+    magnitudes = torch.cat([bits.view(torch.bfloat16).float(), torch.tensor([min_magnitude, MAX_BF16])]).unique()
+    return magnitudes[magnitudes >= min_magnitude]
 
 
 def generate_bfloat16_bits_in_range(low, high, dtype=torch.bfloat16, ftz=True):
@@ -409,20 +473,137 @@ def to_float32_tt_tensor(input_tensor, device, layout=ttnn.TILE_LAYOUT, memory_c
     return to_tt_tensor(input_tensor, device, dtype=ttnn.float32, layout=layout, memory_config=memory_config)
 
 
-def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, **op_kwargs):
+INT32_MIN = -(2**31)
+INT32_MAX = 2**31 - 1
+INT32_DENSE_HALF_RANGE = 2**14
+
+
+def int32_edge_values():
+    """INT32_MIN, INT32_MAX and every ±2^k, ±(2^k - 1), ±(2^k + 1) that fits in int32, sorted."""
+    edges = {INT32_MIN, INT32_MAX}
+    for k in range(32):
+        for v in (2**k - 1, 2**k, 2**k + 1):
+            edges.update(e for e in (v, -v) if INT32_MIN <= e <= INT32_MAX)
+    return torch.tensor(sorted(edges), dtype=torch.int64)
+
+
+def generate_int32_values(include_int_min=True):
+    """
+    65,536 int32 values for an integer accuracy sweep, shaped (256, 256).
+
+    An int32 sweep cannot enumerate all 2^32 values. The input is:
+      - every integer in [-2^14, 2^14), so small values and sign changes are exhaustive,
+      - int32_edge_values(): the powers of two either side of each bit boundary,
+        including 2^24 + 1 (the first integer float32 cannot hold), INT32_MIN and INT32_MAX,
+      - uniformly random int32 values (fixed seed) filling the rest.
+
+    Args:
+        include_int_min (bool, optional): If False, every INT32_MIN is replaced by
+            INT32_MIN + 1 so ops with a known INT32_MIN defect can be swept on the
+            rest of the range. Defaults to True.
+
+    Returns:
+        torch.Tensor: Shape (256, 256), dtype int32.
+    """
+    dense = torch.arange(-INT32_DENSE_HALF_RANGE, INT32_DENSE_HALF_RANGE, dtype=torch.int64)
+    edges = int32_edge_values()
+    edges = edges[(edges < -INT32_DENSE_HALF_RANGE) | (edges >= INT32_DENSE_HALF_RANGE)]
+    generator = torch.Generator().manual_seed(0)
+    num_random = 256 * 256 - dense.numel() - edges.numel()
+    random = torch.randint(INT32_MIN, INT32_MAX + 1, (num_random,), generator=generator, dtype=torch.int64)
+    values = torch.cat([dense, edges, random]).to(torch.int32)
+    if not include_int_min:
+        values = torch.where(values == INT32_MIN, torch.full_like(values, INT32_MIN + 1), values)
+    return values.reshape(256, 256)
+
+
+INT32_BINARY_GRID_SIZE = 2048
+INT32_BINARY_GRID_DENSE_HALF_RANGE = 256
+
+
+def generate_int32_binary_grid(include_int_min=True):
+    """
+    2048 unique int32 values for a pairwise (binary) integer accuracy sweep.
+
+    The outer product of generate_int32_values would be 4.3e9 pairs, so the
+    binary grid trades density for every operand class appearing against
+    every other:
+      - every integer in [-256, 256), so small operands, sign changes and
+        division by small divisors are exhaustive,
+      - int32_edge_values() outside that range, including 2^24 + 1, INT32_MIN
+        and INT32_MAX,
+      - log-uniform random values (a random bit length, then a random value of
+        that length and a random sign), so products and quotients land in
+        every magnitude rather than overflowing as uniform pairs nearly
+        always do,
+      - uniformly random int32 values filling the rest.
+
+    The outer product is 4,194,304 pairs, the size of the bfloat16 binary grid.
+
+    Args:
+        include_int_min (bool, optional): If False, INT32_MIN is left out and
+            the slot goes to a random value. Defaults to True.
+
+    Returns:
+        torch.Tensor: 1D tensor of length 2048, dtype int32, all unique.
+    """
+    dense = torch.arange(-INT32_BINARY_GRID_DENSE_HALF_RANGE, INT32_BINARY_GRID_DENSE_HALF_RANGE, dtype=torch.int64)
+    edges = int32_edge_values()
+    edges = edges[(edges < -INT32_BINARY_GRID_DENSE_HALF_RANGE) | (edges >= INT32_BINARY_GRID_DENSE_HALF_RANGE)]
+    if not include_int_min:
+        edges = edges[edges != INT32_MIN]
+
+    seen = set(torch.cat([dense, edges]).tolist())
+    generator = torch.Generator().manual_seed(0)
+    num_random = INT32_BINARY_GRID_SIZE - len(seen)
+    num_log_uniform = num_random // 2
+    random = []
+    while len(random) < num_random:
+        if len(random) < num_log_uniform:
+            bits = int(torch.randint(9, 32, (1,), generator=generator))
+            magnitude = int(torch.randint(2 ** (bits - 1), 2**bits, (1,), generator=generator))
+            sign = -1 if int(torch.randint(0, 2, (1,), generator=generator)) else 1
+            value = sign * magnitude
+        else:
+            value = int(torch.randint(INT32_MIN + 1, INT32_MAX + 1, (1,), generator=generator, dtype=torch.int64))
+        if value not in seen:
+            seen.add(value)
+            random.append(value)
+
+    values = torch.cat([dense, edges, torch.tensor(random, dtype=torch.int64)]).to(torch.int32)
+    assert values.numel() == INT32_BINARY_GRID_SIZE
+    return values
+
+
+def int32_pairwise_inputs(include_int_min=True):
+    """Outer product of the 2048-value int32 binary grid: A[i, j] = v[i], B[i, j] = v[j]."""
+    return pairwise_from_values(generate_int32_binary_grid(include_int_min=include_int_min))
+
+
+def wrap_int32(tensor):
+    """Reduce an integer tensor to int32 with two's-complement wraparound, as int32 arithmetic does."""
+    return ((tensor.to(torch.int64) - INT32_MIN) % 2**32 + INT32_MIN).to(torch.int32)
+
+
+def to_int32_tt_tensor(input_tensor, device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Convert a torch tensor to a ttnn.int32 tensor on device with TILE_LAYOUT and DRAM."""
+    return to_tt_tensor(input_tensor, device, dtype=ttnn.int32, layout=layout, memory_config=memory_config)
+
+
+def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, input_dtype=ttnn.bfloat16, **op_kwargs):
     """Run a tensor-tensor ttnn binary op and return ``(golden, result)``.
 
     Ops whose ``__name__`` ends in ``_`` (``ttnn.add_``, ``ttnn.multiply_``, …)
     are inplace: they write into lhs and the result is read back from that
     tensor rather than the return value.
 
-    Inputs are uploaded as ``ttnn.bfloat16``. ``op_kwargs`` (e.g.
-    ``fast_and_approximate_mode``) are forwarded only to the device op.
-    Torch-valid golden arguments (e.g. isclose ``rtol``/``atol``) go in
-    ``golden_kwargs`` and are also passed to the device op.
+    Inputs are uploaded as ``input_dtype`` (``ttnn.bfloat16`` by default).
+    ``op_kwargs`` (e.g. ``fast_and_approximate_mode``) are forwarded only to
+    the device op. Torch-valid golden arguments (e.g. isclose ``rtol``/``atol``)
+    go in ``golden_kwargs`` and are also passed to the device op.
     """
-    tt_a = to_tt_tensor(input_a, device)
-    tt_b = to_tt_tensor(input_b, device)
+    tt_a = to_tt_tensor(input_a, device, dtype=input_dtype)
+    tt_b = to_tt_tensor(input_b, device, dtype=input_dtype)
 
     golden_kwargs = golden_kwargs or {}
     golden_function = ttnn.get_golden_function(ttnn_op)
@@ -435,6 +616,29 @@ def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, **op_kw
     else:
         result = ttnn.to_torch(ttnn_op(tt_a, tt_b, **device_kwargs))
     return golden, result
+
+
+def run_int32_binary(device, ttnn_op, input_a, input_b, **op_kwargs):
+    """Run a ttnn binary op on ttnn.int32 inputs and return the device result as a torch tensor.
+
+    ``input_b`` is a torch tensor (uploaded as ttnn.int32) or a Python scalar
+    (passed through). Inplace ops (``__name__`` ending in ``_``) are read back
+    from lhs, as in ``run_binary``. The golden is left to the caller: int32
+    results are compared against an int64 reference wrapped with
+    ``wrap_int32``, not against torch's int32 arithmetic.
+    """
+    tt_a = to_int32_tt_tensor(input_a, device)
+    tt_b = to_int32_tt_tensor(input_b, device) if torch.is_tensor(input_b) else input_b
+    if ttnn_op.__name__.endswith("_"):
+        ttnn_op(tt_a, tt_b, **op_kwargs)
+        return ttnn.to_torch(tt_a)
+    return ttnn.to_torch(ttnn_op(tt_a, tt_b, **op_kwargs))
+
+
+def scalar_rows(values, tile_width=32):
+    """Repeat each value across one tile width, (N,) -> (N, 32), so a tensor-scalar
+    sweep spans N / 32 full tiles instead of one padded tile row."""
+    return values.unsqueeze(1).expand(values.numel(), tile_width).contiguous()
 
 
 def run_ternary(device, ttnn_op, input_a, input_b, input_c, *, golden_kwargs=None, **op_kwargs):

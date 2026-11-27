@@ -127,10 +127,78 @@ def test_padded_slice_rm_last_dim_pads_sliced_row(device, begins, ends, shard_sh
     assert passed, message
 
 
-# Last-dim offset, shard width == sliced width: Quasar read bound without the pad writer.
-def test_quasar_padded_slice_rm_last_dim_no_pad(device):
+# Last-dim start that isn't a multiple of the DRAM alignment (64 B on Blackhole, 32 B on Wormhole),
+# including starts that aren't 16 B aligned either.
+@pytest.mark.parametrize(
+    "begins, ends, shard_shape",
+    (
+        ([0, 0, 0, 1], [1, 1, 64, 57], (8, 56)),
+        ([0, 0, 0, 4], [1, 1, 64, 64], (8, 64)),
+        ([0, 0, 0, 8], [1, 1, 64, 64], (8, 64)),
+        ([0, 0, 0, 24], [1, 1, 64, 64], (8, 48)),
+    ),
+)
+def test_padded_slice_rm_last_dim_unaligned_start(device, begins, ends, shard_shape):
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
-    begins, ends, shard_shape = [0, 0, 0, 16], [1, 1, 64, 64], (8, 48)
+    tt_input, output_mem_config, expected = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
+    actual = ttnn.experimental.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+    passed, message = assert_equal(expected, ttnn.to_torch(actual))
+    assert passed, message
+
+
+# Row-major block-sharded output: each column of cores reads from the slice's W-begin plus its own
+# width offset, so the misalignment to the source buffer differs per column (and can be zero on one
+# column while the other is unaligned). Columns past the sliced width are zero-padded.
+@pytest.mark.parametrize(
+    "begins, ends, shard_shape",
+    (
+        # 16 B begin: column 0 is unaligned, column 1 (16 B + 112 B) is 64 B aligned.
+        ([0, 0, 0, 8], [1, 1, 32, 120], (16, 56)),
+        # aligned begin; column 1's 96 B offset is misaligned on Blackhole (64 B) and aligned on Wormhole (32 B).
+        ([0, 0, 0, 0], [1, 1, 32, 96], (16, 48)),
+        # 2 B begin: neither column's skip is a 16 B multiple, so both go through the RISC memmove.
+        ([0, 0, 0, 1], [1, 1, 32, 113], (16, 56)),
+        # shard width past the sliced width: column 1 reads 96 B and pads the rest.
+        ([0, 0, 0, 8], [1, 1, 32, 120], (16, 64)),
+    ),
+)
+def test_padded_slice_rm_block_sharded_unaligned_start(device, begins, ends, shard_shape):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    num_cores_h, num_cores_w = 2, 2
+    device_grid = device.compute_with_storage_grid_size()
+    if device_grid.x < num_cores_w or device_grid.y < num_cores_h:
+        pytest.skip(f"Need a {num_cores_w}x{num_cores_h} grid, device has {device_grid.x}x{device_grid.y}")
+
+    torch.manual_seed(0)
+    torch_input = torch.randn([1, 1, 32, 128], dtype=torch.bfloat16)
+    sliced = torch_input[..., begins[3] : ends[3]]
+    pad = shard_shape[1] * num_cores_w - sliced.shape[-1]
+    expected = torch.nn.functional.pad(sliced, (0, pad)) if pad > 0 else sliced
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    actual = ttnn.experimental.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+    actual_torch = ttnn.to_torch(actual)
+    passed, message = assert_equal(expected[..., : actual_torch.shape[-1]], actual_torch)
+    assert passed, message
+
+
+# On Blackhole, BF16 begins 16/8 (32 B/16 B starts) use the non-aligned reader's NoC copy;
+# the begin-1 cases below exercise its CPU copy.
+@pytest.mark.parametrize("begin, shard_width", ((16, 48), (16, 64), (8, 64)))
+def test_quasar_padded_slice_rm_last_dim_offset(device, begin, shard_width):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    begins, ends, shard_shape = [0, 0, 0, begin], [1, 1, 64, begin + 48], (8, shard_width)
     tt_input, output_mem_config, expected = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
     actual = ttnn.experimental.quasar.padded_slice(
         tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config
@@ -139,10 +207,105 @@ def test_quasar_padded_slice_rm_last_dim_no_pad(device):
     assert passed, message
 
 
-# Sliced last dim narrower than the output shard: Quasar pad-row path is not ported.
-def test_quasar_padded_slice_rm_last_dim_pad_rejected(device, expect_error):
+@pytest.mark.requires_grid_size((2, 1))
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("padded", [False, True])
+@pytest.mark.parametrize(
+    "memory_layout, grid_end, shard_height, shard_width",
+    [
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (1, 0), 16, 64),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 0), 32, 32),
+        pytest.param(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (1, 1),
+            16,
+            32,
+            marks=pytest.mark.requires_grid_size((2, 2)),
+        ),
+    ],
+    ids=["height", "width", "block"],
+)
+def test_quasar_padded_slice_rm_unaligned_start(
+    device, dtype, padded, memory_layout, grid_end, shard_height, shard_width
+):
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    torch_input = ((torch.arange(32 * 128) * 37) % 251).reshape(1, 1, 32, 128).to(torch_dtype)
+    expected = torch_input[..., 1:65]
+    if padded:
+        shard_width = shard_width * 3 // 2
+        if memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            expected = torch.nn.functional.pad(expected, (0, shard_width - 64))
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*grid_end))})
+    output_mem_config = ttnn.MemoryConfig(
+        memory_layout,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (shard_height, shard_width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    actual = ttnn.experimental.quasar.padded_slice(
+        tt_input, [0, 0, 0, 1], [1, 1, 32, 65], [1, 1, 1, 1], memory_config=output_mem_config
+    )
+    assert_equal(expected, ttnn.to_torch(actual))
+
+
+# Sliced last dim narrower than the output shard: Quasar pad-row path zero-fills the rest of each row.
+@pytest.mark.parametrize(
+    "begins, ends, shard_shape",
+    (
+        ([0, 0, 0, 16], [1, 1, 64, 64], (8, 64)),
+        ([0, 0, 0, 0], [1, 1, 64, 40], (8, 48)),
+    ),
+)
+def test_quasar_padded_slice_rm_last_dim_pads_sliced_row(device, begins, ends, shard_shape):
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
-    begins, ends, shard_shape = [0, 0, 0, 16], [1, 1, 64, 64], (8, 64)
-    tt_input, output_mem_config, _ = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
-    with expect_error(RuntimeError, r"pad-row path \(output_row > slice_row\) not yet ported"):
-        ttnn.experimental.quasar.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+    tt_input, output_mem_config, expected = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
+    actual = ttnn.experimental.quasar.padded_slice(
+        tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config
+    )
+    passed, message = assert_equal(expected, ttnn.to_torch(actual))
+    assert passed, message
+
+
+# The row-major pad writer zero-filled its scratch page only for 2- and 4-byte elements, so a uint8
+# output copied stale L1 into the padding columns.
+@pytest.mark.requires_grid_size((8, 1))
+def test_padded_slice_rm_uint8_pads_with_zeros(device):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    begins, ends, shard_shape = [0, 0, 0, 0], [1, 1, 64, 40], (8, 64)
+
+    # Leave non-zero data behind in L1 for a pad page that is never cleared to pick up.
+    for _ in range(2):
+        poison = ttnn.from_torch(
+            torch.full([1, 1, 512, 512], 0x7B7B, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(ttnn.add(poison, poison))
+        ttnn.deallocate(poison)
+
+    torch.manual_seed(0)
+    torch_input = torch.randint(1, 256, [1, 1, 64, 64], dtype=torch.uint8)
+    expected = torch.nn.functional.pad(torch_input[..., :40], (0, shard_shape[1] - 40))
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    actual = ttnn.experimental.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+    passed, message = assert_equal(expected, ttnn.to_torch(actual))
+    assert passed, message

@@ -3,25 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <functional>
 #include <string>
 #include <unordered_set>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "tests/tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for printing from ethernet cores.
@@ -37,7 +38,7 @@ void RunTest(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool active,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     // Try printing on all ethernet cores on this device
     std::unordered_set<CoreCoord> test_cores;
     tt_metal::EthernetConfig config = {.noc = static_cast<tt_metal::NOC>(processor), .processor = processor};
@@ -54,7 +55,7 @@ void RunTest(
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = Program();
+        Program program = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -79,13 +80,15 @@ TEST_F(DevicePrintFixture, ActiveEthTestPrint) {
     if (!this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
+    bool ran = false;
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
+        ran = true;
 
         const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
@@ -99,6 +102,9 @@ TEST_F(DevicePrintFixture, ActiveEthTestPrint) {
                 mesh_device);
         }
     }
+    if (!ran) {
+        GTEST_SKIP() << "No device has an active ethernet core";
+    }
 }
 TEST_F(DevicePrintFixture, IdleEthTestPrint) {
     if (!this->IsSlowDispatch()) {
@@ -106,13 +112,15 @@ TEST_F(DevicePrintFixture, IdleEthTestPrint) {
         GTEST_SKIP();
     }
     this->RequestFreshDevicesAfterThisTest();
+    bool ran = false;
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         // Skip if no ethernet cores on this device
         if (device->get_inactive_ethernet_cores().empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
+        ran = true;
         const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
@@ -125,5 +133,8 @@ TEST_F(DevicePrintFixture, IdleEthTestPrint) {
                 },
                 mesh_device);
         }
+    }
+    if (!ran) {
+        GTEST_SKIP() << "No device has an idle ethernet core";
     }
 }

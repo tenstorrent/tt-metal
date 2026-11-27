@@ -25,6 +25,9 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
+from models.demos.deepseek_v3_d_p.tt.mla.utils import l1_if_fits
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
 # module-level INDEXER_WEIGHT_NAMES alias is defined at the bottom of this file for back-compat.
@@ -82,6 +85,25 @@ def normalized_hadamard_matrix(dim: int) -> torch.Tensor:
     return (matrix * (dim**-0.5)).to(torch.bfloat16)
 
 
+def index_keys_hadamard_rotated(config) -> bool:
+    """Whether the DSA indexer scores q and k, and stores k in its index cache, in the orthonormal Hadamard basis.
+
+    ``config.index_hadamard``: absent -> True (DeepSeek-V3.2 / GLM: their decode stores and scores indexer keys in
+    the H basis, and prefill's persistent index cache must match it). Kimi-K3.1 sets False: its vLLM reference and
+    decode rotate neither q nor k, so its index cache holds natural-basis keys."""
+    return getattr(config, "index_hadamard", True)
+
+
+def rotate_index_keys(config, keys: torch.Tensor) -> torch.Tensor:
+    """``keys`` [..., index_head_dim] between the natural basis and the index cache's basis.
+
+    ``keys @ H`` when ``index_keys_hadamard_rotated(config)``, else ``keys``: H is symmetric and its own inverse, so
+    the same map takes a natural-basis key into the cache's basis and a cached key back out."""
+    if not index_keys_hadamard_rotated(config):
+        return keys
+    return (keys.float() @ normalized_hadamard_matrix(keys.shape[-1]).float()).to(keys.dtype)
+
+
 class TtIndexerBase:
     """Shared implementation foundation for DSA and compressed indexer variants.
 
@@ -89,6 +111,11 @@ class TtIndexerBase:
     tuned data flow stay unchanged. Variants override weight conversion,
     initialization, key construction, and scoring where their geometry differs.
     """
+
+    key_only = False  # set per instance by the DSA constructor; variants with their own __init__ keep this
+
+    # score()/forward() accept qr already reduced to this TP rank's query rows (qr_tp_local=True).
+    accepts_tp_local_qr = True
 
     # --- DSA ownership: weight names, config-field detection, host/cache API. ttMLA routes all
     # indexer weight-name / config-field / cache-file / placeholder decisions through these so the
@@ -100,6 +127,8 @@ class TtIndexerBase:
         "indexer.k_norm_bias",
         "indexer.weights_proj",
     )
+    # What a key-only indexer (KV-only layer) loads: the key projection and its norm.
+    KEY_WEIGHT_NAMES = ("indexer.wk", "indexer.k_norm", "indexer.k_norm_bias")
     # Per-weight device dtype, read by both the converter and check_cache_complete. as_tensor stamps
     # dtype.name into the tensorbin filename, so the completeness glob must pin the SAME dtype it will
     # request; a bare-stem glob accepts a stale bf16-only cache for a bf8 request, then silently loads
@@ -137,31 +166,34 @@ class TtIndexerBase:
         return "wq_b_repl" if weight_name == "indexer.wq_b" else weight_name.split(".")[-1]
 
     @classmethod
-    def check_cache_complete(cls, cache_path, cache_name_prefix: str) -> bool:
-        """True iff every indexer tensorbin exists under cache_name_prefix (e.g. 'layer_0.mla') AT ITS
-        EXPECTED DTYPE. The glob pins ``_dtype_{name}_`` (WEIGHT_DTYPES) because as_tensor encodes dtype in
-        the filename: a dtype-blind glob would accept a stale bf16-only cache for a now-bf8 weight, report
-        complete, and let cache-only construction load the empty placeholder as garbage.
-        Uses a direct ``Path.glob`` (no `init_checker`/global-state dependency) because this also runs
-        at ttMLA construction time — the resolver / __init__ gate — where the global fast-cache checker
-        is not necessarily initialized. It's a one-off per-layer check (5 files), so the batch
-        fast-checker optimization isn't needed here. Indexer files are `{prefix}.indexer_{short}` — a
-        disjoint prefix space from the dense MLA names, so dense and indexer checks never alias."""
-        if cache_path is None:
+    def cache_globs(cls, cache_name_prefix: str, key_only: bool = False) -> tuple[str, ...]:
+        """One glob per indexer tensorbin under cache_name_prefix (e.g. 'layer_0.mla'), AT ITS EXPECTED DTYPE.
+        The glob pins ``_dtype_{name}_`` (WEIGHT_DTYPES) because as_tensor encodes dtype in the filename: a
+        dtype-blind glob would accept a stale bf16-only cache for a now-bf8 weight, report complete, and let
+        cache-only construction load the empty placeholder as garbage. Indexer files are `{prefix}.indexer_{short}`
+        — a disjoint prefix space from the dense MLA names, so dense and indexer checks never alias."""
+        return tuple(
+            f"{cache_name_prefix}.indexer_{cls._cache_short_name(name)}_dtype_{cls.WEIGHT_DTYPES[name].name}_*.tensorbin"
+            for name in (cls.KEY_WEIGHT_NAMES if key_only else cls.WEIGHT_NAMES)
+        )
+
+    @classmethod
+    def check_cache_complete(cls, cache_path, cache_name_prefix: str, key_only: bool = False) -> bool:
+        """True iff every indexer tensorbin of ``cache_globs`` exists. Lists the directory once with its own
+        FastCacheChecker (no `init_checker`/global-state dependency) because this also runs at ttMLA
+        construction time — the resolver / __init__ gate — where the global fast-cache checker is not
+        necessarily initialized."""
+        if cache_path is None or not Path(cache_path).is_dir():
             return False
-        cache_path = Path(cache_path)
-        for name in cls.WEIGHT_NAMES:
-            short = cls._cache_short_name(name)
-            dtype_name = cls.WEIGHT_DTYPES[name].name
-            if not any(cache_path.glob(f"{cache_name_prefix}.indexer_{short}_dtype_{dtype_name}_*.tensorbin")):
-                logger.debug(f"TTNN indexer cache missing: {cache_name_prefix}.indexer_{short} ({dtype_name})")
+        checker = FastCacheChecker(Path(cache_path))
+        for pattern in cls.cache_globs(cache_name_prefix, key_only=key_only):
+            if not checker.pattern_exists(pattern, "Indexer"):
+                logger.debug(f"TTNN indexer cache missing: {pattern}")
                 return False
         return True
 
     @classmethod
-    def build_ttnn_cache(
-        cls, idx_host, cache_path, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1
-    ) -> None:
+    def build_ttnn_cache(cls, idx_host, cache_path, mesh_device, config, layer_idx, sp_axis: int, tp_axis: int) -> None:
         """Write the indexer tensorbins to disk (device=None, no device copy)."""
         cls._convert_and_cache_weights(
             idx_host, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path=cache_path, device=None
@@ -169,7 +201,16 @@ class TtIndexerBase:
 
     @classmethod
     def _convert_and_cache_weights(
-        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1, cache_path=None, device=None
+        cls,
+        idx_host,
+        mesh_device,
+        config,
+        layer_idx,
+        sp_axis: int,
+        tp_axis: int,
+        cache_path=None,
+        device=None,
+        key_only: bool = False,
     ):
         """Indexer weights → device (or cache). Mirrors dense MLA's converter:
         - host tensors present: transpose/shard/replicate and (optionally) write the cache;
@@ -197,7 +238,11 @@ class TtIndexerBase:
         # lenient placeholder load (don't block construction) — but, unlike dense which is silent, WARN
         # loudly so the misuse is visible. The layer still stays sparse (binds TtIndexer); it does not
         # fall back to dense. (Build mode, device=None, is gated upstream by ttMLA.build_ttnn_cache.)
-        if not idx_host and device is not None and not cls.check_cache_complete(cache_path, f"layer_{layer_idx}.mla"):
+        if (
+            not idx_host
+            and device is not None
+            and not cls.check_cache_complete(cache_path, f"layer_{layer_idx}.mla", key_only=key_only)
+        ):
             logger.warning(
                 f"Sparse MLA layer {layer_idx}: indexer has neither host weights nor a complete cache at "
                 f"{cache_path!r}; loading from empty placeholders — indexer output will be garbage. "
@@ -205,9 +250,10 @@ class TtIndexerBase:
             )
 
         if idx_host:
-            wq_b = idx_host["indexer.wq_b"]
+            # A key-only load needs only the key side, so host weights may omit the query side.
+            wq_b = idx_host.get("indexer.wq_b") if key_only else idx_host["indexer.wq_b"]
             wk = idx_host["indexer.wk"]
-            wproj = idx_host["indexer.weights_proj"]
+            wproj = idx_host.get("indexer.weights_proj") if key_only else idx_host["indexer.weights_proj"]
             knorm = idx_host["indexer.k_norm"]
             knorm_b = idx_host["indexer.k_norm_bias"]
         else:  # cache-only: placeholders in host (pre-transpose) shapes; as_tensor ignores them on a hit
@@ -230,6 +276,7 @@ class TtIndexerBase:
                 memory_config=mem,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 cache_file_name=_cache_name(short),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         def shard(
@@ -245,24 +292,30 @@ class TtIndexerBase:
                 memory_config=mem,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
                 cache_file_name=_cache_name(short),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         # wq_b is REPLICATED (all H_idx heads on every chip) so the indexer_score head-sum is COMPLETE
         # on-chip — no TP logit all-reduce. (Was col-parallel/TP-head-sharded; replicating trades a small
         # matmul/score compute bump for dropping the ~end_pos-wide 2-CCL logit all-reduce.) Cache name
         # "wq_b_repl" (not "wq_b") so a stale col-sharded tensorbin can never alias this layout. wk /
-        # weights_proj contract over hidden (TP-sharded) → upload transposed+sharded, reduced by _tp_rs_ag.
+        # weights_proj contract over hidden (TP-sharded) → upload transposed+sharded, reduced by the fused matmul + RS.
         # wq_b/wk (Q/K projections) load as bf8, halving their DRAM read. wk tolerates it because the k_norm
         # LayerNorm applied right after it (write_k) cancels the bf8 magnitude error. wq_b has NO downstream
         # normalizer (RoPE only rotates), but the indexer score drives top-k SELECTION, not a value: the
         # head-summed logit absorbs the rounding without moving the selected keys across the top-k boundary
         # (per-layer PCC gate confirms). weights_proj (per-head gate) stays bf16 — the gate is precision-sensitive.
+        # key_only (a KV-only layer only writes index keys): skip the query-side wq_b and weights_proj.
         result = {
-            "wq_b": repl(
+            "wq_b": None
+            if key_only
+            else repl(
                 wq_b, cls._cache_short_name("indexer.wq_b"), transpose=True, dtype=cls.WEIGHT_DTYPES["indexer.wq_b"]
             ),  # [q_lora_rank, H_idx*D_idx] replicated (all heads)
             "wk": shard(wk, 0, "wk", dtype=cls.WEIGHT_DTYPES["indexer.wk"]),  # [dim, D_idx] sharded on dim
-            "weights_proj": shard(
+            "weights_proj": None
+            if key_only
+            else shard(
                 wproj, 0, "weights_proj", dtype=cls.WEIGHT_DTYPES["indexer.weights_proj"]
             ),  # [dim, H_idx] sharded on dim
             "k_norm": repl(knorm, "k_norm", dtype=cls.WEIGHT_DTYPES["indexer.k_norm"]),  # [D_idx]
@@ -296,6 +349,7 @@ class TtIndexerBase:
         layer_num: int = 1,
         first_layer_idx: int | None = None,
         output_tp_sequence_sharded: bool = False,
+        key_only: bool = False,
     ):
         """Architecture constants are read from the HF config with no defaults (index_n_heads,
         index_head_dim, index_topk, index_rope_interleave — a sparse config that omits any of them
@@ -306,7 +360,11 @@ class TtIndexerBase:
         compute-kernel configs, weight-cache location, and the CCL handles used by the inlined
         TP collectives and fused SP ring indexer. The indexer derives its own softmax scale
         (index_head_dim**-0.5) — it does NOT reuse MLA's qk_head_dim*mscale scale. The q_a latent
-        (qr) is passed into forward(), not held here — so the indexer holds no MLA weights."""
+        (qr) is passed into forward(), not held here — so the indexer holds no MLA weights.
+
+        key_only: the layer only writes index keys (a KV-only MLA): wq_b and weights_proj are not loaded and
+        score()/forward() must not be called."""
+        self.key_only = key_only
         self.config = config
         self.mesh_device = mesh_device
         self._is_blackhole = mesh_device.arch() == ttnn.Arch.BLACKHOLE
@@ -349,6 +407,13 @@ class TtIndexerBase:
             index_topk=config.index_topk,
             index_rope_interleave=config.index_rope_interleave,
         )
+        # Indexer rope width: absent -> 64 (DS-V3.2 / GLM); 0 -> NoPE indexer (Kimi-K3.1), no rope tables read.
+        self._index_rope_dim = getattr(config, "index_rope_dim", None)
+        if self._index_rope_dim is None:
+            self._index_rope_dim = 64
+        assert self._index_rope_dim in (0, 64), f"indexer rope width must be 0 (NoPE) or 64; got {self._index_rope_dim}"
+        # k_norm epsilon: absent -> 1e-6 (DS-V3.2 / GLM); Kimi-K3.1 sets its rms_norm_eps (vLLM KimiK3DSAIndexerKNorm).
+        self._index_k_norm_eps = getattr(config, "index_k_norm_eps", 1e-6)
         self.seq_len = seq_len
         # Keep the index tensor width fixed at the configured maximum, except on small-cache test /
         # deployment configurations where the cache itself cannot contain that many entries.  This
@@ -378,9 +443,9 @@ class TtIndexerBase:
         # modes.
         # Block-cyclic key cache (persistent [num_users*_index_cache_layers,1,S/sp,D_idx]) is NOT owned
         # here: exactly like the MLA KVPE cache, the caller allocates it and passes it into
-        # forward(index_kv_cache=...) every call; the indexer never self-allocates it. write_k applies the
-        # decode-compatible Hadamard transform and typecasts the key to the cache's dtype before the in-place
-        # write, so the caller controls the dtype.
+        # forward(index_kv_cache=...) every call; the indexer never self-allocates it. write_k puts the
+        # key in decode's basis (index_keys_hadamard_rotated) and typecasts it to the cache's dtype before the
+        # in-place write, so the caller controls the dtype.
         # GLM-5.3 cross-layer indexer reuse: the index key cache is allocated for full layers only, so this
         # layer writes/reads its compacted rank among them and the folded (user-major) slot stride is the
         # cache's full-layer count, not its layer count. _index_cache_layers is that stride.
@@ -426,7 +491,7 @@ class TtIndexerBase:
         # is natively interleaved -> no permute. NOTE: the stored key is then in interleaved layout —
         # reindex by rope.interleaved_to_halfsplit_perm to compare it against a half-split reference.
         self._rope_perm = None
-        if not self.index_args.index_rope_interleave:
+        if self._index_rope_dim and not self.index_args.index_rope_interleave:
             # rope.interleaved_perm_matrix owns the half-split -> interleaved convention (single source).
             self._rope_perm = ttnn.from_torch(
                 interleaved_perm_matrix(64).to(torch.bfloat16),
@@ -435,19 +500,32 @@ class TtIndexerBase:
                 dtype=ttnn.bfloat16,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        # Blaze stores and scores indexer keys in the orthonormal Hadamard basis. Apply the same
-        # transform to both Q and K so standalone prefill scores are unchanged while the persistent
-        # index cache remains byte-compatible with decode after migration.
-        hadamard = normalized_hadamard_matrix(self.index_args.index_head_dim).reshape(
-            1, 1, self.index_args.index_head_dim, self.index_args.index_head_dim
-        )
-        self._index_hadamard = ttnn.from_torch(
-            hadamard,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+        # The index cache's key basis is the decode's (index_keys_hadamard_rotated): DS-V3.2 / GLM decode store
+        # and score indexer keys in the orthonormal Hadamard basis, so prefill applies the same transform to both
+        # Q and K -- scores are unchanged (H cancels in q.k) and the persistent index cache stays byte-compatible
+        # with decode after migration. Kimi-K3.1's decode and reference rotate neither: natural basis, no H.
+        self._index_hadamard = None
+        if index_keys_hadamard_rotated(config):
+            hadamard = normalized_hadamard_matrix(self.index_args.index_head_dim).reshape(
+                1, 1, self.index_args.index_head_dim, self.index_args.index_head_dim
+            )
+            self._index_hadamard = ttnn.from_torch(
+                hadamard,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            # Unrotated keys are validated for the NoPE indexer only (Kimi-K3.1), whose query needs no
+            # per-call transform after wq_b; a roped one would score a bf16 query (see score()).
+            assert self._index_rope_dim == 0, "index_hadamard=False is only supported for a NoPE indexer"
+        # The query leaves wq_b final (emitted BFP8, no per-call matmul in score()) unless a Hadamard follows
+        # the rope. NoPE: wq_b -> per-head split -> Hadamard has nothing nonlinear between, so fold the Hadamard
+        # into wq_b once here.
+        self._q_hadamard_per_call = self._index_hadamard is not None and self._index_rope_dim != 0
+        if self._index_hadamard is not None and self._index_rope_dim == 0 and self._idx_wq_b is not None:
+            self._idx_wq_b = self._fold_q_hadamard(self._idx_wq_b)
 
     @property
     def tp_shard_kv_axis(self):
@@ -474,23 +552,8 @@ class TtIndexerBase:
             self.tt_ccl.mla_high_bw_all_gather_buffers[key] = output
         return output
 
-    def _tp_rs_ag(self, t, rs_only=False):
-        """All-reduce over TP = reduce-scatter (dim 3) then all-gather; rs_only stops after the RS."""
-        if self.tp_factor == 1:
-            return t
-        t = ttnn.experimental.reduce_scatter_minimal_async(
-            t,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
-            cluster_axis=self.tp_axis,
-        )
-        if rs_only:
-            return t
+    def _tp_all_gather_k(self, t):
+        """All-gather the k columns that the fused wk + TP reduce-scatter left scattered on dim 3."""
         assert tuple(t.shape) == (1, 1, self.active_seq_len_local, self.index_args.index_head_dim // self.tp_factor)
         self._k_all_gather_output = self._get_high_bw_all_gather_buffer(
             name="indexer_k_all_reduce",
@@ -550,6 +613,20 @@ class TtIndexerBase:
             cluster_axis=self.tp_axis,
         )
 
+    def _fold_q_hadamard(self, wq_b: ttnn.Tensor) -> ttnn.Tensor:
+        """wq_b [q_lora, H*D] with each head's D columns right-multiplied by the Hadamard, in wq_b's dtype."""
+        k = wq_b.shape[-2]
+        h, d = self.index_args.index_n_heads, self.index_args.index_head_dim
+        w = ttnn.reshape(ttnn.typecast(wq_b, ttnn.bfloat16), (1, k, h, d))
+        folded = ttnn.matmul(
+            w, self._index_hadamard, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
+        )
+        ttnn.deallocate(w)
+        result = ttnn.typecast(ttnn.reshape(folded, tuple(wq_b.shape)), wq_b.dtype)
+        ttnn.deallocate(folded)
+        ttnn.deallocate(wq_b)
+        return result
+
     def _upload_weights(self, idx_host):
         """Indexer weights → device via the shared converter. `idx_host` may be a full host dict
         (from-weights) or falsy (cache-only: the converter builds placeholders and reads the
@@ -564,15 +641,18 @@ class TtIndexerBase:
             self.tp_axis,
             cache_path=self.weight_cache_path,
             device=self.mesh_device,
+            key_only=self.key_only,
         )
         self._idx_wq_b = w["wq_b"]
         self._idx_wk = w["wk"]
-        # Apply the static indexer scale to the persistent projection weight.
-        wproj = w["weights_proj"]
-        self._idx_wproj = ttnn.multiply(
-            wproj, self.index_args.index_n_heads**-0.5 * self.index_args.index_head_dim**-0.5
-        )
-        ttnn.deallocate(wproj)
+        self._idx_wproj = None
+        if not self.key_only:
+            # Apply the static indexer scale to the persistent projection weight.
+            wproj = w["weights_proj"]
+            self._idx_wproj = ttnn.multiply(
+                wproj, self.index_args.index_n_heads**-0.5 * self.index_args.index_head_dim**-0.5
+            )
+            ttnn.deallocate(wproj)
         self._idx_knorm_w = w["k_norm"]
         self._idx_knorm_b = w["k_norm_bias"]
 
@@ -587,7 +667,10 @@ class TtIndexerBase:
         block-cyclic global position on-device from kv_actual_global, exactly as MLA's _apply_rope_padded,
         so keys land at the same positions update_padded_kv_cache writes them to. For DS (half-split
         weights) self._rope_perm first reorders the rope half into the interleaved arrangement so this
-        interleaved op matches the DS reference (the permutation cancels in q·k, applied to both q and k)."""
+        interleaved op matches the DS reference (the permutation cancels in q·k, applied to both q and k).
+        A NoPE indexer returns x itself."""
+        if self._index_rope_dim == 0:
+            return x
         if self._rope_perm is None:
             assert x.shape[-1] == self.index_args.index_head_dim, "Indexer input width must match index_head_dim"
             return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
@@ -686,22 +769,36 @@ class TtIndexerBase:
         ``actual_end`` (end of the chunk's real tokens) clamps the write to them, so a chunk padding past
         the cache end needs only its real tokens to fit. forward() reads back the same prefix
         (``valid_pos``)."""
-        wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
-        k = ttnn.linear(
-            hidden_states,
-            self._idx_wk,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
-        )  # per-chip partial [1, 1, S/sp, D_idx]
-        k = self._tp_rs_ag(k)  # all-reduce over TP
+        if self.tp_factor > 1:
+            k = ttnn.experimental.matmul_reduce_scatter_prefill(
+                hidden_states,
+                self._idx_wk,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+            k = self._tp_all_gather_k(k)
+        else:
+            wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
+            k = ttnn.linear(
+                hidden_states,
+                self._idx_wk,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+                **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
+            )  # [1, 1, S/sp, D_idx]
+        # With no rope or Hadamard after it, the norm writes the cache dtype itself (no typecast op).
+        norm_dtype = index_kbuf.dtype if self._index_rope_dim == 0 and self._index_hadamard is None else None
         k = ttnn.layer_norm(
             k,
             weight=self._idx_knorm_w,
             bias=self._idx_knorm_b,
-            epsilon=1e-6,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            epsilon=self._index_k_norm_eps,
+            # The norm, RoPE and Hadamard outputs live for one op each until the cache write: L1 when small.
+            memory_config=(k_mem := l1_if_fits(k.shape, 2, 4 << 20)),
             compute_kernel_config=self.default_compute_kernel_config,
+            dtype=norm_dtype,
         )
 
         # Rope the per-chip shard at its block-cyclic positions (kv_actual_global=start_pos), then write it
@@ -711,17 +808,24 @@ class TtIndexerBase:
         # compacted stride (_index_cache_layers) so it matches the cache_batch_idx computed in forward().
         cache_layer_idx = self._cache_slot(cache_layer_idx)
         k = self._bc_rope_pe(k, rope_tensors, start_pos, metadata=metadata)  # [1, 1, S/sp, D_idx] bf16
-        k_hadamard_cfg = self._resolve_mm_cfg("indexer.k_hadamard", seq_len)
-        k_h = ttnn.matmul(
-            k,
-            self._index_hadamard,
-            dtype=index_kbuf.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.default_compute_kernel_config,
-            **({"program_config": k_hadamard_cfg["program_config"]} if k_hadamard_cfg is not None else {}),
-        )
-        ttnn.deallocate(k)
-        k = k_h
+        # Into the cache's basis (index_keys_hadamard_rotated) and dtype.
+        if self._index_hadamard is not None:
+            k_hadamard_cfg = self._resolve_mm_cfg("indexer.k_hadamard", seq_len)
+            k_cache = ttnn.matmul(
+                k,
+                self._index_hadamard,
+                dtype=index_kbuf.dtype,
+                memory_config=k_mem,
+                compute_kernel_config=self.default_compute_kernel_config,
+                **({"program_config": k_hadamard_cfg["program_config"]} if k_hadamard_cfg is not None else {}),
+            )
+        elif k.dtype != index_kbuf.dtype:
+            k_cache = ttnn.typecast(k, index_kbuf.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            k_cache = k
+        if k_cache is not k:
+            ttnn.deallocate(k)
+        k = k_cache
         if metadata is not None:
             # Trace-safe: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read on-device. num_layers
             # stays the compacted stride so the kernel recomposes the same (user, layer) slot as the scalar path.
@@ -769,6 +873,7 @@ class TtIndexerBase:
         index_kv_cache: ttnn.Tensor = None,
         actual_end: int = None,
         metadata=None,
+        qr_tp_local: bool = False,
     ) -> IndexerSelectionState:
         """Run indexer stems and scoring, returning device logits plus selection metadata.
 
@@ -782,7 +887,7 @@ class TtIndexerBase:
         one full-seq chunk at offset 0, so there is no natural path that skips the cache.
 
         ``qr`` is the shared q_a latent (q_a_proj + TP all-reduce + q_a_layernorm) — ttMLA computes it once
-        and passes it in; the indexer applies wq_b to it (no q_a stem of its own). ``qr`` is NOT deallocated
+        and passes it in, or with ``qr_tp_local`` only this TP rank's normalized query rows; the indexer applies wq_b to it (no q_a stem of its own). ``qr`` is NOT deallocated
         here — ttMLA's _q_stem consumes it afterwards. ``hidden_states`` is still needed for the K stem
         (write_k) and the per-head weights (weights_proj). (write_k is called internally here; ttMLA.forward
         only ever calls self._indexer.forward — it never calls write_k directly.)
@@ -790,6 +895,7 @@ class TtIndexerBase:
         ``rope_tensors`` (the MLA's block-cyclic indexed cos/sin/trans) and ``cache_user_id`` (per-user slot)
         drive the per-user block-cyclic key cache + block-cyclic scoring. Scoring and transport are bounded
         by the written prefix, rounded to complete block-cyclic slabs for the fixed-size ring protocol."""
+        assert not self.key_only, "a key-only indexer (KV-only layer) has no query weights; it only runs write_k"
         a = self.index_args
         cache_layer_idx = self._cache_slot(cache_layer_idx)
         glob = seq_len * self.sp_factor  # global query/key count this chunk
@@ -822,8 +928,9 @@ class TtIndexerBase:
 
         # Select the indexer's query rows BEFORE the replicated Q projection/RoPE/Hadamard.
         # Keep the original shared latent alive: the main MLA Q stem consumes it after this forward.
+        # qr_tp_local: the caller already reduced the q_a latent to these rows (see ttMLA._q_a_latent_tp_rows).
         tpsp = self.tp_factor > 1
-        qr_local = ttnn.mesh_partition(qr, dim=2, cluster_axis=self.tp_axis) if tpsp else qr
+        qr_local = ttnn.mesh_partition(qr, dim=2, cluster_axis=self.tp_axis) if tpsp and not qr_tp_local else qr
         sq_local = seq_len // self.tp_factor
         wq_b_cfg = self._resolve_mm_cfg("indexer.wq_b", sq_local)
         q = ttnn.linear(
@@ -832,43 +939,62 @@ class TtIndexerBase:
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=wq_b_cfg["out_mem_config"] if wq_b_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
             **({"program_config": wq_b_cfg["program_config"]} if wq_b_cfg is not None else {}),
-            # Preserve the unquantized values through Hadamard, then materialize BFP8 once below.
-            dtype=ttnn.bfloat16,
+            # Preserve the unquantized values through the per-call Hadamard, then materialize BFP8 once below.
+            # Without one (NoPE: folded into wq_b, or no rotation), this is already the final query: emit BFP8.
+            dtype=ttnn.bfloat16 if self._q_hadamard_per_call else ttnn.bfloat8_b,
         )  # [1,1,S/(sp*tp),H_idx*D_idx] — all heads, only this TP rank's query rows
         if qr_local is not qr:
             ttnn.deallocate(qr_local)
+        # The heads and their RoPE go to L1 when the per-call Hadamard writes the scored query to DRAM after them:
+        # ring_indexer_score_dsa writes its logits where q is.
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            q, num_heads=a.index_n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            q,
+            num_heads=a.index_n_heads,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=l1_if_fits(q.shape, 2, 8 << 20) if self._q_hadamard_per_call else ttnn.DRAM_MEMORY_CONFIG,
         )  # [1,H_idx,S/(sp*tp),D_idx] — all heads resident
         # Reuse the SP-sharded tables. The op preserves their original slab stride and adds this TP
         # query window after deriving the rotated start, including metadata-driven trace replays.
         q_dev = self._bc_rope_pe(
             q, rope_tensors, start_pos, metadata=metadata, seq_subshard_axis=self.tp_axis if tpsp else None
         )
-        q_hadamard_cfg = self._resolve_mm_cfg("indexer.q_hadamard", sq_local)
-        q_h = ttnn.matmul(
-            q_dev,
-            self._index_hadamard,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.default_compute_kernel_config,
-            **({"program_config": q_hadamard_cfg["program_config"]} if q_hadamard_cfg is not None else {}),
-        )
-        ttnn.deallocate(q_dev)
-        q_dev = q_h
+        if q_dev is not q:  # a NoPE indexer returns q itself
+            ttnn.deallocate(q)
+        if self._q_hadamard_per_call:
+            q_hadamard_cfg = self._resolve_mm_cfg("indexer.q_hadamard", sq_local)
+            q_h = ttnn.matmul(
+                q_dev,
+                self._index_hadamard,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # ring_indexer_score_dsa writes its logits where q is
+                compute_kernel_config=self.default_compute_kernel_config,
+                **({"program_config": q_hadamard_cfg["program_config"]} if q_hadamard_cfg is not None else {}),
+            )
+            ttnn.deallocate(q_dev)
+            q_dev = q_h
 
         # weights_proj: device stem -> reduce TP partials and scatter query rows. The static scale is
         # already folded into the persistent projection weight in _upload_weights().
-        wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
-        weights = ttnn.linear(
-            hidden_states,
-            self._idx_wproj,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
-        )
-        # Sum TP partials and scatter the sequence rows consumed by local scoring.
-        weights = self._tp_reduce_scatter_sequence(weights)
+        if self.tp_factor > 1:
+            # Sum TP partials and scatter the sequence rows consumed by local scoring.
+            weights = ttnn.experimental.matmul_reduce_scatter_prefill(
+                hidden_states,
+                self._idx_wproj,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-2,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+        else:
+            wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
+            weights = ttnn.linear(
+                hidden_states,
+                self._idx_wproj,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+                **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
+            )
         # Q and gate weights now have the same TP×SP query ownership. Scoring still uses the original
         # full-SP cache geometry below; only the input query count and its TP sub-offset are smaller.
         qc = (64 if sq_local % 64 == 0 else 32) if tpsp else 64
@@ -938,6 +1064,9 @@ class TtIndexerBase:
             block_cyclic_chunk_local=q_dev.shape[2],
             # The full mesh stripes the key cache over every device already.
             block_cyclic_cache_tp_sharded=False,
+            # Q rows and the index cache are SP-major (sp_coord*tp + tp_coord): row-major on the mesh at
+            # sp_axis=0, column-major at sp_axis=1.
+            full_mesh_outer_axis=self.sp_axis,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
@@ -979,8 +1108,12 @@ class TtIndexerBase:
         *,
         subdevice_id: ttnn.SubDeviceId | None = None,
         sub_core_grids: ttnn.CoreRangeSet | None = None,
+        dram_read_noc: ttnn.NOC | None = None,
     ) -> ttnn.Tensor:
-        """Select local top-k indices, optionally confined to one loaded subdevice/core grid."""
+        """Select local top-k indices, optionally confined to one loaded subdevice/core grid.
+
+        dram_read_noc picks the NoC top-k streams the logits from DRAM on (None = the op's default).
+        """
         metadata_kwargs = {}
         if state.valid_length_tensor is not None:
             metadata_kwargs.update(
@@ -995,6 +1128,7 @@ class TtIndexerBase:
             **metadata_kwargs,
             subdevice_id=subdevice_id,
             sub_core_grids=sub_core_grids,
+            dram_read_noc=dram_read_noc,
         )
 
     def finalize_distribution(
@@ -1032,6 +1166,7 @@ class TtIndexerBase:
         index_kv_cache: ttnn.Tensor = None,
         actual_end: int = None,
         metadata=None,
+        qr_tp_local: bool = False,
     ) -> ttnn.Tensor:
         """Sequential compatibility wrapper for direct callers and non-overlapped sparse MLA."""
         state = self.score(
@@ -1045,6 +1180,7 @@ class TtIndexerBase:
             index_kv_cache=index_kv_cache,
             actual_end=actual_end,
             metadata=metadata,
+            qr_tp_local=qr_tp_local,
         )
         local_indices = self.select_local(state)
         return self.finalize_distribution(local_indices, state)
@@ -1065,6 +1201,8 @@ class TtCsaIndexer(TtIndexerBase):
     ``index_entries`` are compressed-entry counts, while ``active_seq_len_local`` and forward's
     ``seq_len`` remain token counts.
     """
+
+    accepts_tp_local_qr = False  # forward() takes the full q_a latent
 
     WEIGHT_NAMES = (
         "compressor.indexer.q_b_proj",
@@ -1129,7 +1267,7 @@ class TtCsaIndexer(TtIndexerBase):
 
     @classmethod
     def _convert_and_cache_weights(
-        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1, cache_path=None, device=None
+        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int, tp_axis: int, cache_path=None, device=None
     ):
         index_n_heads = config.index_n_heads
         index_head_dim = config.index_head_dim
@@ -1178,6 +1316,7 @@ class TtCsaIndexer(TtIndexerBase):
                 memory_config=memory_config,
                 mesh_mapper=mapper,
                 cache_file_name=cache_name(name),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         result = {
@@ -1368,13 +1507,27 @@ class TtCsaIndexer(TtIndexerBase):
         self._idx_position_bias = weights["position_bias"]
         self._idx_knorm = weights["kv_norm"]
 
-    def reset_overlap_state(self) -> None:
-        """Start over from no predecessor window, independently for every cache-user slot. The inner
-        compressor owns the layout, since it is the one that consumes and emits these. TtCSA.alloc_state
-        resets this alongside the block compressor so both states begin at the same token position.
+    def reset_overlap_state(self, cache_user_id: int | None = None) -> None:
+        """Start over from no predecessor window, for slot ``cache_user_id`` or, when None, for every
+        cache-user slot. The inner compressor owns the layout, since it is the one that consumes and emits
+        these. TtCSA.new_state resets a slot alongside the block compressor so both states begin at the
+        same token position.
 
         One pair per slot: two users sharing this instance must not share the overlap state, or the
-        second user's first chunk would consume the first user's terminal state (see __init__)."""
+        second user's first chunk would consume the first user's terminal state (see __init__). Resetting
+        one slot leaves the others where they are, since their users may be mid-prefill."""
+        if cache_user_id is not None:
+            assert (
+                0 <= cache_user_id < self._slot_num
+            ), f"cache_user_id {cache_user_id} is outside [0, {self._slot_num})"
+            # Allocated before the old pair is freed, so a failed allocation leaves the slot as it was.
+            kv_state, score_state = self._compressor.alloc_overlap_state()
+            old = (self._overlap_kv_state[cache_user_id], self._overlap_score_state[cache_user_id])
+            self._overlap_kv_state[cache_user_id] = kv_state
+            self._overlap_score_state[cache_user_id] = score_state
+            for state in old:
+                ttnn.deallocate(state)
+            return
         if hasattr(self, "_overlap_kv_state"):
             for state in (*self._overlap_kv_state, *self._overlap_score_state):
                 ttnn.deallocate(state)

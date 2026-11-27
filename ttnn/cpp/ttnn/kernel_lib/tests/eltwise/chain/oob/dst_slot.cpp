@@ -20,10 +20,13 @@ void kernel_main() {
     constexpr uint32_t slot = get_compile_time_arg_val(1);
     constexpr auto Slot = static_cast<compute_kernel_lib::Dst>(slot);
 
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_in, cb_out);
 
     compute_kernel_lib::eltwise_chain(
         compute_kernel_lib::IterationShape::tiles(total_tiles),
-        compute_kernel_lib::CopyTile<compute_kernel_lib::input(cb_in), Slot>{},
-        compute_kernel_lib::PackTile<compute_kernel_lib::output(cb_out), Slot>{});
+        compute_kernel_lib::CopyTile<compute_kernel_lib::input(cb_in), Slot>{cb_in_obj},
+        compute_kernel_lib::PackTile<compute_kernel_lib::output(cb_out), Slot>{cb_out_obj});
 }

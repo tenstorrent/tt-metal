@@ -5,13 +5,13 @@
 #include "internal/cluster_noc_helpers.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <umd/device/cluster_descriptor.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
-#include "tt_metal/api/tt-metalium/allocator.hpp"
-#include "tt_metal/api/tt-metalium/buffer_types.hpp"
-#include "tt_metal/api/tt-metalium/device.hpp"
+#include "tt_metal/api/tt-metalium/mesh/allocator.hpp"
+#include "tt_metal/api/tt-metalium/memory/buffer/buffer_types.hpp"
+#include "tt_metal/api/tt-metalium/mesh/legacy/device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/metal_soc_descriptor.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"

@@ -8,7 +8,7 @@
 #include <benchmark/benchmark.h>
 
 #include <chrono>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <vector>
 
 #include "core/compute_kernel_config.hpp"
@@ -126,7 +126,7 @@ static void BM_ABT(benchmark::State& state) {
     run_matmul_bench(state, /*transpose_a=*/false, /*transpose_b=*/true);
 }
 
-// transpose_a adds a compute-side transpose_wh_tile pass — extra work beyond the stored-shape
+// transpose_a adds a compute-side transpose_tile pass — extra work beyond the stored-shape
 // change that transpose_b alone makes (see run_matmul_bench).
 static void BM_ATB(benchmark::State& state) {
     run_matmul_bench(state, /*transpose_a=*/true, /*transpose_b=*/false);

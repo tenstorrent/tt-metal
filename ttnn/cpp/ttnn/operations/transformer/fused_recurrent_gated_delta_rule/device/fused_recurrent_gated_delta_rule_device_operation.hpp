@@ -7,7 +7,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -35,9 +35,10 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const Tensor& q,
     const Tensor& k,
     const Tensor& v,
-    const Tensor& decay,
+    const Tensor& g,
     const Tensor& beta,
     const std::optional<Tensor>& initial_state,
+    const std::optional<Tensor>& initial_state_block_idx,
     uint32_t T,
     bool output_final_state,
     bool output_per_token_state,

@@ -31,15 +31,15 @@
 #include <gtest/gtest.h>
 
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 
 namespace tt::tt_metal {
@@ -95,7 +95,7 @@ std::string make_sanity_kernel_source(uint32_t runtime_id) {
 // out by the host-side receiver).
 void enqueue_sanity_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t runtime_id, const CoreRange& all_cores) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     const std::string kernel_src = make_sanity_kernel_source(runtime_id);
 
@@ -367,7 +367,7 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
 
     const std::string kernel_src = make_sanity_kernel_source(kTraceRuntimeId);
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     CreateKernelFromString(
         program,
         kernel_src,

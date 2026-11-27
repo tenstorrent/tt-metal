@@ -3,32 +3,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdint>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <numeric>
 #include <optional>
 #include <random>
+#include <span>
 #include <tuple>
 #include <vector>
 #include <iomanip>
 #include <sstream>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include "env_lib.hpp"
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
-#include <tt-metalium/mesh_config.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include "common/env_lib.hpp"
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/mesh/mesh_config.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include "impl/context/metal_context.hpp"
-#include "tt_metal/api/tt-metalium/math.hpp"
+#include <tt-metalium/data_formats/data_format.hpp>
+#include "tt_metal/api/tt-metalium/utils/math.hpp"
 #include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal::distributed::test {
@@ -36,8 +38,7 @@ namespace {
 
 // Helper function to detect and print mismatch ranges with formatted output
 template <typename T>
-void print_mismatch_ranges(
-    const std::vector<T>& src_vec, const std::vector<T>& dst_vec, const std::string& context = "") {
+void print_mismatch_ranges(std::span<const T> src_vec, std::span<const T> dst_vec, const std::string& context = "") {
     if (src_vec.size() != dst_vec.size()) {
         log_info(
             tt::LogTest,
@@ -119,30 +120,61 @@ constexpr uint32_t ElementSize = sizeof(ElementType);
 constexpr auto KB{1ul << 10};
 constexpr auto MB{1ul << 20};
 constexpr auto GB{1ul << 30};
-class LargeMeshBufferTestSuiteBase : public MeshBufferTestSuite {
-protected:
-    static constexpr uint64_t max_num_elements_ = (12 * GB) / ElementSize;
-    // A large datatype is used to reduce random shuffle time
-    inline static std::vector<ElementType> src_vec_;
 
-    LargeMeshBufferTestSuiteBase() {
-        if (src_vec_.empty()) {
-            log_info(tt::LogTest, "LargeMeshBufferTestSuiteBase ctor: initializing src_vec_");
-            src_vec_.resize(max_num_elements_);
-            std::iota(src_vec_.begin(), src_vec_.end(), 0);
-            std::shuffle(src_vec_.begin(), src_vec_.end(), std::mt19937(std::random_device{}()));
-        }
+// The 12 GB LargeInterleavedReadback case below; no other case is larger.
+constexpr auto max_case_size{12 * GB};
+// Each case's data starts this much further into the shared sequence than the previous case's, wrapping at
+// max_src_shift (1024 distinct starts, far more than there are cases).
+constexpr auto src_shift_step{1 * KB};
+constexpr auto max_src_shift{1 * MB};
+
+// Returns `num_elements` consecutive values of one per-process sequence of distinct values in scrambled order, so a
+// page read back from the wrong address never matches. Value i is the splitmix64 output function
+// (https://prng.di.unimi.it/splitmix64.c) of i plus a random per-process offset; every step of that function is
+// invertible, so distinct indices give distinct values. Because each call starts src_shift_step past the last one,
+// consecutive cases write different data to every DRAM address they share.
+//
+// Cases share the sequence and read it in place, and it is generated only as far as the largest case so far has
+// needed, so a run fills its largest case once and a skipped case costs nothing. Capacity for the largest case plus
+// the largest shift is reserved on first use: that only maps address space, and growing within it never moves the
+// data.
+//
+// ShardDataTransfer::host_data() takes a non-const pointer for writes too, so callers const_cast the result for
+// enqueue_write_shards, which only reads it.
+std::span<const ElementType> src_data(size_t num_elements) {
+    static const uint64_t offset = std::mt19937_64(std::random_device{}())();
+    static std::vector<ElementType> data = [] {
+        std::vector<ElementType> reserved;
+        reserved.reserve((max_case_size + max_src_shift) / ElementSize);
+        return reserved;
+    }();
+    static size_t next_shift = 0;
+    const size_t first = next_shift / ElementSize;
+    next_shift = (next_shift + src_shift_step) % max_src_shift;
+
+    const size_t end = first + num_elements;
+    TT_FATAL(
+        end <= data.capacity(),
+        "A case needs source elements [{}, {}) but only {} are reserved; raise max_case_size to the largest case",
+        first,
+        end,
+        data.capacity());
+    for (size_t i = data.size(); i < end; ++i) {
+        uint64_t z = offset + i;
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+        data.push_back(z ^ (z >> 31));
     }
-};
+    return {data.data() + first, num_elements};
+}
 
 bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
     const size_t num_dram_channels = mesh_device.num_dram_channels();
-    const size_t dram_size_per_channel = mesh_device.dram_size_per_channel();
-    const DeviceAddr bank_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const DeviceAddr available_size_per_bank = mesh_device.allocator()->get_bank_size(BufferType::DRAM);
 
     bool result{true};
     auto allocation_size_per_bank = (size + num_dram_channels - 1) / num_dram_channels;
-    result = result and allocation_size_per_bank <= dram_size_per_channel - bank_offset;
+    result = result and allocation_size_per_bank <= available_size_per_bank;
     if (not result) {
         log_info(
             tt::LogTest,
@@ -150,7 +182,7 @@ bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
             "size/bank, #banks ({:X}, {})",
             size,
             allocation_size_per_bank,
-            dram_size_per_channel - bank_offset,
+            available_size_per_bank,
             num_dram_channels);
         return result;
     }
@@ -158,7 +190,7 @@ bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
     return result;
 }
 
-class InterleavedMeshBufferTestSuite : public LargeMeshBufferTestSuiteBase,
+class InterleavedMeshBufferTestSuite : public MeshBufferTestSuite,
                                        public testing::WithParamInterface<std::tuple<uint64_t, uint32_t>> {};
 
 TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
@@ -184,19 +216,16 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     EXPECT_EQ(mesh_buffer->device_local_size(), tensor_size);
     EXPECT_TRUE(mesh_buffer->is_allocated());
 
-    // Create test data - use uint16_t for easy verification
     auto num_elements = tensor_size / ElementSize;
-    if (num_elements > max_num_elements_) {
-        TT_THROW("Buffer size {} elements exceeds test vector {} elements", num_elements, max_num_elements_);
-    }
-    std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
+    const std::span<const ElementType> src = src_data(num_elements);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
     auto mesh_size = coord_range.shape().mesh_size();
     std::vector<distributed::ShardDataTransfer> input_shards = {};
     input_shards.reserve(mesh_size);
     for (const auto& coord : coord_range) {
-        input_shards.emplace_back(distributed::ShardDataTransfer{coord}.host_data(src_vec.data()));
+        input_shards.emplace_back(
+            distributed::ShardDataTransfer{coord}.host_data(const_cast<ElementType*>(src.data())));
     }
 
     std::unordered_map<distributed::MeshCoordinate, std::vector<ElementType>> dst_vec = {};
@@ -213,8 +242,8 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     for (auto& dst : dst_vec) {
         std::string context =
             "Device coord (" + std::to_string(dst.first[0]) + "," + std::to_string(dst.first[1]) + ")";
-        print_mismatch_ranges(src_vec, dst.second, context);
-        EXPECT_EQ(dst.second, src_vec);
+        print_mismatch_ranges<ElementType>(src, dst.second, context);
+        EXPECT_TRUE(std::ranges::equal(dst.second, src));
     }
 }
 
@@ -241,13 +270,12 @@ bool validate_sharded_test_inputs(
 
     // Determine if required allocation per bank can fit
     const size_t num_dram_channels = mesh_device.num_dram_channels();
-    const size_t dram_size_per_channel = mesh_device.dram_size_per_channel();
-    const DeviceAddr bank_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const DeviceAddr available_size_per_bank = mesh_device.allocator()->get_bank_size(BufferType::DRAM);
     uint32_t shard_height = tensor_shape.height() / grid_size.y;
     uint32_t shard_width = tensor_shape.width() / grid_size.x;
     size_t shard_sizeB = size_t(shard_height) * shard_width * element_sizeB;
 
-    result = result and shard_sizeB <= dram_size_per_channel - bank_offset;
+    result = result and shard_sizeB <= available_size_per_bank;
     if (not result) {
         log_info(
             tt::LogTest,
@@ -257,7 +285,7 @@ bool validate_sharded_test_inputs(
             tensor_shape,
             grid_size,
             shard_sizeB,
-            dram_size_per_channel - bank_offset,
+            available_size_per_bank,
             num_dram_channels);
         return result;
     }
@@ -266,7 +294,7 @@ bool validate_sharded_test_inputs(
 }
 
 class ShardedMeshBufferTestSuite
-    : public LargeMeshBufferTestSuiteBase,
+    : public MeshBufferTestSuite,
       public testing::WithParamInterface<std::tuple<std::pair<Shape2D, CoreCoord>, uint32_t>> {};
 
 TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
@@ -456,15 +484,13 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     auto mesh_buffer = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device_.get());
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
 
-    if (num_elements > max_num_elements_) {
-        TT_THROW("Buffer size {} elements exceeds test vector {} elements", num_elements, max_num_elements_);
-    }
-    std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
+    const std::span<const ElementType> src = src_data(num_elements);
     auto mesh_size = coord_range.shape().mesh_size();
     std::vector<distributed::ShardDataTransfer> input_shards = {};
     input_shards.reserve(mesh_size);
     for (const auto& coord : coord_range) {
-        input_shards.emplace_back(distributed::ShardDataTransfer{coord}.host_data(src_vec.data()));
+        input_shards.emplace_back(
+            distributed::ShardDataTransfer{coord}.host_data(const_cast<ElementType*>(src.data())));
     }
 
     std::unordered_map<distributed::MeshCoordinate, std::vector<ElementType>> dst_vec = {};
@@ -481,8 +507,8 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     for (auto& dst : dst_vec) {
         std::string context =
             "Device coord (" + std::to_string(dst.first[0]) + "," + std::to_string(dst.first[1]) + ")";
-        print_mismatch_ranges(src_vec, dst.second, context);
-        EXPECT_EQ(dst.second, src_vec);
+        print_mismatch_ranges<ElementType>(src, dst.second, context);
+        EXPECT_TRUE(std::ranges::equal(dst.second, src));
     }
 }
 

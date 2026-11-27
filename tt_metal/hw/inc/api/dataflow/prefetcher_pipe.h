@@ -18,7 +18,6 @@
 #include "api/dataflow/prefetcher_pipe_binding_token.h"
 
 #if !defined(COMPILE_FOR_TRISC)
-#include <optional>
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -72,6 +71,12 @@ namespace experimental {
 // commit() / dtor store ptr back when the epoch (word[2] fifo_start, word[5]
 // applied_entry_size) matches the iface.
 //
+// A kernel binding a pipe may also run on nodes that are not the pipe's sender or receivers
+// (PrefetcherPipeBinding::extra_nodes). The pipe token there does not describe a pipe endpoint:
+// don't construct a PrefetcherPipe on those nodes, and don't construct its relay DataflowBuffer
+// in any kernel (the relay's compute consumers run on the extra nodes too). Doing so can corrupt
+// another pipe's state. Use a runtime argument to tell extra nodes apart.
+//
 // Same push/pop/write API as CrossNodeDFB. Mid-flight page-size changes use
 // set_entry_size / set_receiver_entry_size after that endpoint's E1 operations.
 // The sender may switch to E2 and prefetch while a live receiver still consumes E1.
@@ -123,9 +128,12 @@ namespace experimental {
 //    write_strided(src, num_rows, pages_per_row, page_size);
 //    flush_writes();
 //    push_back(n);
+//  or, crediting each receiver right behind its rows (returns with the writes flushed):
+//    reserve_back(n);
+//    write_strided_and_push_back(src, n, num_rows, pages_per_row, page_size);
 //
 //  Mid-flight resize (sender):
-//    set_entry_size(E2);           // snap forward + publish pad credits; no drain
+//    set_entry_size(E2);           // snap forward + publish pad credits once they fit; no drain
 //    // then continue with E2-sized pushes, or signal host to launch a new consumer Program
 //
 // ═══════════════════════════════════════════════════════════════════════
@@ -144,7 +152,7 @@ namespace experimental {
 //    wait_front(n);
 //    auto lock = scoped_read_lock(n);
 //    auto rd = lock.get_ptr();  // CoreLocalMem at fifo front
-//    // process data at rd.get_address() / rd.get_unsafe_ptr() ...
+//    // process data at rd[i] / *rd, or pass rd to Noc as an endpoint ...
 //    pop_front(n);
 //
 //  Mid-flight resize (receiver):
@@ -161,7 +169,9 @@ namespace experimental {
 //
 //  Host: a DataflowBufferSpec with prefetcher_pipe_relays naming the pipe(s), produced by
 //  the receiver DM kernel that binds those pipes and consumed by the compute kernel.
-//  DM deliberately receives no relay binding token and must use bind_relay().
+//  The relay token carries both access patterns. DM must call bind_relay(), which builds the relay
+//  and returns a producer-only view: bind_relay() builds it untyped, bind_relay(dfb::relay) types it
+//  from the token (required when either side of the relay is BLOCKED).
 //
 //  DM (receiver kernel) — single producer:
 //    PrefetcherPipe pipe(pipe::in);
@@ -177,6 +187,16 @@ namespace experimental {
 //    relay.reserve_back(n);
 //    pipe.wait_front(n);   // n owned strides (lane credits)
 //    relay.push_back(n);
+//    pipe.pop_front(n);
+//
+//  DM — typed relay (any patterns; required when either side is BLOCKED):
+//    auto relay = pipe.bind_relay(dfb::relay);
+//    const uint32_t share = relay.get_producer_share();  // entries this thread pushes at a time
+//    pipe.wait_front(n);
+//    for (uint32_t i = 0; i < n * relay_entries_per_pipe_entry; i += share) {
+//        relay.reserve_back(share);
+//        relay.push_back(share);
+//    }
 //    pipe.pop_front(n);
 //
 //  Compute kernel (reads relay DFB, no PrefetcherPipe or NOC knowledge):
@@ -284,7 +304,8 @@ public:
 #if !defined(COMPILE_FOR_TRISC)
     // Change the size of subsequent sender operations. Each receiver's stored write
     // cursor is snapped forward and the skipped bytes are published as pad credits,
-    // matching GlobalCB. Outstanding old-size payload need not drain.
+    // as GlobalCB does. Outstanding old-size payload need not drain, but each pad waits
+    // until its receiver's ring has room for it.
     FORCE_INLINE void set_entry_size(uint32_t entry_size) {
         volatile tt_l1_ptr uint32_t* l1_config =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.sender.config_ptr);
@@ -299,7 +320,7 @@ public:
     // consumed its E1 entries. Consume the sender's matching pad credits, without
     // requiring the sender's newer E2 payload to drain.
     // If this core has a relay, also rewrite the local relay DFB iface (page size,
-    // usable limit, rd/wr) so a RelayView from bind_relay() is not left on E1.
+    // usable limit, rd/wr) so the view bind_relay() returned is not left on E1.
     // TRISC must already have consumed the previous-size tiles (relay-backed pop_front);
     // its local CB is a separate object aligned at DataflowBuffer construction.
     FORCE_INLINE void set_receiver_entry_size(uint32_t entry_size) {
@@ -312,7 +333,8 @@ public:
             l1_config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE, interface_.receiver.fifo_page_size);
         const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         if (iface.relay_id != RELAY_DFB_INVALID) {
-            align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface, relay_pages_per_entry_);
+            align_local_dfb_to_prefetcher_pipe_receiver_iface(
+                iface.relay_id, iface, relay_pages_per_entry_, relay_share_);
         }
     }
 #endif
@@ -328,7 +350,20 @@ public:
         CrossNodeSenderDFBInterface& iface = interface_.sender;
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
         const uint32_t P = num_credit_lanes();
+        if (P == 1 && free_units_floor_ >= max_units_for_write(iface, num_entries)) {
+            // Room is already known, but each write must still be contiguous.
+            if constexpr (ASSERT_ENABLED) {
+                for (uint32_t i = 0; i < num_recv; ++i) {
+                    if (owns_receiver(i)) {
+                        assert_contiguous_write(iface, sender_wr_offset(iface, i), num_entries);
+                    }
+                }
+            }
+            WAYPOINT("GSRD");
+            return;
+        }
 
+        uint32_t min_free_units = fifo_size() / L1_ALIGNMENT;
         for (uint32_t i = 0; i < num_recv; ++i) {
             if (!owns_receiver(i)) {
                 continue;
@@ -336,16 +371,9 @@ public:
             const uint32_t wr_offset = sender_wr_offset(iface, i);
             assert_contiguous_write(iface, wr_offset, num_entries);
             if (P == 1) {
-                const uint32_t num_units = fifo_size() / L1_ALIGNMENT;
-                volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, i, 0);
-                volatile tt_l1_ptr uint32_t* acked_ptr = local_acked_ptr(iface, i, 0);
-                const uint32_t total_units_needed = units_for_write(iface, wr_offset, num_entries);
-                uint32_t sent = 0;
-                uint32_t acked = 0;
-                do {
-                    sent = *sent_ptr;
-                    acked = load_remote_l1_credit(acked_ptr);
-                } while ((num_units - (sent - acked)) < total_units_needed);
+                const uint32_t free_units =
+                    wait_for_free_units(iface, i, units_for_write(iface, wr_offset, num_entries));
+                min_free_units = free_units < min_free_units ? free_units : min_free_units;
             } else {
                 // Lane free space like tile counters: count entries per lane in this push.
                 const uint32_t entry_size = iface.fifo_page_size;
@@ -372,6 +400,7 @@ public:
                 }
             }
         }
+        free_units_floor_ = min_free_units;  // consulted only when P == 1
         WAYPOINT("GSRD");
     }
 
@@ -388,16 +417,7 @@ public:
         const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
         assert_contiguous_write(iface, wr_offset, num_entries);
         if (P == 1) {
-            const uint32_t num_units = fifo_size() / L1_ALIGNMENT;
-            volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, receiver_idx, 0);
-            volatile tt_l1_ptr uint32_t* acked_ptr = local_acked_ptr(iface, receiver_idx, 0);
-            const uint32_t total_units_needed = units_for_write(iface, wr_offset, num_entries);
-            uint32_t sent = 0;
-            uint32_t acked = 0;
-            do {
-                sent = *sent_ptr;
-                acked = load_remote_l1_credit(acked_ptr);
-            } while ((num_units - (sent - acked)) < total_units_needed);
+            wait_for_free_units(iface, receiver_idx, units_for_write(iface, wr_offset, num_entries));
         } else {
             const uint32_t entry_size = iface.fifo_page_size;
             const uint32_t upe = units_per_entry(iface);
@@ -425,6 +445,55 @@ public:
         WAYPOINT("GSRD");
     }
 
+    // Whether a SINGLE receiver (receiver_idx) has space for num_entries entries right now: what
+    // reserve_back_for_receiver waits for, without waiting. Lets one sender serving several receivers
+    // move on to another receiver instead of stalling behind a slow one. Single credit lane only.
+    // Multi-DM: this hart must own receiver_idx. The writes and credits that would follow are no-ops
+    // for a receiver it does not own, so a true answer there would count a block that was never sent.
+    FORCE_INLINE bool receiver_has_space(uint32_t receiver_idx, uint32_t num_entries) {
+        ASSERT(num_credit_lanes() == 1);
+        ASSERT(owns_receiver(receiver_idx));
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
+        assert_contiguous_write(iface, wr_offset, num_entries);
+        const uint32_t num_units = fifo_size() / L1_ALIGNMENT;
+        return num_units - used_units(iface, receiver_idx) >= units_for_write(iface, wr_offset, num_entries);
+    }
+
+    // The most entries, up to max_entries, that one write to a SINGLE receiver (receiver_idx) can carry right now:
+    // as many as its ring has space for, stopping at the ring's end, which one write may not cross. 0 if it has
+    // space for none. Lets a sender with several entries ready send them in one write and one credit. Single credit
+    // lane only; the same ownership rule as receiver_has_space applies.
+    //
+    // `pending_entries` entries already written to the receiver and not credited yet (write_to_receiver_head with
+    // the same count) are counted as used, and the write goes after them, so a sender can keep several writes in
+    // flight to one receiver and credit each once it has left this core.
+    FORCE_INLINE uint32_t
+    receiver_contiguous_space(uint32_t receiver_idx, uint32_t max_entries, uint32_t pending_entries = 0) {
+        ASSERT(num_credit_lanes() == 1);
+        ASSERT(owns_receiver(receiver_idx));
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        uint32_t pending_units = 0;
+        const uint32_t wr_offset =
+            offset_after_pending(iface, sender_wr_offset(iface, receiver_idx), pending_entries, pending_units);
+        const uint32_t free_units = fifo_size() / L1_ALIGNMENT - pending_units - used_units(iface, receiver_idx);
+        // Usually all of them fit short of the ring's end, which settles it without dividing.
+        const uint32_t to_end_bytes = usable_offset(iface) - wr_offset;
+        const uint32_t free_bytes = free_units * L1_ALIGNMENT;
+        const uint32_t max_bytes = max_entries * iface.fifo_page_size;
+        if (max_bytes < to_end_bytes && max_bytes <= free_bytes) {
+            return max_entries;
+        }
+        // Otherwise as many as fit both before the end and in the free space, with one division.
+        const uint32_t fit = (to_end_bytes < free_bytes ? to_end_bytes : free_bytes) / iface.fifo_page_size;
+        uint32_t num_entries = max_entries < fit ? max_entries : fit;
+        // A write that reaches the ring's end is also credited the gap after it.
+        if (num_entries != 0 && units_for_write(iface, wr_offset, num_entries) > free_units) {
+            --num_entries;
+        }
+        return num_entries;
+    }
+
 #if !defined(COMPILE_FOR_TRISC)
 
     // ------------------------------------------------------------------
@@ -447,6 +516,7 @@ public:
         uint32_t coalesced_num_pages_per_row,
         uint32_t coalesced_page_size,
         const typename noc_traits_t<Src>::src_args_type& src_args = {}) {
+#ifdef ARCH_QUASAR
         CrossNodeSenderDFBInterface& iface = interface_.sender;
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
 
@@ -454,49 +524,70 @@ public:
         const uint32_t bytes_per_recv = num_rows * row_bytes_per_recv;
         const uint32_t row_stride_in_stage = row_bytes_per_recv * num_recv;
 
-        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
-        uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
-        uint32_t recv_src_offset = 0;
-        for (uint32_t i = 0; i < num_recv; ++i) {
-            if (owns_receiver(i)) {
-                const uint32_t wr_offset = sender_wr_offset(iface, i);
-                assert_contiguous_bytes(iface, wr_offset, bytes_per_recv);
-
-                uint32_t current_src_addr = src_addr + recv_src_offset;
-                destination_offset_bytes_ = 0;
-#ifdef ARCH_QUASAR
-                // Non-posted: flush_writes waits for completion before pages_sent (posted can reorder).
-                noc.set_async_write_state(*this, coalesced_page_size, {.receiver_idx = i});
-#else
-                noc.set_async_write_state<NocOptions::POSTED>(*this, coalesced_page_size, {.receiver_idx = i});
-#endif
-                for (uint32_t h = 0; h < num_rows; ++h) {
-                    const uint32_t row_src_start = current_src_addr;
-                    for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
-#ifdef ARCH_QUASAR
-                        noc.async_write_with_state(
-                            CoreLocalMem<uint32_t>(current_src_addr),
-                            *this,
-                            coalesced_page_size,
-                            {},
-                            {.receiver_idx = i});
-#else
-                        noc.async_write_with_state<NocOptions::POSTED>(
-                            CoreLocalMem<uint32_t>(current_src_addr),
-                            *this,
-                            coalesced_page_size,
-                            {},
-                            {.receiver_idx = i});
-#endif
-                        current_src_addr += coalesced_page_size;
-                        destination_offset_bytes_ += coalesced_page_size;
-                    }
-                    current_src_addr = row_src_start + row_stride_in_stage;
-                }
+        uint32_t src_addr = local_src_addr(noc, src, src_args);
+        for (uint32_t i = 0; i < num_recv; ++i, src_addr += row_bytes_per_recv) {
+            if (!owns_receiver(i)) {
+                continue;
             }
-            recv_src_offset += row_bytes_per_recv;
+            assert_contiguous_bytes(iface, sender_wr_offset(iface, i), bytes_per_recv);
+
+            uint32_t current_src_addr = src_addr;
+            destination_offset_bytes_ = 0;
+            noc.set_async_write_state(*this, coalesced_page_size, {.receiver_idx = i});
+            const auto write_page = [&](uint32_t page_src_addr, uint32_t page_bytes) {
+                noc.async_write_with_state(
+                    CoreLocalMem<uint32_t>(page_src_addr), *this, page_bytes, {}, {.receiver_idx = i});
+            };
+            for (uint32_t h = 0; h < num_rows; ++h) {
+                const uint32_t row_src_start = current_src_addr;
+                for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
+                    if (h + 1 == num_rows && w + 1 == coalesced_num_pages_per_row) {
+                        // The receiver's last page orders its rows ahead of the credit.
+                        write_flush_tagged(current_src_addr, coalesced_page_size, write_page);
+                    } else {
+                        write_page(current_src_addr, coalesced_page_size);
+                    }
+                    current_src_addr += coalesced_page_size;
+                    destination_offset_bytes_ += coalesced_page_size;
+                }
+                current_src_addr = row_src_start + row_stride_in_stage;
+            }
         }
         destination_offset_bytes_ = 0;
+#else
+        write_strided_impl</*push=*/false>(
+            noc, src, 0, num_rows, coalesced_num_pages_per_row, coalesced_page_size, src_args);
+#endif
+    }
+
+    // write_strided, flush_writes and push_back(num_entries) in one pass: each receiver is credited right
+    // behind its rows. Returns with the writes flushed, so src may be reused.
+    //
+    // WH/BH need no flush between a receiver's rows and its credit. A posted flush only waits for the rows to
+    // leave this core's NIU, and requests on one static VC already leave it in the order their NOC_CMD_CTRL
+    // writes were issued and keep that order along their shared route (tt-isa-documentation,
+    // WormholeB0/NoC/Ordering.md). The rows and the credit are both on NOC_UNICAST_WRITE_VC, so they reach
+    // the receiver in the same order with or without the flush; remote_cb_push_back_and_write_pages credits
+    // the same way. Each credit atomic then finds its command buffer idle instead of queueing behind the
+    // previous receiver's.
+    template <typename Src>
+    FORCE_INLINE void write_strided_and_push_back(
+        const Noc& noc,
+        const Src& src,
+        uint32_t num_entries,
+        uint32_t num_rows,
+        uint32_t coalesced_num_pages_per_row,
+        uint32_t coalesced_page_size,
+        const typename noc_traits_t<Src>::src_args_type& src_args = {}) {
+#ifdef ARCH_QUASAR
+        write_strided(noc, src, num_rows, coalesced_num_pages_per_row, coalesced_page_size, src_args);
+        flush_writes(noc);
+        push_back(num_entries, noc);
+#else
+        write_strided_impl</*push=*/true>(
+            noc, src, num_entries, num_rows, coalesced_num_pages_per_row, coalesced_page_size, src_args);
+        flush_writes(noc);
+#endif
     }
 
     // Broadcast: write n entries of identical data from src to owned receivers
@@ -510,27 +601,14 @@ public:
         uint32_t num_entries,
         const typename noc_traits_t<Src>::src_args_type& src_args = {}) {
         CrossNodeSenderDFBInterface& iface = interface_.sender;
-        const uint32_t entry_size = iface.fifo_page_size;
-        ASSERT(entry_size != 0);
-        const uint32_t len_bytes = num_entries * entry_size;
-        ASSERT(len_bytes != 0 || num_entries == 0);
+        ASSERT(iface.fifo_page_size != 0);
+        ASSERT(num_entries * iface.fifo_page_size != 0 || num_entries == 0);
         if (num_entries == 0) {
             return;
         }
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
-
-        destination_offset_bytes_ = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
-            if (!owns_receiver(i)) {
-                continue;
-            }
-            const uint32_t wr_offset = sender_wr_offset(iface, i);
-            assert_contiguous_write(iface, wr_offset, num_entries);
-#ifdef ARCH_QUASAR
-            noc.async_write(src, *this, len_bytes, src_args, {.receiver_idx = i});
-#else
-            noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = i});
-#endif
+            write_to_receiver(noc, i, src, num_entries, src_args);
         }
     }
 
@@ -539,13 +617,19 @@ public:
     // (collective credit after all per-receiver writes) or push_back_to_receiver()
     // (per-receiver credit) as appropriate.
     // Multi-DM: no-op when this hart does not own receiver_idx.
-    template <typename Src>
+    // Quasar: NocOptions::TXN_ID tags the write with noc_opts.trid, so flush_writes with the same id waits on
+    // this sender's writes alone rather than on every write from the core.
+    template <NocOptions opts = NocOptions::DEFAULT, typename Src>
     FORCE_INLINE void write_to_receiver(
         const Noc& noc,
         uint32_t receiver_idx,
         const Src& src,
         uint32_t num_entries,
-        const typename noc_traits_t<Src>::src_args_type& src_args = {}) {
+        const typename noc_traits_t<Src>::src_args_type& src_args = {},
+        const NocOptVals& noc_opts = {}) {
+        static_assert(
+            !has_flag(opts, NocOptions::CUSTOM_VC),
+            "A payload must go on NOC_UNICAST_WRITE_VC, the credit's VC, to reach its receiver ahead of the credit");
         if (!owns_receiver(receiver_idx)) {
             return;
         }
@@ -556,21 +640,105 @@ public:
         assert_contiguous_write(iface, wr_offset, num_entries);
         destination_offset_bytes_ = 0;
 #ifdef ARCH_QUASAR
-        noc.async_write(src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx});
+        write_flush_tagged(
+            local_src_addr(noc, src, src_args), len_bytes, [&](uint32_t part_src_addr, uint32_t part_bytes) {
+                noc.async_write<opts>(
+                    CoreLocalMem<uint32_t>(part_src_addr),
+                    *this,
+                    part_bytes,
+                    {},
+                    {.receiver_idx = receiver_idx},
+                    noc_opts);
+            });
 #else
-        noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx});
+        static_assert(!has_flag(opts, NocOptions::TXN_ID), "flush_writes cannot wait on a transaction id here");
+        noc.async_write<opts | NocOptions::POSTED>(
+            src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx}, noc_opts);
 #endif
     }
 
-    // Flush payload writes from this core before publishing pages_sent.
-    // WH/BH: posted flush (depart queue). Quasar: write barrier so destination TL1 is
-    // complete before pages_sent — posted payload + credit can otherwise reorder for
-    // interleaved STRIDED relay consumers under same-program backpressure.
-    FORCE_INLINE void flush_writes(const Noc& noc = Noc{}) {
 #ifdef ARCH_QUASAR
-        noc.async_write_barrier();
+    // The last packet of a write that write_to_receiver_head started, for write_to_receiver_tail to issue.
+    struct WriteTail {
+        uint32_t receiver_idx = 0;
+        uint32_t src_addr = 0;
+        // Its place in the receiver's ring, as an offset from the ring's base.
+        uint32_t ring_offset = 0;
+        uint32_t len_bytes = 0;
+    };
+
+    // write_to_receiver in two calls, so this core can do other work while the payload streams out of its L1. The
+    // NoC sends a transfer's packets one after another and a core's next transfer on the same command buffer waits
+    // for them, so the flush-tagged last packet, which has to be a transfer of its own, holds the core until the
+    // rest of the payload has gone out. write_to_receiver_head issues every packet but the last and returns the
+    // last for write_to_receiver_tail, which the caller issues later: before any other write from this core and
+    // before crediting the receiver, and before relying on the write's transaction id to say the write has left.
+    // Arguments as for write_to_receiver, including `pending_entries`; the write must not be empty.
+    template <NocOptions opts = NocOptions::DEFAULT, typename Src>
+    FORCE_INLINE WriteTail write_to_receiver_head(
+        const Noc& noc,
+        uint32_t receiver_idx,
+        const Src& src,
+        uint32_t num_entries,
+        const typename noc_traits_t<Src>::src_args_type& src_args = {},
+        const NocOptVals& noc_opts = {},
+        uint32_t pending_entries = 0) {
+        static_assert(
+            !has_flag(opts, NocOptions::CUSTOM_VC),
+            "A payload must go on NOC_UNICAST_WRITE_VC, the credit's VC, to reach its receiver ahead of the credit");
+        ASSERT(owns_receiver(receiver_idx));
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        const uint32_t len_bytes = num_entries * iface.fifo_page_size;
+        ASSERT(len_bytes != 0);
+        const uint32_t cursor = sender_wr_offset(iface, receiver_idx);
+        uint32_t pending_units = 0;
+        const uint32_t wr_offset = offset_after_pending(iface, cursor, pending_entries, pending_units);
+        assert_contiguous_write(iface, wr_offset, num_entries);
+        const uint32_t src_addr = local_src_addr(noc, src, src_args);
+        const uint32_t head_bytes = flush_tagged_head_bytes(len_bytes);
+        if (head_bytes != 0) {
+            destination_offset_bytes_ = wr_offset - cursor;
+            noc.async_write<opts>(
+                CoreLocalMem<uint32_t>(src_addr), *this, head_bytes, {}, {.receiver_idx = receiver_idx}, noc_opts);
+            destination_offset_bytes_ = 0;
+        }
+        return {
+            .receiver_idx = receiver_idx,
+            .src_addr = src_addr + head_bytes,
+            .ring_offset = wr_offset + head_bytes,
+            .len_bytes = len_bytes - head_bytes};
+    }
+
+    // Issues the flush-tagged last packet of a write write_to_receiver_head started, with the same NocOptions and
+    // transaction id. Credits for earlier writes to the receiver may have come in between.
+    template <NocOptions opts = NocOptions::DEFAULT>
+    FORCE_INLINE void write_to_receiver_tail(const Noc& noc, const WriteTail& tail, const NocOptVals& noc_opts = {}) {
+        // Unsigned, so a tail placed before the cursor's current place in the ring's lap comes out right.
+        destination_offset_bytes_ = tail.ring_offset - sender_wr_offset(interface_.sender, tail.receiver_idx);
+        issue_flush_tagged([&] {
+            noc.async_write<opts>(
+                CoreLocalMem<uint32_t>(tail.src_addr),
+                *this,
+                tail.len_bytes,
+                {},
+                {.receiver_idx = tail.receiver_idx},
+                noc_opts);
+        });
+        destination_offset_bytes_ = 0;
+    }
+#endif
+
+    // Waits until this core's payload writes have left its L1, so their source may be reused. It does not wait
+    // for them to land: the payload and the credit that follows both go on NOC_UNICAST_WRITE_VC, which reaches
+    // a receiver in issue order, and on Quasar each payload's last packet also carries the flush tag
+    // (write_flush_tagged) so the receiver commits it first. With NocOptions::TXN_ID (Quasar only) it waits
+    // only on writes tagged noc_opts.trid.
+    template <NocOptions opts = NocOptions::DEFAULT>
+    FORCE_INLINE void flush_writes(const Noc& noc = Noc{}, const NocOptVals& noc_opts = {}) {
+#ifdef ARCH_QUASAR
+        noc.async_writes_flushed<opts>(noc_opts);
 #else
-        noc.async_writes_flushed<NocOptions::POSTED>();
+        noc.async_writes_flushed<opts | NocOptions::POSTED>();
 #endif
     }
 
@@ -581,15 +749,18 @@ public:
         CrossNodeSenderDFBInterface& iface = interface_.sender;
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
         const uint8_t noc_id = noc.get_noc_id();
+        uint32_t max_units = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
             if (!owns_receiver(i)) {
                 continue;
             }
             const uint32_t wr_offset = sender_wr_offset(iface, i);
             assert_contiguous_write(iface, wr_offset, num_entries);
-            increment_sender_credits_for_receiver<detail::default_noc_mode>(
-                iface, i, num_entries, wr_offset, noc_id, true, write_at_cmd_buf);
+            const uint32_t units = increment_sender_credits_for_receiver<detail::default_noc_mode>(
+                iface, i, num_entries, wr_offset, receiver_noc_base(iface, i, noc_id), noc_id, true, write_at_cmd_buf);
+            max_units = units > max_units ? units : max_units;
         }
+        lower_free_units_floor(max_units);
     }
 
     // Credit-only for one receiver: NOC-inc pages_sent on receiver_idx by num_entries,
@@ -605,8 +776,15 @@ public:
         const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
         assert_contiguous_write(iface, wr_offset, num_entries);
         const uint8_t noc_id = noc.get_noc_id();
-        increment_sender_credits_for_receiver<detail::default_noc_mode>(
-            iface, receiver_idx, num_entries, wr_offset, noc_id, true, write_at_cmd_buf);
+        lower_free_units_floor(increment_sender_credits_for_receiver<detail::default_noc_mode>(
+            iface,
+            receiver_idx,
+            num_entries,
+            wr_offset,
+            receiver_noc_base(iface, receiver_idx, noc_id),
+            noc_id,
+            true,
+            write_at_cmd_buf));
     }
 
 #endif  // !COMPILE_FOR_TRISC
@@ -631,7 +809,22 @@ public:
                 }
             }
         }
+        free_units_floor_ = fifo_size() / L1_ALIGNMENT;  // every owned ring is empty
         WAYPOINT("CNBD");
+    }
+
+    // Whether receiver_idx has acked every entry sent to it on every lane: barrier()'s condition for one
+    // receiver, without waiting. Lets a sender that must also watch for something else (a termination
+    // request) wait for a drain in its own loop.
+    FORCE_INLINE bool receiver_drained(uint32_t receiver_idx) {
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        for (uint32_t lane = 0; lane < num_credit_lanes(); ++lane) {
+            if (load_remote_l1_credit(local_acked_ptr(iface, receiver_idx, lane)) !=
+                *local_sent_ptr(iface, receiver_idx, lane)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // -----------------------------------------------------------------------
@@ -677,7 +870,7 @@ public:
     // If bind_relay() was called, waits until compute has consumed num_entries first.
     FORCE_INLINE void pop_front(uint32_t num_entries, const Noc& noc = Noc{}) {
         if (interface_.receiver.relay_id != RELAY_DFB_INVALID) {
-            ASSERT(relay_dfb_.has_value());
+            ASSERT(relay_bound_);
             wait_relay_consumed(num_entries);
         }
         pop_front_impl(num_entries, noc);
@@ -718,6 +911,11 @@ public:
 
     FORCE_INLINE uint32_t get_entry_size() { return interface_.sender.fifo_page_size; }
 
+    // How many entries of the current size each receiver's ring holds. Sender participants only.
+    FORCE_INLINE uint32_t ring_entries() const {
+        return usable_offset(interface_.sender) / interface_.sender.fifo_page_size;
+    }
+
     // True while the sender has published entries this receiver has not yet popped. Reads this
     // receiver's slot in each credit block -- the same two counters wait_front() compares -- so
     // where they live stays inside the class. Receiver participants only.
@@ -734,54 +932,43 @@ public:
     // Host-declared relay DFB (DM → compute)
     // -----------------------------------------------------------------------
 
-    // Producer-only view over the pipe-owned local DFB. Reserve/push stay here;
-    // pop_front waits on that same DFB so WH/BH and Quasar share one object.
-    class RelayView {
+    // Producer-only view that owns the relay DFB, typed by the relay token's access patterns. Only
+    // bind_relay() makes one, and it binds the relay before handing it out.
+    template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+    class BasicRelayView {
     public:
         FORCE_INLINE void reserve_back(uint16_t num_entries) { dfb_.reserve_back(num_entries); }
         FORCE_INLINE void push_back(uint16_t num_entries) { dfb_.push_back(num_entries); }
+        FORCE_INLINE uint16_t get_producer_share() const { return dfb_.get_producer_share(); }
+        FORCE_INLINE uint32_t get_write_ptr() const { return dfb_.get_write_ptr(); }
+        FORCE_INLINE uint32_t get_entry_size() const { return dfb_.get_entry_size(); }
+        FORCE_INLINE uint32_t get_stride_size() const { return dfb_.get_stride_size(); }
+        FORCE_INLINE uint32_t get_local_size_bytes() const { return dfb_.get_local_size_bytes(); }
+        FORCE_INLINE uint32_t get_ring_span_bytes() const { return dfb_.get_ring_span_bytes(); }
 
     private:
         friend class PrefetcherPipe;
-        FORCE_INLINE explicit RelayView(DataflowBuffer& dfb) : dfb_(dfb) {}
-        DataflowBuffer& dfb_;
+        FORCE_INLINE BasicRelayView(PrefetcherPipe& pipe, RelayDFBBindingToken<Pap, Cap> token) : dfb_(token) {
+            pipe.bind_relay_dfb(dfb_);
+        }
+        DataflowBufferFor<Pap, Cap> dfb_;
     };
 
+    using RelayView = BasicRelayView<dfb::AccessPattern::UNKNOWN, dfb::AccessPattern::UNKNOWN>;
+
     // Open the relay DFB the host registered for this slot (DataflowBufferSpec::
-    // prefetcher_pipe_relays). Constructs the
-    // local DataflowBuffer (Quasar: dfb_ensure_ready), then snaps TC/CB slots to the
-    // current receiver cursor/page size (TRISC is aligned separately in
-    // DataflowBuffer(RelayDFBBindingToken)). A later set_receiver_entry_size() refreshes
-    // that same local iface in place.
+    // prefetcher_pipe_relays) untyped, and bind it exactly like the typed form below.
+    // Multi-producer: each pipe-consumer hart gets its own DataflowBuffer of the
+    // same relay id; STRIDED pap partitions producer slots.
     FORCE_INLINE RelayView bind_relay() {
-        const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
-        ASSERT(iface.relay_id != RELAY_DFB_INVALID);
-        ASSERT(!relay_dfb_.has_value());
-        // Construct first: Quasar DataflowBuffer ctor runs dfb_ensure_ready (resets slots).
-        // Multi-producer: each pipe-consumer hart gets its own DataflowBuffer view of the
-        // same relay id; STRIDED pap partitions producer slots.
-        relay_dfb_.emplace(RelayDFBBindingToken{iface.relay_id});
-        // Before anything re-pages the relay: it still has the page size firmware set from the relay's
-        // config, which fixes how many relay pages one pipe entry is.
-        relay_pages_per_entry_ =
-            static_cast<uint16_t>(prefetcher_pipe_relay_pages_per_entry(iface.relay_id, iface.fifo_page_size));
-        sync_threads();
-        // Align shared local iface once after all producers have constructed.
-        if (get_my_thread_id() == 0) {
-            align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface, relay_pages_per_entry_);
-#ifndef ARCH_QUASAR
-            const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(iface.relay_id));
-            relay_entries_acked_checkpoint_ = static_cast<uint16_t>(reg_read(entries_acked_ptr));
-#endif
-        }
-        sync_threads();
-#ifndef ARCH_QUASAR
-        if (get_my_thread_id() != 0) {
-            const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(iface.relay_id));
-            relay_entries_acked_checkpoint_ = static_cast<uint16_t>(reg_read(entries_acked_ptr));
-        }
-#endif
-        return RelayView(*relay_dfb_);
+        ASSERT(!relay_bound_);
+        ASSERT(interface_.receiver.relay_id != RELAY_DFB_INVALID);
+        return RelayView(*this, RelayDFBBindingToken{interface_.receiver.relay_id});
+    }
+
+    template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+    [[nodiscard]] FORCE_INLINE BasicRelayView<Pap, Cap> bind_relay(RelayDFBBindingToken<Pap, Cap> token) {
+        return BasicRelayView<Pap, Cap>(*this, token);
     }
 #endif
 
@@ -824,12 +1011,13 @@ private:
         // it does not drain payload already in flight at the peer's old entry size.
         // Multi-DM: only tid 0 mutates shared config; others re-setup after the barrier.
         // Drop any cached copy of this core's credit words before anyone touches them, so a
-        // host reset / the previous program's flushed values in TL1 are what every hart sees.
+        // host reset / the previous program's flushed values in TL1 are what every hart sees
+        // (as long as the lines are clean, as the previous pipe's dtor flush leaves them).
         // Not multi-DM specific: it is the Quasar cost of reading credit words through the
         // cache at all (P == 1 included). Compiles out on WH/BH, and sync_threads() returns
         // immediately when the kernel has one thread, so the single-thread path only pays
         // the one-time invalidate here and the flush in the dtor.
-        invalidate_local_credit_lines(/*lane_offset_bytes=*/0);
+        writeback_invalidate_local_credit_lines(/*lane_offset_bytes=*/0);
         sync_threads();
         if (dense_entry_size != applied_entry_size) {
             if (get_my_thread_id() == 0) {
@@ -861,11 +1049,17 @@ private:
     uint8_t num_credit_lanes_ = 1;  // active lanes P (kernel-config slot), read once in the ctor
     uint32_t fifo_size_ = 0;        // full ring allocation (config word[3]); credit modulus
     uint32_t destination_offset_bytes_ = 0;
+    // Single credit lane: units every owned receiver had free at the last reserve_back poll or barrier, less
+    // every credit published since. Free space only grows while this core is not crediting, so while this
+    // covers a reservation, reserve_back need not read any credit word.
+    uint32_t free_units_floor_ = 0;
 
 #if !defined(COMPILE_FOR_TRISC)
-    std::optional<DataflowBuffer> relay_dfb_;
+    bool relay_bound_ = false;
     // Relay pages per pipe entry, fixed at bind_relay() (see prefetcher_pipe_relay_pages_per_entry).
     uint16_t relay_pages_per_entry_ = 1;
+    // This hart's relay entries per push, fixed at bind_relay().
+    uint16_t relay_share_ = 1;
 #ifndef ARCH_QUASAR
     uint16_t relay_entries_acked_checkpoint_ = 0;
 #endif
@@ -879,6 +1073,48 @@ private:
         atomic_noc_mask_ |= static_cast<uint8_t>(1u << noc_id);
 #endif
     }
+
+    // The local L1 address a write reads its source from, noting the read for op-to-op R/W inference
+    // (api/dataflow/buf_rw_note.h).
+    template <typename Src>
+    static FORCE_INLINE uint32_t
+    local_src_addr(const Noc& noc, const Src& src, const typename noc_traits_t<Src>::src_args_type& src_args) {
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();
+        return noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
+    }
+
+#ifdef ARCH_QUASAR
+    // Writes len_bytes from src_addr at destination_offset_bytes_ through issue(src_addr, len_bytes), with the
+    // NoC flush tag on the last packet. Quasar delivers one VC's packets to a receiver in order but may commit
+    // them to its L1 out of order; the receiver commits every packet before a flush-tagged one ahead of
+    // anything after it, so the credit atomic that follows on NOC_UNICAST_WRITE_VC cannot land before the
+    // payload. Only the last packet carries the tag, as each tagged packet holds the receiver's later
+    // commits. The overlay cuts a transfer into NOC_OVERLAY_MAX_BYTES_IN_PACKET packets from its start, so
+    // the last packet is what is left after the whole ones, sent as its own transfer.
+    template <typename Issue>
+    FORCE_INLINE void write_flush_tagged(uint32_t src_addr, uint32_t len_bytes, Issue&& issue) {
+        const uint32_t head_bytes = flush_tagged_head_bytes(len_bytes);
+        if (head_bytes != 0) {
+            issue(src_addr, head_bytes);
+        }
+        destination_offset_bytes_ += head_bytes;
+        issue_flush_tagged([&] { issue(src_addr + head_bytes, len_bytes - head_bytes); });
+        destination_offset_bytes_ -= head_bytes;
+    }
+
+    // The bytes of a `len_bytes` write that go before its flush-tagged last packet (write_flush_tagged).
+    static constexpr uint32_t flush_tagged_head_bytes(uint32_t len_bytes) {
+        return len_bytes == 0 ? 0 : (len_bytes - 1) / NOC_OVERLAY_MAX_BYTES_IN_PACKET * NOC_OVERLAY_MAX_BYTES_IN_PACKET;
+    }
+
+    // Issues a write's last packet through issue() with the NoC flush tag (write_flush_tagged).
+    template <typename Issue>
+    static FORCE_INLINE void issue_flush_tagged(Issue&& issue) {
+        noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/true);
+        issue();
+        noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/false);
+    }
+#endif
 
     // [base, base + size) of the credit words this core writes through the cached view: the
     // whole SENT block on the sender, this receiver's ACKED slots (all lanes) on a receiver.
@@ -908,18 +1144,18 @@ private:
         return get_my_thread_id() * L1_ALIGNMENT;
     }
 
-    // Quasar: discard cached copies (L1 D$ of this hart + shared L2) of the local credit
-    // lines. Only safe when nothing is dirty, i.e. after the previous pipe's dtor flushed.
-    FORCE_INLINE void invalidate_local_credit_lines(uint32_t lane_offset_bytes) const {
+    // Quasar: write back and invalidate the cached copies (L1 D$ of this hart + shared L2) of the local credit lines,
+    // so the next reads come from TL1. Not a discard, which would lose a dirty line's credit writes or neighbours.
+    FORCE_INLINE void writeback_invalidate_local_credit_lines(uint32_t lane_offset_bytes) const {
 #ifdef ARCH_QUASAR
         uint32_t base = 0;
         uint32_t size = 0;
         local_credit_range(lane_offset_bytes, base, size);
         constexpr uint32_t line = 64;
         for (uint32_t addr = base & ~(line - 1); addr < base + size; addr += line) {
-            invalidate_l1_dcache(addr);
+            flush_l1_dcache(addr);
         }
-        invalidate_l2_cache_range(base, size);
+        flush_l2_cache_range(base, size);
 #else
         (void)lane_offset_bytes;
 #endif
@@ -937,18 +1173,41 @@ private:
 #endif
     }
 
+    // Aligns the relay's slots with the receiver's current cursor and page size, on every thread,
+    // so each lane of a multi-lane receiver resumes at its own position. TRISC aligns in its ctor.
+    DFB_TEMPLATE_DECL
+    FORCE_INLINE void bind_relay_dfb(DFB_CLASS& relay) {
+        const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
+        ASSERT(iface.relay_id != RELAY_DFB_INVALID);
+        ASSERT(relay.get_id() == iface.relay_id);
+        ASSERT(!relay_bound_);
+        // Before anything re-pages the relay: it still has the page size firmware set from the relay's
+        // config, which fixes how many relay pages one pipe entry is.
+        relay_pages_per_entry_ =
+            static_cast<uint16_t>(prefetcher_pipe_relay_pages_per_entry(iface.relay_id, iface.fifo_page_size));
+        relay_share_ = relay.get_producer_share();
+        sync_threads();  // every producer hart has constructed its relay before any of them aligns
+        align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface, relay_pages_per_entry_, relay_share_);
+#ifndef ARCH_QUASAR
+        const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(iface.relay_id));
+        relay_entries_acked_checkpoint_ = static_cast<uint16_t>(reg_read(entries_acked_ptr));
+#endif
+        sync_threads();
+        relay_bound_ = true;
+    }
+
     FORCE_INLINE void wait_relay_consumed(uint32_t num_entries) {
         WAYPOINT("PDCW");
+        const uint16_t relay_dfb_id = interface_.receiver.relay_id;
 #ifdef ARCH_QUASAR
         // After the relay.push_back(N), HW posted already marks those entries;
         // wait until consumer acked catches posted on every TC.
         (void)num_entries;
-        relay_dfb_->wait_relay_consumer_caught_up();
+        dfb_dm_wait_relay_consumer_caught_up(get_local_dfb_interface(relay_dfb_id));
 #else
         // The relay's consumer acks relay pages, relay_pages_per_entry_ of them per pipe entry.
         const uint32_t num_pages = num_entries * relay_pages_per_entry_;
-        ASSERT(num_pages <= relay_dfb_->get_local_num_entries());
-        const uint16_t relay_dfb_id = relay_dfb_->get_id();
+        ASSERT(num_pages <= get_local_cb_interface(relay_dfb_id).fifo_num_pages);
         const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(relay_dfb_id));
         uint16_t entries_acked;
         do {
@@ -1004,6 +1263,54 @@ private:
         PrefetcherPipe&, uint32_t new_entry_size, uint32_t stale_entry_size, uint32_t poison_wr_ptr);
 #endif
 
+#if !defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+    // write_strided's walk over the owned receivers. With push, each receiver is also credited num_entries
+    // right behind its rows (see write_strided_and_push_back); the caller still flushes the writes.
+    template <bool push, typename Src>
+    FORCE_INLINE void write_strided_impl(
+        const Noc& noc,
+        const Src& src,
+        uint32_t num_entries,
+        uint32_t num_rows,
+        uint32_t coalesced_num_pages_per_row,
+        uint32_t coalesced_page_size,
+        const typename noc_traits_t<Src>::src_args_type& src_args) {
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
+        const uint32_t row_bytes_per_recv = coalesced_num_pages_per_row * coalesced_page_size;
+        const uint32_t row_stride_in_stage = row_bytes_per_recv * num_recv;
+        const uint8_t noc_id = noc.get_noc_id();
+
+        uint32_t src_addr = local_src_addr(noc, src, src_args);
+        uint32_t max_units = 0;
+        for (uint32_t i = 0; i < num_recv; ++i, src_addr += row_bytes_per_recv) {
+            if (!owns_receiver(i)) {
+                continue;
+            }
+            const uint32_t wr_offset = sender_wr_offset(iface, i);
+            assert_contiguous_bytes(iface, wr_offset, num_rows * row_bytes_per_recv);
+            const uint64_t noc_base = receiver_noc_base(iface, i, noc_id);
+            detail::write_rows_to_receiver<NocOptions::POSTED>(
+                noc,
+                noc_base + iface.fifo_start_addr + wr_offset,
+                src_addr,
+                num_rows,
+                coalesced_num_pages_per_row,
+                coalesced_page_size,
+                row_stride_in_stage);
+            if constexpr (push) {
+                assert_contiguous_write(iface, wr_offset, num_entries);
+                const uint32_t units = increment_sender_credits_for_receiver<detail::default_noc_mode>(
+                    iface, i, num_entries, wr_offset, noc_base, noc_id, true, write_at_cmd_buf);
+                max_units = units > max_units ? units : max_units;
+            }
+        }
+        if constexpr (push) {
+            lower_free_units_floor(max_units);
+        }
+    }
+#endif
+
     // Poll a credit word updated by a remote NOC atomic / write.
     // Quasar DM L2 does not snoop NOC→TL1; WH/BH needs invalidate_l1_cache.
     FORCE_INLINE static uint32_t load_remote_l1_credit(volatile tt_l1_ptr uint32_t* ptr) {
@@ -1021,8 +1328,9 @@ private:
     // remote_dfb_config_layout.h): Quasar's DM L2 writes back whole 64B lines, so a dirty line
     // may only ever contain words this core wrote. Peer-written words are always read through
     // load_remote_l1_credit. Cached copies are dropped at construction
-    // (invalidate_local_credit_lines) so a host reset in TL1 is observed, and written back at
-    // destruction (flush_local_credit_lines) so the values persist into the next program.
+    // (writeback_invalidate_local_credit_lines) so a host reset in TL1 is observed while the lines are clean,
+    // and written back at destruction (flush_local_credit_lines) so the values persist into the next
+    // program.
 
     // Byte offset of (receiver_idx, lane)'s slot within either credit block. Layout stride is
     // credit_lane_capacity() (allocated slots); active P only selects which are used.
@@ -1050,6 +1358,15 @@ private:
         const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx, uint32_t lane = 0) {
         return cross_node_dfb_remote_pages_sent_ptr(iface.num_receivers_and_remote_pages_sent_ptr) +
                credit_slot_offset(receiver_idx, lane);
+    }
+
+    // NoC address of local address 0 on receiver_idx's core: a local address there is added to it.
+    FORCE_INLINE static uint64_t receiver_noc_base(
+        const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx, uint8_t noc) {
+        volatile tt_l1_ptr uint32_t* xy =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + 2 * receiver_idx;
+        return noc_address_backend::worker_address(
+            load_prefetcher_pipe_config_word(xy, 0), load_prefetcher_pipe_config_word(xy, 1), 0, noc);
     }
 
     // Active pipe-consumer lanes P (kernel-config slot, cached in the ctor).
@@ -1141,14 +1458,36 @@ private:
         return *local_wr_offset_ptr(iface, receiver_idx);
     }
 
+    // Units of receiver_idx's ring credited to it and not yet acked.
+    FORCE_INLINE static uint32_t used_units(const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx) {
+        return *local_sent_ptr(iface, receiver_idx) - load_remote_l1_credit(local_acked_ptr(iface, receiver_idx));
+    }
+
+    // Where the next write lands with `pending_entries` entries already written past the cursor at `wr_offset`, and
+    // in `pending_units` the units crediting them will take. Writes never cross the ring's end, so when the pending
+    // ones reached it, the next write restarts at the base, and their credits include the gap after the end.
+    FORCE_INLINE uint32_t offset_after_pending(
+        const CrossNodeSenderDFBInterface& iface,
+        uint32_t wr_offset,
+        uint32_t pending_entries,
+        uint32_t& pending_units) const {
+        uint32_t offset = wr_offset + pending_entries * iface.fifo_page_size;
+        pending_units = pending_entries * units_per_entry(iface);
+        if (offset >= usable_offset(iface)) {
+            offset -= usable_offset(iface);
+            pending_units += (fifo_size() - usable_offset(iface)) / L1_ALIGNMENT;
+        }
+        return offset;
+    }
+
     // Advance a receiver's cursor by the units just credited to it. Payload and any trailing gap
     // are both in `units` (units_for_write), so a lap is exactly the full allocation, and the
     // contiguity rule caps a single credit at one lap: one conditional subtract is enough.
     FORCE_INLINE void advance_wr_offset(
-        const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx, uint32_t units) {
+        const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx, uint32_t wr_offset, uint32_t units) {
         volatile tt_l1_ptr uint32_t* offset_ptr = local_wr_offset_ptr(iface, receiver_idx);
         const uint32_t ring_bytes = fifo_size();
-        uint32_t next = *offset_ptr + units * L1_ALIGNMENT;
+        uint32_t next = wr_offset + units * L1_ALIGNMENT;
         ASSERT(next <= ring_bytes);
         if (next >= ring_bytes) {
             next -= ring_bytes;
@@ -1191,33 +1530,54 @@ private:
         return credited_bytes / L1_ALIGNMENT;
     }
 
+    // The most units_for_write can return for num_entries at any cursor: the payload plus the trailing gap.
+    FORCE_INLINE uint32_t max_units_for_write(const CrossNodeSenderDFBInterface& iface, uint32_t num_entries) {
+        return (num_entries * iface.fifo_page_size + fifo_size() - usable_offset(iface)) / L1_ALIGNMENT;
+    }
+
+    FORCE_INLINE void lower_free_units_floor(uint32_t units) {
+        free_units_floor_ = free_units_floor_ > units ? free_units_floor_ - units : 0;
+    }
+
+    // Single credit lane: spin until receiver_idx's ring has `units` free, and return the free units seen.
+    // Only acked moves while this core waits: it alone writes sent.
+    FORCE_INLINE uint32_t
+    wait_for_free_units(const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx, uint32_t units) {
+        const uint32_t num_units = fifo_size() / L1_ALIGNMENT;
+        const uint32_t sent = *local_sent_ptr(iface, receiver_idx);
+        volatile tt_l1_ptr uint32_t* acked_ptr = local_acked_ptr(iface, receiver_idx);
+        uint32_t free_units = 0;
+        do {
+            free_units = num_units - (sent - load_remote_l1_credit(acked_ptr));
+        } while (free_units < units);
+        return free_units;
+    }
+
 #if !defined(COMPILE_FOR_TRISC)
     // Stripe num_entries of credits across lanes (entry_idx % P); advance wr cursor by
-    // the contiguous units_for_write total. P==1 matches the legacy single-pair path.
+    // the contiguous units_for_write total, which is returned. P==1 matches the legacy single-pair path.
     template <uint8_t nm>
-    FORCE_INLINE void increment_sender_credits_for_receiver(
+    FORCE_INLINE uint32_t increment_sender_credits_for_receiver(
         CrossNodeSenderDFBInterface& iface,
         uint32_t receiver_idx,
         uint32_t num_entries,
         uint32_t wr_offset,
+        uint64_t noc_base,
         uint8_t noc,
         bool posted,
         uint8_t cmd_buf) {
         if (num_entries == 0) {
-            return;
+            return 0;
         }
         const uint32_t P = num_credit_lanes();
         const uint32_t total_units = units_for_write(iface, wr_offset, num_entries);
         note_credit_atomic_noc(noc);
-        volatile tt_l1_ptr uint32_t* xy =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + 2 * receiver_idx;
 
         if (P == 1) {
             volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, receiver_idx, 0);
-            const uint64_t remote_sent_noc_addr =
-                noc_address_backend::worker_address(xy[0], xy[1], remote_sent_ptr(iface, receiver_idx, 0), noc);
+            const uint64_t remote_sent_noc_addr = noc_base + remote_sent_ptr(iface, receiver_idx, 0);
             *sent_ptr += total_units;
-            advance_wr_offset(iface, receiver_idx, total_units);
+            advance_wr_offset(iface, receiver_idx, wr_offset, total_units);
             noc_fast_atomic_increment<nm>(
                 noc,
                 cmd_buf,
@@ -1228,7 +1588,7 @@ private:
                 false /*linked*/,
                 posted,
                 MEM_NOC_ATOMIC_RET_VAL_ADDR);
-            return;
+            return total_units;
         }
 
         // P > 1: entries stripe across lanes (entry_idx % P). The receiver only ever compares
@@ -1255,8 +1615,7 @@ private:
                 continue;
             }
             *local_sent_ptr(iface, receiver_idx, lane) += counts[lane];
-            const uint64_t remote_sent_noc_addr =
-                noc_address_backend::worker_address(xy[0], xy[1], remote_sent_ptr(iface, receiver_idx, lane), noc);
+            const uint64_t remote_sent_noc_addr = noc_base + remote_sent_ptr(iface, receiver_idx, lane);
             noc_fast_atomic_increment<nm>(
                 noc,
                 cmd_buf,
@@ -1268,7 +1627,8 @@ private:
                 posted,
                 MEM_NOC_ATOMIC_RET_VAL_ADDR);
         }
-        advance_wr_offset(iface, receiver_idx, total_units);
+        advance_wr_offset(iface, receiver_idx, wr_offset, total_units);
+        return total_units;
     }
 
     // Contiguous unit bump for mid-flight resize pad credits (single credit lane only).
@@ -1284,15 +1644,20 @@ private:
             return;
         }
         ASSERT(num_credit_lanes() == 1);
-        note_credit_atomic_noc(noc);
         volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, receiver_idx, 0);
-        volatile tt_l1_ptr uint32_t* xy =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + 2 * receiver_idx;
+        // The pad holds its bytes of the ring until the receiver steps over them, so it waits for room
+        // as reserve_back does. Published into a full ring it would push the outstanding count past the
+        // ring, and reserve_back's free-space check would then let the next entry overwrite ones the
+        // receiver still holds.
+        WAYPOINT("GSPW");
+        wait_for_free_units(iface, receiver_idx, adjustment);
+        WAYPOINT("GSPD");
+        note_credit_atomic_noc(noc);
         const uint64_t remote_sent_noc_addr =
-            noc_address_backend::worker_address(xy[0], xy[1], remote_sent_ptr(iface, receiver_idx, 0), noc);
+            receiver_noc_base(iface, receiver_idx, noc) + remote_sent_ptr(iface, receiver_idx, 0);
 
         *sent_ptr += adjustment;
-        advance_wr_offset(iface, receiver_idx, adjustment);
+        advance_wr_offset(iface, receiver_idx, sender_wr_offset(iface, receiver_idx), adjustment);
         noc_fast_atomic_increment<nm>(
             noc,
             cmd_buf,
@@ -1354,6 +1719,7 @@ private:
         }
         sender_cb_interface.fifo_limit_page_aligned = fifo_limit_page_aligned;
         sender_cb_interface.fifo_page_size = page_size;
+        free_units_floor_ = 0;
     }
 
     // Consume the pad credits that the sender published when it snapped its cursor to the
@@ -1452,11 +1818,9 @@ FORCE_INLINE uint64_t noc_traits_t<experimental::PrefetcherPipe>::dst_addr(
     ASSERT(static_cast<bool>(experimental::load_prefetcher_pipe_config_word(
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr), REMOTE_DFB_CFG_IS_SENDER)));
     ASSERT(args.receiver_idx < cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr));
-    volatile tt_l1_ptr uint32_t* xy =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + 2 * args.receiver_idx;
     const uint32_t local_address = iface.fifo_start_addr +
                                    experimental::PrefetcherPipe::sender_wr_offset(iface, args.receiver_idx) +
                                    dst.destination_offset_bytes_;
-    return noc_address_backend::worker_address(xy[0], xy[1], local_address, noc.get_noc_id());
+    return experimental::PrefetcherPipe::receiver_noc_base(iface, args.receiver_idx, noc.get_noc_id()) + local_address;
 }
 #endif

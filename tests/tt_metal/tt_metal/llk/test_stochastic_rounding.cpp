@@ -8,19 +8,19 @@
 #include <map>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal {
 
@@ -75,7 +75,7 @@ StochasticRoundingResult run_stochastic_rounding(
     const size_t output_byte_size = num_tiles * tile_byte_size_output;
     const size_t num_elements = num_tiles * tt::constants::TILE_HW;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*cq.device());
     auto mesh_workload = distributed::MeshWorkload();
 
     auto input_dram_buffer = distributed::MeshBuffer::create(

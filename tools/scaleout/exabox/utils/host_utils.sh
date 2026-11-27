@@ -120,8 +120,10 @@ fi
 exit "$fail"
 VERSION_CHECK_CMD
 
+    local mpi_if_flags=()
+    [[ -n "$mpi_if" ]] && mpi_if_flags=(--mca btl_tcp_if_include "$mpi_if")
     mpirun --host "$hosts" \
-        --mca btl_tcp_if_include "$mpi_if" \
+        "${mpi_if_flags[@]}" \
         "${mpi_extra_args[@]}" \
         bash -c "$version_check_cmd" _ "$TT_SMI_MIN_VERSION" "$KMD_MIN_VERSION" "$FW_MIN_VERSION"
 }

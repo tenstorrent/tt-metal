@@ -7,10 +7,10 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include <enchantum/enchantum.hpp>
 
@@ -70,10 +70,9 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
             out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             if (out_mem_config.buffer_type() == BufferType::L1) {
                 bool has_padding = false;
-                CoreCoord input_shard_grid = input_tensor.buffer()->shard_spec().grid().ranges()[0].grid_size();
-                CoreCoord output_shard_grid = out_mem_config.shard_spec().value().grid.ranges()[0].grid_size();
-                uint32_t input_num_shard_cores = input_shard_grid.x == 1 ? input_shard_grid.y : input_shard_grid.x;
-                uint32_t output_num_shard_cores = output_shard_grid.x == 1 ? output_shard_grid.y : output_shard_grid.x;
+                // Width shards fill every core of the grid, so a 2D grid holds x * y of them, not x or y.
+                uint32_t input_num_shard_cores = input_tensor.buffer()->shard_spec().grid().num_cores();
+                uint32_t output_num_shard_cores = out_mem_config.shard_spec().value().grid.num_cores();
                 uint32_t input_shard_width = input_tensor.buffer()->shard_spec().shape()[1];
                 uint32_t output_shard_width = out_mem_config.shard_spec().value().shape[1];
                 has_padding = input_num_shard_cores * input_shard_width > input_tensor.logical_shape()[-1];
@@ -98,7 +97,7 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
     }
     auto input_buffer_type = input_tensor.memory_config().buffer_type();
     auto output_buffer_type = out_mem_config.buffer_type();
-    auto input_page_size = input_tensor.buffer()->page_size();
+    auto input_page_size = input_tensor.mesh_buffer().page_size();
     auto output_page_size = output_tensor_spec.compute_page_size_bytes();
 
     TT_FATAL(
@@ -129,7 +128,7 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return {false, "Operands to shard need to be on device!"};
     }
-    if (input_tensor.buffer() == nullptr) {
+    if (!input_tensor.is_allocated()) {
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
     if (!input_tensor.is_sharded()) {
@@ -201,8 +200,8 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
         if (!has_unaligned_handling) {
             const uint32_t alignment = hal::get_l1_alignment();
 
-            uint32_t input_page_size = input_tensor.buffer()->page_size();
-            uint32_t input_aligned_page_size = input_tensor.buffer()->aligned_page_size();
+            uint32_t input_page_size = input_tensor.mesh_buffer().page_size();
+            uint32_t input_aligned_page_size = input_tensor.mesh_buffer().aligned_page_size();
             if (input_page_size != input_aligned_page_size) {
                 return {
                     false,
@@ -248,7 +247,8 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
         }
 
         auto out_distribution_spec = output_tensor_spec.compute_buffer_sharding_args().buffer_distribution_spec();
-        auto input_distribution_spec = input_tensor.buffer()->buffer_distribution_spec();
+        auto input_distribution_spec =
+            input_tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
 
         auto n_logical_input_pages = input_distribution_spec->tensor_shape_in_pages().volume();
         auto n_logical_output_pages = out_distribution_spec->tensor_shape_in_pages().volume();
