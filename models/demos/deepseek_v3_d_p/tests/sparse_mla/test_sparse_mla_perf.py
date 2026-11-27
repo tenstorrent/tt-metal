@@ -62,24 +62,25 @@ MODES = ("untraced", "traced")
 # measured). Then re-centred on CI runs after that change: each value is the mean over runs of that run's measurement
 # (fastest untraced sample, traced replay). Galaxy 8x4 K3.1 warm and GLM-5.3: 2-3 runs; Galaxy 4x4 K3.1 warm and
 # LoudBox K3.1: 1 run; deltas under 1% left as is. Galaxy 8x4 GLM-5.3: re-measured with the stage cases on a CI host
-# (1 run). Galaxy 4x4 subtorus: GLM-5.3 re-measured with the stage cases on a 14 kW CI host (1 run, the GLM chunked
-# perf leg); its no-indexer rows are the means of three runs on three 14 kW Galaxies, except the long traced row,
-# re-measured with the stage cases (1 run); the K3.1 row has no CI leg (measured on a subtorus-cabled Galaxy, 3 runs,
-# unscaled). LoudBox GLM-5.3 (both cases):
-# first measured on CI LoudBoxes (6 processes on 3 hosts, 10 readings per value with in-process repeats): the mean of
-# the readings, every reading within the band; one warm untraced reading (+18%, a third repeat in one process, traced
-# replay normal) left out.
+# (1 run). LoudBox GLM-5.3 (both cases): first measured on CI LoudBoxes (6 processes on 3 hosts, 10 readings per value
+# with in-process repeats): the mean of the readings, every reading within the band; one warm untraced reading (+18%, a
+# third repeat in one process, traced replay normal) left out. Galaxy 8x4 then scaled by the L1-activation /
+# sharded-norm change's measured speedup (2 runs of main, 3 of the change, on one Galaxy; ratios under 1% left
+# unapplied); the change's CI run (1 run) was within 2% of those. Galaxy 4x4 and LoudBox re-measured on the change's CI
+# runs (1 run each; LoudBox GLM-5.3 deltas under 1% left as is). Galaxy 4x4 subtorus, not re-measured after that
+# change: GLM-5.3 measured with the stage cases on a 14 kW CI host (1 run, the GLM chunked perf leg); its no-indexer
+# rows are the means of three runs on three 14 kW Galaxies, except the long traced row, re-measured with the stage
+# cases (1 run); the K3.1 row has no CI leg (measured on a subtorus-cabled Galaxy, 3 runs, unscaled).
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (2.93, 2.63, 6.47, 6.18),
-        "glm_5_3": (3.13, 2.70, 6.73, 6.32),
-        "glm_5_3-no_indexer": (2.29, 1.97, 2.36, 2.05),
+        "kimi_k3_1": (2.88, 2.53, 6.34, 6.09),
+        "glm_5_3": (3.13, 2.63, 6.73, 6.32),
+        "glm_5_3-no_indexer": (2.24, 1.83, 2.26, 1.89),
     },
     "Galaxy 4x4": {
-        "kimi_k3_1": (3.21, 3.05, 7.21, 6.98),
-        # GLM-5.3: re-centred on CI run 45551006453 (1 run); deltas under 1% left as is.
-        "glm_5_3": (2.85, 2.60, 6.81, 6.45),
-        "glm_5_3-no_indexer": (2.22, 2.23, 4.63, 4.50),
+        "kimi_k3_1": (3.12, 2.92, 7.05, 6.80),
+        "glm_5_3": (2.85, 2.54, 6.69, 6.35),
+        "glm_5_3-no_indexer": (2.17, 2.10, 4.53, 4.41),
     },
     "Galaxy 4x4 subtorus": {
         "kimi_k3_1": (2.97, 2.80, 6.62, 6.37),
@@ -87,9 +88,9 @@ _TARGETS_MS = {
         "glm_5_3-no_indexer": (2.00, 1.86, 2.08, 1.89),
     },
     "LoudBox": {
-        "kimi_k3_1": (2.65, 2.51, 3.87, 3.71),
-        "glm_5_3": (2.31, 2.11, 3.47, 3.26),
-        "glm_5_3-no_indexer": (1.87, 1.83, 2.59, 2.55),
+        "kimi_k3_1": (2.58, 2.41, 3.78, 3.60),
+        "glm_5_3": (2.34, 2.07, 3.47, 3.21),
+        "glm_5_3-no_indexer": (1.87, 1.77, 2.56, 2.50),
     },
 }
 PERF_TARGETS_MS = {

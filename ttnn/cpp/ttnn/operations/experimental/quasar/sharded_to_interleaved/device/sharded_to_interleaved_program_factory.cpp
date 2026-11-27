@@ -115,7 +115,12 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     const auto* src_buffer = &input.mesh_buffer();
     const auto* dst_buffer = &output.mesh_buffer();
     uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
-    uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
+    // MX tiles (1056 B for the 8-bit formats) are walked by the packer / unpacker at the format's tile stride, so a
+    // staging ring holding them must be sized to that stride (L1 aligned) and not padded to the 64 B DRAM page
+    // alignment.
+    const bool mx_tiles = tt_metal::is_mx(input.dtype()) || tt_metal::is_mx(output.dtype());
+    uint32_t output_page_size =
+        tt::align(output_unit_size, mx_tiles ? hal::get_l1_alignment() : dst_buffer->alignment());
     bool dst_is_dram = dst_buffer->device_local_config().buffer_type == tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 

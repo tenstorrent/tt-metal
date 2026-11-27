@@ -90,13 +90,36 @@ DTYPE = {
 
 LAYOUT = {"TILE": ttnn.TILE_LAYOUT, "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT}
 
+
 # Quasar has no block-float formats (``is_supported_quasar`` in tt_backend_api_types.cpp), so a
-# captured bfloat8_b / bfloat4_b case is rejected before the op runs. With
-# ``TTNN_GRAPH_OPS_BF8_AS_BF16=1`` those tensors are materialized and checked as bfloat16 instead
-# (and judged on the bfloat16 PCC floor, see ``_PCC_BY_DTYPE`` below).
-BF8_AS_BF16 = os.environ.get("TTNN_GRAPH_OPS_BF8_AS_BF16", "") not in ("", "0", "false", "False")
+# captured bfloat8_b / bfloat4_b case is rejected before the op runs. Three env switches pick what
+# those tensors are materialized and checked as instead (at most one may be set):
+#
+#   * ``TTNN_GRAPH_OPS_BF8_AS_BF16=1``   bfloat8_b and bfloat4_b -> bfloat16
+#   * ``TTNN_GRAPH_OPS_BF8_AS_MXFP8R=1`` bfloat8_b -> MXFP8R (``ttnn.mxfp8_e5m2``, 5-bit exponent)
+#   * ``TTNN_GRAPH_OPS_BF8_AS_MXFP8P=1`` bfloat8_b -> MXFP8P (``ttnn.mxfp8_e4m3``, 4-bit exponent)
+#
+# The MX switches leave bfloat4_b as bfloat16 (there is no MX stand-in for it) so those cases still
+# run. MX is TILE-only, which every captured bfloat8_b tensor already is. A bfloat8_b case keeps its
+# block-float PCC floor under the MX switches (the values really are quantized); the bfloat16
+# switch drops it (see ``_PCC_BY_DTYPE`` below).
+def _env_flag(name):
+    return os.environ.get(name, "") not in ("", "0", "false", "False")
+
+
+BF8_AS_BF16 = _env_flag("TTNN_GRAPH_OPS_BF8_AS_BF16")
+BF8_AS_MXFP8R = _env_flag("TTNN_GRAPH_OPS_BF8_AS_MXFP8R")
+BF8_AS_MXFP8P = _env_flag("TTNN_GRAPH_OPS_BF8_AS_MXFP8P")
+if BF8_AS_BF16 + BF8_AS_MXFP8R + BF8_AS_MXFP8P > 1:
+    raise ValueError(
+        "set at most one of TTNN_GRAPH_OPS_BF8_AS_BF16, TTNN_GRAPH_OPS_BF8_AS_MXFP8R, TTNN_GRAPH_OPS_BF8_AS_MXFP8P"
+    )
+BF8_AS_MX = BF8_AS_MXFP8R or BF8_AS_MXFP8P
 if BF8_AS_BF16:
     DTYPE["BFLOAT8_B"] = ttnn.bfloat16
+    DTYPE["BFLOAT4_B"] = ttnn.bfloat16
+elif BF8_AS_MX:
+    DTYPE["BFLOAT8_B"] = ttnn.mxfp8_e5m2 if BF8_AS_MXFP8R else ttnn.mxfp8_e4m3
     DTYPE["BFLOAT4_B"] = ttnn.bfloat16
 
 
@@ -143,6 +166,8 @@ _PCC_BY_DTYPE = {"BFLOAT8_B": 0.97, "BFLOAT4_B": 0.90}
 # cases on the dtype that actually ran (the 0.999 bar, or the op's own floor).
 if BF8_AS_BF16:
     _PCC_BY_DTYPE = {}
+elif BF8_AS_MX:
+    _PCC_BY_DTYPE = {"BFLOAT8_B": _PCC_BY_DTYPE["BFLOAT8_B"]}  # bfloat4_b runs as bfloat16
 _PCC_BY_OP = {
     "ttnn.linear": 0.99,
     "ttnn.experimental.minimal_matmul": 0.99,
@@ -1318,6 +1343,30 @@ _MIN_CORES = (
 )
 
 
+# Base ops with no MX support on Quasar: the MX work (d2d7db4) went into their ``ttnn.experimental.quasar``
+# copies. Under an MX switch the base op's tests skip the cases that would build an MX tensor; a ``*_quasar``
+# companion test runs the same cases through the copy.
+_NO_MX_OPS = (ttnn.matmul,)
+
+
+def _case_uses_mx(case):
+    """Whether building ``case`` makes an MX tensor or asks the op for an MX output dtype."""
+
+    def is_mx(capture_dtype):
+        return ttnn.is_mx_dtype(DTYPE[capture_dtype])
+
+    specs = list(case["args"]) + list(case["kwargs"].values())
+    for spec in specs:
+        kind = spec.get("k")
+        if kind == "t" and is_mx(spec["dtype"]):
+            return True
+        if kind == "tlist" and any(is_mx(t["dtype"]) for t in spec["tensors"]):
+            return True
+        if kind == "dtype" and is_mx(spec["v"]):
+            return True
+    return False
+
+
 def _run_case_impl(op, case, mesh_device, *, op_name=None, pcc=None):
     """Materialize one captured call, run it, and check the result.
 
@@ -1325,6 +1374,8 @@ def _run_case_impl(op, case, mesh_device, *, op_name=None, pcc=None):
     ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
     """
     op_name = op_name or case["op"]
+    if BF8_AS_MX and any(op is no_mx for no_mx in _NO_MX_OPS) and _case_uses_mx(case):
+        pytest.skip(f"{op_name} (the base op) has no MX support on Quasar; the *_quasar test runs this case")
     for min_cores_op, min_cores_fn in _MIN_CORES:
         if op is min_cores_op:
             grid = mesh_device.compute_with_storage_grid_size()
@@ -1382,9 +1433,22 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
         return _run_case_impl(op, case, mesh_device, op_name=op_name, pcc=pcc)
     except RuntimeError as e:
         msg = str(e)
+        if _mx_binary_unsupported(e):
+            pytest.skip("binary_ng refuses MX with a subtile broadcast / scalar / activation (not validated yet)")
         m = _L1_NEVER_FITS.search(msg) if "L1 buffer across " in msg else None
         if m is None:
             m = _L1_NEVER_FITS_HYBRID.search(msg)
         if "Out of Memory" in msg and m is not None and int(m.group(1)) > int(m.group(2)):
             pytest.skip(f"needs {m.group(1)} B per L1 bank; this device's bank is {m.group(2)} B")
         raise
+
+
+# binary_ng's Quasar-native slice admits MX tensor-tensor ops but refuses a subtile broadcast
+# (ROW/COL/SCALAR), a scalar and an activation beside MX (QUASAR_NATIVE_DESIGN.md, F6): those paths are
+# not validated with MX. A captured bias-add (ROW_B broadcast) therefore cannot run as MX yet; skip
+# rather than fail, only under the MX switches, so the case runs once the kernel gains support.
+_MX_BINARY_UNSUPPORTED = re.compile(r"binary op \w+ is not supported for a DataType::MX\w+ ", re.DOTALL)
+
+
+def _mx_binary_unsupported(exc):
+    return BF8_AS_MX and _MX_BINARY_UNSUPPORTED.search(str(exc)) is not None

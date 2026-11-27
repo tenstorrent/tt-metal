@@ -44,13 +44,15 @@ bool is_allowed_row_major_dtype(ttnn::DataType tensor_dtype, std::optional<ttnn:
     if (!requested_dtype.has_value() || requested_dtype.value() == tensor_dtype) {
         return true;
     }
-    // untilize / untilize_with_unpadding convert BFLOAT8_B -> BFLOAT16 natively as part of de-tiling.
-    return tensor_dtype == ttnn::DataType::BFLOAT8_B && requested_dtype.value() == ttnn::DataType::BFLOAT16;
+    // untilize / untilize_with_unpadding convert BFLOAT8_B -> BFLOAT16 natively as part of de-tiling. An MX tile
+    // is expanded to Float16_b by the unpacker, so MX -> BFLOAT16 goes the same way.
+    return (tensor_dtype == ttnn::DataType::BFLOAT8_B || tt::tt_metal::is_mx(tensor_dtype)) &&
+           requested_dtype.value() == ttnn::DataType::BFLOAT16;
 }
 
 constexpr std::string_view kRowMajorDtypeErrorMessage =
     "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device "
-    "(allowed exception: BFLOAT8_B -> BFLOAT16, which untilize handles natively)!";
+    "(allowed exception: BFLOAT8_B / MX -> BFLOAT16, which untilize handles natively)!";
 
 Tensor to_layout_impl(
     const ttnn::Tensor& tensor_arg,
