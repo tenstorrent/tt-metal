@@ -2685,6 +2685,108 @@ public:
 // Stresses the prefetcher "issue queue -> device" path by issuing large paged DRAM writes with inline host payload.
 class PrefetcherThroughputTestFixture : public BasePrefetcherTestFixture {};
 
+// Places a relay-inline header so it ends exactly where the exec_buf's first fetch into the cmddat_q ends, which
+// leaves its whole payload in the next fetch: the remaining == 0 wrap in process_exec_buf_relay_inline_cmd and
+// process_exec_buf_relay_inline_noflush_cmd. Host commands are PCIe-aligned and a header is 16 B, so a header never
+// ends on the (aligned) fetch boundary by itself: the filler before it strides past its own end to put the header
+// there, and the command after it strides 16 B further to realign the stream. The watcher flags a zero-length NOC
+// write as a sanitize error, so the fixture turns it on.
+class PrefetcherExecBufRelayInlineAtFetchEndTestFixture : public BasePrefetcherTestFixture {
+protected:
+    void SetUp() override {
+        watcher_previous_enabled_ = MetalContext::instance().rtoptions().get_watcher_enabled();
+        MetalContext::instance().rtoptions().set_watcher_enabled(true);
+        BasePrefetcherTestFixture::SetUp();
+    }
+
+    void TearDown() override {
+        BasePrefetcherTestFixture::TearDown();
+        MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled_);
+    }
+
+    void run_relay_inline_header_at_fetch_end_test(bool noflush) {
+        TT_FATAL(use_exec_buf_, "The relay-inline fetch-end test requires use_exec_buf=true");
+        constexpr uint32_t initial_exec_buf_fetch_bytes = 16 * 1024;  // INITIAL_FETCH_SIZE in cq_prefetch.cpp
+        constexpr uint32_t boundary_payload_bytes = 64;
+
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/false);
+        const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+        const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
+        Common::DeviceData device_data(
+            device_, worker_range, l1_base, dram_base_, nullptr, false, get_dram_data_size_words(), cfg_);
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+
+        auto linear_write = [&](uint32_t size_bytes) {
+            const std::vector<uint32_t> payload = payload_generator_->generate_payload(size_bytes);
+            const uint32_t addr = device_data.get_result_data_addr(first_worker, 0);
+            Common::DeviceDataUpdater::update_linear_write(payload, device_data, worker_range, /*is_mcast=*/false);
+            return Common::CommandBuilder::build_linear_write_command<true, true>(
+                metal_ctx, payload, worker_range, /*is_mcast=*/false, noc_xy, addr, size_bytes);
+        };
+        // Appends cmd to the stream; extra_stride > 0 moves the next command that many bytes past cmd's end.
+        std::vector<uint8_t> stream;
+        auto append = [&](const HostMemDeviceCommand& cmd, uint32_t extra_stride) {
+            const size_t start = stream.size();
+            const auto* bytes = static_cast<const uint8_t*>(cmd.data());
+            stream.insert(stream.end(), bytes, bytes + cmd.size_bytes());
+            if (extra_stride > 0) {
+                auto* prefetch_cmd = reinterpret_cast<CQPrefetchCmd*>(stream.data() + start);
+                TT_FATAL(
+                    prefetch_cmd->base.cmd_id == CQ_PREFETCH_CMD_RELAY_INLINE, "Only a RELAY_INLINE is re-strided");
+                prefetch_cmd->relay_inline.stride += extra_stride;
+                stream.resize(stream.size() + extra_stride, 0);
+            }
+        };
+
+        // Filler: a PCIe-aligned linear write that ends one PCIe alignment before the fetch end, re-strided so the
+        // next header starts sizeof(CQPrefetchCmd) bytes before it.
+        const uint32_t filler_bytes = initial_exec_buf_fetch_bytes - host_alignment_;
+        HostMemDeviceCommand filler = linear_write(filler_bytes - sizeof(CQPrefetchCmd) - sizeof(CQDispatchCmdLarge));
+        TT_FATAL(
+            filler.size_bytes() == filler_bytes, "Filler is {} B, expected {} B", filler.size_bytes(), filler_bytes);
+        append(filler, host_alignment_ - sizeof(CQPrefetchCmd));
+        TT_FATAL(
+            stream.size() + sizeof(CQPrefetchCmd) == initial_exec_buf_fetch_bytes, "Header does not end at fetch end");
+        const size_t boundary_offset = stream.size();
+
+        if (noflush) {
+            // RELAY_INLINE_NOFLUSH sends the write header (all in the next fetch); RELAY_PAGED sends a DRAM page.
+            const uint32_t page_size = get_page_size();
+            const uint32_t addr = device_data.get_result_data_addr(first_worker, 0);
+            HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged<false, false>(
+                metal_ctx, noc_xy, addr, /*start_page=*/0, dram_base_, page_size, /*pages_in_chunk=*/1);
+            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(/*bank_id=*/0);
+            const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
+            DeviceDataUpdater::update_paged_dram_read(
+                worker_range, device_data, bank_core, /*bank_id=*/0, /*bank_offset=*/0, page_size / sizeof(uint32_t));
+            append(cmd, 0);
+        } else {
+            append(linear_write(boundary_payload_bytes), 0);
+        }
+        const auto* boundary_cmd = reinterpret_cast<const CQPrefetchCmd*>(stream.data() + boundary_offset);
+        TT_FATAL(
+            boundary_cmd->base.cmd_id ==
+                (noflush ? CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH : CQ_PREFETCH_CMD_RELAY_INLINE),
+            "Unexpected command {} at the fetch end",
+            static_cast<uint32_t>(boundary_cmd->base.cmd_id));
+
+        // Realign the rest of the stream (exec_buf wait and end) to the PCIe alignment.
+        append(linear_write(l1_alignment_), sizeof(CQPrefetchCmd));
+        TT_FATAL(stream.size() % host_alignment_ == 0, "Stream of {} B is not PCIe-aligned", stream.size());
+
+        HostMemDeviceCommand stream_cmd(metal_ctx, stream.size());
+        stream_cmd.add_data(stream.data(), stream.size(), stream.size());
+        std::vector<HostMemDeviceCommand> commands;
+        commands.push_back(std::move(stream_cmd));
+        execute_generated_commands(commands, device_data, worker_range.size(), /*num_iterations=*/1);
+    }
+
+private:
+    bool watcher_previous_enabled_{};
+};
+
 // Slow Dispatch Prefetcher Tests
 // Validates cq_prefetch.cpp (IS_D_VARIANT=1) in isolation without FD infrastructure.
 // Two modes via PagedReadParams::use_exec_buf:
@@ -4096,6 +4198,19 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     }
 }
 
+TEST_P(PrefetcherExecBufRelayInlineAtFetchEndTestFixture, RelayInlineHeaderAtFetchEnd) {
+    log_info(
+        tt::LogTest, "PrefetcherExecBufRelayInlineAtFetchEndTestFixture - RelayInlineHeaderAtFetchEnd - Test Start");
+    run_relay_inline_header_at_fetch_end_test(/*noflush=*/false);
+}
+
+TEST_P(PrefetcherExecBufRelayInlineAtFetchEndTestFixture, RelayInlineNoflushHeaderAtFetchEnd) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherExecBufRelayInlineAtFetchEndTestFixture - RelayInlineNoflushHeaderAtFetchEnd - Test Start");
+    run_relay_inline_header_at_fetch_end_test(/*noflush=*/true);
+}
+
 // Quasar simulator FD tests — the default FD fixtures skip on Quasar simulator and these skip on WH/BH.
 TEST_P(BasePrefetcherQuasarSimulatorTestFixture, TestTerminate) {
     log_info(
@@ -4491,6 +4606,17 @@ INSTANTIATE_TEST_SUITE_P(
             DEFAULT_ITERATIONS,
             DEVICE_DATA_SIZE_LARGE / sizeof(uint32_t),  // 20MB in words
             false}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+// PrefetcherExecBufRelayInlineAtFetchEndTestFixture tests - exec buf only, one DRAM page of source data
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherTests,
+    PrefetcherExecBufRelayInlineAtFetchEndTestFixture,
+    ::testing::Values(PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, 1, 1, DRAM_PAGE_SIZE_DEFAULT / sizeof(uint32_t), true}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
