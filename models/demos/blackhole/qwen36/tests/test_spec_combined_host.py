@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Host-only (no device): one deferred verify whose rows combine the device sampling features of
-Qwen36MTPContractForCausalLM (vllm-tt-plugin ``supports_spec_device_mask`` with ``supports_spec_device_logprobs`` and
-``supports_spec_device_penalties``).
+Qwen36MTPContractForCausalLM (vllm-tt-plugin ``supports_spec_device_mask`` with ``supports_spec_device_logprobs``,
+``supports_spec_device_penalties`` and ``supports_spec_device_top_p``).
 
 A token-masked verify (``decode_forward(defer_sampling=True)``) enqueues its forward at submission and the rest at
-``sample_deferred``: the mask, the penalties, the sampler and the logprobs trace, in that order
-(``Qwen36Model.verify_enqueue_post``).
+``sample_deferred``: the mask, the penalties, the sampler (or the certificate sampler) and the logprobs trace, in that
+order (``Qwen36Model.verify_enqueue_post``).
 
 * Logprobs: the payload describes the logits the draws came from: an unmasked, unpenalized row's payload is its raw
   logits', and a masked or penalized row's draw is among its edited candidates (the payload of such a row is not
@@ -15,6 +15,9 @@ A token-masked verify (``decode_forward(defer_sampling=True)``) enqueues its for
   a masked logit stays far below every allowed one, so the order changes no draw. Penalizing after the mask makes the
   float32 argmax that a greedy penalty row takes the masked one, so such a row does not draw (a top-k 1 draw over the
   bfloat16 penalized logits could break a float32 near-tie the other way).
+* Certificate rows (top-k off, top_p < 1) on a deferred verify: the certificate sampler replaces the sampler at
+  sample_deferred, the verify runs no device acceptance and drafter, and the logits a failed row is drawn again from
+  are read after the mask and the penalties edited them, so the redo draws from the same masked, penalized target.
 """
 
 from types import SimpleNamespace
@@ -103,8 +106,10 @@ def deferred(monkeypatch):
             add=lambda tokens: device.setdefault("add", []).append(tokens),
             stage=lambda penalties, greedy, **kw: device.setdefault("staged", []).append((penalties, greedy)),
         ),
+        _vfy_top_p=SimpleNamespace(q="q"),
         _vfy_ids_out="ids",
         _vfy_rows_out="rows",
+        verify_logits_source=lambda bucket: ("shard", True),
         verify_enqueue=lambda *a, **kw: calls.append(("forward", kw)),
         verify_enqueue_post=lambda **kw: calls.append(("post", kw)),
     )
@@ -122,12 +127,20 @@ def deferred(monkeypatch):
             masked = torch.where(allowed_tokens(post["mask"], V), raw, torch.tensor(MASK_NEG))
         lanes = torch.zeros(1, 32, dtype=torch.int64)
         lanes[0, : B * T] = raw.argmax(dim=1)
-        out = {"ids": lanes, "draws": masked.argmax(dim=1)}
+        out = {"ids": lanes, "draws": masked.argmax(dim=1), "q": device.get("q", torch.ones(1, 1, B * T, 1))}
         out.update(zip(["lp_vals", "lp_ids", "lp_sums"], _candidates(masked)))
         host = [out[t] for t in tensors]
         return SimpleNamespace(result=lambda: host, event="event")
 
+    def shards(source):
+        raw, mask = device["logits"], calls[-1][1].get("mask")
+        edited = raw if mask is None else torch.where(allowed_tokens(mask, V), raw, torch.tensor(MASK_NEG))
+        return list(edited.reshape(1, 1, B * T, V).chunk(SHARDS, dim=-1))
+
     monkeypatch.setattr(eng, "_read_device0_async", read)
+    monkeypatch.setattr(ttnn, "get_device_tensors", shards)
+    monkeypatch.setattr(ttnn, "from_device", lambda t, blocking=True: t)
+    monkeypatch.setattr(ttnn, "to_torch", lambda t: t)
     return eng, calls, reads, device
 
 
@@ -237,3 +250,35 @@ def test_the_post_replays_mask_then_penalties_then_sampler_then_logprobs(monkeyp
     assert traces == [f"mask{tag}", f"pen{tag}"], "greedy penalty rows alone take the masked argmax"
     with expect_error(ValueError, "sample_plan that draws its rows or the penalties"):
         m.verify_enqueue_post(bucket=bucket, mask=rows)
+
+
+def test_a_certificate_row_on_a_masked_verify_is_drawn_again_from_the_masked_logits(deferred):
+    """User 0 has top-k off and top_p 0.9 (a certificate row) and a mask at column 0; user 1 is masked and greedy.
+    The certificate sampler replaces the sampler at sample_deferred, the step runs no device acceptance (its
+    submission offered one), and the reads take the certificate's q after the draws. User 0's column 0 fails the
+    certificate: its redo draws from the logits read back after the mask, so it takes an allowed token."""
+    eng, calls, reads, device = deferred
+    eng._one_enqueue_ready = lambda: True
+    g = torch.Generator().manual_seed(9)
+    device["logits"] = (torch.randn(B * T, V, generator=g) * 2).to(torch.bfloat16).float()
+    q = torch.full((1, 1, B * T, 1), 0.99)
+    q[0, 0, 0, 0] = 0.5
+    device["q"] = q
+    payload = _forward(eng, logprobs=True)
+    assert payload.one_enqueue
+    sampling = _params(temperature=[0.7, 0.0], top_k=[-1, 1], top_p=[0.9, 1.0], seed=[11, None])
+    step = eng.sample_deferred(payload, sampling=sampling, mask=_mask({(0, 0): (3, 9), (1, 1): (4, 5)}))
+
+    post = calls[-1][1]
+    assert post["top_p"] is step.cert and step.cert.rows == [True, False] and step.cert.top_p[0] == 0.9
+    assert post["accept_rows"] is None and step.plan is None, "a certificate verify runs no device acceptance"
+    plan = post["sample_plan"]
+    assert plan.sampled == [True] * (2 * T) and plan.k[:T] == [32] * T, "the certificate row draws its top-32"
+    assert reads[-1] == ["ids", "draws", "q", "lp_vals", "lp_ids", "lp_sums"]
+    ids = step.result()
+    assert bool(step.redone[0]) and int(step.redone.sum()) == 1
+    assert int(ids[0, 0]) in (3, 9), "the redo draws from the masked logits"
+    lp = step.logprobs_result()[0]
+    masked0 = torch.where(allowed_tokens(post["mask"][:1], V), device["logits"][:1], torch.tensor(MASK_NEG))
+    want = torch.log_softmax(masked0.double(), dim=-1)[0, int(ids[0, 0])]
+    assert abs(float(lp[0, 0]) - float(want)) < 1e-4, "a redone row's payload comes from the logits it was drawn from"

@@ -682,6 +682,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # An argmax_ids verify sent spec_num_logprobs also returns, for each row and column, the raw logprob and rank
         # of its id and the top-20 ids and logprobs (spec_logprobs, from the verify's own logits on the device).
         "supports_spec_device_logprobs": True,
+        # A sampled row with top-k off and top_p < 1 draws its nucleus on the device when the nucleus lies inside the
+        # sampler's top-32, and is drawn again on the host from the step's logits otherwise (spec_top_p); on a
+        # token-masked verify both read the logits after the row's mask and penalties.
+        "supports_spec_device_top_p": True,
         "output_tokens_per_step": 1,
         "supports_sample_on_device": True,
         "spec_ids_are_sampled": True,

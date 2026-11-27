@@ -76,7 +76,7 @@ class VerifyLogprobs:
         ttnn.copy(vals, self.vals)
         ttnn.copy(gidx, self.ids)
         ttnn.deallocate(gidx)
-        rows, width = int(logits.shape[2]), int(logits.shape[3])
+        rows = int(logits.shape[2])
         top = ttnn.max(vals, dim=-1, keepdim=True)
         ttnn.deallocate(vals)
         if rows < self.rows:
@@ -85,33 +85,47 @@ class VerifyLogprobs:
             ttnn.deallocate(full)
         m = ttnn.typecast(top, ttnn.float32)
         ttnn.deallocate(top)
-        x = ttnn.typecast(logits, ttnn.float32)
-        d = ttnn.subtract(x, m)
-        for t in (x, m):
-            ttnn.deallocate(t)
-        e = ttnn.exp(d, fast_and_approximate_mode=False)
-        ttnn.deallocate(d)
-        s = ttnn.sum(e, dim=-1, keepdim=True, compute_kernel_config=self.compute)
-        ttnn.deallocate(e)
-        if rows < SAMPLER_ROWS:
-            short = s
-            s = ttnn.pad(short, [(0, 0), (0, 0), (0, SAMPLER_ROWS - rows), (0, 0)], value=1.0)
-            if not _aliases(s, short):
-                ttnn.deallocate(short)
-        if self.shards > 1 and width != self.vocab:
-            g = ttnn.all_gather(s, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(s)
-            g4 = ttnn.reshape(g, (1, self.shards, SAMPLER_ROWS, 1))
-            s = ttnn.sum(g4, dim=1, keepdim=True, compute_kernel_config=self.compute)
-            if not _aliases(g4, g):
-                ttnn.deallocate(g4)
-            ttnn.deallocate(g)
+        s = vocab_exp_sum(logits, m, self.shards, self.vocab, self.compute)
+        ttnn.deallocate(m)
         ttnn.copy(s, self.sums)
         ttnn.deallocate(s)
 
     def release(self):
         for t in (self.vals, self.ids, self.sums):
             ttnn.deallocate(t)
+
+
+def vocab_exp_sum(logits, m, shards, vocab, compute, scale=None):
+    """float32 TILE [1, 1, 32, 1]: for each row of ``logits`` (each device's vocabulary shard [1, 1, rows,
+    vocab / shards], or the whole vocabulary on every device), the sum over the whole vocabulary of exp((x - m) * scale)
+    with ``m`` and ``scale`` float32 [1, 1, rows, 1] (``scale`` None: 1). Each device sums its shard in float32 (HiFi4,
+    float32 destination accumulation); the shards' sums are gathered and added. Rows past ``rows`` hold 1."""
+    rows, width = int(logits.shape[2]), int(logits.shape[3])
+    x = ttnn.typecast(logits, ttnn.float32)
+    d = ttnn.subtract(x, m)
+    ttnn.deallocate(x)
+    if scale is not None:
+        unscaled = d
+        d = ttnn.multiply(unscaled, scale)
+        ttnn.deallocate(unscaled)
+    e = ttnn.exp(d, fast_and_approximate_mode=False)
+    ttnn.deallocate(d)
+    s = ttnn.sum(e, dim=-1, keepdim=True, compute_kernel_config=compute)
+    ttnn.deallocate(e)
+    if rows < SAMPLER_ROWS:
+        short = s
+        s = ttnn.pad(short, [(0, 0), (0, 0), (0, SAMPLER_ROWS - rows), (0, 0)], value=1.0)
+        if not _aliases(s, short):
+            ttnn.deallocate(short)
+    if shards > 1 and width != vocab:
+        g = ttnn.all_gather(s, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(s)
+        g4 = ttnn.reshape(g, (1, shards, SAMPLER_ROWS, 1))
+        s = ttnn.sum(g4, dim=1, keepdim=True, compute_kernel_config=compute)
+        if not _aliases(g4, g):
+            ttnn.deallocate(g4)
+        ttnn.deallocate(g)
+    return s
 
 
 def _aliases(a, b):
@@ -193,15 +207,36 @@ def spec_logprobs_payload(values, ids, sums, chosen, live=None, top=TOP_LOGPROBS
     return lp[:, 0].contiguous(), rank.to(torch.int32), lp[:, 1:].contiguous(), tok[:, 1:].to(torch.int32)
 
 
-def payload_from_reads(reads, chosen, live, B, T):
+def exact_logprobs(logits_row, chosen, top=TOP_LOGPROBS):
+    """The payload entries of one row from its full logits [V]: (raw logprob of ``chosen`` float32, rank int32, top
+    logprobs float32 [top], top ids int32 [top]), the top in (value descending, id ascending) order."""
+    x = torch.as_tensor(logits_row).to(torch.float32)
+    lsm = torch.log_softmax(x.to(torch.float64), dim=-1)
+    order = torch.sort(x, descending=True, stable=True).indices[:top]
+    return (
+        lsm[int(chosen)].to(torch.float32),
+        (x >= x[int(chosen)]).sum().to(torch.int32),
+        lsm[order].to(torch.float32),
+        order.to(torch.int32),
+    )
+
+
+def payload_from_reads(reads, chosen, live, B, T, full_logits=None, exact=None):
     """The payload of a B x T verify from the host copies of ``VerifyLogprobs.outputs`` (device-0 replicas) and the
-    verify's answered ids ``chosen`` [B, T]; ``live`` [B] the rows a request owns. Returns the four tensors of
+    verify's answered ids ``chosen`` [B, T]; ``live`` [B] the rows a request owns. ``exact`` [B*T] bool (with
+    ``full_logits`` [>= B*T, V]): rows whose token the host drew from the full logits, which may lie outside the
+    candidates; their entries come from the full logits (``exact_logprobs``). Returns the four tensors of
     ``spec_logprobs_payload`` shaped [B, T] and [B, T, top]."""
     rows = B * T
     vals, ids, sums = (torch.as_tensor(t) for t in reads)
     vals = vals.reshape(-1, vals.shape[-1])[:rows]
     ids = ids.reshape(-1, ids.shape[-1])[:rows]
     sums = sums.reshape(-1)[:rows]
+    chosen = torch.as_tensor(chosen).reshape(-1)
     live_rows = torch.as_tensor(live, dtype=torch.bool).reshape(B, 1).expand(B, T).reshape(-1)
-    out = spec_logprobs_payload(vals, ids, sums, torch.as_tensor(chosen).reshape(-1), live_rows)
+    exact = torch.zeros(rows, dtype=torch.bool) if exact is None else torch.as_tensor(exact).reshape(-1)[:rows]
+    out = spec_logprobs_payload(vals, ids, sums, chosen, live_rows & ~exact)
+    for r in exact.nonzero().reshape(-1).tolist():
+        for t, value in zip(out, exact_logprobs(full_logits[r], chosen[r])):
+            t[r] = value
     return tuple(t.reshape(B, T, *t.shape[1:]) for t in out)

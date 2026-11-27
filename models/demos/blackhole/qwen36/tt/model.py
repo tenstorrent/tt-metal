@@ -36,6 +36,7 @@ from models.demos.blackhole.qwen36.tt.spec_step import (
     rope_rows,
     rope_table_rows,
 )
+from models.demos.blackhole.qwen36.tt.spec_top_p import TopPCertificate
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
@@ -1727,6 +1728,8 @@ class Qwen36Model:
                     self._bucket_sample_body(shard)
                 if getattr(self, "_vfy_logprobs", None) is not None:
                     self._vfy_logprobs.body(shard)
+                if getattr(self, "_vfy_top_p", None) is not None:
+                    self._vfy_top_p.body(shard)
                 ttnn.deallocate(shard)
         return buckets
 
@@ -1787,6 +1790,7 @@ class Qwen36Model:
             "_vfy_sample_trace_id",
             "_vfy_pen_trace_id",
             "_vfy_logprobs_trace_id",
+            "_vfy_top_p_trace_id",
             "_vfy_mask_trace_id",
         ):
             if getattr(self, name, None) is not None:
@@ -1797,6 +1801,7 @@ class Qwen36Model:
             "_vfy_bucket_sample_traces",
             "_vfy_bucket_pen_traces",
             "_vfy_bucket_logprobs_traces",
+            "_vfy_bucket_top_p_traces",
             "_vfy_bucket_mask_traces",
         ):
             for trace_id in (getattr(self, name, None) or {}).values():
@@ -1827,7 +1832,7 @@ class Qwen36Model:
         self.record_verify_trace()
 
     def prepare_verify_trace(
-        self, page_tables, T, warm_positions, sample=False, buckets=(), logprobs=False, mask=False
+        self, page_tables, T, warm_positions, sample=False, buckets=(), logprobs=False, top_p=False, mask=False
     ):
         """Allocate and compile everything the verify trace needs without capturing (warmup phase 1);
         record_verify_trace captures it (phase 2); verify_traced replays it.
@@ -1847,11 +1852,14 @@ class Qwen36Model:
         them no bucket is prepared (_vfy_buckets).
         ``logprobs``: also compile the logprobs body over the same logits (spec_logprobs.VerifyLogprobs), which
         record_verify_trace captures as a trace of its own, per bucket too, and verify_enqueue(logprobs=True) replays.
+        ``top_p`` (with ``sample``): also compile the certificate sampler (spec_top_p.TopPCertificate), which
+        record_verify_trace captures as a trace of its own, per bucket too, and verify_enqueue(top_p=...) replays in
+        place of the sampler trace.
         ``mask`` (with ``sample``): also compile the token mask over the logits the sampler reads
         (spec_mask.VerifyMask), which record_verify_trace captures as a trace of its own per sampler trace and
-        verify_enqueue_post(mask=...) replays before the sampler.
-        Idempotent for the same (B, T, nb, sample, buckets, logprobs, mask); a different key releases any live trace
-        first.
+        verify_enqueue_post(mask=...) replays before the sampler or certificate trace.
+        Idempotent for the same (B, T, nb, sample, buckets, logprobs, top_p, mask); a different key releases any live
+        trace first.
         """
         from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
@@ -1884,7 +1892,16 @@ class Qwen36Model:
         # the full grid.
         if mask and not sample:
             raise ValueError("the verify token mask edits the logits the device sampler reads: prepare with sample")
-        key = (B, T, nb, bool(sample), tuple(sorted(int(b) for b in buckets)), bool(logprobs), bool(mask))
+        key = (
+            B,
+            T,
+            nb,
+            bool(sample),
+            tuple(sorted(int(b) for b in buckets)),
+            bool(logprobs),
+            bool(sample and top_p),
+            bool(mask),
+        )
         if getattr(self, "_vfy_prepared_key", None) == key and getattr(self, "_vfy_step_buf", None) is not None:
             return
         dev = self.device
@@ -1923,6 +1940,9 @@ class Qwen36Model:
         self._vfy_logprobs = (
             VerifyLogprobs(dev, B, T, self.vocab_size, shards=shards, source=self._vfy_sampler) if logprobs else None
         )
+        if getattr(self, "_vfy_top_p", None) is not None:
+            self._vfy_top_p.release()
+        self._vfy_top_p = TopPCertificate(self._vfy_sampler) if sample and top_p else None
         self._vfy_mask_wanted = bool(mask)
         # Grouped aliased KV write (TPAttention._write_kv_aliased): checked here for the warm passes and on
         # every replay (verify_traced), while the tables are still torch; see spec_kv_write_conflicts.
@@ -2036,6 +2056,8 @@ class Qwen36Model:
             self._vfy_sampler.body(outs[0])  # writes the sampler's own persistent draws buffer
         if getattr(self, "_vfy_logprobs", None) is not None:
             self._vfy_logprobs.body(outs[0])  # writes its own persistent outputs
+        if getattr(self, "_vfy_top_p", None) is not None:
+            self._vfy_top_p.body(outs[0])  # writes the sampler's draws and its own q
         self._vfy_buckets = ()
         if buckets and self._vfy_ids_lanes:
             self._vfy_buckets = self._warm_verify_buckets(buckets, ids, outs[1])
@@ -2127,12 +2149,18 @@ class Qwen36Model:
             self._vfy_logprobs_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
             self._vfy_logprobs.body(self._vfy_logits_out if self._vfy_shard_out is None else self._vfy_shard_out)
             ttnn.end_trace_capture(dev, self._vfy_logprobs_trace_id, cq_id=0)
+        if getattr(self, "_vfy_top_p", None) is not None:
+            # Replayed in place of the sampler trace by a verify with a certificate row (top-k off, top_p < 1).
+            self._vfy_top_p_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+            self._vfy_top_p.body(self._vfy_logits_out if self._vfy_shard_out is None else self._vfy_shard_out)
+            ttnn.end_trace_capture(dev, self._vfy_top_p_trace_id, cq_id=0)
         self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
         buckets = getattr(self, "_vfy_buckets", ())
         if buckets:
             self._log_trace_region("the verify trace")
         self._vfy_bucket_traces, self._vfy_bucket_sample_traces, self._vfy_bucket_shards = {}, {}, {}
-        self._vfy_bucket_pen_traces, self._vfy_bucket_logprobs_traces, self._vfy_bucket_mask_traces = {}, {}, {}
+        self._vfy_bucket_pen_traces, self._vfy_bucket_logprobs_traces = {}, {}
+        self._vfy_bucket_top_p_traces, self._vfy_bucket_mask_traces = {}, {}
         for b in buckets:
             self._vfy_bucket_traces[b] = ttnn.begin_trace_capture(dev, cq_id=0)
             shard = self._verify_bucket_body(b, self._vfy_ids_out, self._vfy_rows_out)
@@ -2157,6 +2185,10 @@ class Qwen36Model:
                 self._vfy_bucket_logprobs_traces[b] = ttnn.begin_trace_capture(dev, cq_id=0)
                 self._vfy_logprobs.body(shard)
                 ttnn.end_trace_capture(dev, self._vfy_bucket_logprobs_traces[b], cq_id=0)
+            if getattr(self, "_vfy_top_p", None) is not None:
+                self._vfy_bucket_top_p_traces[b] = ttnn.begin_trace_capture(dev, cq_id=0)
+                self._vfy_top_p.body(shard)
+                ttnn.end_trace_capture(dev, self._vfy_bucket_top_p_traces[b], cq_id=0)
         if buckets:
             sampled = " and their sampler traces" if self._vfy_bucket_sample_traces else ""
             sampled += " and their logprobs traces" if self._vfy_bucket_logprobs_traces else ""
@@ -2297,6 +2329,7 @@ class Qwen36Model:
         bucket=None,
         read_logits=False,
         logprobs=False,
+        top_p=None,
         post=True,
         penalties=False,
     ):
@@ -2312,26 +2345,35 @@ class Qwen36Model:
         ``bucket`` (_verify_bucket_body), which runs users 0 .. bucket-1 only, and with ``sample_plan`` the bucket's
         sampler trace (_bucket_sample_body); every user from ``bucket`` on must be ``inactive``, and no logits can be
         read. ``logprobs``: then also the logprobs trace (the bucket's), which writes the VerifyLogprobs outputs.
-        ``penalties``: replay the penalty trace of the B users or of the bucket before its sampler trace, after the
-        logits traces (the logits read back are the raw ones). ``post`` False (a deferred verify): stage and replay the
-        verify trace only; verify_enqueue_post enqueues the rest later (the penalty, sampler and logprobs traces), with
-        the same ``bucket``, and no logits are read."""
+        ``top_p`` (spec_top_p.CertificateRows, with ``sample_plan``): stage the certificate rows and replay the
+        certificate sampler trace (the bucket's) in place of the sampler trace. ``penalties``: replay the penalty
+        trace of the B users or of the bucket before its sampler (or certificate) trace, after the logits traces (the
+        logits read back are the raw ones). ``post`` False (a deferred verify): stage and replay the verify trace
+        only; verify_enqueue_post enqueues the rest later (the penalty, sampler or certificate and logprobs traces),
+        with the same ``bucket``, and no logits are read."""
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         T, B = self._vfy_T, self._vfy_B
         if sample_plan is not None and self._vfy_sampler is None:
             raise ValueError("verify_traced(sample_plan=...) needs a verify trace prepared with sample=True")
         if logprobs and getattr(self, "_vfy_logprobs_trace_id", None) is None:
             raise ValueError("verify_enqueue(logprobs=True) needs a verify trace prepared with logprobs=True")
+        if top_p is not None and (sample_plan is None or getattr(self, "_vfy_top_p_trace_id", None) is None):
+            raise ValueError(
+                "verify_enqueue(top_p=...) needs a sample_plan and a verify trace prepared with top_p=True"
+            )
         if penalties and getattr(self, "_vfy_pen_trace_id", None) is None:
             raise ValueError("verify_traced(penalties=True) needs the verify penalties of a device-sampling launch")
-        if not post and (sample_plan is not None or read_logits or logprobs or penalties):
+        if not post and (sample_plan is not None or read_logits or logprobs or penalties or top_p is not None):
             raise ValueError(
-                "a deferred verify (post=False) replays no penalty, sampler or logprobs trace and reads no logits"
+                "a deferred verify (post=False) replays no penalty, sampler, certificate or logprobs trace and reads "
+                "no logits"
             )
         bucketed = bucket is not None and int(bucket) != B
         trace_id = self._vfy_trace_id
         if bucketed:
-            trace_id = self._vfy_bucket_trace(int(bucket), inactive, sample_plan, read_logits, logprobs, penalties)
+            trace_id = self._vfy_bucket_trace(
+                int(bucket), inactive, sample_plan, read_logits, logprobs, penalties, top_p
+            )
         assert len(tokens) == B, f"expected {B} users, got {len(tokens)}"
         assert all(len(t) == T for t in tokens), f"expected {T} tokens per user"
         assert len(positions) == B and len(mi_prev) == B, "one position and one mi per user"
@@ -2376,6 +2418,8 @@ class Qwen36Model:
             self._stage_verify_selectors(mi_prev, B, rep)
         if sample_plan is not None:
             self._vfy_sampler.stage(sample_plan)
+        if top_p is not None:
+            self._vfy_top_p.stage(top_p, T)
 
         ttnn.execute_trace(dev, trace_id, cq_id=0, blocking=False)
         if not post:
@@ -2383,7 +2427,9 @@ class Qwen36Model:
         if bucketed:
             if penalties:
                 ttnn.execute_trace(dev, self._vfy_bucket_pen_traces[int(bucket)], cq_id=0, blocking=False)
-            if sample_plan is not None:
+            if top_p is not None:
+                ttnn.execute_trace(dev, self._vfy_bucket_top_p_traces[int(bucket)], cq_id=0, blocking=False)
+            elif sample_plan is not None:
                 ttnn.execute_trace(dev, self._vfy_bucket_sample_traces[int(bucket)], cq_id=0, blocking=False)
             if logprobs:
                 ttnn.execute_trace(dev, self._vfy_bucket_logprobs_traces[int(bucket)], cq_id=0, blocking=False)
@@ -2394,7 +2440,9 @@ class Qwen36Model:
             ttnn.execute_trace(dev, self._vfy_rm_trace_id, cq_id=0, blocking=False)
         if penalties:
             ttnn.execute_trace(dev, self._vfy_pen_trace_id, cq_id=0, blocking=False)
-        if sample_plan is not None:
+        if top_p is not None:
+            ttnn.execute_trace(dev, self._vfy_top_p_trace_id, cq_id=0, blocking=False)
+        elif sample_plan is not None:
             ttnn.execute_trace(dev, self._vfy_sample_trace_id, cq_id=0, blocking=False)
         if logprobs:
             ttnn.execute_trace(dev, self._vfy_logprobs_trace_id, cq_id=0, blocking=False)
@@ -2410,16 +2458,18 @@ class Qwen36Model:
         accept_rows=None,
         logprobs=False,
         penalties=False,
+        top_p=None,
     ):
         """The rest of a deferred verify (verify_enqueue(post=False), the last replay enqueued): with ``accept_rows``
         the step buffer again, from the same ``tokens``, ``positions`` and ``rope_deltas`` and the acceptance rows decided
         now; with ``mask`` (int32 [B*T, W] engine rows, spec_mask packing) the token mask and its trace; with
         ``penalties`` the penalty trace over the parameters the caller staged, after the mask, so the float32 argmax
-        it gives a greedy penalty row is the masked one; with ``sample_plan`` the sampler trace; with ``logprobs`` the
-        logprobs trace, which reads the logits the mask and the penalties edited (spec_logprobs: a masked or penalized
-        draw is among the edited logits' candidates). ``bucket``: the one the verify replayed. The copies queue after
-        the verify trace, which has read the step buffer by then."""
-        dev, B = self.device, self._vfy_B
+        it gives a greedy penalty row is the masked one; with ``sample_plan`` the sampler trace, or with ``top_p``
+        (spec_top_p.CertificateRows) the certificate rows and the certificate sampler trace in its place, over the
+        logits the mask and the penalties edited; with ``logprobs`` the logprobs trace, which reads those logits too
+        (spec_logprobs: a masked or penalized draw is among the edited logits' candidates). ``bucket``: the one the
+        verify replayed. The copies queue after the verify trace, which has read the step buffer by then."""
+        dev, B, T = self.device, self._vfy_B, self._vfy_T
         bucketed = bucket is not None and int(bucket) != B
         if mask is not None and (getattr(self, "_vfy_mask", None) is None or (sample_plan is None and not penalties)):
             raise ValueError(
@@ -2428,6 +2478,10 @@ class Qwen36Model:
             )
         if sample_plan is not None and self._vfy_sampler is None:
             raise ValueError("verify_enqueue_post(sample_plan=...) needs a verify trace prepared with sample=True")
+        if top_p is not None and (sample_plan is None or getattr(self, "_vfy_top_p_trace_id", None) is None):
+            raise ValueError(
+                "verify_enqueue_post(top_p=...) needs a sample_plan and a verify trace prepared with top_p=True"
+            )
         if logprobs and getattr(self, "_vfy_logprobs_trace_id", None) is None:
             raise ValueError("verify_enqueue_post(logprobs=True) needs a verify trace prepared with logprobs=True")
         if penalties and getattr(self, "_vfy_pen_trace_id", None) is None:
@@ -2452,7 +2506,12 @@ class Qwen36Model:
         if penalties:
             trace_id = self._vfy_bucket_pen_traces[int(bucket)] if bucketed else self._vfy_pen_trace_id
             ttnn.execute_trace(dev, trace_id, cq_id=0, blocking=False)
-        if sample_plan is not None:
+        if top_p is not None:
+            self._vfy_sampler.stage(sample_plan)
+            self._vfy_top_p.stage(top_p, T)
+            trace_id = self._vfy_bucket_top_p_traces[int(bucket)] if bucketed else self._vfy_top_p_trace_id
+            ttnn.execute_trace(dev, trace_id, cq_id=0, blocking=False)
+        elif sample_plan is not None:
             self._vfy_sampler.stage(sample_plan)
             trace_id = self._vfy_bucket_sample_traces[int(bucket)] if bucketed else self._vfy_sample_trace_id
             ttnn.execute_trace(dev, trace_id, cq_id=0, blocking=False)
@@ -2460,11 +2519,14 @@ class Qwen36Model:
             trace_id = self._vfy_bucket_logprobs_traces[int(bucket)] if bucketed else self._vfy_logprobs_trace_id
             ttnn.execute_trace(dev, trace_id, cq_id=0, blocking=False)
 
-    def _vfy_bucket_trace(self, bucket, inactive, sample_plan, read_logits=False, logprobs=False, penalties=False):
+    def _vfy_bucket_trace(
+        self, bucket, inactive, sample_plan, read_logits=False, logprobs=False, penalties=False, top_p=None
+    ):
         """The trace of verify row bucket ``bucket``, or ValueError when the step needs more: a live user at or past
         ``bucket`` (the bucket would leave it unverified, its ids stale), device draws without the bucket's sampler
-        trace, logprobs without its logprobs trace, penalties without its penalty trace, or logits to read (the logits
-        traces gather the vocab shard that only the B-user trace writes)."""
+        trace, logprobs without its logprobs trace, penalties without its penalty trace, certificate rows without its
+        certificate sampler trace, or logits to read (the logits traces gather the vocab shard that only the B-user
+        trace writes)."""
         traces = getattr(self, "_vfy_bucket_traces", None) or {}
         if bucket not in traces:
             raise ValueError(f"no verify row bucket of {bucket} users (captured: {sorted(traces)})")
@@ -2474,11 +2536,23 @@ class Qwen36Model:
             raise ValueError(f"the verify row bucket of {bucket} users has no penalty trace")
         if logprobs and bucket not in (getattr(self, "_vfy_bucket_logprobs_traces", None) or {}):
             raise ValueError(f"the verify row bucket of {bucket} users has no logprobs trace")
+        if top_p is not None and bucket not in (getattr(self, "_vfy_bucket_top_p_traces", None) or {}):
+            raise ValueError(f"the verify row bucket of {bucket} users has no certificate sampler trace")
         if read_logits:
             raise ValueError("a verify row bucket makes no logits to read")
         if inactive is None or not all(bool(x) for x in list(inactive)[bucket:]):
             raise ValueError(f"the verify row bucket of {bucket} users leaves out a live user at or past row {bucket}")
         return traces[bucket]
+
+    def verify_logits_source(self, bucket=None):
+        """The device logits the last verify of ``bucket`` users (None or B: the B-user trace) left: (tensor, sharded),
+        each device's vocabulary shard [1, 1, b*T, vocab / tp] when ``sharded``, else the whole vocabulary on every
+        device. A certificate row's host redo reads them (spec_top_p.redo_draws)."""
+        if bucket is not None and int(bucket) != self._vfy_B:
+            return self._vfy_bucket_shards[int(bucket)], True
+        if self._vfy_shard_out is not None:
+            return self._vfy_shard_out, True
+        return self._vfy_logits_out, False
 
     def _vfy_step_host(self, tokens, positions, rope_deltas, accept_rows=None):
         """The verify step buffer's rows (spec_step) of B users x T tokens: ``tokens`` B lists of T ids, ``positions`` user
