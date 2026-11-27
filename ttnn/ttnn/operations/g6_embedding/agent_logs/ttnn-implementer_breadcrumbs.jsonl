@@ -11,3 +11,4 @@
 {"event":"test_run","mode":"dev","result":"pass","detail":"test_g6_embedding.py 16/16, watcher clean","ts":"2026-11-27T06:29:31-05:00"}
 {"event":"test_run","mode":"production","result":"pass","detail":"test_g6_embedding.py 16/16","ts":"2026-11-27T06:29:31-05:00"}
 {"event":"test_run","result":"pass","modes":["dev","prod"],"tests":"16/16 test_g6_embedding.py","note":"fresh rewrite from op_design.md; ProgramSpec host path, UInt16 tilize, whole_row + column_blocked","ts":"2026-11-27T06:52:40-05:00"}
+{"event":"test_run","result":"pass","modes":["dev","prod"],"tests":16,"note":"fresh implementation from op_design.md; whole_row + column_blocked; UInt16 tilize; addresses as common RT args patched per call","ts":"2026-11-27T07:20:17-05:00"}
