@@ -401,6 +401,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.indexed_fill": data_movement.test_indexed_fill,
     "ttnn.gather": data_movement.test_gather,
     "ttnn.sort": data_movement.test_sort,
+    "ttnn.experimental.isin": data_movement.test_isin,
     "ttnn.moe_expert_token_remap": data_movement.test_moe_expert_token_remap,
     "ttnn.narrow": data_movement.test_narrow,
     # Normalization

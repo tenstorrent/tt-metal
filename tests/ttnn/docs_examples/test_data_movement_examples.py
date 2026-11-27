@@ -320,6 +320,17 @@ def test_sort(device):
     logger.debug(f"Sorted Tensor along dim 1: {sorted_tensor_dim}, Indices: {indices_dim}")
 
 
+def test_isin(device):
+    # Create the tensor to check and the values to look for
+    elements = ttnn.from_torch(torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]]), dtype=ttnn.int32, device=device)
+    test_elements = ttnn.from_torch(torch.tensor([2, 3, 5, 7]), dtype=ttnn.int32, device=device)
+
+    # Check which values of elements are in test_elements; use invert=True for the opposite
+    output = ttnn.experimental.isin(elements, test_elements)
+    mask = ttnn.to_torch(output) != 0
+    logger.debug(f"Mask: {mask}")  # [[False, True, True], [False, True, False], [True, False, False]]
+
+
 def test_narrow(device):
     input_tensor = ttnn.rand((32, 16, 16, 4), dtype=ttnn.bfloat16, device=device)
     narrowed_tensor = ttnn.narrow(input_tensor, 0, 0, 12)
