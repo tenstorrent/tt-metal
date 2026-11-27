@@ -1080,6 +1080,13 @@ def pytest_addoption(parser):
         "file as the sweep runs, so a driver can tell which step hung",
     )
     parser.addoption(
+        "--vf-sweep-devices",
+        action="store",
+        default=None,
+        help="With --didt-vf-sweep: force AICLK/VDD only on these device ids (comma separated, e.g. 16). The "
+        "workload still runs on every device; the others stay at the firmware's clock and voltage",
+    )
+    parser.addoption(
         "--grid-size",
         action="store",
         default=None,

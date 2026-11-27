@@ -41,6 +41,8 @@ def didt_vf_sweep(request):
         "vdd_offsets": offsets,
         "start_step": request.config.getoption("--vf-sweep-start-step") if freqs else 0,
         "results_path": request.config.getoption("--vf-sweep-results") if freqs else None,
+        "devices": [int(d) for d in (request.config.getoption("--vf-sweep-devices") or "").split(",") if d.strip()]
+        or None,
     }
     yield
     OpTestBase.vf_sweep_defaults = saved

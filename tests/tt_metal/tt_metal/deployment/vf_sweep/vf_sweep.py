@@ -73,6 +73,32 @@ GTEST_OK = re.compile(r"\[\s+OK \] (\S+)")
 GTEST_FAILED = re.compile(r"\[\s+FAILED\s+\] (\S+)")
 PYTEST_FAILED = re.compile(r"^(?:FAILED|ERROR) (\S+::\S+)")
 
+# Lines that name a failing chip: NOC failure lines and the C++ test's wedge/hang reports ("chip N (bdf, ubb)"),
+# OpTestBase determinism failures ("Device N PCC: <not 1.0>", ND counts).
+CHIP_LINE = re.compile(
+    r"NOC (mismatch|failure|timeout|hang|not run):|No host progress|previously wedged|^\s*chip \d+ \(.*\): noc \d+ batch"
+)
+CHIP_ID = re.compile(r"\bchip (\d+)\b")
+DEVICE_FAIL = re.compile(r"Device (\d+) (?:PCC: (?!1\.0\b)|output failed|reference output)")
+
+
+def failing_chips(text):
+    """Device ids a test log names as failing (unused-channel lines excluded); empty when the log names none."""
+    chips = set()
+    for line in text.splitlines():
+        if UNUSED.search(line):
+            continue
+        if CHIP_LINE.search(line):
+            chips.update(int(c) for c in CHIP_ID.findall(line))
+        m = ND_COUNT.search(line)
+        if m and int(m.group(2)) > 0:
+            chips.add(int(m.group(1)))
+        m = DEVICE_FAIL.search(line)
+        if m:
+            chips.add(int(m.group(1)))
+    return sorted(chips)
+
+
 # Where a point hung. All of them count as a hang at that point; the label says which part of it hung.
 HANG_KINDS = {
     "HANG(force)": "hung while AICLK/VDD were being forced, before the workload ran at that point",
@@ -88,10 +114,11 @@ def selection_args(spec, node=None, k=None):
     return [spec["target"], "-k", k or spec["k"]]
 
 
-def selection_label(spec, node=None, k=None):
-    if node:
-        return node.split("::")[-1]
-    return f"-k '{k or spec['k']}'"
+def selection_label(spec, node=None, k=None, devices=None):
+    label = node.split("::")[-1] if node else f"-k '{k or spec['k']}'"
+    if devices:
+        label += f", forcing only device(s) {','.join(map(str, devices))}"
+    return label
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -214,6 +241,7 @@ def run_invocation(a, spec, results, start_step, out):
         str(start_step),
         "--vf-sweep-results",
         str(results),
+        *(["--vf-sweep-devices", ",".join(map(str, a.devices))] if a.devices else []),
         "-q",
         "--tb=line",
         "-p",
@@ -345,6 +373,8 @@ def summarize(a, steps, status, abort_reason, out):
             ref_failed.setdefault(e.get("step", 0), set()).update(e["failed"])
 
     points = {}  # (mhz, off) -> dict(verdict, text, vcore{dev: mV}, bad_devices)
+    judged = set(a.devices) if a.devices else None
+    others = {}  # device not forced/judged -> points where it failed anyway
     for idx, (mhz, off) in enumerate(steps):
         if idx in status:
             verdict = "HANG" if status[idx].startswith("HANG") else status[idx]
@@ -354,7 +384,12 @@ def summarize(a, steps, status, abort_reason, out):
         if e is None:
             points[(mhz, off)] = {"verdict": "NOT RUN", "text": "-", "vcore": {}, "bad": []}
             continue
-        bad = sorted(set(int(d) for d, n in e["nd"].items() if n) | ref_failed.get(idx, set()))
+        bad = set(int(d) for d, n in e["nd"].items() if n) | ref_failed.get(idx, set())
+        if judged is not None:  # a per-chip sweep judges only the forced chip(s); note the others
+            for d in bad - judged:
+                others.setdefault(d, []).append(f"{mhz}/+{off}")
+            bad &= judged
+        bad = sorted(bad)
         if e["checks"] == 0:
             verdict, text = "NO CHECKS", "no checks"
         elif bad:
@@ -370,7 +405,7 @@ def summarize(a, steps, status, abort_reason, out):
         }
 
     problem_devices = sorted({d for p in points.values() for d in p["bad"]})
-    title = f"{TESTS[a.test]['name']} {selection_label(TESTS[a.test], a.node, a.k)}"
+    title = f"{TESTS[a.test]['name']} {selection_label(TESTS[a.test], a.node, a.k, a.devices)}"
     lines = ["", "=" * 78, f"VF SWEEP RESULT: {title}", "=" * 78]
     lines.append(
         f"AICLK {a.freqs} MHz x VDD offsets {a.offsets} mV over the firmware VCORE, {a.iterations} iterations "
@@ -388,8 +423,12 @@ def summarize(a, steps, status, abort_reason, out):
     for kind, n in hang_counts.items():
         if n:
             lines.append(f"  {kind} = {HANG_KINDS[kind]}")
+    for d, where in sorted(others.items()):
+        lines.append(f"  device {d} (not forced, not judged here) also failed at {', '.join(where)} MHz/mV")
     for idx, devs in sorted(ref_failed.items()):
-        if idx < len(steps):
+        if judged is not None:
+            devs = devs & judged
+        if devs and idx < len(steps):
             mhz, off = steps[idx]
             lines.append(f"  reference outputs at {mhz} MHz +{off} mV failed on device(s) {sorted(devs)}")
 
@@ -433,6 +472,7 @@ def summarize(a, steps, status, abort_reason, out):
     summary = {
         "test": a.test,
         "selection": selection_args(TESTS[a.test], a.node, a.k),
+        "forced_devices": a.devices or "all",
         "verdict": verdict,
         "detail": detail,
         "abort_reason": abort_reason,
@@ -461,7 +501,7 @@ def sweep_one(a):
         a.offsets = [int(o) for o in a.offsets.split(",") if o]
     Path(a.output).mkdir(parents=True, exist_ok=True)
     with open(Path(a.output) / "sweep.log", "a") as out:
-        title = f"{spec['name']} {selection_label(spec, a.node, a.k)}"
+        title = f"{spec['name']} {selection_label(spec, a.node, a.k, a.devices)}"
         log(f"VF sweep of {title} (log: {Path(a.output) / 'sweep.log'})", out)
         steps, status, abort_reason = run_sweep(a, out)
         return summarize(a, steps, status, abort_reason, out)
@@ -497,45 +537,57 @@ def failed_tests(stage, log_text, rc):
                 continue
             end = runs[n + 1][0] if n + 1 < len(runs) else len(lines)
             finished = case in failed
-            verdict, reason = classify("noc_cpp", "\n".join(lines[i:end]), 1 if finished else rc)
+            section = "\n".join(lines[i:end])
+            verdict, reason = classify("noc_cpp", section, 1 if finished else rc)
             short = next((key for key in CPP_NOC_CASES if key in case), None)
             name, k = CPP_NOC_CASES.get(short, (f"NOC (C++) {case}", TESTS["noc"]["k"]))
-            entries.append({"name": name, "verdict": verdict, "reason": reason, "test": "noc", "node": None, "k": k})
+            entries.append(
+                {
+                    "name": name,
+                    "verdict": verdict,
+                    "reason": reason,
+                    "test": "noc",
+                    "node": None,
+                    "k": k,
+                    "chips": failing_chips(section),
+                }
+            )
         if not entries and rc != 0:  # died before any case started, or the case lines are missing
             verdict, reason = classify("noc_cpp", log_text, rc)
             entries.append(
-                {"name": "NOC (C++)", "verdict": verdict, "reason": reason, "test": "noc", "node": None, "k": None}
+                {
+                    "name": "NOC (C++)",
+                    "verdict": verdict,
+                    "reason": reason,
+                    "test": "noc",
+                    "node": None,
+                    "k": None,
+                    "chips": failing_chips(log_text),
+                }
             )
         return entries
 
     kind = "noc" if stage == "noc_py" else "didt"
     stage_name = "NOC integrity (py)" if stage == "noc_py" else "DIDT"
     verdict, reason = classify("noc_py" if stage == "noc_py" else "didt", log_text, rc)
+    chips = failing_chips(log_text)
     nodes = []
     for l in log_text.splitlines():
         m = PYTEST_FAILED.search(l.strip())
         if m and m.group(1) not in nodes:
             nodes.append(m.group(1))
-    for node in nodes:
+    for node in nodes or ([None] if rc != 0 else []):
         entries.append(
             {
-                "name": f"{stage_name} {node.split('::')[-1]}",
+                "name": (
+                    f"{stage_name} {node.split('::')[-1]}" if node else f"{stage_name} (pytest died before its summary)"
+                ),
                 "verdict": verdict,
                 "reason": reason,
                 "test": kind,
                 "node": node,
                 "k": None,
-            }
-        )
-    if not nodes and rc != 0:
-        entries.append(
-            {
-                "name": f"{stage_name} (pytest died before its summary)",
-                "verdict": verdict,
-                "reason": reason,
-                "test": kind,
-                "node": None,
-                "k": None,
+                "chips": chips,
             }
         )
     return entries
@@ -546,9 +598,10 @@ def sweep_qualifies(entry):
     return entry["verdict"] in (("HANG", "ND") if entry["test"] == "noc" else ("ND",))
 
 
-def slug(entry):
+def slug(entry, chip):
     sel = entry["node"].split("::")[-1] if entry["node"] else (entry["k"] or TESTS[entry["test"]]["k"])
-    return entry["test"] + "_" + re.sub(r"[^A-Za-z0-9]+", "_", sel).strip("_")
+    name = entry["test"] + "_" + re.sub(r"[^A-Za-z0-9]+", "_", sel).strip("_")
+    return name + (f"_chip{chip}" if chip is not None else "_all_chips")
 
 
 def cmd_followup(a):
@@ -563,43 +616,54 @@ def cmd_followup(a):
 
     Path(a.output).mkdir(parents=True, exist_ok=True)
     report = []
-    swept = {}  # sweep key -> (verdict line, sweep dir), so a test failed by two stages is swept once
+    swept = {}  # (test, selection, chip) -> (verdict line, sweep dir): a chip failed by two stages is swept once
     for e in entries:
-        print(f"{e['name']}: {e['verdict']} {e['reason']}", flush=True)
+        chips = ", ".join(map(str, e["chips"])) if e["chips"] else "not named in the log"
+        print(f"{e['name']}: {e['verdict']} {e['reason']}; failing chip(s): {chips}", flush=True)
     for e in entries:
         if not sweep_qualifies(e):
             want = "a hang or non-determinism" if e["test"] == "noc" else "non-determinism"
             report.append(f"{e['name']}: not swept ({e['verdict']}: {e['reason']}; only {want} is swept)")
             continue
-        key = (e["test"], e["node"] or e["k"] or TESTS[e["test"]]["k"])
-        if key not in swept:
-            sweep_dir = Path(a.output) / f"vf_sweep_{slug(e)}"
-            print(f"\n=== VF sweep of {e['name']} ({e['verdict']}: {e['reason']}) -> {sweep_dir}", flush=True)
-            s = argparse.Namespace(
-                test=e["test"],
-                node=e["node"],
-                k=e["k"],
-                output=str(sweep_dir),
-                freqs=a.freqs,
-                offsets=a.offsets,
-                iterations=None,
-                check_interval=None,
-                startup_timeout=a.startup_timeout,
-                step_timeout=a.step_timeout,
-                reset_cmd=a.reset_cmd,
-                no_initial_reset=a.no_initial_reset,
-            )
-            try:
-                sweep_one(s)
-            except Exception as ex:  # one broken sweep must not stop the others
-                print(f"VF sweep of {e['name']} failed: {ex}", flush=True)
-            verdict_file = sweep_dir / "verdict.txt"
-            line = (
-                verdict_file.read_text().strip() if verdict_file.exists() else "INCONCLUSIVE: the sweep did not finish"
-            )
-            swept[key] = (line, sweep_dir)
-        line, sweep_dir = swept[key]
-        report.append(f"{e['name']} ({e['verdict']}): {line} [{sweep_dir}/sweep.log]")
+        # One sweep per failing chip, forcing AICLK/VDD on that chip only. When the log names no chip (e.g. pytest
+        # died on an MMIO timeout without saying which chip), the sweep forces every chip.
+        for chip in e["chips"] or [None]:
+            key = (e["test"], e["node"] or e["k"] or TESTS[e["test"]]["k"], chip)
+            who = f"chip {chip}" if chip is not None else "all chips (failing chip not named in the log)"
+            if key not in swept:
+                sweep_dir = Path(a.output) / f"vf_sweep_{slug(e, chip)}"
+                print(
+                    f"\n=== VF sweep of {e['name']} on {who} ({e['verdict']}: {e['reason']}) -> {sweep_dir}",
+                    flush=True,
+                )
+                s = argparse.Namespace(
+                    test=e["test"],
+                    node=e["node"],
+                    k=e["k"],
+                    devices=[chip] if chip is not None else None,
+                    output=str(sweep_dir),
+                    freqs=a.freqs,
+                    offsets=a.offsets,
+                    iterations=None,
+                    check_interval=None,
+                    startup_timeout=a.startup_timeout,
+                    step_timeout=a.step_timeout,
+                    reset_cmd=a.reset_cmd,
+                    no_initial_reset=False,  # always reset the galaxy before each sweep
+                )
+                try:
+                    sweep_one(s)
+                except Exception as ex:  # one broken sweep must not stop the others
+                    print(f"VF sweep of {e['name']} on {who} failed: {ex}", flush=True)
+                verdict_file = sweep_dir / "verdict.txt"
+                line = (
+                    verdict_file.read_text().strip()
+                    if verdict_file.exists()
+                    else "INCONCLUSIVE: the sweep did not finish"
+                )
+                swept[key] = (line, sweep_dir)
+            line, sweep_dir = swept[key]
+            report.append(f"{e['name']} ({e['verdict']}), {who}: {line} [{sweep_dir}/sweep.log]")
     if not entries:
         report.append("no failed tests found in the given logs")
     (Path(a.output) / "vf_followup.txt").write_text("\n".join(report) + "\n")
@@ -629,21 +693,27 @@ def main():
             help="s allowed for one point before it counts as a hang (raised to 3x the slowest finished point)",
         )
         s.add_argument("--reset-cmd", default="tt-smi -glx_reset")
-        s.add_argument("--no-initial-reset", action="store_true", help="do not reset the boards before a sweep")
 
     s = sub.add_parser("sweep", help="run a VF sweep of one test; exit 0 fixed, 1 not fixed, 2 inconclusive")
     s.add_argument("--test", choices=sorted(TESTS), required=True)
     sel = s.add_mutually_exclusive_group()
     sel.add_argument("--node", help="exact pytest node id to sweep (default: the suite's selection for --test)")
     sel.add_argument("-k", dest="k", help="pytest -k expression within the test (e.g. 'galaxy and eth')")
+    s.add_argument(
+        "--devices",
+        type=lambda v: [int(d) for d in v.split(",") if d.strip()],
+        default=None,
+        help="force AICLK/VDD only on these device ids and judge only them (comma separated; default: all)",
+    )
     s.add_argument("--output", required=True, help="directory for sweep.log, events.jsonl, summary.json, verdict.txt")
+    s.add_argument("--no-initial-reset", action="store_true", help="do not reset the boards before the sweep")
     s.add_argument("--iterations", type=int, default=None, help="iterations per point (default: the suite's)")
     s.add_argument("--check-interval", type=int, default=None, help="determinism check interval (default: suite's)")
     add_sweep_options(s)
     s.set_defaults(func=cmd_sweep)
 
     f = sub.add_parser("followup", help="sweep every failed test of the suite's NOC / NOC integrity / DIDT stages")
-    f.add_argument("--output", required=True, help="directory for one vf_sweep_<test> folder per sweep")
+    f.add_argument("--output", required=True, help="directory for one vf_sweep_<test>_chip<N> folder per sweep")
     f.add_argument("--noc-cpp", nargs=2, metavar=("LOG", "RC"), help="C++ NOC stage log and exit code")
     f.add_argument("--noc-py", nargs=2, metavar=("LOG", "RC"), help="NOC integrity (py) stage log and exit code")
     f.add_argument("--didt", nargs=2, metavar=("LOG", "RC"), help="DIDT stage log and exit code")

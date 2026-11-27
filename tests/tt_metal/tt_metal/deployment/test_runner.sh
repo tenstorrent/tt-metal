@@ -37,15 +37,16 @@ Optional:
                                             10 links per chip are expected.
     --mgd <path>                            Path to the mesh graph descriptor (.textproto) file to
                                             use for the Ethernet, DRAM, NOC and PCIe tests (default: $MGD).
-    --run-vf-sweep                          After all tests: sweep every failed test on its own. Each NOC test
-                                            (C++ Noc00/Noc01, NOC integrity py) that failed on a hang or
+    --run-vf-sweep                          After all tests: sweep every failed test, once per failing chip. Each
+                                            NOC test (C++ Noc00/Noc01, NOC integrity py) that failed on a hang or
                                             non-determinism, and each DIDT test that failed on non-determinism, is
                                             re-run as a clock x VDD sweep (AICLK 800/1000/1200/1350 MHz x firmware
-                                            VCORE +0/+25/+50 mV), reporting where its failure is gone and the working
-                                            (clock, Vmin) pairs. C++ NOC cases are swept through the Python port with
-                                            the same sources. Failures from timeouts or machine problems are not
-                                            swept. Hangs inside a sweep are recovered with a board reset, also under
-                                            --skip-reset.
+                                            VCORE +0/+25/+50 mV) that forces AICLK/VDD only on the failing chip and
+                                            judges only that chip, reporting where its failure is gone and its
+                                            working (clock, Vmin) pairs. C++ NOC cases are swept through the Python
+                                            port with the same sources. Failures from timeouts or machine problems
+                                            are not swept. The galaxy is reset before every sweep and after every
+                                            hang, also under --skip-reset.
     -h                                      Display this help message and exit
 
 Examples:
@@ -480,8 +481,9 @@ else
 fi
 
 # VF sweep follow-up: every NOC / NOC integrity / DIDT test that failed is classified on its own, and each one that
-# failed on a hang or non-determinism (NOC) or on non-determinism (DIDT) gets its own clock x VDD sweep. The C++ NOC
-# cases are swept through their Python port with the same sources. One line per failed test lands in vf_followup.txt.
+# failed on a hang or non-determinism (NOC) or on non-determinism (DIDT) gets one clock x VDD sweep per failing chip,
+# forcing AICLK/VDD on that chip only (all chips when the log names none). The C++ NOC cases are swept through their
+# Python port with the same sources. The galaxy is reset before every sweep. One line per sweep in vf_followup.txt.
 vf_summary="not run (no NOC or DIDT test failed)"
 if [ "$RUN_VF_SWEEP" -eq 1 ]
 then
@@ -503,9 +505,9 @@ then
 	then
 		emit "No NOC or DIDT test failed with a log to classify: nothing to sweep."
 	else
-		if [ "$SKIP_RESET" -eq 1 ]; then initial_reset=--no-initial-reset; else initial_reset=; fi
+		# followup resets the galaxy before every sweep (also under --skip-reset) and after every hang.
 		run_logged $PYTHON tests/tt_metal/tt_metal/deployment/vf_sweep/vf_sweep.py followup --output "$RUN_DIR" \
-			--reset-cmd "$RESET_CMD" $initial_reset $followup_args
+			--reset-cmd "$RESET_CMD" $followup_args
 		vf_summary="did not finish (exit code $rc, see $RUN_LOG)"
 	fi
 fi

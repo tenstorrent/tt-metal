@@ -57,6 +57,7 @@ class OpTestBase:
         vdd_offsets=None,
         vf_sweep_start_step=None,
         vf_sweep_results_path=None,
+        vf_sweep_devices=None,
     ):
         self.mesh_device = mesh_device
         # This will be removed once we rebase onto new main with the new open_mesh_device API
@@ -92,6 +93,8 @@ class OpTestBase:
             vf_sweep_start_step = OpTestBase.vf_sweep_defaults.get("start_step") or 0
         if vf_sweep_results_path is None:
             vf_sweep_results_path = OpTestBase.vf_sweep_defaults.get("results_path")
+        if vf_sweep_devices is None:
+            vf_sweep_devices = OpTestBase.vf_sweep_defaults.get("devices")
         # Resuming a sweep (e.g. after a hang) skips its first vf_start_step steps. The reference outputs are taken at
         # the clock and VDD of the first step that runs (the lowest clock at +0 mV on a fresh sweep), so a point that
         # hangs while taking the reference can be skipped like any other. Every sweep event is appended to
@@ -101,7 +104,13 @@ class OpTestBase:
         self.vf_sweep_freqs = list(vf_sweep_freqs) if vf_sweep_freqs else None
         self.sweep_iterations = sweep_iterations
         self.vdd_offsets = list(vdd_offsets) if vdd_offsets else [0]
+        # Devices whose AICLK/VDD the sweep forces (default: all). The workload still runs on every device; the
+        # others stay at the firmware's clock and voltage, so one failing chip can be swept on its own.
+        self.vf_devices = list(vf_sweep_devices) if vf_sweep_devices else list(self.device_ids)
         if self.vf_sweep_freqs:
+            unknown = sorted(set(self.vf_devices) - set(self.device_ids))
+            if unknown:
+                raise ValueError(f"VF sweep devices {unknown} are not in this mesh ({sorted(self.device_ids)})")
             if not self.sweep_iterations or self.sweep_iterations <= 0:
                 raise ValueError("VF sweep needs a positive sweep_iterations (--sweep-iterations)")
             if any(o < 0 or o > 100 for o in self.vdd_offsets):
@@ -187,9 +196,10 @@ class OpTestBase:
         if self.vf_sweep_freqs:
             from tt_py_test_utils_common.aiclk_control import AiclkController
 
-            clock = AiclkController(self.device_ids)
+            clock = AiclkController(self.vf_devices)
+            forced = "all devices" if len(self.vf_devices) == len(self.device_ids) else f"devices {self.vf_devices}"
             logger.info(
-                f"VF sweep: AICLK {self.vf_sweep_freqs} MHz x VDD offsets {self.vdd_offsets} mV, "
+                f"VF sweep on {forced}: AICLK {self.vf_sweep_freqs} MHz x VDD offsets {self.vdd_offsets} mV, "
                 f"{self.sweep_iterations} iterations each ({self.loop_count} in total), "
                 f"determinism check every {self.determinism_check_interval}"
             )
@@ -255,7 +265,7 @@ class OpTestBase:
             offset=step["offset"],
             checks=step["checks"],
             nd={str(d): n for d, n in zip(self.device_ids, step["nd"])},
-            vcore={str(d): v for d, v in zip(self.device_ids, step["vcore"])},
+            vcore={str(d): v for d, v in zip(self.device_ids, step["vcore"]) if v is not None},
         )
 
     def _set_sweep_clock(self, clock, mhz, label):
@@ -416,7 +426,7 @@ class OpTestBase:
                         "offset": offset,
                         "checks": 0,
                         "nd": [0] * num_devices,
-                        "vcore": [vcore[device_idx] for device_idx in self.device_ids],
+                        "vcore": [vcore.get(device_idx) for device_idx in self.device_ids],  # None: not forced
                     }
                     sweep_steps.append(step)
 
@@ -499,11 +509,12 @@ class OpTestBase:
         ]
         for step in sweep_steps:
             failing = [
-                f"dev {self.device_ids[o]}: {n}/{step['checks']} (VCORE {step['vcore'][o]} mV)"
+                f"dev {self.device_ids[o]}: {n}/{step['checks']}"
+                + (f" (VCORE {step['vcore'][o]} mV)" if step["vcore"][o] is not None else " (not forced)")
                 for o, n in enumerate(step["nd"])
                 if n > 0
             ]
-            vcore = sorted(step["vcore"])
+            vcore = sorted(v for v in step["vcore"] if v is not None)
             lines.append(
                 f"  AICLK {step['mhz']:>5} MHz VDD +{step['offset']:>3} mV | checks {step['checks']:>4} | "
                 + (f"ND {', '.join(failing) if failing else 'none'} | " if self.determinism_check_enabled else "")
@@ -526,7 +537,10 @@ class OpTestBase:
             nd = step["nd"] if o is None else [step["nd"][o]]
             failed = sum(nd)
             if o is not None:
-                text = f"{'FAIL' if failed else 'PASS'} {failed}/{step['checks']} @{step['vcore'][o]}mV"
+                v = step["vcore"][o]
+                text = f"{'FAIL' if failed else 'PASS'} {failed}/{step['checks']}" + (
+                    f" @{v}mV" if v is not None else ""
+                )
             elif failed:
                 text = "FAIL " + ",".join(f"d{self.device_ids[i]}:{n}" for i, n in enumerate(step["nd"]) if n)
             else:
