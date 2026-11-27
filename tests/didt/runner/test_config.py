@@ -68,10 +68,20 @@ def test_shipped_config_steps():
         "nd:mcast-ack",
         "nd:mcast-ack-duty",
     ]
-    assert all([f.name for f in s.fallbacks] == ["throttle", "pin_core"] for s in c.steps)
-    assert c.steps[0].fallbacks[0].env == {"TT_MM_THROTTLE_PERF": "5"}
+    pytest_steps = [s for s in c.steps if s.runner == "pytest"]
+    assert len(pytest_steps) == 6 and all(
+        [f.name for f in s.fallbacks] == ["throttle", "pin_core"] for s in pytest_steps
+    )
+    assert c.steps[0].fallbacks[0].env == {"TT_MM_THROTTLE_PERF": "5"} and c.steps[0].fallbacks[0].on == (
+        "FAIL",
+        "HANG",
+    )
     pin = c.steps[0].fallbacks[1]
     assert pin.kind == "pin_core" and pin.hang_reset == {"cmd": "tt-smi -r", "timeout": 600}
+    for key in ("nd:mcast-ack", "nd:mcast-ack-duty"):
+        (fb,) = next(s for s in c.steps if s.key == key).fallbacks
+        assert (fb.name, fb.kind, fb.on) == ("throttle_hang", "env", ("HANG",))
+        assert fb.env == {"TT_MM_THROTTLE_PERF": "5", "MATMUL_ITERS": "100"}
 
 
 def test_shipped_pin_ids():
@@ -239,6 +249,30 @@ def test_pin_core_fallback_fields(tmp_path):
     errors = _errors(tmp_path, cfg)
     assert any("fallback pin_core: unknown field 'env'" in e for e in errors)
     assert any("fallback pin_core: unknown field 'max_devices'" in e for e in errors)
+
+
+def test_each_chip_with_pin_core(tmp_path):
+    cfg = _with_step(runner="each_chip", fallbacks=["throttle", "pin_core"])
+    cfg["fallbacks"]["pin_core"] = PIN
+    errors = _errors(tmp_path, cfg)
+    assert errors == [
+        "nd:x: fallback 'pin_core' is pin_core, for the pytest runner; each_chip already runs each chip alone"
+    ]
+
+
+def test_fallback_on_loads(tmp_path):
+    cfg = copy.deepcopy(BASE)
+    cfg["fallbacks"]["throttle"]["on"] = ["HANG"]
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(cfg))
+    assert load(path).steps[0].fallbacks[0].on == ("HANG",)
+
+
+def test_fallback_on_bad(tmp_path):
+    for on in (["PASS"], [], "HANG"):
+        cfg = copy.deepcopy(BASE)
+        cfg["fallbacks"]["throttle"]["on"] = on
+        assert _errors(tmp_path, cfg) == ["fallback throttle: on must be a non-empty list of FAIL, HANG"], on
 
 
 def test_pin_id_without_colons(tmp_path):

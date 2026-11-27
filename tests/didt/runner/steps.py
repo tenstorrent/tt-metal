@@ -52,6 +52,7 @@ HANG_TRIAGE = (
 ITER_OPT = "--didt-workload-iterations"
 ITER_ENV = ("TT_DET_SWEEP_ITERS", "TT_SWEEP_ITERS", "MATMUL_ITERS")
 DEVICE_ID_ENV = "DIDT_DEVICE_ID"
+THROTTLE_ENV = "TT_MM_THROTTLE_PERF"
 MIN_LOOP_ENV = "DIDT_MIN_LOOP_SECONDS"
 IDENTITY = ("dev", "bdf", "tray", "asic", "asic_id", "kmd")
 ND_DATA = {"failed_checks", "elements", "cores"}
@@ -215,6 +216,12 @@ def _device_line(d: dict, why: str | None = None) -> str:
     return f"{who}: {what}"
 
 
+def _hang_persists(fb: Fallback) -> str:
+    """A fallback run only after a hang that hangs too: its knobs do not cure it. Its triage stays in devices[]."""
+    knob = f"throttle {fb.env[THROTTLE_ENV]}" if THROTTLE_ENV in fb.env else fb.name
+    return f"hang persists at {knob}"
+
+
 def _same_chip(d: dict, t: dict) -> bool:
     """By BDF when both name one: `dev` shifts when a reset leaves a chip off the bus."""
     return d["bdf"] == t["bdf"] if "bdf" in d and "bdf" in t else d["dev"] == t["dev"]
@@ -292,15 +299,13 @@ class Runner:
         env: dict | None = None,
         opts: list[str] | None = None,
         reset: dict | None = None,
-        target: dict | None = None,
     ) -> None:
-        """target: for a each_chip step, the one device to run on instead of every chip."""
         a.status, a.start = Status.RUN, time.time()
         self.reset_failed = False
         self.save()
         self.note(f"{step.key} {label} start -> {d}")
         try:
-            self._attempt(step, a, d, ids or step.ids, env or {}, step.opts if opts is None else opts, reset, target)
+            self._attempt(step, a, d, ids or step.ids, env or {}, step.opts if opts is None else opts, reset)
         except Exception as e:
             a.status, a.reason, a.details, a.devices = Status.FAIL, f"{type(e).__name__}: {e}", [], []
         except BaseException:
@@ -320,7 +325,6 @@ class Runner:
         extra_env: dict,
         opts: list[str],
         reset: dict | None,
-        target: dict | None,
     ) -> None:
         d.mkdir(parents=True, exist_ok=True)
         r = reset or self.cfg.reset
@@ -336,11 +340,7 @@ class Runner:
         if step.runner == "pytest":
             rc = self.shell(cmd, log, env | triage_env(self.cfg, csv), REPO, step.timeout)
         else:
-            devs = sorted(chips) if target is None else [c for c in chips if _same_chip(chips[c].as_dict(), target)]
-            if not devs:
-                a.status, a.reason = Status.FAIL, f"chip {target.get('bdf', target['dev'])} not on the bus after reset"
-                return
-            rcs = self.each_chip(cmd, d, env, devs, step.timeout)
+            rcs = self.each_chip(cmd, d, env, sorted(chips), step.timeout)
         snap = d / "tt-smi.json"
         self.shell(self.cfg.smi["cmd"], snap, base_env(), REPO, self.cfg.smi["timeout"])
 
@@ -459,30 +459,27 @@ class Runner:
         return r, core_sweep_devices(text, chips), [], {}
 
     def pin_core(self, step: StepCfg, fb: Fallback, state: StepState) -> None:
-        """Rerun the step's per-chip test on each failing device of the first attempt, alone, at twice the
-        iterations; a each_chip step reruns its own ids on that chip. A hung target gets the fallback's own reset
-        first; a reset that fails here aborts the run."""
+        """Rerun the step's per-chip test (pin_id) on each failing device of the first attempt, alone, at twice the
+        iterations. A hung target gets the fallback's own reset first; a reset that fails here aborts the run."""
         first = state.first
-        # A each_chip step can hang on one chip and show ND on another, so hung or ND is per device, never from the
-        # step status. ND data on the device, not only a name: a build error or a killed child is no reason to pin.
+        # Hung or ND is per device, never from the step status. ND data on the device, not only a name: a build error
+        # or a killed child is no reason to pin.
         targets = [d for d in first.devices if d.get("hung") or ND_DATA & set(d)]
         if not targets:
             trigger = "hang" if first.status == Status.HANG else "nd"
             self._skip_pin(state, fb, "no failing device named by the first attempt", {"trigger": trigger})
             return
-        each_chip = step.runner == "each_chip"
         unsupported = None
-        if not each_chip and not step.pin_id:
+        if not step.pin_id:
             unsupported = "no per-chip test"
-        elif not each_chip and step.pin_id in self.pin_missing:
+        elif step.pin_id in self.pin_missing:
             unsupported = f"pin id does not collect: {step.pin_id}"
-        pin_test = step.ids[0] if each_chip else step.pin_id
-        test = pin_test.split("::")[-1].split("[")[0] if pin_test else ""
+        test = step.pin_id.split("::")[-1].split("[")[0] if step.pin_id else ""
         for t in targets:
             trigger = "hang" if t.get("hung") else "nd"
             # One chip iterates faster than the full mesh: the rerun loops at least as long as the original did, and
             # at least twice its iterations.
-            first_log = self._loop_log(step, first.log, t["dev"])
+            first_log = Path(first.log) if first.log else None
             original = loop_seconds(first_log) if first_log else None
             loop_env, loop_notes = {}, []
             if original:
@@ -503,10 +500,9 @@ class Runner:
             opts, env_iters, used = double_iterations(step.opts, step.env)
             extra["iterations"] = used
             extra["loop"] = {"original_s": round(original[0], 1)} if original else {}
-            pick = {} if each_chip else {DEVICE_ID_ENV: str(t["dev"])}
             a = Attempt(
                 fb.name,
-                {**env_iters, **pick, **loop_env},
+                {**env_iters, DEVICE_ID_ENV: str(t["dev"]), **loop_env},
                 opts,
                 Status.PENDING,
                 "",
@@ -520,27 +516,19 @@ class Runner:
             state.fallbacks.append(a)
             reset = fb.hang_reset if trigger == "hang" else None
             d = self.run_dir / f"{step.key.replace(':', '/')}_{fb.name}_dev{t['dev']}"
-            ids, target = (step.ids, t) if each_chip else ([step.pin_id], None)
-            self.attempt(step, a, d, f"{fb.name} dev {t['dev']}", ids, a.env, opts, reset, target)
+            self.attempt(step, a, d, f"{fb.name} dev {t['dev']}", [step.pin_id], a.env, opts, reset)
             if self.reset_failed:
                 a.reason += "; run aborted"
                 self.aborted = f"reset failed before the {fb.name} rerun of {step.key} on device {t['dev']}"
                 self.note(f"ABORT {self.aborted}")
                 self.save()
                 return
-            if original and (rerun_loop := loop_seconds(self._loop_log(step, a.log, t["dev"]))):
+            if original and a.log and (rerun_loop := loop_seconds(Path(a.log))):
                 a.extra["loop"] |= {"rerun_s": round(rerun_loop[0], 1), "rerun_iterations": rerun_loop[1]}
             self._pin_result(step, a, t, test, used)
             a.details += loop_notes
             self.note(f"{step.key} {fb.name} dev {t['dev']} result {a.status.value} {a.reason}")
             self.save()
-
-    @staticmethod
-    def _loop_log(step: StepCfg, log: str, dev: int) -> Path | None:
-        """The iteration lines of a each_chip step are in each chip's own log."""
-        if not log:
-            return None
-        return Path(log).parent / "chips" / f"chip{dev}" / "pytest.log" if step.runner == "each_chip" else Path(log)
 
     def _pin_result(self, step: StepCfg, a: Attempt, t: dict, test: str, used: dict) -> None:
         rerun = [d for d in a.devices if _same_chip(d, t)]
@@ -629,10 +617,14 @@ def run(
                 for fb in s.fallbacks:
                     if fb.kind == "pin_core":
                         r.pin_core(s, fb, state)
-                    else:
+                    elif state.first.status.value in fb.on:
                         f = Attempt(fb.name, dict(fb.env), list(fb.opts), Status.PENDING, "", [], [], "", None, None)
                         state.fallbacks.append(f)
                         r.attempt(s, f, d.with_name(f"{d.name}_{fb.name}"), fb.name, env=fb.env, opts=s.opts + fb.opts)
+                        if f.status == Status.HANG and fb.on == ("HANG",):
+                            f.reason = _hang_persists(fb)
+                            r.note(f"{s.key} {fb.name} result {f.status.value} {f.reason}")
+                            r.save()
                     if r.aborted:
                         break
             if r.aborted:
