@@ -1,17 +1,11 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_slice: PyTorch basic-indexing slice x[b0:e0:s0, ..., b_{r-1}:e_{r-1}:s_{r-1}] in ONE device program.
+"""g6_slice: copy the elements of `x` selected by per-dim begin/end/step into a new tensor.
 
-Registry model (eval/op_template.py): INPUT_TAGGERS, SUPPORTED, EXCLUSIONS, validate().
-
-Phase 0: bfloat16, TILE, DRAM interleaved, host-list begins, unit steps, every alignment
-(R1 aligned tile copy, R2 shifted tile gather; op_design.md -> Regimes).
-
-Program caching (BB-07): the ProgramDescriptor is built once per program signature (shapes,
-dtype, layout, placement, regime flags, device) and cached here; every value that changes
-between calls with the same signature (buffer addresses, begins) lives in COMMON runtime args,
-which a cache hit patches in place. Begins are never compile-time values.
+One device program per call (reader NCRISC/NoC0 + writer BRISC/NoC1, no compute kernel). The
+flat output-page index is split into contiguous per-core ranges over the full grid; each core
+walks its range in blocks of `block_pages` (see g6_slice_program_descriptor.plan_blocks).
 """
 
 from __future__ import annotations
@@ -21,30 +15,29 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .g6_slice_program_descriptor import (
-    build_plan,
+    REGIME_ELEMENT_SHIFT,
+    REGIME_PAGE_COPY,
+    REGIME_ROW_SHIFT,
+    TILE,
     create_program_descriptor,
-    patch_common_runtime_args,
+    plan_blocks,
 )
 
-
-# ---------------------------------------------------------------------------
-# helpers: argument normalization (PyTorch semantics)
-# ---------------------------------------------------------------------------
-
-TILE = 32
+_OP = "g6_slice"
 
 
-def _normalize_dim(size, begin, end, step):
+def _normalize(size, begin, end, step):
+    """PyTorch basic-indexing normalization of one dim -> (begin, extent)."""
     if begin < 0:
         begin += size
     if end < 0:
         end += size
     begin = min(max(begin, 0), size)
     end = min(max(end, begin), size)
-    return begin, end, (end - begin + step - 1) // step
+    return begin, (end - begin + step - 1) // step
 
 
-def _memory_name(tensor):
+def _memory_label(tensor):
     mc = tensor.memory_config()
     if mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
         return "l1_width_sharded"
@@ -54,8 +47,22 @@ def _memory_name(tensor):
 
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_TAGGERS  (inputs = (scenario_dict,), see feature_spec.py)
+# 1. INPUT_TAGGERS — each reads the scenario dict of feature_spec.py (inputs[0])
 # ---------------------------------------------------------------------------
+
+
+def _scenario_begins(s):
+    """Normalized begins and output shape of a scenario (device form: begins 0, see tag_alignment)."""
+    shape = s["shape"]
+    if s["begins_source"] == "device_tensor":
+        return [0] * len(shape), list(s["out_shape"])
+    steps = s["steps"] or (1,) * len(shape)
+    begins, extents = [], []
+    for size, b, e, st in zip(shape, s["starts"], s["ends"], steps):
+        nb, m = _normalize(size, b, e, st)
+        begins.append(nb)
+        extents.append(m)
+    return begins, extents
 
 
 def tag_dtype(inputs, axes):
@@ -71,17 +78,10 @@ def tag_memory_config(inputs, axes):
 
 
 def tag_alignment(inputs, axes):
-    s = inputs[0]
-    m = s["out_shape"]
-    if s["begins_source"] == "device_tensor" or s.get("starts") is None:
-        b = (0,) * len(m)
-    else:
-        shape = s["shape"]
-        steps = s["steps"] or (1,) * len(shape)
-        b = tuple(_normalize_dim(shape[d], s["starts"][d], s["ends"][d], steps[d])[0] for d in range(len(shape)))
-    if b[-1] % TILE or m[-1] % TILE:
+    begins, extents = _scenario_begins(inputs[0])
+    if begins[-1] % TILE or extents[-1] % TILE:
         return "w_non_aligned"
-    if b[-2] % TILE or m[-2] % TILE:
+    if begins[-2] % TILE or extents[-2] % TILE:
         return "h_non_aligned"
     return "tile_aligned"
 
@@ -118,7 +118,6 @@ SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "layout": [ttnn.TILE_LAYOUT],
     "memory_config": ["dram_interleaved"],
-    # "h_non_aligned" must never be excluded or split off (spec rule).
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "begins_source": ["host_list"],
@@ -133,94 +132,80 @@ SUPPORTED = {
 EXCLUSIONS = []
 
 
-PROPERTIES = {
-    "multi_core": {"value": True, "source": "declared"},
-    "bounded_cb": {"value": True, "source": "declared"},
-}
-
-
 # ---------------------------------------------------------------------------
 # 4. validate()
 # ---------------------------------------------------------------------------
 
 
-def _build_scenario(input_tensor, starts, ends, steps, slice_dim, num_devices):
-    """Argument checks (ValueError) + the scenario dict axes.classify_call builds."""
+def _check_call(input_tensor, starts, ends, steps, slice_dim, num_devices):
+    """Malformed calls -> ValueError (not support refusals). Returns the canonical slice_dim."""
+    rank = len(input_tensor.shape)
+    starts_is_tensor = isinstance(starts, ttnn.Tensor)
+    ends_is_tensor = isinstance(ends, ttnn.Tensor)
+    if starts_is_tensor != ends_is_tensor:
+        raise ValueError(f"{_OP}: starts and ends must both be lists or both be tensors")
+
+    if not starts_is_tensor:
+        if slice_dim is not None or num_devices is not None:
+            raise ValueError(f"{_OP}: slice_dim and num_devices are only given with tensor starts and ends")
+        if len(starts) != rank or len(ends) != rank:
+            raise ValueError(f"{_OP}: starts and ends must have length {rank}, got {len(starts)} and {len(ends)}")
+        if steps is not None:
+            if len(steps) != rank:
+                raise ValueError(f"{_OP}: steps must have length {rank}, got {len(steps)}")
+            if any(int(s) < 1 for s in steps):
+                raise ValueError(f"{_OP}: every step must be at least 1, got {list(steps)}")
+        steps_ = [1] * rank if steps is None else [int(s) for s in steps]
+        for d in range(rank):
+            _, m = _normalize(int(input_tensor.shape[d]), int(starts[d]), int(ends[d]), steps_[d])
+            if m == 0:
+                raise ValueError(f"{_OP}: the selection of dim {d} is empty")
+        return None
+
+    if slice_dim is None or num_devices is None:
+        raise ValueError(f"{_OP}: tensor starts and ends need both slice_dim and num_devices")
+    if steps is not None:
+        raise ValueError(f"{_OP}: steps are not given with tensor starts and ends")
+    if not -rank <= slice_dim < rank:
+        raise ValueError(f"{_OP}: slice_dim {slice_dim} outside [{-rank}, {rank - 1}]")
+    for name, t in (("starts", starts), ("ends", ends)):
+        if t.dtype != ttnn.uint32 or tuple(t.shape) != (rank,):
+            raise ValueError(
+                f"{_OP}: {name} must be a uint32 tensor of shape ({rank},), got {t.dtype} {tuple(t.shape)}"
+            )
+    sd = slice_dim % rank
+    if num_devices < 1 or int(input_tensor.shape[sd]) % num_devices:
+        raise ValueError(f"{_OP}: num_devices {num_devices} does not divide N_{sd} = {int(input_tensor.shape[sd])}")
+    return sd
+
+
+def _scenario_from_call(input_tensor, starts, ends, steps, sd, num_devices):
+    """The feature_spec scenario dict of a real call (the form INPUT_TAGGERS read)."""
     shape = tuple(int(d) for d in input_tensor.shape)
-    rank = len(shape)
-    device_form = isinstance(starts, ttnn.Tensor) or isinstance(ends, ttnn.Tensor)
     scenario = {
-        "id": "call",
-        "model": "call",
         "shape": shape,
         "dtype": input_tensor.dtype,
         "layout": input_tensor.layout,
-        "memory": _memory_name(input_tensor),
-        "shard": None,
-        "begins_source": "device_tensor" if device_form else "host_list",
-        "slice_dim": slice_dim,
-        "num_devices": num_devices,
-        "begin_index": None,
+        "memory": _memory_label(input_tensor),
     }
-    if device_form:
-        if not (isinstance(starts, ttnn.Tensor) and isinstance(ends, ttnn.Tensor)):
-            raise ValueError("g6_slice: starts and ends must both be tensors or both be lists")
-        if slice_dim is None or num_devices is None:
-            raise ValueError("g6_slice: tensor begins need both slice_dim and num_devices")
-        if steps is not None:
-            raise ValueError("g6_slice: steps are not given with tensor begins")
-        if not -rank <= slice_dim < rank:
-            raise ValueError(f"g6_slice: slice_dim {slice_dim} outside [-{rank}, {rank - 1}]")
-        sd = slice_dim % rank
-        for name, t in (("starts", starts), ("ends", ends)):
-            if t.dtype != ttnn.uint32 or tuple(int(v) for v in t.shape) != (rank,):
-                raise ValueError(f"g6_slice: {name} tensor must be uint32 of shape ({rank},)")
-        if num_devices < 1 or shape[sd] % num_devices:
-            raise ValueError(f"g6_slice: num_devices {num_devices} does not divide N_{sd} = {shape[sd]}")
+    if sd is not None or isinstance(starts, ttnn.Tensor):
         out_shape = list(shape)
         out_shape[sd] = shape[sd] // num_devices
-        scenario.update(slice_dim=sd, starts=None, ends=None, steps=None, out_shape=tuple(out_shape))
-        scenario["_begins"] = None
-        return scenario
-
-    if slice_dim is not None or num_devices is not None:
-        raise ValueError("g6_slice: slice_dim / num_devices are only given with tensor begins")
-    starts = [int(v) for v in starts]
-    ends = [int(v) for v in ends]
-    if len(starts) != rank:
-        raise ValueError(f"g6_slice: len(starts)={len(starts)} != rank {rank}")
-    if len(ends) != rank:
-        raise ValueError(f"g6_slice: len(ends)={len(ends)} != rank {rank}")
-    steps_ = [1] * rank if steps is None else [int(v) for v in steps]
-    if len(steps_) != rank:
-        raise ValueError(f"g6_slice: len(steps)={len(steps_)} != rank {rank}")
-    if any(s < 1 for s in steps_):
-        raise ValueError(f"g6_slice: every step must be >= 1, got {steps_}")
-    begins, out_shape = [], []
-    for d in range(rank):
-        b, _, m = _normalize_dim(shape[d], starts[d], ends[d], steps_[d])
-        if m == 0:
-            raise ValueError(f"g6_slice: empty selection on dim {d}")
-        begins.append(b)
-        out_shape.append(m)
-    scenario.update(
-        starts=tuple(starts),
-        ends=tuple(ends),
-        steps=None if steps is None else tuple(steps_),
-        out_shape=tuple(out_shape),
-    )
-    scenario["_begins"] = tuple(begins)
+        scenario.update(begins_source="device_tensor", starts=None, ends=None, steps=None, out_shape=tuple(out_shape))
+    else:
+        scenario.update(
+            begins_source="host_list",
+            starts=tuple(int(v) for v in starts),
+            ends=tuple(int(v) for v in ends),
+            steps=None if steps is None else tuple(int(v) for v in steps),
+        )
     return scenario
 
 
 def validate(input_tensor, starts, ends, steps=None, *, slice_dim=None, num_devices=None):
-    """Argument checks (ValueError), then the SUPPORTED / EXCLUSIONS gate. Returns the scenario."""
-    if not isinstance(input_tensor, ttnn.Tensor):
-        raise ValueError("g6_slice: input_tensor must be a ttnn.Tensor")
-    rank = len(input_tensor.shape)
-    if not 2 <= rank <= 4:
-        raise ValueError(f"g6_slice: rank must be 2..4, got {rank}")
-    scenario = _build_scenario(input_tensor, starts, ends, steps, slice_dim, num_devices)
+    """ValueError for malformed calls, then the SUPPORTED / EXCLUSIONS gate. Returns the scenario."""
+    sd = _check_call(input_tensor, starts, ends, steps, slice_dim, num_devices)
+    scenario = _scenario_from_call(input_tensor, starts, ends, steps, sd, num_devices)
 
     axes = {}
     for axis_name, tagger in INPUT_TAGGERS.items():
@@ -228,55 +213,117 @@ def validate(input_tensor, starts, ends, steps=None, *, slice_dim=None, num_devi
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
-            raise UnsupportedAxisValue(f"g6_slice: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+            raise UnsupportedAxisValue(f"{_OP}: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+
     for exc in EXCLUSIONS:
         if all(axes.get(k) == v for k, v in exc.items()):
-            raise ExcludedCell(f"g6_slice: unsupported combination (refinement candidate): {exc}")
+            raise ExcludedCell(f"{_OP}: unsupported combination (refinement candidate): {exc}")
     return scenario
+
+
+# ---------------------------------------------------------------------------
+# Geometry + plan
+# ---------------------------------------------------------------------------
+
+
+def _geometry(input_tensor, scenario):
+    """Fold a host-list selection to the canonical (D0, D1, H, W) index space of op_design.md."""
+    shape = scenario["shape"]
+    rank = len(shape)
+    steps = scenario["steps"] or (1,) * rank
+    begins, extents = [], []
+    for size, b, e, st in zip(shape, scenario["starts"], scenario["ends"], steps):
+        nb, m = _normalize(size, b, e, st)
+        begins.append(nb)
+        extents.append(m)
+
+    lead = 4 - rank
+    n4 = (1,) * lead + shape
+    b4 = (0,) * lead + tuple(begins)
+    m4 = (1,) * lead + tuple(extents)
+    padded = input_tensor.padded_shape
+
+    hb, row_offset = divmod(b4[2], TILE)
+    wb, col_offset = divmod(b4[3], TILE)
+    if col_offset:
+        regime = REGIME_ELEMENT_SHIFT
+    elif row_offset:
+        regime = REGIME_ROW_SHIFT
+    else:
+        regime = REGIME_PAGE_COPY
+
+    out_h_tiles = -(-m4[2] // TILE)
+    out_w_tiles = -(-m4[3] // TILE)
+    return {
+        "out_shape": tuple(extents),
+        "regime": regime,
+        "N_D1": n4[1],
+        "in_h_tiles": int(padded[-2]) // TILE,
+        "in_w_tiles": int(padded[-1]) // TILE,
+        "b_D0": b4[0],
+        "b_D1": b4[1],
+        "hb": hb,
+        "wb": wb,
+        "row_offset": row_offset,
+        "col_offset": col_offset,
+        "M_D0": m4[0],
+        "M_D1": m4[1],
+        "M_H": m4[2],
+        "M_W": m4[3],
+        "out_h_tiles": out_h_tiles,
+        "out_w_tiles": out_w_tiles,
+        "total_out_pages": m4[0] * m4[1] * out_h_tiles * out_w_tiles,
+        "needs_below_any": row_offset > 0 and m4[2] > TILE - row_offset,
+        "needs_right_any": col_offset > 0 and m4[3] > TILE - col_offset,
+    }
+
+
+_REGIME_NAMES = {REGIME_PAGE_COPY: "page_copy", REGIME_ROW_SHIFT: "row_shift", REGIME_ELEMENT_SHIFT: "element_shift"}
+
+
+def _plan(input_tensor, scenario):
+    geometry = _geometry(input_tensor, scenario)
+    blocks = plan_blocks(input_tensor.device(), geometry, input_tensor.buffer_aligned_page_size())
+    return geometry, blocks
+
+
+def g6_slice_plan(input_tensor, starts, ends, steps=None, *, slice_dim=None, num_devices=None):
+    """The plan a call selects (BB-08): regime, block knobs and the per-core role dump."""
+    scenario = validate(input_tensor, starts, ends, steps, slice_dim=slice_dim, num_devices=num_devices)
+    geometry, blocks = _plan(input_tensor, scenario)
+    return {
+        "regime": _REGIME_NAMES[geometry["regime"]],
+        "out_shape": geometry["out_shape"],
+        "total_out_pages": geometry["total_out_pages"],
+        "num_cores": blocks["num_cores"],
+        "pages_per_core": blocks["pages_per_core"],
+        "block_pages": blocks["block_pages"],
+        "buffer_depth": blocks["buffer_depth"],
+        "sources_per_output": blocks["sources_per_output"],
+        "assembled_per_output": blocks["assembled_per_output"],
+        # Every participating core runs both roles: reader (NCRISC, NoC0) and writer (BRISC, NoC1).
+        "cores": [
+            {"core": (core.x, core.y), "roles": ("reader", "writer"), "start_page": start, "num_pages": n}
+            for core, start, n in blocks["assignment"]
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
-_DESCRIPTOR_CACHE = {}
-_LAST_PLAN = None
-
-
-def last_plan():
-    """The plan (regime, flags, block knobs, core split) the last call selected (BB-08)."""
-    return dict(_LAST_PLAN) if _LAST_PLAN is not None else None
-
 
 def g6_slice(input_tensor, starts, ends, steps=None, *, slice_dim=None, num_devices=None):
-    global _LAST_PLAN
     scenario = validate(input_tensor, starts, ends, steps, slice_dim=slice_dim, num_devices=num_devices)
+    geometry, blocks = _plan(input_tensor, scenario)
 
-    device = input_tensor.device()
-    out_shape = scenario["out_shape"]
     output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(list(out_shape)),
+        ttnn.Shape(list(geometry["out_shape"])),
         input_tensor.dtype,
         input_tensor.layout,
-        device,
+        input_tensor.device(),
         input_tensor.memory_config(),
     )
-
-    plan = build_plan(input_tensor, scenario["_begins"], out_shape)
-    key = (
-        id(device),
-        tuple(int(d) for d in input_tensor.padded_shape),
-        tuple(out_shape),
-        input_tensor.dtype,
-        input_tensor.layout,
-        str(input_tensor.memory_config()),
-        plan["signature"],
-    )
-    cached = _DESCRIPTOR_CACHE.get(key)
-    if cached is None:
-        cached = create_program_descriptor(input_tensor, output_tensor, plan)
-        _DESCRIPTOR_CACHE[key] = cached
-    descriptor, program_report = cached
-    patch_common_runtime_args(descriptor, input_tensor, output_tensor, plan)
-    _LAST_PLAN = {**plan["report"], **program_report}
+    descriptor = create_program_descriptor(input_tensor, output_tensor, geometry, blocks)
     return ttnn.generic_op([input_tensor, output_tensor], descriptor)
