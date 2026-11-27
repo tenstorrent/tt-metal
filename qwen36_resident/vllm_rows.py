@@ -54,6 +54,15 @@ PREFIX_CACHE_STEP = int(os.environ.get("RESIDENT_PREFIX_CACHE_STEP", "4096"))
 # (prefix_cache.SwapStore) and its resume restores it instead of prefilling prompt + output again (needs the plugin's
 # preempt_request hook, vllm-tt-plugin 0c319a7 / c0ec046)
 SWAP_GB = float(os.environ.get("RESIDENT_SWAP_GB", "0"))
+# Strata S4-1 (needs the prefix cache; default off): a finished request leaves a prefix-cache entry through its answer
+# — at the last ANSWER_BLOCK boundary it decoded past (its recurrent state snapshotted to host as it crossed it, the
+# KV read from the pool at the finish) — so a conversation's next turn, whose prompt carries the answer back, restores
+# through it and prefills only the rest instead of the previous answer too
+ANSWER_CACHE = os.environ.get("RESIDENT_ANSWER_CACHE", "0") == "1"
+ANSWER_BLOCK = 1024  # (= the prefix cache's block: hits resume the PP prefill there)
+# (the most KV positions an entry reads from the pool at a finish — past its parent entry's — a bound on the finish's
+# stall: 65,536 positions ~0.3 GB of host copies)
+ANSWER_MAX_KV = int(os.environ.get("RESIDENT_ANSWER_MAX_KV", "65536"))
 
 
 def _host_bytes(snap):
@@ -352,6 +361,8 @@ class ResidentRowsAdapter:
             self.slots.set_row_order(self._row_order)
         r = self.slots.assign(vslot)
         self.live.discard(r)
+        if hasattr(self.engine, "forget"):
+            self.engine.forget(r)  # (S4-1: the slot's former request's bookkeeping)
         return r
 
     def _prefill_wholes(self, rows, trace=None):
@@ -542,6 +553,8 @@ class ResidentRowsAdapter:
             if h:
                 try:
                     model.restore_slot(r, model.snapshot_from_host(snap), table=blocks)
+                    if hasattr(eng, "entry_of"):
+                        eng.entry_of[r] = (h, snap)  # (S4-1: the slot's KV is this entry's below h)
                 except RuntimeError as e:  # (device memory: as a miss, from 0)
                     logger.warning(f"prefix cache: restore at {h} tokens failed ({str(e)[:160]}); prefilling from 0")
                     h, st["h"], st["parts"] = 0, 0, None
@@ -596,10 +609,22 @@ class ResidentRowsAdapter:
         self.live.update(new)
         for r, _, pos, _ in handed:  # (a first token is sampled on the host)
             self.pos_of[r], self.dev_tok[r] = pos, False
+        self._crossings(new)
         # the launches' token states now run only the new rows: the next decode must rewrite them (the plugin reloads
         # inputs after a prefill), and the device sampler's fed state of these launches is stale
         self._fed_launches = None
         return lg
+
+    def _crossings(self, slots):
+        """(Strata S4-1) slots whose last step consumed position p: those now at a boundary (p + 1 a multiple of
+        ANSWER_BLOCK) have their state snapshotted to host there (enqueued after the step: the state is exactly the
+        boundary's), for the entry their finish leaves"""
+        if not getattr(self.engine, "answer", False):
+            return
+        for r in slots:
+            p = self.pos_of.get(r)
+            if p is not None and (p + 1) % ANSWER_BLOCK == 0:
+                self.engine.cross_snapshot(r, p + 1)
 
     # ------------------------------------------------------------------ decode
     def decode_forward(
@@ -671,6 +696,7 @@ class ResidentRowsAdapter:
             fed = reload_inputs or not device
             self.pos_of[r] = pos[i] if fed or r not in self.pos_of else self.pos_of[r] + 1
             self.dev_tok[r] = device
+        self._crossings(row_slot)
         self._fed_launches = launches if device else None
         # accepted: commit the remap (exactly once) and expect the plugin's note of the same moves
         if slot_remap is not None:
@@ -762,9 +788,27 @@ class ResidentRowsAdapter:
                 )
             except Exception as e:  # (a failed swap-out only costs the recompute vLLM planned anyway)
                 logger.warning(f"swap: resident slot {r}: swap-out failed ({e!r}); its resume prefills again")
-        self.release_request(vslot)
+        self._preempting = True  # (S4-1: a preempted request leaves no answer entry; its resume restores the swap)
+        try:
+            self.release_request(vslot)
+        finally:
+            self._preempting = False
+
+    def _answer_tokens(self, r):
+        """(Strata S4-1) the tokens slot r's request consumed, for its finish's entry; None: unknown (this adapter keeps
+        no token history; the adaptive class does)"""
+        return None
 
     def release_request(self, vslot):
+        r = self.slots.res_of.get(int(vslot))
+        if r is not None and getattr(self.engine, "answer", False):
+            toks = None if getattr(self, "_preempting", False) else self._answer_tokens(r)
+            if toks:
+                try:
+                    self.engine.answer_store(r, toks, self.tables[r])
+                except Exception as e:  # (the cache is an optimization: never fail a finish over it)
+                    logger.warning(f"answer cache: resident slot {r}: no entry ({e!r})")
+            self.engine.forget(r)
         r = self.slots.release(int(vslot))
         if r is None:
             return
@@ -809,6 +853,12 @@ class RowsEngine:
             from qwen36_resident.prefix_cache import SwapStore
 
             self.swap = SwapStore(int(SWAP_GB * 1e9))
+        # (Strata S4-1) the answer cache: each slot's prefix-cache entry its KV agrees byte for byte with (restored
+        # from / stored at: (prefix length, host snapshot)), the parent of its finish's entry; each slot's latest
+        # boundary state (boundary, host snapshot_state)
+        self.answer = bool(ANSWER_CACHE and self.prefix_cache is not None and hasattr(model, "entry_from"))
+        self.entry_of, self.cross = {}, {}
+        self.answer_stats = dict(crossings=0, cross_ms=0.0, entries=0, entry_ms=0.0, skipped=0)
         self.vocab, self.vocab_chip, self.n_slots = vocab, vocab_chip, n_slots
         self.launch_rows = int(getattr(model, "launch_rows", ROWS))  # users per launch (8 * row groups)
         self.chunk = chunk_unit
@@ -868,6 +918,7 @@ class RowsEngine:
         try:
             host = self.model.snapshot_to_host(self.model.snapshot_slot(r, n_tokens=H, table=blocks))
             self.prefix_cache.insert(ids, H, host, self._entry_bytes(host, parts, lo, H))
+            self.entry_of[r] = (H, host)  # (S4-1: the slot's KV is this entry's below H)
         except RuntimeError as e:
             logger.warning(f"prefix cache: no entry at {H} tokens ({str(e)[:160]})")
 
@@ -899,6 +950,7 @@ class RowsEngine:
 
         ids = [int(t) for t in ids]
         n, ids_t = len(ids), torch.as_tensor(ids)
+        self.entry_of.pop(r, None)
         h, snap = pc.lookup(ids)
         h0 = h  # (this pass's taps start at the restored prefix)
         entry_parts = snap.get("taps") if h else None
@@ -911,6 +963,7 @@ class RowsEngine:
                 lap("restore: host -> device")
                 model.restore_slot(r, dev, table=blocks)
                 lap("restore: into the slot")
+                self.entry_of[r] = (h, snap)
             except RuntimeError as e:  # (device memory: prefill it all instead, the slot is overwritten anyway)
                 logger.warning(f"prefix cache: restore at {h} tokens failed ({str(e)[:160]}); prefilling from 0")
                 h = h0 = 0
@@ -1019,6 +1072,61 @@ class RowsEngine:
             return False
         host = self.model.snapshot_to_host(self.model.snapshot_slot(r, n_tokens=q, table=table))
         return self.swap.insert(toks, nxt, host, _host_bytes(host))
+
+    # ------------------------------------------------------------------ Strata S4-1: entries through answers
+    def forget(self, r):
+        """slot r's answer-cache bookkeeping dropped (a new prompt / a release)"""
+        self.entry_of.pop(r, None)
+        self.cross.pop(r, None)
+
+    def cross_snapshot(self, r, B, dev=None):
+        """slot r's state reached boundary B (B tokens consumed): its recurrent state to host (dev: a snapshot_state /
+        vrows_snapshot result already taken, else the plain build's slot r now), kept as the slot's latest boundary"""
+        t0 = time.perf_counter()
+        try:
+            dev = self.model.snapshot_state(r) if dev is None else dev
+            self.cross[r] = (int(B), self.model.snapshot_to_host(dev))
+        except RuntimeError as e:  # (device memory: no entry through this boundary)
+            logger.warning(f"answer cache: no state at {B} tokens for resident slot {r} ({str(e)[:160]})")
+            return
+        st = self.answer_stats
+        st["crossings"] += 1
+        st["cross_ms"] += (time.perf_counter() - t0) * 1000
+
+    def answer_store(self, r, tokens, table):
+        """a finished request's entry at its latest boundary B (its state snapshotted there; tokens: what it consumed,
+        at least B of them; table: its block table, its KV still in the pool): B past the entry its KV agrees with, at
+        most ANSWER_MAX_KV new positions, not cached yet -> inserted with that entry's KV pieces + the pool's past it"""
+        c = self.cross.pop(r, None)
+        if c is None:
+            return False
+        B, state = c
+        H, parent = self.entry_of.get(r, (0, None))
+        pc, st = self.prefix_cache, self.answer_stats
+        tokens = [int(t) for t in tokens]
+        if B <= H or len(tokens) < B or B - H > ANSWER_MAX_KV or pc.peek(tokens[: B + 1]) >= B:
+            st["skipped"] += 1
+            return False
+        t0 = time.perf_counter()
+        try:
+            host = self.model.entry_from(state, table, B, parent=parent)
+            nb = _host_bytes(host)
+            if state.get("taps"):  # (S4-1b: the drafter ring kept at the boundary, for a hit's promotion)
+                host["taps"] = state["taps"]
+                nb += sum(_host_bytes({"k": k, "v": v}) for p in state["taps"] for k, v in p.get("ring", ()))
+            pc.insert(tokens[:B], B, host, nb)
+        except RuntimeError as e:
+            logger.warning(f"answer cache: no entry at {B} tokens ({str(e)[:160]})")
+            return False
+        st["entries"] += 1
+        st["entry_ms"] += (time.perf_counter() - t0) * 1000
+        logger.info(
+            f"answer cache: entry at {B} tokens (resident slot {r}, KV from {H}: "
+            f"{(time.perf_counter() - t0) * 1000:.0f} ms; {st['crossings']} boundary states "
+            f"{st['cross_ms'] / max(1, st['crossings']):.0f} ms each; {st.get('rings', 0)} drafter rings "
+            f"{st.get('ring_ms', 0.0) / max(1, st.get('rings', 0)):.0f} ms each; taps {bool(state.get('taps'))})"
+        )
+        return True
 
     def swap_restore(self, r, key, table):
         """a swap entry back into slot r (its state, its KV pages into the slot's blocks `table`)"""

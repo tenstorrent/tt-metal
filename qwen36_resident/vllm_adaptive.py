@@ -29,6 +29,7 @@ parameters, so such a row gets the argmax there (temperature with top_k above ma
 the one transition step). The plugin refuses logprobs / structured output / logit_bias on a speculating launch.
 """
 import os
+import time
 
 import torch
 from loguru import logger
@@ -36,7 +37,14 @@ from loguru import logger
 from qwen36_resident import weights as Q
 from qwen36_resident.model import SPEC_SAMPLE, TOP_K
 from qwen36_resident.adaptive import taps_usable, window_parts
-from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngine, expand_blocks, resident_capabilities
+from qwen36_resident.vllm_rows import (
+    ANSWER_BLOCK,
+    CHUNK_UNIT,
+    ResidentRowsAdapter,
+    RowsEngine,
+    expand_blocks,
+    resident_capabilities,
+)
 
 SPEC_USERS = 8
 SPEC_K = 3
@@ -299,6 +307,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
     def _to_plain_all(self, acc_of=None):
         for r, u in sorted(self.spec_of.items()):
             acc = (acc_of or {}).get(r, self.last_acc.get(r, 1))
+            self._spec_crossing(r, u, acc)
             self.ae.move_to_plain(u, r, self.tables[r], acc)
             self.last_acc[r] = 1
             self._plain_stale = True
@@ -524,7 +533,56 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 tail[int(p) + 1] = got[r]
                 for old in [k for k in tail if k < int(p) - 3]:
                     del tail[old]
+        self._crossings(list(feed))
         return got
+
+    def _spec_crossing(self, r, u, acc, crossed=None):
+        """(Strata S4-1) spec user u (resident slot r) whose last verify committed acc tokens: if a boundary B lies in the
+        positions its rows consumed validly, the state there to host. Row j of a verify from row-0 position `last`
+        holds the state after position last + j (ring + 1 + j, slot + j: what the next verify would take at acc = j +
+        1); a user with no verify since its start / move holds its state at its position in (ring, slot)"""
+        if not getattr(self.engine, "answer", False):
+            return
+        e, s = self.ae.spec, self.sess
+        if s.started[u]:
+            B = s.pos[u]
+            if B <= 0 or B % ANSWER_BLOCK:
+                return
+            ring, slot = e.ring[u], e.slot[u]
+        else:
+            last = s.last[u]
+            if last is None:
+                return
+            B = (last + int(acc)) // ANSWER_BLOCK * ANSWER_BLOCK
+            if B <= last:
+                return
+            j = B - last - 1
+            ring, slot = e.ring[u] + 1 + j, (e.slot[u] + j) % self.ae.R
+        if self.engine.cross.get(r, (None,))[0] == B:
+            return
+        self.engine.cross_snapshot(r, B, e.m.vrows_snapshot(u, ring, slot))
+        if crossed is not None:
+            crossed.append((r, u, B))
+
+    def _ring_parts(self, crossed):
+        """(Strata S4-1b) spec users that crossed a boundary B at this propose, their drafter context now extended
+        past it: the ring kept with the boundary's state (the entry's taps: a hit's promotion writes it back instead
+        of re-prefilling the window)"""
+        e = self.ae.spec
+        if not hasattr(e, "ring_part"):
+            return
+        for r, u, B in crossed:
+            c = self.engine.cross.get(r)
+            if self.spec_of.get(r) != u or c is None or c[0] != B:
+                continue
+            t0 = time.perf_counter()
+            try:
+                c[1]["taps"] = [e.ring_part(u, B)]
+                st = self.engine.answer_stats
+                st["rings"] = st.get("rings", 0) + 1
+                st["ring_ms"] = st.get("ring_ms", 0.0) + (time.perf_counter() - t0) * 1000
+            except RuntimeError as ex:  # (device memory: the entry without taps; its promotion refills)
+                logger.warning(f"answer cache: no drafter ring at {B} for resident slot {r} ({str(ex)[:160]})")
 
     # ------------------------------------------------------------------ prefill
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, start_pos=None, empty_slots=None, **kwargs):
@@ -714,6 +772,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         for i, r in rows.items():  # (a spec user found non-speculable: to the plain build, it carries no drafts)
             if r in self.spec_of and r in self.sampled:
                 assert nvd.get(i, 0) == 0, "drafts for a non-speculable request"
+                self._spec_crossing(r, self.spec_of[r], acc_of.get(r, 1))
                 self.ae.move_to_plain(self.spec_of.pop(r), r, self.tables[r], acc_of.get(r, 1))
                 self.last_acc[r] = 1
                 self._moved_plain(r)
@@ -759,7 +818,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
 
         B, K = int(committed_tokens.shape[0]), int(num_drafts)
         res_of = dict(self.slots.res_of)
-        rows = {}
+        rows, crossed = {}, []
         for i in range(B):
             a = int(accepted_counts[i])
             p = int(committed_positions[i, a - 1])
@@ -770,6 +829,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 self._note(r, int(committed_positions[i, c]), int(committed_tokens[i, c]))
             rows[i] = (r, a, int(committed_tokens[i, a - 1]), p)
             self.last_acc[r] = a
+            if r in self.spec_of:
+                self._spec_crossing(r, self.spec_of[r], a, crossed)
         live = len(self.live)
         if self._pay["kind"] == "verify":  # (each spec user's acceptance, for its kind's prior when it finishes)
             for r, a, _, _ in rows.values():
@@ -806,6 +867,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                     u = self.spec_of[r]
                     anchors[u], positions[u], accepted[u], active[u], row_u[i] = tok, p, a, True, u
             drafts = self.sess.propose(anchors, positions, accepted, active)
+            if crossed:
+                self._ring_parts(crossed)
             for i, u in row_u.items():
                 ids[i] = torch.tensor(drafts[u][:K], dtype=torch.int32)
                 valid[i] = K
@@ -829,6 +892,10 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             if token_ids is None or len(h) > len(token_ids):
                 token_ids = list(h)
         super().preempt_request(vslot, token_ids)
+
+    def _answer_tokens(self, r):
+        """(Strata S4-1) this class's history: every token the request committed (the last one not run)"""
+        return self.history.get(r)
 
     def release_request(self, vslot):
         r = self.slots.res_of.get(int(vslot))

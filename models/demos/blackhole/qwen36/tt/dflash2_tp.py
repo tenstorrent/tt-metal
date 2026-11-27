@@ -930,6 +930,43 @@ class DFlash2DrafterTP:
         for t in (hctx, chunk_pt, cos, sin):
             ttnn.deallocate(t)
 
+    # ------------------------------------------------------------------ context: a slot's ring as it is (Strata S4-1b)
+    def read_ring(self, phys):
+        """Slot ``phys``'s whole context ring as host tensors in device format: per layer (K, V), each
+        [1, NKVl, ring, HD] in the slot's block order (block i = its table entry i). ``write_ring`` puts them
+        into any slot: a position's ring block is (position // block_size) % blocks in every slot."""
+        assert self.kv is not None and self.ring, "read_ring: a ring context store"
+        ids = self.phys_tables[int(phys)]
+        b0, nb = int(ids[0]), int(ids.numel())
+        assert torch.equal(ids, torch.arange(b0, b0 + nb, dtype=ids.dtype)), "read_ring: a slot of contiguous blocks"
+        out = []
+        for kc, vc in self.kv:
+            pair = []
+            for c in (kc, vc):
+                sl = ttnn.slice(c, (b0, 0, 0, 0), (b0 + nb, self.NKVl, self.block_size, HD))
+                pr = ttnn.permute(sl, (1, 0, 2, 3))
+                ttnn.deallocate(sl)
+                rs = ttnn.reshape(pr, (1, self.NKVl, nb * self.block_size, HD))
+                view = rs.buffer_address() == pr.buffer_address()
+                pair.append(ttnn.from_device(rs))
+                ttnn.deallocate(rs)
+                if not view:
+                    ttnn.deallocate(pr)
+            out.append(tuple(pair))
+        return out
+
+    def write_ring(self, phys, ring, buf):
+        """``read_ring``'s result into slot ``phys``'s ring blocks, through ``buf`` (a persistent [1, NKVl, ring,
+        HD] tensor of the store's dtype: no large device allocation while traces exist)."""
+        assert self.kv is not None and self.ring and len(ring) == len(self.kv)
+        ids = self.phys_tables[int(phys)]
+        pt = self._rm(ids.reshape(1, -1).contiguous())
+        for (kc, vc), (hk, hv) in zip(self.kv, ring):
+            for c, h in ((kc, hk), (vc, hv)):
+                ttnn.copy_host_to_device_tensor(h, buf)
+                ttnn.experimental.paged_fill_cache(c, buf, pt, batch_idx=0)
+        ttnn.deallocate(pt)
+
     # ------------------------------------------------------------------ context: extend (traceable)
     def _extend_body(self, lay):
         st = self._staging[lay.R]

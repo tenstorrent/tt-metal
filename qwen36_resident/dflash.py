@@ -595,6 +595,18 @@ class ResidentDFlashRows:
             # nothing a traced replay may overwrite — and its two fill buckets compiled now)
             nt = len(self.tap_masks)
             self._p2d_main, self._p2d_tail = tap_buffers(mesh, nt, self.fill_rows), tap_buffers(mesh, nt, P2D_TAIL)
+            # (S4-1b: the upload buffer of a drafter ring restored into a slot, one layer's K or V at a time)
+            self._ring_buf = None
+            if self.drafter.ring:
+                dr = self.drafter
+                self._ring_buf = ttnn.from_torch(
+                    torch.zeros(1, dr.NKVl * dr.nd, dr.ring, 128, dtype=torch.bfloat16),
+                    dtype=dr.kv_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=1),
+                )
             self.drafter.fill_context(self._p2d_main, 0, phys=0, valid_len=64)
             self.drafter.fill_context(self._p2d_tail, 0, phys=0, valid_len=64)
             self._fill_context(1, phys=0)
@@ -648,6 +660,13 @@ class ResidentDFlashRows:
             ttnn.deallocate(x)
         return rec
 
+    def ring_part(self, phys, hb):
+        """(Strata S4-1b) a P2d part of user phys's drafter context as it stands, its window before position hb (a
+        boundary its context reaches): the whole ring in device format (fill_from_taps writes it back into a slot as
+        is; positions outside a later window are masked by the drafter's absolute-position bound)"""
+        s0 = max(0, hb - self.window) // 64 * 64
+        return dict(s0=s0, hb=hb, ring=self.drafter.read_ring(phys))
+
     def fill_from_taps(self, phys, rec, n_hist):
         """user phys's drafter window from a capture_taps record: its parts' positions (up to n - 1) exact, n .. n_hist - 1
         (consumed since without taps: the first-token launch, plain steps) zero rows (acceptance 3.06 vs exact 3.08 for
@@ -658,6 +677,9 @@ class ResidentDFlashRows:
         # (copies into the persistent buffers: no device allocation while traces exist). Parts oldest first: a part
         # from a prefix-cache entry may reach before the window, and a newer position's ring slot is written last
         for part in rec["parts"]:
+            if "ring" in part:  # (S4-1b: a drafter ring kept as it was: written back block for block)
+                self.drafter.write_ring(phys, part["ring"], self._ring_buf)
+                continue
             for h, d in zip(part["main"], self._p2d_main):
                 ttnn.copy_host_to_device_tensor(h, d)
             self.drafter.fill_context(self._p2d_main, part["s0"], phys=phys, valid_len=part["hb"] - part["s0"])

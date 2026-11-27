@@ -2635,19 +2635,44 @@ class ResidentModel:
             # (the KV straight to host, piece by piece: kv_host [(first tile, tiles, K piece, V piece)] — a piece's
             # staging is allocated, filled, read and freed before the next)
             assert self.kv_paged
-            n_tiles = -(-n_tokens // TILE)
             tbl = self.block_tables[s] if table is None else table
-            P, C, pieces = self._kv_piece_tiles(), self._attn_copies, []
-            for t0 in range(0, n_tiles, P):
-                nt = min(P, n_tiles - t0)
-                kv = ttnn.empty([C * nt, KV_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
-                kvv = ttnn.empty([C * nt, V_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
-                self._page_copy(self._kv_piece_copies(tbl, t0, nt, kv, kvv, save=True))
-                pieces.append((t0, nt, ttnn.from_device(kv), ttnn.from_device(kvv)))
-                ttnn.deallocate(kv)
-                ttnn.deallocate(kvv)
-            snap.update(kv_host=pieces, n_tokens=n_tokens)
+            snap.update(kv_host=self._kv_to_host(tbl, 0, -(-n_tokens // TILE)), n_tokens=n_tokens)
         return snap
+
+    def _kv_to_host(self, tbl, t_from, n_tiles):
+        """the pool's K / V pages of position tiles t_from .. n_tiles - 1 through block table tbl as host pieces
+        [(first tile, tiles, K piece, V piece)], SNAP_PIECE_MB of staging a chip at a time"""
+        dram, mesh = ttnn.DRAM_MEMORY_CONFIG, self.mesh
+        P, C, pieces = self._kv_piece_tiles(), self._attn_copies, []
+        for t0 in range(t_from, n_tiles, P):
+            nt = min(P, n_tiles - t0)
+            kv = ttnn.empty([C * nt, KV_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
+            kvv = ttnn.empty([C * nt, V_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
+            self._page_copy(self._kv_piece_copies(tbl, t0, nt, kv, kvv, save=True))
+            pieces.append((t0, nt, ttnn.from_device(kv), ttnn.from_device(kvv)))
+            ttnn.deallocate(kv)
+            ttnn.deallocate(kvv)
+        return pieces
+
+    def snapshot_state(self, s):
+        """(Strata S4) slot s's recurrent state alone (GDN states + conv history row, no KV) as device staging tensors —
+        taken while a user decodes, at a position a later entry_from() completes with the KV"""
+        return self.snapshot_slot(s)
+
+    def entry_from(self, state_host, table, n_tokens, parent=None):
+        """(Strata S4) a host snapshot of n_tokens consumed tokens (restore_slot's format) from a host snapshot_state /
+        vrows_snapshot taken at n_tokens and the pool's KV of positions < n_tokens through block table `table`; a
+        parent host snapshot of a shorter prefix whose KV bytes the pool holds (the entry the slot was restored from /
+        stored at) gives its pieces as they are, only the positions past it are read from the pool"""
+        assert self.rows and self.kv_paged and n_tokens % TILE == 0
+        pieces, t_from = [], 0
+        if parent is not None and "kv_host" in parent and 0 < parent["n_tokens"] <= n_tokens:
+            t_from = parent["n_tokens"] // TILE
+            pieces = [p for p in parent["kv_host"] if p[0] + p[1] <= t_from]
+            if sum(p[1] for p in pieces) != t_from:  # (not whole tiles from 0: read everything)
+                pieces, t_from = [], 0
+        pieces = pieces + self._kv_to_host(table, t_from, n_tokens // TILE)
+        return dict(n_tokens=n_tokens, state=state_host["state"], hist=state_host["hist"], kv_host=pieces)
 
     def restore_slot(self, s, snap, table=None):
         """rows mode: a snapshot_slot result into slot s (its GDN states and conv history row, and the snapshot's KV
