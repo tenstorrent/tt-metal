@@ -44,7 +44,8 @@ Tensor sparse_kv_dispatch(
     uint32_t active_from = 0,
     uint32_t part = 0,
     bool skip_exchange = false,
-    const std::optional<Tensor>& rank_table = std::nullopt);
+    const std::optional<Tensor>& rank_table = std::nullopt,
+    uint32_t sp_axis = 0);
 
 // The scratch tensor sparse_kv_dispatch needs: [1, 1, pages, 1024] UINT32, interleaved DRAM, per chip.
 tt::tt_metal::TensorSpec sparse_kv_dispatch_scratch_spec(

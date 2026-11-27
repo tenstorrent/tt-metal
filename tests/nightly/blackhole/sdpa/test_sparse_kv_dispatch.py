@@ -371,7 +371,8 @@ def test_dispatch_parts(mesh_device, fabric, split_slabs):
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("split_slabs", [3, 7], ids=["split_mid", "split_last"])
-def test_dispatch_compact(mesh_device, fabric, split_slabs):
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
+def test_dispatch_compact(mesh_device, fabric, split_slabs, sp_axis):
     """Compact landing: the plan's rank table (rank_table=True) and the dispatch landing rows in the push's compact
     buffer. Every top-k index of every chip, rewritten by the plan (compact indices), addresses that row: ALL, and
     PREFIX then REST, each into a poisoned buffer."""
@@ -436,8 +437,12 @@ def test_dispatch_compact(mesh_device, fabric, split_slabs):
             part=part,
             skip_exchange=skip,
             rank_table=rank,
+            sp_axis=sp_axis,
         )
 
+    rows_n, cols_n = tuple(mesh_device.shape)
+    # owner o of block b (b % n) is on chip owner_chip(o): row-major o for sp_axis 0, (o % rows, o / rows) for 1
+    owner_chip = lambda o: o if sp_axis == 0 else (o % rows_n) * cols_n + o // rows_n
     exchanged = False
     for parts in ((0,), (1, 2)):
         ttnn.copy(poison, compact)
@@ -451,8 +456,10 @@ def test_dispatch_compact(mesh_device, fabric, split_slabs):
             nat = torch.from_numpy(natural[i]).to(torch.int64)
             valid = nat < max_rows
             pages, rws = pages_of[i][valid], nat[valid]
-            # (the concatenated cache is in shard order: row g is at its owner-major page)
-            rws = (rws // STRIPE % n) * (max_rows // n) + (rws // STRIPE // n) * STRIPE + rws % STRIPE
+            # (the concatenated cache is in chip order: row g is on its owner's chip, at its local row)
+            owners = rws // STRIPE % n
+            chips = owners if sp_axis == 0 else (owners % rows_n) * cols_n + owners // rows_n
+            rws = chips * (max_rows // n) + (rws // STRIPE // n) * STRIPE + rws % STRIPE
             wrong = int((got[pages] != cache_bits[rws]).any(dim=1).sum())
             if wrong and i == 0 and os.environ.get("KVD_DEBUG"):
                 rt = ttnn.to_torch(ttnn.get_device_tensors(rank)[0])[0, 0].to(torch.int64)

@@ -15,6 +15,18 @@
 // 1).
 #pragma once
 
+#ifndef KVD_SP_AXIS
+#define KVD_SP_AXIS 0
+#define KVD_ROWS 1
+#define KVD_COLS 1
+#endif
+// The cache's owner index of a chip and back (sp_axis as sparse_kv_push): with sp_axis 0 the owner of block b
+// (b % N) is the row-major chip b % N; with sp_axis 1 owner o is the chip in column o / rows, row o % rows.
+inline uint32_t owner_chip(uint32_t o) { return KVD_SP_AXIS == 0 ? o : (o % KVD_ROWS) * KVD_COLS + o / KVD_ROWS; }
+inline uint32_t chip_owner(uint32_t chip) {
+    return KVD_SP_AXIS == 0 ? chip : (chip % KVD_COLS) * KVD_ROWS + chip / KVD_COLS;
+}
+
 #include <cstdint>
 
 #include "kvd_common.hpp"

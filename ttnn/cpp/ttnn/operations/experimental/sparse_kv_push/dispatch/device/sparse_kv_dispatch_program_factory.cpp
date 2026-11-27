@@ -52,6 +52,13 @@ constexpr uint32_t kSemMuxTermination = 6;
 constexpr uint32_t kSemGo = 0;
 constexpr uint8_t kMuxBuffersPerChannel = 8;
 
+// Placement mode between SparseKvDispatchMeshWorkloadFactory and the per-chip descriptors (same thread): one program
+// for the mesh needs every role's cores over the chips to fit the grid (union placement); when they do not (the
+// 40-core beside-attention grid), each chip gets its own program with its own placement (user's choice: per-chip
+// programs there rather than one placement for every chip).
+thread_local bool g_union_fits = true;      // set false by a descriptor whose union placement did not fit
+thread_local bool g_own_placement = false;  // build this chip's descriptor with its own placement only
+
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/dispatch/device/kernels/";
 
 std::string join(const std::vector<uint8_t>& v) {
@@ -455,7 +462,49 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
             placed[{at[0], at[1]}] = std::move(ch);
         }
     };
-    const bool per_chip = place_per_chip();
+    // own placement (per-chip programs): every chip's ports next to its own Ethernet cores, no union; the kernels run
+    // on this chip's cores only
+    auto place_own = [&]() {
+        placed.clear();
+        for (auto& r : role_cores) {
+            r.clear();
+        }
+        for (const auto& at : mesh_coords) {
+            Chip& ch = placed[{at[0], at[1]}];
+            ch.dir = dirs_of(at);
+            auto* dev = tt::tt_metal::internal::get_device(*mesh_device, at);
+            std::set<CoreKey> tk;
+            for (uint32_t role = 0; role < (kn.lanes == 2 ? 3u : 2u); ++role) {
+                for (uint32_t d = 0; d < 4; ++d) {
+                    for (uint32_t l = 0; l < L; ++l) {
+                        const auto eth = eth_of(at, ch, d, l);
+                        if (!eth) {
+                            continue;
+                        }
+                        for (uint32_t k = 0; k < (role == 1 ? K : 1u); ++k) {
+                            const auto c = nearest_free(dev, *eth, tk, {});
+                            TT_FATAL(c.has_value(), "sparse_kv_dispatch v3: too few grid cores for the port cores");
+                            tk.insert(key_of(*c));
+                            if (at == coord) {
+                                role_cores[role].insert(key_of(*c));
+                            }
+                            (role == 0 ? ch.tx[d][l] : role == 1 ? ch.w[d][l][k] : ch.hlp[d][l]) = *c;
+                        }
+                    }
+                }
+            }
+            const auto pl = choose_planners(tk);
+            TT_FATAL(pl.has_value(), "sparse_kv_dispatch v3: too few cores for {} planners", P);
+            ch.planners = *pl;
+        }
+    };
+    if (g_own_placement) {
+        place_own();
+    }
+    const bool per_chip = g_own_placement || place_per_chip();
+    if (!per_chip) {
+        g_union_fits = false;
+    }
     log_info(
         tt::LogOp,
         "sparse_kv_dispatch placement on {} cores, {} planners: per-chip {} (TX {} / workers {} / helpers {} cores "
@@ -463,12 +512,12 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
         "the chips)",
         cores.size(),
         P,
-        per_chip ? "fits" : "does not fit, uniform",
+        g_own_placement ? "own (per-chip program)" : (per_chip ? "fits" : "does not fit"),
         role_cores[0].size(),
         role_cores[1].size(),
         role_cores[2].size());
     if (!per_chip) {
-        place_uniform();
+        place_uniform();  // (only until the mesh factory rebuilds this range as per-chip programs)
     }
     auto place = [&](const MeshCoordinate& at) -> const Chip& { return placed.at({at[0], at[1]}); };
     const Chip& mine = place(coord);
@@ -738,6 +787,10 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
     // which rows of each requester this call sends (planners: kvd3_planner.cpp route_word)
     ring_defines.emplace_back("KVD_PART", std::to_string(p.part));
     ring_defines.emplace_back("KVD_SKIP_XCHG", p.skip_exchange ? "1" : "0");
+    // owner o <-> physical (row-major) chip: kvd3_common.hpp owner_chip / chip_owner
+    ring_defines.emplace_back("KVD_SP_AXIS", std::to_string(p.sp_axis));
+    ring_defines.emplace_back("KVD_ROWS", std::to_string(R));
+    ring_defines.emplace_back("KVD_COLS", std::to_string(C));
     if (compact) {
         const auto shape = packet_shape(mesh_device, row_bytes);  // (the plan's compact layout: its packet shape)
         ring_defines.emplace_back("KVD_COMPACT", "1");
@@ -1909,8 +1962,22 @@ SparseKvDispatchMeshWorkloadFactory::cached_mesh_workload_t SparseKvDispatchMesh
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& range : tensor_coords.ranges()) {
         std::vector<tt::tt_metal::ProgramDescriptor> descriptors;
+        g_union_fits = true;
         for (const auto& coord : range) {
             descriptors.push_back(SparseKvDispatchProgramFactory::create_descriptor(p, t, output_tensor, coord));
+        }
+        if (!g_union_fits) {
+            // the chips' port cores do not fit one program's grid: one program per chip, each with its own placement
+            g_own_placement = true;
+            for (const auto& coord : range) {
+                workload.add_program(
+                    ttnn::MeshCoordinateRange(coord),
+                    tt::tt_metal::Program{
+                        *mesh_device, SparseKvDispatchProgramFactory::create_descriptor(p, t, output_tensor, coord)});
+                shared_variables[ttnn::MeshCoordinateRange(coord)] = {};
+            }
+            g_own_placement = false;
+            continue;
         }
         if (range.shape().mesh_size() < 2) {
             workload.add_program(range, tt::tt_metal::Program{*mesh_device, descriptors.front()});

@@ -287,7 +287,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("active_from") = 0,
         nb::arg("part") = 0,
         nb::arg("skip_exchange") = false,
-        nb::arg("rank_table") = nb::none());
+        nb::arg("rank_table") = nb::none(),
+        nb::arg("sp_axis") = 0);
 
     ttnn::bind_function<"sparse_kv_dispatch_scratch_spec", "ttnn.experimental.">(
         mod,

@@ -105,6 +105,7 @@ void kernel_main() {
     const uint32_t lane3 = lanes3 == 2 ? (planner & 1) : 0;  // (P even: planner index = producer index)
     const uint32_t me = get_arg_val<uint32_t>(a++);
     const uint32_t my_r = me / C, my_c = me % C;
+    const uint32_t me_o = chip_owner(me);  // this chip as the cache's owner (its blocks me_o + lb * N)
     auto* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(a++)));
     const uint32_t ports_present = get_arg_val<uint32_t>(a++);  // bit q = d * lanes + l: TX(d, l) exists
     constexpr uint32_t kQ = 4 * kMaxLinks;
@@ -208,7 +209,7 @@ void kernel_main() {
         // (and the chunk start: a dense plan writes only slot 0's header; the planners' hot split reads it)
         const uint32_t has_split = h0[::sparse_push::plan_table::kWordHasSplit];
         const uint32_t split_block = h0[::sparse_push::plan_table::kWordSplitBlock];
-        noc_async_read(table.get_noc_addr(me), buf, inbox_slot_bytes);
+        noc_async_read(table.get_noc_addr(me_o), buf, inbox_slot_bytes);
         noc_async_read_barrier();
         auto* h = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buf);
         h[::sparse_push::plan_table::kWordActiveBlocks] = active;
@@ -268,7 +269,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < N; ++i) {
         const uint32_t act = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             hdr_l1 + i * 64)[::sparse_push::plan_table::kWordActiveBlocks];
-        owned_of[i] = act > me ? (act - me + N - 1) / N : 0;
+        owned_of[i] = act > me_o ? (act - me_o + N - 1) / N : 0;
         owned_of[i] =
             owned_of[i] < owner_blocks_max ? owned_of[i] : owner_blocks_max;  // a header never overruns a slot
         if (bad_user) {
@@ -344,7 +345,7 @@ void kernel_main() {
         const auto* h = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hdr_l1 + me * 64);
         if (h[::sparse_push::plan_table::kWordHasSplit] != 0) {
             const uint32_t sb = h[::sparse_push::plan_table::kWordSplitBlock];
-            const uint32_t lb_hot = sb > me ? (sb - me + N - 1) / N : 0;
+            const uint32_t lb_hot = sb > me_o ? (sb - me_o + N - 1) / N : 0;
             const uint32_t a_hot = a_lo + lb_hot * words_per_block;
             g_hot = a_hot / kGW < g_lo ? g_lo : (a_hot / kGW > g_hi ? g_hi : a_hot / kGW);
             hot_straddles = a_hot % kGW != 0 && a_hot / kGW >= g_lo && a_hot / kGW < g_hi;
@@ -598,7 +599,7 @@ void kernel_main() {
 #ifdef KVD_COMPACT
             // (local row lb * stripe + r is global row (me + lb * N) * stripe + r: block me + lb * N)
             noc_async_read(
-                rank_table.get_noc_addr(1 + me + (copy_rows[k] / stripe) * N),
+                rank_table.get_noc_addr(1 + me_o + (copy_rows[k] / stripe) * N),
                 rank_l1 + (1 + k) * rank_page_bytes,
                 rank_page_bytes);
 #endif
@@ -611,11 +612,11 @@ void kernel_main() {
             const uint32_t rank = rp[w] + __builtin_popcount(rp[stripe / 32 + w] & ((1u << (r % 32)) - 1u));
             noc_async_write(
                 row_l1 + k * row_bytes,
-                output.get_noc_addr(sparse_push::compact_page<KVD_PPP, KVD_BANKS>(run_bases[me], rank)),
+                output.get_noc_addr(sparse_push::compact_page<KVD_PPP, KVD_BANKS>(run_bases[me_o], rank)),
                 row_bytes);
 #else
             noc_async_write(
-                row_l1 + k * row_bytes, output.get_noc_addr(me * owner_slot_rows + copy_rows[k]), row_bytes);
+                row_l1 + k * row_bytes, output.get_noc_addr(me_o * owner_slot_rows + copy_rows[k]), row_bytes);
 #endif
         }
         noc_async_writes_flushed();  // the buffers are reused next
@@ -642,7 +643,7 @@ void kernel_main() {
         const uint32_t lb = u / words_per_block, w = u % words_per_block;
 #if KVD_PART != 0
         {
-            const bool in_prefix = !part_has_split || me + lb * N < part_split_block;
+            const bool in_prefix = !part_has_split || me_o + lb * N < part_split_block;
             if (in_prefix != (KVD_PART == 1)) {
                 return;  // this word's block is in the other part
             }
@@ -684,7 +685,7 @@ void kernel_main() {
                 mask |= ((words[z] >> k) & 1) << nz_of[z];
             }
             const uint32_t in_block = w * 32 + k;
-            const uint32_t row = (me + lb * N) * stripe + in_block;
+            const uint32_t row = (me_o + lb * N) * stripe + in_block;
             if (mask & me_bit) {
 #ifdef KVD_ABL_COPY_LATE
                 if (n_late < kLateMax) {

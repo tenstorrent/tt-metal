@@ -2796,6 +2796,7 @@ class ttMLA:
             part=int(part.value),
             skip_exchange=_kvd_skip_exchange(plan),
             rank_table=plan.rank_table,
+            sp_axis=self.sp_axis,
         )
 
     @contextlib.contextmanager

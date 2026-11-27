@@ -144,6 +144,7 @@ void validate_config(const SparseKvDispatchParams& p, const SparseKvDispatchInpu
     TT_FATAL(
         !t.rank_table.has_value() || (!t.plan_indices.has_value() && p.active_from == 0),
         "sparse_kv_dispatch rank_table (compact landing) does not combine with the fused plan or active_from");
+    TT_FATAL(p.sp_axis <= 1, "sparse_kv_dispatch sp_axis must be 0 or 1, got {}", p.sp_axis);
     TT_FATAL(p.part <= 2, "sparse_kv_dispatch part must be 0 (ALL), 1 (PREFIX) or 2 (REST), got {}", p.part);
     TT_FATAL(p.landing_slots >= 1, "sparse_kv_dispatch needs at least one landing slot");
     TT_FATAL(
@@ -293,6 +294,7 @@ ttsl::hash::hash_t SparseKvDispatchDeviceOperation::compute_program_hash(
             p.active_from,
             p.part,
             p.skip_exchange,
+            p.sp_axis,
             t.rank_table.has_value() ? std::optional<tt::tt_metal::TensorSpec>(t.rank_table->tensor_spec())
                                      : std::nullopt,
             t.plan_chunk_start_tensor.has_value()
@@ -358,7 +360,8 @@ Tensor sparse_kv_dispatch(
     uint32_t active_from,
     uint32_t part,
     bool skip_exchange,
-    const std::optional<Tensor>& rank_table) {
+    const std::optional<Tensor>& rank_table,
+    uint32_t sp_axis) {
     using namespace ttnn::operations::experimental::sparse_kv_push;
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "sparse_kv_dispatch input must be on device");
@@ -385,7 +388,8 @@ Tensor sparse_kv_dispatch(
             .plan_chunk_start = plan_chunk_start,
             .active_from = active_from,
             .part = part,
-            .skip_exchange = skip_exchange},
+            .skip_exchange = skip_exchange,
+            .sp_axis = sp_axis},
         SparseKvDispatchInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,

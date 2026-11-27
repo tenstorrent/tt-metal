@@ -224,12 +224,13 @@ void kernel_main() {
             return b < owner_blocks_max ? b : owner_blocks_max;
         };
         uint32_t nth = 0;
-        for (uint32_t o = 0; o < N; ++o) {
-            if (o == me) {
+        for (uint32_t o = 0; o < N; ++o) {  // (table slot o: owner o, on chip owner_chip(o))
+            const uint32_t pc = owner_chip(o);
+            if (pc == me) {
                 continue;
             }
             if (static_cast<uint32_t>(
-                    tt::tt_fabric::get_next_hop_router_direction(dest_mesh_ids[o], dest_chip_ids[o])) != eth_dir) {
+                    tt::tt_fabric::get_next_hop_router_direction(dest_mesh_ids[pc], dest_chip_ids[pc])) != eth_dir) {
                 continue;
             }
             if (nth++ % L != l) {
@@ -253,8 +254,8 @@ void kernel_main() {
                     fabric_mesh::fabric_unicast_noc_fused_unicast_with_atomic_inc(
                         &conn,
                         hdr,
-                        dest_chip_ids[o],
-                        dest_mesh_ids[o],
+                        dest_chip_ids[pc],
+                        dest_mesh_ids[pc],
                         send_l1,
                         n,
                         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
@@ -263,8 +264,8 @@ void kernel_main() {
                     fabric_mesh::fabric_unicast_noc_unicast_write(
                         &conn,
                         hdr,
-                        dest_chip_ids[o],
-                        dest_mesh_ids[o],
+                        dest_chip_ids[pc],
+                        dest_mesh_ids[pc],
                         send_l1,
                         n,
                         tt::tt_fabric::NocUnicastCommandHeader{inbox_dst + off});

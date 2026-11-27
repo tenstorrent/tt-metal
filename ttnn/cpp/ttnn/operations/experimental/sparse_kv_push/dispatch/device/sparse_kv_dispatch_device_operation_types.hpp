@@ -54,6 +54,10 @@ struct SparseKvDispatchParams {
     // The inbox already holds this plan's slices (an earlier call on the same plan build exchanged them): skip the
     // slice exchange. Hashed (a compile-time define of TX and the planners).
     bool skip_exchange = false;
+
+    // The mesh axis the cache's blocks stripe along first (0 or 1), as sparse_kv_push: owner o of block b (= b % N)
+    // is the chip at o / chips_on_other_axis on this axis and o % chips_on_other_axis on the other. Hashed.
+    uint32_t sp_axis = 0;
 };
 
 struct SparseKvDispatchInputs {
