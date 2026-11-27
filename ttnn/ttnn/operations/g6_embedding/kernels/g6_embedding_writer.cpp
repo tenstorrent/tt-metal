@@ -25,6 +25,7 @@ void kernel_main() {
     constexpr uint32_t col_blocks_per_row = get_arg(args::col_blocks_per_row);
     constexpr uint32_t tensor_tile_rows = get_arg(args::tensor_tile_rows);
     constexpr uint32_t tensor_col_tiles = get_arg(args::tensor_col_tiles);
+    constexpr bool bank_rotation = get_arg(args::bank_rotation) != 0;
     constexpr uint32_t block_pages = block_tile_rows * block_col_tiles;
 
     const uint32_t first_block = get_arg(args::first_block);
@@ -52,8 +53,10 @@ void kernel_main() {
                 }
                 const uint32_t first_page = g * tensor_col_tiles + col_block * block_col_tiles;
                 const uint32_t tile_row_base = block_base + t * block_col_tiles * tile_bytes;
-                for (uint32_t j = 0; j < block_col_tiles; ++j) {
+                uint32_t j = bank_rotation ? g % block_col_tiles : 0;
+                for (uint32_t i = 0; i < block_col_tiles; ++i) {
                     noc_async_write(tile_row_base + j * tile_bytes, out_acc.get_noc_addr(first_page + j), tile_bytes);
+                    j = (j + 1 == block_col_tiles) ? 0 : j + 1;
                 }
             }
             // The slot is handed back to compute only after its bytes have left L1.

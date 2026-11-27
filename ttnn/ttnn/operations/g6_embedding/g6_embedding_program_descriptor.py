@@ -35,6 +35,9 @@ INDEX_DEPTH = 2
 ROWS_DEPTH = 2
 OUT_DEPTH = 2
 L1_BUDGET_BYTES = 1_347_776
+# bank_stagger lamp: the writer starts each tile-row's walk at tile (g mod block_col_tiles) so cores
+# do not all open on the same DRAM bank. Measured flat on p1 (752.8 vs 753.4 us), so off.
+WRITER_BANK_ROTATION = False
 
 INDEX_SLOT_BYTES = BLOCK_TILE_ROWS * TILE_DIM * INDEX_BYTES
 
@@ -235,7 +238,7 @@ def create_program_artifacts(input_tensor, weight, output_tensor, plan: Plan, *,
         compiler_options=compiler_options,
         dfb_bindings=[ttnn.experimental.consumer_of(DFB_OUTPUT_TILES, DFB_OUTPUT_TILES)],
         tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=TP_OUT, accessor_name=TP_OUT)],
-        compile_time_args=walk_args,
+        compile_time_args={**walk_args, "bank_rotation": int(WRITER_BANK_ROTATION)},
         runtime_arg_schema=run_arg_schema,
     )
 
