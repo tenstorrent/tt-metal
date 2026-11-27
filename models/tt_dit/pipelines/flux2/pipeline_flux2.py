@@ -45,6 +45,11 @@ _T = TypeVar("_T")
 # latents, a whole number of tiles of pixels.
 _DEFAULT_RESOLUTIONS = ((1024, 1024), (2048, 2048))
 
+# Untraced, `__call__` takes any size whose sides are multiples of _SIDE_MULTIPLE pixels (one token) and at
+# least _MIN_SIDE, up to the pipeline's `max_pixels`.
+_SIDE_MULTIPLE = 16
+_MIN_SIDE = 256
+
 # The prompt's token count, padded to it whatever the prompt.
 _PROMPT_SEQUENCE_LENGTH = 512
 
@@ -122,13 +127,14 @@ class Flux2TransformerState:
 
 
 class _DenoiseState:
-    """The denoising state of one image size, with or without a reference image: the latents, the
-    reference tokens, their RoPE and the trace."""
+    """The denoising state of one image size, with or without a reference image: the token sequence
+    (latents, reference tokens and padding, see `_token_rows`), the mask of its latent rows, their
+    RoPE and the trace."""
 
     def __init__(self, *, step_tracer: Tracer) -> None:
         self.step_tracer = step_tracer
         self.latents = StateTensor()
-        self.reference = StateTensor()
+        self.latent_mask = StateTensor()
         self.rope_cos = StateTensor()
         self.rope_sin = StateTensor()
         self.combined_rope_cos = StateTensor()
@@ -149,6 +155,7 @@ class Flux2Pipeline:
         height: int = 1024,
         width: int = 1024,
         resolutions: Sequence[tuple[int, int]] = _DEFAULT_RESOLUTIONS,
+        max_pixels: int | None = None,
         is_fsdp: bool = False,
         dynamic_load: bool = False,
         trace_warmup: bool = False,
@@ -157,11 +164,19 @@ class Flux2Pipeline:
     ) -> None:
         """Build the pipeline.
 
-        ``resolutions`` are the image sizes (width, height) that ``__call__`` accepts; ``width`` and
-        ``height`` give the default one. The default size is warmed up here, and with
-        ``trace_warmup`` every size, untraced and traced.
+        Untraced, ``__call__`` takes any size (width, height) whose sides are multiples of 16 pixels and at
+        least 256, with at most ``max_pixels`` pixels, by default those of the largest of ``resolutions``, and
+        whose VAE attention takes no more tokens per device than the sizes of ``resolutions`` do. Rounded up per
+        device, that can refuse a size just under ``max_pixels``, such as 2032x2064 on a 2x4 mesh built for
+        2048x2048.
+        Traced, it takes the sizes of ``resolutions``. ``width`` and ``height`` give the default size. The
+        default size is warmed up here, and with ``trace_warmup`` every size of ``resolutions``, untraced and
+        traced.
         """
         self._resolutions = tuple(resolutions)
+        self._max_pixels = max_pixels if max_pixels is not None else max(w * h for w, h in self._resolutions)
+        for w, h in self._resolutions:
+            self._check_size(width=w, height=h)
         if (width, height) not in self._resolutions:
             msg = f"the default size {width}x{height} is not one of the resolutions {self._resolutions}"
             raise ValueError(msg)
@@ -271,6 +286,9 @@ class Flux2Pipeline:
             ccl_manager=self._vae_ccl_manager,
             use_conv3d=self._vae_use_conv3d,
         )
+        # The attention takes as many tokens per device as the resolutions reach, no more: past a threshold it
+        # needs a second program, which may not fit in L1 next to the pipeline (VaeAttention.warm_sdpa).
+        self._vae_tokens = max(self._vae_decoder.attention_tokens((h, w)) for w, h in self._resolutions)
         self._vae_decoder.warm_sdpa((height, width) for width, height in self._resolutions)
 
         # Editing is not supported with dynamic loading, which would have to evict the encoder too.
@@ -290,7 +308,9 @@ class Flux2Pipeline:
             # The reference images are encoded at most at one megapixel (_reference_size).
             self._vae_encoder.warm_sdpa(
                 (h, w)
-                for w, h in (self._reference_size(width=width, height=height) for width, height in self._resolutions)
+                for w, h in (
+                    self._reference_size(width=width, height=height) for width, height in self._largest_sizes()
+                )
             )
             cache.load_model(
                 tt_model=self._vae_encoder,
@@ -359,8 +379,42 @@ class Flux2Pipeline:
 
     @property
     def resolutions(self) -> tuple[tuple[int, int], ...]:
-        """The supported image sizes as (width, height)."""
+        """The image sizes (width, height) that traced calls take."""
         return self._resolutions
+
+    @property
+    def max_pixels(self) -> int:
+        """The most pixels of an image that untraced calls take."""
+        return self._max_pixels
+
+    def _check_size(self, *, width: int, height: int) -> None:
+        if width % _SIDE_MULTIPLE or height % _SIDE_MULTIPLE:
+            msg = f"{width}x{height}: the sides must be multiples of {_SIDE_MULTIPLE} pixels"
+            raise ValueError(msg)
+        if min(width, height) < _MIN_SIDE:
+            msg = f"{width}x{height}: the sides must be at least {_MIN_SIDE} pixels"
+            raise ValueError(msg)
+        if width * height > self._max_pixels:
+            msg = f"{width}x{height}: more than the {self._max_pixels} pixels the pipeline was built for"
+            raise ValueError(msg)
+        decoder = getattr(self, "_vae_decoder", None)
+        if decoder is not None and decoder.attention_tokens((height, width)) > self._vae_tokens:
+            msg = (
+                f"{width}x{height}: {decoder.attention_tokens((height, width))} VAE attention tokens per device, more "
+                f"than the {self._vae_tokens} that the resolutions {self._resolutions} reach"
+            )
+            raise ValueError(msg)
+
+    def _largest_sizes(self) -> list[tuple[int, int]]:
+        """Per width that `__call__` takes, the size (width, height) with the most pixels, and the
+        resolutions: what the token buffers and the warm-ups are sized for. Every size is at most one of
+        these on both sides."""
+        sizes = list(self._resolutions)
+        for width in range(_MIN_SIDE, self._max_pixels // _MIN_SIDE + 1, _SIDE_MULTIPLE):
+            height = self._max_pixels // width // _SIDE_MULTIPLE * _SIDE_MULTIPLE
+            if height >= _MIN_SIDE:
+                sizes.append((width, height))
+        return sizes
 
     def warmup(
         self, *, width: int, height: int, edit: bool = False, traced: bool = False, warmup_info: str = "warmup"
@@ -449,7 +503,7 @@ class Flux2Pipeline:
         resolutions: Sequence[tuple[int, int]] = _DEFAULT_RESOLUTIONS,
         is_fsdp: bool = False,
         dynamic_load: bool = False,
-        trace_warmup: bool = True,
+        trace_warmup: bool = False,
         checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
         vae_use_conv3d: bool = False,
         shard_prompt: bool = True,
@@ -543,8 +597,9 @@ class Flux2Pipeline:
 
         width = width if width is not None else self._width
         height = height if height is not None else self._height
-        if (width, height) not in self._resolutions:
-            msg = f"{width}x{height} is not one of the resolutions {self._resolutions}"
+        self._check_size(width=width, height=height)
+        if traced and (width, height) not in self._resolutions:
+            msg = f"traced, {width}x{height} is not one of the resolutions {self._resolutions}"
             raise ValueError(msg)
 
         on_event = on_event if on_event is not None else null_callback
@@ -615,27 +670,40 @@ class Flux2Pipeline:
         image_ids = _prepare_ids(height=latents_height // self._patch_size, width=latents_width // self._patch_size)
         rope_cos, rope_sin = self._pos_embed.forward(image_ids)
 
-        state.latents.update(self._to_device(latents, mesh_axes=[None, sp_axis, None]), traced)
-
-        # Each device runs the transformer on its shard of the latents followed by its shard of the
-        # reference tokens, so the RoPE is arranged the same way. The attention does not depend on
-        # the order of the tokens, only on their positions.
+        # The transformer runs on one sequence of the latents, the reference tokens and padding, split
+        # evenly over the SP devices (see `_token_rows`); the RoPE is arranged the same way. The
+        # step only updates the latent rows, so the reference and padding rows stay as they are.
+        rows = self._token_rows(spatial_sequence_length + reference_sequence_length)
+        padding = rows - spatial_sequence_length - reference_sequence_length
+        sequence = [latents] if reference is None else [latents, reference.expand(latents.shape[0], -1, -1)]
+        sequence = torch.cat([*sequence, latents.new_zeros(latents.shape[0], padding, latents.shape[2])], dim=1)
+        latent_mask = torch.zeros_like(sequence)
+        latent_mask[:, :spatial_sequence_length] = 1
         if reference is not None:
-            sp_factor = self._parallel_config.sequence_parallel.factor
             reference_rope_cos, reference_rope_sin = self._pos_embed.forward(reference_ids)
-            rope_cos = _interleave_shards(rope_cos, reference_rope_cos, sp_factor)
-            rope_sin = _interleave_shards(rope_sin, reference_rope_sin, sp_factor)
-            state.reference.update(self._to_device(reference, mesh_axes=[None, sp_axis, None]), traced)
+            rope_cos = torch.cat([rope_cos, reference_rope_cos])
+            rope_sin = torch.cat([rope_sin, reference_rope_sin])
+        rope_cos = torch.cat([rope_cos, rope_cos.new_zeros(padding, rope_cos.shape[1])])
+        rope_sin = torch.cat([rope_sin, rope_sin.new_zeros(padding, rope_sin.shape[1])])
+
+        state.latents.update(self._to_device(sequence, mesh_axes=[None, sp_axis, None]), traced)
+        state.latent_mask.update(self._to_device(latent_mask, mesh_axes=[None, sp_axis, None]), traced)
 
         # Store rope tensors pre-shaped as (1, 1, seq, head_dim) so attention blocks never
         # need to reshape per-call. SP sharding is on dim 2 (seq).
         rope_mesh_axes = [None, None, sp_axis, None]
         state.rope_cos.update(self._to_device(rope_cos[None, None], mesh_axes=rope_mesh_axes), traced)
         state.rope_sin.update(self._to_device(rope_sin[None, None], mesh_axes=rope_mesh_axes), traced)
-        # The single blocks run on the concatenated [spatial | prompt] sequence and need the matching
-        # rope. It is constant across the denoising steps, so concat once here.
-        state.combined_rope_cos.update(ttnn.concat([state.rope_cos.data, self.ts.tt_prompt_rope_cos], dim=2), traced)
-        state.combined_rope_sin.update(ttnn.concat([state.rope_sin.data, self.ts.tt_prompt_rope_sin], dim=2), traced)
+
+        # The single blocks run on the concatenated prompt and spatial sequence, in the order of the
+        # transformer's `prompt_first`, and need the matching rope. It is constant across the
+        # denoising steps, so concat once here.
+        def combined(spatial_rope: ttnn.Tensor, prompt_rope: ttnn.Tensor) -> ttnn.Tensor:
+            parts = [prompt_rope, spatial_rope] if self.transformer.prompt_first else [spatial_rope, prompt_rope]
+            return ttnn.concat(parts, dim=2)
+
+        state.combined_rope_cos.update(combined(state.rope_cos.data, self.ts.tt_prompt_rope_cos), traced)
+        state.combined_rope_sin.update(combined(state.rope_sin.data, self.ts.tt_prompt_rope_sin), traced)
 
         if self._guidance_embeds:
             self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
@@ -679,7 +747,7 @@ class Flux2Pipeline:
 
                     step_inputs = {
                         "spatial": state.latents.data,
-                        "reference": state.reference.data if reference is not None else None,
+                        "latent_mask": state.latent_mask.data,
                         "embedded_prompt": self.ts.tt_embedded_prompt,
                         "timestep": self.ts.tt_timestep,
                         "guidance": self.ts.tt_guidance,
@@ -699,19 +767,20 @@ class Flux2Pipeline:
 
             # Latents arrive SP-sharded on dim=1 (patchified token dim). The decoder undoes the patchify on the host
             # and uploads the result split over its H and W axes.
-            latents = tensor.to_torch(state.latents.data, mesh_axes=(None, sp_axis, None))
+            latents = tensor.to_torch(state.latents.data, mesh_axes=(None, sp_axis, None))[:, :spatial_sequence_length]
             tt_latents = self._vae_decoder.preprocess_and_unpatchify(
                 latents, height=latents_height, width=latents_width
             )
+            masks = self._vae_decoder.padding_masks(height=latents_height, width=latents_width)
 
             if self._keeps_size_state(traced):
                 tracer = self._vae_decoder_tracers.get((width, height))
                 if tracer is None:
                     tracer = Tracer(self._vae_decoder.forward, device=self._mesh_device, clone_prep_inputs=False)
                     self._vae_decoder_tracers[width, height] = tracer
-                tt_decoded_output = tracer(tt_latents, traced=traced)
+                tt_decoded_output = tracer(tt_latents, masks, traced=traced)
             else:
-                tt_decoded_output = self._vae_decoder.forward(tt_latents)
+                tt_decoded_output = self._vae_decoder.forward(tt_latents, masks)
             # The decoder's output is flat, [N, 1, H * W, 3] tiled. float_to_uint8 maps it in tiles and
             # untilizes the flat tensor, and the uint8 image is then made [N, H, W, 3] as a view.
             image_hw = self._vae_decoder.output_hw((tt_latents.shape[1], tt_latents.shape[2]))
@@ -723,7 +792,8 @@ class Flux2Pipeline:
                 self._vae_decoder.output_concat_dims(),
                 ccl_manager=self._vae_ccl_manager,
             )
-            output = [Image.fromarray(image.numpy()) for image in decoded_output]
+            # The decoder extends latents that do not split over its devices with zeros; crop that back.
+            output = [Image.fromarray(image[:height, :width].contiguous().numpy()) for image in decoded_output]
 
         on_event(SectionEnd("total"))
         return output
@@ -753,27 +823,55 @@ class Flux2Pipeline:
 
     def _reference_size(self, *, width: int, height: int) -> tuple[int, int]:
         """The size (width, height) a reference image is encoded at for an output of the given size:
-        the output size scaled down to at most one megapixel, rounded down to whole tokens."""
+        the output size scaled down to at most one megapixel, rounded down to whole tokens and, along
+        each axis the VAE encoder splits, to whole latent rows per device."""
         scale = min(1.0, math.sqrt(1024 * 1024 / (width * height)))
-        multiple = self._vae_scale_factor * self._patch_size
-        return int(width * scale) // multiple * multiple, int(height * scale) // multiple * multiple
+        token = self._vae_scale_factor * self._patch_size
+
+        def multiple(split: ParallelFactor | None) -> int:
+            factor = split.factor if split is not None else 1
+            return math.lcm(token, self._vae_scale_factor * factor)
+
+        w_multiple = multiple(self._vae_parallel.w_parallel)
+        h_multiple = multiple(self._vae_parallel.h_parallel)
+        return int(width * scale) // w_multiple * w_multiple, int(height * scale) // h_multiple * h_multiple
 
     def _transformer_row_capacity(self) -> int:
-        """The most tokens per device the transformer sees over all resolutions, rounded up to whole
-        tiles: the single blocks' spatial, reference and prompt tokens of an edit, or without a
-        reference when dynamic loading rules out editing."""
+        """The most tokens per device the transformer sees at any size `__call__` takes, rounded up to whole
+        tiles: the single blocks' spatial, reference and prompt tokens of an edit, or without a reference when
+        dynamic loading rules out editing. A reference has at most a megapixel (`_reference_size`), and fewer
+        pixels than the image."""
         sp_factor = self._parallel_config.sequence_parallel.factor
         token_size = self._vae_scale_factor * self._patch_size
         prompt_rows = -(-_PROMPT_SEQUENCE_LENGTH // sp_factor) if self._shard_prompt else _PROMPT_SEQUENCE_LENGTH
-        rows = 0
-        for width, height in self._resolutions:
-            reference_width, reference_height = self._reference_size(width=width, height=height)
-            spatial_tokens = (height // token_size) * (width // token_size)
-            reference_tokens = (
-                0 if self.dynamic_load else (reference_height // token_size) * (reference_width // token_size)
-            )
-            rows = max(rows, -(-spatial_tokens // sp_factor) + -(-reference_tokens // sp_factor) + prompt_rows)
+        spatial_tokens = max((height // token_size) * (width // token_size) for width, height in self._largest_sizes())
+        reference_tokens = 0 if self.dynamic_load else min(1024 * 1024, self._max_pixels) // token_size**2
+        tokens = spatial_tokens + reference_tokens
+        token_rows = self._token_rows(tokens) if self._prompt_first() else -(-tokens // sp_factor) * sp_factor
+        rows = token_rows // sp_factor + prompt_rows
         return -(-rows // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+    def _prompt_first(self) -> bool:
+        """The transformer's `prompt_first`, known before the transformer is built."""
+        return self._shard_prompt and self._parallel_config.sequence_parallel.factor > 1
+
+    def _token_rows(self, tokens: int) -> int:
+        """The rows of the transformer's token sequence for ``tokens`` latent and reference tokens:
+        whole tiles per SP device, the padding all at the end of the last one. The attention masks
+        only the end of the whole sequence, so padding anywhere else would take part in it. Without
+        the prompt in front in the single blocks (`prompt_first`), the padding would sit before the
+        last device's prompt, so the sequence is not padded and must split evenly."""
+        sp_factor = self._parallel_config.sequence_parallel.factor
+        if not self._prompt_first():
+            if tokens % sp_factor:
+                msg = f"{tokens} tokens do not split over {sp_factor} devices without a sequence-parallel prompt"
+                raise ValueError(msg)
+            return tokens
+        per_device = -(-tokens // (ttnn.TILE_SIZE * sp_factor)) * ttnn.TILE_SIZE
+        if tokens <= (sp_factor - 1) * per_device:
+            msg = f"{tokens} tokens leave a device without any over {sp_factor} devices"
+            raise ValueError(msg)
+        return per_device * sp_factor
 
     def _encode_reference(
         self, image: Image.Image, *, width: int, height: int, traced: bool
@@ -844,7 +942,7 @@ class Flux2Pipeline:
         self,
         *,
         spatial: ttnn.Tensor,
-        reference: ttnn.Tensor | None,
+        latent_mask: ttnn.Tensor,
         embedded_prompt: ttnn.Tensor,
         timestep: ttnn.Tensor,
         guidance: ttnn.Tensor | None,
@@ -857,7 +955,7 @@ class Flux2Pipeline:
         total_sequence_length: ttnn.Tensor,
     ) -> None:
         noise_pred = self.transformer.forward(
-            spatial=ttnn.concat([spatial, reference], dim=1) if reference is not None else spatial,
+            spatial=spatial,
             embedded_prompt=embedded_prompt,
             timestep=timestep,
             guidance=guidance,
@@ -868,11 +966,10 @@ class Flux2Pipeline:
             prompt_sequence_length=prompt_sequence_length,
             total_sequence_length=total_sequence_length,
         )
-        if reference is not None:
-            noise_pred = noise_pred[:, : spatial.shape[1], :]
-
+        # Only the latent rows change: the reference and padding rows keep their values, also where the
+        # transformer's output there is not finite.
         ttnn.multiply_(noise_pred, sigma_difference)
-        ttnn.add_(spatial, noise_pred)
+        ttnn.add_(spatial, ttnn.where(latent_mask, noise_pred, 0.0))
 
     def _patchify(self, latents: torch.Tensor) -> torch.Tensor:
         # N, H, W, C -> N, (H / P) * (W / P), C * P * P
@@ -924,13 +1021,6 @@ def compute_empirical_mu(image_seq_len: int, num_steps: int) -> float:
     mu = a * num_steps + b
 
     return float(mu)
-
-
-def _interleave_shards(a: torch.Tensor, b: torch.Tensor, num_shards: int) -> torch.Tensor:
-    """Concatenate ``a`` and ``b`` on the first dim so that each of ``num_shards`` equal shards of the
-    result is the matching shard of ``a`` followed by that of ``b``."""
-    shards = zip(a.chunk(num_shards), b.chunk(num_shards), strict=True)
-    return torch.cat([t for pair in shards for t in pair])
 
 
 def _prepare_ids(*, height: int = 1, width: int = 1, text_sequence_length: int = 1, time: int = 0) -> torch.Tensor:

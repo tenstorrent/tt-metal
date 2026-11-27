@@ -13,6 +13,7 @@ TT_METAL_CACHE (so new kernel binaries can be counted). KLEIN_OUT_DIR gets ops.c
 """
 
 import os
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -51,6 +52,12 @@ def _summary(rows: list[dict], first: str, second: str) -> list[str]:
         f"{first}: {total_k:.0f} kernels, {total_e:.0f} new cache entries, {total_s:.2f} s over the second run",
         f"{'op':60} {'calls':>5} {'kernels':>7} {'entries':>7} {'extra s':>8}",
     ]
+    # The ops whose first run took the most longer than the second, whatever they built.
+    slowest = sorted(ops, key=lambda kv: kv[1]["first"] - kv[1]["second"], reverse=True)[:12]
+    lines.append(
+        "slowest first runs: "
+        + "; ".join(f"{op} {a['calls']:.0f}x +{a['first'] - a['second']:.3f} s" for op, a in slowest)
+    )
     for op, a in ops:
         if a["kernels"] or a["entries"]:
             lines.append(
@@ -74,6 +81,8 @@ def test_klein_new_size(*, mesh_device: ttnn.MeshDevice, model_location_generato
 
     # The target range's largest size and the default, so the row capacity is the one the server uses.
     resolutions = sorted({(1024, 1024), (2048, 2048), *((w, h) for h, w in sizes)})
+    if os.environ.get("KLEIN_ANY") == "1":  # sizes outside the resolutions
+        resolutions = [(1024, 1024), (2048, 2048)]
     pipeline = Flux2Pipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=model_location_generator("black-forest-labs/FLUX.2-klein-4B"),
@@ -92,7 +101,9 @@ def test_klein_new_size(*, mesh_device: ttnn.MeshDevice, model_location_generato
         reference = Image.effect_noise((1536, 1152), 64).convert("RGB")
     for h, w in sizes:
         runs = [f"{h}x{w} first", f"{h}x{w} second"]
+        walls = []
         for run in runs:
+            t0 = time.perf_counter()
             with recorder.recording(run):
                 pipeline(
                     prompts=["a lighthouse on a cliff, golden hour"],
@@ -104,6 +115,14 @@ def test_klein_new_size(*, mesh_device: ttnn.MeshDevice, model_location_generato
                     traced=False,
                     on_event=recorder.on_event,
                 )
+            walls.append(time.perf_counter() - t0)
+        summary.append(f"{h}x{w} wall: first {walls[0]:.2f} s, second {walls[1]:.2f} s")
+        for sec in sorted({r["section"] for r in recorder.rows if r["run"] in runs}):
+            t = [
+                sum(r["seconds"] for r in recorder.rows if r["run"] == run and r["section"] == sec and r["depth"] == 0)
+                for run in runs
+            ]
+            summary.append(f"  ops in {sec}: first {t[0]:.3f} s, second {t[1]:.3f} s")
         summary += _summary(recorder.rows, *runs) + [""]
         (out_dir / "summary.txt").write_text("\n".join(summary))
         conv_log.flush()

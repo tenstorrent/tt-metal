@@ -30,6 +30,8 @@ from .vae import (
     _norm,
     fold_quant_conv_mean,
     warm_token_gather,
+    warm_zero_padding,
+    zero_padding,
 )
 
 if TYPE_CHECKING:
@@ -157,15 +159,18 @@ class Flux2VaeDecoder(Module):
             warm_fixed_slice_flatten(ctx.device, [*channel_counts, out_channels])
         # So does the mid block's token gather where the token rows per chip are not whole tiles.
         warm_token_gather(ctx, channel_counts[0])
+        warm_zero_padding(ctx)
+
+    def attention_tokens(self, image_size: tuple[int, int]) -> int:
+        """The tokens per device of the mid block's attention for an image of size (height, width)."""
+        scale = 2 ** (len(self._conv_levels()) - 1)
+        h, w = image_size
+        return math.ceil(h / scale / self._ctx.h_factor) * math.ceil(w / scale / self._ctx.w_factor)
 
     def warm_sdpa(self, image_sizes: Iterable[tuple[int, int]]) -> None:
         """Build the mid block's attention programs that images of the given sizes (height, width) reach; see
         VaeAttention.warm_sdpa."""
-        scale = 2 ** (len(self._conv_levels()) - 1)
-        tokens = max(
-            math.ceil(h / scale / self._ctx.h_factor) * math.ceil(w / scale / self._ctx.w_factor)
-            for h, w in image_sizes
-        )
+        tokens = max(self.attention_tokens(size) for size in image_sizes)
         for attention in self.mid_block.attentions:
             attention.warm_sdpa(tokens)
 
@@ -202,11 +207,12 @@ class Flux2VaeDecoder(Module):
         """Undoes the latent normalization and the patchify of all tokens, [N, (H / P) * (W / P), C * P * P], on
         the host, and uploads the result split over the H and W mesh axes, [N, H / h_factor, W / w_factor, C] per
         device, row major. On the device this was a layout conversion, a permute and a mesh partition per axis, a
-        program per image size each, for about 1 MB at 1024x1024; the transfers cost a few ms instead."""
+        program per image size each, for about 1 MB at 1024x1024; the transfers cost a few ms instead.
+
+        Where H or W does not split over its devices, the latents are extended with zeros to the next multiple; pass
+        `padding_masks` to `forward`, and crop the decoded image back."""
         p = self._PATCH_SIZE
         assert height % p == 0 and width % p == 0, f"{height}x{width} is not whole patches"
-        assert height % self._ctx.h_factor == 0, f"height {height} does not split over {self._ctx.h_factor} devices"
-        assert width % self._ctx.w_factor == 0, f"width {width} does not split over {self._ctx.w_factor} devices"
         if self._bn_host is None:
             replicated = (None,)
             mean = tensor.to_torch(self.bn_running_mean.data, mesh_axes=replicated).float()
@@ -217,6 +223,8 @@ class Flux2VaeDecoder(Module):
         z = z.reshape(z.shape[0], height // p, width // p, -1, p, p).permute(0, 1, 4, 2, 5, 3)
         # In bfloat16 already, since from_torch converts other dtypes on the device, at a program per shape.
         z = z.reshape(z.shape[0], height, width, -1).to(torch.bfloat16)
+        pad_h, pad_w = -height % self._ctx.h_factor, -width % self._ctx.w_factor
+        z = torch.nn.functional.pad(z, (0, 0, 0, pad_w, 0, pad_h))
         # Row major: the decoder flattens it before tilizing (see forward).
         return tensor.from_torch(
             z,
@@ -225,8 +233,37 @@ class Flux2VaeDecoder(Module):
             mesh_axes=(None, self._ctx.h_mesh_axis, self._ctx.w_mesh_axis, None),
         )
 
+    def padding_masks(self, *, height: int, width: int) -> tuple[ttnn.Tensor, ...] | None:
+        """For latents of size `height` x `width` that `preprocess_and_unpatchify` extends to split over the
+        devices, the masks of the real pixels at each resolution, from the latent's to the image's: per device
+        [1, 1, H * W, 1] with the local (H, W), one where the pixel is in the image and zero in the padding (see
+        `zero_padding`). None where nothing is extended."""
+        h_factor, w_factor = self._ctx.h_factor, self._ctx.w_factor
+        padded_h, padded_w = -(-height // h_factor) * h_factor, -(-width // w_factor) * w_factor
+        if (padded_h, padded_w) == (height, width):
+            return None
+        masks = []
+        for level in range(len(self.up_blocks)):
+            scale = 2**level
+            rows = torch.arange(padded_h * scale) < height * scale
+            cols = torch.arange(padded_w * scale) < width * scale
+            image = (rows[:, None] & cols[None, :]).to(torch.bfloat16)
+            local_h, local_w = padded_h * scale // h_factor, padded_w * scale // w_factor
+            # [h_factor, w_factor, local H * local W, 1]: each device's block of the image, flattened.
+            blocks = image.reshape(h_factor, local_h, w_factor, local_w).permute(0, 2, 1, 3)
+            blocks = blocks.reshape(h_factor, w_factor, local_h * local_w, 1)
+            # Tilized on the host: on the device it would be a program per size.
+            host = tensor.from_torch(
+                blocks,
+                device=self._ctx.device,
+                mesh_axes=(self._ctx.h_mesh_axis, self._ctx.w_mesh_axis, None, None),
+                on_host=True,
+            )
+            masks.append(ttnn.to_device(host, self._ctx.device))
+        return tuple(masks)
+
     @traced_function(device=lambda self: self._ctx.device, clone_prep_inputs=False)
-    def forward(self, z: ttnn.Tensor, /) -> ttnn.Tensor:
+    def forward(self, z: ttnn.Tensor, /, masks: tuple[ttnn.Tensor, ...] | None = None) -> ttnn.Tensor:
         # Input arrives from preprocess_and_unpatchify in row major, [N, H, W, C] split over the H and
         # W axes where the VAE has them. The tiled activations stay flat, [N, 1, H * W, C], and are
         # made 4D only in row major (see VaeConv2d.forward): a tiled reshape between the two moves data
@@ -238,14 +275,18 @@ class Flux2VaeDecoder(Module):
         # post_quant_conv is a per-position Linear, and the conv pyramid below exchanges halos.
         z = self.post_quant_conv.forward(z)
 
-        z = self.conv_in.forward(z, hw)
-        z = self.mid_block.forward(z, hw)
+        # `masks` (see padding_masks): one per resolution, for the padding past the image's edge.
+        mask = (lambda level: masks[level]) if masks is not None else (lambda level: None)
 
-        for block in self.up_blocks:
-            z = block.forward(z, hw)
+        z = self.conv_in.forward(zero_padding(z, mask(0)), hw)
+        z = self.mid_block.forward(z, hw, mask(0))
+
+        for level, block in enumerate(self.up_blocks):
+            z = block.forward(z, hw, mask(level))
             hw = block.output_hw(hw)
 
-        z = self.conv_norm_out.forward(z)
+        z = self.conv_norm_out.forward(zero_padding(z, mask(len(self.up_blocks) - 1)))
+        z = zero_padding(z, mask(len(self.up_blocks) - 1))
 
         if self._ctx.ccl_manager is not None and self._ctx.tp_axis is not None:
             z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)

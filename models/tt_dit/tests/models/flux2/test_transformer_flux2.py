@@ -225,8 +225,18 @@ def test_transformer(
         prompt_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=prompt_rope_mesh_axes
     )
     tt_combined_rope = (
-        ttnn.concat([tt_spatial_rope_cos, tt_prompt_rope_cos], dim=2),
-        ttnn.concat([tt_spatial_rope_sin, tt_prompt_rope_sin], dim=2),
+        ttnn.concat(
+            [tt_prompt_rope_cos, tt_spatial_rope_cos]
+            if tt_model.prompt_first
+            else [tt_spatial_rope_cos, tt_prompt_rope_cos],
+            dim=2,
+        ),
+        ttnn.concat(
+            [tt_prompt_rope_sin, tt_spatial_rope_sin]
+            if tt_model.prompt_first
+            else [tt_spatial_rope_sin, tt_prompt_rope_sin],
+            dim=2,
+        ),
     )
 
     logger.info("running Torch model...")
@@ -414,8 +424,18 @@ def test_transformer_profile(
         prompt_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=prompt_rope_mesh_axes
     )
     tt_combined_rope = (
-        ttnn.concat([tt_spatial_rope_cos, tt_prompt_rope_cos], dim=2),
-        ttnn.concat([tt_spatial_rope_sin, tt_prompt_rope_sin], dim=2),
+        ttnn.concat(
+            [tt_prompt_rope_cos, tt_spatial_rope_cos]
+            if tt_model.prompt_first
+            else [tt_spatial_rope_cos, tt_prompt_rope_cos],
+            dim=2,
+        ),
+        ttnn.concat(
+            [tt_prompt_rope_sin, tt_spatial_rope_sin]
+            if tt_model.prompt_first
+            else [tt_spatial_rope_sin, tt_prompt_rope_sin],
+            dim=2,
+        ),
     )
 
     # warmup
