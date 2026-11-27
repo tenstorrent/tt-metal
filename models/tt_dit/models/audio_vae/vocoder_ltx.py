@@ -408,12 +408,9 @@ class Vocoder(Module):
         return self._device_to_host(self._forward_device(self._upload_BCT(x_BCT)))
 
     def c12_trace_key(self, shape):
-        identity = getattr(self, "c12_identity", None)
-        if identity is None:
-            return tuple(shape)
         from ...utils.c12 import trace_key
 
-        return trace_key(shape, identity)
+        return trace_key(shape, getattr(self, "c12_identity", None))
 
     def forward_BCT_traced(self, x_BCT: torch.Tensor) -> torch.Tensor:
         """:meth:`forward_BCT` with the device graph captured and replayed.
