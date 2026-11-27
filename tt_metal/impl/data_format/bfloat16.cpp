@@ -7,6 +7,7 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <vector>
 
@@ -176,39 +177,81 @@ std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
 
 // Equality functions
 bool equal_within_n_sig_figs(float a, float b, int n) {
-    std::string str_a = std::to_string(a);
-    std::string str_b = std::to_string(b);
+    TT_FATAL(
+        n >= 1 && n <= std::numeric_limits<float>::max_digits10,
+        "n must be between 1 and {}, got {}",
+        std::numeric_limits<float>::max_digits10,
+        n);
 
-    // Iterate until no more zeroes
-    int i = 0;
-    while (i < std::min(str_a.size(), str_b.size()) and (str_a.at(i) == '0' or str_a.at(i) == '.')) {
-        i++;
+    if (std::isnan(a) || std::isnan(b)) {
+        return std::isnan(a) && std::isnan(b);
+    }
+    if (!std::isfinite(a) || !std::isfinite(b)) {
+        return a == b;
+    }
+    if (a == b) {
+        return true;
+    }
+    if (std::signbit(a) != std::signbit(b) || a == 0.0f || b == 0.0f) {
+        return false;
     }
 
-    // Compare sig figs
-    int num_correct_sig_figs = 0;
-    for (; i < std::min(str_a.size(), str_b.size()); i++) {
-        char cur_char = str_a.at(i);
+    const auto leading_digits = [n](float value) {
+        const double magnitude = std::fabs(static_cast<double>(value));
+        const double decade = std::floor(std::log10(magnitude));
+        const double normalized = magnitude / std::pow(10.0, decade);
+        return static_cast<std::uint64_t>(normalized * std::pow(10.0, n - 1));
+    };
 
-        if (cur_char == str_b.at(i)) {
-            if (cur_char != '.') {  // Ignore decimal point
-                num_correct_sig_figs++;
-            }
-        } else {
-            std::cout << "Floats being compared: A: " << a << ", B: " << b << std::endl;
-            return false;
-        }
+    const double decade_a = std::floor(std::log10(std::fabs(static_cast<double>(a))));
+    const double decade_b = std::floor(std::log10(std::fabs(static_cast<double>(b))));
+    return decade_a == decade_b && leading_digits(a) == leading_digits(b);
+}
 
-        if (num_correct_sig_figs == n) {
-            break;
-        }
+bool is_within_n_sig_figs(float a, float b, int n) {
+    TT_FATAL(
+        n >= 1 && n <= std::numeric_limits<float>::max_digits10,
+        "n must be between 1 and {}, got {}",
+        std::numeric_limits<float>::max_digits10,
+        n);
+
+    // NaN has no significant figures, but two NaN results are the same outcome.
+    if (std::isnan(a) && std::isnan(b)) {
+        return true;
+    }
+    if (!std::isfinite(a) || !std::isfinite(b)) {
+        return a == b;
     }
 
-    return true;
-};
+    const double abs_a = std::fabs(static_cast<double>(a));
+    const double abs_b = std::fabs(static_cast<double>(b));
+    const double scale = std::max(abs_a, abs_b);
+    const double diff = std::fabs(static_cast<double>(a) - static_cast<double>(b));
+
+    // log10(0) is undefined. Both zeros agree. For n >= 1 the decade tolerance
+    // is smaller than any non-zero magnitude, so zero matches only zero.
+    if (scale == 0.0) {
+        return true;
+    }
+
+    // The float32 rounding of 1e-23 is 0x19416d9a. Its log10 is 7.82e-11 below
+    // -23. A nudge of 1e-10 steps into the next decade and widens the tolerance
+    // by 10x. 1e-12 sits above double log10 error (~1e-15) and below that gap.
+    constexpr double kLog10TieEpsilon = 1e-12;
+    const double decade = std::floor(std::log10(scale) + kLog10TieEpsilon);
+    const double tolerance = 0.5 * std::pow(10.0, decade - static_cast<double>(n) + 1.0);
+    return diff <= tolerance;
+}
 
 // this follows the implementation of numpy's is_close
 bool is_close(float a, float b, float rtol, float atol) {
+    if (a == b) {
+        return true;
+    }
+    if (!std::isfinite(a) || !std::isfinite(b)) {
+        return false;
+    }
+
     // the idea is near zero we want absolute tolerance since relative doesn't make sense
     // (consider 1e-6f and 1.1e-6f)
     // elsewhere (not near zero) we want relative tolerance
