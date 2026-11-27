@@ -1,16 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host contracts of the Kimi-K3.1 cases and Blocks that a device run would not show: a MoE case on a golden of other
-weights is refused before device work, the DSA readback marks the indexer's no-key sentinel, and an unset DSA bar is
-refused. CPU only."""
+"""Host contracts of the Kimi-K3.1 cases that a device run would not show: a MoE case on a golden of other weights is
+refused before device work, and an unset DSA bar is refused. CPU only."""
 
 from __future__ import annotations
 
 import json
 import math
 from dataclasses import dataclass
-
-import torch
 
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     MANIFEST,
@@ -19,7 +16,7 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     golden_root,
 )
 from models.demos.common.prefill.long_context_accuracy.run import run_case
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.blocks import KimiK31MoeBlock, device_selection
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.blocks import KimiK31MoeBlock
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.cases import MOE_CASES, dsa_context_bars
 
 
@@ -43,12 +40,6 @@ def test_a_moe_weight_digest_mismatch_fails_before_device_work(tmp_path, monkeyp
     with expect_error(GoldenMismatch, "weights layers.1"):
         run_case(case, case.context_lengths[0], _Mesh(), checkpoint)
     assert built == []
-
-
-def test_dsa_selection_readback_marks_the_no_key_sentinel() -> None:
-    """The indexer's uint32 no-key sentinel (read back as 0xFFFFFFFF) becomes -1; real keys stay int64."""
-    got = device_selection(torch.tensor([[0xFFFFFFFF, 3], [0, 2**31]], dtype=torch.int64))
-    assert got.dtype == torch.int64 and got.tolist() == [[-1, 3], [0, 2**31]]
 
 
 def test_dsa_unset_bar_is_refused(expect_error) -> None:

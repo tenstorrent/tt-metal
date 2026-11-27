@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """The golden registry on tiny goldens in a temporary root, where a run would not show an error: the identity check
-(``Fp64Golden.require``: a golden from another producer, version, model or weights is refused) and the reader's open
+(``Fp64Golden.require``: a golden from another producer, version, model or weights is refused), a producer's resume
+(``start_or_resume``: another run's directory is refused; each session records its provenance) and the reader's open
 files (a leak passes on a host with a high open-file limit). CPU only, no device."""
 
 import os
@@ -16,6 +17,7 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     open_golden,
     product_schema,
     read_slices,
+    start_or_resume,
     write_manifest,
     write_token_ids,
 )
@@ -65,6 +67,15 @@ def test_require_checks_the_weights_a_consumer_loaded_against_the_golden_s(tmp_p
             producer="tests.tiny", producer_version=1, weights_sha256={"layers.0": "dd" * 32, "x": "ee" * 32}
         )
     assert "weights x are eeeeeeeeeeee..., the golden's None..." in str(raised.value)
+
+
+def test_start_or_resume_records_the_session_and_refuses_a_different_run(tmp_path: Path, expect_error) -> None:
+    """A resumed golden continues only the run its directory holds (its segments would otherwise be another prompt's
+    or not bit-reproducible, which the teacher-fed cases cannot see); each session records what fixes its last bits."""
+    manifest = start_or_resume(tmp_path, {"identity": "a", "segment": 4}, TOKENS, 3)
+    assert {"first_segment", "code_revision", "torch", "cpu_capability", "machine"} <= set(manifest["sessions"][0])
+    with expect_error(ValueError, "mismatched fields: \\['identity'\\]"):
+        start_or_resume(tmp_path, {"identity": "b", "segment": 4}, TOKENS, 3)
 
 
 def test_read_slices_closes_every_file_it_opens(tmp_path: Path) -> None:
