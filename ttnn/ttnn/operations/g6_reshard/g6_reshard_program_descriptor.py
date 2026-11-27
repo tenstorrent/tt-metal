@@ -11,6 +11,7 @@ enumerating the pieces on device from the two placements' geometry.
 
 from __future__ import annotations
 
+import collections
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,7 +44,10 @@ ISSUER_SLOTS = (
 #                that already carries the other issuers' wrapped traffic, so the
 #                choice is all-or-nothing. Two issuers sharing a NoC needs dynamic
 #                NoC mode.
-NOC_POLICY = "wrap_free"
+#   "balanced":  starts from "wrap_free", then moves single issuers between NoCs
+#                while that lowers the busiest directed link (NIU ports included)
+#                of a dimension-order route model over the device's core coordinates.
+NOC_POLICY = "balanced"
 
 # Common RT arg slots, rewritten on every call (both buffers are lockstep-allocated:
 # one address serves every core).
@@ -141,7 +145,7 @@ def choose_nocs(roles, in_p, policy):
     defaults = [[ISSUER_SLOTS[k][1] for k in range(len(role["issuers"]))] for role in roles]
     if policy == "fixed":
         return defaults
-    if policy != "wrap_free":
+    if policy not in ("wrap_free", "balanced"):
         raise ValueError(f"g6_reshard: unknown NoC policy {policy!r}")
     all_free = [True, True]
     for role in roles:
@@ -154,6 +158,95 @@ def choose_nocs(roles, in_p, policy):
         return defaults
     shared = 0 if all_free[0] else 1
     return [[shared] * len(role["issuers"]) for role in roles]
+
+
+# NoC torus extent (columns, rows) in NoC coordinates, per architecture.
+NOC_GRID = {"BLACKHOLE": (17, 12), "WORMHOLE_B0": (10, 12)}
+
+
+def _route_links(noc, src, dst, grid):
+    """Directed links a read's data crosses from src to dst: NoC0 +x then +y, NoC1 -y then -x."""
+    cols, rows = grid
+    x, y = src
+    links = [("egress", noc, src)]
+    if noc == 0:
+        while x != dst[0]:
+            nx = (x + 1) % cols
+            links.append((noc, x, y, nx, y))
+            x = nx
+        while y != dst[1]:
+            ny = (y + 1) % rows
+            links.append((noc, x, y, x, ny))
+            y = ny
+    else:
+        while y != dst[1]:
+            ny = (y - 1) % rows
+            links.append((noc, x, y, x, ny))
+            y = ny
+        while x != dst[0]:
+            nx = (x - 1) % cols
+            links.append((noc, x, y, nx, y))
+            x = nx
+    links.append(("ingress", noc, dst))
+    return links
+
+
+def balance_nocs(roles, in_p, nocs, device, max_passes=16):
+    """Greedy single-issuer NoC moves that lower (busiest link, sum of squared link loads)."""
+    grid = NOC_GRID.get(str(device.arch()).split(".")[-1])
+    if grid is None:
+        return nocs
+    coord_cache = {}
+
+    def noc_xy(core):
+        if core not in coord_cache:
+            v = device.worker_core_from_logical_core(ttnn.CoreCoord(*core))
+            coord_cache[core] = (v.x, v.y)
+        return coord_cache[core]
+
+    # Per issuer, for each NoC: the (link, tiles) it adds.
+    contrib = []
+    for role in roles:
+        dst = noc_xy(role["core"])
+        for issuer in role["issuers"]:
+            per_noc = []
+            for noc in (0, 1):
+                acc = collections.Counter()
+                for ri, ci, piece_rows, piece_width in issuer["piece_list"]:
+                    for link in _route_links(noc, noc_xy(in_p.core_of(ri, ci)), dst, grid):
+                        acc[link] += piece_rows * piece_width
+                per_noc.append(acc)
+            contrib.append(per_noc)
+
+    flat = [noc for row in nocs for noc in row]
+    load = collections.Counter()
+    for k, noc in enumerate(flat):
+        load.update(contrib[k][noc])
+
+    def score():
+        return max(load.values(), default=0), sum(v * v for v in load.values())
+
+    best = score()
+    for _ in range(max_passes):
+        improved = False
+        for k in range(len(flat)):
+            old, new = flat[k], 1 - flat[k]
+            load.subtract(contrib[k][old])
+            load.update(contrib[k][new])
+            candidate = score()
+            if candidate < best:
+                best, flat[k], improved = candidate, new, True
+            else:
+                load.subtract(contrib[k][new])
+                load.update(contrib[k][old])
+        if not improved:
+            break
+
+    out, k = [], 0
+    for row in nocs:
+        out.append(flat[k : k + len(row)])
+        k += len(row)
+    return out
 
 
 def describe_plan(input_tensor, memory_config):
@@ -188,8 +281,11 @@ def describe_plan(input_tensor, memory_config):
                     "issuers": issuers,
                 }
             )
-    for role, nocs in zip(roles, choose_nocs(roles, in_p, NOC_POLICY)):
-        for issuer, noc in zip(role["issuers"], nocs):
+    nocs = choose_nocs(roles, in_p, NOC_POLICY)
+    if NOC_POLICY == "balanced":
+        nocs = balance_nocs(roles, in_p, nocs, input_tensor.device())
+    for role, role_nocs in zip(roles, nocs):
+        for issuer, noc in zip(role["issuers"], role_nocs):
             issuer["noc"] = noc
             del issuer["piece_list"]
     return {

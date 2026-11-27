@@ -21,6 +21,7 @@ SETTINGS = {
     "fixed2": {"NOC_POLICY": "fixed", "ISSUERS_PER_CORE": 2},
     "wrapfree2": {"NOC_POLICY": "wrap_free", "ISSUERS_PER_CORE": 2},
     "wrapfree1": {"NOC_POLICY": "wrap_free", "ISSUERS_PER_CORE": 1},
+    "balanced2": {"NOC_POLICY": "balanced", "ISSUERS_PER_CORE": 2},
 }
 
 
