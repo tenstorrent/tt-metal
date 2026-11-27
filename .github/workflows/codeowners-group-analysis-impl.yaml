@@ -244,10 +244,13 @@ jobs:
         (github.event_name == 'workflow_run' && needs.checkbox-gate.outputs.should-run == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # One run per PR at a time: the summary rewrite carries the ping record forward from the comment it read, so an
+    # overlapping run could drop an entry another run had just appended.
     concurrency:
       group: >-
         codeowners-${{ github.event_name == 'workflow_run'
-        && format('checkbox-{0}', needs.checkbox-gate.outputs.pr-number)
+        && format('pr-{0}', needs.checkbox-gate.outputs.pr-number)
+        || github.event_name == 'issue_comment' && format('pr-{0}', github.event.issue.number)
         || github.run_id }}
       cancel-in-progress: false
     permissions:
@@ -1440,6 +1443,15 @@ jobs:
           # Most recent comment with our marker, posted by us or the old PAT user.
           EXISTING_COMMENT_ID=$(echo "$ALL_COMMENTS" | jq -r '[.[] | select((.user.login == "github-actions[bot]" or .user.login == "tenstorrent-github-bot") and (.body | contains("CodeOwners-Workflow-Bot")))] | sort_by(.created_at) | reverse | .[0].id')
 
+          # The summary is regenerated from scratch, so copy the hidden
+          # codeowners-ping-record block across from the comment it replaces.
+          if [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
+            OLD_COMMENT_FILE=$(mktemp)
+            echo "$ALL_COMMENTS" | jq -r --argjson id "$EXISTING_COMMENT_ID" '.[] | select(.id == $id) | .body' > "$OLD_COMMENT_FILE"
+            python3 .github/scripts/codeowners_ping_record.py carry "$RUNNER_TEMP/codeowners_comment.md" "$OLD_COMMENT_FILE"
+            rm -f "$OLD_COMMENT_FILE"
+          fi
+
           # Use jq to properly escape the comment for JSON (use temp file for large comments)
           TEMP_JSON_FILE=$(mktemp)
           jq -n --rawfile body "$RUNNER_TEMP/codeowners_comment.md" '{"body": $body}' > "$TEMP_JSON_FILE"
@@ -2123,6 +2135,8 @@ jobs:
           SLACK_USERS_FILE: ${{ runner.temp }}/slack_users.json
           SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
           GITHUB_TOKEN: ${{ steps.vault2.outputs.token }}
+          # Per-rule record of this selection; appended to the PR once Slack accepts the ping.
+          PING_RECORD_FILE: ${{ runner.temp }}/ping_record.json
         run: |
           python3 .github/scripts/select_owners_to_ping.py
 
@@ -2622,6 +2636,14 @@ jobs:
               echo "✅ Successfully sent Slack notification to channel $SLACK_CHANNEL (message ts: $SLACK_TS)"
               echo "📋 Notified users: $SELECTED_OWNERS"
               echo "📋 Notified groups: $SELECTED_SLACK_GROUPS"
+
+              # Record who was pinged in a hidden block on the CodeOwners bot
+              # comment, for the follow-up reminder. Best effort: never fails the step.
+              PR_NUMBER="$PR_NUMBER" \
+              PING_RECORD_FILE="${RUNNER_TEMP}/ping_record.json" \
+              GITHUB_TOKEN="${{ github.token }}" \
+              GITHUB_REPOSITORY="${{ github.repository }}" \
+                python3 .github/scripts/codeowners_ping_record.py append || true
             else
               SLACK_ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "Unknown error"')
               echo "❌ Failed to send Slack notification: $SLACK_ERROR"
