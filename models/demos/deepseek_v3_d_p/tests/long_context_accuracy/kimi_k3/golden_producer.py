@@ -16,7 +16,11 @@ long each took, the products, and, once complete, the token floor for per-token 
 
 The manifest's ``producer`` is ``PRODUCER``, ``models.demos.deepseek_v3_d_p.tests.kda.long_context_golden``: this
 module's path when it wrote the registered golden ``k3-l0-kda-fp64-1m`` (version 1). It names the producer's
-numerics, not where the module lives now, so it stays unchanged while the bytes do; the reader requires it.
+numerics, not where the module lives now, so it stays unchanged while the bytes do; the reader requires it. That
+golden was written before the registry existed and registered by rewriting its manifest (``manifest.orig.json`` holds
+the original), so its manifest differs from what this module writes in form only: its ``identity.revision`` is the
+code revision this module records per run session (``sessions[].code_revision``), the registry added ``migration``,
+and its segment entries carry the old producer's ``index`` and ``decay`` statistics.
 
 Example (Kimi-K3 ``layers.0`` on the code tokens of a vLLM trace, written straight into the registry as golden
 ``k3-l0-kda-fp64-1m``; ``--segments N`` stops after N segments, and a later run resumes)::

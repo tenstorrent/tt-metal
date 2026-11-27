@@ -36,24 +36,23 @@ from pathlib import Path
 import torch
 
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden, open_golden
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer import (  # noqa: F401
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer import (
     DSA_LAYER,
+    KEYS,
     MOE_LAYERS,
     PRODUCER,
     PRODUCER_VERSION,
+    SAMPLED,
     checkpoint_tensors,
 )
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer import (
     layer_weight_names as chain_weight_names,
 )
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer import (  # noqa: F401
-    tensor_digest,
-)
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer import tensor_digest
 
 K31_CHAIN_1M = "k31-l0-3-fp64-1m"  # layers 0-3 over the vLLM K3.1-Pro 1M prompt (1,044,480 rows)
 MODEL = "Kimi-K3.1"
-STATE_ROW_PRODUCTS = ("latent", "kpe", "index_key")  # per-row products held in the state files, under "keys"
-SAMPLED_PRODUCTS = ("sampled_rows", "attn_output_3")
 
 
 class KimiK31ChainGolden(Fp64Golden):
@@ -71,8 +70,8 @@ class KimiK31ChainGolden(Fp64Golden):
 
     def _read_rows(self, names: list[str], start: int, end: int) -> dict[str, torch.Tensor]:
         segment = self.manifest["segment"]
-        in_state = [n for n in names if n in STATE_ROW_PRODUCTS]
-        in_segment = [n for n in names if n not in STATE_ROW_PRODUCTS]
+        in_state = [n for n in names if n in KEYS]
+        in_segment = [n for n in names if n not in KEYS]
         parts: dict[str, list[torch.Tensor]] = {n: [] for n in names}
         for index in range(start // segment, -(-end // segment)):
             lo = index * segment
@@ -95,8 +94,8 @@ class KimiK31ChainGolden(Fp64Golden):
         for index in range(-(-end // self.manifest["segment"])):
             data = torch.load(self.segment_file(index), weights_only=True, mmap=True)
             keep = data["sampled_rows"] < end
-            parts.append({k: data[k][keep] for k in SAMPLED_PRODUCTS})
-        return {k: torch.cat([p[k] for p in parts]) for k in SAMPLED_PRODUCTS}
+            parts.append({k: data[k][keep] for k in SAMPLED})
+        return {k: torch.cat([p[k] for p in parts]) for k in SAMPLED}
 
 
 def open_k31_chain(golden_id: str = K31_CHAIN_1M, root: Path | None = None) -> KimiK31ChainGolden:
@@ -113,8 +112,6 @@ def layer_weight_names(checkpoint: Path, layer: int) -> list[str]:
     config) or DSA layer ``DSA_LAYER``. Layer 0 (dense FFN) is not supported."""
     if layer not in (*MOE_LAYERS, DSA_LAYER):
         raise ValueError(f"layer_weights reads MoE layers {MOE_LAYERS} or DSA layer {DSA_LAYER}, not layer {layer}")
-    from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-
     config = (
         None
         if layer == DSA_LAYER

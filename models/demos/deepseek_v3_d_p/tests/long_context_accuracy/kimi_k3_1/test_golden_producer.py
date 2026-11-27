@@ -650,6 +650,3 @@ def test_chain_model_reads_each_checkpoint_tensor_into_its_slot(tmp_path: Path):
         "layers.1.experts",
         "layers.2.experts",
     }
-
-
-# --- teacher feeds from the FP64 chain (moe_teacher_feed.py / dsa_teacher_feed.py with --chain) ---------------------
