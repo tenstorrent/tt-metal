@@ -56,23 +56,12 @@ from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 MODES = ("untraced", "traced")
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced), run as the CI jobs run them (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest
-# process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox, Galaxy and Galaxy 4x4: CI
-# hosts; Galaxy and Galaxy 4x4 then scaled by the q-in-L1 change's measured speedup (3 interleaved runs each of main and
-# the change on one Galaxy; ratios under 1% left unapplied), LoudBox by Galaxy's (same 160 q rows per chip, not
-# measured). Then re-centred on CI runs after that change: each value is the mean over runs of that run's measurement
-# (fastest untraced sample, traced replay). Galaxy 8x4 K3.1 warm and GLM-5.3: 2-3 runs; Galaxy 4x4 K3.1 warm and
-# LoudBox K3.1: 1 run; deltas under 1% left as is. Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled
-# Galaxy (3 runs), unscaled. Galaxy 8x4 GLM-5.3: re-measured with the stage cases on a CI host (1 run). LoudBox
-# GLM-5.3 (both cases): first measured on CI LoudBoxes (6 processes on 3 hosts, 10 readings per value with in-process
-# repeats): the mean of the readings, every reading within the band; one warm untraced reading (+18%, a third repeat in
-# one process, traced replay normal) left out. Galaxy 8x4 then scaled by the L1-activation / sharded-norm change's
-# measured speedup (2 runs of main, 3 of the change, on one Galaxy; ratios under 1% left unapplied); the change's CI run
-# (1 run) was within 2% of those. Galaxy 4x4 and LoudBox re-measured on the change's CI runs (1 run each; LoudBox
-# GLM-5.3 deltas under 1% left as is).
+# process per model). Each value is the mean over runs of that run's measurement: the fastest untraced sample, the
+# traced replay. Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled Galaxy.
 _TARGETS_MS = {
     "Galaxy": {
         "kimi_k3_1": (2.88, 2.53, 6.34, 6.09),
-        "glm_5_3": (3.13, 2.63, 6.73, 6.32),
+        "glm_5_3": (3.06, 2.55, 6.61, 6.21),
         "glm_5_3-no_indexer": (2.24, 1.83, 2.26, 1.89),
     },
     "Galaxy 4x4": {
