@@ -140,12 +140,9 @@ def test_run_rejects_a_different_program(device, expect_error):
 @pytest.mark.parametrize("bottom_up", [False, True])
 def test_run_from_kernel_config_buffer(device, bottom_up):
     data, input_tensor, output_tensor = make_io(device)
-    io_tensors = [input_tensor, output_tensor]
-    cb = plain_cb()
-    if bottom_up:
-        # A bottom-up buffer takes the bottom of L1, where static CBs go, so the CB must live in an L1 tensor.
-        cb, cb_tensor = l1_backed_cb(device)
-        io_tensors = [input_tensor, cb_tensor, output_tensor]
+    # A bottom-up buffer takes the bottom of L1, where static CBs go, so the CB lives in an L1 tensor.
+    cb, cb_tensor = l1_backed_cb(device)
+    io_tensors = [input_tensor, cb_tensor, output_tensor]
     descriptor = copy_descriptor(input_tensor, output_tensor, cb)
     compiled = ttnn.experimental.compile_generic_op(io_tensors, descriptor)
     buffer = ttnn.experimental.create_kernel_config_buffer(device, compiled, bottom_up=bottom_up)
