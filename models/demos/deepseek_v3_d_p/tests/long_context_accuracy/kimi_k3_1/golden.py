@@ -51,7 +51,8 @@ from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_p
 )
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer import tensor_digest
 
-K31_CHAIN_1M = "k31-l0-3-fp64-1m"  # layers 0-3 over the vLLM K3.1-Pro 1M prompt (1,044,480 rows)
+# Layers 0-3 over the 1,044,480 prompt tokens of the GPU (vLLM) trace kimi_k31_pro_1m_conv2_l24.
+K31_CHAIN_1M = "kimi_k31_pro_1m_cpu_fp64_l0-3"
 MODEL = "Kimi-K3.1"
 
 

@@ -20,28 +20,29 @@ run resumes bit-identical to an uninterrupted one.
 long each took, the products, and, once complete, the token floor for per-token NRMSE.
 
 The manifest's ``producer`` is ``PRODUCER``, ``models.demos.deepseek_v3_d_p.tests.kda.long_context_golden``: this
-module's path when it wrote golden ``k3-l0-kda-fp64-1m`` (version 1, products stored FP64). It names the producer's
-numerics, not where the module lives now, so it stays unchanged while the bytes do; the reader requires it with
-``PRODUCER_VERSION`` (2: products stored FP32). The registered golden ``K3_LAYER0_GOLDEN``
-(``k3-l0-kda-fp64-stored-fp32-1m``) is ``k3-l0-kda-fp64-1m`` converted by ``convert_to_fp32_storage``, a pure cast;
-its manifest's ``conversion`` names the source and the source manifest's digest. The source was written before the
-registry existed and registered by rewriting its manifest (``manifest.orig.json`` holds the original), so both
-manifests differ from what this module writes in form only: ``identity.revision`` is the code revision this module
-records per run session (``sessions[].code_revision``), the registry added ``migration``, and the segment entries carry
-the old producer's ``index`` and ``decay`` statistics.
+module's path when it wrote the first K3 golden (version 1, products stored FP64). It names the producer's numerics, not
+where the module lives now, so it stays unchanged while the bytes do; the reader requires it with ``PRODUCER_VERSION``
+(2: products stored FP32). The registered golden ``K3_LAYER0_GOLDEN`` (``kimi_k3_code_debug_1m_cpu_fp64_l0_kda``) is
+that version-1 golden converted by ``convert_to_fp32_storage``, a pure cast; its manifest's ``conversion`` names the
+source and the source manifest's digest (the source was deleted once its conversion passed CI; its manifest is kept
+beside the golden's as ``manifest.orig.fp64-source.json``). The source was written before the registry existed and
+registered by rewriting its manifest (``manifest.orig.json`` holds the original), so the manifest differs from what this
+module writes in form only: ``identity.revision`` is the code revision this module records per run session
+(``sessions[].code_revision``), the registry added ``migration``, and the segment entries carry the old producer's
+``index`` and ``decay`` statistics.
 
 Example (Kimi-K3 ``layers.0`` on the code tokens of a vLLM trace, written straight into the registry;
 ``--segments N`` stops after N segments, and a later run resumes)::
 
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer \\
         --checkpoint $KIMI_K3_CKPT --tokens /path/to/vllm/trace --count 1044480 --segment 1024 --threads 32 \\
-        --out /mnt/weka/model-cache/scratch/accuracy-goldens/<golden id>
+        --out /mnt/weka/model-cache/scratch/accuracy-goldens/<trace>_cpu_fp64_l0_kda
 
 Converting a version-1 golden (refuses a destination that already holds a manifest)::
 
     python -m models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer convert \\
-        /mnt/weka/model-cache/scratch/accuracy-goldens/k3-l0-kda-fp64-1m \\
-        /mnt/weka/model-cache/scratch/accuracy-goldens/k3-l0-kda-fp64-stored-fp32-1m
+        /mnt/weka/model-cache/scratch/accuracy-goldens/<version-1 golden> \\
+        /mnt/weka/model-cache/scratch/accuracy-goldens/<destination golden>
 """
 
 from __future__ import annotations
@@ -69,6 +70,7 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     session_provenance,
     start_or_resume,
     token_ids_sha256,
+    trace_token_source,
     write_manifest,
 )
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import golden_floor
@@ -78,8 +80,8 @@ from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, 
 PRODUCER = "models.demos.deepseek_v3_d_p.tests.kda.long_context_golden"
 PRODUCER_VERSION = 2  # 1: products stored FP64; 2: computed FP64, products stored STORAGE_DTYPE
 STORAGE_DTYPE = torch.float32
-# Kimi-K3 layers.0 over the first 1,044,480 code tokens of the k3_4_layers_moe_kda_io vLLM trace.
-K3_LAYER0_GOLDEN = "k3-l0-kda-fp64-stored-fp32-1m"
+# Kimi-K3 layers.0 over the first 1,044,480 tokens of the k3_vllm_code_debug_1M vLLM trace.
+K3_LAYER0_GOLDEN = "kimi_k3_code_debug_1m_cpu_fp64_l0_kda"
 PRODUCER_MODULE = "models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer"  # (this file)
 
 
@@ -319,7 +321,7 @@ def main() -> None:
         "weights_sha256": kda_state_dict_sha256(weights),
         "input": FIRST_LAYER_INPUT,
         "input_weights_sha256": layer_input.weights_sha256(),
-        "token_source": f"vllm trace {trace.name}",
+        **trace_token_source(trace, args.count),
     }
     run_golden(
         run_dir=args.out,

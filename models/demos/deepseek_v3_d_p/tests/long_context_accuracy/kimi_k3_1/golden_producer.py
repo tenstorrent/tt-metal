@@ -29,9 +29,9 @@ resume is bit-identical to an uninterrupted run (same thread count). Per row, th
 The golden is written in the long-context golden registry's format (``common/prefill/long_context_accuracy/
 fp64_golden.py``; its id is its directory name); the reader is ``golden.py`` next to this file. The manifest's
 ``producer`` is ``PRODUCER``, ``fp64_chain`` (version 2): the name this chain had (``tests/kimi_k3/fp64_chain.py`` in
-draft PR #66789) when it wrote the registered golden ``k31-l0-3-fp64-1m``. It names the producer's numerics, not the
-module's location, so it stays while the bytes do; the reader requires it. That golden was written before the
-registry existed and registered by rewriting its manifest (``manifest.orig.json`` holds the original), so its
+draft PR #66789) when it wrote the registered golden ``kimi_k31_pro_1m_cpu_fp64_l0-3``. It names the producer's
+numerics, not the module's location, so it stays while the bytes do; the reader requires it. That golden was written
+before the registry existed and registered by rewriting its manifest (``manifest.orig.json`` holds the original), so its
 manifest differs from what this module writes in form only: ``count`` became ``rows``, ``model.weights_sha256`` moved
 to ``identity.weights_sha256``, and ``golden_id`` and ``products`` were added.
 
@@ -41,7 +41,8 @@ and FFN outputs, routing recall of layers 1-2 (and 3 on sampled rows, whose FFN 
 attention), layer 3 keys (PCC, NRMSE) and top-k recall. The results go into the manifest's segment entries.
 
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer \\
-        --trace T --count 1044480 --threads 32 --out /mnt/weka/model-cache/scratch/accuracy-goldens/k31-l0-3-fp64-1m
+        --trace /mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/golden/kimi_k31_pro_1m_conv2_l24 \\
+        --count 1044480 --threads 32 --out /mnt/weka/model-cache/scratch/accuracy-goldens/kimi_k31_pro_1m_cpu_fp64_l0-3
 
 ``--segments N`` stops after N segments; a later run resumes.
 """
@@ -69,6 +70,7 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     publish,
     start_or_resume,
     token_ids_sha256,
+    trace_token_source,
     write_manifest,
 )
 from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_hits, topk_recall
@@ -760,7 +762,7 @@ def main() -> None:
     identity = {
         "model": "Kimi-K3.1",
         "checkpoint": str(args.checkpoint),
-        "token_source": f"vllm trace {trace.path.name} metadata token_ids[:{count}]",
+        **trace_token_source(trace.path, count),
         "trace_commit": trace.metadata.get("trace_commit"),
     }
     run_chain(

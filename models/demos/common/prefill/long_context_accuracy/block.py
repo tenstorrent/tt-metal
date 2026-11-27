@@ -18,8 +18,8 @@ golden holds) is one more case from the model's case factory. A new kind touches
 
 1. Golden products: what the scorer and the block input read, written by the model's ``golden_producer.py``. A new
    or changed product means a new ``PRODUCER_VERSION`` (the model's ``Fp64Golden`` reader pins it, so goldens of the
-   old version no longer open) and a new golden id naming model, layers, FP64 and rows (``k31-l0-3-fp64-1m``), from
-   a producer run.
+   old version no longer open) and a new golden (id: its token trace, then ``_cpu_fp64_<layers>``, as
+   ``kimi_k31_pro_1m_cpu_fp64_l0-3``), from a producer run.
 2. A scorer, ``<kind>/scorer.py`` beside this file (``BlockScorer``; the smallest is ``FakeScorer`` in
    ``tests/test_run_case.py``). The case passes it the golden's product names and its window as constructor
    arguments. Windows are aligned to row 0 (``WindowedErrors.windows``); the per-row NRMSE floor is

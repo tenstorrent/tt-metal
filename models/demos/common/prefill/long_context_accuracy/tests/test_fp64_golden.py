@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The golden registry on tiny goldens in a temporary root, where a run would not show an error: the identity check
 (``Fp64Golden.require``: a golden from another producer, version, model or weights is refused), a producer's resume
-(``start_or_resume``: another run's directory is refused; each session records its provenance) and the reader's open
-files (a leak passes on a host with a high open-file limit). CPU only, no device."""
+(``start_or_resume``: another run's directory is refused; each session records its provenance), the reader's open
+files (a leak passes on a host with a high open-file limit) and a trace prompt's token source. CPU only, no device."""
 
 import os
 import resource
@@ -18,6 +18,7 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     product_schema,
     read_slices,
     start_or_resume,
+    trace_token_source,
     write_manifest,
     write_token_ids,
 )
@@ -94,3 +95,11 @@ def test_read_slices_closes_every_file_it_opens(tmp_path: Path) -> None:
     finally:
         resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
     assert len(os.listdir("/proc/self/fd")) <= open_now
+
+
+def test_trace_token_source_names_the_trace_the_count_and_its_metadata_digest(tmp_path: Path) -> None:
+    (tmp_path / "metadata.json").write_bytes(b"{}")
+    assert trace_token_source(tmp_path, 7) == {
+        "token_source": f"vllm trace {tmp_path} metadata token_ids[:7]",
+        "token_source_metadata_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",  # of {}
+    }

@@ -12,10 +12,12 @@ consumer needs them); ``open_golden(id, reader=...)`` returns it. Consumers read
 
 ``manifest.json`` fields every golden carries (a producer may add its own):
 
-* ``golden_id``: the directory name (a copied or renamed directory no longer matches);
+* ``golden_id``: the directory name (a copied or renamed directory no longer matches): the GPU trace the prompt's
+  tokens come from, then ``_cpu_fp64_<layers>`` (``kimi_k31_pro_1m_cpu_fp64_l0-3``);
 * ``producer``, ``producer_version``: the module that wrote it and the integer version of its numerics;
-* ``identity``: what the products depend on, at least ``model``, ``token_source`` (provenance of the prompt) and
-  ``weights_sha256``; a consumer compares the digests with what it loads itself;
+* ``identity``: what the products depend on, at least ``model``, ``token_source`` (provenance of the prompt;
+  ``trace_token_source`` for a trace's tokens) and ``weights_sha256``; a consumer compares the digests with what it
+  loads itself;
 * ``rows``: prompt rows covered; ``token_ids_sha256``: digest of the prompt's int64 token ids, which the golden
   holds in ``token_ids.pt``;
 * ``segment`` and ``segments``: the segment size and the complete segments, ``[{start, end, ...}]`` with segment
@@ -89,6 +91,16 @@ def golden_root() -> Path:
 
 def token_ids_sha256(token_ids: Sequence[int] | torch.Tensor) -> str:
     return hashlib.sha256(torch.as_tensor(token_ids, dtype=torch.int64).numpy().tobytes()).hexdigest()
+
+
+def trace_token_source(trace_dir: Path, count: int) -> dict[str, str]:
+    """The ``identity`` fields of a prompt that is the first ``count`` token ids of a vLLM trace's ``metadata.json``:
+    ``token_source`` (the trace directory and the count) and ``token_source_metadata_sha256`` (that file's digest)."""
+    metadata = Path(trace_dir).absolute() / "metadata.json"
+    return {
+        "token_source": f"vllm trace {metadata.parent} metadata token_ids[:{count}]",
+        "token_source_metadata_sha256": hashlib.sha256(metadata.read_bytes()).hexdigest(),
+    }
 
 
 def make_golden_dir(directory: Path) -> None:

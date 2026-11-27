@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Kimi-K3.1 long-context accuracy cases (``block.LongContextCase``) against the FP64 chain golden ``k31-l0-3-fp64-1m``
-(reader ``golden.KimiK31ChainGolden``), run by ``test_long_context_accuracy.py``: MoE layers 1 and 2 (``moe_case``) and
-DSA layer 3 (``DSA_CASE``).
+"""Kimi-K3.1 long-context accuracy cases (``block.LongContextCase``) against the FP64 chain golden
+``kimi_k31_pro_1m_cpu_fp64_l0-3`` (reader ``golden.KimiK31ChainGolden``), run by ``test_long_context_accuracy.py``: MoE
+layers 1 and 2 (``moe_case``) and DSA layer 3 (``DSA_CASE``).
 
 Every case runs its production device Block (``blocks.py``) on one 4x4 K3.1 stage (``K31_PLACEMENT``, a Galaxy tray
 half) in the stage's ``K31_CHUNK``-row chunks, teacher-fed from the chain's products. Identity: the digest of the
@@ -135,7 +135,7 @@ DSA_GOLDEN_NAMES = GoldenNames(
 )
 
 # Per-window maxima of the gated metrics (metric tier 1), per context length (rows; each a multiple of the 2560-row
-# chunk, so none ends in a zero-padded chunk). PROPOSED, pending the owner's decision (epic m06n): 1.25x the worst
+# chunk, so none ends in a zero-padded chunk). Approved by the owner 2026-11-27 (epic m06n): 1.25x the worst
 # window measured on main's production DSA (4x4-sp1), rounded up at two significant figures. Measured worst windows:
 #   5k:   sel_nrmse_median 0.00518, attn_nrmse 0.0280, attn_rms_err 5.68e-4 (one window, 49 scored rows)
 #   128k: sel_nrmse_median 0.0299,  attn_nrmse 0.0476, attn_rms_err 9.69e-4 (rows [98304, 114688) / [114688, 128000))
