@@ -31,6 +31,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.spec_accept import StepAccept, greedy_counts
 from models.demos.blackhole.qwen36.tt.spec_chain import ChainInputs, chain_overlay
+from models.demos.blackhole.qwen36.tt.spec_logprobs import payload_from_reads
 from models.demos.blackhole.qwen36.tt.spec_mask import normalise_rows, unconstrained
 from models.demos.blackhole.qwen36.tt.spec_sample import chained_sampling_plan, drawn_users, sampling_plan, with_draws
 from models.demos.blackhole.qwen36.tt.spec_step import (
@@ -98,7 +99,9 @@ class PendingVerify:
     ran (``num_valid``, ``active``, the fitted table ``pt`` and its width ``cap_blocks``), the slots whose drafts the
     runner withholds at that verify (``no_draft``) and its one-enqueue ``plan``. wait() reads once, on whichever thread
     first asks, and touches no engine state; result() returns the ids with columns past each row's valid drafts set to
-    PLACEHOLDER_TOKEN_ID, as a synchronous verify returns them."""
+    PLACEHOLDER_TOKEN_ID, as a synchronous verify returns them. A verify with ``logprobs`` also reads the logprobs
+    trace's outputs (spec_logprobs.VerifyLogprobs) after the ids and draws, and logprobs_result() returns its payload
+    for the ids wait() returns."""
 
     def __init__(
         self,
@@ -113,6 +116,7 @@ class PendingVerify:
         sample_plan=None,
         reads=None,
         rope_deltas=None,
+        logprobs=False,
     ):
         self.B, self.K, self.T = int(B), int(K), int(K) + 1
         # The slots' M-RoPE deltas the step ran with: a request released before its propose resets its slot's.
@@ -121,7 +125,8 @@ class PendingVerify:
         self.active = torch.as_tensor(active, dtype=torch.bool).reshape(-1).clone()
         self.pt, self.cap_blocks, self.no_draft = pt, cap_blocks, set(no_draft)
         self.plan, self.sample_plan, self.reads = plan, sample_plan, reads
-        self.ids = self.pack = self.drafts = None
+        self.logprobs = bool(logprobs)
+        self.ids = self.pack = self.drafts = self.payload = None
         # The block's tokens [B, T] (drafts in columns 1..K) and column-0 positions [B]: known at a host-staged verify,
         # filled by the predecessor's propose on a chained one.
         self.tokens = self.p0 = None
@@ -149,6 +154,9 @@ class PendingVerify:
                 if self.sample_plan is not None:
                     ids = with_draws(ids, host[1], self.sample_plan)
                     k = 2
+                if self.logprobs:
+                    self.payload = payload_from_reads(host[k : k + 3], ids, self.active, B, T)
+                    k += 3
                 if self.plan is not None:
                     self.pack = host[k].to(torch.int64)
                     steps = [r.reshape(-1)[:B].to(torch.int64) for r in host[k + 1 :]]
@@ -158,6 +166,13 @@ class PendingVerify:
 
     def result(self):
         return mask_unused_columns(self.wait(), self.num_valid).to(torch.int32)
+
+    def logprobs_result(self):
+        """The logprobs payload of the ids wait() returns: (sampled_logprobs float32 [B, T], selected_token_ranks int32
+        [B, T], top_logprobs float32 [B, T, N], top_token_ids int32 [B, T, N]), or None for a verify without
+        ``logprobs``."""
+        self.wait()
+        return self.payload
 
 
 @dataclass
@@ -1348,6 +1363,7 @@ class MTPSpecEngine:
         defer=False,
         predecessor=None,
         keep_pending=False,
+        logprobs=False,
         defer_sampling=False,
     ):
         """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block); slot_remap is applied after
@@ -1359,9 +1375,14 @@ class MTPSpecEngine:
         returns the device sampler's draws in place of its argmax ids (spec_sample). ``one_enqueue``: an argmax_ids
         verify may also run the device acceptance and the drafter (MTPBlockEngine); a narrow decode step, which the
         runner follows with a propose over positions it derives from its own request state, passes False.
+        ``logprobs`` (MTPBlockEngine, argmax_ids): the verify also computes the logprobs payload of its ids
+        (spec_logprobs) and returns a PendingVerify in ``argmax_ids`` whatever ``defer`` says (with ``defer_sampling``,
+        the DeferredVerify's, whose payload sample_deferred computes); its logprobs_result() is the payload.
         Returns VerifyResult."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
+        if logprobs and spec_mode != "argmax_ids":
+            raise ValueError(f"the logprobs payload is an argmax_ids verify's, not a {spec_mode!r} verify's")
         if defer_sampling and (spec_mode != "argmax_ids" or (sampling is not None) != (predecessor is not None)):
             raise ValueError(
                 "a verify with deferred sampling is an argmax_ids verify; a chained one takes its sampling parameters "
@@ -1380,6 +1401,7 @@ class MTPSpecEngine:
                 mamba_state,
                 sampling,
                 defer_sampling=defer_sampling,
+                logprobs=logprobs,
             )
         clean, start0, active = sanitize_verify_block(tokens, start_pos, num_valid_drafts, self.K)
         if clean.shape[0] != self.B:
@@ -1420,6 +1442,7 @@ class MTPSpecEngine:
             ),
             **({"defer": True} if defer and spec_mode == "argmax_ids" else {}),
             **({"keep_pending": True} if keep_pending else {}),
+            **({"logprobs": True} if logprobs else {}),
             **({"defer_sampling": True} if defer_sampling else {}),
         )
         if isinstance(ids, DeferredVerify):
@@ -2044,6 +2067,7 @@ class MTPBlockEngine(MTPSpecEngine):
             warm_positions=[0] * self.B,
             sample=self.sample_on_device,
             buckets=verify_buckets(self.B),
+            logprobs=True,
             mask=self.sample_on_device,
         )
 
@@ -2052,14 +2076,18 @@ class MTPBlockEngine(MTPSpecEngine):
         """Whether a verify can take a token mask (sample_deferred): the verify trace has its mask traces."""
         return self.captured and getattr(self.model, "_vfy_mask", None) is not None
 
-    def _verify_bucket(self, active, read_logits=False, sample_plan=None, drawn=None):
+    def _verify_bucket(self, active, read_logits=False, sample_plan=None, drawn=None, logprobs=False):
         """The verify row bucket a step over ``active`` rows replays (verify_bucket over the captured ones; with
         ``sample_plan``, or ``drawn`` True for a deferred verify whose draws are decided later, over those with a
-        sampler trace), or None for the B-user trace; counts the step in verify_bucket_steps."""
+        sampler trace; with ``logprobs`` over those with a logprobs trace), or None for the B-user trace; counts the step
+        in verify_bucket_steps."""
         traces = getattr(self.model, "_vfy_bucket_traces", None) or {}
         if sample_plan is not None or drawn:
             sampled = getattr(self.model, "_vfy_bucket_sample_traces", None) or {}
             traces = {b: t for b, t in traces.items() if b in sampled}
+        if logprobs:
+            with_logprobs = getattr(self.model, "_vfy_bucket_logprobs_traces", None) or {}
+            traces = {b: t for b, t in traces.items() if b in with_logprobs}
         users = self.B
         if traces and not read_logits:
             users = verify_bucket(traces, active.tolist(), self.B)
@@ -2262,6 +2290,7 @@ class MTPBlockEngine(MTPSpecEngine):
         one_enqueue=False,
         defer=False,
         keep_pending=False,
+        logprobs=False,
         defer_sampling=False,
     ):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j, every GDN layer on the blocks of
@@ -2275,7 +2304,12 @@ class MTPBlockEngine(MTPSpecEngine):
         decided before the verify (_one_enqueue_plan). ``defer`` (argmax_ids only): enqueue the reads without waiting
         and return a PendingVerify in place of the ids. ``keep_pending``: the verify continues an unread one whose
         propose is still to come (_materialize). ``defer_sampling`` (argmax_ids, no ``sample_plan``): enqueue the
-        verify trace only and return a DeferredVerify; sample_deferred enqueues the rest."""
+        verify trace only and return a DeferredVerify; sample_deferred enqueues the rest. ``logprobs`` (argmax_ids only):
+        also replay the logprobs trace (with ``defer_sampling``, at sample_deferred, after the mask and the sampler) and
+        read its outputs with the ids; the verify is then returned as a PendingVerify, as with ``defer``."""
+        if logprobs and read_logits:
+            raise ValueError("a logits verify carries no logprobs payload")
+        defer = defer or logprobs
         assert self.captured, "verify before capture"
         if mamba_state is None:
             raise ValueError("a verify on GDN state blocks needs mamba_state")
@@ -2328,7 +2362,9 @@ class MTPBlockEngine(MTPSpecEngine):
         )
         if sample_plan is not None:
             kw["sample_plan"] = sample_plan
-        bucket = self._verify_bucket(active, read_logits, sample_plan, drawn=defer_sampling)
+        if logprobs:
+            kw["logprobs"] = True
+        bucket = self._verify_bucket(active, read_logits, sample_plan, drawn=defer_sampling, logprobs=logprobs)
         if bucket is not None:
             kw["bucket"] = bucket
         plan = None
@@ -2346,11 +2382,14 @@ class MTPBlockEngine(MTPSpecEngine):
             plan=plan,
             sample_plan=sample_plan,
             rope_deltas=self._rope_deltas,
+            logprobs=logprobs,
         )
         step.tokens, step.p0 = tokens.clone(), torch.where(active, start_pos, 0)
         self._pending.append(step)
         if defer_sampling:
-            self.model.verify_enqueue(*args, post=False, **{k: v for k, v in kw.items() if k != "read_logits"})
+            # verify_enqueue_post replays the logprobs trace, after the draws.
+            later = ("read_logits", "logprobs")
+            self.model.verify_enqueue(*args, post=False, **{k: v for k, v in kw.items() if k not in later})
             if warm is not None:
                 warm()
             self._deferred = DeferredVerify(
@@ -2367,10 +2406,10 @@ class MTPBlockEngine(MTPSpecEngine):
         if plan is not None:
             self._verify_one_enqueue(args, kw, step, after_verify=warm)
             return (step if defer else step.result()), None
-        if defer and not read_logits and not self._timing:
+        if defer and not read_logits and (logprobs or not self._timing):
             self.model.verify_enqueue(*args, **{k: v for k, v in kw.items() if k != "read_logits"})
             draws = [] if sample_plan is None else [self.model._vfy_sampler.draws]
-            step.reads = self._read_device0_async([self.model._vfy_ids_out, *draws])
+            step.reads = self._read_device0_async([self.model._vfy_ids_out, *draws, *self._logprobs_outputs(step)])
             self._vfeed = self.model._vfy_rows_out
             if warm is not None:
                 warm()
@@ -2389,8 +2428,8 @@ class MTPBlockEngine(MTPSpecEngine):
         """Finish the DeferredVerify ``payload``: the step's device ``sampling`` parameters (None: a host-sampled step
         draws nothing), its token ``mask`` (int32 [B, T, W], spec_mask packing, or None) and its ``num_valid_drafts``
         ([B], at most the submitted ones; None: unchanged). Every user with a constrained column draws its columns
-        from the masked logits, a greedy one the masked argmax. Enqueues the mask, sampler, step and drafter traces
-        and the reads, and returns the step's PendingVerify. Validates everything before it changes engine state: a
+        from the masked logits, a greedy one the masked argmax. Enqueues the mask, sampler, logprobs (a verify
+        submitted with ``logprobs``), step and drafter traces and the reads, and returns the step's PendingVerify. Validates everything before it changes engine state: a
         stale payload, a mask of another shape, a constrained column a row can commit that allows no token, or more
         valid drafts than the submitted ones raise ValueError and leave the payload pending."""
         if payload is None or payload is not self._deferred:
@@ -2433,20 +2472,21 @@ class MTPBlockEngine(MTPSpecEngine):
             positions=payload.positions,
             rope_deltas=payload.rope_deltas,
             accept_rows=None if oe is None else oe.rows,
+            logprobs=step.logprobs,
         )
         self.masked_steps += any(masked)
         if oe is not None:
             self._enqueue_step_and_drafter(step)
             return step
         draws = [] if plan is None else [self.model._vfy_sampler.draws]
-        step.reads = self._read_device0_async([self.model._vfy_ids_out, *draws])
+        step.reads = self._read_device0_async([self.model._vfy_ids_out, *draws, *self._logprobs_outputs(step)])
         self._vfeed = self.model._vfy_rows_out
         return step
 
     def _sample_deferred_chained(self, payload, rows, masked, num_valid):
         """sample_deferred of a chained DeferredVerify: the chain program fixed its drawing rows (every live row) and
-        its valid drafts, so a different count raises; the mask, sampler, step and drafter traces and the reads are
-        enqueued over the plan whose seeds its submission staged."""
+        its valid drafts, so a different count raises; the mask, sampler, logprobs, step and drafter traces and the
+        reads are enqueued over the plan whose seeds its submission staged."""
         step = payload.step
         if not torch.equal(num_valid, step.num_valid):
             raise ValueError(
@@ -2458,7 +2498,10 @@ class MTPBlockEngine(MTPSpecEngine):
             raise ValueError(f"a token mask constrains rows {masked} the chained verify does not draw ({drawn})")
         self._deferred = None
         self.model.verify_enqueue_post(
-            sample_plan=step.sample_plan, bucket=payload.bucket, mask=rows if any(masked) else None
+            sample_plan=step.sample_plan,
+            bucket=payload.bucket,
+            mask=rows if any(masked) else None,
+            logprobs=step.logprobs,
         )
         self.masked_steps += any(masked)
         self._enqueue_step_and_drafter(step)
@@ -2554,9 +2597,15 @@ class MTPBlockEngine(MTPSpecEngine):
         ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
         self._dr_rs_staged = None  # the step trace wrote the reseed table
         draws = [] if step.sample_plan is None else [model._vfy_sampler.draws]
-        step.reads = self._read_device0_async([model._vfy_ids_out, *draws, self._dr_pack, *self._dr_outs])
+        step.reads = self._read_device0_async(
+            [model._vfy_ids_out, *draws, *self._logprobs_outputs(step), self._dr_pack, *self._dr_outs]
+        )
         self._vfeed = model._vfy_rows_out
         self.one_enqueue_steps += 1
+
+    def _logprobs_outputs(self, step):
+        """The device outputs a verify with ``logprobs`` reads after its ids and draws (PendingVerify.wait order)."""
+        return self.model._vfy_logprobs.outputs if step.logprobs else []
 
     def propose_draft_tokens(
         self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table=None, hidden=None
@@ -2694,6 +2743,7 @@ class MTPBlockEngine(MTPSpecEngine):
         mamba_state,
         sampling,
         defer_sampling=False,
+        logprobs=False,
     ):
         """A verify that continues the unread ``predecessor``: each live row u of the block (placeholders from the
         runner) continues the predecessor's row ``slot_remap[u]`` (row u without a slot_remap): that row's last
@@ -2706,7 +2756,8 @@ class MTPBlockEngine(MTPSpecEngine):
         once, after every check. Returns VerifyResult with a PendingVerify. ``defer_sampling`` (a token-masked chained
         verify, vllm-tt-plugin supports_spec_device_mask): every live row draws, a greedy one with top-k 1, so any row
         may take a token mask at sample_deferred; the chain program and the verify are enqueued and a DeferredVerify
-        is returned."""
+        is returned. ``logprobs``: the chained verify also computes its logprobs payload (at sample_deferred when
+        ``defer_sampling``)."""
         B, K, T = self.B, self.K, self.T
         if not self._pending or predecessor is not self._pending[-1] or predecessor.successor is not None:
             raise ValueError("spec_predecessor is not the engine's last verify still to propose")
@@ -2753,7 +2804,17 @@ class MTPBlockEngine(MTPSpecEngine):
                 raise ValueError(f"chained verify window from {upper.tolist()} past the paged KV capacity")
             self.remap_slots(src)
             step = self._verify_chained(
-                predecessor, src, active, hint, start_pos, page_table, mamba_state, plan, seed_cand, defer_sampling
+                predecessor,
+                src,
+                active,
+                hint,
+                start_pos,
+                page_table,
+                mamba_state,
+                plan,
+                seed_cand,
+                logprobs=logprobs,
+                defer_sampling=defer_sampling,
             )
             return step if defer_sampling else VerifyResult("argmax_ids", step)
         logger.debug(f"[spec_engine] chained verify built from a read predecessor: {reason}")
@@ -2767,6 +2828,7 @@ class MTPBlockEngine(MTPSpecEngine):
             mamba_state,
             None if defer_sampling else sampling,
             defer_sampling,
+            logprobs,
         )
 
     def _chain_nv(self, predecessor, src, active, hint):
@@ -2855,6 +2917,7 @@ class MTPBlockEngine(MTPSpecEngine):
         mamba_state,
         sample_plan=None,
         seed_cand=None,
+        logprobs=False,
         defer_sampling=False,
     ):
         """Stage the host rows, the ctrl candidates and the seed candidates, replay the chain trace, then the verify,
@@ -2862,8 +2925,9 @@ class MTPBlockEngine(MTPSpecEngine):
         is in this verify's rows, the predecessor's is read at row src[u]. ``sample_plan``
         (spec_sample.chained_sampling_plan, or None): the drawing rows and their parameters; the chain program writes
         their seeds from ``seed_cand``. The predecessor's propose fills the block's tokens and positions.
-        ``defer_sampling``: enqueue the chain and verify traces only and return a chained DeferredVerify; its
-        sample_deferred enqueues the mask, sampler, step and drafter traces and the reads."""
+        ``logprobs``: also the logprobs trace, and its outputs read with the ids. ``defer_sampling``: enqueue the chain
+        and verify traces only and return a chained DeferredVerify; its sample_deferred enqueues the mask, sampler,
+        logprobs, step and drafter traces and the reads."""
         B, T, model = self.B, self.T, self.model
         if self.verify_steps % ONE_ENQUEUE_LOG_EVERY == 0:
             self._log_one_enqueue_counts()
@@ -2902,7 +2966,7 @@ class MTPBlockEngine(MTPSpecEngine):
         if self._acc_pt_staged is None or not torch.equal(self._acc_pt_staged, pt_rows):
             self._accept.stage_pt_rows(pt_rows)
             self._acc_pt_staged = pt_rows
-        bucket = self._verify_bucket(active, sample_plan=sample_plan)
+        bucket = self._verify_bucket(active, sample_plan=sample_plan, logprobs=logprobs)
         ttnn.execute_trace(self.mesh, self._chain_trace, cq_id=0, blocking=False)
         blocks.ctrl_written()
         sampler = getattr(model, "_vfy_sampler", None)
@@ -2918,6 +2982,7 @@ class MTPBlockEngine(MTPSpecEngine):
             step_staged=True,
             **({} if sample_plan is None or defer_sampling else {"sample_plan": sample_plan}),
             **({} if bucket is None else {"bucket": bucket}),
+            **({"logprobs": True} if logprobs and not defer_sampling else {}),
             **({"post": False} if defer_sampling else {}),
         )
         step = PendingVerify(
@@ -2931,6 +2996,7 @@ class MTPBlockEngine(MTPSpecEngine):
             plan=plan,
             sample_plan=sample_plan,
             rope_deltas=self._rope_deltas,
+            logprobs=logprobs,
         )
         step.src = list(src)
         predecessor.successor = step
@@ -2997,7 +3063,9 @@ class MTPBlockEngine(MTPSpecEngine):
         self._offered &= self._active  # a released slot leaves the offer, as the release after the propose does
         return m, acc, ctok, result
 
-    def _materialize(self, predecessor, src, active, hint, page_table, mamba_state, sampling, defer_sampling=False):
+    def _materialize(
+        self, predecessor, src, active, hint, page_table, mamba_state, sampling, defer_sampling=False, logprobs=False
+    ):
         """Build a chained verify from the engine's own read of its predecessor (_propose_from_read), then verify the
         block on the host path: remap_slots(``src``) moves the per-slot state after the predecessor's propose, as in
         the drained order, and row u of the block continues the predecessor's row src[u]."""
@@ -3030,6 +3098,7 @@ class MTPBlockEngine(MTPSpecEngine):
             sampling=sampling,
             defer=True,
             keep_pending=True,
+            logprobs=logprobs,
             defer_sampling=defer_sampling,
         )
 

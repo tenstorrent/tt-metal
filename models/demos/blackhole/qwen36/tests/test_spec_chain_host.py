@@ -1355,3 +1355,52 @@ def test_a_token_masked_chained_verify_draws_every_live_row_under_the_mask_it_ge
     assert step is payload.step and eng._deferred is None and eng.masked_steps == 1
     assert posts[-1]["sample_plan"] is plan and posts[-1]["mask"][3 * T + 1, 0] == 0b1010
     assert log["traces"][-2:] == ["step", "drafter"]
+
+
+def test_a_token_masked_chained_verify_with_logprobs_replays_the_logprobs_trace_at_its_sampling(chained):
+    """vllm-tt-plugin supports_spec_device_logprobs on a token-masked chained verify: the submission enqueues the chain
+    program and the verify without the logprobs trace, and sample_deferred replays it after the mask and the sampler,
+    then reads its outputs between the draws and the drafter's."""
+    eng, log, state = chained
+    B, T, K = eng.B, eng.T, eng.K
+    eng.model._vfy_mask = object()
+    eng.model._vfy_logprobs = SimpleNamespace(outputs=["lp_vals", "lp_ids", "lp_sums"])
+    eng.model._vfy_logprobs_trace_id = "logprobs"
+    posts, seen = [], []
+    eng.model.verify_enqueue_post = lambda **kw: posts.append(kw)
+    inner = eng._read_device0_async
+    eng._read_device0_async = lambda tensors: (
+        seen.append(list(tensors)),
+        inner([t for t in tensors if not str(t).startswith("lp_")]),
+    )[1]
+    ids0 = torch.tensor([[7, 8, 9, 10], [11, 12, 13, 14], [0, 0, 0, 0], [21, 22, 23, 24]])
+    tokens0 = torch.tensor([[1, 7, 8, 5], [2, 11, 12, 13], [0, 0, 0, 0], [3, 21, 9, 9]])
+    starts0, nv0 = [100, 200, -1, 300], [3, 3, 0, 2]
+    state["ids"] = [ids0, torch.zeros(B, T, dtype=torch.int64)]
+    res0 = _host_verify(eng, tokens0, starts0, nv0)
+    upper = [s + T if s >= 0 else -1 for s in starts0]
+    start_pos = torch.tensor([[s + j if s >= 0 else -1 for j in range(T)] for s in upper])
+    payload = eng.decode_forward(
+        torch.where(torch.tensor([s >= 0 for s in upper]).reshape(B, 1), -1, 0).expand(B, T),
+        start_pos,
+        num_valid_drafts=torch.full((B,), K, dtype=torch.int32),
+        accepted_counts=torch.ones(B, dtype=torch.int32),
+        page_table=torch.arange(1, B * eng.nb + 1, dtype=torch.int32).reshape(B, eng.nb),
+        spec_mode="argmax_ids",
+        mamba_state=_mamba(eng),
+        sampling=_greedy(B),
+        defer=True,
+        predecessor=res0.argmax_ids,
+        defer_sampling=True,
+        logprobs=True,
+    )
+    assert payload.chained and payload.step.logprobs
+    assert log["enqueue"][-1].kw["post"] is False and "logprobs" not in log["enqueue"][-1].kw
+    committed0, counts0 = _walk(res0, tokens0, nv0)
+    _propose(eng, starts0, committed0, counts0)
+    mask = torch.full((B, T, VOCAB // 32), -1, dtype=torch.int32)
+    mask[1, 2, 0] = 0b110
+    eng.sample_deferred(payload, sampling=_greedy(B), mask=mask, num_valid_drafts=torch.tensor([K, K, 0, K]))
+    assert posts[-1]["logprobs"] is True and posts[-1]["mask"] is not None
+    assert log["traces"][-2:] == ["step", "drafter"]
+    assert seen[-1] == ["ids", "draws", "lp_vals", "lp_ids", "lp_sums", "pack", *[f"d{k}" for k in range(K)]]
