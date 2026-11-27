@@ -131,3 +131,33 @@ def test_partial_gradient_sum_follows_reduce_dtype(dp_tp_mesh, gradient_reduce_d
     gradient_reduce_default(_FP32)
     np.testing.assert_array_equal(synced(), fp32)
     np.testing.assert_array_equal(synced(reduce_dtype=ttnn.DataType.BFLOAT16), bf16)
+
+
+# A partial gradient is averaged over dp, then summed over tp; under the fp32 reduce it must stay in fp32 in between.
+# Here each tp rank's dp mean lies halfway between two bf16 values, and the tp sum cancels everything but that half
+# step, so rounding the mean to bf16 would lose it.
+def test_partial_gradient_stays_fp32_between_the_sums(dp_tp_mesh, gradient_reduce_default):
+    rng = np.random.default_rng(5)
+    x = to_bf16(np.exp2(rng.integers(-3, 4, (64, 128))) * rng.uniform(1, 2, (64, 128)))
+    half_step = np.exp2(np.floor(np.log2(x)) - 8)  # half the bf16 spacing above x
+    values = np.empty((2, 2, 64, 128), np.float32)  # [dp, tp, ...]
+    values[0, 0], values[1, 0] = x, x + 2 * half_step
+    values[:, 1] = -x
+    gradient = upload(values, [ttnn.PlacementShard(0), ttnn.PlacementShard(1)]).get_value()
+
+    def synced(**reduce_dtype) -> np.ndarray:
+        value = upload(np.zeros((1, 1, 64, 128), np.float32), [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
+        ttml.parallel.mark_partial(Parameter(value), "tp")
+        value.set_grad(gradient)
+        parameters = ttml.NamedParameters()
+        parameters["parameter"] = value
+        ttml.sync_gradients(parameters, **reduce_dtype)
+        assert value.get_grad().dtype == ttnn.DataType.BFLOAT16
+        assert placements(value.get_grad()) == [("Replicate",), ("Replicate",)]
+        return _per_device(value.get_grad())
+
+    expected = np.broadcast_to(half_step, (2, 2, 64, 128))
+    np.testing.assert_array_equal(synced(reduce_dtype=_FP32), expected)
+    assert not np.any(synced() == expected), "bf16 sums kept the half step too, so this test proves nothing"
+    gradient_reduce_default(_FP32)
+    np.testing.assert_array_equal(synced(), expected)

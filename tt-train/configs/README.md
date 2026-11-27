@@ -109,7 +109,8 @@ Device mesh and distributed training configuration.
 | `enable_cp` | bool | false | Enable Context Parallelism (C++ `nano_gpt` runner only) |
 
 ### Constraints
-- DDP and TP can be combined on a 2D mesh (e.g. `mesh_shape: [4, 8]` with `enable_ddp: true` and `enable_tp: true`)
+- DDP and TP can be combined on a 2D mesh (e.g. `mesh_shape: [4, 8]` with `enable_ddp: true` and `enable_tp: true`).
+  The C++ GPT-2 is the exception: its TP layers span the whole mesh, so at most one mesh axis can be larger than 1
 - For DDP: batch_size must be divisible by number of DDP devices
 - For TP: vocab_size is automatically rounded up to be divisible by (num_devices * 32)
 - For SP: the sequence length must be divisible by (TP devices * 32)

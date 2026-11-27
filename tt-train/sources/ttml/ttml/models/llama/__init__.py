@@ -12,6 +12,7 @@ from math import sqrt
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import ttnn
 import ttml
 from ttml.common.utils import build_rope_params_from_config
@@ -59,7 +60,8 @@ class LlamaConfig:
     ``"tp"`` axis size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
     and ``intermediate_size`` — this is validated in ``__post_init__``.  The vocab does
     *not* need to be TP-divisible: the embedding and LM-head weights are padded internally
-    to a multiple of ``32 * tp_size``, exposed as ``Llama.padded_vocab_size``.
+    to a multiple of ``32 * tp_size``, exposed as ``Llama.padded_vocab_size``. Under TP,
+    the logits keep the padded columns, masked to -1e4.
 
     ``embedding_placement`` selects how the token-embedding table is placed across the
     TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
@@ -220,14 +222,13 @@ class Llama(AbstractModuleBase):
             # Pad the vocab so the LM head's sharded output rows are
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
             # each shard needs to be divisible by 32 -- i.e. the padded global
-            # size must be a multiple of 32 * tp_size. The trailing padded
-            # columns are kept on-device and handled by the downstream
-            # vocab_parallel_cross_entropy_loss, so ``config.vocab_size`` is
-            # free to be arbitrary.
+            # size must be a multiple of 32 * tp_size. forward() masks the
+            # padded logits, so ``config.vocab_size`` can be anything.
             mesh = ttml.mesh()
             self.tp_size = mesh.axis_size("tp")
             self._tp_axis = mesh.axis_index("tp")
             self.padded_vocab_size = round_up_to_tile(config.vocab_size, ttnn.TILE_SIZE * self.tp_size)
+            self._tp_vocab_pad_bias: Optional[ttnn.Tensor] = None
             # No gather after LM head, because vocab_parallel_cross_entropy_loss
             # expects a vocab-sharded tensor. Under SP the head input is sequence-sharded
             # and the column-parallel input gather restores the full sequence, so the
@@ -283,7 +284,10 @@ class Llama(AbstractModuleBase):
 
         # Block 0 needs a sequence-sharded residual. Embeddings that emit the full sequence
         # on every rank are sliced locally; the vocab-parallel one already lands sharded.
-        self._slice_sequence = sequence_parallel and not isinstance(self.tok_emb, VocabParallelEmbedding)
+        # At tp=1 there is nothing to slice.
+        self._slice_sequence = (
+            sequence_parallel and self.tp_size > 1 and not isinstance(self.tok_emb, VocabParallelEmbedding)
+        )
 
         rope_params = build_rope_params_from_config(config, config.hidden_size // config.num_attention_heads)
 
@@ -391,13 +395,27 @@ class Llama(AbstractModuleBase):
 
         out = self.ln_fc(out)
         logits = self.fc(out)
-        # In TP mode the LM head output stays vocab-sharded; the trailing
-        # padded columns are handled by vocab_parallel_cross_entropy_loss.
-        # The non-TP path returns full-vocab logits, so we still need to drop
-        # the tile-alignment padding before handing them off to the caller.
-        if not self.config.tp_strategy.tensor_parallel and self.padded_vocab_size != self.config.vocab_size:
-            logits = SliceLastDim.apply(logits, self.config.vocab_size)
+        if self.padded_vocab_size != self.config.vocab_size:
+            if self.config.tp_strategy.tensor_parallel:
+                # Vocab-sharded logits can't be sliced, so mask the padded columns: at -1e4 they get zero probability
+                # and zero gradient.
+                logits = ttml.ops.binary.add(
+                    logits, self._vocab_pad_bias(logits.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype)
+                )
+            else:
+                logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
+
+    def _vocab_pad_bias(self, dtype: ttnn.DataType) -> ttml.autograd.Tensor:
+        """The mask added to the vocab-sharded logits: 0 on real columns, -1e4 on padded ones, in ``dtype``."""
+        if self._tp_vocab_pad_bias is None or self._tp_vocab_pad_bias.dtype != dtype:
+            bias = np.zeros((1, 1, 1, self.padded_vocab_size), dtype=np.float32)
+            bias[..., self.config.vocab_size :] = -1e4
+            mapper = ttml.mesh().axis_mapper("tp", tdim=3)
+            self._tp_vocab_pad_bias = ttml.autograd.Tensor.from_numpy(bias, ttnn.Layout.TILE, dtype, mapper).get_value(
+                ttml.autograd.PreferredPrecision.NATIVE
+            )
+        return ttml.autograd.create_tensor(self._tp_vocab_pad_bias, requires_grad=False)
 
 
 # C++ Llama bindings from _ttml.models.llama

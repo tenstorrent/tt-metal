@@ -18,6 +18,7 @@ from .linear import (
     ColumnParallelLinear,
     LinearLayer,
     RowParallelLinear,
+    gather_features,
     replicate_for_tp,
     shard_features,
     sum_tp_partials,
@@ -167,9 +168,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         x = replicate_for_tp(x, self.cluster_axis, self.sequence_parallel)
         base = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
-            base = ttml.ops.distributed.all_gather(
-                base, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED
-            )
+            base = gather_features(base, self.cluster_axis)
         # lora_A is replicated so it operates on the full input; lora_B is
         # column-sharded, producing a sharded update that must be gathered
         # whenever the base path is gathered.
@@ -179,9 +178,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.gather_output:
-            lora_update = ttml.ops.distributed.all_gather(
-                lora_update, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED
-            )
+            lora_update = gather_features(lora_update, self.cluster_axis)
         return base + lora_update * self.scaling
 
 

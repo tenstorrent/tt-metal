@@ -240,6 +240,8 @@ def sync_gradients(
     """Turn each device's local gradient into the global one; call once per step.
 
     ``reduce_dtype`` applies to both sums, as :func:`average_gradients` and :func:`sum_partial_gradients` take it.
+    Under ``FLOAT32``, a partial gradient stays in fp32 between the two sums, so it is rounded back to its own dtype
+    only once.
     """
     if axis_names is not None:
         warnings.warn(
@@ -248,10 +250,22 @@ def sync_gradients(
             DeprecationWarning,
             stacklevel=2,
         )
+    widened = []
+    m = maybe_mesh()
+    if m is not None and ttml.core.distributed.resolve_reduce_dtype(reduce_dtype) == ttnn.DataType.FLOAT32:
+        for _, param in parameters.items():
+            if not param.is_grad_initialized() or not _partial_axis_indices(m, param):
+                continue
+            grad = param.get_grad()
+            if grad.dtype != ttnn.DataType.FLOAT32:
+                widened.append((param, grad.dtype))
+                param.set_grad(ttnn.typecast(grad, ttnn.DataType.FLOAT32))
     average_gradients(
         parameters, axis_names=("dp", "fsdp") if axis_names is None else axis_names, reduce_dtype=reduce_dtype
     )
     sum_partial_gradients(parameters, reduce_dtype=reduce_dtype)
+    for param, dtype in widened:
+        param.set_grad(ttnn.typecast(param.get_grad(), dtype))
 
 
 def average_gradients(parameters, axis_names: tuple[str, ...], *, reduce_dtype: ttnn.DataType | None = None) -> None:
@@ -314,9 +328,7 @@ def sum_partial_gradients(parameters, *, reduce_dtype: ttnn.DataType | None = No
     for _, param in parameters.items():
         if not param.is_grad_initialized():
             continue
-        # Mesh-axis order: every process must issue these collectives in the same order, and a set of names
-        # iterates in an order that differs between processes.
-        axes = sorted(m.axis_index(name) for name in partial_axes(param) if m.has_axis(name) and m.axis_size(name) > 1)
+        axes = _partial_axis_indices(m, param)
         if not axes:
             continue
         grad = param.get_grad()
@@ -328,3 +340,9 @@ def sum_partial_gradients(parameters, *, reduce_dtype: ttnn.DataType | None = No
         if grad.dtype != grad_dtype:
             grad = ttnn.typecast(grad, grad_dtype)
         param.set_grad(grad)
+
+
+def _partial_axis_indices(m: Mesh, param) -> list[int]:
+    """Indices of the axes (of size > 1) that ``param``'s gradient is partial on, sorted: every process must issue the
+    collectives in the same order, and set iteration order differs between processes."""
+    return sorted(m.axis_index(name) for name in partial_axes(param) if m.has_axis(name) and m.axis_size(name) > 1)

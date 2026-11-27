@@ -13,7 +13,7 @@ import numpy as np
 import ttnn
 import ttml
 
-from .linear import sum_tp_partials
+from .linear import gather_features, sum_tp_partials
 from .module_base import AbstractModuleBase
 from .parameter import Parameter
 
@@ -296,13 +296,4 @@ class FeatureParallelEmbedding(AbstractModuleBase):
 
         if not self.gather_output:
             return emb
-
-        # GradOutputType.REPLICATED divides the backward reduce_scatter by tp_size
-        # (output is replicated, consumed replicated), matching
-        # ColumnParallelLinear(gather_output=True).
-        return ttml.ops.distributed.all_gather(
-            emb,
-            3,
-            self.cluster_axis,
-            ttml.ops.distributed.GradOutputType.REPLICATED,
-        )
+        return gather_features(emb, self.cluster_axis)

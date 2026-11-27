@@ -114,7 +114,8 @@ gradient.
   process, and `close_device()` clears it too. A script that sets the value itself does so after `create_optimizer()`.
   C++ `synchronize_gradients()` and Python `ttml.sync_gradients()` sum in the `reduce_dtype` they are given, else in
   the stored one. For `ttml.sync_gradients()` that covers both of its sums: the average over `dp` and `fsdp`, and the
-  sum of `ttml.parallel.mark_partial` gradients over the axes they are partial on.
+  sum of `ttml.parallel.mark_partial` gradients over the axes they are partial on. A marked gradient stays in fp32
+  between the two sums, so it is rounded back to bf16 only once.
   `core::distributed::synchronize_tensor()`, the average they call, takes `reduce_dtype` only as an argument.
 - **FSDP.** `backward_post` reduce-scatters in the `reduce_dtype` given to `ttml.fsdp.fully_shard()`, else in the
   stored one, which it reads when it runs, as the DDP sync does. It first runs in the first backward, after the

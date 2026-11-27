@@ -4,7 +4,8 @@
 
 """Llama with tensor parallelism, and with sequence parallelism on top, against Llama without either.
 
-Runs at tp=2 and tp=4; tp=4 needs four devices and the bundled ``(1, 4)`` descriptor.
+Runs at tp=1, 2 and 4; tp=4 needs four devices and the bundled ``(1, 4)`` descriptor. tp=1 checks that the layers skip
+their collectives on a single device; a vocab of 100, padded to 128, checks that the padding stays out of the loss.
 """
 
 from __future__ import annotations
@@ -23,12 +24,14 @@ from tp_block import gather_like
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
-BATCH, VOCAB, N_LAYERS = 2, 128, 2
+BATCH, N_LAYERS = 2, 2
 HIDDEN, N_HEADS, N_KV_HEADS, INTERMEDIATE = 256, 8, 4, 256
 HEAD_DIM = HIDDEN // N_HEADS
 SEQ_LEN = 256  # two tiles of sequence per rank at tp=4
+# 100 is padded to 128: the model without TP slices the padding off, the TP model masks it.
+VOCABS = [128, 100]
 
-# A bf16 loss near ln(128) ~ 4.9 rounds to 1/32.
+# A bf16 loss near ln(vocab) ~ 4.6-4.9 rounds to 1/32.
 LOSS_TOLERANCE = 0.05
 # Relative Frobenius error: bf16 rounding, as TP sums row-parallel partial products in another order than one matmul
 # does. Measured at most 0.012, in a norm gamma's gradient.
@@ -42,10 +45,11 @@ _BLOCK_ROWS = {
 }
 
 
-@pytest.fixture(scope="module", params=[2, 4], ids=["tp2", "tp4"])
+@pytest.fixture(scope="module", params=[1, 2, 4], ids=["tp1", "tp2", "tp4"])
 def tp_size(request, fresh_device_mesh):
-    with fresh_device_mesh((1, request.param), ("dp", "tp"), what=f"tp={request.param}", require_mgd=True):
-        yield request.param
+    tp = request.param
+    with fresh_device_mesh((1, tp), ("dp", "tp"), what=f"tp={tp}", require_mgd=tp > 1):
+        yield tp
 
 
 @pytest.fixture(autouse=True)
@@ -54,14 +58,14 @@ def reset_graph():
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
-def config(tp_strategy: TPStrategy, placement: EmbeddingPlacement) -> LlamaConfig:
+def config(tp_strategy: TPStrategy, placement: EmbeddingPlacement, vocab: int) -> LlamaConfig:
     return LlamaConfig(
         hidden_size=HIDDEN,
         num_attention_heads=N_HEADS,
         num_key_value_heads=N_KV_HEADS,
         num_hidden_layers=N_LAYERS,
         intermediate_size=INTERMEDIATE,
-        vocab_size=VOCAB,
+        vocab_size=vocab,
         max_position_embeddings=SEQ_LEN,
         attention_bias=True,
         tp_strategy=tp_strategy,
@@ -84,12 +88,12 @@ def in_tp_layout(name: str, values: np.ndarray, tp: int) -> np.ndarray:
     return np.concatenate([per_block[rank] for rank in range(tp) for per_block in slices], axis=dim)
 
 
-def step(model: Llama) -> tuple[float, np.ndarray]:
+def step(model: Llama, vocab: int) -> tuple[float, np.ndarray]:
     """Forward and backward on fixed tokens with the loss train.py picks, gradients synced; returns the loss and the
     logits."""
     rng = np.random.default_rng(7)
-    ids = rng.integers(0, VOCAB, (BATCH, 1, 1, SEQ_LEN)).astype(np.uint32)
-    targets = rng.integers(0, VOCAB, (BATCH, SEQ_LEN)).astype(np.uint32)
+    ids = rng.integers(0, vocab, (BATCH, 1, 1, SEQ_LEN)).astype(np.uint32)
+    targets = rng.integers(0, vocab, (BATCH, SEQ_LEN)).astype(np.uint32)
     targets = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
     model.train()
     ids = ttml.autograd.Tensor.from_numpy(ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
@@ -108,22 +112,24 @@ def assert_close(actual: np.ndarray, expected: np.ndarray, what: str) -> None:
     assert error <= MAX_REL_ERROR, f"{what}: relative error {error:.3g}"
 
 
+@pytest.mark.parametrize("vocab", VOCABS, ids=lambda v: f"vocab{v}")
 @pytest.mark.parametrize("placement", list(EmbeddingPlacement), ids=lambda p: p.name)
 @pytest.mark.parametrize("tp_strategy", [TPStrategy.TENSOR, TPStrategy.TENSOR_SEQUENCE], ids=["tp", "sp"])
-def test_matches_the_model_without_tp(tp_size, tp_strategy, placement):
+def test_matches_the_model_without_tp(tp_size, tp_strategy, placement, vocab):
     ttml.manual_seed(0)
-    reference = Llama(config(TPStrategy.NONE, EmbeddingPlacement.Replicated))
-    model = Llama(config(tp_strategy, placement))
+    reference = Llama(config(TPStrategy.NONE, EmbeddingPlacement.Replicated, vocab))
+    model = Llama(config(tp_strategy, placement, vocab))
     params, sources = model.parameters(), reference.parameters()
     assert set(params.keys()) == set(sources.keys())
     for name, param in params.items():
         values = in_tp_layout(name, gather_like(sources[name].get_value(NATIVE), sources[name]), tp_size)
         ttml.autograd.assign_numpy(param, values, mapper=ttml.Sharding.from_tensor(param).derive_mapper())
 
-    loss, logits = step(model)
-    expected_loss, expected_logits = step(reference)
+    loss, logits = step(model, vocab)
+    expected_loss, expected_logits = step(reference, vocab)
     assert abs(loss - expected_loss) <= LOSS_TOLERANCE, f"loss {loss}, without TP {expected_loss}"
-    assert_close(logits, expected_logits, "logits")
+    # The TP logits keep the padded columns.
+    assert_close(logits[..., :vocab], expected_logits, "logits")
     for name, param in params.items():
         assert param.is_grad_initialized(), f"{name}: no gradient"
         expected = in_tp_layout(name, gather_like(sources[name].get_grad(), sources[name]), tp_size)

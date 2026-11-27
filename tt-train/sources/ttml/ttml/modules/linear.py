@@ -69,6 +69,16 @@ def sum_tp_partials(x, cluster_axis: int, sequence_parallel: bool):
     return ttml.ops.distributed.all_reduce(x, noop_backward=True, cluster_axis=cluster_axis)
 
 
+def gather_features(x, cluster_axis: int):
+    """All-gather ``x``'s last (feature) dim across ``cluster_axis``, e.g. a column-parallel layer's output.
+
+    The result is consumed replicated, so the backward averages the ranks' gradients instead of summing them."""
+    if ttml.mesh().shape[cluster_axis] == 1:
+        return x
+    feature_dim = len(x.shape()) - 1
+    return ttml.ops.distributed.all_gather(x, feature_dim, cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
+
+
 class LinearLayer(AbstractModuleBase):
     """Fully-connected linear layer: y = x @ W^T + b."""
 
@@ -205,8 +215,7 @@ class ColumnParallelLinear(AbstractModuleBase):
         bias_t = self.bias.tensor if self.bias is not None else None
         x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
-            # Reconstitute the full output across TP devices (dim 3 = last feature dim).
-            x = ttml.ops.distributed.all_gather(x, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
+            x = gather_features(x, self.cluster_axis)
         return x
 
 

@@ -4,6 +4,7 @@
 
 #include "gpt2.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/scoped.hpp"
@@ -21,6 +22,20 @@
 namespace ttml::models::distributed::gpt2 {
 
 DistributedTransformer::DistributedTransformer(const TransformerConfig& config) {
+    // These TP layers shard over the whole mesh, not one axis, so on a 2D mesh (DP x TP) their collectives would mix
+    // the data-parallel groups.
+    const auto mesh_shape = autograd::ctx().get_device().shape();
+    uint32_t axes_larger_than_one = 0;
+    for (size_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+        axes_larger_than_one += mesh_shape[axis] > 1U ? 1U : 0U;
+    }
+    if (axes_larger_than_one > 1U) {
+        throw std::logic_error(fmt::format(
+            "DistributedTransformer (GPT-2) shards its TP layers over the whole mesh, so at most one mesh axis can be "
+            "larger than 1; got mesh shape {}. To combine TP with another axis, use Llama.",
+            mesh_shape));
+    }
+
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
     uint32_t embedding_dim = config.embedding_dim;
