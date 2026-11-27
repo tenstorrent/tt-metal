@@ -2331,16 +2331,19 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
+    # TEMPORARY (#67509 baseline recalibration, reverted before merge): sc4_4x4 on its new default SP axis 0, then
+    # on axis 1 on the same runners as an A/B against the old baseline; both run whatever the perf gate says, and
+    # the job exits with the axis-0 run's code.
+    rc0=0; bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_4x4 || rc0=$?
+    echo "===== axis-0 run exited ${rc0}; now PREFILL_SP_AXIS=1 ====="
+    PREFILL_SP_AXIS=1 bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_4x4 || echo "===== axis-1 run exited $? ====="
+    exit ${rc0}
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm53_sc4_4x4_recal]
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # 1M at 28 users reaches a PCC verdict in ~16.5 min -- 215 chunks at ~2.3s each, since the
-      # lightning indexer scores the whole prefix and so grows with depth, plus a 143M-entry KV chunk
-      # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
-      timeout: 60
+      timeout: 110
       tier: 1
       release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
