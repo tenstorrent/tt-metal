@@ -63,6 +63,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         assert os.environ.get("MOE_IMPL", "block") != "ttmoe", "K3_WEIGHT_OVERRIDE_DIR: MoE block path only"
         model_cfg = self.config.model_cfg
         checkpoint = model_adapter(model_cfg).moe_block_checkpoint()
+        ov.checkpoint = checkpoint  # (K3_WEIGHT_OVERRIDE_FOLDED's router reads the checkpoint's W and gamma)
         layers = list(state_dict.get("layers") or [{} for _ in range(n)])
         for i in mine:
             layers[i - first] = load_layer_state_dict(checkpoint, i, model_cfg=model_cfg)

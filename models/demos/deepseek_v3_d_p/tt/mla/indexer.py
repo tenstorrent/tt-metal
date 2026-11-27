@@ -685,9 +685,13 @@ class TtIndexerBase:
         if not self.key_only:
             # Apply the static indexer scale to the persistent projection weight.
             wproj = w["weights_proj"]
-            self._idx_wproj = ttnn.multiply(
-                wproj, self.index_args.index_n_heads**-0.5 * self.index_args.index_head_dim**-0.5
+            from models.demos.deepseek_v3_d_p.tt.kimi_k3 import weight_override
+
+            # (K3_WEIGHT_OVERRIDE_FOLDED: a folded weights_proj already holds n_heads^-0.5; production: both factors)
+            heads = (
+                1.0 if weight_override.weights_proj_prescaled(self.layer_idx) else self.index_args.index_n_heads ** -0.5
             )
+            self._idx_wproj = ttnn.multiply(wproj, heads * self.index_args.index_head_dim**-0.5)
             ttnn.deallocate(wproj)
         self._idx_knorm_w = w["k_norm"]
         self._idx_knorm_b = w["k_norm_bias"]

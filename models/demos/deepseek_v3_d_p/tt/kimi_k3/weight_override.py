@@ -19,6 +19,12 @@ Keys may carry any root ("language_model.model.", "model."): a tensor is matched
     K3_WEIGHT_OVERRIDE_VERIFY   "1": check that every bf4 / bf8 conversion made while an overridden layer is built is the
                                 identity on its input (no re-rounding), and log a per-layer tally at exit
     K3_WEIGHT_OVERRIDE_VERIFY_OUT   also write that tally (json) here
+    K3_WEIGHT_OVERRIDE_FOLDED   "1": the unit-gamma rule (GPTQ tools RESULTS.md, G4): every tensor of carriers_folded
+                                (GPTQ'd in decode's folded space) replaces its unfolded carrier, and each norm whose
+                                consumers are all among them is set to ones - MLA input_layernorm and q_a_layernorm, the MoE
+                                post_attention_layernorm (the router then becomes bf16(fp32 gamma x fp32 W)) and
+                                routed_expert_norm; the indexer's run-time scale drops n_heads^-0.5 (already in the
+                                folded weights_proj). Off: only latent up is taken folded (prefill folds that norm itself).
 
 How a layer is overridden (so no stale tensorbin can stand in for a carrier):
 * every read of the dequantized checkpoint for that layer (`weights.load_tensors`, the KDA loader, the bf8 routed
@@ -51,6 +57,25 @@ JOINT = ":joint"
 LATENT_UP = "block_sparse_moe.routed_expert_up_proj.weight"
 LATENT_NORM = "block_sparse_moe.routed_expert_norm.weight"
 INEXACT_IN_PREFILL = ("self_attn.f_b_proj.weight",)
+ROUTER = "block_sparse_moe.gate.weight"
+WEIGHTS_PROJ = "self_attn.indexer.weights_proj.weight"
+# (unit-gamma rule) norm -> the consumers decode folds it into; it becomes ones when they are all folded carriers
+FOLD_GROUPS = {
+    "input_layernorm.weight": (
+        "self_attn.q_a_proj.weight",
+        "self_attn.kv_a_proj_with_mqa.weight",
+        "self_attn.g_proj.weight",
+        "self_attn.indexer.wk.weight",
+        WEIGHTS_PROJ,
+    ),
+    "self_attn.q_a_layernorm.weight": ("self_attn.q_b_proj.weight", "self_attn.indexer.wq_b.weight"),
+    "post_attention_layernorm.weight": (
+        "block_sparse_moe.routed_expert_down_proj.weight",
+        "block_sparse_moe.shared_experts.gate_proj.weight",
+        "block_sparse_moe.shared_experts.up_proj.weight",
+    ),
+    LATENT_NORM: (LATENT_UP,),
+}
 
 OVERRIDE = None  # the active WeightOverride, None in production
 _INIT = False
@@ -82,6 +107,13 @@ def lookup(key: str):
     return None if parts is None else ov.tensor(*parts)
 
 
+def weights_proj_prescaled(layer_idx: int) -> bool:
+    """Whether this layer's indexer weights_proj already carries n_heads^-0.5 (a folded carrier, unit-gamma rule): the
+    indexer then scales it by head_dim^-0.5 alone (not a power of two: one bf16 rounding, inexact by design)."""
+    ov = active()
+    return ov is not None and ov.folded and int(layer_idx) in ov.layers and WEIGHTS_PROJ in ov.dense(int(layer_idx))
+
+
 def has_layer(layer_idx: int) -> bool:
     ov = active()
     return ov is not None and int(layer_idx) in ov.layers
@@ -100,12 +132,16 @@ class WeightOverride:
             layers = done
         self.layers = layers
         self.verify = os.environ.get("K3_WEIGHT_OVERRIDE_VERIFY", "") not in ("", "0")
+        self.folded = os.environ.get("K3_WEIGHT_OVERRIDE_FOLDED", "") not in ("", "0")
+        self.checkpoint = None  # (the dequantized checkpoint: the runtime sets it; the folded router reads it)
         self._dense: dict = {}  # layer -> {rel name: bf16 tensor}
         self._experts: dict = {}  # layer -> {rel name: shard path}
         self._lock = threading.Lock()
         self.tally: dict = {}  # layer -> {"exact": n, "inexact": [(what, shape, n differing)]}
         self.building = None  # the layer being built (verify)
-        logger.warning(f"K3_WEIGHT_OVERRIDE: layers {sorted(layers)} from {root} (verify {self.verify})")
+        logger.warning(
+            f"K3_WEIGHT_OVERRIDE: layers {sorted(layers)} from {root} (verify {self.verify}, folded {self.folded})"
+        )
 
     def _layer_dir(self, layer: int) -> Path:
         return self.root / f"layer_{layer:02d}"
@@ -118,7 +154,7 @@ class WeightOverride:
             got = self._dense.get(layer)
             if got is not None:
                 return got
-            got, folded = {}, False
+            got, folded = {}, set()
             d = self._layer_dir(layer)
             for f in ("carriers", "carriers_alt", "carriers_folded"):  # (later files win: joint b_proj, folded up)
                 path = d / f"{f}.safetensors"
@@ -134,14 +170,24 @@ class WeightOverride:
                                 continue
                             rel = rel[: -len(JOINT)]  # (b_proj on prefill's grouping replaces the per-element copy)
                         elif f == "carriers_folded":
-                            if rel != LATENT_UP:  # (decode's folded copies: prefill applies those gammas itself)
+                            if rel != LATENT_UP and not self.folded:  # (decode-folded copies: unit-gamma rule only)
                                 continue
-                            folded = True
+                            folded.add(rel)
                         got[rel] = h.get_tensor(k)
-            if folded:
-                # The folded carrier already holds routed_expert_norm, and prefill folds that norm again: give it ones.
-                got[LATENT_NORM] = torch.ones(got[LATENT_UP].shape[1], dtype=torch.bfloat16)
-            elif LATENT_UP in got:
+            # A folded consumer already holds its norm, which prefill applies again: give each fully folded norm ones.
+            for norm, consumers in FOLD_GROUPS.items():
+                have = [c for c in consumers if c in folded]
+                if not have:
+                    continue
+                assert len(have) == len(consumers), f"layer {layer}: {norm} folded into {have}, not all of {consumers}"
+                got[norm] = torch.ones(got[have[0]].shape[1], dtype=torch.bfloat16)
+                if norm == "post_attention_layernorm.weight":
+                    got[ROUTER] = self._folded_router(layer)
+            if WEIGHTS_PROJ in folded:
+                logger.warning(
+                    f"K3_WEIGHT_OVERRIDE: layer {layer} weights_proj folded: scaled by head_dim^-0.5 (inexact)"
+                )
+            if LATENT_UP in got and LATENT_UP not in folded:
                 logger.warning(
                     f"K3_WEIGHT_OVERRIDE: layer {layer} latent up has no folded carrier (prefill re-rounds it)"
                 )
@@ -151,6 +197,25 @@ class WeightOverride:
             self._dense[layer] = got
             logger.warning(f"K3_WEIGHT_OVERRIDE: layer {layer}: {len(got)} dense tensors")
             return got
+
+    def _folded_router(self, layer: int) -> torch.Tensor:
+        """decode's router under the unit-gamma rule: bf16(fp32(post_attention_layernorm) x fp32(W)), W [E, hidden]."""
+        import json
+
+        from safetensors import safe_open
+
+        assert self.checkpoint is not None, "K3_WEIGHT_OVERRIDE_FOLDED: the runtime sets the checkpoint first"
+        ckpt = Path(self.checkpoint)
+        wm = json.loads((ckpt / "model.safetensors.index.json").read_text())["weight_map"]
+        root = "language_model.model." if any(k.startswith("language_model.model.") for k in wm) else "model."
+        p = f"{root}layers.{layer}."
+
+        def get(rel):
+            with safe_open(str(ckpt / wm[p + rel]), framework="pt", device="cpu") as h:
+                return h.get_tensor(p + rel)
+
+        gamma = get("post_attention_layernorm.weight").float()
+        return (get(ROUTER).float() * gamma[None, :]).to(torch.bfloat16)
 
     def expert_index(self, layer: int) -> dict:
         """{layer-relative expert key: shard file} of an override layer (empty when it has no expert shards)."""
