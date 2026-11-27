@@ -79,7 +79,8 @@ DSA_BARS: dict[int, dict[str, float]] = {
 
 def dsa_context_bars(maxima: Mapping[str, float]) -> ContextBars:
     """Run bars of one context length: each metric at most its value in every window. A non-finite value (a bar not
-    yet set) raises: ``check`` would pass it, since no comparison with NaN fails."""
+    yet set) raises: ``check`` would pass it, since no comparison with NaN fails. ``DSA_CASES`` builds its bars at
+    import, so an unset bar fails the collection of every registered case."""
     unset = [metric for metric, value in maxima.items() if not math.isfinite(value)]
     if unset:
         raise ValueError(f"no bar value for {unset}")

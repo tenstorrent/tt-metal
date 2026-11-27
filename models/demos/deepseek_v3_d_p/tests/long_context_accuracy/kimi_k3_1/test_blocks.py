@@ -13,10 +13,16 @@ from __future__ import annotations
 
 # ==== DSA (m06n.11.5) ===============================================================================================
 # isort: off
+import math
+
 import torch
 
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.blocks import device_selection
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.cases import DSA_CASES, DSA_DIMS
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.cases import (
+    DSA_CASES,
+    DSA_DIMS,
+    dsa_context_bars,
+)
 
 # isort: on
 
@@ -32,6 +38,13 @@ def test_dsa_case_runs_whole_chunks_past_top_k() -> None:
     window has scored rows)."""
     (case,) = DSA_CASES
     assert all(rows % case.chunk == 0 and rows > DSA_DIMS.topk for rows in case.context_lengths), case.context_lengths
+
+
+def test_dsa_unset_bar_is_refused(expect_error) -> None:
+    """A NaN bar would pass every window (no comparison with NaN fails), so a context length without values is
+    refused."""
+    with expect_error(ValueError, "no bar value"):
+        dsa_context_bars({"attn_nrmse": math.nan})
 
 
 # ==== end of DSA ====================================================================================================
