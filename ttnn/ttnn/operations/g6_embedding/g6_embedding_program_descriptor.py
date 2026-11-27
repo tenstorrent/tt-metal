@@ -1,177 +1,140 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_embedding ProgramDescriptor: three CBs, reader / compute / writer over one core set.
+"""ProgramDescriptor for g6_embedding: CBs, kernels and their arguments, all derived from a Plan.
 
-Every extent comes from the Plan built by select_plan; nothing here restates a block size. Buffer
-addresses live only in common runtime args so a cached descriptor is reused by patching them.
+Buffer addresses are common runtime args (reader: idx, weight; writer: out) so a cached
+descriptor is reused across calls by patching only those slots; no per-core arg depends on
+an address.
 """
 
+from __future__ import annotations
+
+import os
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-CB_INDEX_VALUES = 0  # reader-private: index values of the block being gathered + the prefetched one
-CB_GATHERED_ROWS = 1  # row-major table-row segments, UInt16 (bf16 bits)
-CB_OUTPUT_TILES = 2  # tilized output tiles, UInt16 (bf16 bits)
+CB_INDEX_VALUES = 0
+CB_GATHERED_ROWS = 1
+CB_OUTPUT_TILES = 2
 
-READER_KERNEL = 0
-WRITER_KERNEL = 1
-COMPUTE_KERNEL = 2
-
-# Common runtime-arg slots holding buffer addresses.
-READER_INDEX_ADDR_SLOT = 0
-READER_WEIGHT_ADDR_SLOT = 1
-WRITER_OUTPUT_ADDR_SLOT = 0
-
-TILE_DIM = 32
-INDEX_BYTES = 4
-VALUE_BYTES = 2
+# The zone build (BB-21): adds a DeviceZoneScopedN per named block operation. Off in the plain build.
+ZONES_ENV = "G6_EMBEDDING_ZONES"
 
 
-def _core_assignment(plan):
-    """(all_cores, [(core, first_block, num_blocks), ...]) as contiguous block ranges, row-wise."""
-    grid = ttnn.CoreCoord(plan.grid_x, plan.grid_y)
-    (
-        _,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        blocks_per_core_1,
-        blocks_per_core_2,
-    ) = ttnn.split_work_to_cores(grid, plan.total_blocks, row_wise=True)
-
+def _assign_blocks(grid, total_blocks: int):
+    """Contiguous block-id runs in row-wise core order: (all_cores, [(core, first_block, num_blocks)])."""
+    _, all_cores, group_1, group_2, blocks_1, blocks_2 = ttnn.split_work_to_cores(grid, total_blocks, row_wise=True)
     assignment = []
     first_block = 0
-    for group, blocks_per_core in ((core_group_1, blocks_per_core_1), (core_group_2, blocks_per_core_2)):
+    for group, blocks_per_core in ((group_1, blocks_1), (group_2, blocks_2)):
         if blocks_per_core == 0:
             continue
         for core in ttnn.corerange_to_cores(group, None, True):
             assignment.append((core, first_block, blocks_per_core))
             first_block += blocks_per_core
-    assert first_block == plan.total_blocks, f"assigned {first_block} of {plan.total_blocks} blocks"
     return all_cores, assignment
 
 
-def _cb(buffer_index, data_format, page_size, num_pages, core_ranges):
-    return ttnn.CBDescriptor(
-        total_size=num_pages * page_size,
-        core_ranges=core_ranges,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(buffer_index=buffer_index, data_format=data_format, page_size=page_size)
-        ],
-    )
+def create_program_descriptor(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, output: ttnn.Tensor, plan):
+    """Returns (descriptor, reader kernel index, writer kernel index)."""
+    grid = ttnn.CoreCoord(plan.grid_x, plan.grid_y)
+    all_cores, assignment = _assign_blocks(grid, plan.total_blocks)
 
-
-def create_program_descriptor(plan, input_tensor, weight, output_tensor) -> ttnn.ProgramDescriptor:
-    all_cores, assignment = _core_assignment(plan)
-
-    tile_bytes = TILE_DIM * TILE_DIM * VALUE_BYTES
-    index_slot_bytes = plan.block_tile_rows * TILE_DIM * INDEX_BYTES
-    block_pages = plan.block_tile_rows * plan.block_col_tiles
+    tile_bytes = output.buffer_page_size()
+    block_pages = plan.block_pages
 
     cbs = [
-        _cb(CB_INDEX_VALUES, ttnn.uint32, index_slot_bytes, plan.index_depth, all_cores),
-        # UInt16, not bfloat16: a Float16_b CB selects the float tilize path, which rewrites NaN
-        # payloads and the sign of zero. As UInt16 the bf16 bits pass through 16-bit DEST untouched.
-        _cb(CB_GATHERED_ROWS, ttnn.uint16, tile_bytes, plan.rows_depth * block_pages, all_cores),
-        _cb(CB_OUTPUT_TILES, ttnn.uint16, tile_bytes, plan.out_depth * block_pages, all_cores),
+        ttnn.CBDescriptor(
+            total_size=plan.index_depth * plan.index_slot_bytes,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_INDEX_VALUES, data_format=ttnn.uint32, page_size=plan.index_slot_bytes
+                )
+            ],
+        ),
+        # UInt16 on both tilize CBs: the standard (integer) tilize path moves the bf16 bits
+        # untouched; a Float16_b CB would select fast tilize, which rewrites NaNs and -0.0.
+        ttnn.CBDescriptor(
+            total_size=plan.rows_depth * block_pages * tile_bytes,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_GATHERED_ROWS, data_format=ttnn.uint16, page_size=tile_bytes)
+            ],
+        ),
+        ttnn.CBDescriptor(
+            total_size=plan.out_depth * block_pages * tile_bytes,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_OUTPUT_TILES, data_format=ttnn.uint16, page_size=tile_bytes)
+            ],
+        ),
     ]
 
-    reader_ct_args = [
+    defines = [("G6_EMBEDDING_ZONES", "1")] if os.environ.get(ZONES_ENV) == "1" else []
+
+    reader_ct = [
         CB_INDEX_VALUES,
         CB_GATHERED_ROWS,
         plan.block_col_tiles,
         plan.block_tile_rows,
         plan.index_depth,
         plan.col_blocks_per_row,
-    ]
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
-    reader_common_args = [
-        input_tensor.buffer_address(),
-        weight.buffer_address(),
-        plan.tensor_token_extent,
         plan.tile_rows_per_image,
+        plan.token_extent,
         plan.tensor_tile_rows,
     ]
+    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
 
-    writer_ct_args = [
+    writer_ct = [
         CB_OUTPUT_TILES,
         plan.block_col_tiles,
         plan.block_tile_rows,
         plan.col_blocks_per_row,
-    ]
-    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-    writer_common_args = [
-        output_tensor.buffer_address(),
-        plan.tensor_tile_rows,
         plan.tensor_col_tiles,
+        plan.tensor_tile_rows,
     ]
+    writer_ct.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
 
-    compute_ct_args = [
-        CB_GATHERED_ROWS,
-        CB_OUTPUT_TILES,
-        plan.block_col_tiles,
-        plan.block_tile_rows,
-    ]
+    compute_ct = [CB_GATHERED_ROWS, CB_OUTPUT_TILES, plan.block_col_tiles, plan.block_tile_rows]
 
-    reader_rt_args = ttnn.RuntimeArgs()
-    writer_rt_args = ttnn.RuntimeArgs()
-    compute_rt_args = ttnn.RuntimeArgs()
+    reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for core, first_block, num_blocks in assignment:
-        reader_rt_args[core.x][core.y] = [first_block, num_blocks]
-        writer_rt_args[core.x][core.y] = [first_block, num_blocks]
-        compute_rt_args[core.x][core.y] = [num_blocks]
+        reader_rt[core.x][core.y] = [first_block, num_blocks]
+        writer_rt[core.x][core.y] = [first_block, num_blocks]
+        compute_rt[core.x][core.y] = [num_blocks]
 
-    reader_kernel = ttnn.KernelDescriptor(
+    reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_embedding_reader.cpp"),
         core_ranges=all_cores,
-        compile_time_args=reader_ct_args,
-        runtime_args=reader_rt_args,
-        common_runtime_args=reader_common_args,
+        compile_time_args=reader_ct,
+        defines=defines,
+        runtime_args=reader_rt,
+        common_runtime_args=[input_tensor.buffer_address(), weight.buffer_address()],
         config=ttnn.ReaderConfigDescriptor(),
     )
-    writer_kernel = ttnn.KernelDescriptor(
+    writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_embedding_writer.cpp"),
         core_ranges=all_cores,
-        compile_time_args=writer_ct_args,
-        runtime_args=writer_rt_args,
-        common_runtime_args=writer_common_args,
+        compile_time_args=writer_ct,
+        defines=defines,
+        runtime_args=writer_rt,
+        common_runtime_args=[output.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
     )
-
-    compute_config = ttnn.ComputeConfigDescriptor()
-    compute_config.fp32_dest_acc_en = False  # 16-bit DEST: the UInt16 passthrough relies on it
-    compute_config.dst_full_sync_en = False
-    compute_kernel = ttnn.KernelDescriptor(
+    compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_embedding_compute.cpp"),
         core_ranges=all_cores,
-        compile_time_args=compute_ct_args,
-        runtime_args=compute_rt_args,
-        config=compute_config,
+        compile_time_args=compute_ct,
+        defines=defines,
+        runtime_args=compute_rt,
+        config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=False, dst_full_sync_en=False),
     )
 
-    kernels = [None, None, None]
-    kernels[READER_KERNEL] = reader_kernel
-    kernels[WRITER_KERNEL] = writer_kernel
-    kernels[COMPUTE_KERNEL] = compute_kernel
-    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-
-
-def patch_buffer_addresses(program_descriptor, input_tensor, weight, output_tensor):
-    """Point a cached descriptor at this call's tensors (the only per-call state it carries)."""
-    kernels = program_descriptor.kernels
-    reader_common_args = kernels[READER_KERNEL].common_runtime_args
-    reader_common_args[READER_INDEX_ADDR_SLOT] = input_tensor.buffer_address()
-    reader_common_args[READER_WEIGHT_ADDR_SLOT] = weight.buffer_address()
-    kernels[WRITER_KERNEL].common_runtime_args[WRITER_OUTPUT_ADDR_SLOT] = output_tensor.buffer_address()
-
-
-def core_roles(plan):
-    """BB-21 role dump: {(x, y): (roles, first_block, num_blocks)}; every core runs all three roles."""
-    _, assignment = _core_assignment(plan)
-    roles = ("reader", "compute", "writer")
-    return {(core.x, core.y): (roles, first_block, num_blocks) for core, first_block, num_blocks in assignment}
+    descriptor = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    return descriptor, 0, 1
