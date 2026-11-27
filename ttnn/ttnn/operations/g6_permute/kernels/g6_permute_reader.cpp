@@ -46,8 +46,10 @@ FORCE_INLINE void issue_row_reads(const Accessor& input, const Cursor& cursor, u
     for (uint32_t i = 0; i < a_live; ++i) {
         const uint32_t page = ((cursor.n * A + a0 + slot) * tensor_b_tiles + tb) * tensor_w_tiles + cursor.tw;
         const uint32_t slot_addr = slot_base + slot * tile_bytes;
+        // One bank lookup per page; a range offset (< one page) only moves the in-bank address.
+        const uint64_t page_noc_addr = input.get_noc_addr(page);
         for (uint32_t k = 0; k < num_ranges; ++k) {
-            noc_async_read(input.get_noc_addr(page, ranges[k].offset), slot_addr + ranges[k].offset, ranges[k].len);
+            noc_async_read(page_noc_addr + ranges[k].offset, slot_addr + ranges[k].offset, ranges[k].len);
         }
         if (++slot == a_live) {
             slot = 0;
