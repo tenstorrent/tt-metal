@@ -336,6 +336,15 @@ def main():
 
         runtime._on_layer_complete = on_layer_complete
 
+        n_media = int(os.getenv("PROFILE_MEDIA", "0"))
+        media_tokens = int(os.getenv("PROFILE_MEDIA_TOKENS", "576"))
+        if n_media:
+            from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
+
+            # Before compile(), which warms the splice only when a reader is installed.
+            runtime.media_embedding_reader = StubEmbeddingReader(hf_config.hidden_size)
+            print(f"[zone-prof] media reader: StubEmbeddingReader(hidden={hf_config.hidden_size})", flush=True)
+
         # --- 1. WARMUP: JIT-compiles every op and populates the program cache. Its ops land in the CSV
         # too, but outside the `profiled_chunk` zone, so the parser drops them.
         print(f"[zone-prof] warmup / compile ({num_layers}L, SP={sp} x TP={tp} + EP={sp * tp}) ...", flush=True)
@@ -344,17 +353,6 @@ def main():
         print(f"[zone-prof] warmup done in {(time.perf_counter()-t0):.1f}s", flush=True)
 
         tokens = load_tokens(total)
-
-        n_media = int(os.getenv("PROFILE_MEDIA", "0"))
-        media_tokens = int(os.getenv("PROFILE_MEDIA_TOKENS", "576"))
-        if n_media:
-            from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
-
-            # compile() warms the splice through _warm_media, which installs a stub reader and then
-            # restores the original in a finally — so afterwards the reader is whatever it was, and
-            # this harness has no store, so that is None. The profiled chunk needs its own.
-            runtime.media_embedding_reader = StubEmbeddingReader(hf_config.hidden_size)
-            print(f"[zone-prof] media reader: StubEmbeddingReader(hidden={hf_config.hidden_size})", flush=True)
 
         def media_refs_for(c):
             from models.demos.common.prefill.media_stub import stub_media_key
