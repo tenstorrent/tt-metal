@@ -6,8 +6,8 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "llk_device_fixture.hpp"
 #include "single_core_compute_runners.hpp"

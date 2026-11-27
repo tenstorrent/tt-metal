@@ -59,7 +59,7 @@ def _sweep_stats(d):
     from helpers.format_config import DataFormat
     from helpers.llk_params import ApproximationMode, MathOperation
     from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS, ulp_distance, ulp_stats
-    from helpers.ulp_sweep import measurable_mask, nonfinite_failures, ranked_mask
+    from helpers.ulp_sweep import Swept
 
     in_fmt, out_fmt = DataFormat[d["in"]], DataFormat[d["out"]]
     src, golden, result = d["src"], torch.as_tensor(d["golden"]), d["result"]
@@ -72,24 +72,16 @@ def _sweep_stats(d):
     dest = DestAccumulation[d["dest_acc"]]
     # Ranked as the sweep ranks: measurable lanes within the op's claim, which the
     # non-finite column below already reads.
-    mask = ranked_mask(MathOperation[d["op"]], src, golden, result, in_fmt, out_fmt, dest)
+    swept = Swept(src, golden, result, in_fmt, out_fmt, dest, MathOperation[d["op"]], ApproximationMode[d["approx"]])
+    mask = swept.ranked
     if d.get("binary"):
         # A lane is measurable only if both operands are.
-        mask = mask & measurable_mask(d["src_b"], golden, result, in_fmt, output_format=out_fmt, dest_acc=dest)
+        mask = mask & Swept(d["src_b"], golden, result, in_fmt, out_fmt, dest).measurable
     # As test_unary_sfpu_ulp.py measures it: the Dest flushes subnormal results, and
     # the approx mode names the cell for the sweep's known non-finite lanes.
     distance = ulp_distance(golden, result, flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS)
     stats = ulp_stats(distance, mask)
-    nonfinite = nonfinite_failures(
-        MathOperation[d["op"]],
-        src,
-        golden,
-        result,
-        in_fmt,
-        out_fmt,
-        dest_acc=dest,
-        approx_mode=ApproximationMode[d["approx"]],
-    )
+    nonfinite = swept.nonfinite_failures
     flat = distance.reshape(-1).to(torch.int64)
     measured = mask.reshape(-1) & (flat >= 0)
     le1 = float(((flat <= 1) & measured).sum()) / max(int(measured.sum()), 1)

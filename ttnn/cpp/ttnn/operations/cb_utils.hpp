@@ -6,7 +6,7 @@
 
 #include <numeric>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 namespace tt::tt_metal {
 

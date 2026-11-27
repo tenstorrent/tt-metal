@@ -11,11 +11,11 @@
 #include <string>
 #include <unordered_map>
 
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/unique_any.hpp>
 
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <utility>
 
 namespace tt::tt_metal::program_cache::detail {

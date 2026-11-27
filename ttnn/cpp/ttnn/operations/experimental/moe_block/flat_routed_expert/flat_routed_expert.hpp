@@ -12,8 +12,8 @@
 #include <memory>
 #include <optional>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "device/flat_routed_expert_device_operation_types.hpp"
 #include "device/flat_routed_expert_plan.hpp"

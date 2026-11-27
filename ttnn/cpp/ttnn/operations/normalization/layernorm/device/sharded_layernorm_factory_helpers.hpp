@@ -10,8 +10,8 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -134,6 +134,9 @@ struct GridParams {
     bool grid_is_rectangular = true;
 
     static GridParams compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size);
+    // The same from an explicit shard spec: the input's own, or the block grid an interleaved input is split over.
+    static GridParams compute(
+        const Tensor& input, const ShardSpec& shard_spec, uint32_t block_ht, CoreCoord compute_with_storage_grid_size);
 };
 
 // Struct to hold worker distribution parameters
@@ -275,6 +278,10 @@ struct SpecConfig {
     // The cross-core reduce runs in two stages. Only then does the non-distributed Var[x] reduce have a
     // first-stage result for the reader to gather, so only then does it need the ex2 buffer.
     bool use_two_stage_reduce = false;
+    // Interleaved (DRAM or L1) input / output under a sharded program config: the writer reads this core's block
+    // into in0 and writes the output block back by tile id, instead of both buffers borrowing shard memory.
+    bool interleaved_input = false;
+    bool interleaved_output = false;
 
     // Buffer sizes
     DFBSizeParams::Sizes sizes;
@@ -392,6 +399,8 @@ struct RuntimeArgsContext {
     // Flags
     bool is_post_all_gather = false;
     bool writes_back = false;
+    bool interleaved_io = false;  // the writer reads or writes an interleaved tensor by tile id
+    uint32_t block_ht = 0;
     uint32_t num_distributed_devices = 1;
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
 

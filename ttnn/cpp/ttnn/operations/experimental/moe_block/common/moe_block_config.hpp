@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/operations/experimental/moe_block/common/kernels/expert_activation_names.hpp"

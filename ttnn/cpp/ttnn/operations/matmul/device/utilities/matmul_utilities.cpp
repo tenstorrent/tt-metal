@@ -9,14 +9,14 @@
 #include <limits>
 #include <set>
 
-#include "tt-metalium/allocator.hpp"
+#include "tt-metalium/mesh/allocator.hpp"
 #include "tt-metalium/workload/specification/kernel_spec.hpp"
 #include "tt-metalium/experimental/device.hpp"
-#include "tt-metalium/buffer_types.hpp"
-#include "tt-metalium/hal.hpp"
-#include "tt-metalium/kernel_types.hpp"
-#include "tt-metalium/mesh_device.hpp"
-#include "tt-metalium/work_split.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include "tt-metalium/discovery/hal.hpp"
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
+#include "tt-metalium/utils/work_split.hpp"
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"

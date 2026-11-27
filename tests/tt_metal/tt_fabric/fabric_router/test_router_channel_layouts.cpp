@@ -10,7 +10,7 @@
 
 #include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 
 namespace tt::tt_fabric {
 namespace {
