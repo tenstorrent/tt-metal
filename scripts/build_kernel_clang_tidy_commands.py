@@ -362,7 +362,15 @@ def dedupe_key(entry, mode):
 def find_clang_tidy(explicit):
     if explicit:
         return explicit
-    for name in ("clang-tidy-21", "clang-tidy-20", "clang-tidy-19", "clang-tidy-18", "clang-tidy-17", "clang-tidy"):
+    for name in (
+        "clang-tidy-23",
+        "clang-tidy-21",
+        "clang-tidy-20",
+        "clang-tidy-19",
+        "clang-tidy-18",
+        "clang-tidy-17",
+        "clang-tidy",
+    ):
         if shutil.which(name):
             return name
     return None

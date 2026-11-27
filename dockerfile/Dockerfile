@@ -190,8 +190,7 @@ RUN git config --global --add safe.directory '*'
 
 # Install extra ci apt requirements
 # Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
-# clang-tidy-23 comes from the llvm-23 apt repo added (and pinned below the v17/v20
-# default priority) in install_dependencies.sh.
+# clang-tidy-23 comes from the llvm-23 apt repo set up in install_dependencies.sh.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
@@ -213,16 +212,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zstd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# The LLVM packages install versioned names only. CodeChecker resolves the
-# unversioned ones, and consults ClangSA.analyzer_binary() even when only
-# clang-tidy runs, where a None crashes compilation-database parsing. Three
-# workflows each fixed that up themselves before running it; do it once here.
-# Nothing in the build picks a compiler by bare name: build_metal.sh passes an
-# explicit path, CMakePresets pins clang-tidy-20, and CMake's own default probe
-# looks for cc/c++.
-RUN for tool in clang clang++ clang-tidy; do \
-        update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100; \
-    done && \
+# LLVM ships versioned names only; CodeChecker needs the unversioned ones.
+# clang-tidy defaults to v23 to match CI.
+RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100 && \
+    update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100 && \
+    update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-23 100 && \
     clang --version && clang-tidy --version
 
 #############################################################

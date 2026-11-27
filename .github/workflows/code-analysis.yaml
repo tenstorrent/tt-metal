@@ -293,7 +293,7 @@ jobs:
       contents: read
     container:
       # The ci-build image the clang-tidy jobs above already use: it has
-      # clang-tidy-20, cmake and ninja, so no extra image is needed.
+      # clang-tidy-23, cmake and ninja, so no extra image is needed.
       image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       volumes:
         - ${{ github.workspace }}:/work

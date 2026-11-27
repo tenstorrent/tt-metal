@@ -16,7 +16,7 @@ Options:
                          the edits are applied, with inserted includes respelled the
                          way the repo writes them (<tt-metalium/...>, <tt_stl/...>)
     -j N                 parallel clang-tidy processes (default: nproc)
-    --clang-tidy BIN     clang-tidy binary (default: clang-tidy-20, else clang-tidy)
+    --clang-tidy BIN     clang-tidy binary (default: clang-tidy-23, else clang-tidy)
 
 <build-dir> must have been configured with the `iwyu` preset (which turns on
 CMAKE_VERIFY_INTERFACE_HEADER_SETS and CMAKE_EXPORT_COMPILE_COMMANDS) and have had
@@ -396,7 +396,7 @@ def main() -> int:
     parser.add_argument("--fail-on-findings", action="store_true")
     parser.add_argument("--fix", action="store_true")
     parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1)
-    parser.add_argument("--clang-tidy", default=shutil.which("clang-tidy-20") or "clang-tidy")
+    parser.add_argument("--clang-tidy", default=shutil.which("clang-tidy-23") or "clang-tidy")
     parser.add_argument("--artifact", default="include-cleaner-api-headers-results")
     args = parser.parse_intermixed_args()
 

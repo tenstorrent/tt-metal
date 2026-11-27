@@ -414,11 +414,24 @@ configure_compiler_alternatives() {
             update-alternatives --install /usr/bin/$tool $tool /usr/bin/${tool}-20 100 || true
             update-alternatives --set $tool /usr/bin/${tool}-20 2>/dev/null || true
         done
-        if [ -x /usr/bin/clang-tidy-20 ]; then
-            update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-20 100 || true
-            update-alternatives --set clang-tidy /usr/bin/clang-tidy-20 2>/dev/null || true
-        fi
     fi
+}
+
+# clang-tidy defaults to v23, falling back to v20. Runs for docker and bare-metal.
+configure_clang_tidy_alternatives() {
+    if ! is_debian_based; then
+        return
+    fi
+
+    local version
+    for version in 23 20; do
+        if [ -x /usr/bin/clang-tidy-$version ]; then
+            echo "[INFO] Setting clang-tidy-$version as default via update-alternatives"
+            update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-$version 100 || true
+            update-alternatives --set clang-tidy /usr/bin/clang-tidy-$version 2>/dev/null || true
+            return
+        fi
+    done
 }
 
 # We currently have an affinity to clang as it is more thoroughly tested in CI
@@ -601,6 +614,7 @@ install() {
     if [ "$docker" -eq 1 ]; then
         configure_compiler_alternatives
     fi
+    configure_clang_tidy_alternatives
 
     # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
     if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then
