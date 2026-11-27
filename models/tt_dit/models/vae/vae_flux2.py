@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import itertools
+import math
 from typing import TYPE_CHECKING
 
 import torch
@@ -32,7 +33,7 @@ from .vae import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
 
 
 # https://github.com/black-forest-labs/flux2/blob/6bb103559da75b67d75bf77cebba0027ba412ebc/src/flux2/autoencoder.py#L271
@@ -156,9 +157,17 @@ class Flux2VaeDecoder(Module):
             warm_fixed_slice_flatten(ctx.device, [*channel_counts, out_channels])
         # So does the mid block's token gather where the token rows per chip are not whole tiles.
         warm_token_gather(ctx, channel_counts[0])
-        # And the attention's SDPA at both of its programs.
+
+    def warm_sdpa(self, image_sizes: Iterable[tuple[int, int]]) -> None:
+        """Build the mid block's attention programs that images of the given sizes (height, width) reach; see
+        VaeAttention.warm_sdpa."""
+        scale = 2 ** (len(self._conv_levels()) - 1)
+        tokens = max(
+            math.ceil(h / scale / self._ctx.h_factor) * math.ceil(w / scale / self._ctx.w_factor)
+            for h, w in image_sizes
+        )
         for attention in self.mid_block.attentions:
-            attention.warm_sdpa()
+            attention.warm_sdpa(tokens)
 
     def _conv_levels(self) -> list[list[Module]]:
         """The modules holding the convs at each resolution, from the latent's to the image's: each up block's
@@ -352,9 +361,17 @@ class Flux2VaeEncoder(Module):
                     configure_conv2d(module, fixed_slice_hw=self.fixed_slice_hw_per_level[level])
             warm_fixed_slice_flatten(ctx.device, [*channel_counts, z_channels])
         warm_token_gather(ctx, channel_counts[-1])
-        # And the attention's SDPA at both of its programs.
+
+    def warm_sdpa(self, image_sizes: Iterable[tuple[int, int]]) -> None:
+        """Build the mid block's attention programs that images of the given sizes (height, width) reach; see
+        VaeAttention.warm_sdpa."""
+        scale = 2 ** (len(self._conv_levels()) - 1)
+        tokens = max(
+            math.ceil(h / scale / self._ctx.h_factor) * math.ceil(w / scale / self._ctx.w_factor)
+            for h, w in image_sizes
+        )
         for attention in self.mid_block.attentions:
-            attention.warm_sdpa()
+            attention.warm_sdpa(tokens)
 
     def _conv_levels(self) -> list[list[Module]]:
         """The modules holding the convs at each resolution, from the image's to the latent's: each down block's
