@@ -786,21 +786,25 @@
   budget_type: demo
   sp_config: sc1
 
-- name: "(Kimi-K3-2.8T) MoonViT-V2 vision attention and block accuracy 64k, full model small-image accuracy and traced perf, synthetic weights"
-  # Sampled rows from each of the 4 ring chips vs an fp32 CPU golden; no full-image reference.
-  # Full model on a 48x48-patch image vs an fp32 CPU reference computed in the test.
-  # Perf: the full model traced on the largest processor grid, time per replay asserted, output not checked.
+- name: "(Kimi-K3-2.8T) MoonViT-V2 vision attention and block accuracy 64k, full model small-image accuracy and traced perf, real weights"
+  # Attention and block: sampled rows from each ring chip vs an fp32 CPU reference.
+  # Full model: a 48x48-patch image vs an fp32 CPU reference.
+  # Perf: traced full model on the largest grid, time only.
+  # Real weights from the MXFP4 checkpoint, the only K3 checkpoint on Weka with the vision weights.
+  # The tests skip without it, so the job checks for it first.
   fabric_profile: torus_xy
   cmd: |
     timeout -k 2m 10m mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      test -f "$KIMI_K3_HF_MODEL/model.safetensors.index.json" || { echo "::error::no Kimi-K3 checkpoint at $KIMI_K3_HF_MODEL"; exit 1; }
       python3 -m pytest \
         models/experimental/kimi_k3_moonvit_v2/tests/test_vision_attention.py \
         models/experimental/kimi_k3_moonvit_v2/tests/test_vision_block.py \
         models/experimental/kimi_k3_moonvit_v2/tests/test_full_size.py \
         models/experimental/kimi_k3_moonvit_v2/tests/test_vision_model.py \
-        -m synthetic -k "real_rows_from_each_chip or model_trace_perf or small_image" -vvv --tb=short
+        -m real -k "real_rows_from_each_chip or model_trace_perf or small_image" -vvv --tb=short
     '
   test_type: kimi_k3_moonvit
   test_tags: [kimi_k3, accuracy]

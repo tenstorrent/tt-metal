@@ -4,7 +4,7 @@
 
 """Device, the 4-chip ring (one LoudBox row): full-size encoder layers, each on its own, the full 27-layer
 encoder and the full model against reference outputs saved by `goldens.py`, real weights. Also
-`test_full_size_model_trace_perf`, random weights, which asserts the traced model's time and checks no output.
+`test_full_size_model_trace_perf`, random or real weights, which asserts the traced model's time and checks no output.
 
 Two image sizes (`SIZES`), each with its own saved outputs:
   256x256: 65,536 of the 67,584 padded rows real
@@ -15,7 +15,7 @@ rounding is larger than the device's error in deeper layers. The CPU reference i
 length, so it is not recomputed here: generate it once per size with
 `python -m models.experimental.kimi_k3_moonvit_v2.tests.goldens --grid <H>x<W>`.
 The tests that check outputs skip when `$MOONVIT_GOLDEN_DIR` is unset, or the saved outputs or the
-checkpoint are missing; `test_full_size_model_trace_perf` needs neither.
+checkpoint are missing; `test_full_size_model_trace_perf` needs no saved outputs.
 
 Every chip holds real rows (16,896 on chips 0-2; on chip 3, 14,848 at 256x256 and 16,632 at 510x132),
 so besides the PCC over the whole image each chip's real rows (in window order, as the device splits
@@ -395,8 +395,9 @@ def test_full_size_model_trace(mesh_device, sp_axis, num_links, config, referenc
 
 @RING_TRACE
 @SYNTHETIC
+@REAL
 def test_full_size_model_trace_perf(mesh_device, sp_axis, num_links, config, reference):
-    """`test_full_size_model_trace` on PERF_SIZE with random weights, for time only: no saved outputs,
+    """`test_full_size_model_trace` on PERF_SIZE, for time only: no saved outputs,
     no output checks. Asserts the time per replay is within the system mesh's MODEL_TRACE_LIMIT_MS."""
     system_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
     if system_shape not in MODEL_TRACE_LIMIT_MS:
@@ -413,8 +414,7 @@ def test_full_size_model_trace_perf(mesh_device, sp_axis, num_links, config, ref
 
     with Trace(mesh_device, forward) as trace:
         milliseconds = trace.time_replays(
-            f"full-size {PERF_SIZE[0]}x{PERF_SIZE[1]} model ({config.num_hidden_layers} layers, merger, "
-            "projector), random weights"
+            f"full-size {PERF_SIZE[0]}x{PERF_SIZE[1]} model ({config.num_hidden_layers} layers, merger, " "projector)"
         )
     assert (
         lower_limit_ms <= milliseconds <= upper_limit_ms

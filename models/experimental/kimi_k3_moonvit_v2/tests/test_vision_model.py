@@ -7,8 +7,9 @@ projector) against the reference `KimiK3VisionModel` in fp32 (`goldens.to_fp32`)
 Not the bf16 reference: its own rounding is larger than the device's error. `test_full_size.py`
 runs it on a full-size image against the saved fp32 outputs.
 
-`test_vision_model_small_image` is the CI end-to-end check: random weights and a 48x48-patch image
-(672x672 px), so the CPU reference takes seconds. The config and kernels stay at production size."""
+`test_vision_model_small_image` is the CI end-to-end check: a 48x48-patch image (672x672 px), so the
+CPU reference takes seconds. CI runs it with the checkpoint's weights. The config and kernels stay at
+production size."""
 
 from __future__ import annotations
 
@@ -55,5 +56,6 @@ def test_vision_model(mesh_device, sp_axis, num_links, config, reference, grid):
 
 @RING
 @SYNTHETIC
+@REAL
 def test_vision_model_small_image(mesh_device, sp_axis, num_links, config, reference):
     check_vision_model(mesh_device, sp_axis, num_links, config, reference, SMALL_IMAGE_GRID)
