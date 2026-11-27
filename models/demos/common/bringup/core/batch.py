@@ -538,13 +538,31 @@ def group_class(group: list[tuple[str, str]]) -> str | None:
     return unit_class([r for rs in runs for r in rs])
 
 
-def one_load_errors(units: list[tuple[str, str]], env: dict) -> list[str]:
+def one_load_errors(units: list[tuple[str, str]], env: dict, chunk: str | None = None) -> list[str]:
     """F283 / F285 (OWNER 2026-11-19: "a task may load the model at most once per gate"; "accuracy loads the whole
     model; performance does not"): the gate's units (unit, command) as gate_groups puts them in processes. Allowed:
     one group of accuracy units ("full": the fresh full-model process with the determinism check) and one group of
     performance units ("executed": the resident runner's model of the executed layers, no load when it holds it).
     More: why, naming the groups' units and the variables they differ in."""
     groups = gate_groups(units, env)
+    # F307: the chunk is the load's geometry for every run, whatever a test declares per-run (test_no_rebuild's
+    # BRINGUP_CHUNK is per-run only so an unset value and the spec's chunk share one load): two chunks in one layer
+    # class are two loads (WA.4: an 8192 gate's 5120 ladder passed validate, then failed NeedsFreshProcess)
+    for cls in ("full", "executed"):
+        seen = {}
+        for g in groups:
+            if group_class(g) != cls:
+                continue
+            for u, c in g:
+                for r in parse_all(launch_form(c)[0]) or []:
+                    r = _with_config(r, units)  # (the determinism check takes the accuracy units' configuration)
+                    seen.setdefault(r["env"].get("BRINGUP_CHUNK", chunk), []).append(u)
+        if len(seen) > 1:
+            parts = "; ".join(f"chunk {k or 'unset'}: {', '.join(sorted(set(v)))}" for k, v in seen.items())
+            return [
+                f"the gate needs {len(seen)} {cls}-layer model loads, one per chunk ({parts}). Owner rule (2026-11-19, "
+                "spec tests.one_load): one load per layer class per gate; measure another chunk in its own task"
+            ]
     loads, by = [], {}
     for g in groups:
         cls = group_class(g)
