@@ -217,3 +217,73 @@ def test_matmul_decode_large_k_untilized_activation(device, m):
     assert list(tt_out.shape) == [1, 1, m, n]
     assert list(tt_out.memory_config().shard_spec.shape) == [m, n]
     assert_with_pcc(torch_a.float() @ torch_b, ttnn.to_torch(tt_out).float(), 0.99)
+
+
+@pytest.mark.parametrize(
+    "m, k, n, num_cores, a_layout",
+    [
+        # The V4.1 indexer weights_proj: K = D = 5120, N = 32 head weights, on 40 / 20 cores.
+        (1, 5120, 32, 40, ttnn.ROW_MAJOR_LAYOUT),
+        (1, 5120, 32, 20, ttnn.ROW_MAJOR_LAYOUT),
+        # A replica in 1x32 tiles (an mcast output) is the same bytes.
+        (1, 5120, 32, 40, ttnn.TILE_LAYOUT),
+        # Several rows (a batch step's tokens), and an odd tile count per core (the general matmul path).
+        (4, 5120, 32, 40, ttnn.ROW_MAJOR_LAYOUT),
+        (1, 5120, 32, 32, ttnn.ROW_MAJOR_LAYOUT),
+        # One core: the whole K.
+        (1, 5120, 32, 1, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize("reduce_fan_in", [2, 4])
+def test_matmul_decode_large_k_replicated(device, m, k, n, num_cores, a_layout, reduce_fan_in):
+    """A HEIGHT_SHARDED ``[M, K]`` replica on a grid that does not start at (0, 0) (the decode tokens'
+    all_gather_for_matmul replica); B on the first ``num_cores`` of it, each core copying its K-slice out of
+    its own replica. The output sits on B's first core."""
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    replica_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    if replica_grid.num_cores() < num_cores:
+        pytest.skip(f"device has fewer than {num_cores} cores off row and column 0")
+    b_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        ttnn.CoreCoord(1, 1), num_cores, replica_grid, row_wise=True
+    )
+    kc = k // num_cores
+    a_memory_config = ttnn.create_sharded_memory_config(
+        (m, k),
+        core_grid=replica_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    b_memory_config = ttnn.create_sharded_memory_config(
+        (kc, n),
+        core_grid=b_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_b = ttnn.from_torch(
+        torch.randn((k, n), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=b_memory_config,
+    )
+    torch_b = ttnn.to_torch(tt_b).float()
+    root = ttnn.corerange_to_cores(b_grid, row_wise=True)[0]
+    tile = ttnn.Tile((1, ttnn.TILE_SIZE)) if a_layout == ttnn.TILE_LAYOUT else None
+
+    for _ in range(3):
+        torch_a = torch.randn((m, k), dtype=torch.bfloat16)
+        replica = torch_a.repeat(replica_grid.num_cores(), 1)
+        tt_a = ttnn.from_torch(
+            replica, dtype=ttnn.bfloat16, layout=a_layout, tile=tile, device=device, memory_config=a_memory_config
+        )
+        tt_out = ttnn.experimental.matmul_decode_large_k(tt_a, tt_b, reduce_fan_in=reduce_fan_in)
+
+        assert list(tt_out.shape) == [m, n]
+        shard_spec = tt_out.memory_config().shard_spec
+        assert list(shard_spec.shape) == [m, n]
+        out_cores = ttnn.corerange_to_cores(shard_spec.grid)
+        assert len(out_cores) == 1 and (out_cores[0].x, out_cores[0].y) == (root.x, root.y)
+        assert_with_pcc(torch_a.float() @ torch_b, ttnn.to_torch(tt_out).float(), 0.999)

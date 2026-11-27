@@ -25,9 +25,10 @@ uint32_t large_k_leading_volume(const ttnn::Shape& shape) {
     return volume;
 }
 
-// The root of the reduction tree and the only core that holds the output.
-CoreRangeSet large_k_root_core(const Tensor& input_tensor_a) {
-    const auto& grid = input_tensor_a.memory_config().shard_spec().value().grid;
+// The root of the reduction tree and the only core that holds the output: the first core of B's grid, which is
+// A's unless A is replicated.
+CoreRangeSet large_k_root_core(const Tensor& input_tensor_b) {
+    const auto& grid = input_tensor_b.memory_config().shard_spec().value().grid;
     const CoreCoord root = tt::tt_metal::corerange_to_cores(grid, 1, /*row_wise=*/true).front();
     return CoreRangeSet(CoreRange(root, root));
 }
@@ -47,14 +48,19 @@ void MatmulDecodeLargeKDeviceOperation::validate_on_program_cache_miss(
     const uint32_t K = operation_attributes.K;
     const uint32_t N = operation_attributes.N;
 
+    const bool replicated = large_k_replicated_a(a);
     TT_FATAL(
-        a.layout() == Layout::ROW_MAJOR, "matmul_decode_large_k requires input A in ROW_MAJOR, but got {}", a.layout());
+        a.layout() == Layout::ROW_MAJOR || (replicated && a.tensor_spec().tile().get_height() == 1 &&
+                                            a.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH),
+        "matmul_decode_large_k requires input A in ROW_MAJOR (a replicated A may also be in 1x32 tiles, the same "
+        "bytes), but got {}",
+        a.layout());
     TT_FATAL(
         a.dtype() == DataType::BFLOAT16, "matmul_decode_large_k requires input A in BFLOAT16, but got {}", a.dtype());
     TT_FATAL(
-        a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+        (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED || replicated) &&
             a.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
-        "matmul_decode_large_k requires input A WIDTH_SHARDED in L1, but got {}",
+        "matmul_decode_large_k requires input A WIDTH_SHARDED (or a HEIGHT_SHARDED replica) in L1, but got {}",
         a.memory_config());
     const auto& a_shard = a.memory_config().shard_spec().value();
     TT_FATAL(
@@ -62,8 +68,9 @@ void MatmulDecodeLargeKDeviceOperation::validate_on_program_cache_miss(
         "matmul_decode_large_k requires input A's shards in ROW_MAJOR orientation (shard i is K-slice i)");
     const uint32_t fold_rows = operation_attributes.fold_rows;
     TT_FATAL(fold_rows >= 1, "matmul_decode_large_k requires fold_rows >= 1, but got {}", fold_rows);
+    TT_FATAL(!replicated || fold_rows == 1, "matmul_decode_large_k folds rows only of a WIDTH_SHARDED A");
     TT_FATAL(
-        fold_rows > 1 || large_k_leading_volume(a.logical_shape()) == 1,
+        fold_rows > 1 || replicated || large_k_leading_volume(a.logical_shape()) == 1,
         "matmul_decode_large_k requires input A's leading dims to be 1, but got shape {}",
         a.logical_shape());
     TT_FATAL(
@@ -71,7 +78,6 @@ void MatmulDecodeLargeKDeviceOperation::validate_on_program_cache_miss(
         "matmul_decode_large_k treats each row of A as a 1x32 tile, so M must be in [1, {}], but got {}",
         tt::constants::TILE_HEIGHT,
         M);
-    const uint32_t num_cores = a_shard.grid.num_cores();
     TT_FATAL(
         a_shard.shape[0] == M * fold_rows,
         "matmul_decode_large_k requires input A's shard height {} to equal M * fold_rows = {} * {}",
@@ -83,7 +89,39 @@ void MatmulDecodeLargeKDeviceOperation::validate_on_program_cache_miss(
         "matmul_decode_large_k requires input A's shard width {} to be a multiple of {}",
         a_shard.shape[1],
         tt::constants::TILE_WIDTH);
-    const uint32_t Kc = a_shard.shape[1] * fold_rows;
+    TT_FATAL(
+        b.memory_config().is_sharded() && b.memory_config().shard_spec().has_value(),
+        "matmul_decode_large_k requires input B sharded with a shard spec, but got {}",
+        b.memory_config());
+    const CoreRangeSet& grid = b.memory_config().shard_spec().value().grid;
+    const uint32_t num_cores = grid.num_cores();
+    uint32_t Kc = a_shard.shape[1] * fold_rows;
+    if (replicated) {
+        TT_FATAL(
+            a_shard.shape[1] == K,
+            "matmul_decode_large_k requires a replicated A's shard width {} to be K = {}",
+            a_shard.shape[1],
+            K);
+        for (const CoreCoord& core : tt::tt_metal::corerange_to_cores(grid, std::nullopt, /*row_wise=*/true)) {
+            TT_FATAL(
+                a_shard.grid.contains(core),
+                "matmul_decode_large_k requires B's cores {} within the replicated A's {}",
+                grid.str(),
+                a_shard.grid.str());
+        }
+        TT_FATAL(
+            K % (num_cores * tt::constants::TILE_WIDTH) == 0,
+            "matmul_decode_large_k requires K = {} to split into {} tile-aligned slices",
+            K,
+            num_cores);
+        Kc = K / num_cores;
+    } else {
+        TT_FATAL(
+            grid == a_shard.grid,
+            "matmul_decode_large_k requires input B on the same cores as input A, but got {} vs {}",
+            grid.str(),
+            a_shard.grid.str());
+    }
     TT_FATAL(
         Kc * num_cores == K,
         "matmul_decode_large_k requires A's {} shards of width {} to cover K = {} exactly",
@@ -109,10 +147,8 @@ void MatmulDecodeLargeKDeviceOperation::validate_on_program_cache_miss(
         b.memory_config());
     const auto& b_shard = b.memory_config().shard_spec().value();
     TT_FATAL(
-        b_shard.grid == a_shard.grid && b_shard.orientation == a_shard.orientation,
-        "matmul_decode_large_k requires input B on the same cores and shard orientation as input A, but got {} vs {}",
-        b_shard.grid.str(),
-        a_shard.grid.str());
+        b_shard.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR,
+        "matmul_decode_large_k requires input B's shards in ROW_MAJOR orientation (shard i is K-slice i)");
     TT_FATAL(
         b_shard.shape[0] == Kc && b_shard.shape[1] == N,
         "matmul_decode_large_k requires input B's shard to be [Kc, N] = [{}, {}], but got [{}, {}]",
@@ -171,11 +207,19 @@ MatmulDecodeLargeKDeviceOperation::spec_return_value_t MatmulDecodeLargeKDeviceO
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input_tensor_a;
     ttnn::Shape output_shape(a.logical_shape());
-    output_shape[-2] = a.logical_shape()[-2] / operation_attributes.fold_rows;
+    if (large_k_replicated_a(a)) {
+        // A replica's volume is one [M, K] per core; the product is one [M, N].
+        for (int i = 0; i < static_cast<int>(output_shape.rank()) - 2; ++i) {
+            output_shape[i] = 1;
+        }
+        output_shape[-2] = operation_attributes.M;
+    } else {
+        output_shape[-2] = a.logical_shape()[-2] / operation_attributes.fold_rows;
+    }
     output_shape[-1] = operation_attributes.N;
 
     const auto shard_spec = tt::tt_metal::ShardSpec(
-        large_k_root_core(a),
+        large_k_root_core(tensor_args.input_tensor_b),
         {static_cast<uint32_t>(operation_attributes.M), static_cast<uint32_t>(operation_attributes.N)},
         tt::tt_metal::ShardOrientation::ROW_MAJOR);
     const auto memory_config = MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec);
@@ -207,12 +251,16 @@ matmul_decode_large_k(
     uint32_t fold_rows) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeLargeKDeviceOperation;
 
-    // compute_output_specs runs ahead of validation and reads A's shard grid, so that much has to
+    // compute_output_specs runs ahead of validation and reads A's shard and B's grid, so that much has to
     // hold before launching.
     TT_FATAL(
         input_tensor_a.memory_config().is_sharded() && input_tensor_a.memory_config().shard_spec().has_value(),
         "matmul_decode_large_k requires input A to be sharded with a shard spec, but got {}",
         input_tensor_a.memory_config());
+    TT_FATAL(
+        input_tensor_b.memory_config().is_sharded() && input_tensor_b.memory_config().shard_spec().has_value(),
+        "matmul_decode_large_k requires input B to be sharded with a shard spec, but got {}",
+        input_tensor_b.memory_config());
 
     const auto& a_shape = input_tensor_a.logical_shape();
     const auto& b_shape = input_tensor_b.logical_shape();
@@ -228,7 +276,9 @@ matmul_decode_large_k(
         fold_rows);
     // Folded, every group of fold_rows rows is one logical row, leading dims included.
     uint32_t m = a_shape[-2];
-    if (fold_rows > 1) {
+    if (ttnn::operations::experimental::matmul_decode::large_k_replicated_a(input_tensor_a)) {
+        m = input_tensor_a.memory_config().shard_spec().value().shape[0];  // one replica's rows
+    } else if (fold_rows > 1) {
         m = static_cast<uint32_t>(a_shape.volume() / a_shape[-1]) / fold_rows;
     }
     const auto operation_attributes = OperationType::operation_attributes_t{

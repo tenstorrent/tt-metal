@@ -67,9 +67,16 @@ inline std::vector<LargeKTreeNode> build_large_k_tree(uint32_t num_cores, uint32
     return nodes;
 }
 
-// Decode matmul for large K / small N. Core i of A's grid holds the i-th K-slice of both
-// operands, so every core computes its [M, N] partial locally (no activation gather) and the
-// partials are summed up a fan-in tree whose root is the grid's first core.
+// A replicated A: HEIGHT_SHARDED, every core's shard the whole [M, K] (e.g. an all_gather_for_matmul replica of
+// the decode tokens). The op then runs on B's cores, a subset of A's, core i copying its K-slice i out of its own
+// replica. Otherwise A is WIDTH_SHARDED, shard i being K-slice i.
+inline bool large_k_replicated_a(const Tensor& a) {
+    return a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+}
+
+// Decode matmul for large K / small N. Core i of B's grid (A's, unless A is replicated) holds the
+// i-th K-slice of both operands, so every core computes its [M, N] partial locally (no activation
+// gather) and the partials are summed up a fan-in tree whose root is the grid's first core.
 struct MatmulDecodeLargeKDeviceOperation {
     struct operation_attributes_t {
         int M;

@@ -103,6 +103,12 @@ DECODE_LAYOUTS = {
 # than this through two K-block pages instead of whole: whole, q_a's ~450 KiB slab clashes with the persistent L1 a
 # verify-block model holds (the 4-row MoE partials, the Engram block gates). 0: read whole.
 _SELECT_DRAM_STREAM_BYTES = int(os.environ.get("DEEPSEEK_V41_SELECT_DRAM_STREAM_BYTES", str(128 * 1024)))
+# The indexer's weights_proj (K = 5120, N = 32) as ``matmul_decode_large_k`` on at most this many cores of the
+# unfused tokens replica's grid (which the fused path's 12x10 replica contains): each core multiplies its K-slice of
+# its own replica by its slab of the weight, held in L1 (320 KiB / cores), and the partials are summed up a fan-in-4
+# tree onto the first core. The most of 40, 20, 16, 10, 8 cores (an even tile count each) that fit. ``0``: one
+# ``matmul_decode`` core reading the whole weight from DRAM (Nov 26: 7.8 us).
+WEIGHTS_PROJ_LARGE_K_CORES = int(os.environ.get("DEEPSEEK_V41_WEIGHTS_PROJ_LARGE_K_CORES", "40"))
 # A one-row step without a scoring select runs q, kv and ring write as one ``attention_qkv_decode``
 # (``DEEPSEEK_V41_FUSED_QKV=0``: q_a, q_b, kv, their RoPE and the ring write as separate ops).
 _FUSED_QKV = os.environ.get("DEEPSEEK_V41_FUSED_QKV", "1") not in ("0", "", "false", "False")
@@ -334,6 +340,7 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         # Only the scoring select runs the indexer's projections.
         self.q_b_proj.set_dram_stream(_SELECT_DRAM_STREAM_BYTES)
         self.weights_proj.set_dram_stream(_SELECT_DRAM_STREAM_BYTES)
+        self.weights_proj_l1 = self._large_k_weights_proj(tokens_grid)
         # Identity gains (gain=2^20 with eps=2^40) for sharded_rmsnorm's row-block untile of (T, 32) TILE outputs.
         untile_gain = float(1 << 20)
         self._untile_q_gain = ttnn.from_torch(
@@ -350,6 +357,61 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    def _large_k_weights_proj(self, tokens_grid: ttnn.CoreRangeSet | None) -> ttnn.Tensor | None:
+        """``weights_proj``'s ``[K, N]`` weight HEIGHT_SHARDED in L1 over the first cores of ``tokens_grid``
+        (row-major; see :data:`WEIGHTS_PROJ_LARGE_K_CORES`), one ``[K / cores, N]`` slab a core, for
+        :meth:`_head_weights`; ``None`` when off or no count fits."""
+        if WEIGHTS_PROJ_LARGE_K_CORES <= 0 or tokens_grid is None:
+            return None
+        weight = self.weights_proj.weight
+        k, n = weight.shape[-2], weight.shape[-1]
+        fits = [
+            c
+            for c in (40, 20, 16, 10, 8)
+            if c <= min(WEIGHTS_PROJ_LARGE_K_CORES, tokens_grid.num_cores()) and k % (2 * c * ttnn.TILE_SIZE) == 0
+        ]
+        if not fits or n % ttnn.TILE_SIZE:
+            return None
+        cores = fits[0]
+        start = _receiver_cores_in_order(tokens_grid)[0]
+        grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(start, cores, tokens_grid, row_wise=True)
+        mem = ttnn.create_sharded_memory_config(
+            (k // cores, n),
+            core_grid=grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        # The DRAM weight is the logical [K, N] (one N block: no column reorder), whatever its ND sharding.
+        dram = ttnn.to_memory_config(weight, ttnn.DRAM_MEMORY_CONFIG)
+        l1 = ttnn.to_memory_config(dram, mem)
+        if dram.buffer_address() != weight.buffer_address():
+            ttnn.deallocate(dram)
+        return l1
+
+    def _head_weights(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
+        """``weights_proj(tokens)`` ``[M, Hi]``: with :attr:`weights_proj_l1`, ``matmul_decode_large_k`` straight off
+        a tokens replica holding its cores (ROW_MAJOR WIDTH_SHARDED on the first of them), else ``matmul_decode``."""
+        w = self.weights_proj_l1
+        if w is not None and self._large_k_reads(tokens, w):
+            return ttnn.experimental.matmul_decode_large_k(tokens, w, reduce_fan_in=4)
+        return self.weights_proj(_decode_activation(self.weights_proj, tokens))
+
+    @staticmethod
+    def _large_k_reads(tokens: ttnn.Tensor, w: ttnn.Tensor) -> bool:
+        """``tokens`` is a ROW_MAJOR (or 1x32-tiled) bfloat16 HEIGHT_SHARDED L1 ``[M, K]`` replica on ``w``'s cores."""
+        mem = tokens.memory_config()
+        if mem.memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED or mem.buffer_type != ttnn.BufferType.L1:
+            return False
+        if tokens.dtype != ttnn.bfloat16:
+            return False
+        if tokens.layout != ttnn.ROW_MAJOR_LAYOUT and tuple(tokens.get_tile().tile_shape) != (1, ttnn.TILE_SIZE):
+            return False
+        spec = mem.shard_spec
+        if spec.shape[1] != w.shape[-2] or spec.shape[0] > ttnn.TILE_SIZE:
+            return False
+        return _core_grid_contains(spec.grid, w.memory_config().shard_spec.grid)
 
     def _gather_heads(self, q: ttnn.Tensor, w: ttnn.Tensor, rows: int = 1) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """``rows`` rows' queries ``[1, 1, R, Hi * D]`` and head weights ``[1, 1, R, Hi]`` as the select's replicas on
@@ -434,7 +496,7 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             q = ttnn.to_memory_config(q_rm, q_mem)
             ttnn.deallocate(q_rm)
         q = _apply_rope(q, cos_row, sin_row, self.rot, self.rope_dim, head_dim=self.head_dim)
-        w = self.weights_proj(_decode_activation(self.weights_proj, tokens))
+        w = self._head_weights(tokens)
         if deallocate_inputs:
             ttnn.deallocate(tokens)
         if w.layout != ttnn.ROW_MAJOR_LAYOUT and w.get_tile().tile_shape[0] < 32:
@@ -622,7 +684,7 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             q = ttnn.to_memory_config(q_rm, q_mem)
             ttnn.deallocate(q_rm)
         q = _apply_rope(q, cos_row, sin_row, self.rot, self.rope_dim, head_dim=self.head_dim)
-        w = self.weights_proj(_decode_activation(self.weights_proj, tokens))
+        w = self._head_weights(tokens)
         if deallocate_inputs:
             ttnn.deallocate(tokens)
         if w.layout != ttnn.ROW_MAJOR_LAYOUT:

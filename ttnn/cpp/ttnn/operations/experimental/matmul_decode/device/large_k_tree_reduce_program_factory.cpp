@@ -41,14 +41,18 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
     const uint32_t out_tile_size = row_tile.get_tile_size(out_data_format);
 
     const auto& a_shard = input_tensor_a.memory_config().shard_spec().value();
-    const CoreRangeSet& grid = a_shard.grid;
+    // B's cores: A's, or with a replicated A the cores that each copy their K-slice out of it.
+    const bool replicated = large_k_replicated_a(input_tensor_a);
+    const CoreRangeSet& grid = input_tensor_b.memory_config().shard_spec().value().grid;
     const std::vector<CoreCoord> cores = corerange_to_cores(grid, std::nullopt, /*row_wise=*/true);
     const uint32_t num_cores = cores.size();
     const CoreCoord root = cores.front();
 
     const uint32_t M_tiles = operation_attributes.M;
     // A folded shard [M * fold_rows, Kc / fold_rows] is the same bytes as [M, Kc].
-    const uint32_t Kc_tiles = a_shard.shape[1] * operation_attributes.fold_rows / tt::constants::TILE_WIDTH;
+    const uint32_t Kc_tiles = replicated
+                                  ? operation_attributes.K / num_cores / tt::constants::TILE_WIDTH
+                                  : a_shard.shape[1] * operation_attributes.fold_rows / tt::constants::TILE_WIDTH;
     const uint32_t N_tiles = operation_attributes.N / tt::constants::TILE_WIDTH;
     const bool rms_norm = operation_attributes.rms_norm;
     const uint32_t out_num_tiles = M_tiles * N_tiles;
@@ -113,6 +117,7 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
     // then normalizes into the output shard.
     const uint32_t send_cb_index = CBIndex::c_5;
     const uint32_t rms_scale_cb_index = CBIndex::c_6;  // root only, rms_norm: one 1x32 scale per row
+    const uint32_t replica_cb_index = CBIndex::c_7;    // replicated A: the whole [M, K] replica, in place
 
     std::vector<CoreCoord> non_root_cores(cores.begin() + 1, cores.end());
     const CoreRangeSet root_core(CoreRange(root, root));
@@ -126,8 +131,23 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
             .page_size = in0_tile_size,
             .tile = TileDescriptor{row_tile},
         }}},
-        .buffer = input_tensor_a.buffer(),
+        // A replica's K-slice is copied in by the reader; a WIDTH_SHARDED A's shard is the slice.
+        .buffer = replicated ? nullptr : input_tensor_a.buffer(),
     });
+    const uint32_t K_tiles = operation_attributes.K / tt::constants::TILE_WIDTH;
+    if (replicated) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = M_tiles * K_tiles * in0_tile_size,
+            .core_ranges = grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = replica_cb_index,
+                .data_format = in0_data_format,
+                .page_size = in0_tile_size,
+                .tile = TileDescriptor{row_tile},
+            }}},
+            .buffer = input_tensor_a.buffer(),
+        });
+    }
     desc.cbs.push_back(CBDescriptor{
         .total_size = Kc_tiles * N_tiles * in1_tile_size,
         .core_ranges = grid,
@@ -206,16 +226,26 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
 
     const std::string kernel_dir = "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/";
 
-    // The reader only posts local CB credits, so it never touches the NoC.
+    // The reader posts local CB credits; with a replicated A it first copies this core's K-slice of each row out of
+    // the local replica (a NoC read of its own L1).
     KernelDescriptor reader;
     reader.kernel_source = kernel_dir + "dataflow/reader_large_k_tree_reduce.cpp";
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = grid;
-    reader.compile_time_args = {M_tiles * Kc_tiles, Kc_tiles * N_tiles, block_num_tiles, num_levels};
+    reader.compile_time_args = {
+        M_tiles * Kc_tiles,
+        Kc_tiles * N_tiles,
+        block_num_tiles,
+        num_levels,
+        static_cast<uint32_t>(replicated),
+        M_tiles,
+        K_tiles * in0_tile_size,
+        Kc_tiles * in0_tile_size};
     reader.named_compile_time_args = {
         {"cb_in0", in0_cb_index},
         {"cb_in1", in1_cb_index},
         {"cb_recv", recv_cb_index},
+        {"cb_replica", replica_cb_index},
     };
     reader.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
@@ -277,7 +307,9 @@ ProgramDescriptor MatmulDecodeLargeKDeviceOperation::TreeReduce::create_descript
     compute.runtime_args.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const LargeKTreeNode& node = tree[i];
-        reader.runtime_args.emplace_back(cores[i], node.children_per_level);
+        KernelDescriptor::CoreRuntimeArgs reader_args(node.children_per_level.begin(), node.children_per_level.end());
+        reader_args.push_back(i * Kc_tiles * in0_tile_size);  // replicated A: this core's K-slice offset in a row
+        reader.runtime_args.emplace_back(cores[i], std::move(reader_args));
 
         const bool has_parent = node.parent >= 0;
         const CoreCoord parent_phys =
