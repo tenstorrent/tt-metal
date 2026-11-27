@@ -52,8 +52,9 @@ CHECK_CATEGORY = {
     "post_reset_state_stable": "reset",
     "eth_bandwidth": "eth",
     "eth_link_up": "eth",
+    "retest_reset_ok": "reset",
 }
-STRESS_PHASE = "tests"
+STRESS_PHASES = {"tests", "retest"}
 
 # Benign fleet-wide WARNs: tracked but kept out of the actionable rollups.
 ACKNOWLEDGED_CHECKS = {"cpld_fw_old"}
@@ -200,7 +201,7 @@ def category_for(phase: str, check: dict) -> str:
         return CHECK_CATEGORY[name]
     if phase == "reset_loop":
         return "reset"
-    if phase == STRESS_PHASE:
+    if phase in STRESS_PHASES:
         return "stress_test"
     return IP_TO_CATEGORY.get(check.get("ip", ""), "other")
 

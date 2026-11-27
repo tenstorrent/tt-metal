@@ -9,11 +9,10 @@
 
 #include "ckernel_sfpu_operand.h"
 #include "ckernel_trisc_common.h"
-#include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_binary_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "sfpi.h"
 
 // Dest op type, the Dest twin of ckernel_sfpu_srcs.h: SfpuDestOp<MATH, LAYOUT> runs any math policy on Dest tiles.
@@ -22,24 +21,6 @@ namespace ckernel {
 namespace sfpu {
 
 namespace detail {
-
-// Dest bounds check; only metal builds define the kernel-wide sync mode.
-template <trisc::DstTileShape SLOT>
-inline void check_dest_index([[maybe_unused]] const std::uint32_t dst_index) {
-#ifdef DST_SYNC_MODE
-    LLK_ASSERT(
-        (dst_index < trisc::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, SLOT>()),
-        "dst_index exceeds max dest tiles");
-#endif
-}
-
-/// Quasar SFPU vector modes; the check the SFPU_*_CALL macros made before an op ran.
-inline void check_vector_mode([[maybe_unused]] const VectorMode vector_mode) {
-    LLK_ASSERT(
-        vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
-            vector_mode == VectorMode::None || vector_mode == VectorMode::RC_custom,
-        "Quasar SFPU supports vector modes R, C, RC, None, RC_custom");
-}
 
 // True when @p format is in a DataFormat bit mask (the masks of llk_math_common.h); formats past bit 63 are in none.
 constexpr bool format_in(const std::uint64_t format_mask, const DataFormat format) {
@@ -124,18 +105,24 @@ struct SfpuDestOpBase<Op, 1> {
         Op::init_op();
     }
 
-    /** @brief Run Op on one Dest tile, in place; vector_mode selects the faces. */
-    template <trisc::DstTileShape SLOT>
+    /**
+     * @brief Check the Dest index and vector mode, then run Op on one Dest tile, in place; vector_mode selects the
+     *        faces.
+     *
+     * @tparam DST_SYNC: Dest sync mode; with DST_ACCUM it bounds the tile index.
+     * @tparam DST_ACCUM: True for a 32-bit Dest.
+     */
+    template <DstSync DST_SYNC, bool DST_ACCUM, trisc::DstTileShape SLOT>
     static void run(const DstIndex dst_index, const VectorMode vector_mode = VectorMode::RC) {
         const std::uint32_t index = static_cast<std::uint32_t>(dst_index);
-        detail::check_dest_index<SLOT>(index);
-        detail::check_vector_mode(vector_mode);
+        _sfpu_check_<DST_SYNC, DST_ACCUM, SLOT>(index, vector_mode);
         _llk_math_eltwise_unary_sfpu_params_<SLOT>(Op::calculate, index, vector_mode);
     }
 
-    /** @brief run<SLOT>() with the tile shape of Op. */
+    /** @brief run<DST_SYNC, DST_ACCUM, SLOT>() with the tile shape of Op. */
+    template <DstSync DST_SYNC, bool DST_ACCUM>
     static void run(const DstIndex dst_index, const VectorMode vector_mode = VectorMode::RC) {
-        run<Op::tile_shape>(dst_index, vector_mode);
+        run<DST_SYNC, DST_ACCUM, Op::tile_shape>(dst_index, vector_mode);
     }
 };
 
@@ -148,8 +135,11 @@ struct SfpuDestOpBase<Op, 2> {
         Op::init_op();
     }
 
-    /** @brief Run Op on two Dest tiles into a third (the output may be one of the inputs). */
-    template <trisc::DstTileShape SLOT>
+    /**
+     * @brief The two-input form of @ref SfpuDestOpBase<Op, 1>::run: two Dest tiles into a third (the output may be
+     *        one of the inputs).
+     */
+    template <DstSync DST_SYNC, bool DST_ACCUM, trisc::DstTileShape SLOT>
     static void run(
         const DstIndex dst_index_in0,
         const DstIndex dst_index_in1,
@@ -158,20 +148,18 @@ struct SfpuDestOpBase<Op, 2> {
         const std::uint32_t in0 = static_cast<std::uint32_t>(dst_index_in0);
         const std::uint32_t in1 = static_cast<std::uint32_t>(dst_index_in1);
         const std::uint32_t out = static_cast<std::uint32_t>(dst_index_out);
-        detail::check_dest_index<SLOT>(in0);
-        detail::check_dest_index<SLOT>(in1);
-        detail::check_dest_index<SLOT>(out);
-        detail::check_vector_mode(vector_mode);
+        _sfpu_binary_check_<DST_SYNC, DST_ACCUM, SLOT>(in0, in1, out, vector_mode);
         _llk_math_eltwise_binary_sfpu_params_<SLOT>(Op::calculate, in0, in1, out, vector_mode);
     }
 
-    /** @brief run<SLOT>() with the tile shape of Op. */
+    /** @brief run<DST_SYNC, DST_ACCUM, SLOT>() with the tile shape of Op. */
+    template <DstSync DST_SYNC, bool DST_ACCUM>
     static void run(
         const DstIndex dst_index_in0,
         const DstIndex dst_index_in1,
         const DstIndex dst_index_out,
         const VectorMode vector_mode = VectorMode::RC) {
-        run<Op::tile_shape>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+        run<DST_SYNC, DST_ACCUM, Op::tile_shape>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
 };
 

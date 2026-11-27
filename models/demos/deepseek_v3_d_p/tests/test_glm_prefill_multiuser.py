@@ -25,9 +25,10 @@ but the pipeline test also run on a LoudBox.
 * test_glm_packed_mtp_matches_one_chunk_forwards: the same schedule with an MTP layer (one level, random weights)
   after the trunk. Each chunk's MTP input comes from its own ids and lookahead block, prompt-ending chunks generate
   their own token, and every user's trunk and MTP KV must match the chunk run alone.
-* test_glm_packed_traced_matches_eager: the same schedule through TtPrefillRuntime.prefill_forward with
-  use_trace (one capture, replayed per forward; per-chunk metadata and the MoE padding config read on
-  device) must fill the same KV as the eager packed forward.
+* test_glm_packed_traced_matches_eager: the same schedule, and one with every count of real chunks, through
+  TtPrefillRuntime.prefill_forward with use_trace (one capture per real-chunk count, the one matching each
+  forward replayed; per-chunk metadata and the MoE padding config read on device) must fill the same KV as the
+  eager packed forward, and nothing may compile after the captures.
 * test_glm_packed_presend_matches_inline_push: the packed schedule with two shared layers in a row; the sparse-KV
   push's per-step pre-sends must leave every shared step only its rest and match pushing every row in line.
 * test_glm_packed_mtp_traced_matches_eager: traced packed forwards with MTP through prefill_forward (per-chunk level
@@ -36,7 +37,7 @@ but the pipeline test also run on a LoudBox.
   packed forwards handed rank to rank, must match one rank, eager and traced.
 
 Mesh and chunk: each mesh runs the chunk that gives the production per-chip shape, 640 rows per SP chip
-(2x4 -> 1,280-token chunks, 8x4 -> 5,120, a 4x4 stage -> 2,560 with SP on its axis-1 ring; the pipeline test is
+(2x4 -> 1,280-token chunks, 8x4 -> 5,120, a 4x4 stage -> 2,560 with SP on stage_sp_axis; the pipeline test is
 8x4 only). On 2x4 every chip sees what a galaxy chip sees in attention
 (640 rows, 16 heads, 160 sparse_sdpa tokens) but holds 32 experts instead of 8.
 
@@ -57,6 +58,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
+from models.demos.common.prefill.runners.runner_utils import stage_sp_axis
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -163,15 +165,16 @@ MESH_PARAMS = [
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
     ),
-    # One 4x4 stage (a galaxy tray half, GLM-5.3's serving stage): SP on the axis-1 ring at its 2,560-token chunk,
-    # TP=4 on the axis-0 line. Needs the galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the 4x4
-    # descriptor); unnarrowed, requires_mesh_topology skips it.
+    # One 4x4 stage (a galaxy tray half, GLM-5.3's serving stage) at its 2,560-token chunk: SP=4 on the axis
+    # runner_utils.stage_sp_axis gives (PREFILL_SP_AXIS when set; unset, the axis-1 ring, while the serving manifests
+    # default to axis 0), TP=4 on the other. Needs the galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the
+    # 4x4 descriptor); unnarrowed, requires_mesh_topology skips it.
     pytest.param(
         (4, 4),
         torus_x_device_params(fabric_payload_size=GLM_FABRIC_PAYLOAD, l1_small_size=TEST_L1_SMALL_SIZE),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-        id="torus-x-4x4-sp1",
+        id=f"torus-x-4x4-sp{stage_sp_axis((4, 4))}",
     ),
 ]
 
@@ -186,8 +189,9 @@ def _release_moe_blocks(request):
 
 
 def _sp_axis(mesh_device):
-    """The mesh's SP axis: 1 on a 4x4 stage (SP on the tray half's ring), else 0."""
-    return 1 if tuple(mesh_device.shape) == (4, 4) else 0
+    """The mesh's SP axis: runner_utils.stage_sp_axis on a 4x4 stage (the SP-axis knob over its default), else 0."""
+    shape = tuple(mesh_device.shape)
+    return stage_sp_axis(shape) if shape == (4, 4) else 0
 
 
 def _traced_mesh_params(l1_small_extra: int = 0) -> list:
@@ -227,7 +231,7 @@ def _traced_mesh_params(l1_small_extra: int = 0) -> list:
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-            id="torus-x-4x4-sp1",
+            id=f"torus-x-4x4-sp{stage_sp_axis((4, 4))}",
         )
     )
     return params
@@ -1215,22 +1219,57 @@ def test_glm_packed_mtp_matches_one_chunk_forwards(
         transformer.release_sub_device_managers()
 
 
+def _traced_schedule(chunk):
+    """(user lengths, forwards) for the traced test. Each real-chunk count 1..3 has its own capture, so each is replayed
+    three times, in alternating order (3, 2, 1, 4, 1, 2, 3, 1, 2, 3 real). Inside forwards with 1, 2 and 3 real chunks:
+    a partial chunk, a same-slot pair (the second chunk reads the first's KV), a pair ending in a partial; one chunk
+    starts mid-chunk (user J: 800, after a partial first chunk)."""
+    C = chunk
+    E = PrefillChunk(0, 0, 0)
+    P = PrefillChunk
+    lengths = [3 * C, 704, C + 320, 512, 3 * C, 2 * C + 64, C + 100, C, 2 * C, 800 + C, C + 32]
+    #           A=0   B=1  C=2      D=3  E=4    F=5         G=6      H=7 I=8    J=9       L=10
+    forwards = [
+        [P(0, 0, C), P(0, C, 2 * C), P(1, 0, 704), E],
+        [P(2, 0, C), P(2, C, C + 320), E, E],
+        [P(3, 0, 512), E, E, E],
+        [P(0, 2 * C, 3 * C), P(4, 0, C), P(5, 0, C), P(9, 0, 800)],
+        [P(9, 800, 800 + C), E, E, E],
+        [P(4, C, 2 * C), P(5, C, 2 * C), E, E],
+        [P(6, 0, C), P(6, C, C + 100), P(7, 0, C), E],
+        [P(4, 2 * C, 3 * C), E, E, E],
+        [P(5, 2 * C, 2 * C + 64), P(8, 0, C), E, E],
+        [P(8, C, 2 * C), P(10, 0, C), P(10, C, C + 32), E],
+    ]
+    return lengths, forwards
+
+
+# Two shared layers (1, 2) run before checked layer 3, so a wrong pre-sent buffer or top-k row of a shared layer shows
+# up in later KV.
+_TRACED_INDEXER_TYPES = ["full", "shared", "shared", "shared"]
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", TRACED_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.parametrize("schedule", ["packed", "every_real_count"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, device_params, num_links):
-    """Traced packed forwards (slots 0..3) must fill the same KVPE and indexer-K as the eager packed
-    forward of the same chunks on the same model (slots 4..7)."""
+def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, device_params, num_links, schedule):
+    """Traced packed forwards (slots 0..num_users-1) must fill the same KVPE and indexer-K as the eager packed
+    forward of the same chunks on the same model (the next num_users slots). ``packed``: _packed_schedule on the test's
+    layer kinds; ``every_real_count``: _traced_schedule, two shared layers before a checked one."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
     sp = mesh_device.shape[_sp_axis(mesh_device)]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
-    lengths, forwards = _packed_schedule(chunk)
+    if schedule == "packed":
+        (lengths, forwards), indexer_types = _packed_schedule(chunk), None
+    else:
+        (lengths, forwards), indexer_types = _traced_schedule(chunk), _TRACED_INDEXER_TYPES
     num_users = len(lengths)
     seq_cache = N_CHUNKS * chunk
-    config = _test_config(config_only)
+    config = _test_config(config_only, indexer_types)
     config.max_seq_len = seq_cache
     sp_axis = _sp_axis(mesh_device)
     rt_config = TtPrefillRuntimeConfig(
@@ -1286,6 +1325,10 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
     try:
         runtime.compile(caches)
         runtime.capture_trace(caches)
+        logger.info(f"[traced] programs added by each capture, by real-chunk count: {runtime.capture_new_programs}")
+        assert sorted(runtime.capture_new_programs) == list(range(1, FORWARD_CHUNKS + 1)), "one capture per count"
+        assert all(v == 0 for v in runtime.capture_new_programs.values()), "a capture compiled a program"
+        programs_after_capture = mesh_device.num_program_cache_entries()
         ids = _token_ids(config, num_users, max(lengths))
 
         def forward_input(chunks, user_of):
@@ -1299,6 +1342,10 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
             logger.info(f"[traced] forward {f}: {chunks}")
             runtime.prefill_forward(forward_input(chunks, lambda s: s), caches, chunks)
         ttnn.synchronize_device(mesh_device)
+        # Staging + replays only: nothing may compile after the captures.
+        new_programs = mesh_device.num_program_cache_entries() - programs_after_capture
+        logger.info(f"[traced] programs compiled by the traced forwards: {new_programs}")
+        assert new_programs == 0, f"{new_programs} program(s) compiled after the trace captures"
 
         # Eager reference on the same model: the packed forward called directly, so it runs the host-scalar
         # programs rather than the captured ones.
@@ -1695,6 +1742,12 @@ def test_glm_packed_pipeline_matches_one_rank(variant, config_only, mesh_device,
         if not traced:
             ref.compile(ref_caches)
         if traced:
+            # The runner's send warm-up (prefill_runner._forward_send_warmup) reads the packed top-k between compile()
+            # and capture_trace(): compile() must leave it on the model.
+            sent = ranks[0].outbound_indexer_indices
+            assert sent is not None, "compile() left no packed top-k for the send warm-up"
+            assert sent.is_allocated(), "compile() left a freed packed top-k for the send warm-up"
+            sent.memory_config()  # what the runner's _stage_for reads
             ranks[0].set_d2h_ack_service(d2h)
             for r, caches in zip(ranks, rank_caches):
                 r.capture_trace(caches)
@@ -1777,6 +1830,8 @@ def test_glm_packed_pipeline_matches_one_rank(variant, config_only, mesh_device,
         # models on this one mesh share TT_CCL's sparse-MLA overlap manager, which the first release_trace() below
         # removes. (In the runner each rank is its own process.) controller.release() is idempotent.
         for r in ranks:
+            for controller in r._controllers_by_real_count.values():
+                controller.release()
             if r._controller is not None:
                 r._controller.release()
         # Then each model's sub-device managers (and the D2H service a traced rank holds, whose device-side

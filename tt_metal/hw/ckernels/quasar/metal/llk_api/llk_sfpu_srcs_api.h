@@ -9,6 +9,7 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "ckernel_buf_desc.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_math_eltwise_sfpu_common.h"
 #include "llk_sfpu/ckernel_sfpu_dest.h"
@@ -160,10 +161,12 @@ inline void SfpuSrcsOpBase<Op, 2>::run(const std::uint32_t num_tiles) {
 }
 
 template <typename MATH, sfpi::DataLayout LAYOUT, sfpi::DataLayout DEST_LAYOUT>
+template <DstSync DST_SYNC, bool DST_ACCUM>
 inline void SfpuSrcsDestOp<MATH, LAYOUT, DEST_LAYOUT>::run(const DstIndex dst_index) {
     constexpr trisc::DstTileShape tile_shape = trisc::DstTileShape::Tile32x32;
     const std::uint32_t index = static_cast<std::uint32_t>(dst_index);
-    detail::check_dest_index<tile_shape>(index);
+    LLK_ASSERT(
+        (index < trisc::get_dest_max_tiles<DST_SYNC, DST_ACCUM, tile_shape>()), "dst_index exceeds max dest tiles");
     // The Dest tile is an offset from the lent section's base, so no config is written here: a write issued after
     // the unpack below would wait for it, and it finishes only with the SFPU work.
     const int dest_tile = static_cast<int>(index << (trisc::get_dest_tile_size_log2(tile_shape) - 1));

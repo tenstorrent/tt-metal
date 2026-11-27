@@ -200,7 +200,9 @@ struct SfpuSrcsDestOp : SfpuSrcsOpBase<SfpuSrcsDestOp<MATH, LAYOUT, DEST_LAYOUT>
             math_setup<MATH>(), Srcs{Layout::out}, Dest{dest_step}, Srcs{Layout::input(0)});
     }
 
-    // Run the op on Dest tile dst_index and one tile of the buffers unpack() and pack() set.
+    // Run the op on Dest tile dst_index and one tile of the buffers unpack() and pack() set. DST_SYNC and DST_ACCUM
+    // (true for a 32-bit Dest) bound the Dest index.
+    template <DstSync DST_SYNC, bool DST_ACCUM>
     static void run(const DstIndex dst_index);
 };
 

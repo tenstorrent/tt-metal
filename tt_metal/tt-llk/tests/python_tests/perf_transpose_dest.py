@@ -17,6 +17,7 @@ from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
+    LOOP_FACTOR,
     MATH_TRANSPOSE_FACES,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -33,6 +34,8 @@ from helpers.test_variant_parameters import (
     # Both are fixed by the input format.
     dest_acc=lambda formats: [dest_acc_for(formats.input_format)],
     unpack_to_dest=lambda formats: [formats.input_format.is_32_bit()],
+    tile_cnt=[16],
+    loop_factor=[32],
 )
 def test_perf_transpose_dest(
     perf_report,
@@ -41,6 +44,8 @@ def test_perf_transpose_dest(
     math_transpose_faces,
     dest_acc,
     unpack_to_dest,
+    tile_cnt,
+    loop_factor,
 ):
     if formats.input_format != formats.output_format:
         pytest.skip("Prevent mixing INT and FP in math transpose")
@@ -56,8 +61,6 @@ def test_perf_transpose_dest(
     ):
         pytest.skip("Skip transposing faces twice")
 
-    tile_count = 16
-
     configuration = PerfConfig(
         "sources/math_transpose_perf.cpp",
         formats,
@@ -68,7 +71,8 @@ def test_perf_transpose_dest(
             MATH_TRANSPOSE_FACES(math_transpose_faces),
         ],
         runtimes=[
-            TILE_COUNT(tile_count),
+            TILE_COUNT(tile_cnt),
+            LOOP_FACTOR(loop_factor),
             UNPACK_TRANS_FACES(unpack_transpose_faces),
         ],
         variant_stimuli=StimuliConfig(
@@ -77,9 +81,9 @@ def test_perf_transpose_dest(
             None,
             formats.input_format,
             formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,

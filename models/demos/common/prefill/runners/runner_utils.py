@@ -156,8 +156,8 @@ SP_AXIS_ENV = "PREFILL_SP_AXIS"
 
 
 def default_sp_axis(mesh_shape: tuple) -> int:
-    """The axis a stage of ``mesh_shape`` carries SP on by default: axis 1 on a 4x4 tray half, whose only ring is
-    axis 1 (the 4x4 manifests' PREFILL_SP_AXIS=1), else axis 0."""
+    """The axis tests put SP on for a stage of ``mesh_shape`` when ``$PREFILL_SP_AXIS`` is unset: axis 1 on a 4x4
+    tray half (its only ring), else axis 0. The runner does not use it: the manifest sets the stage's axis."""
     return 1 if tuple(mesh_shape) == (4, 4) else 0
 
 

@@ -63,6 +63,7 @@ on:
           - "bh_sc1 (BH Single Galaxy)"
           - "bh_sc4 (BH Supercluster 4)"
           - "bh_sc16 (BH Supercluster 16)"
+          - "bh_qb2 (BH QB2 via TTOP)"
       platform:
         required: false
         type: choice

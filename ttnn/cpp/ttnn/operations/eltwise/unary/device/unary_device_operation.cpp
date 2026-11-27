@@ -119,9 +119,11 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
 }
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
-    // Params are embedded bit-for-bit in kernel defines, but std::hash<float> equates +0.0 and -0.0.
+    // Params are embedded bit-for-bit in kernel defines, but std::hash<float> equates +0.0 and -0.0. Those the
+    // compute kernel reads as runtime args are left out, so a new value reuses the program.
     auto hash = ttsl::hash::hash_objects_with_default_seed(op_chain.size());
-    for (const auto& op : op_chain) {
+    for (const auto& op_with_runtime_scalars : op_chain) {
+        const auto op = utils::without_runtime_scalars(op_with_runtime_scalars);
         hash = ttsl::hash::hash_objects(hash, op.type(), op.base.index());
         std::visit(
             [&hash](auto params) {
@@ -441,8 +443,18 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         return std::pair{distribution->shard_shape_in_pages(), distribution->cores()};
     };
 
+    // The packer route replaces the SFPU chain and compiles in a threshold picked from the scalar, which the
+    // attributes' hash leaves out (relu_max(x, 6) must not share a program with relu_max(x, 4)).
+    const auto pack_relu_config = utils::get_pack_relu_config(
+        attributes.op_chain,
+        input_tensor.dtype(),
+        output_spec.data_type(),
+        attributes.fp32_dest_acc_en,
+        shard_specs.has_value() && input_tensor.is_sharded() && output_spec.memory_config().is_sharded());
+
     return operation::hash_operation<UnaryDeviceOperation>(
         attributes,
+        pack_relu_config,
         input_tensor.tensor_spec().tensor_layout(),
         output_spec.tensor_layout(),
         // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures

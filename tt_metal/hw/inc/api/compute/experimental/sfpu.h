@@ -166,7 +166,7 @@ struct SfpuOp<OP, SfpuReg::Dest, DFB_IDS...> {
         static_assert(inputs == 1, "this op takes two Dest tiles: tile(idst0, idst1, odst)");
 #endif
         MATH((detail::sfpu_op_check_init<Op>()));
-        MATH((Op::run(idst, vector_mode)));
+        MATH((Op::template run<DST_SYNC_MODE, DST_ACCUM_MODE>(idst, vector_mode)));
     }
 
     // clang-format off
@@ -189,7 +189,7 @@ struct SfpuOp<OP, SfpuReg::Dest, DFB_IDS...> {
         static_assert(inputs == 2, "this op takes one Dest tile: tile(idst)");
 #endif
         MATH((detail::sfpu_op_check_init<Op>()));
-        MATH((Op::run(idst0, idst1, odst, vector_mode)));
+        MATH((Op::template run<DST_SYNC_MODE, DST_ACCUM_MODE>(idst0, idst1, odst, vector_mode)));
     }
 
 #ifdef TRISC_MATH
@@ -262,7 +262,7 @@ struct SfpuOp<OP, SfpuReg::SrcS, SRCS_FMT, DEST_DFB_IDS...> {
     ALWI static void tile([[maybe_unused]] DstIndex idst) {
         static_assert(sizeof...(DEST_DFB_IDS) != 0, "name the DFBs the Dest tile came from after the SrcS format");
         SFPU_SRCS((detail::sfpu_op_check_init<Op>()));
-        SFPU_SRCS((Op::run(idst)));
+        SFPU_SRCS((Op::template run<DST_SYNC_MODE, DST_ACCUM_MODE>(idst)));
     }
 
 #ifdef TRISC_ISOLATE_SFPU

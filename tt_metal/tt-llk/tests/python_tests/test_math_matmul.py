@@ -5,7 +5,7 @@ from itertools import chain, product
 
 import pytest
 import torch
-from conftest import skip_for_wormhole
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIM,
@@ -26,15 +26,23 @@ from helpers.llk_params import (
 )
 from helpers.logger import logger
 from helpers.matmul_sweep import (
+    MATMUL_CONFIG_AXES,
     ODD_REUSE_KT_DIMS,
     ODD_REUSE_RT_CT,
     MatmulConfig,
     generate_face_layout_config_sweep,
     generate_tile_dims,
+    matmul_config_columns,
+    matmul_config_from_axes,
     sweep_matmul,
     sweep_tiny_tiles_matmul,
 )
-from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
+from helpers.param_config import (
+    DEST_SYNC_TILE_LIMITS,
+    flat_axes,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
 from helpers.test_config import TestConfig
@@ -160,7 +168,7 @@ ODD_REUSE_FIDELITY_THROTTLE = (
 )
 
 
-def odd_reuse_matmul_params():
+def odd_reuse_matmul_configs():
     fmt = next(
         f
         for f in MATMUL_FORMATS
@@ -168,89 +176,100 @@ def odd_reuse_matmul_params():
         and f.output_format == DataFormat.Float16_b
     )
     face_layout = generate_face_layout_config_sweep(math_matmul=True)[0]
-    params = []
-    for rt_dim, ct_dim in ODD_REUSE_RT_CT:
-        for kt_dim in ODD_REUSE_KT_DIMS:
-            config = MatmulConfig(
-                tile_dimensions=generate_tile_dims(
-                    (
-                        [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
-                        [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
-                    )
-                ),
-                face_layout_config=face_layout,
-                formats=fmt,
-                stochastic_rnd=StochasticRounding.No,
-                dst_index=0,
-                dest_sync=DestSync.Full,
-                dest_acc=DestAccumulation.No,
-            )
-            for fidelity, throttle in ODD_REUSE_FIDELITY_THROTTLE:
-                params.append(
-                    pytest.param(
-                        fidelity,
-                        config,
-                        throttle,
-                        False,
-                        id=f"odd_reuse-rt{rt_dim}-ct{ct_dim}-kt{kt_dim}-{fidelity.name}-throttle{throttle}",
-                    )
+    return [
+        MatmulConfig(
+            tile_dimensions=generate_tile_dims(
+                (
+                    [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
+                    [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
                 )
-    return params
+            ),
+            face_layout_config=face_layout,
+            formats=fmt,
+            stochastic_rnd=StochasticRounding.No,
+            dst_index=0,
+            dest_sync=DestSync.Full,
+            dest_acc=DestAccumulation.No,
+        )
+        for rt_dim, ct_dim in ODD_REUSE_RT_CT
+        for kt_dim in ODD_REUSE_KT_DIMS
+    ]
+
+
+def _rows(fidelity_throttles, configs, row_mop=False):
+    """(math_fidelity, *MATMUL_CONFIG_AXES, throttle, row_mop) rows, one per config and (fidelity, throttle)."""
+    return (
+        (fidelity, *matmul_config_columns(config), throttle, row_mop)
+        for config in configs
+        for fidelity, throttle in fidelity_throttles
+    )
+
+
+def _all_fidelities(throttles):
+    return [(f, t) for f in ALL_MATH_FIDELITIES for t in throttles]
 
 
 ALL_TEST_PARAMS = list(
     chain(
         # Regular matmul with all throttle levels
-        (
-            (fidelity, combinations, throttle, False)
-            for fidelity, combinations, throttle in product(
-                ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
-            )
-        ),
+        _rows(_all_fidelities([1, 2, 3, 4, 5]), MATMUL_COMBINATIONS),
         # Tiny tiles at throttle 0: the full sweep, unchanged.
-        (
-            (fidelity, combinations, 0, False)
-            for fidelity, combinations in product(
-                ALL_MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
-            )
-        ),
+        _rows(_all_fidelities([0]), TINY_TILES_MATMUL_COMBINATIONS),
         # Tiny tiles at a throttled level <= 3: the fallback to the unthrottled MOP is taken
         # at every fidelity.
-        (
-            (fidelity, combinations, TINY_TILE_LOW_THROTTLE, False)
-            for fidelity, combinations in product(
-                ALL_MATH_FIDELITIES, TINY_TILES_THROTTLE_COMBINATIONS
-            )
+        _rows(
+            _all_fidelities([TINY_TILE_LOW_THROTTLE]), TINY_TILES_THROTTLE_COMBINATIONS
         ),
         # Tiny tiles above level 3 at LoFi; high fidelity is covered by
         # test_math_matmul_tiny_tile_high_throttle.
-        (
-            (MathFidelity.LoFi, combinations, TINY_TILE_HIGH_THROTTLE, False)
-            for combinations in TINY_TILES_THROTTLE_COMBINATIONS
+        _rows(
+            [(MathFidelity.LoFi, TINY_TILE_HIGH_THROTTLE)],
+            TINY_TILES_THROTTLE_COMBINATIONS,
         ),
         # Odd t_dim on the full-dest blocks the sweep cannot reach.
-        odd_reuse_matmul_params(),
+        _rows(ODD_REUSE_FIDELITY_THROTTLE, odd_reuse_matmul_configs()),
         # Blackhole row MOP at throttle 0 over the full sweep, bit-exact vs the per-tile MOP.
-        (
-            pytest.param(fidelity, combinations, 0, True, marks=skip_for_wormhole)
-            for fidelity, combinations in product(
-                ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS
-            )
-        ),
+        _rows(_all_fidelities([0]), MATMUL_COMBINATIONS, row_mop=True),
     )
 )
 
 
 @pytest.mark.nightly
-@pytest.mark.parametrize(
-    "math_fidelity,matmul_config,throttle,row_mop", ALL_TEST_PARAMS
+@parametrize(
+    **flat_axes(
+        ("math_fidelity", *MATMUL_CONFIG_AXES, "throttle", "row_mop"),
+        ALL_TEST_PARAMS,
+    )
 )
 def test_math_matmul(
     math_fidelity,
-    matmul_config,
+    formats,
+    dest_acc,
+    dest_sync,
+    stochastic_rnd,
+    dst_index,
+    input_tile_dimensions,
+    ct_dim,
+    rt_dim,
+    kt_dim,
+    unpack_transpose_faces,
     throttle,
     row_mop,
 ):
+    if row_mop and get_chip_architecture() == ChipArchitecture.WORMHOLE:
+        pytest.skip("The row MOP is Blackhole only")
+    matmul_config = matmul_config_from_axes(
+        formats,
+        dest_acc,
+        dest_sync,
+        stochastic_rnd,
+        dst_index,
+        input_tile_dimensions,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        unpack_transpose_faces,
+    )
     run_math_matmul(math_fidelity, matmul_config, throttle, row_mop)
 
 
