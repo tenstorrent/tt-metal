@@ -1,0 +1,42 @@
+{
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR0]": {
+    "case": "perf_focus",
+    "math_fidelity": null,
+    "gate": "exact",
+    "indices": "[3]"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR1]": {
+    "case": "every_index",
+    "indices": "[0, 1, 2, 3, 4, 5, 6]"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR2]": {
+    "case": "new_index",
+    "indices": "[2, 5, 5, 0]",
+    "same_buffer": true,
+    "trace": "[3, 6]"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR3]": {
+    "case": "index_out_of_range",
+    "indices": "[7, 4294967295]",
+    "guard": true,
+    "check_inputs": true
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR4]": {
+    "case": "inputs_unchanged",
+    "indices": "[3]",
+    "check_inputs": true
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[2-5x2x1x64-2x2x1x64-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR]": {
+    "case": "other_shape",
+    "indices": "[[4, 1]]"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR5]": {
+    "case": "repeat_runs",
+    "indices": "[4]",
+    "repeats": 20
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR6]": {
+    "case": "refusals",
+    "refuse": "['dim', 'value_shape']"
+  }
+}

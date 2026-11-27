@@ -1,0 +1,47 @@
+{
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR0]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR1]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR2]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR3]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR4]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[2-5x2x1x64-2x2x1x64-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR5]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "h_non_aligned"
+  },
+  "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR6]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "alignment": "h_non_aligned"
+  }
+}
