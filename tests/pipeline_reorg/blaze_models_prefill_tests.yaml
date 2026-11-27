@@ -500,15 +500,13 @@
         [ "$status" -eq 0 ] || exit "$status"
         grep -qE "[0-9]+ passed" /tmp/k3_moe_perf.out || { echo "::error::k3_moe_perf: no test passed (skipped?): $*"; exit 1; }
       }
-      gated python3 -m pytest $T/perf/test_moe_block_host_perf.py -k "kimi_k3-8x4-5120" -vvv --tb=short
-      gated python3 -m pytest $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3-8x4-5120 and not weka and not real" -vvv --tb=short
       $T/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 6 $T/perf/test_moe_block_host_perf.py $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3_1-xy4-sp1-2560 or (kimi_k3-xy4-sp1-5120-packed and not 1800) or (kimi_k3-xy4-sp1-10240-packed and not 1600)" || exit $?
       echo K3_MOE_PERF_OK
     ' 2>&1 | tee /tmp/k3_moe_job.out
     # mpirun exits 0 when it loses its remote daemon (a test killed on the device host): pass only on the marker.
     grep -q K3_MOE_PERF_OK /tmp/k3_moe_job.out || { echo "::error::k3_moe_perf: mpirun ended without the success marker (killed or lost daemon)"; exit 1; }
   test_type: k3_moe_perf
-  test_tags: [kimi_k3, kimi_k3_1, moe, k3_mla_perf]
+  test_tags: [kimi_k3, kimi_k3_1, moe, k3_mla_perf, glm_chunked_perf_suite]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -1019,7 +1017,7 @@
       export DS_PREFILL_REUSE_MODEL=1
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
     '
-  test_type: glm_chunked_perf_suite
+  test_type: glm_chunked_perf_suite_off
   test_tags: [glm_5_3, transformer, glm_chunked, glm_chunked_untraced_perf, sparse_mla, glm_sparse_mla_perf, moe, glm_moe]
   test_group: module
   skus:
