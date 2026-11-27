@@ -5,10 +5,18 @@ from .g6_reshard import (
     EXCLUSIONS,
     INPUT_TAGGERS,
     SUPPORTED,
-    dump_roles,
     g6_reshard,
     last_plan,
+    role_dump,
     validate,
 )
 
-__all__ = ["g6_reshard", "validate", "SUPPORTED", "EXCLUSIONS", "INPUT_TAGGERS", "last_plan", "dump_roles"]
+__all__ = [
+    "INPUT_TAGGERS",
+    "SUPPORTED",
+    "EXCLUSIONS",
+    "validate",
+    "g6_reshard",
+    "last_plan",
+    "role_dump",
+]
