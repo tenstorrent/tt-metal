@@ -225,7 +225,8 @@ void mix_run(uint32_t num_tiles) {
     reconfig_data_format(cb_values, cb_weights);
     pack_reconfig_data_format(cb_partials);
 
-    cb_values_obj.wait_front(num_tiles * num_candidates);
+    constexpr uint32_t value_slots = attn_res_block_mix_run_slots() * num_candidates;
+    cb_values_obj.wait_front(value_slots);
     for (uint32_t group = 0; group < num_groups; ++group) {
         const uint32_t sites = sites_in_group(group, sites_per_group, num_sites);
         cb_weights_obj.wait_front(sites_per_group * num_candidates);
@@ -251,7 +252,7 @@ void mix_run(uint32_t num_tiles) {
         }
         cb_weights_obj.pop_front(sites_per_group * num_candidates);
     }
-    cb_values_obj.pop_front(num_tiles * num_candidates);
+    cb_values_obj.pop_front(value_slots);
 }
 
 }  // namespace
