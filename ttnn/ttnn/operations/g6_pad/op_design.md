@@ -4,22 +4,22 @@
 
 | Field | Value |
 |-------|-------|
-| Classification | data_movement (no compute kernel, no arithmetic) |
-| Goal | Constant padding at the high end of the trailing dims, bit-exact, as one device program. An extension call writes `c` into only the new rows of the last tile row of each slice, inside the input's storage, and returns a metadata view. Every other call assembles each output page once in L1 and writes it once. |
-| Math | `D_i = d_i + h_i`; `out[j] = x[j]` if `j_i < d_i` for every `i`, else `c`, for `0 <= j_i < D_i` |
-| References | Contract: `eval/prompts/g6_pad.txt`. Golden: `eval/golden_tests/g6_pad/{feature_spec.py,helpers.py}`. Blocking: `.claude/references/{blocking-model.md,l1-footprint-discipline.md,ttnn-cb-memory-fundamentals.md}`. Catalog (`ttnn/ttnn/operations/examples/master.md`): `noc_placement`, `width_split`, `double_buffer`, `tile_reorder`, `split_reader`, `bank_stagger`. Helpers: `ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp`. NoC alignment: `tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_parameters.h:375-380`. View path: `ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.cpp:778-787`. |
+| Classification | data_movement (no compute kernel; no arithmetic; bit-exact copy + constant fill) |
+| Goal | Constant high-end padding of the trailing `k` dims of a rank-2/3/4 tensor, one device program per call. A **tile_padding_extension** call writes `c` into the new rows of the last tile row of each slice **in place** and returns a metadata-only view of the input's storage; every other call assembles each output page once in L1 (input tile + fill patches, or a pure fill page) and writes it once. |
+| Math | `D_i = d_i + h_i`; `out[j] = x[j]` if `j_i < d_i ∀i`, else `c` (`c` = `value` converted to dtype by torch: bf16 = RNE of fp32, int = truncation) |
+| References | `eval/golden_tests/g6_pad/feature_spec.py` (TARGET / INPUTS / LOOSE_CASES), `eval/golden_tests/g6_pad/helpers.py` (oracle `pytorch_g6_pad`, `storage_class`, exact grading), `eval/op_template.py` (registry model), `.claude/references/blocking-model.md`, `.claude/references/l1-footprint-discipline.md`, `ttnn/ttnn/operations/examples/master.md` (`noc_placement`, `double_buffer`, `bank_stagger`, `tile_reorder`, `width_split`), `ttnn/cpp/ttnn/operations/generic/device/generic_op_device_operation_types.hpp:50-52` (single-tensor in-place `io_tensors`), `ttnn/cpp/ttnn/operations/generic/device/generic_op_device_operation.hpp:44-46` (cache hash excludes runtime-arg values), `ttnn/core/tensor/tensor_ops.cpp:533-547` (`tt::tt_metal::view`, metadata-only) |
+
+Integrity note: no pre-existing implementation of this op was read; this design is from the spec, the golden suite and first principles.
 
 ## Parameters
 
 | Name | Type | Required | Valid Range | Default | CT/RT |
 |------|------|----------|-------------|---------|-------|
-| `input_tensor` | `ttnn.Tensor` | yes | rank 2..4 on device, interleaved. Phase 0: bfloat16, TILE, DRAM, rank 3/4 | — | buffer address: common RT arg. Shape, dtype, layout, buffer type: program cache key |
-| `padding` | sequence of `k` pairs `(low, high)`, positional or keyword | yes | `1 <= k <= r`. Each pair is a 2-element list/tuple of ints with `low == 0` and `high >= 0`. Pair `m` applies to dim `r-k+m` | — | Host-derived. Output shape, the segment table and per-core ranges all follow from the highs, which are part of the cache key |
-| `value` | `int` or `float`, positional or keyword | no | any float for float dtypes. Within the integer range for int32/uint32, after truncation | `0.0` | `fill_bits`: common RT arg (32-bit). Not in the cache key |
+| `input_tensor` | `ttnn.Tensor` | yes | rank 2..4, interleaved (DRAM Phase 0; L1 refinement), not sharded | — | buffer address = RT |
+| `padding` | sequence of `(low, high)` int pairs | yes (positional or keyword) | `1 ≤ k ≤ r` pairs; `low == 0`; `high ≥ 0`; pairs aligned to the trailing `k` dims | — | shape-derived quantities: CT (structural, in cache key); per-core ranges: RT |
+| `value` | `float` or `int` | no (positional or keyword) | any float for float dtypes; int in dtype range for int32 / uint32 | `0.0` | `fill_bits` (32-bit pattern of `c`): **RT** (never CT: value changes per call on one shape, LOOSE case `loose_same_shape_two_values`) |
 
-Canonicalization, done once in the entry point before any check: `highs = [0]*(r-k) + [h for (_, h) in padding]` (length `r`). Every later quantity reads `highs`.
-
-`c` conversion (host, torch semantics): bfloat16 uses `torch.tensor([value], dtype=torch.float32).to(torch.bfloat16)`, i.e. RNE to fp32 then RNE to bf16. The bit pattern goes in the low 16 bits of `fill_bits` (`-2**127` gives `0xFF00`). float32 uses its fp32 bits. int32/uint32 use `int(value)` (truncation), range-checked, then the two's-complement bits.
+`fill_bits` is computed on the host with torch: `torch.tensor(value, dtype=torch_dtype)` then reinterpret the bits (`view(torch.int16)` for bf16 → `(b << 16) | b`; `view(torch.int32)` for 32-bit dtypes). `-1.7014118346046923e38` → bf16 `0xFF00` (exactly `-2^127`).
 
 ## Tensors
 
@@ -28,305 +28,286 @@ Canonicalization, done once in the entry point before any check: `highs = [0]*(r
 | Property | Requirement |
 |----------|-------------|
 | Shape | `(d_0, …, d_{r-1})`, `r ∈ {2,3,4}` (Phase 0: 3, 4) |
-| Dtype | bfloat16 (Phase 0). float32, int32, uint32 are refinements |
-| Layout | TILE (Phase 0). ROW_MAJOR is a refinement |
-| Memory | DRAM interleaved (Phase 0). L1 interleaved is a refinement. Sharded is refused with `ValueError` |
+| Dtype | bfloat16 (Phase 0); float32, int32, uint32 (refinements) |
+| Layout | TILE (Phase 0); ROW_MAJOR (refinement) |
+| Memory | DRAM interleaved (Phase 0); L1 interleaved (refinement); sharded → `ValueError` |
 
 ### Output
 
 | Property | Value |
 |----------|-------|
-| Shape | `(d_0+h_0, …, d_{r-1}+h_{r-1})` |
-| Dtype | input dtype |
-| Layout | input layout |
-| Memory | input's memory config |
-| Storage | `extension_band`: a metadata view of the input buffer (same buffer address, same padded shape). `new_storage_tiles`: a newly allocated buffer, and the input stays unchanged |
+| Shape | `(d_0 + h_0, …, d_{r-1} + h_{r-1})` |
+| Dtype | = input |
+| Layout | = input |
+| Memory | = input placement. **tile_padding_extension**: the input's own buffer, viewed at the output logical shape with the input's padded shape. **new_storage**: a freshly allocated interleaved tensor with the input's memory config |
 
 ## Blocking Model
 
-Tile-geometry symbols (tensor scope). Every formula uses `ceil` and is per slice, because each `(lead…, H, W)` image is tile-padded independently:
+Everything below is downstream of this section. Semantics: `.claude/references/blocking-model.md`.
+
+The op has **no dependent axis** (no value of the output depends on more than one input element) and **no reuse-shared input operand** (every input element feeds exactly one output position). The only shared quantity is the scalar `c`, which every core materializes locally from an RT arg — zero bytes moved. Hence every split is a knob-turn and the design question is entirely *which pages are touched, how often, and how coarsely the per-core run is handed to the NoC*.
+
+Notation (all from the shapes; host-computed once, single source = the plan dict of the entry point, see Work Distribution):
 
 | Symbol | Definition |
 |--------|------------|
-| `elem_bytes`, `page_bytes` | element size; tile page size (`input_tensor.buffer_page_size()`: 2048 B bf16, 4096 B fp32/int32/uint32) |
-| `face_row_bytes` | `16 * elem_bytes`; `face_bytes = 256 * elem_bytes` (32×32 tile, 16×16 faces; the host asserts `tile_shape == (32, 32)`) |
-| `tensor_slices_in` / `tensor_slices_out` | `prod(d_0..d_{r-3})` / `prod(D_0..D_{r-3})`; 1 for rank 2 |
-| `tensor_tile_rows_in` / `_out` | `ceil(d_{r-2}/32)` / `ceil(D_{r-2}/32)` |
-| `tensor_tile_cols_in` / `_out` | `ceil(d_{r-1}/32)` / `ceil(D_{r-1}/32)` |
-| `row_rem`, `col_rem` | `d_{r-2} mod 32`, `d_{r-1} mod 32` |
-| `row_mask_end` | `min(32, D_{r-2} − 32·(tensor_tile_rows_in − 1))`. Rows `[row_rem, row_mask_end)` of the input's last tile row are logical output positions that must hold `c`. The range is empty when `h_{r-2} = 0` or `row_rem = 0` |
-| `col_mask_end` | `min(32, D_{r-1} − 32·(tensor_tile_cols_in − 1))`. Same rule for columns `[col_rem, col_mask_end)` |
-| `row_segments(a, b)` | Host function returning the byte ranges of tile rows `[a, b)` across all 32 columns. In face 0/1 the upper rows map to `[a·frb, min(b,16)·frb)` and `face_bytes + [a·frb, min(b,16)·frb)`. In face 2/3 the lower rows map to `2·face_bytes + …` and `3·face_bytes + …`. Adjacent ranges are merged. At most 3 ranges when `a > 0` (`frb = face_row_bytes`) |
+| `tile_h = tile_w = 32`, `face = 16` | tile geometry |
+| `elem_bytes` | 2 (bf16), 4 (fp32 / int32 / uint32) |
+| `row_bytes = face · elem_bytes` | bytes of one face row (bf16: 32 B) |
+| `face_bytes = face · face · elem_bytes`, `tile_bytes = 4 · face_bytes` | bf16: 512 B / 2048 B |
+| `in_tiles_h = ceil(d_{r-2}/32)`, `in_tiles_w = ceil(d_{r-1}/32)` | per-slice input tile counts (alignment-aware, per image) |
+| `out_tiles_h = ceil(D_{r-2}/32)`, `out_tiles_w = ceil(D_{r-1}/32)` | per-slice output tile counts |
+| `in_slices = Π_{i<r-2} d_i`, `out_slices = Π_{i<r-2} D_i` | slices (leading dims folded; rank 2 → 1) |
+| `edge_row = d_{r-2} mod 32`, `edge_col = d_{r-1} mod 32` | first input-tile-padding row / column of the last input tile row / column (0 = aligned, no patch) |
+| `band_row_begin = edge_row`, `band_row_end = D_{r-2} − 32·(in_tiles_h − 1)` | extension only: rows of the last tile row that must become `c` (`1 ≤ begin < end ≤ 32`) |
 
 ### Axes
 
-**Regime `extension_band`** (the band = the last tile row of every input slice):
+Regime **extension_band** (predicate in Regimes):
 
 | Axis | Character (+ one-clause reason) | Extent knob | Phase 0 value | Knob source | Core-assignment | Later unlock |
 |------|--------------------------------|-------------|---------------|-------------|-----------------|--------------|
-| `slice` (leading dims flattened, extent `tensor_slices_in`) | independent: each slice's band is written without reading anything | folded with `band_tile_col` into `band_unit` (both are walked identically and are contiguous in band order) | — (see `band_unit`) | — | via `band_unit` | knob-turn |
-| `band_tile_col` (extent `tensor_tile_cols_in`) | independent: each band tile's new rows are pure `c` writes | folded into `band_unit` | — | — | via `band_unit` | knob-turn |
-| `band_unit` = `slice × band_tile_col` (extent `band_units = tensor_slices_in · tensor_tile_cols_in`) | independent | `band_block_tiles` (band tiles per write batch ending in one barrier) | `core_band_tiles` (the whole per-core run = 1 block). The source is a constant L1 buffer, so the block extent costs no L1 | host `make_plan()`, passed as RT arg | contiguous runs of `band_unit` over the full grid, `row_wise=True`, `num_cores = min(grid_cores, ceil(band_units / min_units_per_core))` | knob-turn |
-| `tile_row` (extent `tensor_tile_rows_in`) | independent, but the contract pins it: only the last tile row of a slice may be touched | none: the block extent is 1, the last tile row | 1. Contract-mandated (no other tile row may be read or written). Not an L1 choice | the formula `(s·tensor_tile_rows_in + tensor_tile_rows_in − 1)·tensor_tile_cols_in + tc` | not assigned across cores (single row per slice) | none: fixed by contract |
-| `row_in_tile` (new rows `[row_rem, row_mask_end)`) | independent | `band_segments = row_segments(row_rem, row_mask_end)` (≤ 3 byte ranges) | the whole new-row range in one write per segment. All 32 columns are written: columns `col_rem..31` of the last tile column are output tile padding, and skipping them would fragment the face rows | host `make_plan()`, passed as common RT args | not split (a sub-tile split across cores is the `band_segment_split` regime, rejected) | none |
+| slice (leading dims, folded) | independent — no output value of one slice depends on another slice | `band_block_tiles` (folded with tile-column into the flat band index `band_idx = slice · in_tiles_w + wt`) | whole per-core band range (one block) | host plan `band_block_tiles = core_band_tiles` | contiguous `band_idx` ranges over the grid (`split_work_to_cores`, `row_wise=True`) | knob-turn |
+| tile column `wt` | independent — columns are disjoint | folded into `band_block_tiles` (above) | whole per-core range | same | same flat split | knob-turn |
+| tile row `ht` | independent in the math, but **not split and not walked**: the contract forbids touching any tile row but `in_tiles_h − 1` | none (extent fixed at 1 by the contract — the only legal tile row) | 1 (contract-pinned, not an L1 choice) | constant from the contract; `last_tile_row = in_tiles_h − 1` host-derived | not assigned (one row per slice) | — (contract) |
+| rows inside the band tile | independent | `[band_row_begin, band_row_end)` — whole row range in one block | all band rows of the tile (coalesced segments, ≤ 3 per tile, 2 in every production case) | host plan `band_segments` (offset, bytes) list, CT | not split (sub-tile: splitting would only add NoC transactions) | — |
 
-**Regime `new_storage_tiles`** (output page space):
+Regime **new_storage_tiles**:
 
-| Axis | Character (+ one-clause reason) | Extent knob | Phase 0 value | Knob source | Core-assignment | Later unlock |
-|------|--------------------------------|-------------|---------------|-------------|-----------------|--------------|
-| `slice` (extent `tensor_slices_out`) | independent: each output page depends on at most one input page and on `c` | folded into `out_page` | — | — | via `out_page` | knob-turn |
-| `tile_row` (extent `tensor_tile_rows_out`) | independent | folded into `out_page` | — | — | via `out_page` | knob-turn |
-| `tile_col` (extent `tensor_tile_cols_out`) | independent | folded into `out_page` | — | — | via `out_page` | knob-turn |
-| `out_page` = `slice × tile_row × tile_col` in interleaved page order (extent `out_pages`) | independent. No operand is shared between pages, so a rectangular block buys nothing over a run of consecutive pages. A run keeps the core's pages contiguous across the bank rotation | `block_tiles` (input-backed output pages per pipeline pass: one CB reserve/push/wait/pop, one read barrier, one write flush) | `min(max(1, max_core_input_pages), l1_block_cap)` = the whole per-core input-backed run in every production shape (1 page for the Phase 0 shapes, 14 for p1) | host `make_plan()`, single CT arg to reader and writer, and sizes `cb_assembled_tiles` | contiguous runs of `out_page` over the full grid, `row_wise=True`, `num_cores = min(grid_cores, ceil(out_pages / min_units_per_core))` | knob-turn |
-| `row_in_tile`, `col_in_tile` (of boundary pages) | independent | mask ranges `row_segments(row_rem, row_mask_end)` and columns `[col_rem, col_mask_end)` | whole ranges, applied once per boundary page | host `make_plan()`, passed as common RT args | inside the page owner | none |
+| Axis | Character | Extent knob | Phase 0 value | Knob source | Core-assignment | Later unlock |
+|------|-----------|-------------|---------------|-------------|-----------------|--------------|
+| output slice (leading dims, folded) | independent — each output slice is either a copy of one input slice or pure fill | folded into `block_tiles` over the flat output tile index `t = (slice · out_tiles_h + ht) · out_tiles_w + wt` | whole per-core range (one block) unless the L1 cap clamps it | host plan `block_tiles = min(core_max_tiles, block_tiles_cap)` | contiguous `t` ranges over the grid (`split_work_to_cores`, `row_wise=True`) | knob-turn |
+| output tile row `ht` | independent | folded into `block_tiles` | whole per-core range | same | same flat split | knob-turn |
+| output tile column `wt` | independent | folded into `block_tiles` | whole per-core range | same | same flat split | knob-turn |
+| elements inside a tile | independent | whole tile (page = transfer unit) | 1 page | page = tile (NoC/DRAM page) | not split | — |
 
-Shared knobs (one source each, in the program-descriptor module):
+Folding is legal: the three outer axes are treated identically (each output tile is classified by its own coordinates — copy, copy+patch, or fill-only) and are contiguous in output page order, so the per-core run is one rectangle in flat page space.
 
-| Knob | Phase 0 value | Source | Derived from it |
-|------|---------------|--------|-----------------|
-| `grid` | `device.compute_with_storage_grid_size()` | queried per cache key | `grid_cores`, core ranges |
-| `min_units_per_core` | 1 | module constant `MIN_UNITS_PER_CORE` | `num_cores` (both regimes) |
-| `buffer_depth` | 2 | module constant `BUFFER_DEPTH` | `eff_depth = min(buffer_depth, max_num_blocks_per_core)`, `l1_block_cap` |
-| `L1_OP_BUDGET_BYTES` | 1 347 776 (BB-05) | module constant | `l1_block_cap = floor((L1_OP_BUDGET_BYTES − page_bytes) / (page_bytes · buffer_depth))` |
-| `band_block_tiles` | `max core_band_tiles` | `make_plan()` | `num_blocks_this_core = ceil(core_band_tiles / band_block_tiles)` |
-| `block_tiles` | see above | `make_plan()` | CB capacity, `num_blocks_this_core = ceil(core_input_pages / block_tiles)` |
-
-No knob is inlined in a kernel: every loop bound is a CT/RT arg derived from these.
+Intermediate data: the only data a stage produces is the assembled output page in `cb_input_tiles` (same axes as the output tile index; it inherits the split above — nothing is collected on a designated core, there is no coordinator role, every core does its own pages end to end).
 
 ### Buffer-depth knobs
 
 | CB | Depth knob | Phase 0 value | What the depth buys |
 |----|------------|---------------|---------------------|
-| `cb_fill_source` (extension_band) | none (a constant buffer, never cycled) | 1 page | nothing to overlap: it is built once and read by every write |
-| `cb_assembled_tiles` (new_storage_tiles) | `buffer_depth` → `eff_depth = min(buffer_depth, max_num_blocks_per_core)` | `eff_depth = 1` in every production shape (one block per core) | with ≥ 2 blocks per core, the reader loads block `k+1` while the writer drains block `k`. With one block there is nothing to overlap, so the second slot would be dead L1 |
-| `cb_fill_page` (new_storage_tiles) | none | 1 page | constant `c` tile, sourced by every fill-only page write |
+| `cb_input_tiles` (new_storage_tiles) | `input_depth_blocks` | `min(2, num_blocks_max)` → **1** whenever the per-core run is one block (every Phase 0 shape), 2 when the L1 cap splits a run | overlap of block `i+1` reads with block `i` patch+writes; worthless with one block, so not allocated |
+| `cb_fill_tile` (both regimes) | none (constant source page, read by NoC writes, never cycled) | 1 page | — |
 
 ### Mechanism caps
 
 | Mechanism | Cap on which extent | Clamp | What happens unclamped |
 |-----------|--------------------|-------|------------------------|
-| NoC DRAM/L1 write alignment 16 B (`noc_parameters.h:376,380`) | band segment offset and length | Segment offsets and lengths are multiples of `face_row_bytes ≥ 32 B`. All segments read the fill source from offset 0 of a CB (L1-aligned). The host asserts `face_row_bytes % 16 == 0` | misaligned writes corrupt neighbouring bytes or hang |
-| NoC DRAM read alignment 64 B (`noc_parameters.h:379`) | input reads | `new_storage_tiles` reads whole tile pages only (page bases are bank-aligned). Never sub-page reads | wrong bytes land in L1 |
-| Segment table width | `row_in_tile` ranges | `row_segments(a, b)` with `a > 0` yields ≤ 3 ranges. The table holds 3 `(offset, bytes)` entries plus a count, and the host asserts `count ≤ 3` | out-of-bounds RT-arg reads |
-| L1 budget (BB-05) | `block_tiles` | `block_tiles ≤ l1_block_cap`. The footprint is then `block_tiles·eff_depth·page_bytes + page_bytes ≤ 1 347 776` for every shape, so no shape is ever refused | launch failure in the model, where 1 347 776 B is all the op gets |
-| CB ring wrap (`ttnn-cb-memory-fundamentals.md` §Ring-Wrap) | `cb_assembled_tiles` push quantum | Every block pushes and pops the nominal `block_tiles`, ragged last block included. Capacity = `block_tiles · eff_depth` | the pointer overshoots `fifo_limit` and silently corrupts neighbouring L1 |
-| `fill_l1_range` contract (`l1_helpers.hpp:100-146`) | mask/fill ranges | starts and lengths are multiples of `elem_bytes` (element-aligned by construction) | ASSERT under `--dev`; silent under-fill otherwise |
+| NoC write alignment (Blackhole `NOC_DRAM_WRITE_ALIGNMENT_BYTES = 16`, `NOC_L1_WRITE_ALIGNMENT_BYTES = 16`, `tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_parameters.h:376,380`) | band segment start/length; source offset in `cb_fill_tile` | segment offsets are multiples of `row_bytes` (≥ 32 B, 16-aligned); source = `fill_base + (dst_offset mod 16)` with `fill_base` 16-aligned → equal mod 16. Every source offset used must stay within `cb_fill_tile` page (segment ≤ `tile_bytes − face_bytes`) | misaligned NoC write: corrupt bytes / hang |
+| NoC DRAM read alignment (`NOC_DRAM_READ_ALIGNMENT_BYTES = 64`, same file :379) | new_storage reads | reads are whole tiles to CB page starts (CB pages are 64-aligned since `tile_bytes` is a multiple of 64) | — |
+| Column patch granularity (`edge_col` is 2 B granular for bf16) | input-tile-padding columns patch | done by `fill_l1_range` (RISC-V L1 stores, alignment-safe head/tail) in the writer, **not** NoC writes (a NoC transfer cannot start at a 2 B offset) | misaligned NoC write |
+| Extension contract | tile rows touched | exactly one tile row per slice (`in_tiles_h − 1`); band rows `[band_row_begin, band_row_end)` only | contract violation (golden `untouched_rows`, storage checks) |
+| L1 budget (BB-05: 1347776 B/core) | `block_tiles` | `block_tiles_cap = floor((1347776 − fill_page_bytes) / (input_depth_blocks_if_split · tile_bytes))` (bf16 ≈ 328 tiles, fp32 ≈ 164) | OOM / refused launch |
+| Kernel RT-arg count | none — per-core args are a fixed handful (range start, count, fill bits, buffer address) | — | — |
 
 ### Regimes
 
 | Regime | Status | Predicate | Block | Data movement vs. minimum | What a bigger block buys |
 |--------|--------|-----------|-------|---------------------------|--------------------------|
-| `extension_band` | built | `layout == TILE and highs[i] == 0 for all i != r-2 and highs[r-2] > 0 and ceil(D_{r-2}/32) == ceil(d_{r-2}/32)` | `band_block_tiles` band tiles × `band_segments` (new rows × 32 cols) | Minimum at the DRAM boundary is every new logical output position written once and nothing read. Actual: 0 B read; `band_units · Σ band_segments` B written. Over the minimum only by columns `col_rem..31` of the last tile column, which are output tile padding written as part of whole face rows | One write barrier per block (Phase 0: once per core). No CB handshakes, no inits. The per-core fixed cost (launch, fill-source build of `fill_source_bytes`) is amortized by tiles per core: the grid-sync lamp |
-| `new_storage_tiles` | built | `layout == TILE and not extension_band` | `block_tiles` input-backed output pages, consecutive in page order | Minimum: each input page crosses DRAM once, each output page once, no fill-only page read. Actual = minimum: input-backed pages read once, all output pages written once. Fill-only pages are written from `cb_fill_page` and never read | Per block, intended once each: one CB reserve/push + wait/pop, one read barrier, one write flush. Per core, intended once: the fill-page build and the final write barrier. Phase 0 runs 1 block per core |
-| `new_storage_rows` | deferred: ROW_MAJOR is outside the Phase 0 SUPPORTED rectangle and arrives with the layout refinement (its 6 production cases are int32/uint32/bf16 ROW_MAJOR). No Phase 0 cell selects it. It reuses the `new_storage_tiles` skeleton unchanged (reader assembles, writer stores, fill-only pages written from a fill buffer): page = stick, `block_rows` sticks per block, the stick tail `[d_{r-1}·e, D_{r-1}·e)` is filled with `c` in L1, and fill-only sticks come from a one-stick fill buffer | `layout == ROW_MAJOR` | `block_rows` output sticks (cap: 64 B DRAM read alignment, so slot stride = aligned page size) | Minimum (input sticks once, output sticks once) | as `new_storage_tiles`, per stick block |
-| `fill_then_copy` | rejected: a second full-tensor DRAM pass, forbidden by the contract. Superseded by `new_storage_tiles` (assemble in L1, write once) | — | — | +1 full output write + copy pass | — |
-| `extension_full_tile_rmw` | rejected: reads the band tiles and writes them back whole (2 × band bytes + reads) where `extension_band` writes only the new rows. Superseded by `extension_band`, which is always legal because face-row writes meet the 16 B alignment | — | band tile | +band read, +written rows `0..row_rem-1` and `row_mask_end..31` | — |
-| `extension_new_storage_copy` | rejected: forbidden when a slice has more than one tile row; for single-tile-row slices it moves a full read + full write per band tile. Superseded by `extension_band` | — | band tile | +1 read and +1 full write per band tile | — |
-| `compute_kernel_assembly` (unpack → DEST → pack to mask) | rejected: a format detour that the bit-exact rule forbids (denormals/int32 through the unpacker), plus an extra CB hop. Superseded by RISC-V masking in L1 | — | — | same DRAM; +2 L1 passes | — |
-| `band_segment_split` (one band tile's segments across ≤ 3 cores) | rejected: below the whole-tile granularity floor. ≤ 1.5 KB per core cannot pay the per-core launch and fill-build cost. Superseded by the whole-tile `band_unit` | — | one segment | same bytes | — |
-| `fill_page_multicast` | rejected: `c` is a 4-byte RT arg and the fill buffer is generated in-core with zero NoC/DRAM bytes. A multicast would add traffic. Superseded by local generation | — | — | +NoC bytes | — |
+| **extension_band** | **built** | `layout == TILE` ∧ `h_{r-2} > 0` ∧ `h_i == 0 ∀ i ≠ r-2` ∧ `ceil(D_{r-2}/32) == ceil(d_{r-2}/32)` (= `helpers.storage_class == "tile_padding_extension"`). 34 of the 40 Phase 0 cases, p2–p4 | `band_block_tiles` consecutive band tiles (= whole per-core range) × `band_segments` | **Minimum** at the DRAM boundary: input read 0 times; written bytes = `in_slices · in_tiles_w · 2 · (band_row_end − band_row_begin) · row_bytes` — only positions that must change (the last tile column's padding columns ride along inside the same face rows, no extra transaction). No allocation, no output page written outside the band | one write barrier per core instead of per tile; fill page materialized once per core; per-core RT-arg / launch cost amortized over `core_band_tiles` |
+| **new_storage_tiles** | **built** | `layout == TILE` ∧ ¬extension_band. 6 Phase 0 cases (`[1,L,128]`, `[1,1,L,L]`, L=185/196/207); later p1 and the rank-2 uint32 `[1,L]` cases | `block_tiles` consecutive output tiles (flat index), one block per core in every INPUTS shape | **Minimum**: every input tile crosses DRAM once (read), every output tile once (write); fill-only output tiles are never read (written from `cb_fill_tile`) | one read barrier + one CB handshake per block instead of per tile; fill-page set-up once per core |
+| new_storage_rows | deferred — the 6 ROW_MAJOR cases (int32/uint32 `[5,8192]`, `[5,1]`, `[1,1,1,1]`, `[1,1,1,8]`, bf16 `[5,3,2560]`) are outside Phase 0 SUPPORTED (layout ROW_MAJOR, dtypes int32/uint32); they arrive with the layout refinement, which adds a row-page variant of the same reader/writer split | `layout == ROW_MAJOR` | `block_rows` consecutive output rows (page = one row of `D_{r-1} · elem_bytes`) | minimum: each input row read once into the start of a CB page (64-aligned), tail `[d_{r-1}, D_{r-1})` filled by RISC stores in L1, written once; fill-only rows written from a fill row page, never read | one barrier per block; Reachability: same plan dict, same flat-range split, same `cb_input_tiles` slot discipline with page = row |
+| extension_rmw (read last tile row, patch in L1, write whole tiles back) | rejected — superseded by extension_band, which writes ≤ the same bytes and reads none (RMW: band read 1× + band written 1× at full tile size) | — | — | 2× tile bytes per band tile vs ≤ 1.5× tile bytes written-only | — |
+| extension_copy_to_new_storage | rejected — forbidden by the contract where `in_tiles_h > 1`; where `in_tiles_h == 1` it would read + write every band tile at full size plus allocate, superseded by extension_band on every shape | — | — | 1× read + 1× write of the whole tensor | — |
+| fill_then_copy (fill all output, then copy input over it) | rejected — forbidden (second full DRAM pass); new_storage_tiles assembles each page once in L1 | — | — | output written ~2× | — |
+| fill_page_broadcast (one core builds the fill page and multicasts it) | rejected — the fill page is generated by RISC stores from one RT arg in < 1 µs locally; a multicast adds NoC traffic and a semaphore rendezvous for zero DRAM saving | — | — | adds `tile_bytes × ncores` NoC bytes | — |
+| split a dependent axis + combine | not applicable — the op has no dependent axis (no output value spans more than one input element) | — | — | — | — |
 
-**Regime-selection function** (host, exact; also the BB-08 plan report): `select_regime(layout, d, highs)` returns `extension_band` when the extension predicate above holds; `new_storage_tiles` when `layout == TILE`; `new_storage_rows` otherwise. Regime-pinned tests are required: the acceptance test pins `extension_band` (single- and multi-tile-row slices) and `new_storage_tiles` (`h` and `hw`) by shape and asserts the reported regime.
+**Regime-selection function** (host, exact; also the plan name reported per BB-08):
+
+```
+def select_regime(layout, in_shape, out_shape):
+    if layout == ROW_MAJOR: return "new_storage_rows"          # deferred: refused by validate() in Phase 0
+    highs = [D - d for D, d in zip(out_shape, in_shape)]
+    only_h = highs[-2] > 0 and all(h == 0 for i, h in enumerate(highs) if i != len(highs) - 2)
+    same_tile_rows = ceil(in_shape[-2] / 32) == ceil(out_shape[-2] / 32)
+    return "extension_band" if (only_h and same_tile_rows) else "new_storage_tiles"
+```
+
+Regime-pinned tests are required: the acceptance test parametrizes production cases of both built regimes and pins the regime by its observable storage (extension_band → output buffer address == input buffer address and equal padded shape; new_storage_tiles → a different buffer), independent of the grid size.
 
 ### Traffic ranking
 
-No axis is dependent, so a split-the-dependent-axis-and-combine candidate does not exist. No operand is reuse-shared: each input page feeds exactly one output page, and `c` is a scalar generated per core. Every candidate therefore moves the same DRAM bytes, the ranking ties on bytes, and the tiebreakers decide (contiguous bank rotation, page-granular occupancy, row-wise core order).
+| Candidate split | DRAM crossings | Cross-core traffic | Rank |
+|-----------------|----------------|--------------------|------|
+| extension: flat band-tile range per core (chosen) | 0 reads; band rows written once | none | 1 (minimum) |
+| extension: split by slice only | same bytes | none | 2 — same traffic, but a 1-slice tensor (p2–p4: 1 slice × 1940 band tiles) would run on one core (`width_split` catalog entry: wide-short split by width) |
+| new_storage: flat output-tile range per core (chosen) | input 1×, output 1× | none | 1 (minimum) |
+| new_storage: split by input tile then derive outputs | input 1×, output 1×, but fill-only output tiles have no input owner → second assignment pass needed | none | 2 — same bytes, two work lists |
+| new_storage: per-core resident slice + leading-dim fill | same bytes | none | 3 — no axis to reuse; nothing gained by residency |
+| dependent-axis split + combine | — | — | n/a (no dependent axis) |
 
-| Regime | Candidate split | DRAM crossings (in / out) | Cross-core | Verdict |
-|--------|-----------------|---------------------------|------------|---------|
-| extension_band | contiguous runs of `band_unit` (slice × band col) | 0 / new rows once | 0 | **chosen**: fills the grid for p2–p4 (1940 units) and for multi-slice shapes (`[16,1,C]`: 16·48 units) alike |
-| extension_band | by slice only | 0 / same | 0 | under-fills for every 1-slice shape (p2–p4: 1 slice) |
-| extension_band | by band col only (`width_split`) | 0 / same | 0 | under-fills for `[8|16, 1, 12]` (1 col) |
-| extension_band | sub-tile segments | 0 / same | 0 | rejected (`band_segment_split`) |
-| new_storage_tiles | contiguous runs of `out_page` | in once / out once | 0 | **chosen**: page-granular occupancy, consecutive pages rotate DRAM banks |
-| new_storage_tiles | by slice / tile row / tile col, or 2-D page blocks | same | 0 | same bytes. Under-fills (Phase 0 shapes: 1 slice, 8 rows, 4–8 cols) or strides page runs |
-| both | broadcast fill buffer by mcast | same + mcast bytes | > 0 | rejected (`fill_page_multicast`) |
+Cheapest-traffic split = the implemented one in both regimes. Occupancy (core count) is a separate decision (Work Distribution) and does not change bytes.
 
 ### Block schedule
 
-**`extension_band`**: one band-writer kernel per core (RISCV_0 / NoC1):
+extension_band (one kernel role, `band_writer`):
 
 ```cpp
-build_fill_source();                                    // once per core: fill_source_bytes of c into cb_fill_source
+make_fill_page();                                   // once per core: RISC stores of fill_bits into cb_fill_tile
+for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {   // num_blocks_this_core = 1 in Phase 0
+    write_band_block(block_idx);                    // for each band tile of the block: issue every band segment
+}                                                   // as a NoC write from cb_fill_tile to (page addr + seg offset)
+drain_writes();                                     // noc_async_write_barrier once per core (BB-03)
+```
+
+| Operation | Block shape | Resident across it | Intended frequency of fixed costs |
+|-----------|-------------|--------------------|-----------------------------------|
+| `make_fill_page` | 1 page | `cb_fill_tile` for the whole kernel | once per core |
+| `write_band_block` | `band_block_tiles × band_segments` | `cb_fill_tile` | no barrier inside; address generation via `TensorAccessor` per band tile (`page = slice · in_tiles_h · in_tiles_w + (in_tiles_h−1) · in_tiles_w + wt`) |
+| `drain_writes` | — | — | one write barrier per core |
+
+new_storage_tiles (reader + writer):
+
+```cpp
+make_fill_page();                                   // writer, once per core
 for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
-    write_band_block(block_idx);                        // band_block_tiles band tiles × band_segments writes
-    retire_band_block(block_idx);                       // one noc write barrier per block
+    load_block(block_idx);       // reader: reserve block_tiles slots; for each source-bearing output tile k of the block,
+                                 // async-read input tile into slot k; ONE read barrier; push block_tiles (nominal)
+    write_fill_tiles(block_idx); // writer: issue writes of every fill-only output tile of the block from cb_fill_tile
+                                 // -- scheduled BEFORE the wait: it does not depend on the input (stall shadow)
+    patch_block(block_idx);      // writer: wait block_tiles; in each edge slot, RISC-store fill_bits into rows
+                                 // [edge_row, 32) (last input tile row) and/or cols [edge_col, 32) (last input tile col)
+    store_block(block_idx);      // writer: async-write each source-bearing slot to its output page; writes_flushed; pop block_tiles
 }
+drain_writes();                  // writer: noc_async_write_barrier (BB-03); reader: read barrier already per block
 ```
 
-| Operation | Block shape | Resident across it | Intended frequency of fixed costs |
-|-----------|-------------|--------------------|-----------------------------------|
-| `build_fill_source` | `fill_source_bytes = max(segment bytes)` of `c` at offset 0 | `cb_fill_source` (whole kernel) | once per core |
-| `write_band_block` | `band_block_tiles` tiles × ≤ 3 segments; segment `i` goes from `cb_fill_source + 0` to `page_addr(tile) + offset_i` | fill source | no barrier inside; writes self-throttle on NoC command-buffer space |
-| `retire_band_block` | — | — | one write barrier per block. Phase 0: once per core, which is also the BB-03 end-of-kernel barrier |
+| Operation | Block shape | Resident across it | Intended frequency |
+|-----------|-------------|--------------------|--------------------|
+| `make_fill_page` | 1 page | `cb_fill_tile` whole kernel | once per core |
+| `load_block` | `block_tiles` slots (slot `k` ↔ k-th output tile of the block; fill-only slots left unwritten) | — | 1 reserve, 1 read barrier, 1 push per block |
+| `write_fill_tiles` | fill-only tiles of the block | `cb_fill_tile` | no barrier; runs while `load_block` is in flight |
+| `patch_block` | edge slots of the block (≤ 1 edge row segment + 1 edge column per slice band) | slots of the block | 1 wait per block; pure L1 stores, no NoC |
+| `store_block` | source-bearing slots of the block | — | 1 `writes_flushed` + 1 pop per block |
+| `drain_writes` | — | — | once per core |
 
-**`new_storage_tiles`**: assembler reader (RISCV_1 / NoC0) and assembler writer (RISCV_0 / NoC1). Each core owns a contiguous run of output pages. Within it, *input-backed* pages flow through `cb_assembled_tiles` in page order, and *fill-only* pages never touch the CB.
+Stall-shadow check: the writer's only wait is on `cb_input_tiles`; the fill-only tile writes do not depend on it and are moved into that window (a pure data move — no floating-point order changes, no precision gate needed). In extension_band nothing waits (write-only).
 
-```cpp
-// reader                                               // writer
-for (block_idx = 0; block_idx < num_blocks_this_core;   if (core_fill_pages > 0) {
-     ++block_idx) {                                         build_fill_page();      // whole tile of c, once
-    load_block(block_idx);                                   store_fill_pages();     // every fill-only page of the run
-    mask_block(block_idx);                               }
-    hand_off_block(block_idx);                           for (block_idx = 0; block_idx < num_blocks_this_core; ++block_idx)
-}                                                            store_block(block_idx);
-                                                         retire_writes();            // final write barrier (BB-03)
-```
+Tile classification (both kernels compute the same predicate from CT args; the host never enumerates tiles):
 
-| Operation | Block shape | Resident across it | Intended frequency of fixed costs |
-|-----------|-------------|--------------------|-----------------------------------|
-| `load_block` | `block_tiles` input-backed pages (ragged last block: fewer reads, nominal reserve) | the block's slots in `cb_assembled_tiles` | one `cb_reserve_back(block_tiles)` and one read barrier per block |
-| `mask_block` | the block's boundary pages: rows `[row_rem, row_mask_end)` of pages in input tile row `tensor_tile_rows_in − 1`, and columns `[col_rem, col_mask_end)` of pages in input tile col `tensor_tile_cols_in − 1` | same slots | none: RISC-V stores, after the read barrier and before the push |
-| `hand_off_block` | `block_tiles` | — | one `cb_push_back(block_tiles)` per block |
-| `build_fill_page` | one page of `c` | `cb_fill_page` (whole kernel) | once per core, only if the run has fill-only pages |
-| `store_fill_pages` | all fill-only pages of the run | fill page | no wait on the reader (stall shadow, below) |
-| `store_block` | `block_tiles` | — | one `cb_wait_front(block_tiles)`, one `noc_async_writes_flushed`, one `cb_pop_front(block_tiles)` per block |
-| `retire_writes` | — | — | one write barrier per core |
+| Output tile (slice coords `j`, `ht`, `wt`) | Class | Source page |
+|---|---|---|
+| `j_i < d_i ∀ leading i` ∧ `ht < in_tiles_h` ∧ `wt < in_tiles_w` | source-bearing | `(in_slice(j) · in_tiles_h + ht) · in_tiles_w + wt` (`in_slice` = mixed-radix over input leading dims) |
+| otherwise | fill-only | none |
+| source-bearing ∧ `ht == in_tiles_h − 1` ∧ `edge_row ≠ 0` | + row patch `[edge_row, 32)` | |
+| source-bearing ∧ `wt == in_tiles_w − 1` ∧ `edge_col ≠ 0` | + column patch `[edge_col, 32)` | |
 
-**Stall-shadow decisions.**
-- The writer's only wait is `cb_wait_front` on the reader's block. Fill-only output pages do not depend on the input: in pad the fill region is independent of `x`, so their writes commute with every input-page write. They are issued before the first wait, and the fill-page build overlaps the reader's first reads. This is pure data movement with no floating-point reordering, so no precision gate applies.
-- The reader's wait is its read barrier. No work is independent of the data in flight: masking needs the data. With ≥ 2 blocks per core and `eff_depth = 2`, the next block's reads overlap the writer's drain of the previous one. That is the depth knob.
-- `extension_band`'s only wait is its final write barrier. Nothing remains to schedule into it.
+Patching is unconditional on whether `D` grows along that dim: positions past `D` are the output's own tile padding (may hold anything), so one rule covers every case and the poisoned input padding never leaks.
 
 ### Perf lamps
 
 | Lamp | Why the default may be wrong here | Nearby alternative to measure |
 |------|-----------------------------------|-------------------------------|
-| Grid synchronization (both regimes) | Max participation leaves 1 page per core on the Phase 0 new-storage shapes (32–64 pages) and on short bands (`[1,3844,1536]`: 48 band tiles). Per-core launch and fill-build cost may exceed the work | `min_units_per_core ∈ {2, 4, 8}` (fewer cores, more units each) on cases 64/65 and 247 |
-| Overlap (`new_storage_tiles`) | Block = whole run serializes each core's reads before its writes (p1: 14 pages) | `block_tiles = ceil(core_input_pages / {2,4})` with `buffer_depth = 2` (catalog `double_buffer`: no gain once DRAM-bound) |
-| Second DM RISC for band writes (`extension_band`) | One RISC issues all ≤ 3 writes per band tile; if issue-bound, NCRISC sits idle (catalog `split_reader`) | Split each core's band run between BRISC/NoC1 and NCRISC/NoC0, each building its own fill source (no shared buffer, no handshake). Measure on p2–p4 |
-| Fill build for `c == 0` (`extension_band`) | All 47 production extension calls have `c = 0`, and the RISC-V store loop builds up to 1.5 KB per core | Build `cb_fill_source` with `noc.async_write_zeros` (`tt_metal/hw/inc/api/dataflow/noc.h:849`) when `fill_bits == 0` |
-| Bank alignment of runs (both) | A run length that is a multiple of the DRAM bank count starts every core on the same bank (catalog `bank_stagger`) | Rotate each core's walk start by `core_idx mod num_banks` |
-| Load balance (`new_storage_tiles`) | A uniform page split hands write-only fill pages to the tail cores. p1 (refinement): 576 of 1536 pages are fill-only, contiguous at the end | Cost-weighted split: an input-backed page counts 2, a fill-only page 1 |
+| grid synchronization (extension_band) | p2–p4: 1940 band tiles / ~110–130 cores ≈ 15–18 tiles, 2 small writes each; per-core launch + RT-arg cost may dominate | `min_band_tiles_per_core` ∈ {1 (default), 32, 64} → fewer cores |
+| grid synchronization (new_storage_tiles) | `[1,L,128]`: 32 output tiles → 32 cores × 1 tile | `min_tiles_per_core` ∈ {1 (default), 4, 8} |
+| overlap (new_storage_tiles) | one block per core serializes reads before patch+writes on a core (p1: ~14 fp32 tiles/core) | `block_tiles` ∈ {4, 8} with `input_depth_blocks = 2` (`double_buffer` catalog: block 4–8, CB = 2·block) |
+| band writes on one RISC | extension is pure write-issue; one BRISC may be issue-bound at 2 writes/tile | split each core's band range across both DM RISCs (RISCV_0/NOC1 and RISCV_1/NOC0), each with its own `cb_fill_tile` (one consumer per CB) (`split_reader` catalog entry, mirrored for writes) |
+| load balance (new_storage_tiles) | equal output-tile counts give copy cores 2× the bytes of fill-only cores (p1: 960 copy + 576 fill tiles) | cost-weighted split (copy = 2, fill = 1) or two separate even splits (source-bearing list, fill-only list) |
+| bank alignment | contiguous ranges whose length is a multiple of the 8 Blackhole DRAM banks start every core on the same bank | `bank_stagger`: rotate each core's walk start by `core mod 8` |
+| core placement | `split_work_to_cores` default `row_wise=False` gives column lines | default here is `row_wise=True` (`noc_placement` catalog); measure diagonal on Blackhole |
 
 ## Dataflow Strategy
 
 | Stage | Format | Mechanism | Notes |
 |-------|--------|-----------|-------|
-| E0 host view (`extension_band`) | metadata | `out = ttnn.reshape(input_tensor, ttnn.Shape(out_shape), input_tensor.padded_shape)`, which takes the volume-change TILE view branch (`reshape.cpp:778-787`: codegen refuses volume change at `reshape_codegen_supported.cpp:402-403`, then `ttnn::experimental::view`). No program, same buffer | Host guard: `out.buffer_address() == input_tensor.buffer_address()` and `out.padded_shape == input_tensor.padded_shape`, else `RuntimeError`. Never fall back to a copy |
-| E1 fill source | input dtype bits in L1 | `fill_l1_range<elem_bytes>` into `cb_fill_source` | `fill_source_bytes` only |
-| E2 band writes | raw bytes | `noc_async_write(fill_src, accessor.get_noc_addr(page) + offset_i, bytes_i)` on NoC1 | page = `(s·tensor_tile_rows_in + tensor_tile_rows_in − 1)·tensor_tile_cols_in + tc`. No other tile row is ever addressed |
-| E3 dispatch | — | `ttnn.generic_op([out], program)`: single in-place io tensor | returns `out` |
-| N1 input page → L1 (`new_storage_tiles`) | tile page, input dtype | reader: `noc_async_read(accessor.get_noc_addr(in_page), slot, page_bytes)` on NoC0, one barrier per block | only input-backed pages |
-| N2 mask | bits | `fill_l1_range<elem_bytes>` over the row ranges (`row_segments(row_rem,row_mask_end)`) and per-face-row column ranges | before push; no unpack/pack |
-| N3 hand-off | — | `cb_assembled_tiles` reader → writer | nominal `block_tiles` per push/pop |
-| N4 output pages → DRAM | tile page | writer: `noc_async_write(slot, out_accessor.get_noc_addr(out_page), page_bytes)` on NoC1 | |
-| N5 fill-only pages → DRAM | tile page of `c` | writer: `noc_async_write(cb_fill_page, out_accessor.get_noc_addr(out_page), page_bytes)` | no DRAM read for any fill-only page |
+| `fill_bits` → `cb_fill_tile` | dtype bit pattern, one tile page (bf16: 2048 B) | `fill_l1_range<elem_bytes>` (`l1_helpers.hpp:101`) in the writer | No DRAM read, no compute. Every NoC write sourcing it happens after the stores (same RISC, program order) |
+| extension: `cb_fill_tile` → DRAM band rows | raw bytes | `noc_async_write` per band segment (src offset ≡ dst offset mod 16), `TensorAccessor` page address of the last tile row + segment offset | input never read; output = view of input storage |
+| new_storage: DRAM input tile → `cb_input_tiles` slot | TILE page, input dtype, bytes unchanged | `noc_async_read` (`TensorAccessor`), reader on RISCV_1 / NOC0 | each input tile read exactly once globally |
+| new_storage: slot patch | in-place in L1 | writer `fill_l1_range` of `fill_bits` into rows `[edge_row,32)` and/or columns `[edge_col,32)` (face-aware: rows 0–15 in faces 0/1, 16–31 in faces 2/3; columns 0–15 in faces 0/2, 16–31 in faces 1/3) | bit-exact: no unpack/pack |
+| new_storage: slot / fill page → DRAM output | TILE page | `noc_async_write` (`TensorAccessor`), writer on RISCV_0 / NOC1 | every output page written exactly once |
 
-No inter-Tensix communication in any regime, built or deferred. Physical shards are not in TARGET; a sharded input is refused.
+TARGET placement axis: `memory_config ∈ {"dram","l1"}` — both interleaved; `"l1"` is a **knob-turn** (TensorAccessor already abstracts the bank type; the three L1 cases are extension calls). Sharded inputs are refused by contract (no TARGET value), so no physical-shard scheme is designed.
 
-### TARGET axes as regime rows
-
-| TARGET value | Regime(s) | Class | What changes |
-|--------------|-----------|-------|--------------|
-| dtype float32 / int32 / uint32 | extension_band, new_storage_tiles | knob-turn | `elem_bytes = 4`, `page_bytes = 4096`, `fill_l1_range<4>`, 32-bit `fill_bits`. Host `c` conversion (fp32 bits; int truncation + range check) |
-| layout ROW_MAJOR | new_storage_rows | new regime on the same two-kernel skeleton (deferred row) | page = stick; tail fill per stick |
-| memory_config "l1" | both TILE regimes | knob-turn | the accessor is built over an L1 interleaved buffer; the output takes the input's config |
-| alignment "tile_aligned" | new_storage_tiles (an extension call is never tile-aligned: it needs `row_rem > 0`) | knob-turn | mask ranges are empty |
-| rank 2 | both TILE regimes | knob-turn | `tensor_slices_* = 1`, no leading radices |
-| padded_dims "leading" | new_storage_tiles | knob-turn | the leading-coordinate predicate marks whole fill-only slices (p1) |
-| padded_dims "w" | new_storage_tiles | knob-turn | column mask plus fill-only tile columns |
-
-### Host-side contract
-
-| Item | Decision |
-|------|----------|
-| `validate()` (first line of `g6_pad`) | Step 1 raises `ValueError` for structural argument errors, in this order: sharded input; padding not a list/tuple of 1..r 2-element pairs of ints; `low != 0`; `high < 0`; `value` not int/float; integer `c` out of range. Step 2 builds the scenario dict (`shape`, `padding`, `value`, `dtype`, `layout`, `"dram"/"l1"`), applies `INPUT_TAGGERS`, and gates on `SUPPORTED` then `EXCLUSIONS` (`UnsupportedAxisValue` / `ExcludedCell`). Step 1 precedes step 2 because the golden refusal cases `sharded` (case 64) and `args` (cases 247/253) lie inside SUPPORTED |
-| Taggers | `tag_padded_dims` reads only `padding[-1][1]` (dim -1) and `padding[-2][1]` (dim -2, when `k ≥ 2`). Positive means padded. It never indexes by `r`, so a malformed `k > r` scenario still tags. `tag_alignment`: `W % 32 != 0` gives `"w_non_aligned"`; otherwise `H % 32 != 0` gives `"h_non_aligned"`; otherwise `"tile_aligned"` |
-| Phase 0 `SUPPORTED` | `dtype: [bfloat16]`, `layout: [TILE]`, `memory_config: ["dram"]`, `alignment: ["w_non_aligned","h_non_aligned"]`, `rank: [3,4]`, `padded_dims: ["h","hw"]`. `EXCLUSIONS = []` |
-| Program cache (BB-07) | Python memo `key → (ProgramDescriptor, per-call patch slots)` with `key = (regime, logical shape, padded shape, tuple(highs), dtype, layout, buffer_type, grid)`. On a hit, only common RT args are patched (buffer addresses, `fill_bits`). `custom_program_hash` is set once from `ttnn.compute_program_descriptor_hash`. `value` is never in the key |
-| Plan report (BB-08) | `describe_plan(input_tensor, padding) -> dict`, exported from the package (`from ttnn.operations.g6_pad import describe_plan`; the acceptance test pins regimes with it): regime, num_cores, core ranges, units per core (both groups), `block_tiles`/`band_block_tiles`, `eff_depth`, `band_segments`, L1 bytes per core. The entry point keeps the last plan in a module attribute |
-| Role dump (BB-21) | `describe_plan` lists each core's role (`band_writer` / `assembler`) and unit range. Kernels wrap every phase and every blocking wait in `DeviceZoneScopedN` zones (`fill_build`, `band_writes`, `write_barrier`, `read_issue`, `read_barrier`, `mask`, `cb_reserve`, `cb_wait`, `block_writes`, `write_flush`) that compile to nothing in the plain build |
-| Structural impossibilities | none to add (`INVALID = []` is correct) |
+Output storage (extension_band): the entry point builds the output as a metadata-only view `out = view(input_tensor, logical=out_shape, padded=input_tensor.padded_shape)` (C++ `tt::tt_metal::view`, `ttnn/core/tensor/tensor_ops.cpp:533`, tracked as `Tensor::reshape` with no program factory; Python: `ttnn.reshape(input_tensor, out_shape, input_tensor.padded_shape)` takes the volume-mismatch tile view path, `ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.cpp:771-779`, **only if** the routed-codegen check before it does not dispatch — the implementer MUST confirm under `ttnn.graph` capture that the view adds zero program nodes; if it does dispatch, bind/locate a direct `tt::tt_metal::view(logical, padded)` path instead). Then `ttnn.generic_op([out], desc)` — single-tensor in-place `io_tensors` is supported (`generic_op_device_operation_types.hpp:50-52`). The input's logical values are never written.
 
 ## Work Distribution
 
-| Field | `extension_band` | `new_storage_tiles` |
-|-------|------------------|---------------------|
-| Work unit | a band tile (`band_unit`) | an output page (`out_page`); `block_tiles` input-backed pages per block |
-| Grid | `device.compute_with_storage_grid_size()` | same |
-| Split | `ttnn.split_work_to_cores(grid, band_units, row_wise=True)` (catalog `noc_placement`: row-wise spread) | `ttnn.split_work_to_cores(grid, out_pages, row_wise=True)` |
-| Per-core work | `core_band_tiles` = g1/g2 counts; RT args `start_unit`, `core_band_tiles` | RT args `start_page`, `core_out_pages`, plus host-computed `core_input_pages` and `core_fill_pages` |
-| Remainder | split_work_to_cores' two groups; all formulas `ceil`, per slice | the same. The ragged last block keeps nominal push/pop counts |
-| Unit → page | `s = u / tensor_tile_cols_in`, `tc = u % tensor_tile_cols_in` → `(s·tensor_tile_rows_in + tensor_tile_rows_in − 1)·tensor_tile_cols_in + tc` | `tc = p % tensor_tile_cols_out`, `tr = (p / tensor_tile_cols_out) % tensor_tile_rows_out`, `s_out = p / (tensor_tile_rows_out·tensor_tile_cols_out)`. Leading coords come from `s_out` in the output radices `D_lead`. The page is input-backed iff every leading coord `< d_lead`, `tr < tensor_tile_rows_in` and `tc < tensor_tile_cols_in`. Then `s_in` = the coords in radices `d_lead` and `in_page = (s_in·tensor_tile_rows_in + tr)·tensor_tile_cols_in + tc` |
-| Core ranges (BB-17) | row-wise groups give ≤ 3 rectangles | same |
-| Kernels | band writer only | reader + writer; no compute kernel |
+| Field | Value |
+|-------|-------|
+| Work unit | extension_band: one band tile (`band_idx = slice · in_tiles_w + wt`, `N_band = in_slices · in_tiles_w`). new_storage_tiles: one output tile (flat `t`, `N_out = out_slices · out_tiles_h · out_tiles_w`) |
+| Grid | `device.compute_with_storage_grid_size()` (runtime, never a literal); core count `ncores = min(grid_x·grid_y, ceil(N / min_units_per_core))`, `min_units_per_core` = host knob (Phase 0: 1) |
+| Per-core work | `ttnn.split_work_to_cores(grid, N, row_wise=True)` → ≤ 2 core groups (`units_per_core_g1`, `units_per_core_g2`), contiguous unit ranges in core order; RT args per core: `start_unit`, `num_units` |
+| Remainder | handled by the two core groups of `split_work_to_cores`; tile counts are `ceil` per image (`in_tiles_h = ceil(d_{r-2}/32)` per slice, never `floor(prod/32)`) |
+| Blocks per core | Phase 0: `num_blocks_this_core = ceil(num_units / block_tiles)` = 1 for every INPUTS shape; `last_block_extent = num_units − (num_blocks−1)·block_tiles` (nominal CB push/pop counts keep `block_tiles`) |
+| Core ranges (BB-17) | row-wise fill of the first `ncores` cores = ≤ 2 rectangles per group |
+| Plan report (BB-08) | entry point keeps `g6_pad.last_plan` (regime name, ncores, block extents); the same dict is the descriptor cache key value |
+| Program cache (BB-07) | Python-side cache of the built `ProgramDescriptor` keyed by `(regime, in_shape, in_padded_shape, out_shape, dtype, layout, buffer_type, grid)`; on hit only RT args are patched (`fill_bits`, buffer addresses). `generic_op`'s own hash excludes RT values (`generic_op_device_operation.hpp:44-46`), so all structure (CT args, core ranges, CB sizes) is shape-derived and keyed |
 
-Production geometry. Units/core assume a 110-core grid; `make_plan()` derives them from the queried grid:
-
-| Case | Regime | Units | Units / core | Segments (B) per tile |
-|------|--------|-------|--------------|------------------------|
-| p2 `[1,1,2,62080]`→32 | extension_band | 1940 | 17–18 | 448, 1472 |
-| p3 `[1,1,8,62080]`→16 | extension_band | 1940 | 17–18 | 256, 256 |
-| p4 `[1,1,8,62080]`→32 | extension_band | 1940 | 17–18 | 256, 1280 |
-| `[1,3844,1536]`→3872 | extension_band | 48 | 1 | 384, 1408 |
-| `[16,1,1536]`→32 | extension_band | 768 | 6–7 | 480, 1504 |
-| `[1,3844,12]`→3872 | extension_band | 1 | 1 | 384, 1408 |
-| `[1,1,196,196]`→256 | new_storage_tiles | 64 pages (49 input-backed, 15 fill-only) | 1 | — |
-| `[1,196,128]`→256 | new_storage_tiles | 32 pages (28 input-backed, 4 fill-only) | 1 | — |
-| p1 `[5,12,128,128]`→8 (refinement) | new_storage_tiles | 1536 pages (960 / 576) | 13–14 | — |
+Phase 0 core counts (Blackhole, ~110–130 cores): p2–p4 1940 band tiles → full grid; `[1,3844,1536]` 48 → 48 cores; `[16,1,1536]` 768 → full grid; `[1,3844,12]` 1 → 1 core (one unit of work exists); `[1,1,196,196]→256²` 64 output tiles → 64 cores; `[1,196,128]→256` 32 → 32 cores.
 
 ## Circular Buffers
 
 | Semantic Name | Index | Page Size | Num Pages | Sizing rationale | Format | Producer | Consumer | Lifetime |
 |---------------|-------|-----------|-----------|------------------|--------|----------|----------|----------|
-| `cb_fill_source` (extension_band) | 0 | `page_bytes` | 1 | spans `row_in_tile` (live: `fill_source_bytes ≤ page_bytes`); streams `band_unit`, `tile_row` | input dtype | writer (`build_fill_source`) | writer (NoC source) | whole kernel |
-| `cb_assembled_tiles` (new_storage_tiles) | 0 | `page_bytes` | `block_tiles · eff_depth` | spans `out_page` → `block_tiles`, ×`eff_depth` | input dtype | reader | writer | per block, whole kernel |
-| `cb_fill_page` (new_storage_tiles) | 1 | `page_bytes` | 1 | spans one page of `c`; streams `out_page` | input dtype | writer (`build_fill_page`) | writer (NoC source) | whole kernel |
+| `cb_fill_tile` | 0 | `tile_bytes` | 1 | constant source page; spans no block axis; segments ≤ `tile_bytes − face_bytes` so any 16-aligned source offset fits | input dtype | writer (`band_writer` in extension_band) | writer (NoC source) | whole kernel |
+| `cb_input_tiles` | 1 | `tile_bytes` | `input_depth_blocks · block_tiles` | spans the flat output-tile axis of one block (slot k ↔ k-th tile of the block); depth 1 when one block per core | input dtype | reader | writer | per block (new_storage_tiles only) |
 
-The two scratch CBs are reserved once and never pushed (`cb_reserve_back(…, 1)` + `get_write_ptr`). Producer and consumer are the same kernel. Full ledger: `l1_ledger.md`.
+Ring-wrap: pushes and pops are always the nominal `block_tiles` (fill-only slots and a short last block are simply not written / not sent), so every cycle closes exactly at capacity.
 
 ## Block Operation Realization
 
 | # | Block operation | Block shape | Helper? | Input CB (semantic name, pages, state) | Output CB (semantic name, pages) | CB state after |
 |---|-----------------|-------------|---------|----------------------------------------|----------------------------------|----------------|
-| E1 | `build_fill_source` | `fill_source_bytes` | `fill_l1_range` | — | `cb_fill_source`, 1 (reserved, not pushed) | holds `c` for the whole kernel |
-| E2 | `write_band_block` | `band_block_tiles` × `band_segments` | raw NoC | `cb_fill_source` (read as NoC source) | DRAM (input buffer = output view) | unchanged |
-| E3 | `retire_band_block` | — | raw NoC | — | — | all writes acked |
-| N1 | `load_block` | `block_tiles` | raw NoC + CB | DRAM input | `cb_assembled_tiles`, reserve `block_tiles` | slots hold raw input pages |
-| N2 | `mask_block` | boundary pages of the block | `fill_l1_range` | `cb_assembled_tiles` (reserved, not yet pushed) | same slots | padded rows/cols hold `c` |
-| N3 | `hand_off_block` | `block_tiles` | CB | — | `cb_assembled_tiles`, push `block_tiles` | visible to writer |
-| N4 | `build_fill_page` | 1 page | `fill_l1_range` | — | `cb_fill_page`, 1 (reserved, not pushed) | holds `c` |
-| N5 | `store_fill_pages` | all fill-only pages of the run | raw NoC | `cb_fill_page` | DRAM output | unchanged |
-| N6 | `store_block` | `block_tiles` | raw NoC + CB | `cb_assembled_tiles`, wait `block_tiles` | DRAM output | popped `block_tiles` after flush |
-| N7 | `retire_writes` | — | raw NoC | — | — | all writes acked (BB-03) |
+| E1 | `make_fill_page` | 1 page | `fill_l1_range` | — | `cb_fill_tile`, 1 (written by stores, no push needed: same-kernel scratch) | resident |
+| E2 | `write_band_block` | `band_block_tiles × band_segments` | no | `cb_fill_tile`, 1, resident | DRAM (output = input storage) | unchanged |
+| E3 | `drain_writes` | — | no | — | — | — |
+| N1 | `make_fill_page` | 1 page | `fill_l1_range` | — | `cb_fill_tile`, 1 | resident |
+| N2 | `load_block` | `block_tiles` slots | no | DRAM input | `cb_input_tiles`, push `block_tiles` | full block visible to writer |
+| N3 | `write_fill_tiles` | fill-only tiles of block | no | `cb_fill_tile`, 1 | DRAM output | unchanged |
+| N4 | `patch_block` | edge slots | `fill_l1_range` | `cb_input_tiles`, wait `block_tiles` | same slots, in place | owned by writer until pop |
+| N5 | `store_block` | source slots | no | `cb_input_tiles` | DRAM output; pop `block_tiles` | freed |
+| N6 | `drain_writes` | — | no | — | — | — |
 
 ## API Mapping
 
 | Block operation | Type | Function | File:Line | Template Params / Args | Input CB | Output CB | Which params are block knobs |
 |-----------------|------|----------|-----------|------------------------|----------|-----------|------------------------------|
-| E1, N2, N4 | helper | `dataflow_kernel_lib::fill_l1_range<val_size>` | `ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp:100-101` | `val_size = elem_bytes` (CT); `(start_addr, n_bytes, fill_bits)` | — | scratch / slot | `n_bytes` = segment / range length (derived from `row_segments`, mask ranges) |
-| E2, N4–N6 writes | raw_api | `noc_async_write` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:876` | `(src_l1, dst_noc_addr, bytes)` | fill source / slot | DRAM | `band_block_tiles`, `block_tiles` (loop extents) |
-| E2, N1, N4–N6 addressing | raw_api | `TensorAccessor::get_noc_addr(page_id, offset)` | `tt_metal/hw/inc/api/tensor/tensor_accessor.h:165` | page id + segment offset | — | — | — |
-| N1 reads | raw_api | `noc_async_read` | `dataflow_api.h:547` | `(src_noc_addr, slot_l1, page_bytes)` | DRAM | `cb_assembled_tiles` | `block_tiles` |
-| E3, N7 | raw_api | `noc_async_write_barrier` | `dataflow_api.h:1951` | — | — | — | once per block / core |
-| N6 | raw_api | `noc_async_writes_flushed` | `dataflow_api.h:1980` | — | — | — | once per block |
-| N1 | raw_api | `noc_async_read_barrier` | `dataflow_api.h:1921` | — | — | — | once per block |
-| N1, N3, N6 | raw_api | `cb_reserve_back` / `cb_push_back` / `cb_wait_front` / `cb_pop_front` / `get_write_ptr` / `get_read_ptr` | `dataflow_api.h:406 / 208 / 479 / 260 / 325 / 346` | quantum `block_tiles` | — | — | `block_tiles` |
-| fill (lamp) | raw_api | `Noc::async_write_zeros` | `tt_metal/hw/inc/api/dataflow/noc.h:849` | only on the `c == 0` lamp | — | `cb_fill_source` | — |
+| page addressing | raw_api | `TensorAccessor` / `TensorAccessorArgs` | `tech_reports/tensor_accessor/tensor_accessor.md` | CT accessor args of input (and output) | — | — | — |
+| E2, N3, N5 | raw_api | `noc_async_write(src_l1, dst_noc_addr, bytes)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:876` | segment offset/bytes (E2), `tile_bytes` (N3/N5) | `cb_fill_tile` / `cb_input_tiles` | — | `band_block_tiles`, `block_tiles` (trip counts) |
+| N2 | raw_api | `noc_async_read` + `noc_async_read_barrier` (once per block) | `dataflow_api.h:547`, `:1921` | `tile_bytes` | — | `cb_input_tiles` | `block_tiles` |
+| N2/N4/N5 | raw_api | `cb_reserve_back`/`cb_push_back`/`cb_wait_front`/`cb_pop_front`/`get_write_ptr`/`get_read_ptr` | same | nominal `block_tiles` | `cb_input_tiles` | | `block_tiles` |
+| E3, N6 | raw_api | `noc_async_write_barrier` | `dataflow_api.h:1951` | — | — | — | — |
+| N5 | raw_api | `noc_async_writes_flushed` before `cb_pop_front` | `dataflow_api.h:1980` | — | `cb_input_tiles` | — | — |
+| E1, N4 | helper | `dataflow_kernel_lib::fill_l1_range<elem_bytes>(start_addr, n_bytes, fill_bits)` | `ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp:101` | E1: one call over the whole page. N4 row patch: one call per contiguous run — `edge_row < 16`: face 0 rows `[edge_row,16)`, then face 1 rows `[edge_row,16)` + faces 2,3 whole (one run); `edge_row ≥ 16`: face 2 rows `[edge_row−16,16)`, face 3 rows `[edge_row−16,16)`; column patch: one call per face row over columns `[edge_col mod 16 …)` of faces 0/2 (if `edge_col<16`) and whole face rows of faces 1/3, or `[edge_col−16,16)` of faces 1/3 | — | `cb_fill_tile` / `cb_input_tiles` | — |
 
-**Helpers considered and rejected** (for every `raw_api` row):
+**Helpers considered and rejected** (there is no compute phase; every operation is a data move):
 
-| Raw use | Candidate helper | Mismatch (file:line) |
-|---------|------------------|----------------------|
-| sub-page band writes, page reads and writes | `dataflow_kernel_lib::fill_tile_column` | `tile_column_dataflow.hpp:69-70`: RISC-V stores into an L1 tile column; no NoC transfer to an interleaved tensor |
-| same | `local_copy_helpers_dataflow.hpp` (`read_with_state`, `set_read_trid`) | `local_copy_helpers_dataflow.hpp:9,94-95`: self-aimed L1→L1 reads only (trid helpers `:147,158` are the barrier-granularity lamp's tools, not a page mover) |
-| same | `mcast/kernel/mcast_args.hpp` | multicast between Tensix cores; this op has no cross-core traffic |
-| same | compute-side helpers (`tilize`/`untilize`/`eltwise_*`/`reduce`) | compute kernels unpack and pack, which is the format detour the bit-exact rule forbids; this op has no compute kernel |
-| CB handshakes | none: no dataflow helper wraps raw `cb_*` for a reader→writer page hand-off | — |
+| Helper | Mismatch | Citation |
+|--------|----------|----------|
+| eltwise `copy` (`ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp:113`) | Would route every tile through unpack → DEST → pack: a format path the Precision rule forbids for int32/uint32/fp32 (a detour through another format) and that adds a compute kernel to a pure move; the edge patch with `c` has no element in the chain vocabulary | `convenience.hpp:113`, `convenience.inl:68` |
+| `fill_tile_column<dfb_id, T>` | Works one column at a time with element-sized stores (`ttnn/cpp/ttnn/kernel_lib/tile_column_dataflow.hpp:70-78`); the column patch is `32 − edge_col` adjacent columns, which `fill_l1_range` covers as one contiguous run per face row with 4-byte bulk stores | `tile_column_dataflow.hpp:70` |
+| `tilize_helpers.hpp` / `untilize_helpers.hpp` | No layout change happens: input and output share the layout | `ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp` |
+| `mcast/kernel/mcast_args.hpp` | No reuse-shared operand (see regime `fill_page_broadcast`, rejected) | `ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp` |
 
 ## Key Risks and Gotchas
 
 | Risk | Why it bites here | Mitigation in this design |
 |------|-------------------|---------------------------|
-| The view relies on `ttnn.reshape`'s volume-change TILE branch | `reshape.cpp:760` `this_is_view` is false when the old dim -2 is not a multiple of 32. The view comes only from the `:778-787` branch, which upstream marks as legacy. `ttnn.view`/`ttnn.experimental.view` TT_FATAL on volume change (`data_movement/view/view.cpp:24`, `reshape_common.cpp:58`). The single-shape `ttnn.reshape(t, list)` form resolves to the `SmallVector` overload and hits the same fatal | Always call the two-shape form with `ttnn.Shape(out_shape)` and `input_tensor.padded_shape`. Host guard on buffer address and padded shape. The acceptance test counts programs. If the branch ever goes, add a nanobind overload binding `ttnn::experimental::view(t, logical, padded)` (`experimental/reshape/view.cpp:12`). Never copy |
-| Producer leftovers in the input's tile padding (rule 2) | `new_storage_tiles` copies whole tiles. With zero-padded test inputs and `c = 0`, a missing mask passes | The mask covers rows `[row_rem, row_mask_end)` and cols `[col_rem, col_mask_end)` of every boundary page. The acceptance test poisons padding with 1000.0 |
-| Touching a non-last tile row (rule 3) | An off-by-one in the band page formula silently rewrites real data rows in multi-tile-row slices | The page formula fixes `tile_row = tensor_tile_rows_in − 1`. The acceptance test diffs the raw padded buffer of every earlier tile row |
-| Bit exactness | Any unpack/pack or float conversion breaks int32/uint32/denormals | No compute kernel. Masking and fill are RISC-V integer stores of `fill_bits`. bf16 `c` comes from torch fp32 → bf16 RNE on the host (`-2**127` → `0xFF00`, `0.1` → torch's value) |
-| Cache key vs per-call data (BB-07) | The same shape is called with different `value` and padding (loose case 253 → `value=7.0` → 291) | `fill_bits` and addresses are common RT args patched per call. Highs are in the key |
-| Ragged blocks and ring wrap | Per-core `core_input_pages` differ, but `block_tiles` is uniform | Nominal `block_tiles` push/pop per block. Capacity = `block_tiles·eff_depth` |
-| Race on hand-off (BB-06) | Masking writes slots after the reads land | Order: read barrier → mask → `cb_push_back`. The writer pops only after `noc_async_writes_flushed` |
-| Transactions left in flight (BB-03) | The next model program starts immediately | Every writer ends with `noc_async_write_barrier`. The reader ends after its last read barrier |
-| Odd column boundary in bf16 | `col_rem` odd puts mask ranges at 2-byte alignment | `fill_l1_range<2>` handles 16-bit head/tail stores; ranges are element-aligned |
-| Cores without input-backed pages | Fill-only tail runs (p1, tile row 7 of the 256 cases) | `num_blocks_this_core = 0`: the reader exits and the writer only writes fill pages. CB config stays uniform across the core range |
-| Refusals inside SUPPORTED | The golden `sharded` (case 64) and `args` (247, 253) refusals lie in SUPPORTED cells | Structural `ValueError` checks run before the support gate. Taggers never crash on `k > r` |
+| Input tile padding copied into logical output | Golden inputs are zero padded and `c = 0` mostly; a whole-tile copy passes except under `poison_padding` | Unconditional row/column patch of every edge slot (N4); extension writes all band rows `[edge_row, band_row_end)` from the fill page |
+| View dispatches a program | Golden counts program nodes; `ttnn.reshape` may route to codegen before its view path | Verify zero extra program nodes under `ttnn.graph` capture; build the view before `generic_op([out], …)` |
+| Touching other tile rows in extension | `untouched_rows` compares the raw buffer | Page index uses `in_tiles_h − 1` only; segments derive from `[band_row_begin, band_row_end)` only |
+| Value in the cache key / CT | Same shape, different `value` replays a stale fill (`loose_same_shape_two_values`) | `fill_bits` is RT only; padding → output shape → part of the Python cache key |
+| bf16 fill conversion | `-1.7e38` must be `0xFF00`; `0.1` must match torch RNE | Host converts with torch, never with `struct.pack` truncation |
+| Column patch on 2-byte granularity | NoC cannot start a write at a 2 B offset | Patches are RISC stores in L1, face-aware |
+| Partial-tile band writes | 32 B granularity; must be 16 B aligned and src≡dst mod 16 | `row_bytes` multiple of 16; source offset from a 16-aligned fill page |
+| Writes left in flight at return | Next program hangs (BB-03) | `noc_async_write_barrier` at the end of every writing kernel |
+| Fill-only tiles needlessly read | Rule: no page holding only `c` is read from DRAM | Reader skips fill-only slots; nominal push count still `block_tiles` |
+| L1 cases (refinement) and other dtypes | `elem_bytes` changes `row_bytes`/`face_bytes`/`tile_bytes` | Every geometry value derived from `elem_bytes` in the plan; no literal 2048/512/32 B in kernels |
+| Profiling (BB-21) | Each role's work and its wait need zones | Zones: `make_fill_page`, `write_band_block`, `load_block`, `write_fill_tiles`, `patch_block` (incl. its wait), `store_block`, `drain_writes`; the plan report lists role per core |
+
+### Registry model (for the implementer)
+
+| Item | Value |
+|------|-------|
+| INPUT_TAGGERS | `tag_alignment`: W%32≠0 → `"w_non_aligned"`; elif H%32≠0 → `"h_non_aligned"`; else `"tile_aligned"` (H, W = input `shape[-2]`, `shape[-1]`). `tag_rank`: `len(shape)`. `tag_padded_dims`: highs aligned to trailing dims; `h[-2]>0 ∧ h[-1]>0` → `"hw"`, only `h[-2]` → `"h"`, only `h[-1]` → `"w"`, else `"leading"`. `tag_dtype`, `tag_layout`, `tag_memory_config` read the scenario keys |
+| Phase 0 SUPPORTED | dtype `[bfloat16]`, layout `[TILE_LAYOUT]`, memory_config `["dram"]`, alignment `["w_non_aligned","h_non_aligned"]`, rank `[3,4]`, padded_dims `["h","hw"]` |
+| EXCLUSIONS | none |
+| validate() order | (1) argument validation → `ValueError` (padding form, low≠0, high<0, k∉[1,r], value type/int range, sharded input); (2) build the scenario dict from the tensor and gate SUPPORTED per axis then EXCLUSIONS (`UnsupportedAxisValue` / `ExcludedCell`). `validate()` is the first line of `g6_pad` |
+
+### Structural impossibilities
+
+None beyond `INVALID = []`.

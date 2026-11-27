@@ -1,59 +1,40 @@
 # L1 Ledger: g6_pad
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Axes are those of `op_design.md` § Blocking Model. Each regime is its own program, so an axis of the other regime is tagged `n/a (other program)`.
-
-Axis list: `slice`, `band_tile_col`, `band_unit` (extension_band); `tile_row`, `row_in_tile` (both); `tile_col`, `out_page`, `col_in_tile` (new_storage_tiles).
-
-Inventory decisions, made before any sizing:
-- No compute kernel, so no compute-side CBs.
-- `new_storage_tiles` has one staging CB, not an input CB plus an output CB. The reader packs each input page into the slot the writer stores from (Rule 3 pattern 1). Masking is in place in that slot while the reader still owns it, between `cb_reserve_back` and `cb_push_back`. That gives real CB credit and no second thread on the slot (pattern 2).
-- Fill-only pages get a constant buffer, not slots. One build per core instead of one full-tile store loop per fill page. It also lets the writer issue them before the first hand-off (the stall shadow in `op_design.md`).
-
-## CB table
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes from `op_design.md` → Blocking Model:
+extension_band: `band` (flat slice × tile-column band index, extent `band_block_tiles`), `band_rows` (rows `[band_row_begin, band_row_end)` inside a band tile, not split).
+new_storage_tiles: `out_tile` (flat slice × tile-row × tile-column output index, extent `block_tiles`).
+No compute kernel, no DEST: every page holds raw input-dtype bytes (`fp32_dest_acc_en` does not apply; audit 2: dataflow-only payload).
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_fill_source` (extension_band, idx 0) | `1` (page = `page_bytes`) | `fill_source_bytes = max(band_segments bytes) ≤ page_bytes`, so 1 page | `{slice: streams, band_tile_col: streams, band_unit: streams (every band tile sources the same bytes), tile_row: streams (fixed extent 1), row_in_tile: spans → fill_source_bytes, tile_col: n/a (other program), out_page: n/a (other program), col_in_tile: n/a (other program)}` | input dtype bit pattern. A dataflow-only payload that never passes through DEST, so the DEST-width audit does not apply | writer (`build_fill_source`) | writer (NoC write source) | whole kernel | Only buffer of its program, so nothing to share. Capacity exceeds the live set by up to one page minus the longest segment. The reason is page granularity: a fixed one-page CB covers every padding, and `fill_source_bytes` is set per call by the segment table |
-| `cb_assembled_tiles` (new_storage_tiles, idx 0) | `block_tiles · eff_depth` | `block_tiles · eff_depth`. With `eff_depth = 2` (≥ 2 blocks per core), block `k+1` loads while block `k` drains. With 1 block per core (every production shape) `eff_depth = 1` | `{out_page: spans → block_tiles × eff_depth, slice: spans via out_page (folded), tile_row: spans via out_page (folded), tile_col: spans via out_page (folded), row_in_tile: spans (whole page, masked in place), col_in_tile: spans (whole page, masked in place), band_tile_col: n/a (other program), band_unit: n/a (other program)}` | input dtype, raw tile page (never unpacked) | reader | writer | per block, whole kernel | Cannot alias `cb_fill_page`: the lifetimes are concurrent, because the writer sources fill pages while the reader loads blocks. It already serves as both the input staging and the output staging buffer |
-| `cb_fill_page` (new_storage_tiles, idx 1) | `1` | 1 page on cores with `core_fill_pages > 0`, 0 elsewhere. It is allocated on every core of the range because a CB config covers the core range, at a cost ≤ 4 KB | `{out_page: streams (sourced by every fill-only page), slice: streams, tile_row: streams, tile_col: streams, row_in_tile: spans (whole page of c), col_in_tile: spans (whole page of c), band_tile_col: n/a (other program), band_unit: n/a (other program)}` | input dtype bit pattern; dataflow-only payload | writer (`build_fill_page`) | writer (NoC write source) | whole kernel | Cannot alias `cb_assembled_tiles` (concurrent). Folding it into slots was rejected: that costs a full-tile store loop per fill page instead of one per core, and it serializes fill pages behind the reader hand-off |
+| `cb_fill_tile` | 1 (constant: one tile of `c`; every band segment / fill-only tile is a sub-range or the whole of it) | 1 | `{band: streams (every band tile re-sources the same page), band_rows: streams (segments are sub-ranges of the page), out_tile: streams (every fill-only tile re-sources it)}` | input dtype bits (bf16 Phase 0) | writer (`band_writer` in extension_band) | writer (NoC write source) | whole kernel | Cannot share with `cb_input_tiles`: concurrent lifetime (it is the source of fill-only writes issued while `load_block` fills `cb_input_tiles`). Not dropped in favor of a hardware zero region: `c` is per-call data and is non-zero in production (`-2^127`, `-1`). |
+| `cb_input_tiles` (new_storage_tiles only; not allocated in extension_band) | `input_depth_blocks · block_tiles`, `input_depth_blocks = min(2, num_blocks_max)` | `block_tiles` (one block assembled at a time when one block per core; `2 · block_tiles` when the L1 cap splits a run and reads of block `i+1` overlap writes of block `i`) | `{out_tile: spans → block_tiles (slot k ↔ k-th output tile of the block), band: n/a (other regime), band_rows: n/a}` | input dtype bits | reader | writer (patches edge slots in place while it owns them, then sends) | per block | Is itself the assembly buffer (pack-into-destination: patch happens in place, no separate output CB — rule 3 patterns 1+2). Fill-only slots are reserved but unwritten: capacity over the source-tile live set is the price of the nominal push count that closes the ring cycle (blocking-model §2); bounded by `block_tiles`. |
 
 ## Symbol table
 
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
-| `page_bytes` | 2048 (bfloat16) or 4096 (float32/int32/uint32) | TILE layout with 32×32 tiles (host asserts `tile_shape == (32, 32)`); dtype ∈ TARGET |
-| `fill_source_bytes` | `≤ page_bytes − face_row_bytes` (rows `[row_rem, row_mask_end)` with `row_rem ≥ 1`) | `row_segments(a, b)` ranges lie inside one tile; regime predicate `extension_band` (`row_rem > 0`) |
-| `block_tiles` | `1 ≤ block_tiles ≤ l1_block_cap = floor((1 347 776 − page_bytes) / (page_bytes · buffer_depth))` = 328 (bf16) / 164 (4-byte dtypes) | `make_plan()` clamp; `block_tiles = min(max(1, max_core_input_pages), l1_block_cap)` |
-| `max_core_input_pages` | `≤ ceil(out_pages / num_cores)` | `split_work_to_cores` contiguous runs |
-| `eff_depth` | `∈ {1, 2}` | `eff_depth = min(buffer_depth = 2, max_num_blocks_per_core)` |
-| `buffer_depth` | 2 | module constant `BUFFER_DEPTH` |
-| `L1_OP_BUDGET_BYTES` | 1 347 776 | BB-05 (the model leaves this much L1 per core) |
+| `tile_bytes` | 2048 (bf16), 4096 (fp32/int32/uint32) | dtype ∈ TARGET |
+| `block_tiles` | `min(core_max_tiles, block_tiles_cap)`, `block_tiles_cap = floor((1347776 − tile_bytes) / (2 · tile_bytes))` → ≤ 328 (bf16), ≤ 163 (32-bit) | L1 budget BB-05 |
+| `core_max_tiles` | `ceil(N_out / ncores)`; INPUTS: 1 for the bf16 `[1,1,256,256]` and `[1,256,128]` outputs (64 and 32 tiles), p1 `ceil(1536 / ncores)` ≈ 12–14 | `split_work_to_cores` |
+| `num_blocks_max` | `ceil(core_max_tiles / block_tiles)` = 1 for every INPUTS shape | above |
+| `input_depth_blocks` | `min(2, num_blocks_max)` ∈ {1, 2} | above |
 
-## Per-core footprint
+## Footprint
 
-| Regime | Total (bytes) | Scales with | Production values |
-|--------|---------------|-------------|-------------------|
-| extension_band | `page_bytes` | nothing (constant) | 2048 (bf16) |
-| new_storage_tiles | `page_bytes · (block_tiles · eff_depth + 1)` ≤ `L1_OP_BUDGET_BYTES` by construction of `l1_block_cap` | `block_tiles` (block knob) and `eff_depth` (depth knob, only with ≥ 2 blocks); the `+1` fill page is constant | Phase 0 shapes: `2048 · (1·1 + 1)` = 4096. p1 (refinement): `4096 · (14·1 + 1)` = 61 440 |
-| new_storage_rows (deferred) | `stick_bytes_out · (block_rows · eff_depth + 1)` | `block_rows`, `eff_depth` | — |
-
-No shape is ever refused for L1: `block_tiles` is clamped, so the coarsest-fitting block always exists. No budget solve or safety fraction exists beyond that clamp, and the inventory (≤ 2 CBs) is minimal.
+`L1(core) = tile_bytes · (1 + input_depth_blocks · block_tiles)` (new_storage_tiles); `tile_bytes` (extension_band).
+Scales with: `block_tiles` and `input_depth_blocks` (`cb_input_tiles`); nothing else. Max over INPUTS: p1 fp32 ≈ 4096 · (1 + 14) ≈ 61 KB; bf16 `[1,1,256,256]` 64 tiles / 64 cores → 4 KB; extension 2 KB. Hard bound by construction: ≤ 1347776 B.
 
 ## Data-movement budget
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| input (`extension_band`) | 0 | the band is written from an in-core constant; rows `< row_rem` are never read or written | 0 |
-| output = input's buffer (`extension_band`) | the new rows once: `band_units · Σ band_segments` B. p2 3 724 800; p3 993 280; p4 2 979 840; `[1,3844,1536]` 86 016 | each new logical row is written once; no other tile row is addressed | 0 |
-| input (`new_storage_tiles`) | 1× (every input page is input-backed) | each input page feeds exactly one output page and is read once into its slot | 0 |
-| output (`new_storage_tiles`) | 1× every page | assembled in L1 and written once; fill-only pages come from `cb_fill_page`, never from DRAM | 0 |
-| fill value `c` | 0 | 4-byte common RT arg, expanded in L1 | 0 |
+| input (extension_band) | 0 | the band is write-only: the logical rows of the last tile row are never touched, so nothing needs reading | none |
+| output band (extension_band) | 1 × band bytes = `in_slices · in_tiles_w · 2 · (band_row_end − band_row_begin) · row_bytes` | output = view of the input storage; only rows that must become `c` are written | none |
+| input (new_storage_tiles) | 1 | each input tile maps to exactly one output tile; one block per core holds it until sent | none |
+| output (new_storage_tiles) | 1 | each output page assembled once in L1 (patch in place) or sourced from the fill page | none |
+| fill value `c` | 0 | materialized per core from one RT arg | none |
 
-Totals per tier:
+Totals: extension_band — DRAM read 0 B, DRAM write = band bytes (p4 `[1,1,8,62080]→32`: 1940 · 2 · 24 · 32 B = 2.98 MB; p2: 1940 · 2 · 30 · 32 B = 3.72 MB; p3: 1940 · 2 · 8 · 32 B = 0.99 MB). new_storage_tiles — DRAM read = input tile bytes, DRAM write = output tile bytes (p1: 3.93 MB / 6.29 MB). NoC cross-core: 0.
 
-| Regime | DRAM read | DRAM write | Cross-core NoC | Core-local L1 work |
-|--------|-----------|------------|----------------|--------------------|
-| extension_band | 0 | `band_units · Σ band_segments` | 0 | `fill_source_bytes` of stores once per core |
-| new_storage_tiles | `in_pages · page_bytes` (`[1,1,196,196]`: 100 352; p1: 3 932 160) | `out_pages · page_bytes` (`[1,1,196,196]`: 131 072; p1: 6 291 456) | 0 | mask stores on boundary pages; one fill page per core with fill pages |
-
-> Cheapest-traffic split considered: contiguous runs of `band_unit` (extension_band) and of `out_page` (new_storage_tiles). Every candidate split moves identical bytes per tier (no reuse-shared operand, no overlapping footprint, no dependent axis), so the delta is 0 B at every tier. Implemented: the same splits. The implemented split is the cheapest.
+> Cheapest-traffic split considered: flat band-tile range (extension) / flat output-tile range (new_storage) — delta 0 B per tier against the minimum. Implemented: the same splits. Deferred: none on traffic grounds (the op has no dependent or reuse-shared axis; `new_storage_rows` is deferred for support scope, not traffic).
