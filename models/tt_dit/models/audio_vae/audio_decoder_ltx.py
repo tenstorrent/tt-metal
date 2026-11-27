@@ -23,6 +23,7 @@ import ttnn
 from ...parallel.config import AudioTCParallelConfig, DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
+from ...utils.c12 import parse_mode
 from ...utils.conv3d import conv3d_blocking_hash
 from .bwe_ltx import MelSTFT, VocoderWithBWE
 from .mel_decoder_ltx import MelDecoder
@@ -163,7 +164,7 @@ class LTXAudioDecoderAdapter:
         )
         # Experiment selection is main-vocoder-only and precedes all weight/cache loads.
         c12_mode = os.environ.get("LTX_C12_MODE", "off")
-        if c12_mode not in ("", "off", "0"):
+        if parse_mode(c12_mode)[0] is not None:
             self._configure_c12(main_voc, voc_cfg, c12_mode)
         bwe_voc = self._build_vocoder(
             bwe_cfg, apply_final_activation=False, parallel_config=bwe_pc, ccl_manager=audio_ccl
@@ -227,9 +228,8 @@ class LTXAudioDecoderAdapter:
         import hashlib
 
         from ...layers.audio_c12 import install_c12
-        from ...utils.c12 import MODULE_PATH, digest, parse_mode
+        from ...utils.c12 import MODULE_PATH, digest
 
-        parse_mode(mode)  # Reject misspelled modes before checkpoint reads.
         evidence = None
         with safe_open(self._checkpoint_path, framework="pt") as checkpoint:
             prefix = "vocoder." + MODULE_PATH

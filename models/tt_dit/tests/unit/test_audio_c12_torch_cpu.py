@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Optional dependency-complete CPU check; exits nonzero if Torch is missing.
 
-Run directly with --upstream /path/to/run106/evidence/upstream-audio_pack.py.
+Run directly with --upstream /path/to/upstream-audio_pack.py.
 Only the two pinned, device-free reference functions are AST-extracted. Never
 imports TTNN or opens a device. This remains a CPU, not native-arithmetic test.
 """
