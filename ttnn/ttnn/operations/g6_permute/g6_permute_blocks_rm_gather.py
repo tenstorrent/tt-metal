@@ -39,6 +39,10 @@ CB_OUTPUT_ROWS = 1
 INPUT_DEPTH = 2
 # Tuning cap on block_h on top of the L1 cap; None keeps the design value min(max_core_units, block_cap).
 BLOCK_H_LIMIT = None
+# NoCs the reader issues its page reads on (1 or 2); 2 puts both kernels in dynamic NoC mode.
+READ_NOCS = 1
+# Rotate each core's per-block issue order by (core index mod banks) pages.
+BANK_STAGGER = False
 
 
 @dataclass
@@ -60,13 +64,16 @@ class BlocksPlan:
     slot_bytes: int = 0
     out_page_bytes: int = 0
     out_row_bytes: int = 0
+    read_nocs: int = 1
+    num_banks: int = 1
+    bank_stagger: bool = False
     all_cores: object = None
     assignment: list = field(default_factory=list)  # [(CoreCoord, start_unit, num_units)]
 
 
 def knob_key():
     """Host knobs that reach this regime's CT args; part of the program cache key."""
-    return (INPUT_DEPTH, BLOCK_H_LIMIT)
+    return (INPUT_DEPTH, BLOCK_H_LIMIT, READ_NOCS, BANK_STAGGER)
 
 
 def _align_up(value, alignment):
@@ -76,6 +83,7 @@ def _align_up(value, alignment):
 def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
     assert tuple(canonical_dims) == DIMS, f"regime {REGIME} serves dims {DIMS}"
     assert INPUT_DEPTH >= 1
+    assert READ_NOCS in (1, 2, 3)
     N, C, H, W, I, J = (int(d) for d in input_tensor.shape)
     tensor_units = N * C * H
     pages_per_unit = W * I
@@ -135,6 +143,9 @@ def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
         slot_bytes=slot_bytes,
         out_page_bytes=out_page_bytes,
         out_row_bytes=out_row_bytes,
+        read_nocs=READ_NOCS,
+        num_banks=ttnn.get_memory_view(input_tensor.device(), buffer_type).num_banks,
+        bank_stagger=BANK_STAGGER,
         all_cores=all_cores,
         assignment=assignment,
     )
@@ -145,6 +156,14 @@ def _first_output_page(plan: BlocksPlan, unit):
     _, _, H, _, I, J = plan.shape
     nc, h = divmod(unit, H)
     return h, nc * I * H * J + h * J
+
+
+def _dm_config(plan: BlocksPlan, processor, noc, dedicated_config):
+    """The default reader/writer config, or the same RISC and NoC in dynamic NoC mode when the reader
+    also issues on the second NoC (one core runs both kernels in one mode)."""
+    if plan.read_nocs == 1:
+        return dedicated_config()
+    return ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC)
 
 
 def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> ttnn.ProgramDescriptor:
@@ -182,6 +201,8 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
         W * I,
         plan.in_page_bytes,
         plan.slot_bytes,
+        plan.read_nocs,
+        plan.num_banks,
         *ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args(),
     ]
     writer_ct_args = [
@@ -200,8 +221,9 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
-    for core, start, count in plan.assignment:
-        reader_rt_args[core.x][core.y] = [start, count]
+    for core_idx, (core, start, count) in enumerate(plan.assignment):
+        stagger = core_idx % plan.num_banks if plan.bank_stagger else 0
+        reader_rt_args[core.x][core.y] = [start, count, stagger]
         writer_rt_args[core.x][core.y] = [count, *_first_output_page(plan, start)]
 
     reader = ttnn.KernelDescriptor(
@@ -210,7 +232,7 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt_args,
         common_runtime_args=[input_tensor.buffer_address()],
-        config=ttnn.ReaderConfigDescriptor(),
+        config=_dm_config(plan, ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0, ttnn.ReaderConfigDescriptor),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_permute_blocks_writer.cpp"),
@@ -218,7 +240,7 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
         common_runtime_args=[output_tensor.buffer_address()],
-        config=ttnn.WriterConfigDescriptor(),
+        config=_dm_config(plan, ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1, ttnn.WriterConfigDescriptor),
     )
     kernels = [None, None]
     kernels[READER_KERNEL_INDEX] = reader

@@ -7,7 +7,8 @@
 Run under `scripts/run_safe_pytest.sh --profile --no-py-zones`: each case is one dispatch, read the
 device kernel duration from the ops CSV. Every case also checks the output bit for bit.
 - grid: the same work over fewer cores separates a per-core read-issue limit (time grows as cores
-  shrink) from a DRAM-side request limit (time stays flat).
+  shrink) from a DRAM-side request limit (time stays flat); read_nocs 2 repeats it with the page
+  reads spread over both NoCs, which reach every DRAM bank through a second endpoint.
 DO NOT DELETE.
 """
 
@@ -48,8 +49,10 @@ def _run(shape, device):
     assert torch.equal(actual.view(torch.int16), expected.view(torch.int16))
 
 
+@pytest.mark.parametrize("read_nocs", [1, 2], ids=lambda n: f"read_nocs{n}")
 @pytest.mark.parametrize("rows", [10, 5, 2, 1], ids=lambda r: f"grid_rows{r}")
-def test_grid_scaling(rows, device, fresh_cache, monkeypatch):
+def test_grid_scaling(rows, read_nocs, device, fresh_cache, monkeypatch):
     full = device.compute_with_storage_grid_size()
     monkeypatch.setattr(regime_module, "worker_grid", lambda _device: ttnn.CoreCoord(full.x, rows))
+    monkeypatch.setattr(regime_module, "READ_NOCS", read_nocs)
     _run(FLUX_74, device)
