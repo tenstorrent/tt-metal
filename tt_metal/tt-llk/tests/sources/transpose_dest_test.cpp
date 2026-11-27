@@ -63,9 +63,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    if constexpr (!unpack_to_dest)
+                    if constexpr (unpack_to_dest)
                     {
-                        _perf_unpack_stream_set_valid<true /* set_a */, is_fp32_dest_acc_en /* set_b */, PERF_RUN_TYPE>(
+                        // Service math's direct-unpack handshake without
+                        // moving data, then publish the transpose operands.
+                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                        {
+                            (void)mailbox_read(ThreadId::MathThreadId);
+                            wait_for_dest_available();
+                            t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
+                        }
+                    }
+                    else
+                    {
+                        // Plain WH/BH unpack_A publishes SrcA plus a zeroed
+                        // SrcB for every face, including 16-bit Dest.
+                        _perf_unpack_stream_set_valid<true /* set_a */, true /* set_b */, PERF_RUN_TYPE>(
                             _perf_src_handshake_iters_(false /* tilize_en */, NUM_TILES_IN_BLOCK, num_faces));
                     }
                     // transpose_dest consumes the one SrcA/SrcB pulse emitted
@@ -139,9 +152,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    if constexpr (!unpack_to_dest)
+                    if constexpr (unpack_to_dest)
                     {
-                        _perf_math_stream_clear_valid<true /* clear_a */, is_fp32_dest_acc_en /* clear_b */, PERF_RUN_TYPE>(NUM_TILES_IN_BLOCK * num_faces);
+                        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+                            DataCopyType::A2D,
+                            is_fp32_dest_acc_en,
+                            BroadcastType::NONE,
+                            false /* is_int_fpu_en */,
+                            PackMode::Default>(tensor_shape, formats.math);
+                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                        {
+                            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                                tile, formats.math, formats.math, tensor_shape);
+                        }
+                    }
+                    else
+                    {
+                        // Match unpack_A's per-face SrcA plus zeroed SrcB
+                        // publication for both 16-bit and 32-bit Dest.
+                        _perf_math_stream_clear_valid<true /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(NUM_TILES_IN_BLOCK * num_faces);
                     }
                     _perf_math_stream_clear_valid<true /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(NUM_TILES_IN_BLOCK);
                 }
