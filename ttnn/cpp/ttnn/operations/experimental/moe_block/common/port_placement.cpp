@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <set>
 #include <tuple>
 
@@ -64,39 +65,66 @@ private:
     tt::tt_metal::NOC noc_;
 };
 
-PortCores place_nearest(
+// One chip's ports on the allowed cores. A port sends its rows to its Ethernet core over NOC1, which goes north (up the
+// port core's column) first, so ports in the same column share that column's links. To spread them:
+//  - a port's load is the number of destination chips the fabric routes through it (its first hop);
+//  - ports are placed heaviest first, each on the free core with the lowest cost: NOC1 hops to its Ethernet core plus
+//    kColumnLoadHops for each unit of load already placed in that core's column;
+//  - a placed port adds its load + 1 to its column (the + 1: a port with no load still counts against its column).
+// Placing each port on its nearest core instead stacks them in the few columns next to the Ethernet cores.
+constexpr uint32_t kColumnLoadHops = 2;
+
+PortCores place_spread(
     MeshDevice& mesh_device, const MeshPlan& plan, tt::tt_metal::NOC noc, const std::vector<CoreCoord>& allowed) {
+    const FirstHops first_hops = fabric_first_hops(mesh_device, plan.topo);
+    const uint32_t num_chips = plan.topo.num_chips();
     PortCores out;
     for (const auto& [chip, ports] : plan.chips) {
         const EthDistance dist(mesh_device, plan.topo, chip, noc);
-        std::set<std::pair<size_t, size_t>> taken;
+        const uint32_t me = plan.topo.index(chip);
+        struct Port {
+            Dir dir;
+            uint32_t link_index;
+            uint32_t load;
+            tt::tt_metal::experimental::Device::CoreAtNocHops eth;
+        };
+        std::vector<Port> wanted;
         for (Dir d : kDirs) {
             const auto& port = ports[static_cast<size_t>(d)];
             if (!port) {
                 continue;
             }
-            for (uint32_t li = 0; li < port->links.size(); ++li) {
-                const auto closest = dist.closest(chip, port->peer, port->links[li]);
-                std::optional<CoreCoord> best;
-                uint32_t best_hops = std::numeric_limits<uint32_t>::max();
-                for (const auto& candidate : allowed) {  // (row-major: a tie keeps the lower row, then column)
-                    if (taken.contains({candidate.x, candidate.y})) {
-                        continue;
-                    }
-                    const uint32_t h = dist.hops(candidate, closest);
-                    if (h < best_hops) {
-                        best_hops = h;
-                        best = candidate;
-                    }
-                }
-                TT_FATAL(
-                    best.has_value(),
-                    "moe_block: too few allowed cores for the ports of chip ({}, {})",
-                    chip.r,
-                    chip.c);
-                taken.insert({best->x, best->y});
-                out[PortKey{chip, d, li}] = *best;
+            uint32_t load = 0;
+            for (uint32_t t = 0; t < num_chips; ++t) {
+                load += (t != me && first_hops.at(me, t) == d) ? 1u : 0u;
             }
+            for (uint32_t li = 0; li < port->links.size(); ++li) {
+                wanted.push_back({d, li, load, dist.closest(chip, port->peer, port->links[li])});
+            }
+        }
+        std::stable_sort(wanted.begin(), wanted.end(), [](const Port& a, const Port& b) { return a.load > b.load; });
+        std::set<std::pair<size_t, size_t>> taken;
+        std::map<size_t, uint32_t> column_load;
+        for (const auto& w : wanted) {
+            std::optional<CoreCoord> best;
+            uint32_t best_cost = std::numeric_limits<uint32_t>::max();
+            for (const auto& candidate : allowed) {  // (row-major: a tie keeps the lower row, then column)
+                if (taken.contains({candidate.x, candidate.y})) {
+                    continue;
+                }
+                const auto column = column_load.find(candidate.x);
+                const uint32_t cost =
+                    dist.hops(candidate, w.eth) + kColumnLoadHops * (column == column_load.end() ? 0u : column->second);
+                if (cost < best_cost) {
+                    best_cost = cost;
+                    best = candidate;
+                }
+            }
+            TT_FATAL(
+                best.has_value(), "moe_block: too few allowed cores for the ports of chip ({}, {})", chip.r, chip.c);
+            taken.insert({best->x, best->y});
+            column_load[best->x] += w.load + 1;
+            out[PortKey{chip, w.dir, w.link_index}] = *best;
         }
     }
     return out;
@@ -124,7 +152,7 @@ PortCores place_ports(
     auto allowed = allowed_in.value_or(placement_detail::all_worker_cores(mesh_device));
     std::sort(allowed.begin(), allowed.end(), placement_detail::row_major_less);
     allowed.erase(std::unique(allowed.begin(), allowed.end()), allowed.end());
-    return placement_detail::place_nearest(mesh_device, plan, tt::tt_metal::NOC::NOC_1, allowed);
+    return placement_detail::place_spread(mesh_device, plan, tt::tt_metal::NOC::NOC_1, allowed);
 }
 
 }  // namespace ttnn::operations::experimental::moe_block

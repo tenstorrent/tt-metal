@@ -43,6 +43,10 @@ FLAT = dict(
     down_first_columns=list(range(0, 20, 2)),
     down_weight_region_tiles=96,
     row_tiles_per_sub_block=4,
+    # (each core's 8 positions in one bank, cores 8 and 9 stacked after cores 0 and 1)
+    down_bank_patterns=[[d % 8] * 8 for d in range(10)],
+    down_weight_region_bases=[d // 8 * 8 for d in range(10)],
+    down_weight_regions_per_bank=16,
 )
 
 
@@ -174,12 +178,16 @@ def test_same_packing_reused(ops):
 
 
 def test_routed_layout_change(ops):
-    """A block whose flat plan lays the experts out differently gets its own routed weights; the head (same plan) is
-    kept."""
+    """A block whose flat plan lays the experts out differently (gate/up slots, or only the down cores' DRAM banks) gets
+    its own routed weights; the head (same plan) is kept."""
     ffn = _ffn(True)
     w1 = ffn._weights(_block(_lay()))
     w2 = ffn._weights(_block(_lay(), flat={**FLAT, "column_groups_per_weight_slot": 4, "gate_up_weight_slots": 4}))
     w3 = ffn._weights(_block(_lay(), flat={**FLAT, "row_tiles_per_sub_block": 2}))  # (not a packing field)
+    # (only the down cores' banks differ - another chip's harvesting: core 9 split over banks 1 and 2)
+    split = FLAT["down_bank_patterns"][:9] + [[1] * 4 + [2] * 4]
+    w4 = ffn._weights(_block(_lay(), flat={**FLAT, "down_bank_patterns": split}))
     assert w2.gate_up is not w1.gate_up and w2.head is w1.head and w2.w_up is w1.w_up
     assert w3 is w1
-    assert len(ops.routed) == 2 and len(ops.heads) == 1 and ops.tails == 1
+    assert w4.gate_up is not w1.gate_up and w4.head is w1.head, "a new down bank layout reused the old routed weights"
+    assert len(ops.routed) == 3 and len(ops.heads) == 1 and ops.tails == 1

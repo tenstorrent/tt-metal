@@ -58,6 +58,19 @@ nb::dict plan_dict(const FlatRoutedExpertPlan& p) {
     d["down_first_columns"] = p.down_first_columns;
     d["dram_banks"] = p.dram_banks;
     d["down_weight_region_tiles"] = p.weight_tile_bytes ? p.down_weight_region_bytes / p.weight_tile_bytes : 0;
+    {  // per down core: its bank pattern as a list (entry j: the bank of its blocks k with k % dram_banks == j)
+        nb::list pats;
+        for (const uint32_t v : p.down_bank_pattern) {
+            nb::list l;
+            for (uint32_t j = 0; j < p.dram_banks; ++j) {
+                l.append((v >> (4 * j)) & 0xF);
+            }
+            pats.append(l);
+        }
+        d["down_bank_patterns"] = pats;
+    }
+    d["down_weight_region_bases"] = p.down_weight_region_base;
+    d["down_weight_regions_per_bank"] = p.down_weight_regions_per_bank;
     d["down_h_buffers"] = p.down_h_buffers;
     d["gate_up_block_pieces"] = p.gate_up_block_pieces;
     d["down_chains"] = p.down_chains;

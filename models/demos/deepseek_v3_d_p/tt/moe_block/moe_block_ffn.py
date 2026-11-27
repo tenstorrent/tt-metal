@@ -58,7 +58,7 @@ _BLOCKS: dict = {}  # (id(mesh), chunk, forward_chunks, options) -> (mesh, MoEBl
 # model on the mesh finds them free.
 _BLOCK_USERS: dict = {}
 _TOKENS = itertools.count()
-_FACE_MAPS: dict = {}  # ((H, I, E, layout), experts a batch) -> gather_batches of flat_face_map: the same every layer
+_FACE_MAPS: dict = {}  # ((H, I, E, the plan's packing fields), experts a batch) -> gather_batches of flat_face_map
 
 
 def release_blocks(mesh_device=None):
@@ -319,7 +319,18 @@ class TtMoEBlockFfn:
         "down_columns_per_core",
         "down_first_columns",
         "down_weight_region_tiles",
+        # (each down core's DRAM banks and region base: the plan picks them by the chip's bank anchors - its DRAM
+        # endpoints and harvesting - so the layout is a function of these, not of the layout options alone)
+        "down_bank_patterns",
+        "down_weight_region_bases",
+        "down_weight_regions_per_bank",
     )
+
+    @classmethod
+    def _routed_key(cls, flat: dict) -> tuple:
+        """The flat plan's _ROUTED_PACKING fields, hashable (nested lists frozen: the down cores' bank patterns)."""
+        frozen = lambda v: tuple(frozen(x) for x in v) if isinstance(v, (list, tuple)) else v  # noqa: E731
+        return tuple((k, frozen(flat.get(k))) for k in cls._ROUTED_PACKING)
 
     def _routed_layout(self, block) -> dict:
         """The flat plan (as_dict) the block's routed experts are laid out for."""
@@ -357,11 +368,7 @@ class TtMoEBlockFfn:
             lay.k_step_tiles,
             str(block.dtypes.shared_weights),
         )
-        flat = self._routed_layout(block)
-        routed = tuple(
-            (k, tuple(v) if isinstance(v, (list, tuple)) else v) for k in self._ROUTED_PACKING for v in [flat.get(k)]
-        )
-        return head, routed
+        return head, self._routed_key(self._routed_layout(block))
 
     def _routed(self, block, sources=None):
         """This layer's flat expert tensors (gidx, w_gu, w_d), laid out on the device from TtMoe's bfp4 cache - or from
@@ -373,8 +380,7 @@ class TtMoEBlockFfn:
         epc, Hr, I = E // N, self.dims.routed_width, self.dims.routed_expert_hidden_dim
         kw = block.expert_kw
         lay = self._routed_layout(block)
-        lo = kw["layout"]
-        key = (Hr, I, epc, tuple(lo.key()), kw["max_tokens_per_expert"])
+        key = (Hr, I, epc, self._routed_key(lay))  # (the face map is a function of the plan's packing fields)
         # (the layer's sources go to DRAM GATHER_EXPERTS local experts at a time and are freed after their gather:
         # all 3 epc of them next to the laid-out dest held one layer's routed weights twice - 65 MB a bank on K3, which
         # the last layer of an SC4 stage at 100 slots did not have)

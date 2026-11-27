@@ -33,7 +33,25 @@ the bank count and every bank serves the same bytes.
 The reads are the core's NCRISC's, on NOC0 beside the x forwarder; each slot's cores are the gate/up cores fewest NOC0
 hops from the bank's anchor, its optimal worker core (`get_optimal_dram_bank_to_logical_worker_assignment`; hops from
 `experimental::Device::get_worker_noc_hop_distance`, the reads' response direction), all (slot, core) pairs taken
-nearest first.
+nearest first, then swapped between slots while that lowers the worst slot's mean hops (min-max). Every core waits for
+the whole expert, so the slot whose readers are farthest on average is the one to improve - and nearest-first leaves the
+last bank the cores no other bank took. The swaps only change which core reads which slot, not the weights' layout.
+
+## Down weight reads
+
+The down cores are the free cores in row-major order (row by row, left to right), with the DRAM banks' anchor cores and
+their east neighbours last. They are not picked by distance to DRAM: that would take exactly the anchor-side cores, and
+the combine places its ports on the cores the flat expert leaves free.
+
+Distance to DRAM is handled by where each down core's weights live: each core reads from the bank(s) nearest it,
+aiming at an even column load across the banks (a target a bank; leftover entries may push a bank past it). Its bank pattern (`down_bank_pattern`) has one entry per
+bank, entry j naming the bank of its blocks k with k % banks == j - most cores name one bank in every entry, the rest a
+few nearby banks. In each bank the core's blocks sit in order from its region base (`down_weight_region_base`); the
+exact layout is defined next to these fields in `flat_routed_expert_plan.hpp`.
+`down_weight_reader.cpp` reads by this layout and `flat_weight_regions` packs by it. The layout follows the plan - the
+chip's DRAM endpoints (firmware) and harvesting place the banks' anchors - so a cache of packed weights is keyed on the
+plan's packing fields (`down_bank_patterns`, `down_weight_region_bases`, `down_weight_regions_per_bank`), not on the
+layout options.
 
 ## Roles and kernels (`device/kernels`)
 

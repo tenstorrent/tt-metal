@@ -29,13 +29,15 @@ ARENAS = [64 << 10, 400 << 10, 900 << 10, 1200 << 10, 1400 << 10]
 
 
 def test_credit_policy():
-    """With >= 16 sources (the Galaxy) credits go back every 8 consumed rows, idle snapshots batched (8 rows or 8100
-    cycles old); with fewer, a batch is at most half a source's slots (D), the shared landing's grants at once; a
-    config's credit_batch wins."""
+    """How often a source chip gets its landing-slot credits back (in consumed rows), by chip count N: > 16 chips (a
+    Galaxy) every 8 rows (idle snapshots also batched: 8 rows or 8100 cycles old); 16 chips (a 4x4 sub-torus) with
+    landing rings - each source its own receive slots - every 4; a shared landing (one receive pool for all sources)
+    at <= 16 chips every row; fewer chips with rings at most half a source's slots (D); a config's credit_batch wins."""
     assert moe_block_utils.combine_credit_policy() == (8, 8, 8100)
     assert moe_block_utils.combine_credit_policy(N=32, landing_slots_per_source=2) == (8, 8, 8100)
+    assert moe_block_utils.combine_credit_policy(N=32, landing_slots_per_source=2, shared_landing=True) == (8, 8, 8100)
     # (a Galaxy 4x4 sub-torus: 15 sources)
-    assert moe_block_utils.combine_credit_policy(N=16, landing_slots_per_source=2) == (8, 8, 8100)
+    assert moe_block_utils.combine_credit_policy(N=16, landing_slots_per_source=2) == (4, 4, 8100)
     assert moe_block_utils.combine_credit_policy(N=16, landing_slots_per_source=2, shared_landing=True) == (1, 1, 8100)
     assert moe_block_utils.combine_credit_policy(N=8, landing_slots_per_source=8) == (4, 4, 8100)
     assert moe_block_utils.combine_credit_policy(N=8, landing_slots_per_source=2) == (1, 1, 8100)

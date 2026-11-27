@@ -117,9 +117,19 @@ struct FlatRoutedExpertPlan {
     uint32_t gate_up_arena_bytes = 0, down_arena_bytes = 0, relay_arena_bytes = 0;
     // a weight slot's gate/up region (bytes per core region)
     uint32_t gate_up_weight_region_bytes = 0;
-    // the down cores' weight blocks rotate over the banks: block k of down core d in bank (d + k) % dram_banks, at
-    // d * down_weight_region_bytes + (k / dram_banks) blocks, like unified_routed_expert_ffn's one-tile-row ND shards
+    // The down weights' layout (down_weight_reader.cpp reads by it, flat_weight_regions packs by it):
+    // - bank pattern: down_bank_pattern[d] holds dram_banks entries of 4 bits; entry j is the bank holding the core's
+    //   blocks k with k % dram_banks == j. The planner names the banks nearest the core (most cores one bank in every
+    //   entry, the rest a few nearby banks).
+    // - regions: a region is the size of one entry's blocks of the widest core (down_weight_region_bytes). In each bank
+    //   it uses, a core stores its blocks of that bank consecutively, in order of k, from region
+    //   down_weight_region_base[d] on; down_weight_regions_per_bank is the regions a bank (the down weight tensor's
+    //   height).
+    // So block k sits in bank b = pattern[k % dram_banks], at region_base x region_bytes + ((k / dram_banks) x
+    // (entries naming b) + (entries naming b before k % dram_banks)) blocks.
     uint32_t down_weight_region_bytes = 0;
+    std::vector<uint32_t> down_bank_pattern, down_weight_region_base;
+    uint32_t down_weight_regions_per_bank = 0;
 
     // ---- role cores (logical)
     // each DRAM bank's anchor: its optimal worker core (gate/up cores are placed by their NOC0 hops from it)

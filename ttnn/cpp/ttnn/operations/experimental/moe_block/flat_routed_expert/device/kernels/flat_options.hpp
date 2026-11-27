@@ -129,7 +129,7 @@ constexpr uint32_t down_blocks_per_expert =
 constexpr bool y_row_major = get_named_compile_time_arg_val("y_row_major") != 0;
 // row tiles of y in flight per down core (the row-major out CB's capacity)
 constexpr uint32_t y_row_major_rows = get_named_compile_time_arg_val("y_row_major_rows");
-// DRAM banks the down weight blocks rotate over (block k of a core sits in bank (first + k) % banks)
+// DRAM banks the down weight blocks are spread over (block k of a core in the bank of its pattern's entry k % banks)
 constexpr uint32_t down_weight_banks = get_named_compile_time_arg_val("down_weight_banks");
 // the down weight ring's capacity in blocks
 constexpr uint32_t down_weight_ring_blocks = get_named_compile_time_arg_val("down_weight_ring_blocks");
