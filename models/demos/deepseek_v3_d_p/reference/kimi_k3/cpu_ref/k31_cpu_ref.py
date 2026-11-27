@@ -3,6 +3,14 @@
 """Kimi K3.1 full-model CPU reference forward over the 10K vLLM trace prompt (study tool, CPU only).
 
 usage: python k31_cpu_ref.py --tracks fp32,tf --out /data/.../cpu_ref [--rows 8192] [--last-layer 92]
+       python k31_cpu_ref.py --tracks fp32,bf16 --out /data/.../panel --panel <calib panel dir> --seqs 1,5,6
+              [--save-sub fp32]
+
+--panel runs whole sequences of a calibration panel (tokens.i32 + sequences.jsonl) instead of the trace prompt:
+the sequences are concatenated as rows in --seqs order, positions restart at each sequence and attention (KDA
+conv/state, MLA indexer and softmax) never crosses a sequence boundary. <out>/manifest.json records the sequence
+ids, strata, row ranges and a token hash; <out>/tokens.pt holds the tokens, segments, roles and assistant mask.
+DSA indices are then positions within the sequence. No tf track and no vs-trace metrics in this mode.
 
 One pass streams the 93 layers' bf16 weights from the dequantized checkpoint (one ~60 GB file per
 layer, read with parallel preads and prefetched one layer ahead) and runs every requested track on
@@ -295,10 +303,12 @@ def attn_res_read(run, blocks, norm_w, proj_w, p, chunk=1024):
 # ───────────────────────────── modules ─────────────────────────────
 
 
-def kda(l, x, W, p):
-    """Kimi Delta Attention, fresh state over all rows. x [N, H] (AttnRes read #1, un-normed)."""
+def kda(l, x, W, p, segments=None):
+    """Kimi Delta Attention. x [N, H] (AttnRes read #1, un-normed). Each [a, b) of segments (default: all rows)
+    is an independent sequence: fresh conv history and recurrent state at a."""
     pre = f"model.layers.{l}.self_attn."
     N = x.shape[0]
+    segments = segments or [(0, N)]
     NL, D = KDA_HEADS, KDA_D
     xn = p.rb(rmsnorm(x, W[f"model.layers.{l}.input_layernorm.weight"]))
 
@@ -306,8 +316,10 @@ def kda(l, x, W, p):
         proj = p.rb(p.mm(xn, W[pre + f"{name}_proj.weight"]))
         taps = W[pre + f"{name}_conv1d.weight"].float().reshape(NL * D, CONV_K)
         acc = proj * taps[:, CONV_K - 1]
-        for s in range(1, CONV_K):  # tap CONV_K-1-s multiplies row t-s (zero history before row 0)
-            acc[s:] += proj[:-s] * taps[:, CONV_K - 1 - s]
+        for s in range(1, CONV_K):  # tap CONV_K-1-s multiplies row t-s (zero history before a sequence start)
+            for a0, b0 in segments:
+                if b0 - a0 > s:
+                    acc[a0 + s : b0] += proj[a0 : b0 - s] * taps[:, CONV_K - 1 - s]
         act = p.rb(F.silu(acc)).view(N, NL, D)
         if l2:
             act = act * torch.rsqrt(act.pow(2).sum(-1, keepdim=True) + L2_EPS)
@@ -328,7 +340,10 @@ def kda(l, x, W, p):
     del q, k, v
     S = torch.zeros(NL, D, D, dtype=rdt)
     o = torch.empty(N, NL, D, dtype=rdt)
+    starts = {a0 for a0, _ in segments}
     for t in range(N):  # token-ordered delta rule, state [heads, D_k, D_v]
+        if t in starts:
+            S.zero_()
         S.mul_(alpha[t].unsqueeze(-1))
         pr = torch.bmm(kd[t].unsqueeze(1), S).squeeze(1)
         u = beta[t].unsqueeze(-1) * (vd[t] - pr)
@@ -344,10 +359,12 @@ def kda(l, x, W, p):
     return p.rb(p.mm(o.reshape(N, NL * D), W[pre + "o_proj.weight"])), {}
 
 
-def mla(l, x, W, p, qb=64):
-    """K3.1 MLA (NoPE, output gate) with the DSA indexer; dense masked attention per query block."""
+def mla(l, x, W, p, qb=64, segments=None):
+    """K3.1 MLA (NoPE, output gate) with the DSA indexer; dense masked attention per query block.
+    Each [a, b) of segments (default: all rows) is an independent sequence; topk holds positions within it."""
     pre = f"model.layers.{l}.self_attn."
     N = x.shape[0]
+    segments = segments or [(0, N)]
     NH = MLA_HEADS
     xn = p.rb(rmsnorm(x, W[f"model.layers.{l}.input_layernorm.weight"]))
     qan = p.rb(rmsnorm(p.rb(p.mm(xn, W[pre + "q_a_proj.weight"])), W[pre + "q_a_layernorm.weight"]))
@@ -377,44 +394,57 @@ def mla(l, x, W, p, qb=64):
     wts = p.rb(p.mm(xn, W[pre + "indexer.weights_proj.weight"]))  # [N, 32]
     del xn, qan
     topk = torch.full((N, TOPK), -1, dtype=torch.int64)
-    for a in range(0, N, 256):
-        b = min(N, a + 256)
-        if b <= TOPK:
-            continue
-        lg = torch.matmul(qi[a:b].reshape(-1, IDX_D), ki[:b].t()).view(b - a, IDX_HEADS, b).clamp_min_(0)
-        sc = torch.einsum("ths,th->ts", lg, wts[a:b]) / 64.0
-        del lg
-        sc.masked_fill_(torch.arange(b).unsqueeze(0) > torch.arange(a, b).unsqueeze(1), float("-inf"))
-        r0 = max(a, TOPK)
-        topk[r0:b] = sc[r0 - a :].topk(TOPK, dim=-1).indices
-    small = torch.arange(min(N, TOPK))
-    topk[: min(N, TOPK)] = torch.where(
-        small.unsqueeze(1) >= torch.arange(TOPK).unsqueeze(0), torch.arange(TOPK).unsqueeze(0), -1
-    )[:, :TOPK]
+    for a0, b0 in segments:
+        Ls = b0 - a0
+        for a in range(0, Ls, 256):
+            b = min(Ls, a + 256)
+            if b <= TOPK:
+                continue
+            lg = (
+                torch.matmul(qi[a0 + a : a0 + b].reshape(-1, IDX_D), ki[a0 : a0 + b].t())
+                .view(b - a, IDX_HEADS, b)
+                .clamp_min_(0)
+            )
+            sc = torch.einsum("ths,th->ts", lg, wts[a0 + a : a0 + b]) / 64.0
+            del lg
+            sc.masked_fill_(torch.arange(b).unsqueeze(0) > torch.arange(a, b).unsqueeze(1), float("-inf"))
+            r0 = max(a, TOPK)
+            topk[a0 + r0 : a0 + b] = sc[r0 - a :].topk(TOPK, dim=-1).indices
+        small = torch.arange(min(Ls, TOPK))
+        topk[a0 : a0 + min(Ls, TOPK)] = torch.where(
+            small.unsqueeze(1) >= torch.arange(TOPK).unsqueeze(0), torch.arange(TOPK).unsqueeze(0), -1
+        )[:, :TOPK]
     # attention over the selected positions
     scale = (NOPE + ROPE) ** -0.5
     out = torch.empty(N, H)
     o_proj_f = W[pre + "o_proj.weight"].float()
-    for a in range(0, N, qb):
-        b = min(N, a + qb)
-        ii = topk[a:b]
-        allowed = torch.zeros(b - a, b + 1, dtype=torch.bool)  # column b collects the -1 pads
-        allowed.scatter_(1, torch.where(ii >= 0, ii, b), True)
-        allowed = allowed[:, :b]
-        s = torch.matmul(q_full[a:b].reshape(-1, KV_LORA + ROPE), kv[:b].t()).view(b - a, NH, b) * scale
-        if p.bf16:  # flash-attention style: fp32 scores/softmax, bf16 probabilities into the PV GEMM
-            s.masked_fill_(~allowed.unsqueeze(1), float("-inf"))
-            pr = bf(torch.softmax(s, -1))
-        else:
-            s64 = s.double().masked_fill_(~allowed.unsqueeze(1), float("-inf"))
-            pr = torch.softmax(s64, -1).float()
-            del s64
-        del s
-        o_lat = p.rb(torch.matmul(pr.view(-1, b), kv[:b, :KV_LORA]).view(b - a, NH, KV_LORA))
-        del pr
-        o = p.rb(torch.einsum("bhc,hvc->bhv", o_lat, W_UV)).reshape(b - a, NH * V_DIM)
-        og = p.rb(o * gate[a:b])
-        out[a:b] = p.rb(p.mm(og, o_proj_f))
+    for a0, b0 in segments:
+        Ls = b0 - a0
+        for a in range(0, Ls, qb):
+            b = min(Ls, a + qb)
+            ii = topk[a0 + a : a0 + b]
+            allowed = torch.zeros(b - a, b + 1, dtype=torch.bool)  # column b collects the -1 pads
+            allowed.scatter_(1, torch.where(ii >= 0, ii, b), True)
+            allowed = allowed[:, :b]
+            s = (
+                torch.matmul(q_full[a0 + a : a0 + b].reshape(-1, KV_LORA + ROPE), kv[a0 : a0 + b].t()).view(
+                    b - a, NH, b
+                )
+                * scale
+            )
+            if p.bf16:  # flash-attention style: fp32 scores/softmax, bf16 probabilities into the PV GEMM
+                s.masked_fill_(~allowed.unsqueeze(1), float("-inf"))
+                pr = bf(torch.softmax(s, -1))
+            else:
+                s64 = s.double().masked_fill_(~allowed.unsqueeze(1), float("-inf"))
+                pr = torch.softmax(s64, -1).float()
+                del s64
+            del s
+            o_lat = p.rb(torch.matmul(pr.view(-1, b), kv[a0 : a0 + b, :KV_LORA]).view(b - a, NH, KV_LORA))
+            del pr
+            o = p.rb(torch.einsum("bhc,hvc->bhv", o_lat, W_UV)).reshape(b - a, NH * V_DIM)
+            og = p.rb(o * gate[a0 + a : a0 + b])
+            out[a0 + a : a0 + b] = p.rb(p.mm(og, o_proj_f))
     extra = {"topk": topk, "kv": kv, "idx_k": ki}
     return out, extra
 
@@ -519,8 +549,9 @@ def overlap_sets(a, b):
 
 
 class Track:
-    def __init__(self, name, out, n, mla_layers, writer, save=True):
+    def __init__(self, name, out, n, mla_layers, writer, save=True, save_sub=True, segments=None):
         self.name, self.n, self.mla_layers, self.writer, self.save = name, n, mla_layers, writer, save
+        self.save_sub, self.segments = save_sub, segments
         self.dir = Path(out) / name
         self.dir.mkdir(parents=True, exist_ok=True)
         self.p = Prec("bf16" if name == "bf16" else "fp32")
@@ -581,10 +612,11 @@ class Track:
             self.blocks.append(self.run)
             self.run = None
         is_mla = l in self.mla_layers
-        a, ax = (mla if is_mla else kda)(l, x_attn, W, p)
+        a, ax = (mla if is_mla else kda)(l, x_attn, W, p, segments=self.segments)
         del x_attn
         m["t_attn"] = round(time.time() - t0, 1)
-        m["attn_vs_trace"] = segs(tr["attn"].float(), a, n)
+        if "attn" in tr:
+            m["attn_vs_trace"] = segs(tr["attn"].float(), a, n)
         if self.tf:
             m["attn_bf16_floor"] = snr(a, bf(a))
         if is_mla:
@@ -604,7 +636,8 @@ class Track:
             if "indexer_k" in tr:
                 m["idx_k_vs_trace"] = snr(tr["indexer_k"].float(), ax["idx_k"])
             self.put(f"dsa_L{l:02d}.pt", {"topk": ax["topk"].to(torch.int16)})
-        self.put(f"attn_L{l:02d}.pt", a.to(torch.bfloat16) if p.bf16 else a)
+        if self.save_sub:
+            self.put(f"attn_L{l:02d}.pt", a.to(torch.bfloat16) if p.bf16 else a)
         # residual add (fp32 track: fp32; bf16 track and trace replay: bf16 adds)
         a_state = tr["attn"] if self.tf else a
         if self.run is None:
@@ -626,7 +659,8 @@ class Track:
             f, fx = moe(l, x_ffn, W, p, trace_ids=tr["ids"] if (self.tf and "ids" in tr) else None)
         del x_ffn
         m["t_ffn"] = round(time.time() - t1, 1)
-        m["ffn_vs_trace"] = segs(tr["ffn"].float(), f, n)
+        if "ffn" in tr:
+            m["ffn_vs_trace"] = segs(tr["ffn"].float(), f, n)
         if "ids" in fx:
             tid = tr.get("ids")
             if tid is not None:
@@ -641,7 +675,8 @@ class Track:
                     m["ffn_same_route_vs_trace"] = {"snr": snr(tf_[same], f[same]), "rows": int(same.sum())}
                     m["ffn_trace_route_vs_trace"] = segs(tf_, fx["out_trace_route"], n)
             self.put(f"route_L{l:02d}.pt", {"ids": fx["ids"].to(torch.int16), "w": fx["w"]})
-        self.put(f"ffn_L{l:02d}.pt", f.to(torch.bfloat16) if p.bf16 else f)
+        if self.save_sub:
+            self.put(f"ffn_L{l:02d}.pt", f.to(torch.bfloat16) if p.bf16 else f)
         f_state = tr["ffn"] if self.tf else f
         self.run = (self.run + f_state.float()) if not (p.bf16 or self.tf) else bf(self.run + f_state.float())
         del f
@@ -680,13 +715,65 @@ class Track:
             res["lse_fp32head"] = torch.logsumexp(logits32.double(), -1)
             self.writer.put(self.dir / "logits_fp32head.pt", logits32)
         self.writer.put(self.dir / "final.pt", res)
-        self.writer.put(self.dir / "logits.pt", logits)
+        self.writer.put(self.dir / "logits.pt", logits.to(torch.bfloat16) if p.bf16 else logits)
         self.writer.flush()
         (self.dir / "done_final").write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
         log(f"{self.name} final: logits saved, mean lse {float(lse.mean()):.4f}")
 
 
 # ───────────────────────────── driver ─────────────────────────────
+
+
+def load_panel(root, seq_ids):
+    """Whole sequences of a calibration panel (tokens.i32 + sequences.jsonl), concatenated in the given order.
+    Returns tokens [N], segments [(a, b)] (row ranges, positions restart at each a) and the manifest."""
+    import hashlib
+
+    import numpy as np
+
+    root = Path(root)
+    seqs = {d["seq"]: d for d in map(json.loads, (root / "sequences.jsonl").read_text().splitlines()) if d}
+    docs = [json.loads(x) for x in (root / "documents.jsonl").read_text().splitlines() if x.strip()]
+    toks = np.fromfile(root / "tokens.i32", dtype=np.int32)
+    roles = np.fromfile(root / "roles.u8", dtype=np.uint8)
+    amask = np.fromfile(root / "assistant_mask.u8", dtype=np.uint8)
+    parts, segments, entries, r, ro, am = [], [], [], 0, [], []
+    for sid in seq_ids:
+        d = seqs[sid]
+        o, ln = d["offset"], d["length"]
+        parts.append(toks[o : o + ln])
+        ro.append(roles[o : o + ln])
+        am.append(amask[o : o + ln])
+        segments.append((r, r + ln))
+        entries.append(
+            {
+                "seq": sid,
+                "stratum": d["stratum"],
+                "source": d["source"],
+                "render": d.get("render"),
+                "panel_offset": o,
+                "length": ln,
+                "rows": [r, r + ln],
+                "assistant_tokens": d.get("assistant_tokens"),
+                "docs": [
+                    {k: x[k] for k in ("doc", "key", "sub", "start", "stop", "render", "origin") if k in x}
+                    for x in docs
+                    if x["seq"] == sid
+                ],
+            }
+        )
+        r += ln
+    t = np.concatenate(parts)
+    manifest = {
+        "panel": str(root),
+        "seq_order": list(seq_ids),
+        "rows": int(r),
+        "positions": "restart at 0 at every sequence start (rows[0]); attention never crosses sequences",
+        "tokens_sha256": hashlib.sha256(t.astype(np.int32).tobytes()).hexdigest(),
+        "sequences": entries,
+    }
+    extra = {"roles": torch.from_numpy(np.concatenate(ro)), "assistant_mask": torch.from_numpy(np.concatenate(am))}
+    return torch.from_numpy(t.astype(np.int64)), segments, manifest, extra
 
 
 def main():
@@ -699,6 +786,9 @@ def main():
     ap.add_argument("--io-threads", type=int, default=16)
     ap.add_argument("--no-final", action="store_true")
     ap.add_argument("--heartbeat", default=None)
+    ap.add_argument("--panel", default=None, help="calibration panel dir: run its sequences instead of the trace")
+    ap.add_argument("--seqs", default=None, help="panel sequence ids, comma separated, in row order")
+    ap.add_argument("--save-sub", default="all", help="tracks that save attn/ffn sub-outputs (all, none or a list)")
     args = ap.parse_args()
     torch.set_num_threads(args.threads)
     torch.set_grad_enabled(False)
@@ -715,18 +805,36 @@ def main():
     assert cfg["routed_scaling_factor"] == 1.0 and cfg["moe_renormalize"] and cfg["rms_norm_eps"] == EPS
     mla_layers = {i - 1 for i in cfg["linear_attn_config"]["full_attn_layers"]}
     assert {i - 1 for i in cfg["linear_attn_config"]["kda_layers"]} | mla_layers == set(range(N_LAYERS))
-    trace = Trace(n=n)
-    assert sorted(trace.ix["dsa_layers"]) == sorted(mla_layers), "trace DSA layers != config full-attention layers"
-    tokens = torch.tensor(trace.meta["token_ids"][:n], dtype=torch.long)
-    assert len(tokens) == n
-    writer = Writer()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    segments = None
+    if args.panel:  # natural-text sequences, no trace: no tf track, no vs-trace metrics
+        assert "tf" not in args.tracks.split(","), "the tf track needs the trace"
+        tokens, segments, manifest, extra = load_panel(args.panel, [int(x) for x in args.seqs.split(",")])
+        n = len(tokens)
+        mf = out / "manifest.json"
+        if mf.exists():
+            assert json.loads(mf.read_text())["tokens_sha256"] == manifest["tokens_sha256"], "out dir has other tokens"
+        else:
+            mf.write_text(json.dumps(manifest, indent=1))
+            torch.save({"tokens": tokens, "segments": segments, **extra}, out / "tokens.pt")
+        trace = None
+    else:
+        trace = Trace(n=n)
+        assert sorted(trace.ix["dsa_layers"]) == sorted(mla_layers), "trace DSA layers != config full-attention layers"
+        tokens = torch.tensor(trace.meta["token_ids"][:n], dtype=torch.long)
+        assert len(tokens) == n
+    writer = Writer()
     hb = Path(args.heartbeat) if args.heartbeat else out / "heartbeat.txt"
-    tracks = [Track(t, out, n, mla_layers, writer) for t in args.tracks.split(",")]
+    names = args.tracks.split(",")
+    sub = set(names) if args.save_sub == "all" else set() if args.save_sub == "none" else set(args.save_sub.split(","))
+    tracks = [Track(t, out, n, mla_layers, writer, save_sub=t in sub, segments=segments) for t in names]
     last = args.last_layer
     starts = {t.name: t.first_todo(last) for t in tracks}
-    log(f"rows {n}, tracks {starts}, last layer {last}, threads {args.threads}")
+    log(
+        f"rows {n}, tracks {starts}, last layer {last}, threads {args.threads}"
+        + (f", panel seqs {args.seqs} segments {segments}" if segments else "")
+    )
     head_keys = [
         "model.embed_tokens.weight",
         "lm_head.weight",
@@ -736,8 +844,9 @@ def main():
     ]
     Wh = ck.load(head_keys)
     emb_bf = Wh["model.embed_tokens.weight"][tokens].clone()
-    emb_tr = trace.rows("decoder_input_layer_0")
-    log(f"embedding vs trace decoder_input_layer_0: equal={bool(torch.equal(emb_bf, emb_tr))}")
+    if trace is not None:
+        emb_tr = trace.rows("decoder_input_layer_0")
+        log(f"embedding vs trace decoder_input_layer_0: equal={bool(torch.equal(emb_bf, emb_tr))}")
     emb = emb_bf.float()
     for t in tracks:
         t.restore(starts[t.name], emb_bf if t.tf else emb, trace)
@@ -747,7 +856,7 @@ def main():
     def fetch(l):
         ts = time.time()
         W = ck.load(ck.layer_keys(l))
-        tr = trace.layer(l, l in mla_layers)
+        tr = trace.layer(l, l in mla_layers) if trace is not None else {}
         return W, tr, time.time() - ts
 
     fut = pool.submit(fetch, first) if first <= last else None
