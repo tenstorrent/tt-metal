@@ -5,15 +5,13 @@
 // g6_permute writer (blocks_rm_gather): gather_block + write_block.
 // out[n, c, i, h, j, w] = x[n, c, h, w, i, j]. Per unit (n, c, h) the reader's slots hold the
 // [W, I, J] values (slot (w, i) = one input page of J values); the gather moves them into I * J
-// output rows of W values in cb_output_rows (two values per 32-bit access when J is even, one
-// halfword otherwise), and each row goes to output page
-// p_out = ((n * C + c) * I + i) * H * J + h * J + j. The values are moved by RISC-V loads and
-// stores only, so every bf16 bit survives.
+// output rows of W values in cb_output_rows (g6_permute_rm_transpose.hpp), and each row goes to
+// output page p_out = ((n * C + c) * I + i) * H * J + h * J + j.
 // cb_output_rows is this kernel's private staging area: it is never pushed or popped.
-// Raw dataflow: kernel_lib has no block helper that transposes halfwords between strided L1 rows.
 
 #include "api/dataflow/dataflow_api.h"
 #include "g6_permute_common.hpp"
+#include "g6_permute_rm_transpose.hpp"
 
 constexpr uint32_t cb_input_slots = get_compile_time_arg_val(0);
 constexpr uint32_t cb_output_rows = get_compile_time_arg_val(1);
@@ -29,51 +27,17 @@ constexpr auto output_args = TensorAccessorArgs<10>();
 
 constexpr uint32_t unit_slot_bytes = tensor_w * tensor_i * slot_bytes;
 constexpr uint32_t unit_row_bytes = tensor_i * tensor_j * out_row_bytes;
-// Consecutive w of one (i, j) sit this many halfwords apart in the slots.
-constexpr uint32_t w_stride = tensor_i * slot_bytes / sizeof(uint16_t);
 // Output pages of consecutive i of one unit are this far apart.
 constexpr uint32_t i_page_stride = tensor_h * tensor_j;
 
 static_assert(out_page_bytes == tensor_w * sizeof(uint16_t), "output page is one row of W bfloat16 values");
-static_assert(slot_bytes % sizeof(uint16_t) == 0 && out_row_bytes >= out_page_bytes);
-static_assert(slot_bytes % sizeof(uint32_t) == 0 && out_row_bytes % sizeof(uint32_t) == 0, "word gather alignment");
+static_assert(out_row_bytes >= out_page_bytes);
 
-// Halfword gather: any J.
-FORCE_INLINE void gather_unit_halfwords(uint32_t src_unit, uint32_t dst_unit) {
+// Per i, the [W, J] values of slots (w, i) become rows (i, j).
+FORCE_INLINE void gather_unit(uint32_t src_unit, uint32_t dst_unit) {
     for (uint32_t i = 0; i < tensor_i; ++i) {
-        for (uint32_t j = 0; j < tensor_j; ++j) {
-            const auto* src = reinterpret_cast<const tt_l1_ptr uint16_t*>(src_unit + i * slot_bytes) + j;
-            auto* dst = reinterpret_cast<tt_l1_ptr uint16_t*>(dst_unit + (i * tensor_j + j) * out_row_bytes);
-            for (uint32_t w = 0; w < tensor_w; ++w) {
-                dst[w] = src[w * w_stride];
-            }
-        }
-    }
-}
-
-// Word gather for even J: word m of slot (w, i) holds values j = 2m (low half) and 2m + 1, so the
-// words of slots w and w + 1 give one word of row (i, 2m) and one of row (i, 2m + 1). Halves the
-// L1 accesses of the halfword gather; an odd W leaves one halfword per row.
-FORCE_INLINE void gather_unit_words(uint32_t src_unit, uint32_t dst_unit) {
-    constexpr uint32_t w_stride_words = w_stride / 2;
-    for (uint32_t i = 0; i < tensor_i; ++i) {
-        for (uint32_t m = 0; m < tensor_j / 2; ++m) {
-            const auto* src = reinterpret_cast<const tt_l1_ptr uint32_t*>(src_unit + i * slot_bytes) + m;
-            const uint32_t row_even = dst_unit + (i * tensor_j + 2 * m) * out_row_bytes;
-            auto* dst_even = reinterpret_cast<tt_l1_ptr uint32_t*>(row_even);
-            auto* dst_odd = reinterpret_cast<tt_l1_ptr uint32_t*>(row_even + out_row_bytes);
-            for (uint32_t w2 = 0; w2 < tensor_w / 2; ++w2) {
-                const uint32_t a = src[(2 * w2) * w_stride_words];
-                const uint32_t b = src[(2 * w2 + 1) * w_stride_words];
-                dst_even[w2] = (a & 0xFFFFu) | (b << 16);
-                dst_odd[w2] = (a >> 16) | (b & 0xFFFF0000u);
-            }
-            if constexpr (tensor_w % 2 != 0) {
-                const uint32_t a = src[(tensor_w - 1) * w_stride_words];
-                reinterpret_cast<tt_l1_ptr uint16_t*>(dst_even)[tensor_w - 1] = a & 0xFFFFu;
-                reinterpret_cast<tt_l1_ptr uint16_t*>(dst_odd)[tensor_w - 1] = a >> 16;
-            }
-        }
+        g6_permute::transpose_pages<tensor_w, tensor_j, tensor_i * slot_bytes, out_row_bytes>(
+            src_unit + i * slot_bytes, dst_unit + i * tensor_j * out_row_bytes);
     }
 }
 
@@ -84,11 +48,7 @@ FORCE_INLINE void gather_block(uint32_t rows_base, uint32_t extent) {
     // NoC writes that read the rows.
     asm volatile("" ::: "memory");
     for (uint32_t u = 0; u < extent; ++u) {
-        if constexpr (tensor_j % 2 == 0) {
-            gather_unit_words(src, dst);
-        } else {
-            gather_unit_halfwords(src, dst);
-        }
+        gather_unit(src, dst);
         src += unit_slot_bytes;
         dst += unit_row_bytes;
     }

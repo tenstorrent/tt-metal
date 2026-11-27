@@ -140,14 +140,9 @@ def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
         block_h = min(block_h, BLOCK_H_LIMIT)
     assert block_h >= 1
 
-    dram_input = buffer_type == ttnn.BufferType.DRAM
-    alt_share = Fraction(READ_ALT_NOC_SHARE) if dram_input else Fraction(0)
-    assert 0 <= alt_share < 1 and alt_share.denominator & (alt_share.denominator - 1) == 0
-    bank_major = BANK_MAJOR and dram_input
-    num_banks = ttnn.get_memory_view(input_tensor.device(), buffer_type).num_banks
-    block_pages = block_h * pages_per_unit
-    chunk_pages = block_pages if BANK_RUN_ROUNDS is None else min(block_pages, BANK_RUN_ROUNDS * num_banks)
-    chunk_pages = _align_up(chunk_pages, num_banks)
+    alt_share, bank_major, num_banks, chunk_pages = read_plan(
+        input_tensor, block_h * pages_per_unit, READ_ALT_NOC_SHARE, BANK_MAJOR, BANK_RUN_ROUNDS
+    )
     max_blocks_per_core = _div_up(units_g1, block_h)
 
     core_roles = {f"{c.x},{c.y}": f"{REGIME} reader+writer units (n, c, h) [{s}, {s + n})" for c, s, n in assignment}
@@ -180,6 +175,52 @@ def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
     )
 
 
+def read_plan(input_tensor, block_pages, alt_noc_share, bank_major, bank_run_rounds):
+    """The shared reader's issue plan for blocks of up to block_pages pages:
+    (read_alt_share, bank_major, num_banks, chunk_pages). The 2-NoC split and the bank-major walk
+    apply to DRAM input only."""
+    buffer_type = input_tensor.memory_config().buffer_type
+    dram_input = buffer_type == ttnn.BufferType.DRAM
+    alt_share = Fraction(alt_noc_share) if dram_input else Fraction(0)
+    assert 0 <= alt_share < 1 and alt_share.denominator & (alt_share.denominator - 1) == 0
+    num_banks = ttnn.get_memory_view(input_tensor.device(), buffer_type).num_banks
+    chunk_pages = block_pages if bank_run_rounds is None else min(block_pages, bank_run_rounds * num_banks)
+    return alt_share, bank_major and dram_input, num_banks, _align_up(chunk_pages, num_banks)
+
+
+def reader_descriptor(plan, input_tensor, block_units, pages_per_unit, units_per_row, tail_pages, core_starts):
+    """The shared ROW_MAJOR reader (g6_permute_blocks_reader.cpp) for a plan carrying the read_plan
+    fields. Blocks are block_units units of pages_per_unit pages, except the last unit of each row of
+    units_per_row, which holds tail_pages. core_starts: [(core, start_page, num_units, row_pos)]."""
+    ct_args = [
+        CB_INPUT_SLOTS,
+        block_units,
+        pages_per_unit,
+        plan.in_page_bytes,
+        plan.slot_bytes,
+        plan.read_alt_share.numerator,
+        plan.read_alt_share.denominator,
+        plan.num_banks,
+        int(plan.bank_major),
+        plan.chunk_pages,
+        units_per_row,
+        tail_pages,
+        *ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args(),
+    ]
+    rt_args = ttnn.RuntimeArgs()
+    for core_idx, (core, start_page, count, row_pos) in enumerate(core_starts):
+        stagger = core_idx % plan.num_banks if plan.bank_stagger else 0
+        rt_args[core.x][core.y] = [start_page, count, stagger, row_pos]
+    return ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "g6_permute_blocks_reader.cpp"),
+        core_ranges=plan.all_cores,
+        compile_time_args=ct_args,
+        runtime_args=rt_args,
+        common_runtime_args=[input_tensor.buffer_address()],
+        config=dm_config(plan, ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0, ttnn.ReaderConfigDescriptor),
+    )
+
+
 def _first_output_page(plan: BlocksPlan, unit):
     """(h, p_out(n, c, i=0, h, j=0)) of unit `unit`; the writer advances both without dividing."""
     _, _, H, _, I, J = plan.shape
@@ -187,7 +228,7 @@ def _first_output_page(plan: BlocksPlan, unit):
     return h, nc * I * H * J + h * J
 
 
-def _dm_config(plan: BlocksPlan, processor, noc, dedicated_config):
+def dm_config(plan, processor, noc, dedicated_config):
     """The default reader/writer config, or the same RISC and NoC in dynamic NoC mode when the reader
     also issues on the second NoC (one core runs both kernels in one mode)."""
     if plan.read_alt_share == 0:
@@ -224,19 +265,6 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
         ),
     ]
 
-    reader_ct_args = [
-        CB_INPUT_SLOTS,
-        plan.block_h,
-        W * I,
-        plan.in_page_bytes,
-        plan.slot_bytes,
-        plan.read_alt_share.numerator,
-        plan.read_alt_share.denominator,
-        plan.num_banks,
-        int(plan.bank_major),
-        plan.chunk_pages,
-        *ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args(),
-    ]
     writer_ct_args = [
         CB_INPUT_SLOTS,
         CB_OUTPUT_ROWS,
@@ -251,20 +279,19 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
         *ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args(),
     ]
 
-    reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
-    for core_idx, (core, start, count) in enumerate(plan.assignment):
-        stagger = core_idx % plan.num_banks if plan.bank_stagger else 0
-        reader_rt_args[core.x][core.y] = [start, count, stagger]
+    for core, start, count in plan.assignment:
         writer_rt_args[core.x][core.y] = [count, *_first_output_page(plan, start)]
 
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "g6_permute_blocks_reader.cpp"),
-        core_ranges=plan.all_cores,
-        compile_time_args=reader_ct_args,
-        runtime_args=reader_rt_args,
-        common_runtime_args=[input_tensor.buffer_address()],
-        config=_dm_config(plan, ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0, ttnn.ReaderConfigDescriptor),
+    # One unit per row: every unit is a full W * I pages.
+    reader = reader_descriptor(
+        plan,
+        input_tensor,
+        plan.block_h,
+        W * I,
+        1,
+        W * I,
+        [(core, start * W * I, count, 0) for core, start, count in plan.assignment],
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_permute_blocks_writer.cpp"),
@@ -272,7 +299,7 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
         common_runtime_args=[output_tensor.buffer_address()],
-        config=_dm_config(plan, ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1, ttnn.WriterConfigDescriptor),
+        config=dm_config(plan, ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1, ttnn.WriterConfigDescriptor),
     )
     kernels = [None, None]
     kernels[READER_KERNEL_INDEX] = reader

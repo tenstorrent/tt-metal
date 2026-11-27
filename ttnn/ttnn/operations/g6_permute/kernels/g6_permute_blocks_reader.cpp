@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_permute reader (blocks_rm_gather): load_block.
-// Unit (n, c, h) owns the pages_per_unit = W * I consecutive input pages of J values that start at
-// unit * pages_per_unit. Every page lands in its own slot of slot_bytes (the page's bank stride), so
-// local and remote address agree mod 64 as Blackhole DRAM reads require. One read barrier and one
-// push per block.
+// g6_permute reader of the ROW_MAJOR regimes (blocks_rm_gather, nhwc_rm_transpose): load_block.
+// A unit is a run of consecutive input pages, and a core's units are consecutive, so a block is one
+// page range. Units come in rows of units_per_row whose last unit holds tail_pages pages and the
+// others pages_per_unit: blocks_rm_gather has one unit (n, c, h) of W * I pages per row;
+// nhwc_rm_transpose cuts each row (n, h) of W pages into units of block_w pages and a shorter tail.
+// Every page lands in its own slot of slot_bytes (the page's bank stride), so local and remote
+// address agree mod 64 as Blackhole DRAM reads require. One read barrier and one push per block.
 // Each page costs one request at the DRAM port it enters, and a port retires requests at a fixed
 // rate, so the reader deals a share alt_num / alt_den of its pages to the second NoC, which enters
 // every bank through a different port. Pages go to a NoC a whole bank round (num_banks consecutive
@@ -32,11 +34,30 @@ constexpr uint32_t alt_den = get_compile_time_arg_val(6);
 constexpr uint32_t num_banks = get_compile_time_arg_val(7);
 constexpr bool bank_major = get_compile_time_arg_val(8) != 0;
 constexpr uint32_t chunk_pages = get_compile_time_arg_val(9);
-constexpr auto input_args = TensorAccessorArgs<10>();
+constexpr uint32_t units_per_row = get_compile_time_arg_val(10);
+constexpr uint32_t tail_pages = get_compile_time_arg_val(11);
+constexpr auto input_args = TensorAccessorArgs<12>();
 
 static_assert(slot_bytes >= in_page_bytes);
 static_assert(!bank_major || chunk_pages % num_banks == 0, "a chunk is whole bank rounds");
 static_assert(alt_num < alt_den && (alt_den & (alt_den - 1)) == 0, "alt share is a power-of-two fraction below 1");
+static_assert(units_per_row >= 1 && tail_pages >= 1 && tail_pages <= pages_per_unit);
+
+// Pages of the next `extent` units; row_pos is the next unit's position in its row.
+FORCE_INLINE uint32_t block_pages(uint32_t extent, uint32_t& row_pos) {
+    if constexpr (tail_pages == pages_per_unit) {
+        return extent * pages_per_unit;
+    } else {
+        uint32_t pages = extent * pages_per_unit;
+        for (uint32_t u = 0; u < extent; ++u) {
+            if (++row_pos == units_per_row) {
+                row_pos = 0;
+                pages -= pages_per_unit - tail_pages;
+            }
+        }
+        return pages;
+    }
+}
 
 // Round r goes to the second NoC when a Bresenham accumulator stepping by alt_num wraps mod alt_den.
 FORCE_INLINE uint8_t page_noc(uint32_t page) {
@@ -151,9 +172,9 @@ FORCE_INLINE void block_read_barrier() {
 
 template <bool zoned, typename Accessor>
 FORCE_INLINE void load_block(
-    const Accessor& input, uint32_t& page, uint32_t extent, uint32_t stagger, uint32_t& alt_carry) {
+    const Accessor& input, uint32_t& page, uint32_t num_pages, uint32_t stagger, uint32_t& alt_carry) {
     G6_ZONED_STEP(zoned, "PERM-RD-RESERVE", cb_reserve_back(cb_input_slots, block_h));
-    G6_ZONED_STEP(zoned, "PERM-RD-ISSUE", issue_block_reads(input, page, extent * pages_per_unit, stagger, alt_carry));
+    G6_ZONED_STEP(zoned, "PERM-RD-ISSUE", issue_block_reads(input, page, num_pages, stagger, alt_carry));
     G6_ZONED_STEP(zoned, "PERM-RD-BARRIER", block_read_barrier());
     // Nominal count on a ragged last block too: the writer waits and pops the same quantum.
     cb_push_back(cb_input_slots, block_h);
@@ -161,10 +182,10 @@ FORCE_INLINE void load_block(
 
 void kernel_main() {
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t start_unit = get_arg_val<uint32_t>(0);
+    uint32_t page = get_arg_val<uint32_t>(0);
     uint32_t remaining = get_arg_val<uint32_t>(1);
     const uint32_t stagger = get_arg_val<uint32_t>(2);
-    uint32_t page = start_unit * pages_per_unit;
+    uint32_t row_pos = get_arg_val<uint32_t>(3);
     uint32_t alt_carry = 0;
 
     const auto input = TensorAccessor(input_args, input_addr, in_page_bytes);
@@ -173,14 +194,14 @@ void kernel_main() {
     for (; block_idx < g6_permute::ZONED_BLOCKS && remaining > 0; ++block_idx) {
         DeviceZoneScopedN("PERM-RD-LOAD-BLOCK");
         const uint32_t extent = remaining < block_h ? remaining : block_h;
-        load_block<true>(input, page, extent, stagger, alt_carry);
+        load_block<true>(input, page, block_pages(extent, row_pos), stagger, alt_carry);
         remaining -= extent;
     }
     if (remaining > 0) {
         DeviceZoneScopedN("PERM-RD-TAIL");
         while (remaining > 0) {
             const uint32_t extent = remaining < block_h ? remaining : block_h;
-            load_block<false>(input, page, extent, stagger, alt_carry);
+            load_block<false>(input, page, block_pages(extent, row_pos), stagger, alt_carry);
             remaining -= extent;
         }
     }

@@ -7,7 +7,8 @@
 Regimes, selected on the host by (layout, canonical dims), each in DRAM or L1 (interleaved):
 - rows_tile_scatter: TILE bfloat16 rank 4, dims (0, 2, 1, 3);
 - blocks_rm_gather: ROW_MAJOR bfloat16 rank 6, dims (0, 1, 4, 2, 5, 3);
-- nhwc_tile_bfp8_transpose: TILE bfloat8_b rank 4, dims (0, 3, 1, 2).
+- nhwc_tile_bfp8_transpose: TILE bfloat8_b rank 4, dims (0, 3, 1, 2);
+- nhwc_rm_transpose: ROW_MAJOR bfloat16 rank 4, dims (0, 3, 1, 2).
 """
 
 from __future__ import annotations
@@ -17,9 +18,11 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from . import g6_permute_blocks_rm_gather as blocks_rm_gather
+from . import g6_permute_nhwc_rm_transpose as nhwc_rm_transpose
 from . import g6_permute_nhwc_tile_bfp8 as nhwc_tile_bfp8_transpose
 from . import g6_permute_program_descriptor as rows_tile_scatter
 from .g6_permute_blocks_rm_gather import BlocksPlan
+from .g6_permute_nhwc_rm_transpose import NhwcRmPlan
 from .g6_permute_nhwc_tile_bfp8 import NhwcPlan
 from .g6_permute_program_descriptor import (
     READER_KERNEL_INDEX,
@@ -125,7 +128,6 @@ EXCLUSIONS = [
     {"dtype": ttnn.bfloat8_b, "dims": (0, 2, 1, 3)},
     {"dtype": ttnn.bfloat8_b, "dims": (0, 1, 4, 2, 5, 3)},
     {"dtype": ttnn.bfloat16, "layout": ttnn.TILE_LAYOUT, "dims": (0, 3, 1, 2)},
-    {"layout": ttnn.ROW_MAJOR_LAYOUT, "dims": (0, 3, 1, 2)},
 ]
 
 
@@ -181,6 +183,7 @@ _REGIMES = {
     (ttnn.TILE_LAYOUT, (0, 2, 1, 3)): rows_tile_scatter,
     (ttnn.ROW_MAJOR_LAYOUT, blocks_rm_gather.DIMS): blocks_rm_gather,
     (ttnn.TILE_LAYOUT, nhwc_tile_bfp8_transpose.DIMS): nhwc_tile_bfp8_transpose,
+    (ttnn.ROW_MAJOR_LAYOUT, nhwc_rm_transpose.DIMS): nhwc_rm_transpose,
 }
 
 
@@ -214,7 +217,7 @@ def _cache_key(input_tensor, canonical_dims):
     )
 
 
-def g6_permute_plan(input_tensor: ttnn.Tensor, dims) -> Plan | BlocksPlan | NhwcPlan:
+def g6_permute_plan(input_tensor: ttnn.Tensor, dims) -> Plan | BlocksPlan | NhwcPlan | NhwcRmPlan:
     """Report the plan a call selects (regime, active cores, block extent, blocks per core group,
     per-core roles) without dispatching."""
     axes = validate(input_tensor, dims)
