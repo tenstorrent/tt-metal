@@ -16,7 +16,7 @@
 | `input_tensor` | `ttnn.Tensor` | yes, positional | rank 2 (Phase 0) or 4 (refinement); bfloat16; TILE 32x32; DRAM interleaved; on device | — | buffer address: common RT; geometry: CT |
 | `memory_config` | `ttnn.MemoryConfig` | yes, positional | buffer L1; `WIDTH_SHARDED` (Phase 0) or `HEIGHT_SHARDED` (refinement); `shard_spec` with shard dims multiples of 32 that cover the padded tile grid; `ROW_MAJOR` or `COL_MAJOR` | — | grid → kernel core ranges; orientation → core order `G` (host); shard shape → CT row stride + per-core RT rectangles |
 | `issuers_per_core` (module knob, `KNOBS` dict in the program-descriptor module, not a public argument) | int | no | {1, 2} | 1 | host: number of KernelDescriptors (1 = NCRISC/NOC0; 2 = + BRISC/NOC1) |
-| `partial_tile_read` (module knob, same dict) | str | no | {`"valid_rows"`, `"whole_tile"`} | `"valid_rows"` | CT: value of `partial_span_bytes` |
+| `partial_tile_read` (module knob, same dict) | str | no | {`"valid_rows"`, `"face_rows"` (lamp L2, two spans), `"whole_tile"`} | `"valid_rows"` | CT: `partial_span_bytes` and the second span's offset/bytes |
 
 The public signature is exactly `g6_interleaved_to_sharded(input_tensor, memory_config)`. Knobs are module constants, never call arguments; every knob value is part of the descriptor cache key.
 
@@ -275,8 +275,8 @@ Malformed requests (ValueError, before the support check):
 | `memory_config.buffer_type != L1` | not L1 |
 | `memory_layout not in (HEIGHT_SHARDED, WIDTH_SHARDED)` or `shard_spec is None` | not height or width sharded |
 | `shard_shape[0] % 32 or shard_shape[1] % 32` | shard shape not a multiple of 32 |
-| width: `shard_tile_rows < tensor_tile_rows` | width shard shorter than the tensor |
-| height: `shard_tile_cols < tensor_tile_cols` | height shard narrower than the tensor |
+| width: `shard_tile_rows != tensor_tile_rows` | width shard shorter than the tensor (no owner for some rows); taller cannot be allocated (TensorSpec requires equality, `tt_metal/impl/tensor/spec/tensor_spec.cpp:62-68`) |
+| height: `shard_tile_cols != tensor_tile_cols` | height shard narrower than the tensor; wider cannot be allocated (`tensor_spec.cpp:52-56`) |
 | `num_shards > grid.num_cores()` | grid with fewer cores than shards |
 | `shard_tile_rows * shard_tile_cols * tile_bytes > L1_BUDGET_BYTES (1347776)` | BB-05 host refusal (op buffers add 0) |
 
@@ -301,7 +301,7 @@ Support refusals in Phase 0 (NotImplementedError subclasses): `rank = 4`, `out_s
 | Transfers in flight at return (R1, BB-03) | the op is nothing but reads, and another program starts right after | every issuer ends with `noc_async_read_barrier` on its own NoC; the op issues no writes, semaphores or atomics; test `test_repeat_then_other_program` |
 | Value-changing path (R6) | graded bit-exact, NaN payloads included | no compute kernel; bytes move DRAM → L1 by NoC only; test `test_special_values_bit_exact` |
 | Partial-row span geometry (R9) | the span assumes 16x16 faces; row 0 of a tile is bytes `[0,32)` of face 0 and `[512,544)` of face 1 | host derives face sizes from the tensor's tile; validate refuses other tiles; test `test_poisoned_padding` (NaN in rows 1-31 never reaches the logical row) |
-| Row stride in the shard | a width shard taller than the tensor, or a height shard wider, has a row stride ≠ `tensor_tile_cols` | shard slot uses `shard_tile_cols`; positions past the tensor stay unwritten |
+| Row stride in the shard | for width shards the shard row stride (`shard_tile_cols`) differs from the input's (`tensor_tile_cols`) | shard slot uses `shard_tile_cols`; a taller/wider shard than the tensor is refused as malformed (TensorSpec cannot allocate it) |
 | Surplus cores / partial last shard | shards beyond the tile grid; cores of G after the last shard | `ceil` for `num_shards`, `min` clamps, empty rectangle for surplus cores |
 | Full-row path untested by production | no production tile row is fully valid | regime-pin case (33, 5120) in Phase 0; `height_multi_shard` after the refinement |
 | Kernel text and core ranges (BB-17, BB-18) | the op runs in the FLUX trace before/after large programs | one small reader kernel; kernel group = the grid's own ranges (one rectangle in each production case); no TRISC binaries at all |

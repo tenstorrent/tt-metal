@@ -30,20 +30,21 @@ void kernel_main() {
     static_assert(partial_span_bytes > 0 && partial_span_bytes <= tile_bytes, "partial span outside the tile");
     static_assert(partial_span2_offset + partial_span2_bytes <= tile_bytes, "second partial span outside the tile");
 
-    const uint32_t input_base = get_common_arg_val<uint32_t>(0);
-    const uint32_t shard_base = get_common_arg_val<uint32_t>(1);
-
-    const uint32_t block_row_begin = get_arg_val<uint32_t>(0);
-    const uint32_t block_col_begin = get_arg_val<uint32_t>(1);
-    const uint32_t block_tile_rows = get_arg_val<uint32_t>(2);
-    const uint32_t block_tile_cols = get_arg_val<uint32_t>(3);
-    const uint32_t block_slot_begin = get_arg_val<uint32_t>(4);    // shard slot of the block's first tile
-    const uint32_t row_in_image_begin = get_arg_val<uint32_t>(5);  // block_row_begin mod image_tile_rows
-
-    [[maybe_unused]] const auto input = TensorAccessor(input_args, input_base, tile_bytes);
-
     {
+        // Argument loading and accessor setup are part of the fetch (BB-21: no work outside a zone).
         DeviceZoneScopedN("I2S-FETCH");
+        const uint32_t input_base = get_common_arg_val<uint32_t>(0);
+        const uint32_t shard_base = get_common_arg_val<uint32_t>(1);
+
+        const uint32_t block_row_begin = get_arg_val<uint32_t>(0);
+        const uint32_t block_col_begin = get_arg_val<uint32_t>(1);
+        const uint32_t block_tile_rows = get_arg_val<uint32_t>(2);
+        const uint32_t block_tile_cols = get_arg_val<uint32_t>(3);
+        const uint32_t block_slot_begin = get_arg_val<uint32_t>(4);    // shard slot of the block's first tile
+        const uint32_t row_in_image_begin = get_arg_val<uint32_t>(5);  // block_row_begin mod image_tile_rows
+
+        [[maybe_unused]] const auto input = TensorAccessor(input_args, input_base, tile_bytes);
+
         uint32_t row_in_image = row_in_image_begin;
         uint32_t row_page = block_row_begin * tensor_tile_cols + block_col_begin;
         uint32_t row_slot_addr = shard_base + block_slot_begin * tile_bytes;

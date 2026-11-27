@@ -10,6 +10,8 @@ lives in eval/golden_tests/g6_interleaved_to_sharded/feature_spec.py.
 
 from __future__ import annotations
 
+import copy
+
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
@@ -126,18 +128,21 @@ def _check_malformed(input_tensor, memory_config):
     if shard_spec is None:
         _refuse("memory_config has no shard_spec")
     shard_h, shard_w = shard_spec.shape
-    if shard_h <= 0 or shard_w <= 0 or shard_h % 32 or shard_w % 32:
-        _refuse(f"shard shape {list(shard_spec.shape)} is not a positive multiple of 32")
+    tile_h, tile_w = input_tensor.tile.tile_shape
+    if shard_h <= 0 or shard_w <= 0 or shard_h % tile_h or shard_w % tile_w:
+        _refuse(f"shard shape {list(shard_spec.shape)} is not a positive multiple of the {tile_h}x{tile_w} tile")
 
     geom = _descriptor.compute_geometry(input_tensor, memory_config)
-    if geom.scheme == _descriptor.WIDTH and geom.shard_tile_rows < geom.tensor_tile_rows:
+    # A shorter/narrower shard leaves tiles without an owner; a taller/wider one cannot be
+    # allocated at all (TensorSpec requires equality on the unsharded dim).
+    if geom.scheme == _descriptor.WIDTH and geom.shard_tile_rows != geom.tensor_tile_rows:
         _refuse(
-            f"width shard of {geom.shard_tile_rows} tile rows is shorter than the tensor's "
+            f"width shard of {geom.shard_tile_rows} tile rows does not match the tensor's "
             f"{geom.tensor_tile_rows} tile rows"
         )
-    if geom.scheme == _descriptor.HEIGHT and geom.shard_tile_cols < geom.tensor_tile_cols:
+    if geom.scheme == _descriptor.HEIGHT and geom.shard_tile_cols != geom.tensor_tile_cols:
         _refuse(
-            f"height shard of {geom.shard_tile_cols} tile columns is narrower than the tensor's "
+            f"height shard of {geom.shard_tile_cols} tile columns does not match the tensor's "
             f"{geom.tensor_tile_cols} tile columns"
         )
     if geom.num_shards > len(geom.cores):
@@ -191,7 +196,8 @@ def validate(input_tensor, memory_config):
 def describe_plan(input_tensor, memory_config) -> dict:
     """The plan a call with these arguments runs (BB-08, BB-21), from the same cached planning step."""
     validate(input_tensor, memory_config)
-    return _descriptor.get_program(input_tensor, memory_config).plan
+    # A copy: the cached plan must not change under a caller that edits the report.
+    return copy.deepcopy(_descriptor.get_program(input_tensor, memory_config).plan)
 
 
 def g6_interleaved_to_sharded(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:

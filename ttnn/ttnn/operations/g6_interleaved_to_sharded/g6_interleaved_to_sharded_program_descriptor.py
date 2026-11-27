@@ -31,8 +31,16 @@ KNOBS = {
     #   "whole_tile": the whole page (A/B reference only).
     "partial_tile_read": "valid_rows",
 }
+# Issuer i runs on (processor, NoC id). The NoC id is also the kernel's CT arg, so the
+# accessor, the reads and the barrier all use the NoC the kernel is configured on.
+ISSUERS = (
+    (ttnn.DataMovementProcessor.RISCV_1, 0),
+    (ttnn.DataMovementProcessor.RISCV_0, 1),
+)
+_NOC = {0: ttnn.NOC.NOC_0, 1: ttnn.NOC.NOC_1}
+
 KNOB_VALUES = {
-    "issuers_per_core": (1, 2),
+    "issuers_per_core": tuple(range(1, len(ISSUERS) + 1)),
     "partial_tile_read": ("valid_rows", "face_rows", "whole_tile"),
 }
 
@@ -41,14 +49,6 @@ ABLATE_READS = False
 
 # Free L1 per core the model leaves to the op (BB-05); the output shard counts inside it.
 L1_BUDGET_BYTES = 1347776
-
-# Issuer i runs on (processor, NoC id). The NoC id is also the kernel's CT arg, so the
-# accessor, the reads and the barrier all use the NoC the kernel is configured on.
-ISSUERS = (
-    (ttnn.DataMovementProcessor.RISCV_1, 0),
-    (ttnn.DataMovementProcessor.RISCV_0, 1),
-)
-_NOC = {0: ttnn.NOC.NOC_0, 1: ttnn.NOC.NOC_1}
 
 WIDTH = "width"
 HEIGHT = "height"
@@ -208,7 +208,8 @@ def cache_key(input_tensor, memory_config):
     in_mc = input_tensor.memory_config()
     shard_spec = memory_config.shard_spec
     return (
-        id(input_tensor.device()),
+        # The device's own id, not id() of its Python wrapper: an address can be reused after close.
+        input_tensor.device().id(),
         tuple(input_tensor.shape),
         tuple(input_tensor.padded_shape),
         input_tensor.dtype,

@@ -1,0 +1,127 @@
+{
+  "summary": {
+    "total": 13,
+    "supported_pass": 4,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 2,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 7
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_golden.py::test_op[1x5120-width_sharded-32x160-0_0to7_3-row_major-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "h_non_aligned",
+          "out_scheme": "width_sharded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_golden.py::test_op_loose[flux58_p1-1x5120-width_sharded-32x160-0_0to7_3-row_major-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "h_non_aligned",
+          "out_scheme": "width_sharded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_golden.py::test_op_loose[special_values_bit_exact-1x5120-width_sharded-32x160-0_0to7_3-row_major-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "h_non_aligned",
+          "out_scheme": "width_sharded"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_golden.py::test_op_loose[poisoned_padding-1x5120-width_sharded-32x160-0_0to7_3-row_major-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-out_scheme=width_sharded-rank=2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 2,
+          "alignment": "h_non_aligned",
+          "out_scheme": "width_sharded"
+        },
+        "status": "passed"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_golden.py::test_op[1x1x1x128-height_sharded-32x128-0_0to0_0-row_major-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-out_scheme=height_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "out_scheme": "height_sharded"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_golden.py::test_op_loose[flux57_p2-1x1x1x128-height_sharded-32x128-0_0to0_0-row_major-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-out_scheme=height_sharded-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "rank": 4,
+          "alignment": "h_non_aligned",
+          "out_scheme": "height_sharded"
+        },
+        "status": "xfail"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_regression.py::test_repeat_then_other_program[flux58]",
+        "test_name": "test_repeat_then_other_program[flux58]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_regression.py::test_cache_key_shard_spec[flux58-then-8cores]",
+        "test_name": "test_cache_key_shard_spec[flux58-then-8cores]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_regression.py::test_placement_reported[flux58]",
+        "test_name": "test_placement_reported[flux58]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_regression.py::test_orientation_col_major[flux58-col-then-row]",
+        "test_name": "test_orientation_col_major[flux58-col-then-row]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_regression.py::test_new_input_address[flux58]",
+        "test_name": "test_new_input_address[flux58]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_regression.py::test_height_multi_shard[2x1x33x128-height-4cores]",
+        "test_name": "test_height_multi_shard[2x1x33x128-height-4cores]",
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_interleaved_to_sharded/test_regression.py::test_refuse_uncovered_shard_spec[flux58]",
+        "test_name": "test_refuse_uncovered_shard_spec[flux58]",
+        "status": "failed"
+      }
+    ]
+  }
+}

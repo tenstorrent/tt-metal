@@ -1,0 +1,22 @@
+{
+  "eval/golden_tests/g6_interleaved_to_sharded/test_golden.py::test_op_loose[flux58_p1-1x5120-width_sharded-32x160-0_0to7_3-row_major-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-out_scheme=width_sharded-rank=2]": {
+    "case": "flux58_p1",
+    "gate": "exact",
+    "math_fidelity": null
+  },
+  "eval/golden_tests/g6_interleaved_to_sharded/test_golden.py::test_op_loose[flux57_p2-1x1x1x128-height_sharded-32x128-0_0to0_0-row_major-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-out_scheme=height_sharded-rank=4]": {
+    "case": "flux57_p2",
+    "gate": "exact",
+    "math_fidelity": null
+  },
+  "eval/golden_tests/g6_interleaved_to_sharded/test_golden.py::test_op_loose[special_values_bit_exact-1x5120-width_sharded-32x160-0_0to7_3-row_major-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-out_scheme=width_sharded-rank=2]": {
+    "case": "special_values_bit_exact",
+    "gate": "exact",
+    "values": "special"
+  },
+  "eval/golden_tests/g6_interleaved_to_sharded/test_golden.py::test_op_loose[poisoned_padding-1x5120-width_sharded-32x160-0_0to7_3-row_major-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-out_scheme=width_sharded-rank=2]": {
+    "case": "poisoned_padding",
+    "gate": "exact",
+    "poison_padding": NaN
+  }
+}
