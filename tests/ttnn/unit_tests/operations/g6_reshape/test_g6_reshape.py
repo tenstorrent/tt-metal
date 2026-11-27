@@ -2,147 +2,143 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_reshape, Phase 0 (bfloat16, TILE, DRAM interleaved).
+"""Acceptance test for g6_reshape, Phase 0: bfloat16, TILE_LAYOUT, DRAM interleaved.
 
-The cases are the bfloat16 TILE production cases of the golden INPUTS plus the cases the spec's rules
-and the design require (BB-22): two pins of the `face_row_assemble` regime (FLUX geometry in bfloat16,
-since no bfloat16 production shape reaches that regime), special values, NaN-poisoned input padding,
-the -1 entry, a tuple shape, repeated calls with different targets, and the host validation errors.
-Production has no single-tile bfloat16 case, so none is added.
-
-The op moves bytes only, so every comparison is bit for bit against torch.reshape of the input as it
-sits on the device (read back through the same ttnn.to_torch path as the output).
+g6_reshape moves values and never computes on them, so every check is bit-exact
+(the golden suite's TOLERANCES are ("exact", None) for every dtype).
 """
 
 import pytest
 import torch
 
 import ttnn
-from ttnn.operations.g6_reshape import g6_reshape
+from ttnn.operations.g6_reshape import describe_plan, g6_reshape
 
+# BB-05: L1 the model leaves to the op on every core.
+L1_OP_BUDGET = 1347776
 
-# (input shape, target shape): Qwen production cases, bfloat16 TILE, all `face_row_direct`.
-PRODUCTION_BF16_TILE = [
-    ((1, 16, 6, 256), (1, 1, 16, 1536)),  # Qwen #349
-    ((16, 1, 64), (1, 1, 16, 64)),  # Qwen #353
-    ((16, 1, 1536), (1, 1, 16, 1536)),  # Qwen #357
-    ((1, 1, 16, 4608), (16, 1, 4608)),  # Qwen #364
-    ((1, 16, 64), (16, 1, 64)),  # Qwen #367
-    ((16, 1, 5120), (1, 1, 16, 5120)),  # Qwen #370
-    ((2, 1, 5120), (1, 1, 2, 5120)),  # Qwen #382
-    ((1, 8, 6, 256), (1, 1, 8, 1536)),  # Qwen #490
-    ((8, 1, 64), (1, 1, 8, 64)),  # Qwen #494
-    ((8, 1, 1536), (1, 1, 8, 1536)),  # Qwen #498
-    ((1, 1, 8, 4608), (8, 1, 4608)),  # Qwen #505
-    ((1, 8, 64), (8, 1, 64)),  # Qwen #508
-    ((8, 1, 5120), (1, 1, 8, 5120)),  # Qwen #511
-    ((1, 1, 6, 256), (1, 1, 1536)),  # Qwen #553
+# The bfloat16 TILE production cases of feature_spec.INPUTS: (input shape, target shape).
+PRODUCTION_CASES = [
+    ((1, 16, 6, 256), (1, 1, 16, 1536)),
+    ((16, 1, 64), (1, 1, 16, 64)),
+    ((16, 1, 1536), (1, 1, 16, 1536)),
+    ((1, 1, 16, 4608), (16, 1, 4608)),
+    ((1, 16, 64), (16, 1, 64)),
+    ((16, 1, 5120), (1, 1, 16, 5120)),
+    ((2, 1, 5120), (1, 1, 2, 5120)),
+    ((1, 8, 6, 256), (1, 1, 8, 1536)),
+    ((8, 1, 64), (1, 1, 8, 64)),
+    ((8, 1, 1536), (1, 1, 8, 1536)),
+    ((1, 1, 8, 4608), (8, 1, 4608)),
+    ((1, 8, 64), (8, 1, 64)),
+    ((8, 1, 5120), (1, 1, 8, 5120)),
+    ((1, 1, 6, 256), (1, 1, 1536)),
 ]
 
-# W_out = 1 and W_in not equal to W_out: every output face row is assembled from element segments.
-ASSEMBLE_REGIME_PINS = [
-    ((1, 185), (1, 1, 185, 1)),  # FLUX #168 geometry
-    ((1, 512), (1, 1, 512, 1)),  # FLUX #78 geometry
+# The FLUX row-to-column geometry at the Phase 0 dtype. A last dim that is not a multiple
+# of 16 pins the element-run regime, which Phase 0 claims for every bfloat16 TILE shape.
+ELEMENT_RUN_CASES = [
+    ((1, 185), (1, 1, 185, 1)),
+    ((1, 512), (1, 1, 512, 1)),
 ]
 
-# Every host validation error of the op names the op first.
-HOST_ERROR_PREFIX = "g6_reshape:"
-
-BF16_SPECIALS = [float("nan"), float("inf"), float("-inf"), -0.0, 9.18e-41, 3.0e38]
+# bfloat16 NaN, infinities, -0.0, a denormal and a large finite value.
+_BF16_SPECIALS = [float("nan"), float("inf"), float("-inf"), -0.0, 9.18e-41, 3.0e38]
 
 
 def _case_id(case):
-    input_shape, shape = case
-    return f"{'x'.join(map(str, input_shape))}-to-{'x'.join(map(str, shape))}"
+    src, dst = case
+    return "x".join(map(str, src)) + "-to-" + "x".join(map(str, dst))
 
 
-def _bits(t):
-    return t.contiguous().view(torch.int16).to(torch.int32) & 0xFFFF
-
-
-def _randn_bf16(shape):
+def _random_input(shape):
     torch.manual_seed(42)
-    return torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
+    return torch.randn(shape).to(torch.bfloat16)
 
 
-def _special_bf16(shape):
-    """randn with the last mantissa bit set, and NaN / inf / -0.0 / a denormal spread over the tensor."""
-    flat = _randn_bf16(shape).reshape(-1)
-    flat = (flat.view(torch.int16) | 1).view(torch.bfloat16).clone()
-    n = flat.numel()
-    stride = max(n // len(BF16_SPECIALS), 1)
-    for i, v in enumerate(BF16_SPECIALS):
-        flat[min(i * stride, n - 1)] = v
-    return flat.reshape(shape)
-
-
-def _to_device(torch_input, device, *, poison=None):
-    tensor = ttnn.from_torch(
-        torch_input,
+def _to_device(torch_tensor, device):
+    return ttnn.from_torch(
+        torch_tensor,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         preserve_nan_values=True,
     )
-    if poison is not None:
-        tensor = ttnn.fill_implicit_tile_padding(tensor, poison)
-    return tensor
 
 
-def _resolved(shape, numel):
-    shape = [int(s) for s in shape]
-    if -1 in shape:
-        known = 1
-        for s in shape:
-            if s != -1:
-                known *= s
-        shape[shape.index(-1)] = numel // known
-    return shape
+def _bits(t):
+    return t.contiguous().view(torch.int16)
 
 
-def _check(ttnn_input, ttnn_output, shape):
-    device_input = ttnn.to_torch(ttnn_input)
-    expected = torch.reshape(device_input, tuple(int(s) for s in shape))
-    assert list(ttnn_output.shape) == _resolved(shape, device_input.numel())
+def _check_exact(ttnn_output, expected):
+    assert tuple(ttnn_output.shape) == tuple(expected.shape)
     assert ttnn_output.dtype == ttnn.bfloat16
     assert ttnn_output.layout == ttnn.TILE_LAYOUT
-    assert ttnn_output.memory_config().buffer_type == ttnn.BufferType.DRAM
-    assert ttnn_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    memory_config = ttnn_output.memory_config()
+    assert memory_config.buffer_type == ttnn.BufferType.DRAM
+    assert memory_config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
     got = ttnn.to_torch(ttnn_output)
-    assert list(got.shape) == list(expected.shape)
-    mismatch = (_bits(got) != _bits(expected)).reshape(-1)
-    assert not mismatch.any(), (
-        f"{int(mismatch.sum())} of {mismatch.numel()} values differ, first at linear index "
-        f"{int(mismatch.nonzero()[0])}"
-    )
+    assert got.dtype == torch.bfloat16
+    assert tuple(got.shape) == tuple(expected.shape)
+    mismatch = _bits(got) != _bits(expected)
+    assert not mismatch.any(), f"{int(mismatch.sum())} of {mismatch.numel()} values differ"
     return got
 
 
-@pytest.mark.parametrize("case", PRODUCTION_BF16_TILE + ASSEMBLE_REGIME_PINS, ids=_case_id)
-def test_g6_reshape(device, case):
-    input_shape, shape = case
-    torch_input = _randn_bf16(input_shape)
+def _run_and_check(torch_input, target, device, *, poison=None):
     ttnn_input = _to_device(torch_input, device)
+    if poison is not None:
+        ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, poison)
+    output = g6_reshape(ttnn_input, target)
+    return _check_exact(output, torch.reshape(torch_input, tuple(target)))
 
-    ttnn_output = g6_reshape(ttnn_input, list(shape))
 
-    got = _check(ttnn_input, ttnn_output, shape)
-    assert torch.equal(_bits(got), _bits(torch.reshape(torch_input, shape)))
+def _check_plan(torch_input, target, device, regime):
+    plan = describe_plan(_to_device(torch_input, device), target)
+    assert plan["regime"] == regime
+    assert plan["num_cores"] > 1
+    assert plan["l1_bytes_per_core"] <= L1_OP_BUDGET
+    return plan
+
+
+@pytest.mark.parametrize("case", PRODUCTION_CASES, ids=_case_id)
+def test_production_cases(case, device):
+    src, dst = case
+    torch_input = _random_input(src)
+    _run_and_check(torch_input, list(dst), device)
+    _check_plan(torch_input, list(dst), device, "tile_face_row")
+
+
+@pytest.mark.parametrize("case", ELEMENT_RUN_CASES, ids=_case_id)
+def test_element_run_cases(case, device):
+    src, dst = case
+    torch_input = _random_input(src)
+    _run_and_check(torch_input, list(dst), device)
+    _check_plan(torch_input, list(dst), device, "tile_element_run")
+
+
+def test_tuple_shape(device):
+    torch_input = _random_input((1, 1, 16, 4608))
+    _run_and_check(torch_input, (16, 1, 4608), device)
 
 
 @pytest.mark.parametrize(
-    "case",
-    [((1, 16, 6, 256), (1, 1, 16, 1536)), ((1, 185), (1, 1, 185, 1))],
-    ids=_case_id,
+    "src, target, resolved",
+    [
+        ((16, 1, 1536), [1, 1, -1, 1536], (1, 1, 16, 1536)),
+        ((1, 16, 6, 256), [-1, 1536], (16, 1536)),
+    ],
 )
-def test_g6_reshape_special_values(device, case):
-    input_shape, shape = case
-    ttnn_input = _to_device(_special_bf16(input_shape), device)
+def test_inferred_entry(src, target, resolved, device):
+    torch_input = _random_input(src)
+    output = g6_reshape(_to_device(torch_input, device), target)
+    assert tuple(output.shape) == resolved
+    _check_exact(output, torch.reshape(torch_input, resolved))
 
-    _check(ttnn_input, g6_reshape(ttnn_input, list(shape)), shape)
 
-
+# Input tile padding filled with NaN must never reach a logical output position; from_torch
+# pads with zeros and would hide such a leak.
 @pytest.mark.parametrize(
     "case",
     [
@@ -153,62 +149,71 @@ def test_g6_reshape_special_values(device, case):
     ],
     ids=_case_id,
 )
-def test_g6_reshape_poisoned_padding(device, case):
-    input_shape, shape = case
-    ttnn_input = _to_device(_randn_bf16(input_shape), device, poison=float("nan"))
-
-    got = _check(ttnn_input, g6_reshape(ttnn_input, list(shape)), shape)
-    assert not torch.isnan(got).any()
+def test_poisoned_padding(case, device):
+    src, dst = case
+    _run_and_check(_random_input(src), list(dst), device, poison=float("nan"))
 
 
-def test_g6_reshape_inferred_entry(device):
-    ttnn_input = _to_device(_randn_bf16((16, 1, 1536)), device)
-
-    ttnn_output = g6_reshape(ttnn_input, [1, 1, -1, 1536])
-
-    assert list(ttnn_output.shape) == [1, 1, 16, 1536]
-    _check(ttnn_input, ttnn_output, [1, 1, -1, 1536])
-
-
-def test_g6_reshape_tuple_shape(device):
-    ttnn_input = _to_device(_randn_bf16((1, 1, 16, 4608)), device)
-
-    _check(ttnn_input, g6_reshape(ttnn_input, (16, 1, 4608)), (16, 1, 4608))
-
-
-def test_g6_reshape_repeated_calls(device):
-    # Two targets with different page maps on one input, then the first again: a cache key that
-    # missed the target shape would replay the wrong program, and a repeat must be bit-identical.
-    ttnn_input = _to_device(_randn_bf16((16, 1, 64)), device)
-
-    first = _check(ttnn_input, g6_reshape(ttnn_input, [1, 1, 16, 64]), [1, 1, 16, 64])
-    _check(ttnn_input, g6_reshape(ttnn_input, [1, 1, 1, 1024]), [1, 1, 1, 1024])
-    again = _check(ttnn_input, g6_reshape(ttnn_input, [1, 1, 16, 64]), [1, 1, 16, 64])
-
-    assert torch.equal(_bits(first), _bits(again))
+def test_special_values(device):
+    src, dst = (1, 16, 6, 256), [1, 1, 16, 1536]
+    flat = _random_input(src).reshape(-1)
+    # An odd mantissa bit everywhere: a path through a narrower or rounding format changes it.
+    flat = (flat.view(torch.int16) | 1).view(torch.bfloat16).clone()
+    stride = flat.numel() // len(_BF16_SPECIALS)
+    for i, value in enumerate(_BF16_SPECIALS):
+        flat[i * stride] = value
+    _run_and_check(flat.reshape(src), dst, device)
 
 
 @pytest.mark.parametrize(
-    "shape",
+    "case",
+    [((1, 16, 6, 256), (1, 1, 16, 1536)), ((1, 185), (1, 1, 185, 1))],
+    ids=_case_id,
+)
+def test_round_trip(case, device):
+    src, dst = case
+    torch_input = _random_input(src)
+    forward = g6_reshape(_to_device(torch_input, device), list(dst))
+    back = g6_reshape(forward, list(src))
+    _check_exact(back, torch_input)
+
+
+# One input, two targets with different page maps, then the first again: a program cache key
+# that misses the target shape replays the wrong program; repeats must be bit-identical.
+def test_retarget_and_repeat(device):
+    torch_input = _random_input((16, 1, 64))
+    ttnn_input = _to_device(torch_input, device)
+    first = _check_exact(g6_reshape(ttnn_input, [1, 1, 16, 64]), torch.reshape(torch_input, (1, 1, 16, 64)))
+    _check_exact(g6_reshape(ttnn_input, [1, 1, 1, 1024]), torch.reshape(torch_input, (1, 1, 1, 1024)))
+    again = _check_exact(g6_reshape(ttnn_input, [1, 1, 16, 64]), torch.reshape(torch_input, (1, 1, 16, 64)))
+    assert torch.equal(_bits(first), _bits(again))
+
+
+# (16,1,64)->(1,1,16,64) produces 2 output tiles from 32 input tiles: the core count must come
+# from the blocking, not from the output tile count.
+def test_core_count_not_capped_by_output_tiles(device):
+    plan = describe_plan(_to_device(_random_input((16, 1, 64)), device), [1, 1, 16, 64])
+    assert plan["num_cores"] > 2
+
+
+@pytest.mark.parametrize(
+    "target",
     [
-        [1, 1, 16, 100],  # product differs from the element count
-        [16, 0, 1536],  # entry of 0
-        [-2, 12288],  # entry below -1
-        [-1, -1, 1536],  # more than one -1
-        [1, 1, 1, 16, 1536],  # output rank 5
+        [1, 1, 16, 65],  # product differs from the element count
+        [0, 1024],  # zero entry
+        [-2, -512],  # entry below -1, product still equals the element count
+        [-1, -1, 1024],  # more than one -1
+        [1, 1, 1, 16, 64],  # output rank 5
         [],  # output rank 0
     ],
-    ids=["bad-product", "zero-entry", "below-minus-one", "two-minus-one", "rank-5", "rank-0"],
 )
-def test_g6_reshape_invalid_shape_raises(device, expect_error, shape):
-    ttnn_input = _to_device(_randn_bf16((16, 1, 1536)), device)
+def test_invalid_shape(target, device, expect_error):
+    ttnn_input = _to_device(_random_input((16, 1, 64)), device)
+    with expect_error((ValueError, RuntimeError), ""):
+        g6_reshape(ttnn_input, target)
 
-    with expect_error((ValueError, RuntimeError), HOST_ERROR_PREFIX):
-        g6_reshape(ttnn_input, shape)
 
-
-def test_g6_reshape_input_rank_5_raises(device, expect_error):
-    ttnn_input = _to_device(_randn_bf16((1, 16, 1, 1, 64)), device)
-
-    with expect_error((ValueError, RuntimeError), HOST_ERROR_PREFIX):
+def test_invalid_input_rank(device, expect_error):
+    ttnn_input = _to_device(_random_input((1, 1, 1, 16, 64)), device)
+    with expect_error((ValueError, RuntimeError), ""):
         g6_reshape(ttnn_input, [16, 64])

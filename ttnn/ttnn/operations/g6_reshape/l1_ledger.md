@@ -1,116 +1,74 @@
 # L1 Ledger: g6_reshape
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions: `op_design.md`
-(Blocking Model). Named block axes: `granule` (flattened `out_tile_col × out_image × row slab`),
-`row_in_granule`, `face_col`, `line_elem`.
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Symbols: `op_design.md` → Notation.
+Block axes (from the Blocking Model): `out_atom` (folded `out_tile_col` × `out_row`, extent `block_atoms`,
+i.e. `T = block_atoms·atom_rows` TRS), `half` (2), `face_row_elem` (16 elements = `F` bytes), `movers` (2 per core).
 
-## Inventory
+Inventory, before any sizing: three buffers per mover, each forced by a mechanism, none removable without
+changing what the op can express.
 
-Two buffers. The minimum: staging cannot be removed (a line cannot be read into its output position on
-Blackhole — DRAM reads need src ≡ dst mod 64 — so it lands at source parity and is written from there), and
-the writer needs one private region for the pre-computed write plan (stall-shadow) and, in
-`face_row_assemble` only, for the assembled lines (an element segment cannot be moved by the NoC: its
-source and destination differ mod 16). Plan and assembly share one allocation (same owner, same lifetime).
-There is no compute kernel, so no DEST, no intermediate tile CB, no scaler.
+- `cb_src_stage`: DRAM reads must land at an address ≡ source (mod 64), so a face-row cannot be read
+  straight into its output position (odd/even row parity differs); something must hold source geometry.
+- `cb_dst_image`: output runs are contiguous in output byte order, which the staging order is not; the
+  element-run regime cannot write sub-face-row pieces to DRAM at all (16-B write congruence). Dropping it
+  for `tile_face_row` only is the "store realization" perf lamp, not a default.
+- `cb_move_plan`: copies must wait for the read barrier, the walk that discovers them runs before it;
+  recording the walk (8 B per face-row) is cheaper than re-walking it.
+
+No budget predicate is introduced beyond the BB-05 cap on `block_atoms`; every golden INPUTS shape is one
+block per mover at a few KB per core.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_staged_lines` (index 0) | `staging_depth` pages × `staging_page_bytes = align_up(64 + block_granules · L_g · M · 64, 64)` | every source line of one block, at source parity: all land before the push and all are read by the writes until `noc_async_writes_flushed` → the whole page is live at once. Peak = distinct source lines of the block × ≤ 64 B (bf16 32 B line + ≤ 32 B parity pad; fp32 64 B line, parity 0) | `{granule: spans → block_granules, row_in_granule: spans → min(R_g, H_out), face_col: spans → min(2, ceil(W_out/16)), line_elem: spans → whole line inside its 64 B slot}`; `out_tile_col`, `out_image` are flattened into `granule` | raw bytes, tagged with the input dtype; never unpacked — a dataflow-only payload that never passes through DEST (audit 2) | reader | writer | one block: reserve → reads → read barrier → push → wait → writes flushed → pop | **Not shared** with `cb_writer_scratch`: concurrent lifetimes (the writer fills its plan while this page is being filled and reads both during the store) and different producers. Capacity − live set: (a) +64 B so a run can align to 64 inside a page whose base is only 16-aligned; (b) `M` is the fan-in **bound** (assemble regime), the dedupe usually stages fewer lines; (c) the second page exists only when `staging_depth = 2` (more than one block per core) — the overlap mechanism |
-| `cb_writer_scratch` (index 1) | 1 page × `writer_scratch_bytes = block_granules · L_g · (16 + A · (line_bytes + 12 · M))` | write plan (one 16 B entry per write run, ≤ one per output line) computed before the wait and read during the store; assemble regime adds copy segments (12 B each, ≤ `M` per line) and the assembly slots (`line_bytes` per output line) — all live together from `plan_block_writes` to the end of `store_output_lines` | `{granule: spans → block_granules, row_in_granule: spans → min(R_g, H_out), face_col: spans → min(2, ceil(W_out/16)), line_elem: spans → line_bytes per assembly slot (assemble only); streams → nothing (plan entries are per write run)}`; `out_tile_col`, `out_image` flattened into `granule` | raw bytes (plan words and assembled lines); no DEST involvement | writer | writer (private: `get_write_ptr` only, no reserve/push/wait/pop) | one block: plan → wait → assemble → store | Plan and assembly regions **share** this allocation (same owner, same lifetime). Cannot alias `cb_staged_lines` (concurrent, see above). Capacity − live set: write runs merge, so the plan usually holds fewer than one entry per line — the bound is kept so the capacity is closed-form |
+| `cb_src_stage_m0` | 1 page of `stage_depth · 2T·S·(F + A)` B | the block's distinct source face-rows (`≤ 2T·S`, exactly `2T` in `tile_face_row`) + per-run phase pad `< A` | `{out_atom: spans → T, half: spans → 2, face_row_elem: spans → F, movers: one per mover}`; input preimage enters through `S` | input dtype (dataflow-only payload; never through DEST; no `fp32_dest_acc_en` exists) | mover 0 (NoC reads) | mover 0 (CPU loads) | `gather_block` → end of `permute_block`, every block | cannot share with `cb_dst_image_m0`: both live during `permute_block` (read one, write the other); cannot share with `cb_move_plan_m0`: plan is written during the same walk that issues reads into staging. Capacity > live set by the phase pad (DRAM read congruence) and by the `S` bound (element-run worst case) |
+| `cb_dst_image_m0` | 1 page of `image_depth · 2T·F` B | the block's output face-rows, exactly `2T·F` (less where `trs_halves = 1`) | `{out_atom: spans → T, half: spans → 2, face_row_elem: spans → F, movers: one per mover}` | input dtype (dataflow-only) | mover 0 (CPU stores) | mover 0 (NoC writes) | `permute_block` → `writes_flushed` at the next block's `permute_block` | cannot alias staging (concurrent in `permute_block`); cannot alias the plan (tile table read by `store_block` while the image is being written out); capacity = live set |
+| `cb_move_plan_m0` | 1 page of `16·S·T + 16·T` B | copy entries (`2T` in `tile_face_row`, `≤ 2T·S` element-run) × 8 B + tile entries (`≤ T`) × 16 B | `{out_atom: spans → T, half: spans → 2 (one entry per face-row), face_row_elem: streams (one entry per piece, not per element), movers: one per mover}` | UInt32 (raw words) | mover 0 | mover 0 | `gather_block` → `store_block`, every block | cannot share with staging (written while reads land) or image (tile table consumed while the image is written out); capacity > live set only by the `S` bound in `tile_face_row` (S = 1 there, so equal) |
+| `cb_src_stage_m1` | as m0 | as m0 | as m0 | as m0 | mover 1 | mover 1 | as m0 | cannot share with any m0 buffer: the two movers run concurrently on disjoint atom ranges |
+| `cb_dst_image_m1` | as m0 | as m0 | as m0 | as m0 | mover 1 | mover 1 | as m0 | as above (concurrent with mover 0) |
+| `cb_move_plan_m1` | as m0 | as m0 | as m0 | as m0 | mover 1 | mover 1 | as m0 | as above (concurrent with mover 0) |
 
-## Symbol table
+### Symbol table
 
-| Symbol | Meaning | Bound | Predicate establishing it |
-|--------|---------|-------|---------------------------|
-| `es` | element size | 2 (bf16, Phase 0); 4 (fp32 / int32 / uint32, refinements) | dtype |
-| `line_bytes` | `16 · es` (one face row) | 32 or 64 | dtype |
-| `rows_per_word` | `max(1, 64 / line_bytes)` | 1 or 2 | dtype |
-| `R_g` | rows per granule | `rows_per_word ≤ R_g ≤ 16`, power of two | `R_g = rows_per_word`; raised to `min(16, next_pow2(ceil(16/W_out)))` only in `face_row_assemble` with `W_out < 16` |
-| `L_g` | output lines per granule, bound: `min(R_g, H_out) · min(2, ceil(W_out/16))` | ≤ 4 when `W_out ≥ 16` (then `R_g ≤ 2`); ≤ 16 when `W_out < 16` (one face col) | definition of the granule |
-| `M` | source lines per output line, bound | 1 (`face_row_direct`); 3 (`face_row_assemble`, `W_in ≥ 16`); `1 + ceil(15/W_in)` ≤ 16 (`face_row_assemble`, `W_in < 16`) | regime predicate `P_direct`; a 16-element window crosses ≤ 2 line boundaries when lines are ≥ 16 apart in one of every two gaps |
-| `A` | 1 in `face_row_assemble`, 0 in `face_row_direct` | — | `P_direct` |
-| `n1` | max granules per core | `ceil(total_granules / num_cores)` | `split_work_to_cores` |
-| `block_granules` | granules per pipeline pass | `1 ≤ block_granules ≤ n1`; `= n1` when `staging_page_bytes(n1) + writer_scratch_bytes(n1) ≤ BLOCK_L1_CAP`, else the largest value with `2 · staging_page_bytes + writer_scratch_bytes ≤ BLOCK_L1_CAP` | `BLOCK_L1_CAP` clamp; one granule needs ≤ 21 KB, so ≥ 1 always fits |
-| `staging_depth` | staging pages | 1 or 2 | 1 iff `ceil(n1 / block_granules) == 1` |
-| `BLOCK_L1_CAP` | CB bytes per core the op may use | 1 048 576 | below the 1 347 776 B model budget (BB-05); never binds on golden INPUTS (max footprint 5 KB) — it exists so that unbounded N cannot overflow L1 |
+| Symbol | Bound | Predicate establishing it |
+|--------|-------|---------------------------|
+| `e` | 2 (bf16, Phase 0); 4 (fp32 / int32 / uint32, refinements) | SUPPORTED dtype |
+| `F = 16·e` | 32 or 64 B | `e` |
+| `A` | 64 B on Blackhole (32 on Wormhole) | `ttnn.get_dram_alignment()` (HAL) |
+| `atom_rows = max(1, A/F)` | 1..2 | `A`, `F` |
+| `S` | 1 if `W_in % 16 == 0 and W_out % 16 == 0`; 3 if `W_in ≥ 16`; `ceil(15/W_in) + 1 ≤ 16` otherwise | regime predicate + `W_in` |
+| `block_atoms` | `min(max atoms over movers, floor(1347776 / (movers_per_core · atom_rows · bytes_per_trs)))` | BB-05 cap (host) |
+| `T = block_atoms · atom_rows` | as above × `atom_rows` | `block_atoms` |
+| `stage_depth`, `image_depth` | 1 (Phase 0) | host constants |
+| `movers_per_core` | 2 (Phase 0) | host constant |
 
-## Total per-core footprint
+### Footprint
 
-```
-L1_per_core = staging_depth · align_up(64 + block_granules · L_g · M · 64, 64)
-            + block_granules · L_g · (16 + A · (line_bytes + 12 · M))
-            ≤ BLOCK_L1_CAP
-```
+`bytes_per_trs = stage_depth·2·S·(F + A) + image_depth·2·F + 16·S + 16` (per mover)
 
-- Scales with `block_granules` (both terms), `L_g` (rows per granule × face columns), `M` (staging only,
-  plus the copy-segment term in the assemble regime), `staging_depth` (staging only).
-- Nothing scales with N, `W`, `H` or a tile count directly: N reaches L1 only through `block_granules ≤ n1`,
-  and the `BLOCK_L1_CAP` clamp bounds that — a larger tensor adds blocks per core, never bytes per block.
+`L1 per core = movers_per_core · T · bytes_per_trs`
 
-Per golden shape (block = whole assignment, `staging_depth = 1`; 110-core grid):
+| Term | Scales with |
+|------|-------------|
+| staging `2T·S·(F+A)` | `block_atoms`, `S` (regime / `W_in`), `stage_depth` |
+| image `2T·F` | `block_atoms`, dtype, `image_depth` |
+| plan `16·S·T + 16·T` | `block_atoms`, `S` |
+| `× movers_per_core` | mover knob |
 
-| Shape | Regime | `R_g` | `n1` | `L_g` | `M` | staging B | scratch B | total B |
-|-------|--------|-------|------|-------|-----|-----------|-----------|---------|
-| `(1,16,6,256)→(1,1,16,1536)` | direct | 2 | 4 | 4 | 1 | 1088 | 256 | 1344 |
-| `(16,1,64)→(1,1,16,64)` | direct | 2 | 1 | 4 | 1 | 320 | 64 | 384 |
-| `(16,1,1536)→(1,1,16,1536)` | direct | 2 | 4 | 4 | 1 | 1088 | 256 | 1344 |
-| `(1,1,16,4608)→(16,1,4608)` | direct | 2 | 21 | 2 | 1 | 2752 | 672 | 3424 |
-| `(1,16,64)→(16,1,64)` | direct | 2 | 1 | 2 | 1 | 192 | 32 | 224 |
-| `(16,1,5120)→(1,1,16,5120)` | direct | 2 | 12 | 4 | 1 | 3136 | 768 | 3904 |
-| `(2,1,5120)→(1,1,2,5120)` | direct | 2 | 2 | 4 | 1 | 576 | 128 | 704 |
-| `(1,8,6,256)→(1,1,8,1536)` | direct | 2 | 2 | 4 | 1 | 576 | 128 | 704 |
-| `(8,1,64)→(1,1,8,64)` | direct | 2 | 1 | 4 | 1 | 320 | 64 | 384 |
-| `(8,1,1536)→(1,1,8,1536)` | direct | 2 | 2 | 4 | 1 | 576 | 128 | 704 |
-| `(1,1,8,4608)→(8,1,4608)` | direct | 2 | 11 | 2 | 1 | 1472 | 352 | 1824 |
-| `(1,8,64)→(8,1,64)` | direct | 2 | 1 | 2 | 1 | 192 | 32 | 224 |
-| `(8,1,5120)→(1,1,8,5120)` | direct | 2 | 6 | 4 | 1 | 1600 | 384 | 1984 |
-| `(1,1,6,256)→(1,1,1536)` | direct | 2 | 1 | 2 | 1 | 192 | 32 | 224 |
-| `(1,185)→(1,1,185,1)` bf16 (regime pin) | assemble | 16 | 1 | 16 | 3 | 3136 | 1344 | 4480 |
-| `(1,512)→(1,1,512,1)` bf16 (regime pin) | assemble | 16 | 1 | 16 | 3 | 3136 | 1344 | 4480 |
-| FLUX fp32 `(1,W)→(1,1,W,1)` (refinement) | assemble | 16 | 1 | 16 | 3 | 3136 | 1856 | 4992 |
+Worked values: `tile_face_row` bf16 on Blackhole (`S=1, F=32, A=64`): `bytes_per_trs = 192 + 64 + 32 = 288` → `576·T` B per core; the cap allows `T ≤ 2339`. Element-run fp32 with `W_in < 16` (`S=16, F=64`): `bytes_per_trs = 4096 + 128 + 272 = 4496` → cap `T ≤ 149`. Production bf16 maximum: the largest `G` is 2304 atoms (`(1,1,16,4608)→(16,1,4608)`), so `T ≤ 2·ceil(ceil(2304/P)/2)`; at `P ≥ 64` that is `T ≤ 36` → ≤ 21 KB per core, two orders of magnitude under 1347776.
 
 ## Data-movement budget
 
-Chosen split: output-keyed granules, column-major `u = (tc·B_out + b)·S + s`, contiguous per core.
-
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| input | 1 (`face_row_direct`: each logical input line is read once, by the core that owns the output line it becomes); `face_row_assemble`: ≤ 2 for an input line whose output lines straddle a core boundary, exactly 1 on the FLUX geometries (`R_g = 16` keeps each input line on one core) | ownership by output granules over a bijection; read runs contain only needed lines; input padding is never read as a source | 0 |
-| output | 1 (each valid output line written once; output tile padding rows never written) | single owner per line (single-writer 64 B words) | 0 |
+| input | 1 (`tile_face_row`); ≤ 2 for face-rows straddling two output face-rows in different half-passes or blocks (`tile_element_run`) | output-stationary gather: each logical input face-row is the preimage of exactly one output face-row when both W are multiples of 16; consecutive reuse (`last fetched face-row`) removes repeats inside one half-pass; tile padding rows are never addressed | 0 |
+| output | 1 | each output atom is owned by exactly one mover and written once from its image; padding rows never written | 0 |
 
-Per golden shape (bf16 = 2 B; DRAM read and write bytes are equal because every production width is a
-multiple of 16; transactions from a host model of the walk on the 110-core grid):
+Totals per tier (`tile_face_row`): DRAM read `N·e`, DRAM write `N·e`, cross-core NoC 0, core-local L1:
+`N·e` landed by the NoC, `N·e` CPU-copied staging → image, `N·e` sent by the NoC. `tile_element_run`
+adds at most the padding columns of each row's last face-row on both sides plus ≤ 1× of the straddling
+input face-rows. Transaction count, not bytes, is the binding cost at production sizes: one read per
+coalesced input face-column run, one write per merged output face run.
 
-| Shape | Regime | Cores | Lines | DRAM read B | DRAM write B | Read runs | Write runs | Max transactions / core |
-|-------|--------|-------|-------|-------------|--------------|-----------|------------|-------------------------|
-| `(1,16,6,256)→(1,1,16,1536)` | direct | 110 | 1536 | 49 152 | 49 152 | 1536 | 1536 | 32 |
-| `(16,1,64)→(1,1,16,64)` | direct | 16 | 64 | 2 048 | 2 048 | 64 | 64 | 8 |
-| `(16,1,1536)→(1,1,16,1536)` | direct | 110 | 1536 | 49 152 | 49 152 | 1536 | 1536 | 32 |
-| `(1,1,16,4608)→(16,1,4608)` | direct | 110 | 4608 | 147 456 | 147 456 | 492 | 4608 | 48 |
-| `(1,16,64)→(16,1,64)` | direct | 32 | 64 | 2 048 | 2 048 | 64 | 64 | 4 |
-| `(16,1,5120)→(1,1,16,5120)` | direct | 110 | 5120 | 163 840 | 163 840 | 5120 | 5120 | 96 |
-| `(2,1,5120)→(1,1,2,5120)` | direct | 110 | 640 | 20 480 | 20 480 | 640 | 640 | 16 |
-| `(1,8,6,256)→(1,1,8,1536)` | direct | 110 | 768 | 24 576 | 24 576 | 768 | 768 | 16 |
-| `(8,1,64)→(1,1,8,64)` | direct | 8 | 32 | 1 024 | 1 024 | 32 | 32 | 8 |
-| `(8,1,1536)→(1,1,8,1536)` | direct | 110 | 768 | 24 576 | 24 576 | 768 | 768 | 16 |
-| `(1,1,8,4608)→(8,1,4608)` | direct | 110 | 2304 | 73 728 | 73 728 | 466 | 2304 | 28 |
-| `(1,8,64)→(8,1,64)` | direct | 16 | 32 | 1 024 | 1 024 | 32 | 32 | 4 |
-| `(8,1,5120)→(1,1,8,5120)` | direct | 110 | 2560 | 81 920 | 81 920 | 2560 | 2560 | 48 |
-| `(1,1,6,256)→(1,1,1536)` | direct | 48 | 96 | 3 072 | 3 072 | 96 | 96 | 4 |
-| `(1,185)→(1,1,185,1)` bf16 pin | assemble | 12 | 185 | 384 | 5 920 | 12 | 12 | 2 |
-| `(1,512)→(1,1,512,1)` bf16 pin | assemble | 32 | 512 | 1 024 | 16 384 | 32 | 32 | 2 |
-
-The assemble pins write more bytes than values (one valid element per 32 B output line, `W_out = 1`):
-the line is the write quantum, and those lines merge into one write per face (512 B), which is fewer
-transactions than one 2 B write per element.
-
-**Totals per tier (chosen split):** DRAM = N·es read + N·es written on every production shape (the
-minimum); cross-core NoC = 0; core-local = 0 in `face_row_direct`, N·es through RISC-V loads/stores in
-`face_row_assemble`.
-
-> Cheapest-traffic split considered: output-keyed granules in column-major order — DRAM bytes at the
-> line-granular minimum (N·es each way), zero cross-core bytes, and the fewest read transactions of the
-> equal-byte candidates (row-major order: 4608 vs 492 reads on `(1,1,16,4608)→(16,1,4608)`).
-> Implemented: the same split. It is the cheapest; the regimes that would cut transactions further at the
-> same bytes are the deferred `tile_page_copy` (identity tilings; no golden shape) and `rm_bank_run`
-> (ROW_MAJOR refinement), both reachable on this walk/placer/writer structure.
+> Cheapest-traffic split considered: output atoms, column-major fold (tile column outer, logical row
+> inner) — 0 B delta on every tier versus any other non-rejected split, and the fewest transactions.
+> Implemented: the same split. It is the cheapest; no split is deferred for traffic reasons.
