@@ -46,6 +46,7 @@ from models.demos.deepseek_v3_d_p.tt.moe_block.flat_gather import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import MoEBlock, MoEBlockWeights, sp_tp, to_mesh_order
 from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+from models.demos.deepseek_v3_d_p.tt.kimi_k3 import weight_override
 from models.demos.deepseek_v3_d_p.tt.moe_impl import model_adapter, moe_block_dims, moe_block_words_slab
 
 moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
@@ -372,7 +373,9 @@ class TtMoEBlockFfn:
         flat = self._routed_layout(block)
         routed = tuple(
             (k, tuple(v) if isinstance(v, (list, tuple)) else v) for k in self._ROUTED_PACKING for v in [flat.get(k)]
-        ) + (("bf8", accuracy.routed_bf8(self.layer_idx)),)  # (the weights' dtype is part of their layout)
+        ) + (
+            ("bf8", accuracy.routed_bf8(self.layer_idx)),
+        )  # (the weights' dtype is part of their layout)
         return head, routed
 
     def _acc_key(self) -> tuple:
@@ -415,6 +418,12 @@ class TtMoEBlockFfn:
             )
             for n in ("w_gu", "w_d")
         }
+        if (
+            sources is None
+            and weight_override.active() is not None
+            and weight_override.active().has_experts(self.layer_idx)
+        ):  # (K3_WEIGHT_OVERRIDE_DIR: the layer's GPTQ carriers, at the dtype the knobs give the layer)
+            sources = self._override_sources
         if sources is None and bf8:  # (K3_ACC_ROUTED_BF8: from the bf16 checkpoint, not the bfp4 TtMoe cache)
             sources = self._checkpoint_bf8_sources
         if sources is not None:
@@ -496,11 +505,19 @@ class TtMoEBlockFfn:
                 del x
         return srcs
 
-    def _checkpoint_bf8_sources(self, experts):
+    def _override_sources(self, experts):
+        """K3_WEIGHT_OVERRIDE_DIR (tt/kimi_k3/weight_override.py): _checkpoint_bf8_sources' layout with the override's
+        carriers (bf4 grid) in place of the checkpoint's experts, bfp4 as production packs them, or bfp8 where
+        K3_ACC_ROUTED_BF8 covers the layer (the same values: a bf4-grid block is exact in bf8)."""
+        dtype = ttnn.bfloat8_b if accuracy.routed_bf8(self.layer_idx) else ttnn.bfloat4_b
+        return self._checkpoint_bf8_sources(experts, dtype=dtype)
+
+    def _checkpoint_bf8_sources(self, experts, dtype=None):
         """K3_ACC_ROUTED_BF8 (tt/kimi_k3/accuracy.py): the routed experts as bfp8 flat_gather sources (device_sources'
         layout) read from the bf16-dequantized checkpoint (adapter.moe_block_checkpoint). Block expert b on block chip
         b // epc is checkpoint expert block_order_perm[b] - the same placement as TtMoe's cache, so the gate rows
-        host_weights permutes still address them."""
+        host_weights permutes still address them. `dtype` (default bfp8) and, under K3_WEIGHT_OVERRIDE_DIR, an
+        overridden expert's carrier in place of the checkpoint's (_override_sources)."""
         import json
 
         from safetensors import safe_open
@@ -517,6 +534,9 @@ class TtMoEBlockFfn:
 
         def get(e, w):
             key = f"{root}layers.{self.layer_idx}.block_sparse_moe.experts.{int(e)}.{w}.weight"
+            override = weight_override.lookup(key)
+            if override is not None:
+                return override
             name = wm[key]
             if name not in handles:
                 handles[name] = safe_open(str(ckpt / name), framework="pt", device="cpu")
@@ -530,7 +550,7 @@ class TtMoEBlockFfn:
                 srcs.append(
                     ttnn.from_torch(
                         x,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=dtype or ttnn.bfloat8_b,
                         layout=ttnn.TILE_LAYOUT,
                         device=self.mesh,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -562,6 +582,12 @@ class TtMoEBlockFfn:
     def _weights(self, block):
         """This layer's MoEBlockWeights for the block: each part laid out for the block's plans (_packing) - made for
         the first block that needs that layout, reused by every block with the same one."""
+        with weight_override.building(
+            self.layer_idx
+        ):  # (K3_WEIGHT_OVERRIDE_VERIFY: check the conversions; else nothing)
+            return self._weights_for(block)
+
+    def _weights_for(self, block):
         seen = self._by_block.get(id(block))
         if seen is not None and seen[0] is block:  # (held: its id is not reused while the entry lives)
             return seen[1]
@@ -602,6 +628,16 @@ class TtMoEBlockFfn:
             if pool is not None:
                 pool.shutdown()
             host = lambda k: ttnn.from_torch(w[k], dtype=ttnn.float32)  # noqa: E731
+            ov = weight_override.active()
+            if ov is not None and ov.verify and weight_override.has_layer(self.layer_idx):
+                # (the head / tail ops pack these fp32 inputs themselves, block max + RNE along HF-out, as ttnn's packer:
+                # check that packing them is the identity, the tail's input being latent up with its norm folded)
+                packed = ttnn.bfloat16 if accuracy.bf16_weights() else ttnn.bfloat8_b
+                for k in ("gate", "up", "down", "latent_down"):
+                    if k in w:
+                        ov.check(f"moe head {k}", w[k].T, packed)
+                if "latent_up" in w:
+                    ov.check("moe tail latent_up x norm", (w["latent_up"] * w["latent_norm"][None, :]).T, packed)
             if head is None:
                 head = ttnn.experimental.moe_block.prepare_moe_head_weights(
                     host("gate"),

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 from pathlib import Path
 
 from loguru import logger
@@ -37,6 +38,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             raise ValueError(f"Kimi-K3 has no MTP predictor; got mtp_levels={self.config.mtp_levels}")
         if not state_dict:
             state_dict = self._accuracy_state_dict()
+        state_dict = self._override_state_dict(state_dict)
         super()._build_model(state_dict)
         from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
 
@@ -44,6 +46,28 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         from models.demos.deepseek_v3_d_p.tt.kimi_k3 import logits
 
         logits.start(self)  # (K3_LOGITS_DIR set, last rank: every position's logits; else nothing)
+
+    def _override_state_dict(self, state_dict: dict) -> dict:
+        """K3_WEIGHT_OVERRIDE_DIR (tt/kimi_k3/weight_override.py): every overridden layer of this stage gets its whole
+        state dict from the dequantized checkpoint, the GPTQ carriers substituted at the read; TtKimiK3Transformer then
+        builds it without the weight cache. `state_dict` unchanged otherwise (production)."""
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import weight_override
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import load_layer_state_dict
+        from models.demos.deepseek_v3_d_p.tt.moe_impl import model_adapter
+
+        ov = weight_override.active()
+        first, n = self.config.first_layer_idx, self.config.num_layers
+        mine = [i for i in range(first, first + n) if ov is not None and i in ov.layers]
+        if not mine:
+            return state_dict
+        assert os.environ.get("MOE_IMPL", "block") != "ttmoe", "K3_WEIGHT_OVERRIDE_DIR: MoE block path only"
+        model_cfg = self.config.model_cfg
+        checkpoint = model_adapter(model_cfg).moe_block_checkpoint()
+        layers = list(state_dict.get("layers") or [{} for _ in range(n)])
+        for i in mine:
+            layers[i - first] = load_layer_state_dict(checkpoint, i, model_cfg=model_cfg)
+        logger.warning(f"K3_WEIGHT_OVERRIDE: layers {mine} built from {checkpoint} with the override's tensors")
+        return {**state_dict, "layers": layers}
 
     def _accuracy_state_dict(self) -> dict:
         """K3_ACC_BF16_WEIGHTS (tt/kimi_k3/accuracy.py): a cache built without the knob holds no bf16 attention
@@ -70,6 +94,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             return {}
         checkpoint = model_adapter(model_cfg).moe_block_checkpoint()
         logger.warning(f"K3_ACC_BF16_WEIGHTS: layers {stale} read their attention weights from {checkpoint}")
+
         def layer(i):  # (a dense layer's MLP is bf16-origin too)
             state = load_attention_weights(checkpoint, i, model_cfg=model_cfg)
             if i < model_cfg.NUM_DENSE_LAYERS:

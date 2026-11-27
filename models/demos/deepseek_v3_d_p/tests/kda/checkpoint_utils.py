@@ -107,6 +107,8 @@ def load_kda_layer_state_dict(
     checkpoint_dir: Path, layer_idx: int, config: KDAConfig, model_root: str | None = None
 ) -> dict[str, torch.Tensor]:
     """Load and canonicalize one KDA layer from complete indexed safetensor shards."""
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3 import weight_override
+
     checkpoint_dir = Path(checkpoint_dir)
     model_root = model_root or resolve_model_root(checkpoint_dir)
     shards = resolve_kda_layer_shards(checkpoint_dir, layer_idx, config, model_root)
@@ -119,7 +121,9 @@ def load_kda_layer_state_dict(
             for name in required:
                 full_name = f"{prefix}{name}"
                 if full_name in shard_keys:
-                    state_dict[name] = shard_file.get_tensor(full_name)
+                    # (K3_WEIGHT_OVERRIDE_DIR: an overridden layer's GPTQ carrier instead; None in production)
+                    override = weight_override.lookup(full_name)
+                    state_dict[name] = override if override is not None else shard_file.get_tensor(full_name)
 
     missing = [name for name in required if name not in state_dict]
     if missing:

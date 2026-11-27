@@ -142,11 +142,15 @@ def load_tensors(checkpoint_dir: Path, names: dict[str, str]) -> dict[str, torch
     for alias, key in names.items():
         by_shard.setdefault(weight_map[key], []).append((alias, key))
 
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3 import weight_override
+
     tensors: dict[str, torch.Tensor] = {}
     for shard, entries in by_shard.items():
         with safe_open(checkpoint_dir / shard, framework="pt", device="cpu") as handle:
             for alias, key in entries:
-                tensors[alias] = handle.get_tensor(key)
+                # (K3_WEIGHT_OVERRIDE_DIR: an overridden layer's GPTQ carrier instead; None in production)
+                override = weight_override.lookup(key)
+                tensors[alias] = override if override is not None else handle.get_tensor(key)
     return tensors
 
 
@@ -296,7 +300,9 @@ def _attention_cache_globs(layer_idx: int, model_cfg: type) -> tuple[str, ...]:
             if accuracy.bf16_weights() and layer_idx < model_cfg.NUM_DENSE_LAYERS
             else ()
         )
-        return dense + kda_current_cache_globs(f"layer_{layer_idx}.kda", kimi_k3_kda_config(), kimi_k3_projection_dtype())
+        return dense + kda_current_cache_globs(
+            f"layer_{layer_idx}.kda", kimi_k3_kda_config(), kimi_k3_projection_dtype()
+        )
     mla = (
         tuple(f"layer_{layer_idx}.mla.{name}_dtype_BFLOAT16_layout_TILE.tensorbin" for name in _MLA_BF16_ORIGIN)
         if accuracy.bf16_weights()

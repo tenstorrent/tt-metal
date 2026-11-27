@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWa
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, build_attention, build_kda_scalars
+from models.demos.deepseek_v3_d_p.tt.kimi_k3 import weight_override
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
@@ -251,6 +252,11 @@ class TtKimiK3Transformer(LightweightModule):
             layer_idx = first_layer_idx + local_idx
             is_last = local_idx == num_layers - 1
             layer_state = state_dict["layers"][local_idx] if state_dict.get("layers") else {}
+            # K3_WEIGHT_OVERRIDE_DIR (tt/kimi_k3/weight_override.py; production: never): an overridden layer is built
+            # from its state dict alone, the TTNN weight cache neither read nor written, and with
+            # K3_WEIGHT_OVERRIDE_VERIFY its bf4/bf8 conversions are checked while it is built.
+            layer_cache = None if weight_override.has_layer(layer_idx) else weight_cache_path
+            verifying = weight_override.building(layer_idx).__enter__()
             attention = build_attention(
                 mesh_device,
                 config,
@@ -263,7 +269,7 @@ class TtKimiK3Transformer(LightweightModule):
                 tp_axis=tp_axis,
                 num_links=num_links,
                 topology=topology,
-                weight_cache_path=weight_cache_path,
+                weight_cache_path=layer_cache,
                 max_seq_len=max_seq_len,
                 is_chunked=is_chunked,
                 slot_num=slot_num,
@@ -289,7 +295,7 @@ class TtKimiK3Transformer(LightweightModule):
                     tp_axis=tp_axis,
                     is_balanced=is_balanced,
                     gate_fallback_mode=gate_fallback_mode,
-                    weight_cache_path=weight_cache_path,
+                    weight_cache_path=layer_cache,
                     kv_only=kv_only_last_layer and is_last,
                     forward_chunks=forward_chunks,
                     moe_impl=moe_impl,
@@ -310,7 +316,8 @@ class TtKimiK3Transformer(LightweightModule):
             #   * no real weights for this layer -- the build read whatever the cache already held.
             #     If the cache was complete its marker is already on disk and nothing is lost; if it
             #     was not, the layer is placeholders and marking it would make them permanent.
-            if layer_state and not (kv_only_last_layer and is_last):
+            verifying.__exit__(None, None, None)
+            if layer_state and layer_cache is not None and not (kv_only_last_layer and is_last):
                 mark_layer_cached(weight_cache_path, layer_idx)
 
         # The MoE layers' implementation (tt/moe_impl.py; one for the whole model): the MoE block takes a packed forward's
