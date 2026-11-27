@@ -326,6 +326,7 @@ void kernel_main() {
     const uint32_t a_lo = bitmap_off, a_hi = bitmap_off + owned_words;
     const uint32_t g_lo = a_lo / kGW, g_hi = (a_hi + kGW - 1) / kGW;
     uint32_t g_hot = g_hi;
+    bool hot_straddles = false;  // the split's group also holds prefix words (the split is not group-aligned)
     // The part this call sends (KVD_PART: 0 ALL, 1 PREFIX = blocks before the split block, 2 REST = the others). Every
     // chip plans the same chunk, so the split block is the same for every requester; without one, every row is in the
     // prefix (as sparse_kv_push).
@@ -341,6 +342,7 @@ void kernel_main() {
             const uint32_t lb_hot = sb > me ? (sb - me + N - 1) / N : 0;
             const uint32_t a_hot = a_lo + lb_hot * words_per_block;
             g_hot = a_hot / kGW < g_lo ? g_lo : (a_hot / kGW > g_hi ? g_hi : a_hot / kGW);
+            hot_straddles = a_hot % kGW != 0 && a_hot / kGW >= g_lo && a_hot / kGW < g_hi;
         }
     }
     // Cold groups split only while there are few of them (small KV): up to 4 ways, at most ~2 units a planner
@@ -355,10 +357,24 @@ void kernel_main() {
         cold_split = hot_split = 1;
     }
     const uint32_t n_cold = (g_hot - g_lo) * cold_split;
-    const uint32_t n_units = n_cold + (g_hi - g_hot) * hot_split;
-    // unit v -> its group and the rows of each of its words it routes
-    auto unit_group = [&](uint32_t v) { return v < n_cold ? g_lo + v / cold_split : g_hot + (v - n_cold) / hot_split; };
-    auto unit_rows = [&](uint32_t v) -> uint32_t {
+    const uint32_t n_all = n_cold + (g_hi - g_hot) * hot_split;
+    // Only the units that can hold this part's rows are dealt (route_word still filters word by word): REST the
+    // groups from the split's on, PREFIX those before it plus the split's group when it straddles the split. A REST
+    // after a pre-send (the current chunk's rows) then reads and walks a few groups, not the whole cache.
+#if KVD_PART == 2
+    const uint32_t v_first = n_cold, n_units = n_all - n_cold;
+#elif KVD_PART == 1
+    const uint32_t v_first = 0, n_units = n_cold + (hot_straddles ? hot_split : 0);
+#else
+    const uint32_t v_first = 0, n_units = n_all;
+#endif
+    // unit v (of this part) -> its group and the rows of each of its words it routes
+    auto unit_group = [&](uint32_t v0) {
+        const uint32_t v = v0 + v_first;
+        return v < n_cold ? g_lo + v / cold_split : g_hot + (v - n_cold) / hot_split;
+    };
+    auto unit_rows = [&](uint32_t v0) -> uint32_t {
+        const uint32_t v = v0 + v_first;
         const uint32_t s = v < n_cold ? cold_split : hot_split;
         const uint32_t part = v < n_cold ? v % cold_split : (v - n_cold) % hot_split;
         const uint32_t n = 32 / s;
