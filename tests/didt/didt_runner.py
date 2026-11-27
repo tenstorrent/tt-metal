@@ -97,6 +97,9 @@ def main(argv: list[str]) -> int:
     if unknown:
         print(f"unknown step keys: {', '.join(unknown)}; see --list", file=sys.stderr)
         return 2
+    if not [s for s in cfg.steps if (only is None or s.key in only) and s.key not in skip]:
+        print("no steps selected: --only/--skip leave nothing to run", file=sys.stderr)
+        return 2
 
     chips = snapshot()
     if not chips:
