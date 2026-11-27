@@ -459,6 +459,18 @@ def _verify_shard_pair(resident, fresh, stats: dict) -> tuple[bool, bool]:
         a = b = resident = fresh = None
 
 
+def _stored_once(tensor) -> bool:
+    """Whether every shard of `tensor` replicates one copy: ttnn dumps a replica group once, after checking
+    each replica holds the same values, unless ttnn.CONFIG.verify_replicated_shards_on_dump is off."""
+    if not getattr(ttnn.CONFIG, "verify_replicated_shards_on_dump", False):
+        return False
+    try:
+        placements = tensor.tensor_topology().placements()
+    except (AttributeError, RuntimeError):
+        return False
+    return bool(placements) and all(isinstance(p, ttnn.PlacementReplicate) for p in placements)
+
+
 def verify_saved_model(
     tt_model: Module, cache_dir: str | Path, /, *, prefix: str = "", stats: dict | None = None
 ) -> bool:
@@ -512,9 +524,12 @@ def verify_saved_model(
                     if len(resident) != len(fresh):
                         parameter_ok = False
                         logger.error(f"cache mismatch in '{path.name}': shard count {len(resident)} vs {len(fresh)}")
-                    # Do not deduplicate replicated storage: its ordered logical coordinates
-                    # are part of the comparison. Only native shard handles are retained here.
-                    for i, (a, b) in enumerate(zip(resident, fresh)):
+                    # A replica group is stored once, and the dump already compared every resident
+                    # replica with it, so one pair checks the file; anything else is compared shard by shard.
+                    pairs = zip(resident, fresh)
+                    if _stored_once(reloaded):
+                        pairs = zip(resident[:1], fresh[:1])
+                    for i, (a, b) in enumerate(pairs):
                         equal, finite = _verify_shard_pair(a, b, counters)
                         counters["shards_completed"] += 1
                         if not equal or not finite:
@@ -638,6 +653,17 @@ def _scan_signature(cache_dir: Path) -> str:
     return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
 
 
+def _stamp_clean_scan(cache_dir: Path, stamp: str | None = None) -> None:
+    """Record that `cache_dir`'s tensorbins hold no NaN or inf, so `_set_aside_if_nonfinite` skips them."""
+    try:
+        stamp = stamp or _scan_signature(cache_dir)
+        tmp = cache_dir / f"{SCAN_OK_FILE}.{os.getpid()}"
+        tmp.write_text(stamp)
+        tmp.replace(cache_dir / SCAN_OK_FILE)
+    except OSError as err:
+        logger.debug(f"cannot stamp the clean scan of '{cache_dir}' ({err}); the next load scans it again")
+
+
 def _set_aside_if_nonfinite(tt_model: Module, cache_dir: Path) -> bool:
     """Whether a cache hit holds NaN or inf; if so it is moved aside, so `load_model` rebuilds it.
 
@@ -663,12 +689,7 @@ def _set_aside_if_nonfinite(tt_model: Module, cache_dir: Path) -> bool:
     bad = nonfinite_tensorbins(tt_model, cache_dir)
     logger.info(f"scanned cache at '{cache_dir}' ({size / 2**30:.2f} GiB) for NaN/inf in {time.time() - t0:.1f}s")
     if not bad:
-        try:
-            tmp = cache_dir / f"{SCAN_OK_FILE}.{os.getpid()}"
-            tmp.write_text(stamp)
-            tmp.replace(cache_dir / SCAN_OK_FILE)
-        except OSError as err:
-            logger.debug(f"cannot stamp the clean scan of '{cache_dir}' ({err}); the next load scans it again")
+        _stamp_clean_scan(cache_dir, stamp)
         return False
     aside = cache_dir.with_name(f"{cache_dir.name}.bad-nonfinite-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
     logger.warning(
@@ -958,9 +979,12 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
         # Without this a handful of flipped bytes on the way to disk is reused on every later run,
         # and nothing downstream can tell a damaged weight from a real one. Off by default because
         # it re-reads the whole cache once at creation.
-        if _verify_env_enabled() and not verify_saved_model(tt_model, staging):
-            logger.error(f"cache for {cache_dir} did not verify; not publishing it, so it is rebuilt next time.")
-            return
+        if _verify_env_enabled():
+            if not verify_saved_model(tt_model, staging):
+                logger.error(f"cache for {cache_dir} did not verify; not publishing it, so it is rebuilt next time.")
+                return
+            # The verify found every stored value finite, so the first cache hit need not scan it again.
+            _stamp_clean_scan(staging)
 
         manifest = {"format": CACHE_FORMAT}
         if key is not None:

@@ -122,9 +122,47 @@ def test_device_target_and_independent_readbacks_are_preserved(fake, tmp_path):
     assert len(decoded) == 2 and decoded[0] is a[0] and decoded[1] is b[0]
 
 
-def test_replication_visits_every_logical_coordinate(fake, tmp_path):
+class Labelled(list):
+    """Shards plus the topology label a loaded tensorbin carries."""
+
+    def __init__(self, shards, *placements):
+        super().__init__(shards)
+        self.placements = placements
+
+    def tensor_topology(self):
+        return SimpleNamespace(placements=lambda: list(self.placements))
+
+
+def test_unlabelled_shards_visit_every_logical_coordinate(fake, tmp_path):
     a, b = torch.ones(2, 3), torch.ones(2, 3)
     assert cache.verify_saved_model(fake.model([a] * 8, [b] * 8), tmp_path)
+    assert sum(kind == "decode" for kind, _ in fake.events) == 16
+
+
+def test_a_replica_group_stored_once_is_checked_once(fake, tmp_path):
+    replicate = cache.ttnn.PlacementReplicate()
+    fresh = Labelled([torch.ones(2, 3)] * 8, replicate, replicate)
+    assert cache.verify_saved_model(fake.model([torch.ones(2, 3)] * 8, fresh), tmp_path)
+    assert sum(kind == "decode" for kind, _ in fake.events) == 2
+
+    for bad in (torch.zeros(2, 3), torch.full((2, 3), float("nan"))):
+        fake.events.clear()
+        fresh = Labelled([bad] * 8, replicate, replicate)
+        resident = [bad.clone() if bad.isnan().any() else torch.ones(2, 3)] * 8
+        assert not cache.verify_saved_model(fake.model(resident, fresh), tmp_path)
+    fresh = Labelled([torch.ones(2, 3)] * 8, replicate)
+    assert not cache.verify_saved_model(fake.model([torch.ones(2, 3)] * 7, fresh), tmp_path)
+
+
+@pytest.mark.parametrize("case", ["sharded", "dump_check_off"])
+def test_a_label_the_dump_did_not_check_is_compared_shard_by_shard(fake, tmp_path, monkeypatch, case):
+    placements = [cache.ttnn.PlacementReplicate(), cache.ttnn.PlacementReplicate()]
+    if case == "sharded":
+        placements[1] = cache.ttnn.PlacementShard(0)
+    else:
+        monkeypatch.setattr(cache.ttnn, "CONFIG", SimpleNamespace(verify_replicated_shards_on_dump=False))
+    fresh = Labelled([torch.ones(2, 3)] * 8, *placements)
+    assert cache.verify_saved_model(fake.model([torch.ones(2, 3)] * 8, fresh), tmp_path)
     assert sum(kind == "decode" for kind, _ in fake.events) == 16
 
 
@@ -217,6 +255,31 @@ def test_failed_publication_keeps_unrelated_leaf_and_cleans_staging(fake, tmp_pa
     assert sentinel.read_bytes() == b"unrelated model stays intact"
     assert not (tmp_path / "candidate").exists()
     assert not list(tmp_path.glob(".candidate.staging-*"))
+
+
+def test_a_verified_publication_is_stamped_so_its_first_hit_is_not_scanned(fake, tmp_path, monkeypatch):
+    model = fake.model([torch.ones(2, 3)])
+    model.save = lambda directory: (directory / "weight.tensorbin").write_bytes(b"owned fixture")
+    monkeypatch.setenv("TT_DIT_CACHE_VERIFY", "1")
+    leaf = tmp_path / "leaf"
+    cache._publish_cache(model, leaf, None)
+    assert (leaf / cache.SCAN_OK_FILE).read_text() == cache._scan_signature(leaf)
+
+    scans = []
+    monkeypatch.setattr(cache, "nonfinite_tensorbins", lambda m, d: scans.append(d) or [])
+    monkeypatch.setattr(cache, "_scanned_cache_dirs", set())
+    monkeypatch.setattr(cache, "_distributed_world_size", lambda: 1)
+    assert not cache._set_aside_if_nonfinite(model, leaf)
+    assert not scans
+
+
+def test_an_unverified_publication_is_not_stamped(fake, tmp_path, monkeypatch):
+    model = fake.model([torch.ones(2, 3)])
+    model.save = lambda directory: (directory / "weight.tensorbin").write_bytes(b"owned fixture")
+    monkeypatch.setenv("TT_DIT_CACHE_VERIFY", "0")
+    cache._publish_cache(model, tmp_path / "leaf", None)
+    assert (tmp_path / "leaf" / "weight.tensorbin").is_file()
+    assert not (tmp_path / "leaf" / cache.SCAN_OK_FILE).exists()
 
 
 @pytest.mark.parametrize("error_type", [OSError, ValueError, TypeError])
