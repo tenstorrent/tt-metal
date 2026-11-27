@@ -7,4 +7,5 @@
 - `scripts/lb-guard.sh`: keeps the LoudBox reservation from idling (runs the op's unit tests after 45 idle minutes).
 - `results/results.<job>.jsonl`: Galaxy runs. 239295: native op, one program per chip, per-call scratch, plus the
   generic op. 240094: persistent scratch on/off. 240679: one merged program for the mesh (4539a4d5d91).
+- 241342: q-stem single call (00d16c233e2), MLA_A2AMM_QSTEM=1 then 0 (same session; the layer rows come in that order).
 - `results/loudbox.results.jsonl`: LoudBox 1x4 runs.
