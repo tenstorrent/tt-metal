@@ -15,6 +15,7 @@ decides what each tier asks of each phase. The phase modules:
     eth_summary.py                       the flash tier's end-of-run ETH link summary
     qsfp.py, qsfp_ingest.py           7  QSFP tests (ETH dump collection and its conversion to checks)
     sys_triage.py                     8  syseng sys-triage bundle
+    erisc_debug.py                    9  ERISC debug dump (ETH FW state on every ETH core)
 
 and what they share: model.py (Check, Phase), common.py (subprocess, console and
 path helpers), galaxy.py (BH Galaxy topology), external.py (ingesting checks

@@ -28,6 +28,7 @@
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #                   + sys-triage bundle, if the host has the package and BMC credentials
 #   post_bmc_reboot the same as pre_bmc_reboot for now, run after the BMC reboot
+# Every tier ends with the ERISC debug dump, whatever the steps before it found.
 # The old names (light, medium, deploy, pre_reboot) still work; see DEPRECATED_TIER_ALIASES.
 #
 # Designed to match tt-metal's run_upstream_tests_vanilla.sh shape.
@@ -74,6 +75,13 @@ step of flash, full, pre_bmc_reboot and post_bmc_reboot only. It runs when \`sys
 PATH (same .deb) and the BMC credentials are set; otherwise the phase reports SKIP with
 the reason. It never gates the run.
 
+Every tier ends with the ERISC debug dump, whatever the steps before it found: each ETH
+core read with tt-exalens (FW sections against the release ELF, the ERISC0 top frame, the
+boot postcodes) into <output dir>/logs/erisc_debug.txt, under the same python as the ETH
+status read. It decodes through eth_init-vX.Y.Z.elf for the ETH FW each chip runs, from
+--erisc-elf-dir; a chip whose ELF is not there is not inspected, and the phase names the
+ELF it needs. It never gates the run.
+
 Forwarded options (see diag_runner.py --help for details):
   --dry-run              Print intended subprocess calls without executing destructive steps
   --input-snapshot PATH  Use pre-captured tt-smi snapshot JSON (skip live tt-smi call)
@@ -101,6 +109,9 @@ Forwarded options (see diag_runner.py --help for details):
   --bmc-user USER        BMC user for sys-triage (default: \$BMC_USER)
   --bmc-password PASS    BMC password for sys-triage (default: \$BMC_PASSWORD, preferred:
                          a flag value is visible in the process list)
+  --skip-erisc-debug     Skip the ERISC debug dump
+  --erisc-elf-dir PATH   ETH FW release ELFs for the ERISC debug dump
+                         (default: /usr/local/share/exabox/eth-fw-elf)
 EOF
 }
 

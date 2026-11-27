@@ -8,8 +8,8 @@
 
 Orchestrates: tt-smi snapshot validation, direct FW-telemetry-table reads,
 reset stability loop, tt-metal deployment-test gtest invocation, the kmd_triage
-first-step tools, the tt-triage ETH status read, and — where the host has the
-package — the QSFP tests and the sys-triage bundle.
+first-step tools, the tt-triage ETH status read, the QSFP tests and the
+sys-triage bundle where the host has the package, and the ERISC debug dump.
  Emits a single JSON pass/fail report.
 
 This file holds the CLI and the order the phases run in. What each tier runs is
@@ -38,6 +38,7 @@ if _SUITE_DIR not in sys.path:
 
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
+from diag.erisc_debug import DEFAULT_ERISC_ELF_DIR, run_erisc_debug  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
@@ -134,6 +135,20 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         help=(
             "BMC password for sys-triage. Default: $BMC_PASSWORD, which is preferred: a flag value is "
             "visible in the process list. Passed on to sys-triage through its environment, never argv."
+        ),
+    )
+    ap.add_argument(
+        "--skip-erisc-debug",
+        action="store_true",
+        help="Skip the ERISC debug dump entirely.",
+    )
+    ap.add_argument(
+        "--erisc-elf-dir",
+        type=Path,
+        default=DEFAULT_ERISC_ELF_DIR,
+        help=(
+            "ETH FW release ELFs (eth_init-vX.Y.Z.elf) for the ERISC debug dump. Default: %(default)s. "
+            "A chip whose ELF is not there is not inspected, and the phase names the ELF it needs."
         ),
     )
     ap.add_argument(
@@ -256,10 +271,13 @@ def run_diag(
     bmc_ip: str | None = None,
     bmc_user: str | None = None,
     bmc_password: str | None = None,
+    skip_erisc_debug: bool = False,
+    erisc_elf_dir: Path = DEFAULT_ERISC_ELF_DIR,
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
 ) -> tuple[int, dict]:
-    """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
+    """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage
+    → ERISC debug).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -474,6 +492,26 @@ def run_diag(
         )
     _finish(report, sys_triage_phase, t0, summary=True, all_skip_stays_skip=True)
 
+    # Phase 9: the ERISC debug dump. Last, because it opens every chip and
+    # because what it records is the state everything above left, failed tests
+    # included. It reads and never halts the cores. Forensics, so it never votes.
+    erisc_phase = Phase(name="erisc_debug", gates=False)
+    t0 = time.time()
+    if skip_erisc_debug:
+        erisc_phase.add(Check(name="erisc_debug", status=SKIP, details="--skip-erisc-debug", ip="other"))
+    elif not plan.erisc_debug:
+        erisc_phase.add(
+            Check(name="erisc_debug", status=SKIP, details=f"no ERISC debug dump for tier '{tier}'", ip="other")
+        )
+    else:
+        _guarded(
+            erisc_phase,
+            "erisc_debug",
+            SKIP,
+            lambda: run_erisc_debug(tt_metal_path, erisc_phase, dry_run, logs_dir, erisc_elf_dir),
+        )
+    _finish(report, erisc_phase, t0, summary=True, all_skip_stays_skip=True)
+
     ended = datetime.now(timezone.utc)
     report["ended_utc"] = ended.isoformat()
     report["total_duration_s"] = (ended - started).total_seconds()
@@ -525,6 +563,8 @@ def main() -> int:
         bmc_ip=args.bmc_ip,
         bmc_user=args.bmc_user,
         bmc_password=args.bmc_password,
+        skip_erisc_debug=args.skip_erisc_debug,
+        erisc_elf_dir=args.erisc_elf_dir,
         output=args.output,
         snapshot_out=args.snapshot_out,
     )

@@ -66,7 +66,7 @@ EXCLUDED_CHECKS = {"snapshot_capture"}
 # for triage. The qsfp_* and eth_status_* entries name the ports at fault
 # ("ubb=2/asic=1/eth=6 -> ...", "UBB2/U6 ch4 (TRACE P9, dev 13)"), which is the
 # whole value of the row: truncated to 140 they say a link is down without
-# saying which.
+# saying which. erisc_debug names the ELFs a host still needs.
 DETAIL_RICH = {
     "pcie_gen",
     "gddr_speed",
@@ -89,6 +89,7 @@ DETAIL_RICH = {
     "eth_status_cable_lanes",
     "eth_status_cable_trays_alike",
     "eth_status_cabling",
+    "erisc_debug",
 }
 
 # numeric forensic checks: dropped from checks_fact, folded into runs rollups.
