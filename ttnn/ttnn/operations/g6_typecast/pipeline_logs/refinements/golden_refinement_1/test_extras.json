@@ -1,0 +1,18 @@
+{
+  "eval/golden_tests/g6_typecast/test_golden.py::test_op_loose[F322-1x2048x2048x3-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=ROW_MAJOR-output_dtype=UINT8-rank=4]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_typecast/test_golden.py::test_op_loose[F317-1x1024x1024x3-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=ROW_MAJOR-output_dtype=UINT8-rank=4]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_typecast/test_golden.py::test_op_loose[Q2185-16x4096x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_typecast/test_golden.py::test_op_loose[P39-1x128x256x256-alignment=tile_aligned-buffer=l1-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]": {
+    "math_fidelity": null,
+    "gate": "bfp8_group"
+  }
+}

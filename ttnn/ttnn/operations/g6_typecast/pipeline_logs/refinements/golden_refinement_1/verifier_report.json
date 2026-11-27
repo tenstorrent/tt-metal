@@ -1,0 +1,864 @@
+{
+  "summary": {
+    "total": 71,
+    "supported_pass": 60,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 9,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 2
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2185-16x4096x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2186-8x4096x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2187-1x1x3844x256-alignment=h_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2188-1x3844x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2189-1x3844-alignment=w_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2190-16x1024x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2191-16x1x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2192-16x128x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2193-2x128x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2194-1x1x64x256-alignment=tile_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2195-1x64x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2196-1x64-alignment=h_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2197-1x1x31x256-alignment=h_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2198-1x31x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2199-1x31-alignment=w_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2200-1x1x33x256-alignment=h_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2201-1x33x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2202-1x33-alignment=w_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2203-1x1x256x256-alignment=tile_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2204-1x256x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2205-1x256-alignment=h_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2206-1x1x77x256-alignment=h_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2207-1x77x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2208-1x77-alignment=w_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2209-1x1x1000x256-alignment=h_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2210-1x1000x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2211-1x1000-alignment=w_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2212-1x1x129x256-alignment=h_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2213-1x129x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2214-1x129-alignment=w_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2215-8x1024x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2216-8x1x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2217-8x128x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2218-1x1x4096x256-alignment=tile_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2219-1x4096x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2220-1x4096-alignment=h_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2221-1x1x100x256-alignment=h_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2222-1x100x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2223-1x100-alignment=w_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2224-1x1x1024x256-alignment=tile_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2225-1x1024x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2226-1x1024-alignment=h_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2227-1x1x12-alignment=w_non_aligned-buffer=l1-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "l1",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2229-1x1x32x128-alignment=tile_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=INT32-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "INT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2230-1x1x32x128-alignment=tile_aligned-buffer=dram-dtype=UINT32-layout=TILE-output_dtype=INT32-rank=4]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2232-1x1x128x256-alignment=tile_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2233-1x128x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2234-1x128-alignment=h_non_aligned-buffer=dram-dtype=UINT32-layout=ROW_MAJOR-output_dtype=INT32-rank=2]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "INT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[F317-1x1024x1024x3-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=ROW_MAJOR-output_dtype=UINT8-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT8",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[F321-1-alignment=w_non_aligned-buffer=dram-dtype=INT32-layout=ROW_MAJOR-output_dtype=UINT32-rank=1]",
+        "axes": {
+          "dtype": "INT32",
+          "output_dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 1
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[F322-1x2048x2048x3-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=ROW_MAJOR-output_dtype=UINT8-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT8",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[P22-1x32x64x256-alignment=tile_aligned-buffer=l1-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "l1",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[P31-1x64x128x256-alignment=tile_aligned-buffer=l1-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "l1",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[P39-1x128x256x256-alignment=tile_aligned-buffer=l1-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "l1",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[P46-1x32x128x256-alignment=tile_aligned-buffer=l1-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "l1",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[P50-1x128x256x128-alignment=tile_aligned-buffer=l1-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "l1",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op_loose[F322-1x2048x2048x3-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=ROW_MAJOR-output_dtype=UINT8-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT8",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op_loose[F317-1x1024x1024x3-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=ROW_MAJOR-output_dtype=UINT8-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT8",
+          "layout": "ROW_MAJOR",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op_loose[Q2185-16x4096x12-alignment=w_non_aligned-buffer=dram-dtype=BFLOAT16-layout=TILE-output_dtype=FLOAT32-rank=3]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op_loose[P39-1x128x256x256-alignment=tile_aligned-buffer=l1-dtype=BFLOAT16-layout=TILE-output_dtype=BFLOAT8_B-rank=4]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "buffer": "l1",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "passed"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2228-1x1x32x128-alignment=tile_aligned-buffer=dram-dtype=INT32-layout=TILE-output_dtype=BFLOAT16-rank=4]",
+        "axes": {
+          "dtype": "INT32",
+          "output_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[Q2231-1x1x32x128-alignment=tile_aligned-buffer=dram-dtype=UINT16-layout=TILE-output_dtype=INT32-rank=4]",
+        "axes": {
+          "dtype": "UINT16",
+          "output_dtype": "INT32",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[F315-1x512x128-alignment=tile_aligned-buffer=dram-dtype=FLOAT32-layout=TILE-output_dtype=BFLOAT16-rank=3]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[F316-1x1x512x512-alignment=tile_aligned-buffer=dram-dtype=FLOAT32-layout=TILE-output_dtype=BFLOAT16-rank=4]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[F318-1x256x128-alignment=tile_aligned-buffer=dram-dtype=FLOAT32-layout=TILE-output_dtype=BFLOAT16-rank=3]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[F319-1x1x256x256-alignment=tile_aligned-buffer=dram-dtype=FLOAT32-layout=TILE-output_dtype=BFLOAT16-rank=4]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[F320-1x1x196x196-alignment=w_non_aligned-buffer=dram-dtype=FLOAT32-layout=TILE-output_dtype=BFLOAT16-rank=4]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[F323-1x1x185x185-alignment=w_non_aligned-buffer=dram-dtype=FLOAT32-layout=TILE-output_dtype=BFLOAT16-rank=4]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_golden.py::test_op[F324-1x1x207x207-alignment=w_non_aligned-buffer=dram-dtype=FLOAT32-layout=TILE-output_dtype=BFLOAT16-rank=4]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "buffer": "dram",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_regression.py::test_truncation_bf16_to_int32",
+        "test_name": "test_truncation_bf16_to_int32",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_typecast/test_regression.py::test_bfloat8_b_outlier_groups",
+        "test_name": "test_bfloat8_b_outlier_groups",
+        "status": "passed"
+      }
+    ]
+  }
+}
