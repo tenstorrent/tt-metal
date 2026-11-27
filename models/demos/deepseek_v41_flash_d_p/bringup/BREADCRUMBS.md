@@ -1796,3 +1796,21 @@
 - Re-run: `orchestrator measure --spec $BRINGUP_SPEC --task WA.4 --part test_woa_offon --part test_packed_walls
   --part test_skip_positions__BRINGUP_CHUNK-5120 --part test_no_rebuild` (devjob) + `gate WA.4 --check --unit
   WA.4#test_skip_positions`.
+
+## WA.5 (perf, attempt 1): wo_a bank-local report + wq_b / wo_b estimate (CPU only)
+
+- Expected saving of this step: 0 device / 0 host (no model code change; a report and an estimate only). No switch
+  added (none needed: nothing in tt/ changed). Full loads: none ("needs the full X": nothing loaded; CPU only).
+- OV-80: re-rendered results/WA.4_ladder.md from ab/WA.4 (woa_ladder_report now keeps the verdict section and prints
+  the switch as each side's batch plan ran it). Finding: the A/B's off side ran test_skip_positions (8192, 5120),
+  test_packed_walls and test_no_rebuild with DS41_WOA_BANK=on (every gate command names the switch; ab_batches: the
+  segment's prefix wins over the side env): those tables are on vs on (DS41-397). The real off vs on is
+  test_woa_offon only (wo_a 3.058 -> 2.656 ms, chunk -0.60 ms at 8192).
+- Report: results/WA.5_report.md, written by tests/woa/test_woa_report.py from tests/woa/wa5_report.md (a results/<task>_*.md is a gate output the gate deletes first, F292: attempt 1 of the check failed on that). Estimate: tests/woa/woa_estimate.py (shapes from the checkpoint config; today from
+  PB.MM256.json / P.81; calibrated on wo_a's measured bank path, two methods, mean = best): saved a 8192 chunk
+  wq_b 1.28 ms (0-1.75), wo_b 0.45 ms (0-0.72; per-cluster x reads would make wo_b slower than today: needs one
+  grid-wide x multicast). Lesson: DS41-396 (placement paid 17.4 of 20.8 us at 256 rows; compute-bound after).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate WA.5 --spec $BRINGUP_SPEC --check`;
+  `python3 -m models.demos.deepseek_v41_flash_d_p.tests.woa.woa_estimate`;
+  `python3 -m models.demos.deepseek_v41_flash_d_p.tests.woa.woa_ladder_report`.
+- Rule 20: no per-chunk value touched (no model code changed).

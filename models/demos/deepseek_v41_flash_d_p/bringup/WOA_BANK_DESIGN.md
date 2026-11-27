@@ -217,3 +217,12 @@ Extend the fork (constraint 3), defaults = today's behaviour:
 - Switch: WOA_BANK call-time; WOA_BANK_COPIES=selected (one copy, the shipped load) | both (A/B) per OV-77.
 - Result: off == on bit-identical (single 8192, packed 4 x 2k, single 5120, real-input 160 rows), repeats exact, cold
   no-rebuild PASS; wo_a 3.06 -> 2.65-2.74 ms a chunk; host a call unchanged; load +1.39 s (21 layers).
+
+## WA.5: report (2026-11-27; results/WA.5_report.md)
+
+- What paid: the cores next to their bank (17.4 of 20.8 us at 256 rows); bank-local data on today's cores 3.4 us.
+  At 256 rows the bank path is compute-bound (4-column cores). DS41-396.
+- WA.4's A/B ladders ran the switch on both sides (DS41-397); the real off vs on is test_woa_offon (-0.40 ms wo_a a
+  8192 chunk).
+- wq_b / wo_b with the same layout, ESTIMATE ONLY (tests/woa/woa_estimate.py): 1.28 / 0.45 ms a 8192 chunk; wo_b
+  needs one x multicast over all clusters (every cluster needs all of x).

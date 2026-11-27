@@ -83,6 +83,26 @@ def _lane_key(case: str):
     return k
 
 
+def switch_as_run(ab: pathlib.Path) -> dict:
+    """{side: {unit: DS41_WOA_BANK as the runner got it}} from the sides' batch plans (WA.5): a segment's own prefix
+    wins over the side's env (orchestrator.ab_batches: "as the shell"), so a gate command that names the switch runs
+    that value on BOTH sides. None = the unit sets the switch itself (test_woa_offon) or no plan."""
+    out = {}
+    for s in SIDES:
+        got = {}
+        for f in sorted((ab / s).glob("batch*.json")):
+            if not f.name[len("batch") :].split(".")[0].isdigit() or f.name.count(".") != 1:
+                continue
+            try:
+                entries = json.loads(f.read_text()).get("entries", [])
+            except (OSError, ValueError, AttributeError):
+                continue
+            for e in entries:
+                got[e.get("group", e.get("name"))] = e.get("env", {}).get("DS41_WOA_BANK")
+        out[s] = got
+    return out
+
+
 def render(ab: pathlib.Path) -> str:
     sk8 = {s: _metrics(ab / s, lambda n: n.startswith("test_skip_positions") and "5120" not in n) for s in SIDES}
     sk5 = {s: _metrics(ab / s, lambda n: n.startswith("test_skip_positions") and "5120" in n) for s in SIDES}
@@ -99,6 +119,17 @@ def render(ab: pathlib.Path) -> str:
         "device. Layers 0-20 (DECODER_SKIP=decode). `-` = that side has not run (yet).",
         "",
     ]
+    sw = switch_as_run(ab)
+    same = sorted(u for u, v in sw.get("old", {}).items() if v is not None and v == sw.get("new", {}).get(u, v))
+    if same:
+        out += [
+            "**Switch as run (the sides' batch plans):** the off side ran "
+            + ", ".join(f"{u} with DS41_WOA_BANK={sw['old'][u]}" for u in same)
+            + ": the gate command's own `DS41_WOA_BANK=on` prefix wins over the side's env (orchestrator.ab_batches,"
+            " a segment's prefix wins). Those tables are on vs on: their deltas are session noise, not the change."
+            " The one real off vs on is test_woa_offon (it switches per call itself).",
+            "",
+        ]
     for title, ms, key in (
         ("Single request, 8192 tokens (test_skip_positions, BRINGUP_CHUNK=8192)", sk8, _single_key),
         ("Chip-aligned 4 x 2048 (lanes4x2k, test_packed_walls)", pw, _lane_key("lanes4x2k")),
@@ -141,6 +172,13 @@ def render(ab: pathlib.Path) -> str:
     return "\n".join(out) + "\n"
 
 
+def keep_verdict(old: str) -> str:
+    """The hand-written verdict section of an existing WA.4_ladder.md (kept across re-renders)."""
+    i = old.find("## Verdict data")
+    j = old.find("Rendered by tests/woa/woa_ladder_report.py")
+    return old[i:j].rstrip() + "\n\n" if 0 <= i < j else ""
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ab", default=str(AB))
@@ -151,7 +189,12 @@ def main():
     if a.print:
         print(text)
     else:
-        pathlib.Path(a.out).write_text(text)
+        out = pathlib.Path(a.out)
+        keep = keep_verdict(out.read_text()) if out.exists() else ""
+        if keep:
+            head, _, body = text.partition("\n\n")
+            text = head + "\n\n" + keep + body
+        out.write_text(text)
         print(f"wrote {a.out}")
 
 

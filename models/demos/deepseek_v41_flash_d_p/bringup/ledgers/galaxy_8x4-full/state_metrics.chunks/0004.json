@@ -4968,5 +4968,10 @@
   "woa_repeat_max_abs_diff_4x2k_tagentic_cc": 0.0,
   "woa_repeat_max_abs_diff_single5120_tagentic_cc": 0.0,
   "woa_repeat_max_abs_diff_single8192_tagentic_cc": 0.0
+ },
+ "WA.5": {
+  "woa_est_ms_wo_b": 0.446,
+  "woa_est_ms_wq_b": 1.277,
+  "woa_report_parts": 4
  }
 }

@@ -1,0 +1,86 @@
+{
+ "used": [
+  {
+   "id": "DS41-306",
+   "how": "P.81's stock DRAM-sharded numbers for wq_b / wo_b (no gain / worse at 160 rows) in part 3 and as a cross-check of the wq_b estimate",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-391",
+   "how": "today's wo_a bank pattern (tile in bank n % 8) as the 'before' of part 2; the same pattern holds for wq_b / wo_b (Nt 1024 / 160 multiples of 8)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-393",
+   "how": "x sender placement row of part 2's table",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-394",
+   "how": "host row of part 2's table (one kernel group)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-139",
+   "how": "replicated projections (ATTN_SP32_PROJ) read the full 44.56 MB a chip: the bytes of the estimate",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-191",
+   "how": "wo_b weight bytes 44.6 MB, DRAM-bound at 160 rows: cross-check of the estimator's byte count",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "A/B with a call-time env switch: a gate command that names the switch overrides the side's env (now DS41-397)",
+  "no stub (reader vs compute) data for wq_b / wo_b at either row count: the estimate's main uncertainty",
+  "a results/<task>_*.md named by a brief is a gate output (gate.outputs_in, F292): deleted before the gate runs, so the test must write it, not the agent"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no code built; the estimate assumes no padding (wq_b 128 / wo_b 20 column tiles a bank split evenly)"
+  },
+  {
+   "id": "OV-80",
+   "answer": "disagree",
+   "evidence": "Re-rendered WA.4_ladder.md from ab/WA.4 (PROXY wording dropped, verdict kept). But the off side is not real for the ladders: ab/WA.4/old/batch0.json gives DS41_WOA_BANK=on to test_skip_positions (8192, 5120), test_packed_walls, test_no_rebuild (gate commands carry DS41_WOA_BANK=on; orchestrator.py ab_batches e_env = {**x, **r['env']}, 'a segment's prefix wins'). Their deltas are on vs on (attention -0.22..+0.23 ms vs ~-0.40 expected). WA.5_report.md uses test_woa_offon's real off/on and labels the ladder deltas as noise (DS41-397)."
+  }
+ ],
+ "cited_only": [
+  "DS41-382",
+  "DS41-396",
+  "DS41-397"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "WA.5",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-27T20:58:39",
+  "head": "628fc2263bc",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/WOA_BANK_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.5.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.5_report.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/WA.5.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_report.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/wa5_report.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/woa_estimate.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/woa_ladder_report.py"
+  ]
+ }
+}

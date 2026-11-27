@@ -1543,3 +1543,5 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   tasks; passed X.8 / PB.NR are real two-chunk gates). The 5120 ladder unit dropped from WA.4's gate (validate: valid):
   its off AND on sides are already measured by the A/B on this code (ab/WA.4/{old,new}/test_skip_positions__BRINGUP_CHUNK-5120;
   WA.5 renders them). classify framework; gate --continue (only test_no_rebuild left).
+- 20:47 WA.4 gate PASS -> 628fc2263bc (no_rebuild 206 s; 5 units kept). DS41_WOA_BANK default on (batching). Next WA.5 (report; re-render WA.4 ladders from the real A/B, OV-80). Then MB.WA on model_bringup (owner 15:33; text /home/dnijemcevic/handoff_20261127/MBWA_task.yaml).
+- 20:50 heartbeat: WA.5 agent active; RAM used 58 GB; / 71G free.
