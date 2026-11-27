@@ -443,6 +443,7 @@ class TtKimiK3Transformer(LightweightModule):
         mtp_geometry=None,
         chunks: Optional[list] = None,
         mtp_unions: Optional[list] = None,
+        ack_records: Optional[list] = None,
     ):
         """Run this rank's layers. Returns the post-norm hidden state, or the raw one mid-pipeline.
 
@@ -480,9 +481,8 @@ class TtKimiK3Transformer(LightweightModule):
                 token_ids,
                 kvpe_cache,
                 chunks,
-                # A packed forward's D2H acks go out once it is done (TtPrefillRuntime.prefill_forward); here the
-                # service only asks for each chunk's KV pad window to be zeroed as it is written.
-                zero_pad=d2h_service is not None,
+                d2h_service=d2h_service,
+                ack_records=ack_records,
                 index_kv_cache=index_kv_cache,
                 on_layer_complete=on_layer_complete,
                 on_layer_hidden=on_layer_hidden,
@@ -584,6 +584,8 @@ class TtKimiK3Transformer(LightweightModule):
         layer_tap: Optional[Callable] = None,
         seed_indexer_indices=None,
         zero_pad: bool = False,
+        d2h_service=None,
+        ack_records: Optional[list] = None,
     ):
         """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them, any users at any depth): every
         layer runs its attention once per non-empty chunk against that chunk's slot and offset (MLA: its KV slab;
@@ -599,15 +601,17 @@ class TtKimiK3Transformer(LightweightModule):
         on_layer_complete: ``(global layer index, chunk)`` once per non-empty chunk per layer.
         layer_tap: ``(local_idx, hidden)`` after each layer with the live residual over every chunk's rows, as in
             forward().
-        zero_pad: zero each chunk's KV pad window as it is written without acking it, for a caller that sends the
-            acks itself once the forward is done (TtPrefillRuntime.prefill_forward; always on the traced path).
+        zero_pad: zero each chunk's KV pad window as it is written, acking only through d2h_service.
+        d2h_service / ack_records: one persistent 12 B record per chunk position, sent by each layer for every
+            running position (TtKimiK3Block.forward_packed).
         index_kv_cache: K3.1's DSA indexer key cache (None on K3). Each DSA layer runs its own indexer per chunk, as
             in forward(): the chunk's index-key write and top-k against that chunk's slot and prefix.
         seed_indexer_indices: part of the shared packed contract (GLM-5.3's indexer reuse). No K3 or K3.1 layer reuses
             another's top-k, so none cross a pipeline boundary and it must be None.
         metadata / padding_config: the traced form. One ``(slot, actual_start, actual_end)`` device triple per
             chunk position replaces ``chunks`` (then None), and the runtime's persistent PackedPadding replaces the
-            one built from the chunks. Every position runs (an empty one points at a scratch slot); no acks.
+            one built from the chunks. Every position runs (an empty one points at a scratch slot and its ack record
+            names no chunk); no host acks.
 
         Returns the post-norm hidden state over all rows, or None with kv_only_last_layer.
         """
@@ -623,6 +627,8 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError("Kimi-K3.1's DSA layers write and read an indexer key cache; pass index_kv_cache")
         if traced and (padding_config is None or on_layer_complete is not None):
             raise ValueError("a traced packed forward takes the persistent padding_config and no host acks")
+        if d2h_service is not None and on_layer_complete is not None:
+            raise ValueError("d2h_service and on_layer_complete are mutually exclusive ack transports")
 
         attn_input_tap = None
         if on_layer_hidden is not None:
@@ -706,6 +712,8 @@ class TtKimiK3Transformer(LightweightModule):
                     packed_padding_config=padding_config,
                     attn_input_tap=attn_input_tap,
                     zero_pad=zero_pad,
+                    d2h_service=d2h_service,
+                    ack_records=ack_records,
                 )
                 if layer_tap is not None and not layer.kv_only:
                     layer_tap(local_idx, residual.current())

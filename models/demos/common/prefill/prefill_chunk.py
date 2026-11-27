@@ -271,7 +271,7 @@ def packed_forward_refusals(
     - ``traced_forward`` (supports_packed_forward_trace): its prefill_forward stages each chunk's inputs before a
       trace replay.
     - ``forward_d2h_acks`` (supports_packed_forward_d2h_acks): it sends one 12-byte D2H ack record per chunk per
-      KV-writing layer, chunk by chunk.
+      KV-writing layer.
     - ``forward_indexer_indices`` (supports_packed_forward_indexer_indices): it takes and leaves a pipeline
       boundary's indexer indices for every chunk of the forward, packed in one tensor of the runtime's
       indexer_indices_shape().

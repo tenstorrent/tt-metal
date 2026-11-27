@@ -12,9 +12,8 @@ trace's freed intermediates. Projections take the fidelity of one 2k chunk (HiFi
 
 Layer completions: a forward of n entries completes like n chunks in entry order, num_layers per entry, each naming
 its entry's (slot, start, end), and none precedes its KV. With a D2H ack service, entry 0's records go per layer from
-the trace and the other entries' after its last layer, each from that entry's own 12-byte metadata tensor (the
-LayerAckDecoder needs a chunk's records contiguous on the rank); otherwise the host reports them all once the forward
-finishes (set_layer_completion_sink).
+the trace and the other entries' after its last layer, each from that entry's own 12-byte metadata tensor; otherwise
+the host reports them all once the forward finishes (set_layer_completion_sink).
 """
 
 import torch
