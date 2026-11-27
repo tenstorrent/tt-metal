@@ -1,44 +1,61 @@
-# L1 ledger: g6_embedding
+# L1 Ledger: g6_embedding
 
-Schema: `.claude/references/l1-footprint-discipline.md`. Host model: ProgramSpec; the buffers are
-DataflowBufferSpecs (`index_values`, `gathered_rows`, `output_tiles`), slot indices assigned by the runtime. Block axes (op_design.md, Blocking Model):
-`tile_row` (extent `BLOCK_TILE_ROWS`), `col_tile` (extent `block_col_tiles`), `image` (folded into
-`tile_row`), `table_row` (gathered, not a block axis). `fp32_dest_acc_en = False` (16-bit DEST).
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_design.md`, Blocking Model):
+`tile_rows` (token tile rows, extent `block_tile_rows`), `positions` (token positions in a tile row, fixed 32),
+`width` (D tile columns, extent `block_width_tiles`), `table_rows` (gather-addressed, no extent knob).
+
+Compute config: `fp32_dest_acc_en = False` (16-bit DEST); no value is ever computed.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_index_values` (`dfb::index_values`), 128 B pages | `INDEX_DEPTH · BLOCK_TILE_ROWS` | `2 · BLOCK_TILE_ROWS` slots: the current row-block's indices (read by the RISC while issuing row reads) + the next row-block's, prefetched before the current block's barrier | `{tile_row: spans → BLOCK_TILE_ROWS, streams → INDEX_DEPTH window; col_tile: neither (idx does not vary along D) → 1; image: folded into tile_row; table_row: n/a}` | UInt32 (index values; RISC-read, never through DEST) | reader (NoC read; `reserve_back`/`push_back` one slot per row block) | reader (self-loop DFB `dfb::index_values`: `wait_front` + RISC loads from the read pointer, `pop_front` after the row block's last column block has issued its reads); values valid after the reader's own read barrier | whole reader kernel | none: its prefetch lands while the same block's row reads fill `cb_gathered_rows` (concurrent), and its format differs. 256 B at Phase 0 |
-| `cb_gathered_rows` (`dfb::gathered_rows`), 2048 B pages | `ROWS_DEPTH · BLOCK_TILE_ROWS · block_col_tiles` | `BLOCK_TILE_ROWS · block_col_tiles` per pipeline stage; capacity is 2× for double buffering (reader fills block k+1 while compute tilizes block k) | `{tile_row: spans → BLOCK_TILE_ROWS, streams → ROWS_DEPTH; col_tile: spans → block_col_tiles; image: folded; table_row: n/a (≤ 32 gathered rows per tile-row fixed by the tile height)}` | UInt16 (bf16 bits as integers: keeps the tilize off the float fast path, so NaN payloads / -0.0 / subnormals survive; 16-bit = DEST width) | reader | compute (tilize helper) | whole kernel, block-pipelined | not with `cb_output_tiles`: tilize reads one while writing the other (concurrent) and the helper forbids in-place (`static_assert(input_dfb != output_dfb)`) |
-| `cb_output_tiles` (`dfb::output_tiles`), 2048 B pages | `OUT_DEPTH · BLOCK_TILE_ROWS · block_col_tiles` | `BLOCK_TILE_ROWS · block_col_tiles` per stage; 2× for double buffering (compute packs block k+1 while the writer drains block k) | `{tile_row: spans → BLOCK_TILE_ROWS, streams → OUT_DEPTH; col_tile: spans → block_col_tiles; image: folded; table_row: n/a}` | UInt16 (same bytes as a bf16 tile; 16-bit = DEST width) | compute | writer | whole kernel, block-pipelined | not with `cb_gathered_rows` (see above); the result is DRAM interleaved, so no zero-copy output CB exists |
-
-Every push and pop on `cb_gathered_rows` / `cb_output_tiles` is `BLOCK_TILE_ROWS · block_col_tiles`
-pages on the dataflow side and `block_col_tiles` pages per tile-row on the compute side, both
-divisors of the capacity, so the ring closes. A ragged last row-block (possible only when
-`BLOCK_TILE_ROWS > 1`) still pushes and pops the nominal count.
+| `cb_index_window` (128 B pages) | `index_window_tile_rows = min(INDEX_WINDOW_MAX_TILE_ROWS, max_core_tile_row_span)` | `index_window_tile_rows` — by decision: the window is filled by one transfer per image segment before the first block, so every slot is resident at once; a one-slot live set would put a DRAM round trip inside every block | `{tile_rows: spans → index_window_tile_rows, positions: spans → 32 per page, width: streams (the indices do not vary along D; one copy serves every width block of a tile row), table_rows: none (holds row ids, not rows)}` | UInt32 — dataflow-only payload, never passes through DEST (audit 2 mechanism reason) | reader | reader (scratch: reserved once, read in place, no push/pop) | whole kernel (one window per core on every production shape) | none: read by every `gather_rows_block` while `cb_gathered_rows` and `cb_output_tiles` stream → concurrent lifetime with both |
+| `cb_gathered_rows` (2048 B pages) | `GATHER_DEPTH_BLOCKS · block_tile_rows · block_width_tiles` | `2 · block_tile_rows · block_width_tiles` — one block being gathered by the reader, one being tilized by compute; capacity == live set at `GATHER_DEPTH_BLOCKS = 2` (the depth is the pipelining decision) | `{tile_rows: spans → block_tile_rows (× depth), positions: spans → 32 sticks per unit, width: spans → block_width_tiles, table_rows: streams → ≤ 32·block_tile_rows rows per block, never resident beyond the block}` | UInt16 — 16-bit matches 16-bit DEST; UInt16 rather than Float16_b is the bit-exactness mechanism (integer tilize path) | reader | compute | per block | none: concurrent with `cb_output_tiles` (tilize reads this CB while packing into that one; in-place tilize is impossible — `tilize_helpers.inl:89-90` static_asserts input ≠ output, and a tile's output bytes overlap sticks that still hold every other tile of the row) and with `cb_index_window` |
+| `cb_output_tiles` (2048 B pages) | `OUTPUT_DEPTH_BLOCKS · block_tile_rows · block_width_tiles` | `2 · block_tile_rows · block_width_tiles` — one block being packed by compute, one being written by the writer; capacity == live set at `OUTPUT_DEPTH_BLOCKS = 2` | `{tile_rows: spans → block_tile_rows (× depth), positions: spans → 32 rows per tile, width: spans → block_width_tiles, table_rows: none}` | UInt16 — 16-bit matches 16-bit DEST; bit-identical bytes of the bfloat16 result | compute | writer | per block | none: concurrent with `cb_gathered_rows` (pipelined tilize) and with `cb_index_window`; the writer cannot write from `cb_gathered_rows` because the result must be TILE |
 
 ## Symbol table
 
-| Symbol | Bound | Established by |
-|--------|-------|----------------|
-| `BLOCK_TILE_ROWS` | 1 (host constant) | op_design.md, `tile_row` axis |
-| `INDEX_DEPTH`, `ROWS_DEPTH`, `OUT_DEPTH` | 2 each (host constants); `INDEX_DEPTH ≥ 2` asserted on host and in the reader | op_design.md, buffer-depth knobs |
-| `block_col_tiles` | `≤ col_tile_cap = floor((1_347_776 − INDEX_DEPTH·BLOCK_TILE_ROWS·128) / ((ROWS_DEPTH + OUT_DEPTH)·BLOCK_TILE_ROWS·2048))` = 164 at Phase 0; a divisor of `tensor_col_tiles` | `select_plan`: `q_l1` clamp; regime predicate `col_blocks_per_row = max(q_l1, q_fill)` |
+| Symbol | Bound | Predicate / source establishing it |
+|--------|-------|------------------------------------|
+| `block_width_tiles` | `1 ≤ block_width_tiles ≤ 80`, divides `Dt` | `select_block_width` candidates are divisors of `Dt` ≤ `MAX_BLOCK_WIDTH_TILES = 80` |
+| `block_tile_rows` | `= 1` (Phase 0); if raised: `block_tile_rows · block_width_tiles ≤ 80` and `= 1` whenever `width_blocks_per_row > 1` | host constant `BLOCK_TILE_ROWS` + the clamp in Mechanism caps |
+| `GATHER_DEPTH_BLOCKS`, `OUTPUT_DEPTH_BLOCKS` | `= 2` (Phase 0); lamp LP6 measures 3–4 | host constants |
+| `index_window_tile_rows` | `1 ≤ index_window_tile_rows ≤ 64` | `min(INDEX_WINDOW_MAX_TILE_ROWS = 64, max_core_tile_row_span)` |
+| `max_core_tile_row_span` | unbounded in the contract (grows with `B·S / C`); ≤ 19 on every production shape at `C = 110` | clamped by `INDEX_WINDOW_MAX_TILE_ROWS`; refill per window beyond it |
+| tile page bytes | 2048 | UInt16 32×32 tile (same bytes as bfloat16) |
+| index page bytes | 128 | 32 uint32 indices per tile row |
 
-## Total per core
+## Total per-core footprint
 
-`L1 = INDEX_DEPTH · BLOCK_TILE_ROWS · 128 + (ROWS_DEPTH + OUT_DEPTH) · BLOCK_TILE_ROWS · block_col_tiles · 2048` B.
+```
+footprint = 128 · index_window_tile_rows
+          + 2048 · block_tile_rows · block_width_tiles · (GATHER_DEPTH_BLOCKS + OUTPUT_DEPTH_BLOCKS)
+```
 
-The first term scales with `BLOCK_TILE_ROWS` and `INDEX_DEPTH`; the second with
-`BLOCK_TILE_ROWS`, `block_col_tiles` and the two depths. Largest production plan: `block_col_tiles
-= 40` → 327 936 B (24 % of BB-05). `validate()` refuses a plan above 1 347 776 B (unreachable:
-`block_col_tiles = 1` always fits).
+| Term | Scales with |
+|------|-------------|
+| `128 · index_window_tile_rows` | the per-core tile-row span, capped at 64 → ≤ 8,192 B |
+| `2048 · block_tile_rows · block_width_tiles · (depths)` | block width (D knob) × block height (token knob) × the two depth knobs |
 
-## Data-movement budget (DRAM crossings per tensor)
+Bound: Phase 0 maximum over every legal input `128·64 + 2048·1·80·4 = 663,552 B ≤ 1,347,776 B` (BB-05), so no shape of the contract — golden or not — reaches the bound; `validate()` still evaluates the expression and raises `ValueError` naming 1,347,776 B if it ever exceeds it. Production maximum: 330,112 B (`[16, 4096] × [248320, 1280]`, `block_width_tiles = 40`, window 19).
 
-| Tensor | `whole_row` | `column_blocked` |
-|--------|-------------|------------------|
-| idx | 1×: `4 · valid_rows(g)` B per tile-row, one read per tile-row | `col_blocks_per_row`× (each column block's core reads its tile-row's ≤ 128 B) |
-| W | `2D` B per index (repeats read again), N reads of `2D` B | same bytes, `N · col_blocks_per_row` reads of `block_col_tiles · 64` B |
-| out | 1× (tile-padded: `2D · 32 · tensor_tile_rows` B), one 2048 B write per tile | 1× |
+## Data-movement budget
 
-No cross-core traffic in either regime.
+Formulas for the implemented split (R1, `width_blocks_per_row = Dt / block_width_tiles`):
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| index (`4·B·S` B) | once when `width_blocks_per_row = 1`; each tile row's slice `width_blocks_per_row` times otherwise | each core reads only the slice of the tile rows it owns, once, into `cb_index_window`; the D split gives a tile row `width_blocks_per_row` owners | 0 |
+| weight (`V·2·D` B) | the named rows only: `B·S·2·D` B, each named row once per position (a repeated index reads its row again); never a whole-table pass | `gather_rows_block` reads exactly `rows_valid` row slices per unit; the width split cuts a row into `width_blocks_per_row` slices of `block_width_tiles·64` B, same bytes | 0 |
+| output (`T·Dt·2048` B) | once | each tile written once from `cb_output_tiles`; padding rows of partial tile rows travel inside their tiles | 0 |
+
+At the perf focus (`[16, 4096] × [248320, 1280]`, `block_width_tiles = 40`, `width_blocks_per_row = 1`):
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| index (262,144 B) | 1 → 262,144 B | 19-unit slices, one window fill per core | 0 |
+| weight (635,699,200 B table) | 65,536 rows × 2,560 B = 167,772,160 B (26 % of the table) | rows named by the indices, full-row transfers | 0 |
+| output (81,920 tiles) | 1 → 167,772,160 B | whole-tile writes | 0 |
+
+Totals at p1: DRAM reads 168,034,304 B, DRAM writes 167,772,160 B, cross-core 0 B; core-local L1: each gathered byte read once by the tilize unpacker and each tile packed once.
+
+> Cheapest-traffic split considered: token tile rows only (`width_blocks_per_row = 1`) — the minimum (index, named rows and output tiles each cross DRAM once). Implemented: R1 with `select_block_width`; it is the cheapest split on every shape where the selection returns `block_width_tiles = Dt` (p1, p3, and every `D = 64` call with `T ≥ 64`). On the other shapes the width split adds `(width_blocks_per_row − 1)` reads of each tile row's index slice (≤ 3.1 % of the call's DRAM bytes, ≤ 384 extra reads per call) and no table or output bytes. The split that restores the minimum under the width split is R3 (index broadcast per tile-row group), deferred because it replaces each duplicated ≤128-B read — issued before the core's first row read — with a sender read → multicast → semaphore chain that still contains a DRAM read on every receiver's critical path; R1 keeps it reachable (only `fill_index_window`'s source changes).

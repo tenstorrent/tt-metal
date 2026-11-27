@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_embedding.
+"""Acceptance test for g6_embedding (Phase 0: ROW_MAJOR uint32 index, bfloat16 table).
 
-Every op call uses a production case of eval/golden_tests/g6_embedding/feature_spec.py (BB-22).
-The op moves values and computes none, so results are graded by bit equality of the bfloat16
-patterns (helpers.TOLERANCES is ("exact", None)), never by PCC.
+Every case is a production call of the spec (BB-22) or a case one of its rules
+requires. The op copies table values and computes none, so every check is bit
+equality of the logical result (helpers.TOLERANCES holds ("exact", None)).
 """
 
 import functools
@@ -15,75 +15,63 @@ import torch
 import torch.nn.functional as F
 import ttnn
 
+from ttnn.operations.g6_embedding import g6_embedding
 from ttnn.operations._op_contract import UnsupportedAxisValue
-from ttnn.operations.g6_embedding import g6_embedding, select_plan
-
-SEED = 42
-L1_BOUND_BYTES = 1_347_776
 
 QWEN_SMALL = (262144, 64)
 QWEN_LARGE = (248320, 1280)
 FLUX_LARGE = (131072, 2560)
-FLUX_NARROW_VOCAB = (32, 5120)
-FLUX_RANK3 = (1, 256, 128)
 
-# bfloat16 bit patterns that a float route rewrites: -0.0, two subnormals, +inf, -inf,
-# quiet NaN, NaN with sign and payload set, signalling NaN.
+# bfloat16 bit patterns the spec names: -0.0, two subnormals, +inf, -inf, quiet NaN,
+# NaN with sign and payload set, signalling NaN.
 SPECIAL_BITS = (0x8000, 0x0001, 0x8008, 0x7F80, 0xFF80, 0x7FC0, 0xFFFF, 0x7F81)
 
 
-@functools.lru_cache(maxsize=2)
-def host_table(weight_shape):
-    """Shared across tests (a large table is 0.6 GB); callers must not mutate it."""
-    generator = torch.Generator().manual_seed(SEED)
+def reference(index, weight):
+    """torch.nn.functional.embedding in the table's own dtype; a [1, V, D] weight is weight[0]."""
+    table = weight[0] if weight.dim() == 3 else weight
+    return F.embedding(index.to(torch.int64), table)
+
+
+@functools.lru_cache(maxsize=1)
+def make_table(weight_shape):
+    # One cached table at a time: the Qwen and FLUX tables are 0.6-0.7 GB each, and the
+    # parametrizations below are grouped by table so each one is drawn once.
+    generator = torch.Generator().manual_seed(42)
     return torch.randn(weight_shape, generator=generator, dtype=torch.bfloat16)
 
 
-def table_of(weight):
-    return weight[0] if weight.dim() == 3 else weight
+def make_index(index_shape, vocab):
+    return torch.randint(0, vocab, index_shape, dtype=torch.int32)
 
 
-def pytorch_reference(index, weight):
-    return F.embedding(index.to(torch.int64), table_of(weight))
+def to_device_table(table, device):
+    return ttnn.from_torch(
+        table, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
 
 
 def to_device_index(index, device):
     return ttnn.from_torch(
-        index,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        index, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
 
-def to_device_weight(weight, device):
-    return ttnn.from_torch(
-        weight,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-
-def op_kwargs(memory_config):
-    kwargs = {"layout": ttnn.TILE_LAYOUT, "runtime_rows": False}
-    if memory_config == "dram":
+def call_kwargs(pass_memory_config):
+    kwargs = {"layout": ttnn.TILE_LAYOUT}
+    if pass_memory_config:
         kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
     return kwargs
 
 
-def check_exact(output, expected):
-    assert output.layout == ttnn.TILE_LAYOUT, f"layout {output.layout}"
-    assert output.dtype == ttnn.bfloat16, f"dtype {output.dtype}"
+def assert_bit_exact(output, expected):
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert output.dtype == ttnn.bfloat16
     placement = output.memory_config()
-    assert placement.buffer_type == ttnn.BufferType.DRAM, f"placement {placement}"
-    assert placement.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED, f"placement {placement}"
+    assert placement.buffer_type == ttnn.BufferType.DRAM
+    assert placement.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
     actual = ttnn.to_torch(output)
-    assert tuple(actual.shape) == tuple(expected.shape), f"shape {tuple(actual.shape)} != {tuple(expected.shape)}"
-    assert actual.dtype == torch.bfloat16
-    # int16 views: value comparison would equate -0.0 with 0.0 and fail on NaN.
+    assert tuple(actual.shape) == tuple(expected.shape)
     got = actual.contiguous().view(torch.int16)
     want = expected.contiguous().view(torch.int16)
     differs = got != want
@@ -95,52 +83,56 @@ def check_exact(output, expected):
         )
 
 
-def check_plan(plan, device, expected_regime):
-    grid = device.compute_with_storage_grid_size()
-    assert plan.l1_bytes_per_core <= L1_BOUND_BYTES, f"L1 {plan.l1_bytes_per_core} B > {L1_BOUND_BYTES} B"
-    assert 1 < plan.num_cores <= grid.x * grid.y, f"num_cores {plan.num_cores}"
-    assert plan.regime in ("whole_row", "column_blocked")
-    if expected_regime is not None:
-        assert plan.regime == expected_regime, f"regime {plan.regime}, expected {expected_regime}"
-
-
-# (index_shape, weight_shape, memory_config as the model passes it, regime fixed for every real grid or None).
-# Grouped by table: host_table keeps two tables.
+# (index shape, weight shape, pass an explicit DRAM memory_config); grouped by table.
 CASES = [
-    pytest.param((1, 1), FLUX_RANK3, None, "column_blocked", id="1x1_flux_rank3_weight"),
-    pytest.param((1, 1), FLUX_NARROW_VOCAB, None, "column_blocked", id="1x1_flux5120"),
-    pytest.param((1, 1), QWEN_SMALL, "dram", "column_blocked", id="1x1_qwen64"),
-    pytest.param((2, 128), QWEN_SMALL, "dram", None, id="2x128_qwen64"),
-    pytest.param((1, 4096), QWEN_SMALL, "dram", None, id="1x4096_qwen64"),
-    pytest.param((1, 8), QWEN_LARGE, "dram", "column_blocked", id="1x8_qwen1280"),
-    pytest.param((1, 77), QWEN_LARGE, "dram", "column_blocked", id="1x77_qwen1280"),
-    pytest.param((16, 128), QWEN_LARGE, "dram", None, id="16x128_qwen1280"),
-    pytest.param((1, 3844), QWEN_LARGE, "dram", "whole_row", id="1x3844_qwen1280_p4"),
-    pytest.param((16, 1024), QWEN_LARGE, "dram", "whole_row", id="16x1024_qwen1280_p3"),
-    pytest.param((1, 512), FLUX_LARGE, None, None, id="1x512_flux2560"),
+    ((1, 1), QWEN_SMALL, True),  # Qwen 231: one token, a partial tile row
+    ((2, 128), QWEN_SMALL, True),  # Qwen 203: two images, tile-aligned
+    ((1, 4096), QWEN_SMALL, True),  # Qwen 225: the most frequent call
+    ((1, 8), QWEN_LARGE, True),  # Qwen 222: decode, one tile row split across cores by width
+    ((1, 77), QWEN_LARGE, True),  # Qwen 214: three tile rows, the last one partial
+    ((16, 128), QWEN_LARGE, True),  # Qwen 202: sixteen images, several width blocks per core
+    ((1, 3844), QWEN_LARGE, True),  # Qwen 196 (p4): long, partial last tile row
+    ((16, 1024), QWEN_LARGE, True),  # Qwen 198 (p3): several full-width tile rows per core
+    ((16, 4096), QWEN_LARGE, True),  # Qwen 192 (p1): the largest call, the perf focus
+    ((1, 512), FLUX_LARGE, False),  # FLUX 41: D = 2560, default placement
+    ((1, 1), (32, 5120), False),  # FLUX 43: D past the per-block width cap
+    ((1, 1), (1, 256, 128), False),  # FLUX 44: a [1, V, D] weight read as it arrives
 ]
 
 
-@pytest.mark.parametrize("index_shape, weight_shape, memory_config, expected_regime", CASES)
-def test_g6_embedding(device, index_shape, weight_shape, memory_config, expected_regime):
-    torch.manual_seed(SEED)
-    vocab = weight_shape[-2]
-    index = torch.randint(0, vocab, index_shape, dtype=torch.int32)
-    weight = host_table(weight_shape)
+def _case_id(case):
+    index_shape, weight_shape, pass_memory_config = case
+    parts = ["idx" + "x".join(map(str, index_shape)), "w" + "x".join(map(str, weight_shape))]
+    if pass_memory_config:
+        parts.append("dram")
+    return "-".join(parts)
 
+
+@pytest.mark.parametrize("case", CASES, ids=[_case_id(c) for c in CASES])
+def test_g6_embedding_matches_reference(case, device):
+    index_shape, weight_shape, pass_memory_config = case
+    torch.manual_seed(42)
+    table = make_table(weight_shape)
+    index = make_index(index_shape, weight_shape[-2])
+
+    tt_weight = to_device_table(table, device)
     tt_index = to_device_index(index, device)
-    tt_weight = to_device_weight(weight, device)
-    try:
-        check_plan(select_plan(tt_index, tt_weight), device, expected_regime)
-        output = g6_embedding(tt_index, tt_weight, **op_kwargs(memory_config))
-        check_exact(output, pytorch_reference(index, weight))
-    finally:
-        ttnn.deallocate(tt_weight)
+    output = g6_embedding(tt_index, tt_weight, **call_kwargs(pass_memory_config))
+
+    expected = reference(index, table)
+    assert tuple(output.shape) == tuple(index_shape) + (weight_shape[-1],)
+    assert_bit_exact(output, expected)
+
+    ttnn.deallocate(output)
+    ttnn.deallocate(tt_index)
+    ttnn.deallocate(tt_weight)
 
 
 def place_special_rows(table, index):
-    """A copy of `table` whose rows named by `index` hold SPECIAL_BITS, shifted per row so every
-    column sees every pattern; written through an int16 view so no float conversion touches them."""
+    """A copy of `table` whose rows named by `index` hold SPECIAL_BITS, shifted by row number.
+
+    Written through an int16 view so no float conversion touches the patterns.
+    """
     special = table.clone()
     rows = torch.unique(index.to(torch.int64))
     bits = torch.tensor([b - 0x10000 if b >= 0x8000 else b for b in SPECIAL_BITS], dtype=torch.int16)
@@ -150,53 +142,103 @@ def place_special_rows(table, index):
     return special
 
 
-@pytest.mark.parametrize("weight_shape", [QWEN_SMALL, QWEN_LARGE], ids=["qwen64", "qwen1280"])
-def test_special_values_bit_exact(device, weight_shape):
-    torch.manual_seed(SEED)
-    index = torch.randint(0, weight_shape[-2], (1, 128), dtype=torch.int32)
-    weight = place_special_rows(host_table(weight_shape), index)
+@pytest.mark.parametrize("weight_shape", [QWEN_SMALL, QWEN_LARGE], ids=["w262144x64", "w248320x1280"])
+def test_g6_embedding_special_bit_patterns(weight_shape, device):
+    """-0.0, subnormals, infinities and NaN payloads come back bit for bit (spec rule 2)."""
+    torch.manual_seed(42)
+    index = make_index((1, 128), weight_shape[-2])
+    table = place_special_rows(make_table(weight_shape), index)
 
-    tt_weight = to_device_weight(weight, device)
-    try:
-        back = ttnn.to_torch(tt_weight)
-        if not torch.equal(back.contiguous().view(torch.int16), weight.contiguous().view(torch.int16)):
-            raise RuntimeError("the special bit patterns did not survive the host-to-device copy")
-        output = g6_embedding(to_device_index(index, device), tt_weight, **op_kwargs("dram"))
-        check_exact(output, pytorch_reference(index, weight))
-    finally:
-        ttnn.deallocate(tt_weight)
+    tt_weight = to_device_table(table, device)
+    back = ttnn.to_torch(tt_weight)
+    assert torch.equal(back.contiguous().view(torch.int16), table.contiguous().view(torch.int16))
+    del back
 
+    tt_index = to_device_index(index, device)
+    output = g6_embedding(tt_index, tt_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert_bit_exact(output, reference(index, table))
 
-def test_new_index_values_same_program(device):
-    """Rows are chosen on the device from the values of each call, never from the first call's."""
-    torch.manual_seed(SEED)
-    weight = host_table(QWEN_SMALL)
-    first = torch.randint(0, QWEN_SMALL[0], (1, 4096), dtype=torch.int32)
-    second = torch.randint(0, QWEN_SMALL[0], (1, 4096), dtype=torch.int32)
-
-    tt_weight = to_device_weight(weight, device)
-    try:
-        for index in (first, second, first):
-            output = g6_embedding(to_device_index(index, device), tt_weight, **op_kwargs("dram"))
-            check_exact(output, pytorch_reference(index, weight))
-    finally:
-        ttnn.deallocate(tt_weight)
+    ttnn.deallocate(output)
+    ttnn.deallocate(tt_index)
+    ttnn.deallocate(tt_weight)
 
 
-def test_runtime_rows_true_refused(device, expect_error):
-    index = torch.zeros((1, 1), dtype=torch.int32)
-    weight = host_table(FLUX_RANK3)
+def test_g6_embedding_new_indices_reuse_program(device):
+    """Rows follow the index values of each call; repeats reuse the cached program (rule 1, BB-06, BB-07)."""
+    torch.manual_seed(42)
+    weight_shape = QWEN_SMALL
+    table = make_table(weight_shape)
+    tt_weight = to_device_table(table, device)
+    first = make_index((1, 4096), weight_shape[-2])
+    second = make_index((1, 4096), weight_shape[-2])
+    tt_first = to_device_index(first, device)
+    tt_second = to_device_index(second, device)
+
+    kwargs = dict(layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, runtime_rows=False)
+    out_first = g6_embedding(tt_first, tt_weight, **kwargs)
+    entries_after_first = device.num_program_cache_entries()
+    out_second = g6_embedding(tt_second, tt_weight, **kwargs)
+    out_again = g6_embedding(tt_first, tt_weight, **kwargs)
+    assert device.num_program_cache_entries() == entries_after_first
+
+    assert_bit_exact(out_first, reference(first, table))
+    assert_bit_exact(out_second, reference(second, table))
+    assert_bit_exact(out_again, reference(first, table))
+
+    for tensor in (out_first, out_second, out_again, tt_first, tt_second, tt_weight):
+        ttnn.deallocate(tensor)
+
+
+def test_g6_embedding_rejects_invalid_inputs(device, expect_error):
+    """The input errors the spec's Validation section lists raise ValueError or RuntimeError.
+
+    The spec fixes the error types, not their wording, so any message matches.
+    """
+    torch.manual_seed(42)
+    vocab, width = 64, 64
+    table = torch.randn((vocab, width), dtype=torch.bfloat16)
+    index = make_index((1, 8), vocab)
+    tt_weight = to_device_table(table, device)
+    tt_index = to_device_index(index, device)
+    invalid = (ValueError, RuntimeError)
+
+    rank3_index = to_device_index(make_index((1, 1, 8), vocab), device)
+    with expect_error(invalid, ""):
+        g6_embedding(rank3_index, tt_weight)
+
+    float_index = ttnn.from_torch(
+        index.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(invalid, ""):
+        g6_embedding(float_index, tt_weight)
+
+    tiled_weight = ttnn.from_torch(
+        table, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    with expect_error(invalid, ""):
+        g6_embedding(tt_index, tiled_weight)
+
+    narrow_weight = to_device_table(torch.randn((vocab, 48), dtype=torch.bfloat16), device)
+    with expect_error(invalid, ""):
+        g6_embedding(tt_index, narrow_weight)
+
+    stacked_weight = to_device_table(torch.randn((2, vocab, width), dtype=torch.bfloat16), device)
+    with expect_error(invalid, ""):
+        g6_embedding(tt_index, stacked_weight)
+
+    host_weight = ttnn.from_torch(table, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    with expect_error(invalid, ""):
+        g6_embedding(tt_index, host_weight)
+
+    with expect_error(invalid, ""):
+        g6_embedding(tt_index, tt_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
     with expect_error(UnsupportedAxisValue, "runtime_rows"):
-        g6_embedding(
-            to_device_index(index, device),
-            to_device_weight(weight, device),
-            layout=ttnn.TILE_LAYOUT,
-            runtime_rows=True,
-        )
+        g6_embedding(tt_index, tt_weight, layout=ttnn.TILE_LAYOUT, runtime_rows=True)
 
-
-def test_rank3_weight_leading_extent_refused(device, expect_error):
-    index = torch.zeros((1, 1), dtype=torch.int32)
-    weight = torch.zeros((2, 256, 128), dtype=torch.bfloat16)
-    with expect_error((ValueError, RuntimeError), "weight"):
-        g6_embedding(to_device_index(index, device), to_device_weight(weight, device), layout=ttnn.TILE_LAYOUT)
+    for tensor in (rank3_index, float_index, tiled_weight, narrow_weight, stacked_weight, tt_index, tt_weight):
+        ttnn.deallocate(tensor)
