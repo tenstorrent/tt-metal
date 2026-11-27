@@ -18,6 +18,15 @@ KDA_GATE_DTYPE = ttnn.bfloat16
 KDA_RECURRENT_STATE_DTYPE = ttnn.float32
 KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
+
+
+def kda_prep_output_bf16_mask() -> int:
+    """Chunk preparation's BF16 outputs: KDA_PREP_OUTPUT_BF16_MASK (kd, q_decay, final_decay), or none (every chunk
+    term FLOAT32) under K3_ACC_FIDELITY (tt/kimi_k3/accuracy.py)."""
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
+    return 0 if accuracy.fidelity() else KDA_PREP_OUTPUT_BF16_MASK
+
 # The L1 budgets below are static: they are sized on Galaxy SP8xTP4 against what is live next to these tensors
 # there (the local summary and prefix buffers, the scans' circular buffers and the CCL semaphores), not measured at
 # run time. They assume the device is opened with an L1_SMALL region (as the model's prefill tests do), so the CCL
@@ -95,7 +104,7 @@ def preparation_bytes(batch_heads: int, num_chunks: int, key_dim: int, value_dim
     # v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv tiles per chunk.
     tiles = (value_tiles, key_tiles, key_tiles, 1, key_tiles, key_tiles, 1)
     tile_bytes = sum(
-        count * ttnn.TILE_SIZE * ttnn.TILE_SIZE * (2 if KDA_PREP_OUTPUT_BF16_MASK & (1 << index) else 4)
+        count * ttnn.TILE_SIZE * ttnn.TILE_SIZE * (2 if kda_prep_output_bf16_mask() & (1 << index) else 4)
         for index, count in enumerate(tiles)
     )
     return batch_heads * num_chunks * tile_bytes
