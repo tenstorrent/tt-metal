@@ -1,0 +1,41 @@
+2026-11-26 15:19:00.421 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:256 - Activations and inputs pushed to devices!
+2026-11-26 15:20:33.478 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:281 - Starting iterations
+2026-11-26 15:20:40.116 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:291 - Start sync device id: 0
+2026-11-26 15:22:09.994 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:316 - Switching activation tensor for new determinism iterations...
+2026-11-26 15:22:09.995 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:323 - Iteration = 9, done!
+2026-11-26 15:22:10.031 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 0: UBB1 ASIC1 /dev/tenstorrent/0 0000:01:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 1: UBB1 ASIC2 /dev/tenstorrent/1 0000:02:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 2: UBB1 ASIC3 /dev/tenstorrent/2 0000:03:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 3: UBB1 ASIC4 /dev/tenstorrent/3 0000:04:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 4: UBB1 ASIC5 /dev/tenstorrent/4 0000:05:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 5: UBB1 ASIC6 /dev/tenstorrent/5 0000:06:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 6: UBB1 ASIC7 /dev/tenstorrent/6 0000:07:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 7: UBB1 ASIC8 /dev/tenstorrent/7 0000:08:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 8: UBB2 ASIC1 /dev/tenstorrent/8 0000:41:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 9: UBB2 ASIC2 /dev/tenstorrent/9 0000:42:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 10: UBB2 ASIC3 /dev/tenstorrent/10 0000:43:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 11: UBB2 ASIC4 /dev/tenstorrent/11 0000:44:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 12: UBB2 ASIC5 /dev/tenstorrent/12 0000:45:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 13: UBB2 ASIC6 /dev/tenstorrent/13 0000:46:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 14: UBB2 ASIC7 /dev/tenstorrent/14 0000:47:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 15: UBB2 ASIC8 /dev/tenstorrent/15 0000:48:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 16: UBB4 ASIC1 /dev/tenstorrent/24 0000:81:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 17: UBB4 ASIC2 /dev/tenstorrent/25 0000:82:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 18: UBB4 ASIC3 /dev/tenstorrent/26 0000:83:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 19: UBB4 ASIC4 /dev/tenstorrent/27 0000:84:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 20: UBB4 ASIC5 /dev/tenstorrent/28 0000:85:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 21: UBB4 ASIC6 /dev/tenstorrent/29 0000:86:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 22: UBB4 ASIC7 /dev/tenstorrent/30 0000:87:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 23: UBB4 ASIC8 /dev/tenstorrent/31 0000:88:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 24: UBB3 ASIC1 /dev/tenstorrent/16 0000:c1:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 25: UBB3 ASIC2 /dev/tenstorrent/17 0000:c2:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 26: UBB3 ASIC3 /dev/tenstorrent/18 0000:c3:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 27: UBB3 ASIC4 /dev/tenstorrent/19 0000:c4:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 28: UBB3 ASIC5 /dev/tenstorrent/20 0000:c5:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 29: UBB3 ASIC6 /dev/tenstorrent/21 0000:c6:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 30: UBB3 ASIC7 /dev/tenstorrent/22 0000:c7:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - Chip map device 31: UBB3 ASIC8 /dev/tenstorrent/23 0000:c8:00.0 board=0x47330000000
+2026-11-26 15:22:10.032 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:151 - ND report: 0 of 32 devices non-deterministic (10 checks)
+2026-11-26 15:22:10.032 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:344 - Number of non-deterministic outputs on device 0 is 0
+2026-11-26 15:22:10.033 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:344 - Number of non-deterministic outputs on device 4 is 0
+======================== 1 passed in 200.82s (0:03:20) =========================

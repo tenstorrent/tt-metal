@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from pathlib import Path
 
 from tests.didt.runner.chips import Chip, by_dev
@@ -36,6 +37,10 @@ def read(name: str) -> str:
     return (TESTDATA / name).read_text()
 
 
+# chips[] of the run the real nd_*.log excerpts come from (testdata/SOURCES.txt)
+c10u08 = by_dev([Chip(**c) for c in json.loads(read("chips_c10u08.json"))])
+
+
 def test_triage_hang_devices_real_shape():
     d, warnings = triage_hang_devices(read("crash_triage_hang.csv"), chips32)
     assert [x["dev"] for x in d] == [27] and d[0]["tray"] == 3 and d[0]["asic"] == 4
@@ -64,70 +69,96 @@ def test_triage_device_not_in_snapshot_keeps_dev_only():
     assert d[0]["dev"] == 27 and "bdf" not in d[0] and d[0]["hung"] is True
 
 
-def test_nd_report_top_cores_and_pattern():
-    devices, warnings = nd_report_devices(read("nd_report.log"), chips32)
+def test_nd_report_real_minimal():
+    devices, warnings = nd_report_devices(read("nd_minimal_dev16.log"), c10u08)
     assert warnings == []
-    assert [x["dev"] for x in devices] == [19, 26]
-    d19, d26 = devices
-    assert {k: d19[k] for k in IDENTITY} == chips32[19].as_dict()
-    assert d19["failed_checks"] == 3 and d19["checks"] == 20 and d19["hung"] is False
-    assert d19["pattern"] == "single core (6,8)"
-    assert d19["cores"] == [
-        {
-            "x": 6,
-            "y": 8,
-            "translated": [7, 10],
-            "failed_checks": 3,
-            "signature": "face column lane 3 in 3/3 checks; 2-96 elements per check; bits 7:100%",
-        }
+    (d,) = devices
+    assert {k: d[k] for k in IDENTITY} == {
+        "dev": 16,
+        "bdf": "0000:81:00.0",
+        "tray": 4,
+        "asic": 1,
+        "asic_id": "0x38ce2fee992a3907",
+        "kmd": 24,
+    }
+    assert (d["failed_checks"], d["checks"], d["hung"]) == (2, 20, False)
+    assert d["pattern"] == (
+        "scattered (24 cores in 2 rows, 12 columns): "
+        "(0,1) (1,1) (2,1) (3,1) (4,1) (5,1) (6,1) (7,1) (8,1) (9,1) (10,1) (11,1) +12 more"
+    )
+    # 24 cores failed; the log details 8 of them
+    assert [(c["x"], c["y"], c["translated"], c["failed_checks"]) for c in d["cores"]] == [
+        (0, 1, [1, 3], 1),
+        (1, 1, [2, 3], 1),
+        (2, 1, [3, 3], 1),
+        (3, 1, [4, 3], 1),
+        (4, 1, [5, 3], 1),
+        (5, 1, [6, 3], 1),
+        (6, 1, [7, 3], 1),
+        (7, 1, [10, 3], 1),
     ]
-    assert d26["pattern"].startswith("scattered (10 cores")
-    assert len(d26["cores"]) == 8 and d26["cores"][0]["x"] == 0 and d26["cores"][0]["failed_checks"] == 2
+    assert d["cores"][0]["signature"] == (
+        "whole tiles in 1/1 checks; most common face column 4 (1/1 checks); 7601-7601 elements per check; "
+        "bits 3:16% 2:16% 4:14%"
+    )
+    assert d["cores"][2]["signature"] == "no structure"
+
+
+def test_nd_report_real_duty():
+    # This log also holds log_nd_cores' per-check "ND device 16 [...] pattern:" line, which is not a summary.
+    devices, warnings = nd_report_devices(read("nd_duty_dev16.log"), c10u08)
+    assert warnings == []
+    (d,) = devices
+    assert {k: d[k] for k in IDENTITY} == c10u08[16].as_dict()
+    assert (d["failed_checks"], d["checks"], d["pattern"]) == (3, 10, "rectangle x=0..11 y=0..8 (108 cores)")
+    assert [(c["x"], c["y"], c["failed_checks"]) for c in d["cores"]] == [(x, 1, 3) for x in range(8)]
+    assert d["cores"][3]["signature"] == (
+        "row strips in 1/1 checks; most common face column 5 (1/1 checks); 255669-255669 elements per check; "
+        "bits 13:10% 12:10% 11:8%"
+    )
+
+
+def test_nd_report_real_pass_is_empty():
+    # 32 Chip map lines and "ND report: 0 of 32", no summary
+    assert nd_report_devices(read("nd_pass_duty.log"), c10u08) == ([], [])
 
 
 def test_nd_report_bdf_mismatch_warns():
-    text = read("nd_report.log").replace(
-        "Chip map device 19: UBB4 ASIC4 /dev/tenstorrent/27 0000:84:00.0",
-        "Chip map device 19: UBB4 ASIC5 /dev/tenstorrent/28 0000:85:00.0",
+    text = read("nd_minimal_dev16.log").replace(
+        "Chip map device 16: UBB4 ASIC1 /dev/tenstorrent/24 0000:81:00.0",
+        "Chip map device 16: UBB4 ASIC2 /dev/tenstorrent/25 0000:82:00.0",
     )
-    devices, warnings = nd_report_devices(text, chips32)
-    d19 = devices[0]
-    assert d19["dev"] == 19 and d19["bdf"] == "0000:85:00.0"
+    devices, warnings = nd_report_devices(text, c10u08)
+    (d,) = devices
     # identity follows the log's bdf: that chip's tray/asic/asic_id/kmd from the snapshot
-    assert (d19["tray"], d19["asic"], d19["asic_id"]) == (4, 5, chips32[20].asic_id)
-    assert warnings == ["device 19: log says bdf 0000:85:00.0, chip snapshot says 0000:84:00.0; kept the log's"]
-
-
-def test_nd_report_interval_zero_is_empty():
-    assert nd_report_devices("=== 1 passed in 9s ===\n", chips32) == ([], [])
+    assert d == {**d, **c10u08[17].as_dict(), "dev": 16}
+    assert warnings == ["device 16: log says bdf 0000:82:00.0, chip snapshot says 0000:81:00.0; kept the log's"]
 
 
 def test_nd_report_missing_chip_joins_on_snapshot_order():
-    # tray 4 asic 2 (0000:82:00.0) absent: 0000:84:00.0 is dev 18, not 19
-    chips31 = _galaxy(skip={(4, 2)})
-    text = (
-        read("nd_report.log")
-        .replace("device 19", "device 18")
-        .replace("device 18: UBB4 ASIC3", "device 99: UBB4 ASIC3")
+    # 0000:48:00.0 absent: every later chip moves down one, so 0000:81:00.0 is dev 15
+    kept = [c for c in c10u08.values() if c.bdf != "0000:48:00.0"]
+    chips31 = by_dev([Chip(i, c.bdf, c.tray, c.asic, c.asic_id, c.kmd) for i, c in enumerate(kept)])
+    text = "".join(
+        line.replace("device 16", "device 15")
+        for line in read("nd_minimal_dev16.log").splitlines(True)
+        if "Chip map device 15:" not in line
     )
     devices, warnings = nd_report_devices(text, chips31)
-    assert devices[0]["dev"] == 18 and devices[0]["bdf"] == "0000:84:00.0" and devices[0]["kmd"] == 27
-    assert not [w for w in warnings if w.startswith("device 18")]
+    assert devices[0]["dev"] == 15 and devices[0]["bdf"] == "0000:81:00.0" and devices[0]["kmd"] == 24
+    assert devices[0]["asic_id"] == c10u08[16].asic_id
+    assert warnings == []
 
 
 def test_write_ack_nd_chip_uses_parent_chip_id():
-    # A child run with TT_VISIBLE_DEVICES=<chip> sees one chip, as device 0.
-    child = "".join(
-        line
-        for line in read("nd_report.log")
-        .replace("device 19", "device 0")
-        .replace("0000:84:00.0", "0000:83:00.0")
-        .splitlines(True)
-        if "device 0" in line or "failed in" in line
-    )
-    devices, warnings = write_ack_devices({18: "ND chip 18 (runtime id 0): ..."}, {18: child}, chips32)
-    assert [d["dev"] for d in devices] == [18]
-    assert devices[0]["hung"] is False and devices[0]["bdf"] == "0000:83:00.0" and devices[0]["failed_checks"] == 3
+    # The child ran with TT_VISIBLE_DEVICES=16, saw one chip and logged it as device 0.
+    why = "ND chip 16 (runtime id 0): BusDeviceFunction=0000:81:00.0 /dev/tenstorrent/24"
+    devices, warnings = write_ack_devices({16: why}, {16: read("nd_write_ack_chip16.log")}, c10u08)
+    (d,) = devices
+    assert {k: d[k] for k in IDENTITY} == c10u08[16].as_dict()
+    assert (d["failed_checks"], d["checks"], d["pattern"], d["hung"]) == (3, 10, "whole grid (120 cores)", False)
+    assert d["cores"][0] == {"x": 0, "y": 0, "translated": [1, 2], "failed_checks": 3, "signature": "no structure"}
+    assert d["cores"][7]["translated"] == [10, 2]
     assert warnings == []
 
 

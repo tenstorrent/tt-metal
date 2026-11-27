@@ -1,0 +1,258 @@
+[
+ {
+  "dev": 0,
+  "bdf": "0000:01:00.0",
+  "tray": 1,
+  "asic": 1,
+  "asic_id": "0x47818fa735173c30",
+  "kmd": 0
+ },
+ {
+  "dev": 1,
+  "bdf": "0000:02:00.0",
+  "tray": 1,
+  "asic": 2,
+  "asic_id": "0x669a0b50dabda5e9",
+  "kmd": 1
+ },
+ {
+  "dev": 2,
+  "bdf": "0000:03:00.0",
+  "tray": 1,
+  "asic": 3,
+  "asic_id": "0xf4e769c363e5308c",
+  "kmd": 2
+ },
+ {
+  "dev": 3,
+  "bdf": "0000:04:00.0",
+  "tray": 1,
+  "asic": 4,
+  "asic_id": "0xf090798ae75bdf11",
+  "kmd": 3
+ },
+ {
+  "dev": 4,
+  "bdf": "0000:05:00.0",
+  "tray": 1,
+  "asic": 5,
+  "asic_id": "0x65c322074573b496",
+  "kmd": 4
+ },
+ {
+  "dev": 5,
+  "bdf": "0000:06:00.0",
+  "tray": 1,
+  "asic": 6,
+  "asic_id": "0xd5aee3ed16ded761",
+  "kmd": 5
+ },
+ {
+  "dev": 6,
+  "bdf": "0000:07:00.0",
+  "tray": 1,
+  "asic": 7,
+  "asic_id": "0xe9723a67ae589b0d",
+  "kmd": 6
+ },
+ {
+  "dev": 7,
+  "bdf": "0000:08:00.0",
+  "tray": 1,
+  "asic": 8,
+  "asic_id": "0xe8aeaeeb374b2227",
+  "kmd": 7
+ },
+ {
+  "dev": 8,
+  "bdf": "0000:41:00.0",
+  "tray": 2,
+  "asic": 1,
+  "asic_id": "0xc4f74be37fa8c479",
+  "kmd": 8
+ },
+ {
+  "dev": 9,
+  "bdf": "0000:42:00.0",
+  "tray": 2,
+  "asic": 2,
+  "asic_id": "0x199b27ecb4caab1e",
+  "kmd": 9
+ },
+ {
+  "dev": 10,
+  "bdf": "0000:43:00.0",
+  "tray": 2,
+  "asic": 3,
+  "asic_id": "0xd83c92c09148d83e",
+  "kmd": 10
+ },
+ {
+  "dev": 11,
+  "bdf": "0000:44:00.0",
+  "tray": 2,
+  "asic": 4,
+  "asic_id": "0x912376de87f2cae4",
+  "kmd": 11
+ },
+ {
+  "dev": 12,
+  "bdf": "0000:45:00.0",
+  "tray": 2,
+  "asic": 5,
+  "asic_id": "0x7865b36350d4ee9c",
+  "kmd": 12
+ },
+ {
+  "dev": 13,
+  "bdf": "0000:46:00.0",
+  "tray": 2,
+  "asic": 6,
+  "asic_id": "0x3795f86f25c922c3",
+  "kmd": 13
+ },
+ {
+  "dev": 14,
+  "bdf": "0000:47:00.0",
+  "tray": 2,
+  "asic": 7,
+  "asic_id": "0xfe0638c63e909526",
+  "kmd": 14
+ },
+ {
+  "dev": 15,
+  "bdf": "0000:48:00.0",
+  "tray": 2,
+  "asic": 8,
+  "asic_id": "0x44dd4e6b6351d835",
+  "kmd": 15
+ },
+ {
+  "dev": 16,
+  "bdf": "0000:81:00.0",
+  "tray": 4,
+  "asic": 1,
+  "asic_id": "0x38ce2fee992a3907",
+  "kmd": 24
+ },
+ {
+  "dev": 17,
+  "bdf": "0000:82:00.0",
+  "tray": 4,
+  "asic": 2,
+  "asic_id": "0x5389819c8bb6188f",
+  "kmd": 25
+ },
+ {
+  "dev": 18,
+  "bdf": "0000:83:00.0",
+  "tray": 4,
+  "asic": 3,
+  "asic_id": "0x68caacb21d77252e",
+  "kmd": 26
+ },
+ {
+  "dev": 19,
+  "bdf": "0000:84:00.0",
+  "tray": 4,
+  "asic": 4,
+  "asic_id": "0x1c6b319923050bf9",
+  "kmd": 27
+ },
+ {
+  "dev": 20,
+  "bdf": "0000:85:00.0",
+  "tray": 4,
+  "asic": 5,
+  "asic_id": "0x5bb37203a2a07b0e",
+  "kmd": 28
+ },
+ {
+  "dev": 21,
+  "bdf": "0000:86:00.0",
+  "tray": 4,
+  "asic": 6,
+  "asic_id": "0xe61a306d7ae96679",
+  "kmd": 29
+ },
+ {
+  "dev": 22,
+  "bdf": "0000:87:00.0",
+  "tray": 4,
+  "asic": 7,
+  "asic_id": "0x93d5a0e0608fcd0f",
+  "kmd": 30
+ },
+ {
+  "dev": 23,
+  "bdf": "0000:88:00.0",
+  "tray": 4,
+  "asic": 8,
+  "asic_id": "0xda3108b35b87139b",
+  "kmd": 31
+ },
+ {
+  "dev": 24,
+  "bdf": "0000:c1:00.0",
+  "tray": 3,
+  "asic": 1,
+  "asic_id": "0x2f1aee01afc7b5e6",
+  "kmd": 16
+ },
+ {
+  "dev": 25,
+  "bdf": "0000:c2:00.0",
+  "tray": 3,
+  "asic": 2,
+  "asic_id": "0xfd05a823ccf912f6",
+  "kmd": 17
+ },
+ {
+  "dev": 26,
+  "bdf": "0000:c3:00.0",
+  "tray": 3,
+  "asic": 3,
+  "asic_id": "0x64ebc1ec645ca6c8",
+  "kmd": 18
+ },
+ {
+  "dev": 27,
+  "bdf": "0000:c4:00.0",
+  "tray": 3,
+  "asic": 4,
+  "asic_id": "0x3ef7cc940151a87b",
+  "kmd": 19
+ },
+ {
+  "dev": 28,
+  "bdf": "0000:c5:00.0",
+  "tray": 3,
+  "asic": 5,
+  "asic_id": "0x5ea81983418057dc",
+  "kmd": 20
+ },
+ {
+  "dev": 29,
+  "bdf": "0000:c6:00.0",
+  "tray": 3,
+  "asic": 6,
+  "asic_id": "0x07213b65db220013",
+  "kmd": 21
+ },
+ {
+  "dev": 30,
+  "bdf": "0000:c7:00.0",
+  "tray": 3,
+  "asic": 7,
+  "asic_id": "0x2403ba6d137e0dc1",
+  "kmd": 22
+ },
+ {
+  "dev": 31,
+  "bdf": "0000:c8:00.0",
+  "tray": 3,
+  "asic": 8,
+  "asic_id": "0xec7b31f2d9c89c99",
+  "kmd": 23
+ }
+]

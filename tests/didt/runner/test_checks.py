@@ -190,6 +190,18 @@ def test_loop_seconds_real_log():
     assert round(seconds, 3) == 164.372 and iterations == 1000
 
 
+def test_loop_seconds_real_nd_logs():
+    # testdata/SOURCES.txt; duty 12:21:41.623 -> 12:23:20.973, child 12:44:09.915 -> 12:45:42.370,
+    # pass 15:20:33.478 -> 15:22:09.995
+    for name, expected in (
+        ("nd_duty_dev16.log", (99.35, 10)),
+        ("nd_write_ack_chip16.log", (92.455, 10)),
+        ("nd_pass_duty.log", (96.517, 10)),
+    ):
+        seconds, iterations = loop_seconds(TESTDATA / name)
+        assert (round(seconds, 3), iterations) == expected, name
+
+
 def test_loop_seconds_without_iteration_lines(tmp_path):
     (tmp_path / "log").write_text("Device 27: Timeout waiting for dispatch\n")
     assert loop_seconds(tmp_path / "log") is None
