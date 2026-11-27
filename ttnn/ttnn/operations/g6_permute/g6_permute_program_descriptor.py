@@ -2,266 +2,182 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_permute program descriptor: regime R1 `rows_tile` (dims (0, 2, 1, 3), TILE).
+"""g6_permute, regime rows_tile: plan (unit split, block knobs) and ProgramDescriptor.
 
-Plan selection (`select_plan`), per-core block ranges, CBs and kernels. Every knob of the
-Blocking Model in op_design.md is defined once here; CB page counts, kernel loop bounds and
-the core split derive from it.
+Work unit: one output tile (n, b, ta, tw), ordered b-fastest:
+    u = ((n * tensor_a_tiles + ta) * tensor_w_tiles + tw) * B + b
+Each core owns a contiguous unit range and cuts it into blocks by the block rule
+(`_block_extent`, mirrored in kernels/g6_permute_common.hpp).
 """
 
 from __future__ import annotations
 
-import copy
-import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-REGIME_ROWS_TILE = "rows_tile"
+TILE_ROWS = 32
+FACE_COLS = 16
 
-# Blocking-model knobs (op_design.md, Axes and Buffer-depth knobs).
-BLOCK_WT = 1
-MAX_DEPTH_IN = 2
-MAX_DEPTH_STAGING = 2
-
-CB_INPUT_TILES = 0
+CB_INPUT_ROWS = 0
 CB_OUTPUT_STAGING = 1
 
-_ROLE = "rows_tile reader+writer"
+# Block knobs whose Phase 0 value is fixed by the design. They are realized by the block rule
+# ("keep n", "keep tw"); a refinement that turns one must teach the block rule the new extent.
+BLOCK_N = 1
+BLOCK_W_TILES = 1
+MAX_DEPTH_IN = 2
+DEPTH_OUT = 1
 
 
-@dataclass(frozen=True)
-class Geometry:
-    """Tile and face geometry of one dtype, in rows and bytes."""
-
-    tile_h: int
-    tile_w: int
-    face_h: int
-    face_w: int
-    tile_bytes: int
-    face_bytes: int
-    face_row_bytes: int
-
-    @property
-    def faces_per_band(self):
-        return self.tile_w // self.face_w
-
-
-def tile_geometry(tensor) -> Geometry:
-    tile_h, tile_w = (int(v) for v in tensor.tile.tile_shape)
-    face_h, face_w = (int(v) for v in tensor.tile.face_shape)
-    # Byte offsets of face rows assume the 32x32 tile of 16x16 faces (op_design.md, Mechanism caps).
-    assert (tile_h, tile_w) == (32, 32), f"g6_permute: tile shape {(tile_h, tile_w)} is not 32x32"
-    assert (face_h, face_w) == (16, 16), f"g6_permute: face shape {(face_h, face_w)} is not 16x16"
-    element_bytes = int(tensor.element_size())
-    tile_bytes = int(tensor.tile.get_tile_size(tensor.dtype))
-    assert tile_bytes == tile_h * tile_w * element_bytes, "g6_permute: tile bytes do not match an unpacked tile"
-    return Geometry(
-        tile_h=tile_h,
-        tile_w=tile_w,
-        face_h=face_h,
-        face_w=face_w,
-        tile_bytes=tile_bytes,
-        face_bytes=face_h * face_w * element_bytes,
-        face_row_bytes=face_w * element_bytes,
-    )
+@dataclass
+class Plan:
+    regime: str
+    num_cores: int
+    total_units: int
+    units_per_core_g1: int
+    units_per_core_g2: int
+    a_tile_rows: int
+    block_b_rows: int
+    depth_in: int
+    max_blocks_per_core: int
+    core_roles: dict
+    # Geometry and per-core assignment the descriptor is built from.
+    shape: tuple = ()
+    tensor_a_tiles: int = 0
+    tensor_b_tiles: int = 0
+    tensor_w_tiles: int = 0
+    all_cores: object = None
+    assignment: list = field(default_factory=list)  # [(CoreCoord, start_unit, num_units)]
 
 
-def _div_up(x, y):
-    return -(-x // y)
+def _div_up(a, b):
+    return (a + b - 1) // b
 
 
-def _block_extents(tile_h):
-    """Legal block_a / block_b values: the tile height halved down to 1."""
-    extents = []
-    e = tile_h
-    while e >= 1:
-        extents.append(e)
-        e //= 2
-    return extents
+def _block_extent(b, remaining, B, block_b_rows):
+    """Units in the block that starts at row b: stays in range, in B, in one b-tile, <= block_b_rows."""
+    return min(block_b_rows, remaining, B - b, TILE_ROWS - b % TILE_ROWS)
 
 
-def num_blocks_of(n, a, b, wt, block_a, block_b, block_wt):
-    return n * _div_up(a, block_a) * _div_up(b, block_b) * _div_up(wt, block_wt)
+def _count_blocks(start, count, B, block_b_rows):
+    blocks = 0
+    b = start % B
+    while count > 0:
+        run = _block_extent(b, count, B, block_b_rows)
+        count -= run
+        b = (b + run) % B
+        blocks += 1
+    return blocks
 
 
-def max_cores_for(device):
-    """The core-count knob: the whole worker grid (op_design.md, Work Distribution)."""
-    grid = device.compute_with_storage_grid_size()
-    return int(grid.x) * int(grid.y)
+def build_plan(input_tensor, canonical_dims) -> Plan:
+    assert tuple(canonical_dims) == (0, 2, 1, 3), "only regime rows_tile is built"
+    N, A, B, W = (int(d) for d in input_tensor.shape)
+    tensor_a_tiles = _div_up(A, TILE_ROWS)
+    tensor_b_tiles = _div_up(B, TILE_ROWS)
+    tensor_w_tiles = _div_up(W, TILE_ROWS)
 
+    a_tile_rows = min(TILE_ROWS, A)
+    total_units = N * tensor_a_tiles * tensor_w_tiles * B
 
-def select_plan(n, a, b, wt, max_cores, tile_h, block_wt):
-    """The occupancy walk of op_design.md: closed cells, then halve a, then halve b.
+    grid = input_tensor.device().compute_with_storage_grid_size()
+    (
+        num_cores,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        units_per_core_g1,
+        units_per_core_g2,
+    ) = ttnn.split_work_to_cores(grid, total_units, row_wise=True)
 
-    Each step is taken while its block count fits `max_cores`; the walk stops at the first step that
-    does not. Returns (block_a, block_b).
-    """
-    extents = _block_extents(tile_h)
-    walk = [(e, tile_h) for e in extents] + [(1, e) for e in extents[1:]]
-    chosen = walk[0]
-    for step in walk[1:]:
-        if num_blocks_of(n, a, b, wt, *step, block_wt) > max_cores:
-            break
-        chosen = step
-    return chosen
+    block_b_rows = min(TILE_ROWS, B, units_per_core_g1)
 
-
-def _split(grid, num_blocks, max_cores):
-    """Contiguous block ranges on min(num_blocks, max_cores) cores, row-wise (one or two rectangles)."""
-    cores = ttnn.num_cores_to_corerangeset(min(num_blocks, max_cores), grid, True)
-    _, all_cores, group_1, group_2, per_core_1, per_core_2 = ttnn.split_work_to_cores(cores, num_blocks, row_wise=True)
     assignment = []
     start = 0
-    for group, per_core in ((group_1, per_core_1), (group_2, per_core_2)):
+    for group, per_core in ((core_group_1, units_per_core_g1), (core_group_2, units_per_core_g2)):
         if per_core == 0:
             continue
         for core in ttnn.corerange_to_cores(group, None, True):
-            assignment.append(((int(core.x), int(core.y)), start, int(per_core)))
+            assignment.append((core, start, per_core))
             start += per_core
-    assert start == num_blocks, f"g6_permute: split covers {start} of {num_blocks} blocks"
-    return all_cores, assignment
+    assert start == total_units
 
+    max_blocks_per_core = max(_count_blocks(s, n, B, block_b_rows) for _, s, n in assignment)
+    depth_in = min(MAX_DEPTH_IN, max_blocks_per_core)
 
-def plan_key(input_tensor, canonical_dims):
-    """Everything that changes the program: shapes, dims, dtype, layout, placement, grid, core knob."""
-    memory_config = input_tensor.memory_config()
-    device = input_tensor.device()
-    grid = device.compute_with_storage_grid_size()
-    return (
-        "g6_permute",
-        tuple(int(d) for d in input_tensor.shape),
-        tuple(int(d) for d in input_tensor.padded_shape),
-        tuple(canonical_dims),
-        str(input_tensor.dtype),
-        str(input_tensor.layout),
-        str(memory_config.buffer_type),
-        str(memory_config.memory_layout),
-        (int(grid.x), int(grid.y)),
-        max_cores_for(device),
-        BLOCK_WT,
-        MAX_DEPTH_IN,
-        MAX_DEPTH_STAGING,
+    core_roles = {f"{c.x},{c.y}": f"rows_tile reader+writer units [{s}, {s + n})" for c, s, n in assignment}
+
+    return Plan(
+        regime="rows_tile",
+        num_cores=num_cores,
+        total_units=total_units,
+        units_per_core_g1=units_per_core_g1,
+        units_per_core_g2=units_per_core_g2,
+        a_tile_rows=a_tile_rows,
+        block_b_rows=block_b_rows,
+        depth_in=depth_in,
+        max_blocks_per_core=max_blocks_per_core,
+        core_roles=core_roles,
+        shape=(N, A, B, W),
+        tensor_a_tiles=tensor_a_tiles,
+        tensor_b_tiles=tensor_b_tiles,
+        tensor_w_tiles=tensor_w_tiles,
+        all_cores=all_cores,
+        assignment=assignment,
     )
 
 
-def _program_hash(key, plan):
-    knobs = tuple(plan[k] for k in ("block_a", "block_b", "block_wt", "depth_in", "depth_staging"))
-    digest = hashlib.blake2b(repr((key, knobs)).encode(), digest_size=8).digest()
-    return int.from_bytes(digest, "little")
+def create_program_descriptor(plan: Plan, input_tensor, output_tensor) -> ttnn.ProgramDescriptor:
+    """Descriptor for one plan. Buffer addresses are common runtime args (index 0) so a cached
+    descriptor is re-dispatched by patching them; everything else is fixed per plan."""
+    N, A, B, W = plan.shape
+    tile_bytes = input_tensor.buffer_page_size()
+    face_row_bytes = FACE_COLS * input_tensor.element_size()
+    assert tile_bytes == output_tensor.buffer_page_size()
+    assert tile_bytes == 4 * FACE_COLS * face_row_bytes
 
-
-def build_plan(input_tensor):
-    """Host-only plan of the rows_tile regime for a validated input; no allocation, no dispatch."""
-    geometry = tile_geometry(input_tensor)
-    n, a, b, w = (int(d) for d in input_tensor.shape)
-    wt = _div_up(w, geometry.tile_w)
-    device = input_tensor.device()
-    grid = device.compute_with_storage_grid_size()
-    max_cores = max_cores_for(device)
-    block_wt = BLOCK_WT
-
-    block_a, block_b = select_plan(n, a, b, wt, max_cores, geometry.tile_h, block_wt)
-    num_blocks = num_blocks_of(n, a, b, wt, block_a, block_b, block_wt)
-    all_cores, assignment = _split(grid, num_blocks, max_cores)
-    max_blocks_per_core = max(count for _, _, count in assignment)
-    regroup = block_a > 1
-    return {
-        "regime": REGIME_ROWS_TILE,
-        "block_a": block_a,
-        "block_b": block_b,
-        "block_wt": block_wt,
-        "num_blocks": num_blocks,
-        "num_cores": len(assignment),
-        "depth_in": min(MAX_DEPTH_IN, max_blocks_per_core),
-        "depth_staging": min(MAX_DEPTH_STAGING, max_blocks_per_core) if regroup else 0,
-        "regroup": regroup,
-        "cores": [
-            {"core": core, "role": _ROLE, "start_block": start, "num_blocks": count}
-            for core, start, count in assignment
-        ],
-        "_all_cores": all_cores,
-    }
-
-
-def public_plan(plan):
-    return copy.deepcopy({k: v for k, v in plan.items() if not k.startswith("_")})
-
-
-def create_program_descriptor(input_tensor, output_tensor, plan, key):
-    geometry = tile_geometry(input_tensor)
-    n, a, b, w = (int(d) for d in input_tensor.shape)
-    wt = _div_up(w, geometry.tile_w)
-    in_padded = [int(d) for d in input_tensor.padded_shape]
-    out_padded = [int(d) for d in output_tensor.padded_shape]
-    assert input_tensor.buffer_page_size() == geometry.tile_bytes
-    assert output_tensor.buffer_page_size() == geometry.tile_bytes
-
-    block_a, block_b, block_wt = plan["block_a"], plan["block_b"], plan["block_wt"]
-    all_cores = plan["_all_cores"]
-
-    cbs = [
-        ttnn.CBDescriptor(
-            total_size=plan["depth_in"] * block_a * block_wt * geometry.tile_bytes,
-            core_ranges=all_cores,
+    def cb(index, num_pages):
+        return ttnn.CBDescriptor(
+            total_size=num_pages * tile_bytes,
+            core_ranges=plan.all_cores,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=CB_INPUT_TILES, data_format=input_tensor.dtype, page_size=geometry.tile_bytes
-                )
+                ttnn.CBFormatDescriptor(buffer_index=index, data_format=input_tensor.dtype, page_size=tile_bytes)
             ],
         )
-    ]
-    if plan["regroup"]:
-        cbs.append(
-            ttnn.CBDescriptor(
-                total_size=plan["depth_staging"] * block_b * block_wt * geometry.tile_bytes,
-                core_ranges=all_cores,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=CB_OUTPUT_STAGING, data_format=output_tensor.dtype, page_size=geometry.tile_bytes
-                    )
-                ],
-            )
-        )
 
-    # Same order as the constants of kernels/g6_permute_common.hpp.
-    shared_ct_args = [
-        a,
-        b,
-        wt,
-        in_padded[1],
-        in_padded[2] // geometry.tile_h,
-        in_padded[3] // geometry.tile_w,
-        out_padded[1],
-        out_padded[2] // geometry.tile_h,
-        out_padded[3] // geometry.tile_w,
-        block_a,
-        block_b,
-        block_wt,
-        geometry.tile_h,
-        geometry.face_h,
-        geometry.faces_per_band,
-        geometry.tile_bytes,
-        geometry.face_bytes,
-        geometry.face_row_bytes,
-        CB_INPUT_TILES,
+    cbs = [
+        cb(CB_INPUT_ROWS, plan.depth_in * plan.a_tile_rows),
+        cb(CB_OUTPUT_STAGING, DEPTH_OUT * plan.block_b_rows),
     ]
-    reader_ct_args = list(shared_ct_args)
+
+    geometry_ct_args = [
+        A,
+        B,
+        plan.tensor_a_tiles,
+        plan.tensor_b_tiles,
+        plan.tensor_w_tiles,
+        plan.a_tile_rows,
+        plan.block_b_rows,
+        face_row_bytes,
+        tile_bytes,
+    ]
+
+    reader_ct_args = [CB_INPUT_ROWS, *geometry_ct_args]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    writer_ct_args = list(shared_ct_args) + [CB_OUTPUT_STAGING, plan["depth_staging"]]
+    writer_ct_args = [CB_INPUT_ROWS, CB_OUTPUT_STAGING, *geometry_ct_args]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     per_core_rt_args = ttnn.RuntimeArgs()
-    for core in plan["cores"]:
-        x, y = core["core"]
-        per_core_rt_args[x][y] = [core["start_block"], core["num_blocks"]]
+    for core, start, count in plan.assignment:
+        per_core_rt_args[core.x][core.y] = [start, count]
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_permute_reader.cpp"),
-        core_ranges=all_cores,
+        core_ranges=plan.all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=per_core_rt_args,
         common_runtime_args=[input_tensor.buffer_address()],
@@ -269,23 +185,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan, key):
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_permute_writer.cpp"),
-        core_ranges=all_cores,
+        core_ranges=plan.all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=per_core_rt_args,
         common_runtime_args=[output_tensor.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
     )
-    descriptor = ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=cbs)
-    descriptor.custom_program_hash = _program_hash(key, plan)
-    return descriptor
+    return ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=cbs)
 
 
 READER_KERNEL_INDEX = 0
 WRITER_KERNEL_INDEX = 1
-
-
-def patch_addresses(descriptor, input_tensor, output_tensor):
-    """Cache hit: only the two buffer addresses change."""
-    kernels = descriptor.kernels
-    kernels[READER_KERNEL_INDEX].common_runtime_args[0] = input_tensor.buffer_address()
-    kernels[WRITER_KERNEL_INDEX].common_runtime_args[0] = output_tensor.buffer_address()

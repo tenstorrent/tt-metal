@@ -2,110 +2,126 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared by the rows_tile reader and writer: the compile-time-arg prefix both kernels receive in the
-// same order, the block grid of op_design.md, and the tile-row byte geometry.
-
 #pragma once
 
 #include <cstdint>
 
-#include "api/dataflow/dataflow_api.h"
-
+// Regime rows_tile: out[n, b, a, w] = x[n, a, b, w] on bfloat16 tiles of four 16x16 faces.
+// Work unit = one output tile (n, b, ta, tw), ordered b-fastest:
+//     u = ((n * tensor_a_tiles + ta) * tensor_w_tiles + tw) * B + b
+// The block rule below is mirrored by _block_extent in g6_permute_program_descriptor.py.
 namespace g6_permute {
 
-// Logical extents of x = [N, A, B, W]; WT = ceil(W / tile width).
-constexpr uint32_t A = get_compile_time_arg_val(0);
-constexpr uint32_t B = get_compile_time_arg_val(1);
-constexpr uint32_t WT = get_compile_time_arg_val(2);
-// Page strides come from the padded shapes: interleaved pages are laid over them, not over the logical shape.
-constexpr uint32_t IN_A = get_compile_time_arg_val(3);
-constexpr uint32_t IN_BT = get_compile_time_arg_val(4);
-constexpr uint32_t IN_WT = get_compile_time_arg_val(5);
-constexpr uint32_t OUT_B = get_compile_time_arg_val(6);
-constexpr uint32_t OUT_AT = get_compile_time_arg_val(7);
-constexpr uint32_t OUT_WT = get_compile_time_arg_val(8);
-constexpr uint32_t BLOCK_A = get_compile_time_arg_val(9);
-constexpr uint32_t BLOCK_B = get_compile_time_arg_val(10);
-constexpr uint32_t BLOCK_WT = get_compile_time_arg_val(11);
-constexpr uint32_t TILE_H = get_compile_time_arg_val(12);
-constexpr uint32_t FACE_H = get_compile_time_arg_val(13);
-constexpr uint32_t FACES_PER_BAND = get_compile_time_arg_val(14);
-constexpr uint32_t TILE_BYTES = get_compile_time_arg_val(15);
-constexpr uint32_t FACE_BYTES = get_compile_time_arg_val(16);
-constexpr uint32_t FACE_ROW_BYTES = get_compile_time_arg_val(17);
-constexpr uint32_t CB_INPUT_TILES = get_compile_time_arg_val(18);
-constexpr uint32_t NUM_SHARED_CT_ARGS = 19;
+constexpr uint32_t TILE_ROWS = 32;
+constexpr uint32_t FACE_ROWS = 16;
 
-constexpr uint32_t NA = (A + BLOCK_A - 1) / BLOCK_A;
-constexpr uint32_t NBG = (B + BLOCK_B - 1) / BLOCK_B;
-constexpr uint32_t NW = (WT + BLOCK_WT - 1) / BLOCK_WT;
-// Ragged blocks still push and pop the nominal count so the input ring closes on every core.
-constexpr uint32_t INPUT_PAGES_PER_BLOCK = BLOCK_A * BLOCK_WT;
+// Byte offsets inside one tile, derived from the 32-B (bfloat16) face-row segment.
+template <uint32_t face_row_bytes>
+struct TileGeometry {
+    static constexpr uint32_t face_bytes = FACE_ROWS * face_row_bytes;
+    static constexpr uint32_t band_bytes = 2 * face_bytes;  // 16 rows, both column halves
+    static constexpr uint32_t tile_bytes = 2 * band_bytes;
 
-// A row span of a sub-tile block must stay inside one face band: then each face half of the span
-// is one contiguous run. Blocks of TILE_H rows always cover the tile's live rows and move whole.
-static_assert(TILE_H % BLOCK_A == 0 && TILE_H % BLOCK_B == 0, "block_a and block_b must divide the tile height");
-static_assert(BLOCK_A == TILE_H || FACE_H % BLOCK_A == 0, "a sub-tile a-span must not cross the face band");
-static_assert(BLOCK_B == TILE_H || FACE_H % BLOCK_B == 0, "a sub-tile b-span must not cross the face band");
-
-struct Block {
-    uint32_t n;
-    uint32_t a0;
-    uint32_t live_a;
-    uint32_t b0;
-    uint32_t live_b;
-    uint32_t wt0;
-    uint32_t live_wt;
+    // Offset of tile row r (0..31), column half h (0, 1).
+    static constexpr uint32_t off(uint32_t r, uint32_t h) {
+        return (r / FACE_ROWS) * band_bytes + h * face_bytes + (r % FACE_ROWS) * face_row_bytes;
+    }
 };
 
-FORCE_INLINE uint32_t min_u32(uint32_t x, uint32_t y) { return x < y ? x : y; }
+struct ByteRange {
+    uint32_t offset;
+    uint32_t len;
+};
 
-// block_idx = ((n * NA + ag) * NBG + bg) * NW + wtb
-FORCE_INLINE Block decode_block(uint32_t block_idx) {
-    const uint32_t wtb = block_idx % NW;
-    block_idx /= NW;
-    const uint32_t bg = block_idx % NBG;
-    block_idx /= NBG;
-    const uint32_t ag = block_idx % NA;
-    const uint32_t n = block_idx / NA;
-    Block blk;
-    blk.n = n;
-    blk.a0 = ag * BLOCK_A;
-    blk.live_a = min_u32(BLOCK_A, A - blk.a0);
-    blk.b0 = bg * BLOCK_B;
-    blk.live_b = min_u32(BLOCK_B, B - blk.b0);
-    blk.wt0 = wtb * BLOCK_WT;
-    blk.live_wt = min_u32(BLOCK_WT, WT - blk.wt0);
-    return blk;
-}
-
-FORCE_INLINE uint32_t in_page(uint32_t n, uint32_t a, uint32_t bt, uint32_t wt) {
-    return ((n * IN_A + a) * IN_BT + bt) * IN_WT + wt;
-}
-
-FORCE_INLINE uint32_t out_page(uint32_t n, uint32_t b, uint32_t at, uint32_t wt) {
-    return ((n * OUT_B + b) * OUT_AT + at) * OUT_WT + wt;
-}
-
-// Byte offset of half `h` of tile row `r`: a tile row is FACES_PER_BAND face rows, one per face of its band.
-FORCE_INLINE uint32_t face_off(uint32_t r, uint32_t h) {
-    return ((r / FACE_H) * FACES_PER_BAND + h) * FACE_BYTES + (r % FACE_H) * FACE_ROW_BYTES;
-}
-
-// True when rows [r0, r0 + rows) hold every live row of a tile whose dim has `remaining` rows from
-// the tile's first row on; the tile then moves as one page.
-FORCE_INLINE bool covers_live_rows(uint32_t r0, uint32_t rows, uint32_t remaining) {
-    return r0 == 0 && rows >= min_u32(TILE_H, remaining);
-}
-
-// Calls fn(offset, bytes) once per face half for rows [r0, r0 + rows) of a tile; the span lies in one
-// face band (static_asserts above), so each half is one contiguous run at the same tile-relative offset
-// in source and destination.
-template <typename Fn>
-FORCE_INLINE void for_each_row_run(uint32_t r0, uint32_t rows, Fn&& fn) {
-    for (uint32_t h = 0; h < FACES_PER_BAND; ++h) {
-        fn(face_off(r0, h), rows * FACE_ROW_BYTES);
+// Contiguous byte ranges covering tile rows [r0, r1): two face ranges per touched band, merged
+// into one band range when the band is fully covered, and one tile range for the whole tile.
+// Returns the range count (<= 4).
+template <uint32_t face_row_bytes>
+inline uint32_t row_span_ranges(uint32_t r0, uint32_t r1, ByteRange ranges[4]) {
+    using G = TileGeometry<face_row_bytes>;
+    if (r0 == 0 && r1 == TILE_ROWS) {
+        ranges[0] = {0, G::tile_bytes};
+        return 1;
     }
+    uint32_t count = 0;
+    for (uint32_t band = 0; band < 2; ++band) {
+        const uint32_t band_r0 = band * FACE_ROWS;
+        const uint32_t lo = r0 > band_r0 ? r0 : band_r0;
+        const uint32_t hi = r1 < band_r0 + FACE_ROWS ? r1 : band_r0 + FACE_ROWS;
+        if (lo >= hi) {
+            continue;
+        }
+        if (lo == band_r0 && hi == band_r0 + FACE_ROWS) {
+            ranges[count++] = {band * G::band_bytes, G::band_bytes};
+        } else {
+            const uint32_t len = (hi - lo) * face_row_bytes;
+            ranges[count++] = {G::off(lo, 0), len};
+            ranges[count++] = {G::off(lo, 1), len};
+        }
+    }
+    return count;
 }
+
+// Walks one core's unit range block by block.
+template <uint32_t B, uint32_t tensor_a_tiles, uint32_t tensor_w_tiles, uint32_t block_b_rows>
+struct BlockCursor {
+    static_assert(block_b_rows >= 1 && block_b_rows <= TILE_ROWS, "a block stays inside one b-tile");
+
+    uint32_t n, ta, tw, b;  // first unit of the current block
+    uint32_t remaining;     // units left in this core's range
+
+    BlockCursor(uint32_t start_unit, uint32_t num_units) : remaining(num_units) {
+        b = start_unit % B;
+        uint32_t rest = start_unit / B;
+        tw = rest % tensor_w_tiles;
+        rest /= tensor_w_tiles;
+        ta = rest % tensor_a_tiles;
+        n = rest / tensor_a_tiles;
+    }
+
+    bool done() const { return remaining == 0; }
+
+    // Block rule: stay in the core's range, keep (n, ta, tw), keep b div 32, at most block_b_rows.
+    uint32_t extent() const {
+        uint32_t run = block_b_rows;
+        run = remaining < run ? remaining : run;
+        run = (B - b) < run ? (B - b) : run;
+        const uint32_t to_tile_end = TILE_ROWS - b % TILE_ROWS;
+        return to_tile_end < run ? to_tile_end : run;
+    }
+
+    // Live rows of output tile row ta (= live input tiles of the block).
+    uint32_t a_live(uint32_t A) const {
+        const uint32_t left = A - ta * TILE_ROWS;
+        return left < TILE_ROWS ? left : TILE_ROWS;
+    }
+
+    void advance(uint32_t run) {
+        remaining -= run;
+        b += run;
+        if (b == B) {
+            b = 0;
+            if (++tw == tensor_w_tiles) {
+                tw = 0;
+                if (++ta == tensor_a_tiles) {
+                    ta = 0;
+                    ++n;
+                }
+            }
+        }
+    }
+};
+
+// Per-step profiler zones are kept for the first blocks of a core only: zone executions are
+// capped at ~125 per RISC and a zone past the cap vanishes silently.
+constexpr uint32_t ZONED_BLOCKS = 16;
 
 }  // namespace g6_permute
+
+#define G6_ZONED_STEP(zoned, name, ...) \
+    if constexpr (zoned) {              \
+        DeviceZoneScopedN(name);        \
+        __VA_ARGS__;                    \
+    } else {                            \
+        __VA_ARGS__;                    \
+    }
