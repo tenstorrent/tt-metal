@@ -3468,7 +3468,13 @@ class MiniMaxH3Pipeline:
         transformer.release_traces()
 
     def _set_sol_attention(
-        self, transformer: MiniMaxH3Transformer3DModel, rung: int, logical_n: int, sink_tokens: int
+        self,
+        transformer: MiniMaxH3Transformer3DModel,
+        rung: int,
+        logical_n: int,
+        sink_tokens: int,
+        *,
+        first_stage: bool = False,
     ) -> None:
         """Switch the ring attention between dense and Sol-Attn for this request (`H3_SOL_ATTN=1`, default off).
 
@@ -3476,9 +3482,16 @@ class MiniMaxH3Pipeline:
         condition and audio rows, everything in front of the target video. The sparse op compiles `logical_n` into
         its kernels, so each new packed length pays a compile, and the pre-pass buffers change with it: a change of
         request releases the denoise traces and marks every bucket cold, so the gen runs eager and recaptures.
+
+        A low-res first stage always runs dense. It leaves the full-resolution request in place (the attention
+        goes sparse only on the rung that request names), so both stages keep their traces; only a request left
+        on this very rung, planned for another layout, is dropped.
         """
         sol = None
-        if os.environ.get("H3_SOL_ATTN", "0") == "1" and not self.dynamic_length:
+        if first_stage:
+            if self._sol_key is None or self._sol_key[0] != rung // self.sp_factor:
+                return
+        elif os.environ.get("H3_SOL_ATTN", "0") == "1" and not self.dynamic_length:
             tau = float(os.environ.get("H3_SOL_TAU", "1.0"))
             sol = (rung // self.sp_factor, logical_n, sink_tokens, tau)
         if sol == self._sol_key:
@@ -3637,13 +3650,13 @@ class MiniMaxH3Pipeline:
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
         state = self._buckets.setdefault(rung, _BucketState()) if self.bucket_denoise else self._request_state
-        # A low-res first stage runs dense and leaves the full-resolution Sol request in place (the attention goes
-        # sparse only on the rung that request names), so both stages keep their traces. Only a request for
-        # this very rung has to be replaced.
-        if not first_stage or (self._sol_key is not None and self._sol_key[0] == rung // self.sp_factor):
-            self._set_sol_attention(
-                transformer, rung, layout.sequence_length, l_len + num_cond + num_cond_audio + a_target
-            )
+        self._set_sol_attention(
+            transformer,
+            rung,
+            layout.sequence_length,
+            l_len + num_cond + num_cond_audio + a_target,
+            first_stage=first_stage,
+        )
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
             if os.environ.get(_RECAPTURE_KEEPS_AUDIO_ENV, "1") == "0":

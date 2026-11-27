@@ -197,3 +197,22 @@ def test_lowres_stage_pdd_heads(monkeypatch):
     assert calls[0][5] == ({"video": [0, 4, 32], "audio": [0, 4, 8]}, weights)
     # What the full-resolution stage then reads: the remaining blocks of the trained partition, for both.
     assert pipeline._pdd_active == ({"video": indices[2:], "audio": indices[2:]}, weights)
+
+
+def test_lowres_stage_never_runs_sol(monkeypatch):
+    # dense whatever the request before left behind: its request stays unless it names the low-res rung
+    monkeypatch.setenv("H3_SOL_ATTN", "1")
+    requests = []
+    pipeline = MiniMaxH3Pipeline.__new__(MiniMaxH3Pipeline)
+    pipeline.dynamic_length, pipeline.sp_factor, pipeline._transformer = False, 8, None
+    pipeline._buckets, pipeline._request_state = {}, SimpleNamespace(warm=True)
+    pipeline._log = lambda message: None
+    transformer = SimpleNamespace(set_sol_request=lambda request, tau: requests.append(request))
+
+    pipeline._sol_key = (9600, 76000, 500, 1.0)
+    pipeline._set_sol_attention(transformer, 20224, 19000, 500, first_stage=True)
+    assert requests == [] and pipeline._sol_key == (9600, 76000, 500, 1.0)
+
+    pipeline._sol_key = (2528, 20000, 500, 1.0)
+    pipeline._set_sol_attention(transformer, 20224, 19000, 500, first_stage=True)
+    assert requests == [None] and pipeline._sol_key is None and not pipeline._request_state.warm
