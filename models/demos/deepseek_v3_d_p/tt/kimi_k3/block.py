@@ -61,6 +61,7 @@ class TtKimiK3Block(LightweightModule):
         is_balanced: bool = False,
         gate_fallback_mode=None,  # defaults to K3's own mode below
         weight_cache_path=None,
+        routed_cache_path=None,
         kv_only: bool = False,
         dispatch_buffer_capacity_factor: int = 2,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
@@ -143,7 +144,9 @@ class TtKimiK3Block(LightweightModule):
                 mesh_device,
                 model_cfg,
                 layer_idx,
-                cache_path=weight_cache_path,
+                # (`routed_cache_path`: the routed experts' TtMoe cache for a layer whose other weights are built
+                # without the cache - K3_WEIGHT_OVERRIDE_DIR; production: weight_cache_path)
+                cache_path=routed_cache_path if routed_cache_path is not None else weight_cache_path,
                 options=MoEBlockFfnOptions(sp_axis=sp_axis),
             )
         elif self.is_moe:

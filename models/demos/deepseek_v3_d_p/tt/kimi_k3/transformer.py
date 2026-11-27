@@ -296,6 +296,7 @@ class TtKimiK3Transformer(LightweightModule):
                     is_balanced=is_balanced,
                     gate_fallback_mode=gate_fallback_mode,
                     weight_cache_path=layer_cache,
+                    routed_cache_path=weight_cache_path,  # (an overridden layer's experts: carriers, else the cache)
                     kv_only=kv_only_last_layer and is_last,
                     forward_chunks=forward_chunks,
                     moe_impl=moe_impl,
