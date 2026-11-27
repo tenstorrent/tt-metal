@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Generate a Gemma-4 reference forward pass for test_gemma4_parity.
 
 Gemma-4 landed in transformers 5, but tt-metal's env pins 4.53 and upgrading it in place
