@@ -14,11 +14,11 @@
 #include <unistd.h>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/mesh_event.hpp>
 #include "mesh_event_impl.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "impl/context/metal_env_impl.hpp"
 #include <tt-umd/chip_helpers/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"

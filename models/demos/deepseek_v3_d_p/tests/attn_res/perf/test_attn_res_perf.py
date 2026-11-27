@@ -70,15 +70,14 @@ INHERITED_SNAPSHOTS = LAYER // BLOCK_SIZE
 # Ordinary layers timed in one step, after the boundary layer; the step's time is divided by this.
 ORDINARY_LAYERS = 8
 _GALAXY = "SP8xTP4"
-# Host-time targets (ms) per (layer, mode) on Galaxy, as tests/measure measures them: the mean of 3 runs on one
-# Galaxy (off the CI pool; samples within 1% of each other). The untraced targets are then scaled by the speedup of
-# running AttnRes as one program per mesh (#66039: ordinary 175 -> 108 us, boundary 400 -> 380 us on one Galaxy).
-# LoudBox SP2xTP4 and SP4xTP4 report until a CI run gives their targets.
+# Host-time targets (ms) per (layer, mode) on Galaxy, as tests/measure measures them, taken on the CI leg
+# (k3_mla_perf, bh_sc1_high_power; run 44901278331). LoudBox SP2xTP4 and SP4xTP4 report until a CI run gives their
+# targets.
 _TARGETS_MS = {
-    ("boundary", "untraced"): 0.504,
-    ("boundary", "traced"): 0.474,
-    ("ordinary", "untraced"): 0.106,
-    ("ordinary", "traced"): 0.128,
+    ("boundary", "untraced"): 0.461,
+    ("boundary", "traced"): 0.448,
+    ("ordinary", "untraced"): 0.127,
+    ("ordinary", "traced"): 0.124,
 }
 # A layout's prefill chunk where it is not PER_CHIP_TOKENS a chip: a 4x4 stage takes the same chunk as the 8x4 mesh,
 # so each chip holds twice the rows.
@@ -184,7 +183,7 @@ def test_attn_res_layer_perf(request, mesh_device, device_params, layer):
                 "layout": layout,
                 "layer": layer,
                 "mode": mode,
-                "fabric_config": ttnn.get_fabric_config().name,
+                "fabric_config": ttnn.get_fabric_config(mesh_device).name,
                 "tokens": num_tokens,
                 "first_layer": LAYER,
                 "layers_per_sample": per_call,

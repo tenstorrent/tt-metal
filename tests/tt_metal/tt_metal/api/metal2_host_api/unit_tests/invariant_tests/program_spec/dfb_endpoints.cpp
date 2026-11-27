@@ -4,7 +4,8 @@
 
 // ProgramSpec structural invariants on DataflowBufferSpec endpoints (program_spec.hpp): every bound DFB has
 // a producer and a consumer; same-role bindings agree on access pattern, num_threads, kind and (Gen1)
-// processor; self-loop sides match; Gen2 DM sides agree on implicit sync.
+// processor; self-loop sides match; Gen2 DM sides agree on implicit sync; Gen2 compute sides agree on the SFPU
+// pipeline.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -14,7 +15,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
@@ -504,6 +505,73 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementAllowsExplicitGen1MultiBinding) {
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
     spec.dataflow_buffers[0].advanced_options.allow_instance_multi_binding = true;
     EXPECT_NO_THROW(Program(fixture_device, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBMultiBindingSfpuPipelineMismatchFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    // Two compute producers on disjoint nodes; only one hands "dfb" to the SFPU pipeline. The DFB has one
+    // producer pipeline, so same-role bindings must agree.
+    auto producer_pack = MakeMinimalGen2ComputeKernel("producer_pack");
+    auto producer_sfpu = MakeMinimalGen2ComputeKernel("producer_sfpu");
+    auto consumer = MakeMinimalGen2DMKernel("consumer");
+    std::get<ComputeHardwareConfig>(producer_sfpu.hw_config).config_2xx =
+        ComputeHardwareConfig::Compute2XXConfig{.sfpu_pipeline_produced_dfbs = {DFBSpecName{"dfb"}}};
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer_pack.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer_sfpu.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer_pack, producer_sfpu, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer_pack", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer_sfpu", "consumer"}),
+    };
+
+    EXPECT_THAT(
+        [&] { Program(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mismatched sfpu_pipeline_produced_dfbs")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBMultiBindingSfpuPipelineConsumerMismatchFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    // Two compute consumers on disjoint nodes; only one hands "dfb" to the SFPU pipeline.
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer_unpack = MakeMinimalGen2ComputeKernel("consumer_unpack");
+    auto consumer_sfpu = MakeMinimalGen2ComputeKernel("consumer_sfpu");
+    std::get<ComputeHardwareConfig>(consumer_sfpu.hw_config).config_2xx =
+        ComputeHardwareConfig::Compute2XXConfig{.sfpu_pipeline_consumed_dfbs = {DFBSpecName{"dfb"}}};
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer_unpack.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    consumer_sfpu.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer_unpack, consumer_sfpu};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer", "consumer_unpack"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer", "consumer_sfpu"}),
+    };
+
+    EXPECT_THAT(
+        [&] { Program(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mismatched sfpu_pipeline_consumed_dfbs")));
 }
 
 }  // namespace

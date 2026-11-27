@@ -4,9 +4,9 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
-#include <buffer_types.hpp>
-#include <core_coord.hpp>
-#include <device.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe_dram_sender_internal.hpp"
@@ -15,8 +15,8 @@
 #include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
-#include "tt_metal/api/tt-metalium/hal_types.hpp"
-#include <tt-metalium/math.hpp>
+#include "tt_metal/api/tt-metalium/vocabulary/hal_types.hpp"
+#include <tt-metalium/utils/math.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -36,16 +36,16 @@
 
 #include "hostdev/remote_dfb_config_layout.h"
 #include "llrt/tt_cluster.hpp"
-#include "mesh_device.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "tt_metal/api/tt-metalium/tt_metal.hpp"
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include "tt_metal/api/tt-metalium/execution/slow_dispatch.hpp"
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 namespace tt::tt_metal::experimental {
 

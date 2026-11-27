@@ -14,6 +14,40 @@
 using namespace ckernel;
 
 /**
+ * @brief Returns the instruction that retags SrcB before a 32-bit Dest unary copy clears it.
+ *
+ * A source bank keeps the format of the last data written into it; CLRSRC/ZEROSRC zero the data but keep that format.
+ * If SrcB was last written in a packed format (e.g. MxFp4_2x_B by a 2x matmul), non-matmul reads such as ELWADD decode
+ * the cleared bank through the packed path and return non-zero values. Neither the implied format the clear sets
+ * (assembly.yaml, UNPACR_NOP Set_Dvalid) nor the configured ALU formats change that, and neither does releasing SrcB
+ * with a separate CLEARDVALID (TEN-4935). The returned single-row unpack (no dvalid, no index increment) gives the bank
+ * unpacker 1's output format; the clear that follows zeroes the row. SrcA needs no retag: its packed path is used only
+ * by matmul instructions, so a cleared SrcA reads as zero. Costs one extra single-row unpack per tile on the otherwise
+ * idle unpacker 1, in 32-bit Dest mode only.
+ *
+ * Also points unpacker 1's tile counters at tile 0 of buf_desc_id. _llk_unpack_unary_operand_ only sets UNP_SEL's
+ * counters and the retag never increments them, so its read stays inside this op's buffer.
+ *
+ * @param buf_desc_id: buffer descriptor the op unpacks from
+ * @note Use only when the tile is unpacked to SrcA (UNP_SEL == p_unpacr::UNP_A). Issue the returned instruction right
+ * before @ref nop_insn_for_unused_unpacker_engine, once per tile.
+ */
+inline std::uint32_t retag_insn_for_cleared_srcb(const std::uint32_t buf_desc_id)
+{
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0 /*Value*/);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0 /*Value*/);
+    return TT_OP_UNPACR1_ROW(
+        0 /*Dst_Row_Idx*/,
+        0 /*Src_Row_Idx*/,
+        0 /*Dst_Face_Idx*/,
+        0 /*Src_Face_Idx*/,
+        0 /*Dst_Tile_Offset_Idx_Inc*/,
+        0 /*Src_Tile_Offset_Idx_Inc*/,
+        buf_desc_id,
+        0 /*SetDatValid*/);
+}
+
+/**
  * @brief MOP configuration for unpack of unary operations
  * @details Sets up MOP for unpacking a single operand by tiles
  * Specialized for tiny-tile unpack where each face is a separate tile in HW.
@@ -21,7 +55,7 @@ using namespace ckernel;
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B
  * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ * stored in the buffer descriptor table; the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
@@ -64,7 +98,22 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     if constexpr (EN_32BIT_DEST)
     {
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
-        temp.set_start_op(clr_unused_unpacr_engine);
+        if constexpr (UNP_SEL == p_unpacr::UNP_A)
+        {
+            const std::uint32_t retag_srcb = retag_insn_for_cleared_srcb(buf_desc_id);
+            // The end ops are taken, so the retag and the clear go in through the replay buffer as the start op.
+            load_replay_buf<0, 2>(
+                [retag_srcb, clr_unused_unpacr_engine]
+                {
+                    TT_INSN(retag_srcb);
+                    TT_INSN(clr_unused_unpacr_engine);
+                });
+            temp.set_start_op(TT_OP_REPLAY(0 /*start_idx*/, 2 /*len*/, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/));
+        }
+        else
+        {
+            temp.set_start_op(clr_unused_unpacr_engine);
+        }
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -77,7 +126,7 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B
  * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ * stored in the buffer descriptor table; the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  */
 template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
@@ -106,7 +155,14 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
     if constexpr (EN_32BIT_DEST)
     {
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
-        temp.set_end_op(clr_unused_unpacr_engine);
+        if constexpr (UNP_SEL == p_unpacr::UNP_A)
+        {
+            temp.set_end_ops(retag_insn_for_cleared_srcb(buf_desc_id), clr_unused_unpacr_engine);
+        }
+        else
+        {
+            temp.set_end_op(clr_unused_unpacr_engine);
+        }
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -118,7 +174,7 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
  * @tparam EN_32BIT_DEST: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ * stored in the buffer descriptor table; the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note Does NOT support tiny-tiles
@@ -191,7 +247,14 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
     if constexpr (EN_32BIT_DEST)
     {
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
-        temp.set_end_op(clr_unused_unpacr_engine);
+        if constexpr (UNP_SEL == p_unpacr::UNP_A)
+        {
+            temp.set_end_ops(retag_insn_for_cleared_srcb(buf_desc_id), clr_unused_unpacr_engine);
+        }
+        else
+        {
+            temp.set_end_op(clr_unused_unpacr_engine);
+        }
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -271,7 +334,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  * @tparam EN_32BIT_DEST: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- *        stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ *        stored in the buffer descriptor table; the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @param num_tiles: Number of tiles to unpack at a time for a single operand.
  * @note On the math thread (T1): for the plain datacopy path pair with @ref _llk_math_eltwise_unary_datacopy_init_; for reuse_dest != NONE this is the

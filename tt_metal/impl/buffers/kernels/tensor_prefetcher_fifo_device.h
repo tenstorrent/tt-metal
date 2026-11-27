@@ -15,6 +15,9 @@
 //   TENSOR_PREFETCHER_KERNEL_INDEX       this kernel's index in tensor_prefetcher_kernels(): its FIFO consumer
 //   TENSOR_PREFETCHER_STATE_BASE         L1 base of this kernel's own state, zeroed before launch
 //   TENSOR_PREFETCHER_STATE_SIZE         bytes of this kernel's own state
+//   TENSOR_PREFETCHER_TRID_OFFSET        where this kernel's NoC transaction ids start in the Tensor prefetcher's
+//                                        range (dispatch_noc_trids::kTensorPrefetcher)
+//   TENSOR_PREFETCHER_TRIDS              how many NoC transaction ids this kernel has (at least 1)
 
 #include <stdint.h>
 
@@ -36,10 +39,32 @@ using tt::tt_metal::TensorPrefetcherLayoutMode;
 using tt::tt_metal::TensorPrefetcherRequestHeader;
 using tt::tt_metal::TensorPrefetcherTensorLayout;
 
-// This kernel's NoC transaction id, from its range in dispatch_noc_trids.hpp. Its reads and writes carry it, so it
-// waits on its own transactions instead of every untagged transaction on the dispatch engine, which includes the
-// command queues' traffic.
-inline constexpr uint32_t kTrid = dispatch_noc_trids::tensor_prefetcher_trid(TENSOR_PREFETCHER_KERNEL_INDEX);
+// This kernel's NoC transaction ids, its range in dispatch_noc_trids.hpp. Each of its reads and writes carries one,
+// so it waits on its own transactions instead of every untagged transaction on the dispatch engine, which includes
+// the command queues' traffic, and it can wait on some of its transactions while others stay in flight.
+inline constexpr dispatch_noc_trids::TridRange kTrids =
+    dispatch_noc_trids::tensor_prefetcher_trids(TENSOR_PREFETCHER_TRID_OFFSET, TENSOR_PREFETCHER_TRIDS);
+static_assert(kTrids.size() >= 1 && kTrids.end() <= dispatch_noc_trids::kTensorPrefetcher.end());
+
+// Groups of this kernel's transactions in flight, one per id, retired in the order they were issued: slot k's
+// transactions carry kTrids[k], and the oldest group is in slot `oldest`.
+struct TridQueue {
+    static constexpr uint32_t kSlots = kTrids.size();
+    uint32_t oldest = 0;
+    uint32_t in_flight = 0;
+
+    FORCE_INLINE bool full() const { return in_flight == kSlots; }
+    // The slot the next group goes in.
+    FORCE_INLINE uint32_t next() const {
+        const uint32_t k = oldest + in_flight;
+        return k < kSlots ? k : k - kSlots;
+    }
+    FORCE_INLINE void push() { ++in_flight; }
+    FORCE_INLINE void pop() {
+        oldest = oldest + 1 == kSlots ? 0 : oldest + 1;
+        --in_flight;
+    }
+};
 
 // Every word in the region is shared with the host, the other kernels or the NoC, none of which snoop
 // this core's data cache, so it is always accessed through the uncached L1 alias.
@@ -57,7 +82,8 @@ struct Region {
     uint32_t base = 0;
     fifo::RegionLayout layout;
 
-    // Blocks of receiver `i` the reader has staged, and the pusher has pushed (freeing their stage slots).
+    // Bytes of receiver `i`'s share of the stage ring the reader has staged, and the pusher has pushed (so the reader
+    // may stage into them again), each counting the gaps that blocks skip at the end of the share.
     FORCE_INLINE volatile tt_l1_ptr uint32_t* staged(uint32_t i) const {
         return region_ptr<uint32_t>(base, layout.staged_offset() + i * fifo::kLineBytes);
     }
@@ -104,6 +130,11 @@ public:
     }
 
     FORCE_INLINE void retire_slot() { *rd_ = ++rd_count_; }
+
+    // The slot after the one being served, if the host has written it already; nullptr otherwise.
+    FORCE_INLINE volatile tt_l1_ptr fifo::SlotHeader* next_slot() const {
+        return *wr_ - rd_count_ > 1 ? region.slot(rd_count_ + 1) : nullptr;
+    }
 
 private:
     volatile tt_l1_ptr uint32_t* terminate_;
@@ -154,18 +185,28 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* tensor_blocks(volatile tt_l1_ptr fifo:
 }
 
 // Waits for the kernel that reads tensor `e` of `slot` from its source to plan how many blocks each receiver
-// gets of it, and returns that count in `blocks`. False if termination was requested first.
+// gets of it, and returns that count in `blocks`. `idle()` is the caller's own work while it waits, and returns
+// whether it made progress; termination is checked only when it made none. False if termination was requested first.
+template <typename Idle>
 FORCE_INLINE bool wait_for_tensor_blocks(
-    const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, uint32_t& blocks) {
+    const FifoConsumer& requests,
+    volatile tt_l1_ptr fifo::SlotHeader* slot,
+    uint32_t e,
+    uint32_t& blocks,
+    Idle&& idle) {
     volatile tt_l1_ptr uint32_t* planned = tensor_blocks(slot, e);
     WAYPOINT("TBW");
     while ((blocks = *planned) == fifo::kTensorBlocksUnplanned) {
-        if (requests.terminate_requested()) {
+        if (!idle() && requests.terminate_requested()) {
             return false;
         }
     }
     WAYPOINT("TBD");
     return true;
+}
+FORCE_INLINE bool wait_for_tensor_blocks(
+    const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, uint32_t& blocks) {
+    return wait_for_tensor_blocks(requests, slot, e, blocks, [] { return false; });
 }
 
 // Waits until the signal slot a WAIT_SIGNAL page names reaches its count. The slots only grow and may wrap, so
@@ -186,8 +227,8 @@ FORCE_INLINE bool wait_for_signal(
 }
 
 // Puts this kernel's NoC command buffers back on id 0, as a command buffer's id must be 0 at kernel exit. Each
-// keeps the last id given to it: the read command buffer the one serve_requests sets, the write command buffer
-// the one the pusher's tagged writes carry.
+// keeps the last id given to it: the read command buffer the one the reader last read with, the write command
+// buffer the one the pusher's last tagged write carried.
 FORCE_INLINE void clear_noc_trids() {
     noc_async_read_set_trid(0);
     noc_async_write_set_trid(0);
@@ -199,8 +240,8 @@ FORCE_INLINE void clear_noc_trids() {
 // sends anything the requests after it name until the signal arrives.
 template <typename ServeRequest>
 FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
-    // Every read this kernel issues carries its id, which the read command buffer keeps.
-    noc_async_read_set_trid(kTrid);
+    // Every read this kernel issues carries one of its ids, which the read command buffer keeps until the next is set.
+    noc_async_read_set_trid(kTrids[0]);
     FifoConsumer requests;
     while (volatile tt_l1_ptr fifo::SlotHeader* slot = requests.wait_for_slot()) {
         ASSERT(slot->num_lanes <= region.layout.lanes);
@@ -225,22 +266,80 @@ FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
     clear_noc_trids();
 }
 
-// How one tensor of a PREFETCH slot streams: every receiver of every lane, numbered in lane order. The
-// kernels derive the same plan from the same slot, so a receiver number names the same stage slots for all.
-struct TensorStream {
-    uint32_t num_receivers = 0;
+// How a tensor's blocks lie in a receiver's share of the stage ring.
+struct StageGeometry {
     uint32_t block_bytes = 0;
+    // Bytes of each receiver's share of the stage ring, set by the receiver count alone (fifo::stage_share_bytes).
+    uint32_t share_bytes = 0;
+    // Bytes each block takes in its receiver's share (fifo::stage_block_footprint).
+    uint32_t block_footprint = 0;
+};
+
+// How one tensor of a PREFETCH slot streams: every receiver of every lane, numbered in lane order. The
+// kernels derive the same plan from the same slot, so a receiver number names the same stage share for all.
+struct TensorStream : StageGeometry {
+    uint32_t num_receivers = 0;
     // Blocks of each of the tensor's groups per receiver; a group selector decides how many groups arrive.
     uint32_t block_count = 0;
-    // Bytes of each stage slot, set by the receiver count alone (fifo::stage_slot_bytes).
-    uint32_t slot_bytes = 0;
     uint8_t lane[fifo::kMaxReceivers];
     uint8_t receiver_in_lane[fifo::kMaxReceivers];
 
-    // Stage slot `k` (0 .. kStageSlotsPerReceiver) of receiver `i`.
-    uint32_t stage_slot_addr(uint32_t i, uint32_t k) const {
-        return stage_ring_base + (i * fifo::kStageSlotsPerReceiver + k) * slot_bytes;
+    // The L1 address `offset` bytes into receiver `i`'s share of the stage ring.
+    uint32_t stage_addr(uint32_t i, uint32_t offset) const { return stage_ring_base + i * share_bytes + offset; }
+
+    // The most blocks the kernels move in one NoC transfer: what fits in kMaxRunBytes, and at least one. Moving
+    // small blocks together pays a transfer's fixed costs once for all of them; the cap keeps a run from holding
+    // back its first block for long.
+    uint32_t max_run_blocks() const { return max_run_blocks(block_bytes); }
+    static uint32_t max_run_blocks(uint32_t block_bytes) {
+        return block_bytes >= kMaxRunBytes ? 1 : kMaxRunBytes / block_bytes;
     }
+    static constexpr uint32_t kMaxRunBytes = 256 * 1024;
+};
+
+// How many blocks of `footprint` bytes fit in `bytes`, at most `max_blocks`. Divides only when fewer than
+// `max_blocks` fit: these sizes change from run to run, and a division costs tens of cycles on a data-movement core.
+FORCE_INLINE uint32_t blocks_in(uint32_t bytes, uint32_t footprint, uint32_t max_blocks) {
+    return bytes >= max_blocks * footprint ? max_blocks : bytes / footprint;
+}
+
+// Where one receiver's blocks go in its share of the stage ring. The reader and the pusher each keep one per receiver
+// and place the same blocks in the same order, so they agree on every block's offset. Each starts its shares over
+// when the receiver count changes, which happens only while the stage ring is empty.
+class StageCursor {
+public:
+    // The bytes the next block takes: its footprint, and before it the end of the share if it does not fit there.
+    FORCE_INLINE uint32_t bytes_taken(const StageGeometry& geometry) const {
+        return (wraps(geometry) ? geometry.share_bytes - offset_ : 0) + geometry.block_footprint;
+    }
+    FORCE_INLINE void reset() { offset_ = 0; }
+
+    // A run is blocks that lie back to back in the share, so one NoC transfer moves them. The most blocks, up to
+    // `max_blocks`, a run from the next block can hold: the first may start the share over, and the run stops at
+    // the share's end. Blocks lie back to back only when their footprint is their size.
+    FORCE_INLINE uint32_t run_blocks(const StageGeometry& geometry, uint32_t max_blocks) const {
+        if (geometry.block_footprint != geometry.block_bytes) {
+            return 1;
+        }
+        return blocks_in(geometry.share_bytes - (wraps(geometry) ? 0 : offset_), geometry.block_footprint, max_blocks);
+    }
+    // The bytes a run of `num_blocks` from the next block takes (bytes_taken for its first block).
+    FORCE_INLINE uint32_t run_bytes_taken(const StageGeometry& geometry, uint32_t num_blocks) const {
+        return bytes_taken(geometry) + (num_blocks - 1) * geometry.block_footprint;
+    }
+    // Places a run of `num_blocks` (at most run_blocks) and returns its offset in the share.
+    FORCE_INLINE uint32_t place_run(const StageGeometry& geometry, uint32_t num_blocks) {
+        const uint32_t at = wraps(geometry) ? 0 : offset_;
+        offset_ = at + num_blocks * geometry.block_footprint;
+        return at;
+    }
+
+private:
+    FORCE_INLINE bool wraps(const StageGeometry& geometry) const {
+        return offset_ + geometry.block_footprint > geometry.share_bytes;
+    }
+
+    uint32_t offset_ = 0;
 };
 
 // Plans tensor `e` of a PREFETCH slot. The host serializes one page per lane for the same tensors, so every
@@ -274,9 +373,10 @@ FORCE_INLINE void plan_tensor(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_
             stream.receiver_in_lane[i] = r;
         }
     }
-    stream.slot_bytes = fifo::stage_slot_bytes(stage_ring_size, stream.num_receivers);
+    stream.share_bytes = fifo::stage_share_bytes(stage_ring_size, stream.num_receivers);
+    stream.block_footprint = fifo::stage_block_footprint(stream.block_bytes);
     // The host checks the fit at queue time.
-    ASSERT(stream.block_bytes <= stream.slot_bytes);
+    ASSERT(stream.block_bytes <= fifo::max_stage_block_bytes(stream.share_bytes));
 }
 
 }  // namespace tensor_prefetcher

@@ -6,13 +6,13 @@
 #include <cstring>
 #include <vector>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

@@ -77,14 +77,15 @@ on:
         type: string
         default: ""
         description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+      hf-oidc:
+        required: false
+        type: boolean
+        default: false
+        description: "Get a Hugging Face token via OIDC for gated models. The caller must grant id-token: write."
     outputs:
       matrix:
         description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
         value: ${{ jobs.load-test-matrix.outputs.matrix }}
-
-permissions:
-  contents: read
-  packages: read
 
 jobs:
   load-test-matrix:
@@ -176,7 +177,7 @@ jobs:
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
@@ -224,7 +225,6 @@ jobs:
         timeout-minutes: 10
         with:
           install-ttml: ${{ inputs.wheel-artifact-name != '' }}
-          hf-token: ${{ secrets.HUGGINGFACE_TOKEN }}
 
       - name: Install Python dependencies for metrics
         if: ${{ inputs.test-category == 'perf' }}
@@ -232,15 +232,28 @@ jobs:
           uv pip list
           uv pip install "gitpython==3.1.55" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
 
+      # Only schedule and workflow_dispatch runs on main get a token; other runs warn and
+      # continue without one.
+      - name: 🤗 Get Hugging Face token (OIDC)
+        id: hf-oidc
+        if: ${{ inputs.hf-oidc && inputs.package-artifact-name == '' }}
+        timeout-minutes: 5
+        uses: tenstorrent/.github/actions/hf-oidc-token@hf-oidc-token-v1.0.0 # immutable release, commit d31c308a8c85847acb5c6f5f0a48d58ecf962d33
+        with:
+          resource: ${{ vars.HF_OIDC_RESOURCE }}
+          if-no-token: warn
+
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         env:
+          HF_TOKEN: ${{ steps.hf-oidc.outputs.token }}
           LSAN_OPTIONS: ${{ inputs.package-artifact-name != '' && 'suppressions=/usr/share/tt-metalium/lsan.supp' || '' }}
           UBSAN_OPTIONS: ${{ inputs.package-artifact-name != '' && 'print_stacktrace=1:halt_on_error=1' || '' }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
+            unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
             python3 tools/tt-power-sidecar/tt_power_sidecar.py \
               --backend sysfs \
               --out /work/power_report.json \
