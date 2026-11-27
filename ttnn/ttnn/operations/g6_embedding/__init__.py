@@ -6,19 +6,19 @@ from .g6_embedding import (
     INPUT_TAGGERS,
     SUPPORTED,
     Plan,
-    core_roles,
     g6_embedding,
     select_plan,
     validate,
 )
+from .g6_embedding_program_descriptor import core_roles
 
 __all__ = [
-    "g6_embedding",
-    "select_plan",
-    "core_roles",
-    "Plan",
-    "validate",
+    "EXCLUSIONS",
     "INPUT_TAGGERS",
     "SUPPORTED",
-    "EXCLUSIONS",
+    "Plan",
+    "core_roles",
+    "g6_embedding",
+    "select_plan",
+    "validate",
 ]
