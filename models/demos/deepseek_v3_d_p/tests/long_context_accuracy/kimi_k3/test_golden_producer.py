@@ -146,7 +146,7 @@ def test_products_are_computed_in_fp64_and_stored_in_fp32(tmp_path: Path) -> Non
     reference run in FP64 on its rows, the second against the FP64 run continued from the FP64 state."""
     run, table, weights, config = make_run(tmp_path)
     manifest = run()
-    assert (manifest["dtype"], manifest["storage_dtype"]) == ("torch.float64", "float32")
+    assert manifest["dtype"] == "torch.float64" and manifest["producer_version"] == 2
     assert {schema["dtype"] for schema in manifest["products"].values()} == {"float32"}
     state = None
     for index in range(2):
@@ -246,8 +246,6 @@ def _version_1_golden(run_dir: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         patch.setattr(golden_producer, "PRODUCER_VERSION", 1)
         run, *_ = make_run(run_dir)
         manifest = run()
-    del manifest["storage_dtype"]  # (version 1 had no storage dtype)
-    (run_dir / MANIFEST).write_text(json.dumps(manifest))
     return manifest
 
 
@@ -262,7 +260,7 @@ def test_conversion_writes_the_golden_the_producer_writes(
     converted = convert_to_fp32_storage(tmp_path / "fp64", tmp_path / "fp32")
 
     assert converted == json.loads((tmp_path / "fp32" / MANIFEST).read_text())
-    for key in ("producer", "producer_version", "storage_dtype", "dtype", "products", "token_floor", "rows"):
+    for key in ("producer", "producer_version", "dtype", "products", "token_floor", "rows"):
         assert converted[key] == direct[key], key
     assert converted["golden_id"] == "fp32" and converted["identity"] == source["identity"]
     conversion = converted["conversion"]

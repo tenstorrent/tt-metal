@@ -8,8 +8,8 @@ segments. After each segment the run atomically writes that segment's output row
 before it (the reader: ``golden.py`` next to this file). The run never opens a device: device tests only load a
 prepared golden, so the CPU work never holds the device.
 
-The layer is computed in FP64 (``dtype``) and its products are stored in ``STORAGE_DTYPE``, FP32
-(``storage_dtype``): a device cannot compute in FP64, so storing the FP64 result in FP32 moves a device measurement
+The layer is computed in FP64 (the manifest's ``dtype``) and its products are stored in ``STORAGE_DTYPE``, FP32
+(``producer_version`` 2; each product's ``dtype``): a device cannot compute in FP64, so storing the FP64 result in FP32 moves a device measurement
 only by FP32 rounding (2^-24 relative), at half the bytes to read. The carried state stays FP64 in
 ``resume_state_path`` (the latest complete segment's only, removed once the golden is complete), so an interrupted
 run resumes bit-identical to an uninterrupted one.
@@ -151,7 +151,7 @@ def run_golden(
     resumes).
 
     ``identity`` names what produced the inputs and weights. A resume refuses a directory whose identity, tokens,
-    segment size, dtypes or thread count differ (``fp64_golden.start_or_resume``).
+    segment size, dtype or thread count differ (``fp64_golden.start_or_resume``).
     """
     run_dir = Path(run_dir)
     expected = {
@@ -164,7 +164,6 @@ def run_golden(
         "token_ids_sha256": token_ids_sha256(token_ids),
         "segment": segment,
         "dtype": str(dtype),
-        "storage_dtype": str(STORAGE_DTYPE).removeprefix("torch."),
         "threads": torch.get_num_threads(),
     }
     segments = -(-len(token_ids) // segment)
@@ -272,7 +271,6 @@ def convert_to_fp32_storage(source: Path, destination: Path) -> dict:
     manifest.update(
         golden_id=destination.name,
         producer_version=PRODUCER_VERSION,
-        storage_dtype=str(STORAGE_DTYPE).removeprefix("torch."),
         products=products,
         token_floor=_token_floor(destination, len(segments)),
     )
