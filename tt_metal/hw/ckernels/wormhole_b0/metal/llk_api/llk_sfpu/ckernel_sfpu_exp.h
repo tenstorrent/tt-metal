@@ -18,6 +18,7 @@
 
 namespace ckernel {
 namespace sfpu {
+
 /*
  * _float_to_int32_positive_ use branch to handle special cases
  * With exp21f function, some of these cases never happen (e.g. negative exponent, overflow)
@@ -731,7 +732,7 @@ template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, boo
 inline __attribute__((always_inline)) void exp_init() {
     // Common SFPU init (SFPU config register + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
-    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses ADDR_MOD_6 and ADDR_MOD_7 at their invariants).
+    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (the approximate replay path also programs ADDR_MOD_6, below).
     sfpu::_init_sfpu_config_reg();
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
@@ -996,11 +997,15 @@ inline __attribute__((always_inline)) void exp_init() {
         // avoiding race conditions from dest bank conflicts or other pipeline hiccups.
         TTI_SFPCONFIG(0xF00, 0x8, 0x1);
 
+        // Each recorded LOADMACRO advances DEST by 2 through ADDR_MOD_6/2
+        // (the recordings' sfpu_addr_mode literal 2 + SFPU base 4 = slot 6).
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
         // ===================================================================
         // Program Replay Buffer
         // ===================================================================
         // Record 32 instructions (16 LM+SHFT2 pairs) into replay buffer.
-        // ADDR_MOD_6 (its dest += 2 invariant) advances DEST once per LOADMACRO.
+        // ADDR_MOD_6 (dest += 2, programmed above) advances DEST once per LOADMACRO.
         //
         // Pattern starts with LM(LREG0) so all LOADMACROs can be replayed.
         // The first two SHFT2s are "dummy" (operate on not-yet-loaded LREGs)
