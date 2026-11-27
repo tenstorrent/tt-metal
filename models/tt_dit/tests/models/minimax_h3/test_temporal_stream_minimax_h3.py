@@ -13,6 +13,7 @@ import pytest
 from ....models.vae.minimax_h3.temporal_minimax_h3 import (
     StreamingClipAssembly,
     assemble_clip_parts,
+    blend_clip_frames,
     split_clip,
 )
 
@@ -56,6 +57,26 @@ def _stream(clips, token_drop, trim, on_frames):
         return stream.result()
     finally:
         stream.close()
+
+
+@pytest.mark.parametrize("dtype", [np.uint8, np.int16])
+@pytest.mark.parametrize("num_clips", [6, 9, 14])
+def test_assembled_frames_are_the_whole_seam_blend(num_clips, dtype):
+    # uint8 seams go frame by frame through scratch frames; `blend_clip_frames` on the whole seam is the reference.
+    rng = np.random.default_rng(num_clips)
+    parts, overlap = [], None
+    for _ in range(num_clips):  # a served clip: 28 frames, a 17-frame part and a 5-frame tail
+        clip = rng.integers(0, 256, size=(28, 6, 4)).astype(dtype)
+        part, tail = split_clip(clip, CHUNK_FRAMES, PRE_PADDING, 3)
+        parts.append((part, overlap))
+        overlap = tail
+    parts[-1] = (parts[-1][0][:3], parts[-1][1])  # a last chunk shorter than the cross-fade
+    parts.append((overlap, None))
+    expected = np.concatenate(
+        [segment if previous is None else blend_clip_frames(previous, segment, OVERLAP) for segment, previous in parts]
+    )
+    result = assemble_clip_parts(parts, OVERLAP)
+    assert result.dtype == expected.dtype and np.array_equal(result, expected)
 
 
 @pytest.mark.parametrize("num_clips", [1, 2, 15])
