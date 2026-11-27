@@ -1,0 +1,2 @@
+{"event":"env_issue","details":"host rebooted 18:15; /opt/openmpi-v5.0.7-ulfm missing -> import ttnn fails on MPIX_Comm_shrink. Workaround: LD_PRELOAD generated/mpix_stub/libmpix_stub.so (abort-on-call stubs for MPIX_Comm_shrink/revoke)","ts":"2026-11-26T19:07:55-05:00"}
+{"event":"test_run","result":"pass","details":"acceptance: 8 passed, 3 xfailed (bf8b/height/l1 outside Phase 0 SUPPORTED); writer-only owner-writes-whole-shard, NUM_WRITER_RISCS=1","ts":"2026-11-26T19:07:55-05:00"}
