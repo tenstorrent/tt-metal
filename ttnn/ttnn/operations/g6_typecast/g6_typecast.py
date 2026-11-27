@@ -14,6 +14,7 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
+from . import g6_typecast_program_descriptor as _pd
 from .g6_typecast_program_descriptor import create_program_descriptor, patch_buffer_addresses
 
 
@@ -150,6 +151,11 @@ def _cache_key(input_tensor, dtype):
         input_tensor.layout,
         mem.memory_layout,
         mem.buffer_type,
+        # Block knobs change CT args / CB sizes: part of the key so a turned knob never replays a stale program.
+        _pd.BUFFER_DEPTH,
+        _pd.BLOCK_TILES_CAP,
+        _pd.L1_OP_BUDGET_BYTES,
+        _pd.L1_SLACK_BYTES,
     )
 
 
