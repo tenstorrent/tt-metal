@@ -33,21 +33,15 @@ def topk_recall(hits: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
 def missed_keys(hits: torch.Tensor, want: torch.Tensor, scores: torch.Tensor) -> dict[str, torch.Tensor]:
     """Every ``want`` id that the selection misses (``hits = topk_hits(got, want)``), one entry per miss: its ``row``
     (index into the chunk), its ``rank`` in ``want``'s own selection ordered by ``scores`` (``want``'s score of each
-    of its ids, larger first; 0 = best), that selection's size ``selected``, and its ``spread_share`` (score − cut) /
-    (top − cut), the cut being the lowest selected score. A rank near ``selected`` or a share near 0 is a near-tie at
-    the cut."""
+    of its ids, larger first; 0 = best) and that selection's size ``selected``. A rank near ``selected`` is a near-tie
+    at the cut."""
     valid = want >= 0
     missed = ~hits & valid
     masked = scores.masked_fill(~valid, -float("inf"))
     rank = torch.empty_like(want)
     rank.scatter_(1, masked.argsort(dim=1, descending=True), torch.arange(want.shape[1]).expand_as(want).contiguous())
-    top = masked.max(dim=1, keepdim=True).values
-    cut = scores.masked_fill(~valid, float("inf")).min(dim=1, keepdim=True).values
-    row = torch.arange(want.shape[0]).unsqueeze(1).expand_as(want)[missed]
-    share = (scores[missed] - cut[row, 0]) / (top - cut).clamp_min(1e-30)[row, 0]  # (elementwise: on the misses only)
     return {
-        "row": row,
+        "row": torch.arange(want.shape[0]).unsqueeze(1).expand_as(want)[missed],
         "rank": rank[missed],
         "selected": valid.sum(dim=1, keepdim=True).expand_as(want)[missed],
-        "spread_share": share.float(),
     }
