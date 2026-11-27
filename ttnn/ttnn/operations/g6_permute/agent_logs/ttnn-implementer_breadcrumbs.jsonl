@@ -43,3 +43,4 @@
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T10:43:42-05:00"}
 {"event":"hypothesis","detail":"R4 plan: nhwc_rm_transpose = blocks reader reused with ragged units (rows of num_wb units, last one tail_w pages), new writer with partial-row writes at offset wb*block_w*2, shared transpose primitive header. Unit (n,h,wb), block_w multiple of 8 chosen by a read+write transaction cost model.","ts":"2026-11-27T10:43:42-05:00"}
 {"event":"test_run","status":"pass","test":"test_g6_permute_nhwc_rm.py 21/21; blocks_rm + nhwc_bfp8 + test_g6_permute 82/82; golden PANOPTIC_44, L3, L17, L1, L18 5/5","ts":"2026-11-27T10:50:09-05:00"}
+{"event":"test_run","status":"pass","test":"perf sweep p4 BLOCK_W 16..256 L1/DRAM: chosen 64 = 59226 ns L1, 87339 ns DRAM; writer-bound (BRISC 59.1 us, NCRISC 10.1 us). FLUX L0 555877 ns (R3 554900, noise).","ts":"2026-11-27T10:54:51-05:00"}

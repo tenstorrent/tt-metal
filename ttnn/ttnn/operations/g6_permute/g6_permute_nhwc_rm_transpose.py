@@ -49,11 +49,13 @@ INPUT_DEPTH = 2
 BLOCK_W = None
 # Input pages a block aims for: block_units = ceil(BLOCK_PAGES / block_w) under the L1 and core caps.
 BLOCK_PAGES = 256
-# Per-core time model of _choose_block_w, in ns: one input page (its read issue plus the transpose
-# of its C values, GATHER_NS each) and one partial-row write issue.
-READ_NS = 28
-GATHER_NS = 6
-WRITE_NS = 30
+# Weights of _choose_block_w's per-core cost: one input page, one of its values through the
+# transpose, one partial-row write. Relative weights, not measured costs: the writer RISC bounds the
+# regime and its time is not linear in these terms. They put the model's minimum on the measured one
+# of the BLOCK_W sweep on Panoptic p4 (64, in L1 and DRAM; test_g6_permute_nhwc_rm_perf.py).
+PAGE_WEIGHT = 28
+VALUE_WEIGHT = 6
+ROW_WEIGHT = 30
 # The shared reader's DRAM-input knobs (blocks_rm_gather measured them on 4 B pages).
 READ_ALT_NOC_SHARE = Fraction(1, 2)
 BANK_MAJOR = True
@@ -100,7 +102,7 @@ def knob_key():
         INPUT_DEPTH,
         BLOCK_W,
         BLOCK_PAGES,
-        (READ_NS, GATHER_NS, WRITE_NS),
+        (PAGE_WEIGHT, VALUE_WEIGHT, ROW_WEIGHT),
         READ_ALT_NOC_SHARE,
         BANK_MAJOR,
         BANK_RUN_ROUNDS,
@@ -119,14 +121,14 @@ def _unit_l1_bytes(block_w, C, slot_bytes, element_bytes):
 
 
 def _choose_block_w(N, H, W, C, num_cores, granule, fits):
-    """The unit width minimizing the busiest core's modelled time: whole rows, or a multiple of the
+    """The unit width minimizing the busiest core's modelled cost: whole rows, or a multiple of the
     write granule below W. Ties go to the wider unit (fewer handshakes and writes)."""
     best = None
     for block_w in [W, *range(granule * ((W - 1) // granule), 0, -granule)]:
         if not fits(block_w):
             continue
         units = N * H * _div_up(W, block_w)
-        cost = _div_up(units, min(units, num_cores)) * (block_w * (READ_NS + C * GATHER_NS) + C * WRITE_NS)
+        cost = _div_up(units, min(units, num_cores)) * (block_w * (PAGE_WEIGHT + C * VALUE_WEIGHT) + C * ROW_WEIGHT)
         if best is None or cost < best[0]:
             best = (cost, block_w)
     return None if best is None else best[1]

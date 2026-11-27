@@ -137,3 +137,50 @@
   - `test_g6_permute_blocks_rm_perf.py`: the guard sweep, shipped plan against R1 on FLUX_73/74 in DRAM and L1.
   - `test_g6_permute_blocks_rm_ablation_debug.py`: ablation arms behind temporary kernel guards, plus the `BLOCK_PAGES` sweep.
   - `test_g6_permute_blocks_rm_debug.py`: the grid-scaling experiment now runs at share 0 and 1/2.
+
+## Refinement 4 — ROW_MAJOR NHWC→NCHW (Panoptic p4)
+- Date: 2026-11-27
+- What was done:
+  - EXCLUSIONS loses `{layout: ROW_MAJOR, dims: (0,3,1,2)}`. SUPPORTED is unchanged: ROW_MAJOR, `"l1"` and `(0,3,1,2)` were already in it.
+  - New regime `nhwc_rm_transpose` (`g6_permute_nhwc_rm_transpose.py`, `kernels/g6_permute_nhwc_rm_writer.cpp`), selected on the host by `(ROW_MAJOR, (0,3,1,2))`, DRAM or L1.
+    - Work unit `(n, h, wb)`: `block_w` consecutive input pages `(n, h, w)` of `C` values. The last unit of each row holds `tail_w = W − (⌈W/block_w⌉ − 1)·block_w` pages. Units are split over the full grid (`split_units`, `row_wise=True`).
+    - `block_w` is `W` (whole rows) or a multiple of 8 values, so each partial-row write at byte offset `wb·block_w·2` stays 16 B-aligned like its staging row. `BLOCK_W` is a live knob; `None` lets `_choose_block_w` pick the width with the lowest modelled cost on the busiest core, among widths whose unit fits the budget.
+    - A block is `block_units = ⌈BLOCK_PAGES / block_w⌉` units (`BLOCK_PAGES = 256`) under the L1 and core caps. `cb_input_slots` is double-buffered when a core owns ≥ 2 blocks.
+    - Writer: transposes `[width, C] → [C, width]` in L1 (word path for even `C`, halfwords for odd `C`) and writes the `C` partial rows. One flush per block, one write barrier at the end.
+    - `RuntimeError` (BB-05) when no unit width fits one unit plus the output's L1 pages in 1347776 B. `knob_key` covers every knob. `g6_permute_plan` returns an `NhwcRmPlan` that reports `block_w`, `tail_w`, `block_units`, `l1_bytes_per_core` and `out_l1_bytes_per_core`.
+  - Reused:
+    - `blocks_rm_gather`'s reader. It now takes rows of units with a shorter last unit (`units_per_row`, `tail_pages` CT args, a `row_pos` RT arg) and a start page instead of a start unit. FLUX passes one unit per row, which compiles to the old block page count. Its four DRAM read paths (2-NoC split, bank-major runs, stagger) serve both regimes.
+    - `read_plan`, `reader_descriptor` and `dm_config`, factored out of `g6_permute_blocks_rm_gather.py`.
+    - The transpose itself, moved to `kernels/g6_permute_rm_transpose.hpp` (`transpose_pages`) and called by both writers. For FLUX (`J = 2`) it issues the same loads and stores in the same order as before.
+  - Added: the host module, the NHWC writer, the shared header, tests.
+- Accuracy achieved: bit-exact (PCC=1.0, relative RMS=0, 0 differing bit patterns) on:
+  - Panoptic p4 `[1,128,256,32]` in L1 and in DRAM;
+  - 10 other shapes of the cell: odd C (3, 5), C = 1, C = 64 (128 B pages), W = 5 (whole rows below one write granule), tails of 1, 4, 8 and 16 values, W = 1000 cut over 63 cores, N = 2, every alignment tag;
+  - special values (NaN payloads, ±inf, −0, denormals) and negative dims `(0, -1, 1, -2)`;
+  - 5 forced plans: `block_w` 8/16/24/32/whole rows, multi-block rings across rows, depth 1/2/3, and in DRAM page order on one NoC and bank-major with a 1/4 NoC1 share.
+- Device kernel time, Panoptic p4 (Blackhole, 110 cores, one fresh-cache run per width, `test_g6_permute_nhwc_rm_perf.py`):
+
+  | `block_w` | units / core | L1 (production) ns | DRAM ns |
+  |-----------|--------------|--------------------|---------|
+  | **64 (chosen)** | 5 | **59226** | **87339** |
+  | 256 (whole rows) | 2 | 83693 | 106596 |
+  | 128 | 3 | 75144 | 99361 |
+  | 32 | 10 | 81181 | 109136 |
+  | 16 | 19 | 112749 | 141174 |
+
+  `_choose_block_w` picks the measured optimum in both placements. Its weights are relative and calibrated to put the model's minimum on this sweep; they are not measured per-operation costs.
+- Regression check: FLUX_74 / L0 after the shared-transpose refactor is 555877 ns, against Refinement 3's 554900 (+0.2 %, noise).
+- Finding (for the perf rounds): p4 is bound by the writer RISC. In L1, BRISC takes 59.1 µs and the reader (NCRISC) 10.1 µs, so the reader idles ~83 % of the kernel.
+  - From 32 to 64 values per unit, the writer time drops 22 µs for 160 fewer writes per core. That puts each partial-row write at ~137 ns. Per transposed value, the cost changes with the unit width, so a linear model does not fit the sweep.
+  - Levers left untried, because they change the kernel roles or are perf work outside this refinement:
+    1. Split each core's units between both RISCs, each reading, transposing and writing its own half on its own NoC (catalog `split_reader`).
+    2. Make write addresses cheaper: advance a bank cursor by `H` per channel instead of one `TensorAccessor` lookup (a division by 110 banks) per partial row.
+    3. Try a transpose store order that walks rows sequentially.
+- Golden test progress: slice of 5 (PANOPTIC_44, loose L3 and L17, plus FLUX_73 / L1 and L18 as prior-passing representatives): 5 / 5 pass. PANOPTIC_44, L3 and L17 were `xfail_expected`. Expected full suite: 32 / 32 passing, 0 `xfail_expected`.
+- Issues encountered:
+  - The pre-commit black hook (23.10.1) failed on every file with "Ran out of input". Its cache file under `~/.cache/black/23.10.1/` was empty; removing it fixed the hook.
+  - `LD_PRELOAD` of the MPI stub is still needed on this host.
+- Tests added:
+  - `test_g6_permute_nhwc_rm.py` (21 cases): p4 in L1 and DRAM, 10 other shapes, special values, negative dims, the plan report (including the 38 × 512 B output pages per core), program reuse, and 5 forced plans.
+  - `test_g6_permute_nhwc_rm_perf.py`: the `BLOCK_W` sweep, run under `--profile`.
+  - Unit regression net still green: `test_g6_permute_blocks_rm.py`, `test_g6_permute_nhwc_bfp8.py` (incl. FLUX in L1) and `test_g6_permute.py`, 82 / 82.

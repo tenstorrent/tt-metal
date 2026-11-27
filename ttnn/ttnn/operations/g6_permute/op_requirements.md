@@ -100,7 +100,7 @@ Walking each block's pages bank-major (`p, p+8, p+16, …` share a bank) also le
 
 **Outcome**: L0 device kernel time went 1022579 → 554900 ns (−45.7 %; R1 plan in the same session 1029265), FLUX_73 248450 → 144460 ns, FLUX in L1 −25 % / −21 %. All bit-exact. The win comes from reads split evenly over both NoCs on DRAM input, each NoC entering a bank through its own port, issued bank by bank in 8-round runs, with 256-page blocks. L0 is now bound by the DRAM ports' request rate: 524288 single-page reads over 16 ports at ~17 ns each. Ablation: writes stubbed −1.7 %, all payloads stubbed 49.8 µs; 55 cores are only +8 %, so the issue rate is not binding. Next is fewer requests (Refinement 5's bank-coalesced reads). `split_reader` and `trid_double_issue` were not built: the core-count, depth and block sweeps show the ports never starve. L1 placement is issue-bound (~28 ns per read), so a split reader or cheaper per-page addressing is its lever.
 
-### [ ] Refinement 4 — ROW_MAJOR NHWC→NCHW (Panoptic p4)
+### [x] Refinement 4 — ROW_MAJOR NHWC→NCHW (Panoptic p4)
 
 **Goal**: build regime `nhwc_rm_transpose` (`op_design.md` → Regimes) and remove `{layout: ROW_MAJOR_LAYOUT, dims: (0,3,1,2)}` from `EXCLUSIONS`. This moves golden PANOPTIC_44 `[1,128,256,32]` bf16 ROW_MAJOR L1 and loose L3 and L17 (`l1_free=1347776`) from `xfail_expected` to passing, bit-exact. The axis values (ROW_MAJOR, `"l1"`, (0,3,1,2)) are already in SUPPORTED from Refinements 1 and 2, so this refinement turns cells on rather than adding axis values. The regime must be right with buffer `"dram"` as well as `"l1"`.
 
