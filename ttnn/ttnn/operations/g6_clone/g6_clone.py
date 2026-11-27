@@ -124,12 +124,15 @@ def _cache_key(input_tensor):
 
 def _plan(input_tensor):
     # The one place the plan's inputs are read off the tensor: the entry point and the plan report
-    # must agree on them (BB-08), and every input that changes the plan must also be in _cache_key.
+    # must agree on them (BB-08), and every input that changes the plan must also be in _cache_key
+    # (the DRAM bank count and placement are functions of the device id).
+    device = input_tensor.device()
     return compute_plan(
-        input_tensor.device(),
+        device,
         input_tensor.buffer_num_pages(),
         input_tensor.buffer_aligned_page_size(),
         tile_geometry(input_tensor),
+        ttnn.get_memory_view(device, ttnn.BufferType.DRAM).num_banks,
     )
 
 
