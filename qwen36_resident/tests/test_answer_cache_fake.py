@@ -258,3 +258,15 @@ def test_no_entry_on_preemption_or_without_a_boundary(monkeypatch):
     _turn(run, 0, [(2 * i + 9) % V for i in range(35)], 5, plain=True)  # (35 .. 40: no boundary past 32)
     run.finish(0)
     assert m.engine.answer_stats["entries"] == 0
+
+
+def test_no_boundary_states_past_the_live_limit(monkeypatch):
+    """past RESIDENT_ANSWER_MAX_LIVE live users no boundary state is taken (their cost at 32 users), so no entry"""
+    m, pf = make(monkeypatch)
+    monkeypatch.setattr(A, "PLAIN_HOLD", 10**6)
+    monkeypatch.setattr(VR, "ANSWER_MAX_LIVE", 0)
+    run = AF.Runner(m)
+    _turn(run, 0, [(7 * i + 3) % V for i in range(40)], 30, plain=True)
+    assert m.engine.answer_stats["crossings"] == 0 and not m.engine.cross
+    run.finish(0)
+    assert m.engine.answer_stats["entries"] == 0

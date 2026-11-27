@@ -932,39 +932,41 @@ class DFlash2DrafterTP:
 
     # ------------------------------------------------------------------ context: a slot's ring as it is (Strata S4-1b)
     def read_ring(self, phys):
-        """Slot ``phys``'s whole context ring as host tensors in device format: per layer (K, V), each
-        [1, NKVl, ring, HD] in the slot's block order (block i = its table entry i). ``write_ring`` puts them
-        into any slot: a position's ring block is (position // block_size) % blocks in every slot."""
+        """Slot ``phys``'s whole context ring as host tensors in device format: per layer (K, V), each the slot's
+        blocks [blocks, NKVl, block_size, HD] in its table order (block i = its table entry i): one slice each, all
+        enqueued before the first blocking read. ``write_ring`` puts them into any slot: a position's ring block is
+        (position // block_size) % blocks in every slot."""
         assert self.kv is not None and self.ring, "read_ring: a ring context store"
         ids = self.phys_tables[int(phys)]
         b0, nb = int(ids[0]), int(ids.numel())
         assert torch.equal(ids, torch.arange(b0, b0 + nb, dtype=ids.dtype)), "read_ring: a slot of contiguous blocks"
+        end = (b0 + nb, self.NKVl, self.block_size, HD)
+        dev = [tuple(ttnn.slice(c, (b0, 0, 0, 0), end) for c in pair) for pair in self.kv]
         out = []
-        for kc, vc in self.kv:
-            pair = []
-            for c in (kc, vc):
-                sl = ttnn.slice(c, (b0, 0, 0, 0), (b0 + nb, self.NKVl, self.block_size, HD))
-                pr = ttnn.permute(sl, (1, 0, 2, 3))
-                ttnn.deallocate(sl)
-                rs = ttnn.reshape(pr, (1, self.NKVl, nb * self.block_size, HD))
-                view = rs.buffer_address() == pr.buffer_address()
-                pair.append(ttnn.from_device(rs))
-                ttnn.deallocate(rs)
-                if not view:
-                    ttnn.deallocate(pr)
-            out.append(tuple(pair))
+        for pair in dev:
+            out.append(tuple(ttnn.from_device(x) for x in pair))
+            for x in pair:
+                ttnn.deallocate(x)
         return out
 
     def write_ring(self, phys, ring, buf):
-        """``read_ring``'s result into slot ``phys``'s ring blocks, through ``buf`` (a persistent [1, NKVl, ring,
-        HD] tensor of the store's dtype: no large device allocation while traces exist)."""
+        """``read_ring``'s result into slot ``phys``'s ring blocks, through ``buf`` (a persistent [blocks, NKVl,
+        block_size, HD] tensor of the store's dtype: no large upload allocation while traces exist); each layer's K /
+        V reordered to [1, NKVl, ring, HD] rows on device for paged_fill_cache."""
         assert self.kv is not None and self.ring and len(ring) == len(self.kv)
         ids = self.phys_tables[int(phys)]
+        nb = int(ids.numel())
         pt = self._rm(ids.reshape(1, -1).contiguous())
         for (kc, vc), (hk, hv) in zip(self.kv, ring):
             for c, h in ((kc, hk), (vc, hv)):
                 ttnn.copy_host_to_device_tensor(h, buf)
-                ttnn.experimental.paged_fill_cache(c, buf, pt, batch_idx=0)
+                pr = ttnn.permute(buf, (1, 0, 2, 3))
+                rs = ttnn.reshape(pr, (1, self.NKVl, nb * self.block_size, HD))
+                view = rs.buffer_address() == pr.buffer_address()
+                ttnn.experimental.paged_fill_cache(c, rs, pt, batch_idx=0)
+                ttnn.deallocate(rs)
+                if not view:
+                    ttnn.deallocate(pr)
         ttnn.deallocate(pt)
 
     # ------------------------------------------------------------------ context: extend (traceable)

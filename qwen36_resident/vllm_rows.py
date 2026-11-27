@@ -63,6 +63,10 @@ ANSWER_BLOCK = 1024  # (= the prefix cache's block: hits resume the PP prefill t
 # (the most KV positions an entry reads from the pool at a finish — past its parent entry's — a bound on the finish's
 # stall: 65,536 positions ~0.3 GB of host copies)
 ANSWER_MAX_KV = int(os.environ.get("RESIDENT_ANSWER_MAX_KV", "65536"))
+# (boundary states only while at most this many users are live: each costs ~40 ms of host copies (the GDN states, fp32),
+# which at 32 users decoding together cost c32 128/1024 2.8% of its throughput, 2026-11-27; the chat / speculation
+# regime is <= 8 users. A boundary skipped leaves the request's entry at its last boundary taken, if any)
+ANSWER_MAX_LIVE = int(os.environ.get("RESIDENT_ANSWER_MAX_LIVE", "8"))
 
 
 def _host_bytes(snap):
@@ -619,12 +623,18 @@ class ResidentRowsAdapter:
         """(Strata S4-1) slots whose last step consumed position p: those now at a boundary (p + 1 a multiple of
         ANSWER_BLOCK) have their state snapshotted to host there (enqueued after the step: the state is exactly the
         boundary's), for the entry their finish leaves"""
-        if not getattr(self.engine, "answer", False):
+        if not getattr(self.engine, "answer", False) or len(self.live) > ANSWER_MAX_LIVE:
             return
         for r in slots:
             p = self.pos_of.get(r)
             if p is not None and (p + 1) % ANSWER_BLOCK == 0:
+                t0 = time.perf_counter()
                 self.engine.cross_snapshot(r, p + 1)
+                self._answer_time(time.perf_counter() - t0)
+
+    def _answer_time(self, seconds):
+        """(Strata S4-1) host time the answer cache took between two steps (the adaptive class keeps it out of its
+        policy's step times)"""
 
     # ------------------------------------------------------------------ decode
     def decode_forward(

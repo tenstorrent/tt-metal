@@ -39,6 +39,7 @@ from qwen36_resident.model import SPEC_SAMPLE, TOP_K
 from qwen36_resident.adaptive import taps_usable, window_parts
 from qwen36_resident.vllm_rows import (
     ANSWER_BLOCK,
+    ANSWER_MAX_LIVE,
     CHUNK_UNIT,
     ResidentRowsAdapter,
     RowsEngine,
@@ -541,7 +542,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         positions its rows consumed validly, the state there to host. Row j of a verify from row-0 position `last`
         holds the state after position last + j (ring + 1 + j, slot + j: what the next verify would take at acc = j +
         1); a user with no verify since its start / move holds its state at its position in (ring, slot)"""
-        if not getattr(self.engine, "answer", False):
+        if not getattr(self.engine, "answer", False) or len(self.live) > ANSWER_MAX_LIVE:
             return
         e, s = self.ae.spec, self.sess
         if s.started[u]:
@@ -560,7 +561,9 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             ring, slot = e.ring[u] + 1 + j, (e.slot[u] + j) % self.ae.R
         if self.engine.cross.get(r, (None,))[0] == B:
             return
+        t0 = time.perf_counter()
         self.engine.cross_snapshot(r, B, e.m.vrows_snapshot(u, ring, slot))
+        self._answer_time(time.perf_counter() - t0)
         if crossed is not None:
             crossed.append((r, u, B))
 
@@ -583,6 +586,12 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 st["ring_ms"] = st.get("ring_ms", 0.0) + (time.perf_counter() - t0) * 1000
             except RuntimeError as ex:  # (device memory: the entry without taps; its promotion refills)
                 logger.warning(f"answer cache: no drafter ring at {B} for resident slot {r} ({str(ex)[:160]})")
+            self._answer_time(time.perf_counter() - t0)
+
+    def _answer_time(self, seconds):
+        """(Strata S4-1) boundary states / drafter rings are no step's cost: excluded from the policy's step times, as
+        a prefill between two steps is"""
+        self._pay["excl"] = self._pay.get("excl", 0.0) + seconds
 
     # ------------------------------------------------------------------ prefill
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, start_pos=None, empty_slots=None, **kwargs):

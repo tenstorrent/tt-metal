@@ -600,7 +600,7 @@ class ResidentDFlashRows:
             if self.drafter.ring:
                 dr = self.drafter
                 self._ring_buf = ttnn.from_torch(
-                    torch.zeros(1, dr.NKVl * dr.nd, dr.ring, 128, dtype=torch.bfloat16),
+                    torch.zeros(dr.ring // dr.block_size, dr.NKVl * dr.nd, dr.block_size, 128, dtype=torch.bfloat16),
                     dtype=dr.kv_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=mesh,

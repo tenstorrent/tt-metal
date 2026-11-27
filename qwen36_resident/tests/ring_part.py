@@ -51,20 +51,24 @@ def main():
             pos, anchor, acc = pos + len(new), new[-1], len(new)
         d0 = s.propose([anchor] + [0] * 3, [pos] + [0] * 3, [acc] + [1] * 3, act)  # (the context extended to pos)
         ttnn.synchronize_device(mesh)
-        t0 = time.perf_counter()
-        part = eng.ring_part(0, pos // 64 * 64)
-        t_read = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        eng.fill_from_taps(1, dict(parts=[part], n=part["hb"], tail=None), part["hb"])
-        ttnn.synchronize_device(mesh)
-        t_write = time.perf_counter() - t0
+        t_read, t_write = [], []
+        for _ in range(3):  # (the first of each cold: program compiles)
+            t0 = time.perf_counter()
+            part = eng.ring_part(0, pos // 64 * 64)
+            t_read.append(time.perf_counter() - t0)
+            t0 = time.perf_counter()
+            eng.fill_from_taps(1, dict(parts=[part], n=part["hb"], tail=None), part["hb"])
+            ttnn.synchronize_device(mesh)
+            t_write.append(time.perf_counter() - t0)
+        t_read = f"{1e3 * t_read[0]:.0f} cold / {1e3 * min(t_read[1:]):.0f}"
+        t_write = f"{1e3 * t_write[0]:.0f} cold / {1e3 * min(t_write[1:]):.0f}"
         r0, r1 = ring_torch(eng, 0), ring_torch(eng, 1)
         same_ring = all(torch.equal(x, y) for x, y in zip(r0, r1))
         d = eng.drafter.draft([anchor, anchor, 0, 0], [pos, pos, 0, 0])
         same_draft = list(d[0]) == list(d[1])  # (d0: the propose's, for reference)
         nbytes = sum(2 * x[0].numel() * x[0].element_size() for x in r0)
         print(
-            f"ring part at {part['hb']} (window from {part['s0']}): read {1e3 * t_read:.0f} ms, write {1e3 * t_write:.0f} ms, "
+            f"ring part at {part['hb']} (window from {part['s0']}): read {t_read} ms, write {t_write} ms, "
             f"{nbytes / 1e6:.1f} MB; ring byte-identical {same_ring}; drafts {list(d[0])} / {list(d[1])} "
             f"(the propose's {list(d0[0])}) equal {same_draft}",
             flush=True,
