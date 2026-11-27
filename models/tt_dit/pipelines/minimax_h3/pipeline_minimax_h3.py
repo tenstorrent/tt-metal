@@ -1044,6 +1044,8 @@ class MiniMaxH3Pipeline:
             pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
             readback_uint8=self.vae_output_type == "uint8",
             waves_per_device=self.vae_waves_per_device,
+            # Waves per decoder call of the yuv420 strip stitch (default 1: one unit per device per call).
+            waves_per_call=int(os.environ.get("H3_VAE_WAVES_PER_CALL", "1")),
         )
         self._vae.load_state(self._read_safetensors("vae"))
 
@@ -3107,7 +3109,9 @@ class MiniMaxH3Pipeline:
             height, width = canvas
             num_latents = chunk_latents
             if canvas == full_canvas:
-                num_latents = config.tokens_chunk_size * (wave_size // full + 1) - config.token_drop
+                # Enough chunks for a second wave, and for one full decoder call when calls batch waves.
+                chunks = max(wave_size // full + 1, self._vae.waves_per_call * (wave_size // full))
+                num_latents = config.tokens_chunk_size * chunks - config.token_drop
             latents = torch.zeros(1, config.latent_channels, num_latents, height // ratio, width // ratio)
             self._vae.decode(latents, output_type="yuv420")
         self._host_log(f"VAE decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
