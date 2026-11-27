@@ -10,7 +10,7 @@ import pytest
 import torch
 
 import ttnn
-from tt_py_test_utils_common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     check_readable,
@@ -18,7 +18,12 @@ from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    block_shards,
+    contiguous_1d_shards,
+    full_range_input,
+)
 
 
 def random_torch_tensor(dtype, shape):
@@ -672,6 +677,26 @@ def test_transpose_wh_tiled_uint32(device, shape):
     assert_equal(t.permute(0, 1, 3, 2), ttnn.to_torch(out))
 
 
+# Output (n, n, 1, 5) tile-pads to (n, n, 32, 32): exactly 2^32 elements at n=2048.
+# The element count is dtype independent: bfloat16 (~8.6 GB output) fits Wormhole n150, fp32 (~16 GB) needs Blackhole.
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        pytest.param(ttnn.bfloat16, id="bfloat16"),
+        pytest.param(ttnn.float32, id="float32", marks=run_for_blackhole("needs ~16 GB DRAM for 2^32 padded elements")),
+    ],
+)
+@pytest.mark.parametrize("n", [2047, 2048])
+def test_permute_tiled_padded_volume_uint32_overflow(device, n, dtype):
+    torch.manual_seed(0)
+    x = torch.randn(n, 5, n, 1)
+    if dtype == ttnn.bfloat16:
+        x = x.to(torch.bfloat16)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y = ttnn.to_torch(ttnn.permute(t, [2, 0, 3, 1]))
+    assert torch.equal(y, x.permute(2, 0, 3, 1))
+
+
 # TODO: Fix sharded permute bugs for width and block shard strategies
 @pytest.mark.parametrize("shape", [[16, 8, 224, 224]])
 @pytest.mark.parametrize("perm", [[0, 2, 3, 1], [0, 3, 2, 1], [1, 2, 3, 0], [1, 3, 2, 0]])
@@ -1081,6 +1106,53 @@ def test_permute_rm_into_height_shards_with_unaligned_rows(device):
 
     assert output.memory_config() == config
     assert_equal(x.permute(1, 0, 2, 3), ttnn.to_torch(output))
+
+
+# ROW_MAJOR block shards one row high on two or more shard columns: transpose stages them through interleaved memory
+# (#67023).
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shard_cols", [2, 4])
+@pytest.mark.parametrize("rows", [2, 3, 4])
+@pytest.mark.parametrize("shard_h", [1, 2], ids=["one_row_shard", "two_row_shard"])
+def test_transpose_wh_rm_into_block_shard_rows(device, shard_h, rows, shard_cols, dtype):
+    out_rows = rows * shard_h
+    # The ROW_MAJOR WH transpose turns a BFLOAT16 NaN into inf and -0.0 into +0.0 even between interleaved tensors.
+    x = full_range_input([1, 1, 16 * shard_cols, out_rows], dtype, nan=False)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.transpose(t, -2, -1, memory_config=block_shards((shard_h, 16), rows, shard_cols))
+
+    assert_exact(x.transpose(-2, -1), ttnn.to_torch(output), signed_zeros=False)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_transpose_wh_rm_into_folded_nd_shard_rows(device, dtype):
+    # [1, 1, 1, 16] ND shards of 64-wide rows fold the same way as a one-row BLOCK shard.
+    config = contiguous_1d_shards([1, 1, 1, 16], num_cores=4)
+    # The ROW_MAJOR WH transpose turns a BFLOAT16 NaN into inf and -0.0 into +0.0 even between interleaved tensors.
+    x = full_range_input([1, 1, 64, 16], dtype, nan=False)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.transpose(t, -2, -1, memory_config=config)
+
+    assert output.memory_config() == config, "transpose changed the requested output configuration"
+    assert_exact(x.transpose(-2, -1), ttnn.to_torch(output), signed_zeros=False)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
+    x = full_range_input([1, 1, 16, 64], dtype, nan=False)
+    t = ttnn.from_torch(
+        x,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=contiguous_1d_shards([1, 1, 1, 16], num_cores=4),
+    )
+
+    output = ttnn.permute(t, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert_exact(x.permute(0, 1, 3, 2), ttnn.to_torch(output), signed_zeros=False)
 
 
 @pytest.mark.parametrize(

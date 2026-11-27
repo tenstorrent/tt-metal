@@ -31,6 +31,11 @@ enum class SubtileBroadcastType {
 
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w);
 
+// unary::utils::without_runtime_scalars of each activation: what the program cache keys in their place, since
+// the compute kernel reads those scalars from runtime args.
+ttsl::SmallVector<unary::EltwiseUnaryWithParam> without_runtime_scalars(
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations);
+
 struct BinaryNgDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
@@ -105,9 +110,10 @@ struct BinaryNgDeviceOperation {
         auto attribute_values() const {
             return std::make_tuple(
                 binary_op_type,
-                lhs_activations,
-                rhs_activations,
-                (is_where_op || is_quant_op) ? ttsl::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
+                without_runtime_scalars(lhs_activations),
+                without_runtime_scalars(rhs_activations),
+                (is_where_op || is_quant_op) ? ttsl::SmallVector<unary::EltwiseUnaryWithParam>{}
+                                             : without_runtime_scalars(post_activations),
                 memory_config,
                 get_dtype(),
                 compute_kernel_config,

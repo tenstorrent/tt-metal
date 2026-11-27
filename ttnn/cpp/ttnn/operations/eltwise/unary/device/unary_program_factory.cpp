@@ -446,6 +446,16 @@ tt::tt_metal::ProgramRunArgs make_run_args(
     }
     compute_run_args.common_runtime_arg_values["packed_scalar1"] = packed_scalar1;
     compute_run_args.common_runtime_arg_values["packed_scalar2"] = packed_scalar2;
+    if (std::ranges::any_of(operation_attributes.op_chain, [](const EltwiseUnaryWithParam& op) {
+            return takes_runtime_scalars(op.type());
+        })) {
+        // Generating the defines also validates the scalars, which a cache hit with new values needs.
+        std::vector<uint32_t> chain_scalars;
+        get_unary_chain_defines(operation_attributes.op_chain, input.dtype(), chain_scalars);
+        for (uint32_t i = 0; i < chain_scalars.size(); ++i) {
+            compute_run_args.common_runtime_arg_values[unary_runtime_scalar_name(i)] = chain_scalars[i];
+        }
+    }
 
     for (const auto& [name, value] : dram_read_args(plan, input, operation_attributes.worker_grid)) {
         reader_run_args.common_runtime_arg_values[name] = value;
@@ -543,7 +553,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     const bool work_queue = plan.flow == DramReadFlow::WorkQueue;
 
     const bool math_approx_mode = false;
-    std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
+    std::vector<uint32_t> chain_scalars;
+    std::map<std::string, std::string> unary_defines = get_unary_chain_defines(ops_chain, input.dtype(), chain_scalars);
     if (bf16_kernel_defines) {
         unary_defines = *bf16_kernel_defines;
     }
@@ -805,6 +816,11 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         };
     }
 
+    Group<std::string> compute_common_runtime_arg_names = {"packed_scalar1", "packed_scalar2"};
+    for (uint32_t i = 0; i < chain_scalars.size(); ++i) {
+        compute_common_runtime_arg_names.push_back(unary_runtime_scalar_name(i));
+    }
+
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = compute_path,
@@ -816,7 +832,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args = std::move(compute_compile_time_args),
         .runtime_arg_schema =
-            {.runtime_arg_names = {"num_tiles"}, .common_runtime_arg_names = {"packed_scalar1", "packed_scalar2"}},
+            {.runtime_arg_names = {"num_tiles"},
+             .common_runtime_arg_names = std::move(compute_common_runtime_arg_names)},
         .hw_config = std::move(compute_hw_config),
     };
 

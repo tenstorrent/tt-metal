@@ -5,7 +5,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
 def torch_snake_beta(x, alpha, beta):
@@ -51,6 +51,24 @@ def test_snake_beta_broadcast(device, x_shape, ab_shape, seed, torch_dtype, ttnn
         assert torch.allclose(expected, result, rtol=1e-5, atol=1e-5)
     else:
         assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=2)
+
+
+@pytest.mark.parametrize("out_dtype, pcc", [(ttnn.bfloat8_b, 0.999), (ttnn.bfloat4_b, 0.97)], ids=["bfp8", "bfp4"])
+def test_snake_beta_block_float_output(device, out_dtype, pcc):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 64)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    a = _sample_uniform(shape, *_AB_RANGE_ALPHA, dtype=torch.bfloat16)
+    b = _sample_uniform(shape, *_AB_RANGE_BETA, dtype=torch.bfloat16)
+    expected = torch_snake_beta(x.float(), a.float(), b.float())
+
+    x_tt, a_tt, b_tt = (
+        ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device) for t in (x, a, b)
+    )
+    output = ttnn.from_torch(torch.zeros(shape), layout=ttnn.TILE_LAYOUT, dtype=out_dtype, device=device)
+    ttnn.snake_beta(x_tt, a_tt, b_tt, output_tensor=output)
+
+    assert_with_pcc(expected, ttnn.to_torch(output).float(), pcc)
 
 
 # Per-preset bf16 distribution params from issue #43337:
@@ -278,5 +296,5 @@ def test_snake_beta_unsupported_dtype_int32(device, expect_error):
         dtype=ttnn.int32,
         device=device,
     )
-    with expect_error(RuntimeError, r"BFLOAT16 or FLOAT32"):
+    with expect_error(RuntimeError, "SNAKE_BETA does not support DataType::INT32"):
         ttnn.snake_beta(x, a, b)

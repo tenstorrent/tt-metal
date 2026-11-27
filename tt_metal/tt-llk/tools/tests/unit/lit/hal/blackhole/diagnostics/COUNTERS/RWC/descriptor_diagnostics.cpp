@@ -14,9 +14,9 @@
 // EMPTY: error: static assertion failed: math-counter descriptor must update a counter, flip a bank, or clear the fidelity phase
 // DEST_ONLY: error: could not convert {{.*}}IncrementAndSave{{.*}} to 'hal::counters::rwc::SrcUpdate'
 // SLICED_SAVE: in 'constexpr' expansion of 'hal::detail::require({{.*}}"IncrementAndSave applies only to the Dest counter"))'
-// SLICED_SAVE-NEXT: error: '__builtin_trap()' is not a constant expression
+// SLICED_SAVE: error: '__builtin_trap()' is not a constant expression
 // VALUE_RANGE: in 'constexpr' expansion of 'hal::detail::require({{.*}}"math-counter value must fit in four bits"))'
-// VALUE_RANGE-NEXT: error: '__builtin_trap()' is not a constant expression
+// VALUE_RANGE: error: '__builtin_trap()' is not a constant expression
 // TWO_INSTRUCTIONS: in 'constexpr' expansion of 'hal::detail::require({{.*}}"MathCounter::operation() encodes one instruction, but this descriptor needs SETRWC and INCRWC{{.*}}"))'
 // clang-format on
 

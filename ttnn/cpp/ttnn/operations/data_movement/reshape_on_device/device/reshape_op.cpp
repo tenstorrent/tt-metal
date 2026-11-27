@@ -48,9 +48,11 @@ void ReshapeDeviceOperation::validate_on_program_cache_miss(
         "Reshape does not currently support sharding. Use ttnn::reshape for reshaping sharded inputs");
 
     if (input_tensor_a.layout() == Layout::TILE) {
-        // ReshapeTileProgramFactory sizes its CBs and tile counts from the architectural 32x32
-        // constants, and the tile is absent from compute_program_hash, so a non-standard tile would
-        // both compile a mis-sized program and alias onto a cached 32x32 one.
+        // ReshapeTileProgramFactory sizes its DFBs and tile counts from the architectural 32x32 constants.
+        // A non-standard tile would compile a mis-sized program.
+        // Reject it here.
+        // The cache key already separates tile shapes.
+        // It hashes the input's page config, and a TILE page config carries its Tile.
         const auto tile = input_tensor_a.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,

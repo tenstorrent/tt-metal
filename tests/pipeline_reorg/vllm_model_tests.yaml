@@ -46,7 +46,6 @@
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "l1_small_size": 4096}'
   server-default-top-k: 32
   additional-server-args: "--async-scheduling"
-  tt-llama-text-ver: tt_transformers
   multimodal: true
   skus:
     wh_llmbox:
@@ -67,7 +66,6 @@
   server-default-top-k: 32
   additional-server-args: "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling"
   tt_mm_throttle_perf: 5
-  tt-llama-text-ver: tt_transformers
   multimodal: true
   skus:
     wh_galaxy_perf:
@@ -379,7 +377,6 @@
   mesh-device: "(4, 8)"
   arch: arch-wormhole_b0
   multimodal: false
-  tt-llama-text-ver: tt_transformers
   tt-config: '{"sample_on_device_mode": "all", "l1_small_size": 16384}'
   server-default-top-k: 32
   additional-server-args: "--max_num_seqs 1 --async-scheduling"
@@ -405,7 +402,6 @@
   mesh-device: "(4, 8)"
   arch: arch-wormhole_b0
   multimodal: false
-  tt-llama-text-ver: tt_transformers
   tt-config: '{"fabric_config": "FABRIC_1D_RING", "sample_on_device_mode": "all", "trace_region_size": 100000000, "l1_small_size": 16384}'
   server-default-top-k: 32
   tt_mm_throttle_perf: 2
@@ -432,7 +428,6 @@
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0
-  tt-llama-text-ver: tt_transformers
   tt-config: '{"fabric_config": "FABRIC_1D", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
   server-default-top-k: 32
   additional-server-args: "--async-scheduling"
@@ -455,7 +450,6 @@
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0
-  tt-llama-text-ver: tt_transformers
   # Prefix-caching models reserve a traced resumed prefill per traced sequence
   # length at warmup, which the 50 MB default does not cover: 53248000B measured
   # on this SKU. 85 MB matches the T3K sampling-tests leg above rather than
@@ -480,7 +474,6 @@
   mesh-device: P150x4
   arch: arch-blackhole
   tt-config: '{"trace_region_size": 76000000}'
-  tt-llama-text-ver: tt_transformers
   additional-server-args: "--async-scheduling"
   structured-output: true
   multimodal: false
@@ -498,7 +491,6 @@
   benchmark-timeout: 10
   mesh-device: P150x8
   arch: arch-blackhole
-  tt-llama-text-ver: tt_transformers
   # See the prefix-caching leg: warmup reserves a traced resumed prefill per
   # traced sequence length, above the 50 MB default. Carried over from the T3K
   # measurement, not measured on Blackhole. Reserving at warmup means a value
@@ -524,7 +516,6 @@
   chunked-prefill-test-timeout: 15
   mesh-device: T3K
   arch: arch-wormhole_b0
-  tt-llama-text-ver: tt_transformers
   # sample_on_device_mode is what makes this leg cover the intermediate-chunk
   # sampling fallback: the runner forces host sampling for a step containing a
   # mid-prompt row, and with device sampling off that branch never runs.
@@ -561,7 +552,6 @@
   # it is wrong.
   tt-config: '{"fabric_config": "FABRIC_1D_RING", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
   server-default-top-k: 32
-  tt-llama-text-ver: tt_transformers
   additional-server-args: "--data_parallel_size 4 --async-scheduling"
   structured-output: true
   multimodal: false
@@ -649,7 +639,6 @@
   benchmark-timeout: 10
   mesh-device: T3K
   arch: arch-wormhole_b0
-  tt-llama-text-ver: tt_transformers
   tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 28467200}'
   structured-output: true
   multimodal: true
@@ -668,7 +657,6 @@
   benchmark-timeout: 10
   mesh-device: T3K
   arch: arch-wormhole_b0
-  tt-llama-text-ver: tt_transformers
   tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 60000000, "sample_on_device_mode": "decode_only"}'
   structured-output: true
   multimodal: true
@@ -687,7 +675,6 @@
   benchmark-timeout: 10
   mesh-device: T3K
   arch: arch-wormhole_b0
-  tt-llama-text-ver: tt_transformers
   tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 28467200}'
   structured-output: true
   multimodal: true

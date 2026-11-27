@@ -275,10 +275,10 @@ TEST(RelationalUnaryScalarWord, FloatScalarIsConvertedByValue) {
         const std::array<float, 1> params = {scalar};
         return get_defines<float>(op, std::span<const float>(params), "0", "0", dtype).at("SFPU_OP_FUNC_0");
     };
-    EXPECT_EQ(func(UnaryOpType::UNARY_NE, 7.0f, DataType::INT32), "unary_ne_tile_int32(0, 7u);");
-    EXPECT_EQ(func(UnaryOpType::UNARY_EQ, -5.0f, DataType::INT32), "unary_eq_tile_int32(0, 4294967291u);");
-    EXPECT_EQ(func(UnaryOpType::UNARY_GT, 2.0f, DataType::INT32), "unary_gt_tile_int32(0, 2);");
-    EXPECT_EQ(func(UnaryOpType::UNARY_LT, 2.0f, DataType::INT32), "unary_lt_tile_int32(0, 2);");
+    EXPECT_EQ(func(UnaryOpType::UNARY_NE, 7.0f, DataType::INT32), "unary_ne_tile_int32(0, 0x7u);");
+    EXPECT_EQ(func(UnaryOpType::UNARY_EQ, -5.0f, DataType::INT32), "unary_eq_tile_int32(0, 0xfffffffbu);");
+    EXPECT_EQ(func(UnaryOpType::UNARY_GT, 2.0f, DataType::INT32), "unary_gt_tile_int32(0, 0x2u);");
+    EXPECT_EQ(func(UnaryOpType::UNARY_LT, 2.0f, DataType::INT32), "unary_lt_tile_int32(0, 0x2u);");
 }
 
 TEST(RelationalUnaryScalarWord, UnrepresentableFloatScalarIsRejected) {
@@ -334,7 +334,7 @@ TEST(RelationalUnaryScalarWord, Uint32ScalarOutsideInt32RangeIsRejected) {
         get_defines<std::uint32_t>(
             UnaryOpType::UNARY_GT, std::span<const std::uint32_t>(five), "0", "0", DataType::INT32)
             .at("SFPU_OP_FUNC_0"),
-        "unary_gt_tile_int32(0, 5);");
+        "unary_gt_tile_int32(0, 0x5u);");
 }
 
 // Host side only: an op placed after a TYPECAST is generated for the cast's target dtype. A relational
@@ -357,7 +357,7 @@ TEST(RelationalUnaryScalarWord, OpsAfterTypecastUseTheCastDtype) {
     EXPECT_EQ(func_1(int_to_float_gt_half, DataType::INT32), "unary_gt_tile(0, 0x3f000000u);");
     const std::vector<EltwiseUnaryWithParam> float_to_int_gt = {
         typecast(DataType::FLOAT32, DataType::INT32), EltwiseUnaryWithParam(UnaryOpType::UNARY_GT, 2.0f)};
-    EXPECT_EQ(func_1(float_to_int_gt, DataType::FLOAT32), "unary_gt_tile_int32(0, 2);");
+    EXPECT_EQ(func_1(float_to_int_gt, DataType::FLOAT32), "unary_gt_tile_int32(0, 0x2u);");
     // The TYPECAST parameters may be int32_t or uint32_t backed; the cast's dtype is read from the active type.
     const std::vector<EltwiseUnaryWithParam> int_params_gt_half = {
         EltwiseUnaryWithParam(

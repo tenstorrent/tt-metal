@@ -19,4 +19,9 @@ namespace ttnn::prim {
 LayerNormProgramConfig create_layernorm_program_config(
     const std::optional<tt::tt_metal::ShardSpec>& shard_spec, uint32_t tile_height = 32, uint32_t tile_width = 32);
 
+// The block grid an interleaved input is split over under a sharded program config, as the shard spec a block-sharded
+// input of the same blocks would have: (Kt / block_w) x (Mt / block_h) cores from (0, 0), row major.
+tt::tt_metal::ShardSpec interleaved_block_shard_spec(
+    const Tensor& input, const LayerNormShardedMultiCoreProgramConfig& program_config);
+
 }  // namespace ttnn::prim
