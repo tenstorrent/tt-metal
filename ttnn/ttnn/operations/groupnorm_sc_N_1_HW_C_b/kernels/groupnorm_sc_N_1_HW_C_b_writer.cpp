@@ -30,7 +30,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "vendor/gn_perf_instrumentation.hpp"
 
 namespace {
 constexpr uint32_t cb_output_rm = 1;

@@ -50,7 +50,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "vendor/gn_perf_instrumentation.hpp"
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;

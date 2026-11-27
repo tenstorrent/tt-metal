@@ -47,15 +47,10 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+#include "vendor/gn_matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "vendor/gn_perf_instrumentation.hpp"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"
@@ -63,6 +58,7 @@
 #endif
 
 using namespace compute_kernel_lib;
+using namespace gn_kernel_lib;
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;
