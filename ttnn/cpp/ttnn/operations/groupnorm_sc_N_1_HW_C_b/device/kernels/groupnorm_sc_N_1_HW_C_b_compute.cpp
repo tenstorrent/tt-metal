@@ -487,28 +487,35 @@ static constexpr uint32_t P2_UNP_B_ROW =
     TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 static constexpr uint32_t P2_UNP_A_ZERO = TT_OP_UNPACR_NOP(
     SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-// Seed unpack of DEST tiles 0..cnt-1 from b' tiles ww, ww+1, ... (wrapping from wrap_at back to reset_to), in one
-// unpacker context: _llk_unpack_A_'s context protocol around per-tile (Z = 4 * ww, (b' row, zero A) x 2).
+// Seed unpack of DEST tiles 0..cnt-1 from b' tiles ww, ww+1, ... (wrapping from wrap_at back to reset_to):
+// _llk_unpack_A_'s context protocol around per-tile (Z = 4 * (ww % 64), (b' row, zero A) x 2). The ADC Z counter is
+// 8 bits, so Z = 4 * ww only reaches b' tile 63: the context's base address is b' tile 64 * (ww / 64), and a window
+// whose tiles cross a 64-tile group opens a new context per group (W <= 64: always one context).
 inline void p2_seed_unpack_window(uint32_t cnt, uint32_t ww, uint32_t wrap_at, uint32_t reset_to) {
+    constexpr uint32_t Z_TILES = 64;  // tiles the 8-bit Z counter addresses at 4 faces per tile
     const uint32_t id = get_operand_id(cb_bprime);
     const uint32_t address = get_local_cb_interface(id).fifo_rd_ptr - 1;
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    const uint32_t page = get_local_cb_interface(id).fifo_page_size;  // 16 B units, as the address
     volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
-    wait_for_next_context(2);
-    cfg[unp_cfg_context == 0 ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32] =
-        address;
-    semaphore_post(semaphore::UNPACK_SYNC);
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-    for (uint32_t k = 0; k < cnt; ++k) {
-        TT_SETADC(p_setadc::UNP_B, p_setadc::CH_0, p_setadc::SET_Z, ww << 2);
-        TTI_INSN(P2_UNP_B_ROW);
-        TTI_INSN(P2_UNP_A_ZERO);
-        TTI_INSN(P2_UNP_B_ROW);
-        TTI_INSN(P2_UNP_A_ZERO);
-        ww = ww + 1 == wrap_at ? reset_to : ww + 1;
+    while (cnt > 0) {
+        const uint32_t grp = ww / Z_TILES;
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+        wait_for_next_context(2);
+        cfg[unp_cfg_context == 0 ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32] =
+            address + grp * Z_TILES * page;
+        semaphore_post(semaphore::UNPACK_SYNC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        do {
+            TT_SETADC(p_setadc::UNP_B, p_setadc::CH_0, p_setadc::SET_Z, (ww % Z_TILES) << 2);
+            TTI_INSN(P2_UNP_B_ROW);
+            TTI_INSN(P2_UNP_A_ZERO);
+            TTI_INSN(P2_UNP_B_ROW);
+            TTI_INSN(P2_UNP_A_ZERO);
+            ww = ww + 1 == wrap_at ? reset_to : ww + 1;
+        } while (--cnt > 0 && ww / Z_TILES == grp);
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        switch_config_context(unp_cfg_context);
     }
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-    switch_config_context(unp_cfg_context);
 }
 #endif
 #ifdef TRISC_MATH

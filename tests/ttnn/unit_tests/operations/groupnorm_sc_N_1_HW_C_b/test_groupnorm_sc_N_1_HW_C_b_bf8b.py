@@ -174,3 +174,28 @@ def test_bf8b_large(device, inputs):
     run_groupnorm_sc_N_1_HW_C(
         inputs, device=device, dtype=B8, layout=TILE, affine="gamma_beta", affine_dtype=B8, affine_layout=TILE
     )
+
+
+# More than 64 channel tiles on one core (only bfloat8_b input fits): pass 2 must seed each tile from its own b'
+# tile. Checked per channel tile, because one wrong tile out of 65 stays inside the whole-tensor bfloat8_b tolerance.
+@pytest.mark.parametrize(
+    "shape, num_groups", [((2, 1, 1024, 2080), 1), ((2, 1, 1024, 2080), 4), ((2, 1, 4096, 2112), 1)]
+)
+@pytest.mark.parametrize("affine_dtype, affine_layout", [(B8, TILE), (BF16, RM)])
+def test_more_than_64_channel_tiles(device, shape, num_groups, affine_dtype, affine_layout):
+    torch.manual_seed(0)
+    C = shape[-1]
+    x = ttnn.from_torch(
+        torch.randn(shape).bfloat16(), dtype=B8, layout=TILE, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    gamma = ttnn.from_torch(torch.randn(1, 1, 1, C).bfloat16(), dtype=affine_dtype, layout=affine_layout, device=device)
+    beta = ttnn.from_torch(torch.randn(1, 1, 1, C).bfloat16(), dtype=affine_dtype, layout=affine_layout, device=device)
+    out = ttnn.to_torch(groupnorm_sc_N_1_HW_C_b(x, num_groups, gamma=gamma, beta=beta)).float()
+    # Reference on the device-quantized operands.
+    xq = ttnn.to_torch(x).float()
+    gq = ttnn.to_torch(gamma).float().reshape(1, 1, 1, C)
+    bq = ttnn.to_torch(beta).float().reshape(1, 1, 1, C)
+    ref = torch.nn.functional.group_norm(xq.permute(0, 3, 1, 2), num_groups, eps=1e-5).permute(0, 2, 3, 1) * gq + bq
+    per_tile = (out - ref).abs().reshape(-1, C // 32, 32).mean(dim=(0, 2))
+    bad = [t for t, e in enumerate(per_tile.tolist()) if e > 0.05]
+    assert not bad, f"channel tiles with mean abs error > 0.05: {bad}"
