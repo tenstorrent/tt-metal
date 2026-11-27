@@ -164,6 +164,30 @@ class TtIndexerBase:
         # tensorbin cannot satisfy completeness checks or be loaded by cache-only construction.
         return "wq_b_repl" if weight_name == "indexer.wq_b" else weight_name.split(".")[-1]
 
+    # The projections K3_ACC_BF16_WEIGHTS keeps in bf16 (tt/kimi_k3/accuracy.py); production: WEIGHT_DTYPES.
+    _BF16_ORIGIN = ("indexer.wq_b", "indexer.wk")
+
+    @classmethod
+    def weight_dtype(cls, name: str) -> ttnn.DataType:
+        """A weight's device dtype: WEIGHT_DTYPES, or bf16 for wq_b / wk under K3_ACC_BF16_WEIGHTS."""
+        if name in cls._BF16_ORIGIN:
+            from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
+            return accuracy.weight_dtype(cls.WEIGHT_DTYPES[name])
+        return cls.WEIGHT_DTYPES[name]
+
+    def _acc_score_kwargs(self) -> dict:
+        """The score op's compute_kernel_config under K3_ACC_FIDELITY (HiFi4), else nothing (the op's default)."""
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
+        if not accuracy.fidelity():
+            return {}
+        return {
+            "compute_kernel_config": ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4
+            )
+        }
+
     @classmethod
     def cache_globs(cls, cache_name_prefix: str, key_only: bool = False) -> tuple[str, ...]:
         """One glob per indexer tensorbin under cache_name_prefix (e.g. 'layer_0.mla'), AT ITS EXPECTED DTYPE.
@@ -172,7 +196,7 @@ class TtIndexerBase:
         cache-only construction load the empty placeholder as garbage. Indexer files are `{prefix}.indexer_{short}`
         — a disjoint prefix space from the dense MLA names, so dense and indexer checks never alias."""
         return tuple(
-            f"{cache_name_prefix}.indexer_{cls._cache_short_name(name)}_dtype_{cls.WEIGHT_DTYPES[name].name}_*.tensorbin"
+            f"{cache_name_prefix}.indexer_{cls._cache_short_name(name)}_dtype_{cls.weight_dtype(name).name}_*.tensorbin"
             for name in (cls.KEY_WEIGHT_NAMES if key_only else cls.WEIGHT_NAMES)
         )
 
@@ -309,9 +333,9 @@ class TtIndexerBase:
             "wq_b": None
             if key_only
             else repl(
-                wq_b, cls._cache_short_name("indexer.wq_b"), transpose=True, dtype=cls.WEIGHT_DTYPES["indexer.wq_b"]
+                wq_b, cls._cache_short_name("indexer.wq_b"), transpose=True, dtype=cls.weight_dtype("indexer.wq_b")
             ),  # [q_lora_rank, H_idx*D_idx] replicated (all heads)
-            "wk": shard(wk, 0, "wk", dtype=cls.WEIGHT_DTYPES["indexer.wk"]),  # [dim, D_idx] sharded on dim
+            "wk": shard(wk, 0, "wk", dtype=cls.weight_dtype("indexer.wk")),  # [dim, D_idx] sharded on dim
             "weights_proj": None
             if key_only
             else shard(
@@ -1057,6 +1081,8 @@ class TtIndexerBase:
             # Q rows and the index cache are SP-major (sp_coord*tp + tp_coord): row-major on the mesh at
             # sp_axis=0, column-major at sp_axis=1.
             full_mesh_outer_axis=self.sp_axis,
+            # K3_ACC_FIDELITY (tt/kimi_k3/accuracy.py): the score matmul at HiFi4 (the op's default: LoFi)
+            **self._acc_score_kwargs(),
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1

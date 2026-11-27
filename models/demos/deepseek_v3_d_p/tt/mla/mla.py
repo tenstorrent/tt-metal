@@ -177,6 +177,10 @@ class ttMLA:
         hidden_size = config.hidden_size
         qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
         use_gate = bool(getattr(config, "mla_use_output_gate", False))
+        # The projections' device dtype: bfloat8_b, or bf16 under K3_ACC_BF16_WEIGHTS (tt/kimi_k3/accuracy.py).
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
+        wdt = accuracy.weight_dtype(ttnn.bfloat8_b)
 
         def _cache_name(name, prefix="mla"):
             return str(cache_path / f"layer_{layer_idx}.{prefix}.{name}") if cache_path else None
@@ -224,7 +228,7 @@ class ttMLA:
             return ttnn.as_tensor(
                 wkv_b1,
                 device=device if on_device else None,
-                dtype=ttnn.bfloat8_b,
+                dtype=wdt,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem if on_device else None,
                 mesh_mapper=mapper,
@@ -237,7 +241,7 @@ class ttMLA:
                 return _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
 
             def _tensorbin(name):
-                return name and Path(f"{name}_dtype_{ttnn.bfloat8_b.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
+                return name and Path(f"{name}_dtype_{wdt.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
 
             repl_name = _cache_name("wkv_b1", "mla_repl")
             repl_file = _tensorbin(repl_name)
@@ -295,7 +299,7 @@ class ttMLA:
             "kv_a_proj_with_mqa": ttnn.as_tensor(
                 kv_a_proj,
                 device=device,
-                dtype=ttnn.bfloat8_b,
+                dtype=wdt,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
                 mesh_mapper=mapper_tp0,
@@ -319,7 +323,7 @@ class ttMLA:
                     "q_a_proj": ttnn.as_tensor(
                         q_a_proj,
                         device=device,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=wdt,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=mem,
                         mesh_mapper=mapper_tp0,
@@ -329,7 +333,7 @@ class ttMLA:
                     "q_b_proj": ttnn.as_tensor(
                         q_b_proj,
                         device=device,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=wdt,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=mem,
                         mesh_mapper=mapper_tp1,
@@ -340,7 +344,7 @@ class ttMLA:
                     "wkv_b2": ttnn.as_tensor(
                         wkv_b2,
                         device=device,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=wdt,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=mem,
                         mesh_mapper=mapper_tp1,
@@ -350,7 +354,7 @@ class ttMLA:
                     "o_proj": ttnn.as_tensor(
                         o_proj,
                         device=device,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=wdt,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=mem,
                         mesh_mapper=mapper_tp0,
@@ -365,7 +369,7 @@ class ttMLA:
                 result["g_proj"] = ttnn.as_tensor(
                     g_proj,
                     device=device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=wdt,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=mem,
                     mesh_mapper=mapper_tp1,
@@ -606,6 +610,21 @@ class ttMLA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # K3_ACC_FIDELITY (tt/kimi_k3/accuracy.py): HiFi4 everywhere; fp32 DEST where the config already had it (the
+        # default keeps bf16 DEST: the tuned subblocks of its matmuls are sized for it).
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
+        self._acc_fidelity = accuracy.fidelity()
+        if self._acc_fidelity:
+            self.default_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            self.hifi2_fp32_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
+            self.hifi3_fp32_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
 
         self.ring_sdpa_compute_grid = (
             mesh_device.compute_with_storage_grid_size().x - 1,
@@ -1104,15 +1123,19 @@ class ttMLA:
                 return self._make_batched_mm_kwargs(weight_name, seq_len_local)
             return {
                 "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                "dtype": self.MM_DEFAULT_DTYPES[weight_name],
+                "dtype": self._out_dtype(self.MM_DEFAULT_DTYPES[weight_name]),
                 "compute_kernel_config": self.default_compute_kernel_config,
             }
         return {
             "memory_config": cfg["out_mem_config"],
             "program_config": cfg["program_config"],
-            "dtype": cfg["out_dtype"],
+            "dtype": self._out_dtype(cfg["out_dtype"]),
             "compute_kernel_config": self._tuned_compute_kernel_config(cfg),
         }
+
+    def _out_dtype(self, dtype):
+        """A projection's output dtype: bf16 instead of bf8 under K3_ACC_FIDELITY (tt/kimi_k3/accuracy.py)."""
+        return ttnn.bfloat16 if getattr(self, "_acc_fidelity", False) and dtype == ttnn.bfloat8_b else dtype
 
     def _tuned_compute_kernel_config(self, cfg: dict):
         """HiFi2 bf16 dest by default; ``fp32_dest_acc`` -> fp32 dest; ``math_fidelity`` HiFi3 (fp32 dest only)."""
@@ -1182,7 +1205,7 @@ class ttMLA:
 
         return {
             "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "dtype": self.MM_DEFAULT_DTYPES[weight_name],
+            "dtype": self._out_dtype(self.MM_DEFAULT_DTYPES[weight_name]),
             "compute_kernel_config": self.default_compute_kernel_config,
             "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
@@ -1559,6 +1582,8 @@ class ttMLA:
         merged = ttnn.concat(parts, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for t in parts:
             ttnn.deallocate(t)
+        if q.dtype == ttnn.bfloat16:  # (K3_ACC_BF16_WEIGHTS: the parts are bf16 already)
+            return merged
         weight = ttnn.typecast(merged, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(merged)
         return weight
@@ -2025,7 +2050,7 @@ class ttMLA:
             fused_activation=cfg["fused_activation"],
             compute_kernel_config=self._tuned_compute_kernel_config(cfg),
             memory_config=cfg["out_mem_config"],
-            dtype=cfg["out_dtype"],
+            dtype=self._out_dtype(cfg["out_dtype"]),
             topology=topology,
             cluster_axis=self.tp_axis,
             num_links=links,
@@ -3113,6 +3138,21 @@ class ttMLA:
             k_chunk_size=k_chunk,
             cache_batch_idx=cache_batch_idx,
             **block_cyclic,
+            # K3_ACC_FIDELITY (tt/kimi_k3/accuracy.py): HiFi4 + fp32 DEST, the approximate exp kept (the op's
+            # exact-exp path is not used: its kernels hard-wire the approximate exp)
+            **(
+                {
+                    "compute_kernel_config": ttnn.init_device_compute_kernel_config(
+                        q_rm.device().arch(),
+                        math_fidelity=ttnn.MathFidelity.HiFi4,
+                        math_approx_mode=True,
+                        fp32_dest_acc_en=True,
+                        packer_l1_acc=False,
+                    )
+                }
+                if self._acc_fidelity
+                else {}
+            ),
         )
         out = attention() if prefetch is None else self._beside_prefetch(prefetch, attention)
         if q_rm is not q:  # the caller owns q
